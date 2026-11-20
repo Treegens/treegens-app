@@ -315,5 +315,1495 @@
    "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/op-alert-desk.png (alert with no account shows the operator's own workspace and a Trust button)",
    "/home/user/treegens-app/sign-and-grow/tests/out/verify-support/shots/said.json and said2.json (the words each screen showed in each state)"
   ]
+ },
+ "verify:signin": {
+  "checks": [
+   {
+    "item": "State: single use, bound to the browser by an HttpOnly cookie, 10 minutes, never accepted at the other provider's callback, two tabs",
+    "holds": true,
+    "evidence": "Author's tests (26/26 pass, run twice) cover missing, made-up, other-browser, reused, expired and cross-provider states. My angles: two concurrent Disconnects and a connect state that was expired by the timer (probe section 6) both end in 'expired'; a state is deleted synchronously before the first await, so a double-submitted callback cannot be redeemed twice in one process."
+   },
+   {
+    "item": "ID token verified by hand (RS256 only, kid, JWKS cache and one refetch, issuer incl. Microsoft tid rule, audience/azp, exp/nbf/iat, nonce)",
+    "holds": true,
+    "evidence": "Author's 28 forgeries pass. Extra angle: a key-list entry shaped like Microsoft's real ones (x5c, x5t, issuer members next to n/e) is still accepted by createPublicKey (probe section 2: landed /signin/done). tsc shows no error in any sign-in file (only 2 errors in src/app/sign/[token]/page.tsx, another engineer's file)."
+   },
+   {
+    "item": "Identity by (provider, subject), never by email alone: nOAuth Microsoft tenant, same oid in another tenant, UPN-only claim",
+    "holds": true,
+    "evidence": "Probe 14: a token from OTHER_TENANT with no email claim, preferred_username=upn.owner@corp.example and xms_edov:true lands on /login?signin_error=exists, nobody signed in. Probe 16: an unvouched Microsoft token claiming a closing login's address does not restore it. Probe 8: a login made through my own tenant in a stranger's name stays unconfirmed and its POST /account/invites answers 403."
+   },
+   {
+    "item": "Linking to an existing login only when the provider vouches (Google: email_verified + gmail or hd; Microsoft: xms_edov)",
+    "holds": false,
+    "evidence": "Works for the cases the author tried, but probe 15: Google token {email: hdvictim@corp.example, email_verified: true, hd: 'attacker.example', sub: new} links to and signs in to the existing login hdvictim@corp.example. identityOf() only checks that hd is non-empty, never that it is the address's domain.",
+    "still_broken": "hd is not compared with the address's domain (defense in depth; real Google probably never issues such a token, see doubts).",
+    "suggested_fix": "In identityOf (src/server/oidc.ts) vouch for a Workspace address only when email.endsWith('@' + claims.hd.toLowerCase()); secondary-domain users then fall back to our own confirmation email, a safe failure."
+   },
+   {
+    "item": "No open redirect after sign-in",
+    "holds": true,
+    "evidence": "Probe 1: 12 extra values ('/.//evil.example', '/..//evil.example', '/app/..//evil.example', '/%2F%2Fevil.example', '/%5Cevil.example', '/\u3000/evil.example', '/@evil.example', '/./\\\\evil.example', '/ /evil.example', '/%09/evil.example', '/#//evil.example', '/?//evil.example') all stay on the site; end to end next=/.//evil.example lands with next=/app. In Chromium, /signin/done?next=/.//evil.example/x ended at http://localhost:3561/login?next=%2Fapp."
+   },
+   {
+    "item": "Invitation and free code carried through the flow",
+    "holds": true,
+    "evidence": "Author tests cover join, wrong address and code typo. Extra angle (probe 13): an unvouched Microsoft account from another tenant holding the invitation link joins as admin with the address marked confirmed, the same as password sign-up with the link (parity, not a new hole). Browser: the sign-up button href carries code and next (/api/auth/google/start?mode=signup&code=GROWalition&next=%2Fapp%2Fsettings)."
+   },
+   {
+    "item": "A closing login is brought back by a provider sign-in, and only by a legitimate one",
+    "holds": true,
+    "evidence": "Probe 16: closing login clotwo@gmail.com; unvouched Microsoft from another tenant gets 'exists' and closing_at stays; a first-time vouched Google sign-in links, clears closing_at and signs in."
+   },
+   {
+    "item": "The last way in cannot be disconnected",
+    "holds": true,
+    "evidence": "Probe 7: two DELETE /me/signin/:id requests sent with Promise.all for a passwordless login with Google + Microsoft answered 200 and 409, one identity left (the handler is synchronous). Browser at 390x844 and 1280x800: Disconnect on a Google-only login shows the 409 words in the card (06-last-way-in-*.png)."
+   },
+   {
+    "item": "API keys can do none of it",
+    "holds": true,
+    "evidence": "Author test covers every /me/signin route for send and admin keys. Extra angle (probe 9): an admin key sent with the start and the callback of a login-mode flow does not tie the Google account to the key owner's login (the identity went to a new login keeper.other@gmail.com, not keeper@corp.example)."
+   },
+   {
+    "item": "No way of signing in with a provider skips two-step login (being built right now by another engineer)",
+    "holds": true,
+    "evidence": "routes-signin.ts and routes-account.ts were edited by the two-step engineer during my run (uncommitted). Probe 3: known Google identity with two-step on gets no ts_session and goes to /login/two-step; a vouched link to a two-step login is held too; POST /auth/two-step with the code finishes it and returns linked:'Google'; a stranger-started login reclaimed by Google is not held by the stranger's authenticator (cutEarlierAccess now clears two_step_*). WORK IN PROGRESS: on my first run src/app/login/two-step/page.tsx did not exist, so the redirect was a 404; a few minutes later the page existed and the check held. createLogin (new logins) is the only other createSession caller, and a new login cannot have two-step.",
+    "still_broken": "See new bug 'vouched link happens before the second step'."
+   },
+   {
+    "item": "'Forgot password' works for someone who only ever used Google, and says something sensible",
+    "holds": true,
+    "evidence": "Probe 10: POST /auth/forgot for a Google-only login sends 'Choose a password for Sign&Grow' saying 'It is opened by signing in with Google'; reset answers {ok:true, disconnected:[], two_step:false}; password login 200 afterwards and Google still signs in. The forgot page itself still says 'Reset your password' / 'choose a new password', acceptable."
+   },
+   {
+    "item": "Errors come back to the page in words, and the words lead somewhere sensible",
+    "holds": false,
+    "evidence": "All 10 codes render in words with no jargon or long dash (shots.log). But probe 6: a signed-in person (slowc@corp.example) presses Connect Google under Settings, the state expires (or another tab overwrote the cookie), the callback sends them to /login?signin_error=expired&provider=google, whose words say 'Please start again from this page'. Pressing 'Continue with Google' there with the same Google account made a NEW login slowc.private@gmail.com (own workspace) and switched the browser to it.",
+    "still_broken": "Expired or overwritten Connect misdirects a signed-in person into creating a second login.",
+    "suggested_fix": "In the callback, when the state row is gone but c.auth?.via==='session', redirect to /app/settings?tab=profile&signin_error=expired; or put the mode in the state cookie value; and on /login, when /me shows a signed-in user, say 'You are signed in as X. To connect Google go to Settings, Profile' instead of offering provider buttons that open another login."
+   },
+   {
+    "item": "A login a stranger started is theirs no longer once the provider vouches for the real owner",
+    "holds": false,
+    "evidence": "Probe 4: stranger signs up reclaim@gmail.com with a password (never confirmed), PATCH /me {name:'Customer Support Team', title:'Billing', company:'Bank', signature_png}, PATCH /account {name:'Stranger Brand', brand_color:'#ff0000'}, POST /webhooks {url: stranger's listener} -> all 200. Real owner signs in with Google (vouched) -> reclaimed. Afterwards: name=Customer Support Team, title=Billing, company=Bank, signature kept, workspace 'Stranger Brand', brand #ff0000, webhook still there. The real owner then sent 'Real owner salary agreement' and the stranger's URL received {event:'envelope.sent', subject:'Real owner salary agreement'}.",
+    "still_broken": "Stranger's webhook keeps receiving the real owner's document events; stranger-typed name, signature image and branding stay on the owner's login.",
+    "suggested_fix": "In cutEarlierAccess (src/server/auth.ts), for accounts this login owns alone: delete webhooks and their deliveries, reset account name/brand_color/brand_logo; reset users.name to the provider's name and clear title, company, signature_png, initials_png. Better still, refuse POST /webhooks until email_verified. Make the notice name what really can remain."
+   },
+   {
+    "item": "Owner is emailed on every new connection, in words that are true",
+    "holds": false,
+    "evidence": "Probe 5: login made with Microsoft (unvouched), confirmed by our link in its own browser, password_hash '!'; then a vouched Google sign-in links. The email says 'Your password is unchanged.' and 'Then change your password, because someone else may know it.' although the login has no password.",
+    "suggested_fix": "In tellConnected (src/server/routes-signin.ts) branch on hasPassword(user): without one, drop 'Your password is unchanged' and say 'disconnect it under Settings' only."
+   },
+   {
+    "item": "Nothing personal kept after deletion",
+    "holds": false,
+    "evidence": "identities cascade (author test). But probe 12: after POST /me/delete {now:true}, 1 signin_states row with that user_id remains; rows (user_id, invite token, typed code, next) are purged only when some later sign-in starts after expiry, and src/server/cron.ts never mentions signin_states.",
+    "suggested_fix": "Add DELETE FROM signin_states WHERE expires_at < now to the cron tick, and DELETE FROM signin_states WHERE user_id=? where a login is deleted."
+   },
+   {
+    "item": "Screens at 390x844 and 1280x800",
+    "holds": true,
+    "evidence": "Chromium with every non-localhost request aborted: /login, /signup, 4 error pages, /forgot, Settings Ways to sign in (Google-only and with password), taken error: 0px sideways overflow on all, no long dash, provider buttons 316x44 (phone) and 346x44 (desktop). Connect POSTs /api/me/signin/google/connect and navigates to accounts.google.com (aborted)."
+   },
+   {
+    "item": "No em dash in any new text",
+    "holds": true,
+    "evidence": "grep for U+2014/U+2013 in oidc.ts, routes-signin.ts, signin.ts, AuthForm.tsx, signin/done, settings page, auth.ts, routes-account.ts, security, help, README, .env.example, developers, openapi: none; rendered pages: none."
+   },
+   {
+    "item": "Docs and public pages say what the code does",
+    "holds": false,
+    "evidence": "/security line 157 (shown when a provider is on): 'No two-step login of our own ... A second step at sign-in is whatever your account there has. We add none of our own, and a team cannot make its members sign in one particular way.' README line 429: 'a second step is then whatever that account has.' Two-step login with a team requirement is now wired into every sign-in (routes-twostep.ts). Likely to be fixed by the two-step engineer, still false right now.",
+    "suggested_fix": "Reword both once two-step lands: provider sign-in is the first step, our own two-step login applies after it."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Reclaimed login keeps the stranger's webhook, name, signature and branding; the real owner's documents leak to the stranger",
+    "severity": "medium",
+    "where": "src/server/auth.ts cutEarlierAccess; src/server/routes-signin.ts reclaim path; POST /webhooks in src/server/routes-account.ts",
+    "detail": "Steps (tests/out/verify-signin/probe.ts section 4): stranger POST /auth/signup reclaim@gmail.com; PATCH /me name 'Customer Support Team', title, company, signature_png; PATCH /account name 'Stranger Brand'; POST /webhooks to their listener (200, no confirmed address needed). Real owner: Continue with Google (vouched) -> reclaimed, told 'To be safe ... every other browser was signed out'. Result: name, title, company, signature image, workspace name, brand colour and the webhook all remain; the owner's first send delivered {event:'envelope.sent', subject:'Real owner salary agreement'} to the stranger. The notice and email tell the owner to look at 'the team, the API keys and the webhooks', but an unconfirmed login cannot invite (403) and the keys are already deleted, while the name, signature and branding are not mentioned. The builder listed webhooks as left open, but the leak is concrete. Fix: delete webhooks and deliveries and reset profile and branding in cutEarlierAccess (also used by /auth/reset), or refuse POST /webhooks before the address is confirmed; name what remains in the notice."
+   },
+   {
+    "title": "An expired or overwritten Connect sends a signed-in person to /login, and 'start again from this page' makes a second login",
+    "severity": "medium",
+    "where": "src/server/routes-signin.ts callback fail(null, p, 'expired'); src/lib/signin.ts 'expired' words; src/components/AuthForm.tsx",
+    "detail": "Steps (probe section 6): signed in as slowc@corp.example, POST /me/signin/google/connect, the state expires (10 min at Google, or a sign-in started in another tab replaced the cookie), callback -> 302 /login?signin_error=expired&provider=google. The page says 'Please start again from this page.' Pressing Continue with Google there with the same account -> a new login slowc.private@gmail.com with its own workspace and welcome signatures, and the browser is now signed in to it instead of the person's real login. Fix: when the row is missing and the request has a session, go back to /app/settings?tab=profile&signin_error=expired; carry the mode in the cookie; and have /login say 'You are signed in as X' to a signed-in visitor."
+   },
+   {
+    "title": "A vouched link is made and announced before the second step is passed",
+    "severity": "low",
+    "where": "src/server/routes-signin.ts linking path (addIdentity + tellConnected before signInAs/holdForSecondStep)",
+    "detail": "Probe 3b: login tsb@gmail.com with password and two-step on; a vouched Google sign-in is held at /login/two-step without a session, but the Google identity is already stored and 'Google can now open your Sign&Grow login' already emailed, even if the code is never typed. Not a bypass (every later Google sign-in is still held), but a permanent change made by someone who has not passed the login's own protection. Fix: when holdForSecondStep holds, keep the pending link in the pending note and add the identity and send the email in POST /auth/two-step after the code."
+   },
+   {
+    "title": "Connection email to a passwordless login talks about its password",
+    "severity": "low",
+    "where": "src/server/routes-signin.ts tellConnected('address')",
+    "detail": "Probe 5: Microsoft-made login (no password, confirmed), then vouched Google sign-in. The email says 'Your password is unchanged.' and 'Then change your password, because someone else may know it.' Fix: branch on hasPassword(user)."
+   },
+   {
+    "title": "Started sign-ins are never swept and outlive the login they name",
+    "severity": "low",
+    "where": "src/server/routes-signin.ts begin(); src/server/cron.ts; login deletion",
+    "detail": "Probe 12: after POST /me/delete {now:true}, a signin_states row with the deleted user_id remains. Expired rows (invite token, typed code, next, user_id) are cleared only when another sign-in starts. Fix: sweep in the cron tick and delete WHERE user_id=? on login deletion."
+   },
+   {
+    "title": "Google hd is trusted without matching the address's domain",
+    "severity": "low",
+    "where": "src/server/oidc.ts identityOf",
+    "detail": "Probe 15: token {email:'hdvictim@corp.example', email_verified:true, hd:'attacker.example'} links to and signs in to the existing login hdvictim@corp.example. Google should never issue this (a Workspace address must be in a domain that org verified), so this is defense in depth. Fix: require email to end with '@' + hd."
+   },
+   {
+    "title": "/security and README still say there is no two-step login of our own",
+    "severity": "low",
+    "where": "src/app/security/page.tsx line 157; README.md line 429",
+    "detail": "With a provider on, /security says 'A second step at sign-in is whatever your account there has. We add none of our own, and a team cannot make its members sign in one particular way.' Two-step login and the team requirement are now wired into every sign-in. Looked like work in progress by the two-step engineer (their files were changing during my run), but the sentences come from this piece and are false today."
+   },
+   {
+    "title": "Error words start with a lowercase letter when the provider is unknown",
+    "severity": "low",
+    "where": "src/lib/signin.ts signInErrorText",
+    "detail": "/login?signin_error=failed&provider=Call%20%2B1%20555%200100 shows 'the sign-in service did not confirm who you are, ...' (lowercase start; the hostile text is correctly not printed). Only reachable through a hand-made URL. Fix: capitalise the first letter of the result."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "research/build-missing-partial.json build:signin, abuse 'identity linking 1', and the reclaimed notice/email",
+    "claim": "Handled for access ... the person is told on screen and by email to look at the team, the API keys and the webhooks.",
+    "reality": "An unconfirmed login cannot invite anyone (403) and its API keys are already deleted, so two of the three things named cannot be there. What does remain (the stranger's webhook, which goes on receiving the owner's document events, plus the name, title, company, signature image and branding) is mostly not named. README's 'team members' is also inaccurate."
+   },
+   {
+    "where": "README 'Things to decide before launch' and the builder's left_open",
+    "claim": "What that login made stays in it (team members, webhooks, drafts).",
+    "reality": "Team members cannot exist. The stranger's typed name, signature image and branding stay too, and the webhook is an active leak, not a leftover to look at."
+   },
+   {
+    "where": "src/server/routes-signin.ts tellConnected",
+    "claim": "'Your password is unchanged.'",
+    "reality": "Sent also to logins that have no password (probe 5)."
+   },
+   {
+    "where": "src/app/security/page.tsx line 157, README line 429",
+    "claim": "No two-step login of our own; a second step is whatever the provider account has; a team cannot make its members sign in one way.",
+    "reality": "Our own two-step login (and a team rule) now applies after Google or Microsoft (routes-twostep.ts, wired into signInAs)."
+   },
+   {
+    "where": "builder STUCK 3",
+    "claim": "Cancelled, took too long, pressed back: handled, words for each.",
+    "reality": "For a Connect started under Settings, 'took too long' lands on /login with 'start again from this page', which makes a second login (probe 6)."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "Google hd: Google's own guidance treats email_verified plus a gmail.com address, or the presence of hd, as Google being authoritative for the address. I am fairly sure (about 80%) that a Workspace or Cloud Identity address is always in a domain that org verified, so the hd-mismatch case should not occur with real tokens. There have been public reports of Workspace sign-ups usable before domain verification, but I cannot confirm whether hd was ever issued then. I cannot call Google.",
+   "Microsoft xms_edov: I am moderately sure (about 70%) that it is an optional ID-token claim set in Token configuration or the manifest's optionalClaims, and that Microsoft omits unverified email claims by default for newer multi-tenant apps. Either way the code fails safe (unvouched means our confirmation email). I do not know whether personal (MSA) accounts ever carry xms_edov:true.",
+   "Microsoft key list: apps that use a claims-mapping policy (custom signing keys) must fetch the JWKS with ?appid=<client id>. Optional claims alone do not need this, as far as I know. If an operator adds a claims-mapping policy, every Microsoft sign-in fails with 'failed'.",
+   "Endpoints, issuers (accounts.google.com in both spellings; login.microsoftonline.com/{tid}/v2.0, including the personal tenant 9188040d-...), PKCE with a confidential web client, response_mode=query and prompt=select_account all match what I know of both providers (high confidence). Nothing was run against the live providers; my browser run aborted every request that left localhost.",
+   "__Host- cookies depend on x-forwarded-proto reaching the app. If a host terminates TLS without sending it, c.secure is false, the server sets sg_signin_note without the prefix, and the landing page (on https) only reads __Host-sg_signin_note, so the first-screen notice (joined, reclaimed, linked) is silently lost. Render sends the header, so this is probably fine there."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/01-login-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/01-login-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/02-signup-code-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/02-signup-code-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/03-error-exists-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/03-error-expired-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/03-error-invite-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/03-error-session-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/03-error-exists-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/04-forgot-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/05-ways-google-only-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/05-ways-google-only-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/06-last-way-in-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/06-last-way-in-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/07-taken-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/08-ways-with-password-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/08-ways-with-password-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/shots.log",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/probe.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/probe.log",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signin/shots.cjs"
+  ]
+ },
+ "verify:signercode": {
+  "checks": [
+   {
+    "item": "Nothing of the document, its name, the sender's message or the other people is shown before the code is passed, on any route a signing link reaches",
+    "holds": true,
+    "evidence": "tests/out/verify-signercode/stranger.ts: locked GET /sign/:token holds subject '', masked email and number, no message/note/documents/fields. Before the code: GET /comments, POST /comments, GET /pay, POST /pay-opened, POST /print-check, POST /hand-back, POST /take-over all answer 401 'Type the one-time code first.'; /request-extension, /mail-again, /dispute answer without naming the document. Author's test covers /doc, /download, /consent, /complete, /save, /decline, /reassign, /ask, /name, /upload. Browser (screens.cjs): page title before the code is 'Sign&Grow \u00b7 e-signatures that plant trees', subject absent from the HTML, after the code the title is the subject. One small leak remains via the envelope id (see new bug 'locked view plus public lookup').",
+    "still_broken": "Counts of other signers/approvers, how many signed and the page count are reachable through envelope.id in the locked view plus GET /public/verify/:id.",
+    "suggested_fix": "Leave envelope.id and impact out of lockedView."
+   },
+   {
+    "item": "Code: 6 digits from randomInt, stored as HMAC, 10 minutes, 5 wrong tries, compared in constant time, newest only, no replay",
+    "holds": true,
+    "evidence": "race.ts: 20 parallel wrong guesses from 20 addresses -> statuses 401 x4 then 423 x16, fails=5, the right code afterwards 423. A code typed at 599 s answers 200. signer_codes row holds only a 64-hex code_hash. Author's tests (re-run: 30/30 pass) cover expiry at 10 min+1 s, replaced code, used code 410."
+   },
+   {
+    "item": "A code for one recipient cannot be used on another",
+    "holds": true,
+    "evidence": "stranger.ts #5: same envelope, same mailbox, signer and approver; A's code typed on B's link -> 401 'wrong'. codeHash binds recipient id and stamp."
+   },
+   {
+    "item": "Device pass cookie: not reusable for another link, reset after a correction, lasts a day",
+    "holds": false,
+    "evidence": "Another link: refused (author test). Change of check or number: reset (check_gen). But certificate.ts #3: a correction to another person at the same inbox keeps the first person's pass (device stays open, record says passed). stranger.ts #6: the cookie value is identical on two devices and a copied cookie still opens the link after checked_at is moved 3 days back: 'a day' is only the browser's Max-Age.",
+    "still_broken": "Same-inbox person swap inherits the pass; no server-side age limit.",
+    "suggested_fix": "Put person_gen into linkStamp and deviceStamp; put an issued-at time into the cookie (HMAC'd) and refuse it after 24 hours."
+   },
+   {
+    "item": "Limits on codes (per recipient, per caller, per mailbox or number, per account) stop flooding",
+    "holds": true,
+    "evidence": "race.ts: 10 parallel 'send me the code' -> one 200 and nine 429, one signer_codes row, one email; with a Twilio stub one provider call. lockout.ts shows the per-caller 15/hour and per-destination 15/day limits fire. Author's SMS_DAILY_PER_ACCOUNT test passes; the usage row is inserted synchronously before the first await, so parallel requests cannot overshoot."
+   },
+   {
+    "item": "Limits do not lock out a legitimate person",
+    "holds": false,
+    "evidence": "lockout.ts #1: 16 colleagues behind one office address -> 16th gets 429 '15 codes were asked for from your internet connection in the last hour'. #2: another account requests 15 codes to victim's mailbox -> victim's real document from Hana answers 429 'Try again tomorrow'. #3: an anonymous public-form visitor does the same with 16 starts from 16 addresses (all 200), 15 code emails reach the victim, real document 429.",
+    "still_broken": "Office lockout and cross-account / anonymous mailbox lockout for 24 hours.",
+    "suggested_fix": "Count the destination limit per account (or per envelope) with a much higher global ceiling; count the caller limit per (address, account) or only for failures; count public-form code emails against the form's own visitor limits."
+   },
+   {
+    "item": "SMS_DAILY_PER_ACCOUNT is a hard stop counting every new text including resends",
+    "holds": true,
+    "evidence": "Author's test re-run passes (3rd text allowed, 4th 503, send 429, delete hands nothing back). Code path: textsLeft checked in mayText and sendText inserts sms_usage before awaiting the provider."
+   },
+   {
+    "item": "Pause stops texts like emails",
+    "holds": false,
+    "evidence": "retry.ts #4: link text failed first, account paused, cron.tick sends it (Twilio To=+447700900141). paused.ts: paused unpaid account opens its own links (recipient-view 200) and sends 15 code texts to 3 numbers it typed while paused.",
+    "still_broken": "Timer retries and code requests bypass the pause.",
+    "suggested_fix": "Re-check emailRefusal in tooLate for texts; refuse code texts for a suspended account."
+   },
+   {
+    "item": "Fake-payment-notice filter over texts",
+    "holds": false,
+    "evidence": "First send and reminders: author's test (alsoText guard). Timer retries: tooLate in src/server/sms.ts never calls emailRefusal, so a link text queued before the filter's lists or the subject changed goes out on retry (same path proven for pause in retry.ts #4). Code texts carry only the sender's name, which is checked at rename for unpaid accounts only.",
+    "still_broken": "Retry path skips the filter.",
+    "suggested_fix": "Run the alsoText guards again in tooLate."
+   },
+   {
+    "item": "Someone who reported or declined, or switched reminders off, gets no more texts",
+    "holds": false,
+    "evidence": "retry.ts #3: link text failed, recipient reported, cron.tick texts the reporter. retry.ts #5: signer finished while the other signer is pending, cron.tick texts 'is waiting for you to sign' with the link.",
+    "still_broken": "Retry path.",
+    "suggested_fix": "Load the recipient in tooLate and drop on report, completed/declined, muted reminders, check_stop, text_link off, changed number."
+   },
+   {
+    "item": "'This is not my number' stops all codes and link texts to that number until the sender corrects or confirms",
+    "holds": false,
+    "evidence": "retry.ts #2: retried link text goes to the disowned number. notmine-scope.ts: same sender's next envelope to the same number gets a link text and a code (texts: link, code).",
+    "still_broken": "Stop is per link and skipped on retries.",
+    "suggested_fix": "Keep a per-account stop list by phoneKey and check it in mayText and textRefusal; drop queued texts on not_mine."
+   },
+   {
+    "item": "A stranger with the link cannot turn off the sender's texts",
+    "holds": false,
+    "evidence": "stranger.ts #3: without passing the code, POST /sign/:token/mute 200 and /report 200; the next reminder sends 0 texts, no 'Text not sent' line, sender not told. #4: not_mine pressed by a stranger stops codes; limited to 3 a day per link, sender can confirm.",
+    "still_broken": "Mute and report silently stop texts for a person who never passed the check.",
+    "suggested_fix": "Require the code check for /mute when verify is a code; record and tell the sender when a report stops texts."
+   },
+   {
+    "item": "Certificate says for each signer how they were checked, and nothing more than happened",
+    "holds": false,
+    "evidence": "certificate.ts: email/sms passed lines, access code combined, 'Link sent by email only' after the check was removed, mixed envelope: correct. #3: Alex Jones (another person at the same inbox after a name correction) gets 'One-time code sent by email to c***@example.com, passed 20 November 2026 19:30 UTC', which Sam passed before Alex was on the document. In-person and link-by-sender lines drop how the link travelled, though Role/name elsewhere on the certificate say it.",
+    "still_broken": "Inherited pass on a same-inbox person swap.",
+    "suggested_fix": "Tie the pass record to person_gen."
+   },
+   {
+    "item": "Public forms: text refused, code by email works; bulk takes a phone column",
+    "holds": true,
+    "evidence": "Author's tests re-run pass (form 400 for sms template, email_code walk-in passes, bulk rows with phone, missing row refused). Abuse side effect via public forms listed under the lockout check."
+   },
+   {
+    "item": "Ten minutes and time zones",
+    "holds": true,
+    "evidence": "race.ts #5: signer_codes.at and expires_at are UTC ISO 600000 ms apart, answers give expires_in 600 seconds, the screen counts seconds from the server number, certificate prints UTC. No device clock is trusted."
+   },
+   {
+    "item": "An API caller cannot read a code",
+    "holds": true,
+    "evidence": "Author's test with an API key on GET /envelopes/:id and list; texts in GET /envelopes/:id are masked without body; webhooks carry no recipients. Our stored email copy keeps the code after a retried send (see new bug), but no API answer returns email html outside the dev outbox."
+   },
+   {
+    "item": "Twilio request and generic hook are what the services expect",
+    "holds": true,
+    "evidence": "src/server/sms.ts hand(): POST https://api.twilio.com/2010-04-01/Accounts/{SID}/Messages.json, form-encoded To, Body and From or MessagingServiceSid, Basic SID:AuthToken, 201 with sid. Hook: POST JSON {to,text}, Authorization: Bearer token, as the brief defines. Not called live; see doubts."
+   },
+   {
+    "item": "Code screen at 390x844: numeric keypad, one-time-code autofill, no overflow, 44 px targets",
+    "holds": true,
+    "evidence": "screens.cjs: inputmode=numeric, autocomplete=one-time-code, horizontal overflow 0 on start, wrong code, trouble and stopped states at 390 and 1280; trouble buttons 294x44 (phone). Screens 01 to 05."
+   },
+   {
+    "item": "Correct dialog with the 'I checked' box at 390x844",
+    "holds": false,
+    "evidence": "dialog.cjs: label 280x44 but the checkbox itself renders 7x13 px; select shows 'One-time code by text messag' clipped. Screenshot 08-correct-confirm-phone.png; the builder's own 21-phone-confirm-number.png shows the same.",
+    "still_broken": "Tiny checkbox, clipped option text.",
+    "suggested_fix": "label.sn-check-confirm input { flex: none; width: 20px; height: 20px; } and a shorter option label or a wrapping select."
+   },
+   {
+    "item": "No em dash in the feature's text",
+    "holds": true,
+    "evidence": "grep for U+2014 in signercode.ts, sms.ts, routes-signercode.ts, checks.ts, CodeCheck.tsx, CheckFields.tsx, dialogs.tsx, Recipients.tsx, checks.css, openapi.ts, developers/help/security pages, README.md, .env.example, StepAdd.tsx, csv.ts, policy.ts: none."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Timer retry of a link text ignores everything since the first try: texts the OLD wrong number after a correction, a disowned number, a reporter, a paused sender, someone who already signed",
+    "severity": "high",
+    "where": "src/server/sms.ts tooLate() and retryTexts(); src/server/signercode.ts resetCheck() only expires kind='code' texts (dropCodeTexts)",
+    "detail": "Probe tests/out/verify-signercode/retry.ts, Twilio stubbed, first provider answer 503 so the 'link' text is failed with next_try_at. (1) POST /envelopes/:id/correct {recipient_id, phone:'+44 7700 900112'} -> 200; make the old text due; cron.tick -> texts {sent:1}; Twilio called with To=+447700900111, the number the sender just said was wrong, body 'Sign&Grow, sent for Ada Sender: \"Wrong number corrected\" is waiting for you to sign. http://test.local/sign/<token>'. With text_link and no code check, whoever holds that number can open and sign. (2) after POST /sign/:token/code/problem {what:'not_mine'} the retry still texts +447700900121. (3) after POST /sign/:token/report the retry texts the reporter. (4) after the account is paused the retry goes out. (5) a signer who finished (other signer pending) is texted 'is waiting for you to sign'. Fix: in tooLate load the recipient by recipient_id and drop the text when to_phone differs from normalPhone(recipient.phone), text_link is off, check_stop is set, status is completed or declined, muted (reminders), an abuse report exists, or emailRefusal(e) refuses; and expire all queued or failed texts of a recipient (not only codes) whenever the number, the person or the check changes and on not_mine."
+   },
+   {
+    "title": "Another person at the same inbox inherits the first person's passed code, and the certificate says they passed it",
+    "severity": "medium",
+    "where": "src/server/signercode.ts linkStamp/deviceStamp (keyed on recipient id and token only); src/server/envelopes.ts correctRecipient sameInbox branch and writeContent otherName (keep the token, bump person_gen)",
+    "detail": "Probe certificate.ts #3: Sam Smith (email_code) passes the code on his device. POST /envelopes/:id/correct {name:'Alex Jones', email: same} -> 200; same token, person_gen 1, consent cleared (the app treats Alex as another person). Sam's device: GET /sign/:token locked=false. API check: {line:'One-time code sent by email to c***@example.com, passed 20 November 2026 19:30 UTC', passed_at: Sam's time}. Alex finishes from that device; certificate for Alex Jones: 'Identity check One-time code sent by email to c***@example.com, passed 20 November 2026 19:30 UTC'. Alex never typed a code. The comment in signercode.ts says a pass stops counting when the address is corrected to another person, but this path keeps the link. Fix: include person_gen in linkStamp and deviceStamp, or call resetCheck whenever person_gen changes."
+   },
+   {
+    "title": "A stranger (another account, or an anonymous public-form visitor) can use up a mailbox's 15 codes a day and lock that person out of every sender's document for 24 hours",
+    "severity": "medium",
+    "where": "src/server/signercode.ts requestCode, SIGNER_CODES_PER_DESTINATION_DAY counted over all accounts by dest_hash",
+    "detail": "lockout.ts #2: Mallory's account sends 15 envelopes with email_code to victim@, asks for a code on each -> Hana's genuine envelope to the same address: POST /sign/:token/code -> 429 '15 codes have gone to v***@example.com in the last 24 hours, which is the most we send to one mailbox in a day. Try again tomorrow.' #3: no account at all: 16 POST /public/powerforms/:slug/start with the victim's address from 16 addresses -> all 200; 15 'Your code to open a document from Hana HR' emails land in the victim's inbox; the victim's real document then answers 429. Fix: count the destination limit per account (or per envelope) with a far higher global ceiling; count a public form's code emails against that form's visitor limit and limit starts per address; never let codes from one account block another account's signer."
+   },
+   {
+    "title": "15 codes an hour per internet address locks out an office signing a bulk send",
+    "severity": "medium",
+    "where": "src/server/signercode.ts requestCode, SIGNER_CODES_PER_CALLER_HOUR",
+    "detail": "lockout.ts #1: 16 colleagues, each with their own email_code document, all behind 203.0.113.77 -> statuses 200 x15, then 429 '15 codes were asked for from your internet connection in the last hour'. find() in routes-sign.ts already says one address can be a whole office signing a bulk send. Fix: count per (address, account) or only count codes that ended in wrong tries; rely on per-recipient and per-destination limits for flooding."
+   },
+   {
+    "title": "A paused account keeps texting numbers it typed by opening its own links and asking for codes",
+    "severity": "medium",
+    "where": "src/server/signercode.ts requestCode -> mayText (no pause or fake-notice check)",
+    "detail": "paused.ts: unpaid account sends 3 envelopes with sms_code to 3 numbers and its own email, is paused (suspended_at), gets each link with POST /envelopes/:id/recipient-view (200) and asks for codes from rotating addresses: 15 texts '... is your Sign&Grow code to open a document from Mo Sender ...' go out while paused. The author's test asserts this on purpose ('a code ... still works while paused'), but the sender can be the one asking. Fix: refuse code texts while the account is suspended (neutral words to the signer, tell the sender), or at least when the request comes from a browser signed in to the sending account."
+   },
+   {
+    "title": "A link holder who never passed the code can silently switch off the signer's texts",
+    "severity": "low",
+    "where": "src/server/routes-sign.ts /sign/:token/mute and /report use find(c, false); signercode.ts alsoText returns silently on a report",
+    "detail": "stranger.ts #3: without the code, POST /sign/:token/mute -> 200 and /report {reason:'not-for-me'} -> 200. Next day's reminder: texts before 1, after 1; audit shows 'Reminders stopped' and 'Reported as suspicious' but no 'Text not sent', and the sender is not told texts stopped. Fix: require the code check for /mute when verify is a code; when a report stops texts, write 'Text not sent' and tell the sender once."
+   },
+   {
+    "title": "'This is not my number' stops texts for that one link only",
+    "severity": "low",
+    "where": "src/server/signercode.ts codeProblem sets recipients.check_stop; mayText/textRefusal never look at other recipients",
+    "detail": "notmine-scope.ts: not_mine on envelope 1 for +447700900432; the same sender's envelope 2 to the same number a minute later gets a link text and a code (texts: ['link','code']). The help page says 'We stop texting it at once, codes and links alike'. Fix: keep a stop list per account (or global) by phoneKey, refuse a send to it in words until the sender confirms."
+   },
+   {
+    "title": "Our stored copy of a code email keeps the code when it was sent on a timer retry",
+    "severity": "low",
+    "where": "src/server/signercode.ts requestCode redacts only when the first try is 'sent'; src/server/mail.ts retryMail/deliver never redacts",
+    "detail": "mailretry.ts: SMTP stub throws '451 try later' on the first try -> signer gets 502; cron.tick -> mail {sent:1}; emails row status 'sent' and html still contains the 6-digit code. README says the stored copy loses the code once the mail server has taken it. Fix: redact rows with expires_at after any successful try (or store the code only as a placeholder rendered at send time)."
+   },
+   {
+    "title": "Correct dialog at 390 px: the 'I checked ... their number' checkbox is a 7x13 px sliver and the check select is clipped",
+    "severity": "low",
+    "where": "src/app/styles/checks.css .sn-check-fix label.sn-check-confirm; select in src/components/sender/CheckFields.tsx",
+    "detail": "dialog.cjs at 390x844: label 280x44, checkbox 7x13 (flex shrinks it when the text wraps), select text 'One-time code by text messag' cut off. Screenshot tests/out/verify-signercode/08-correct-confirm-phone.png; the builder's 21-phone-confirm-number.png shows the same, contrary to the report. Tapping the label does tick it. Fix: label.sn-check-confirm input { flex: none; width: 20px; height: 20px; } and a shorter option label (for example 'Code by text message') or text-overflow ellipsis."
+   },
+   {
+    "title": "Before the code, the envelope id in the locked view plus the public lookup reveal the other people's count and progress and the page count",
+    "severity": "low",
+    "where": "src/server/signercode.ts lockedView keeps envelope.id and impact; src/server/evidence.ts lookupEnvelope",
+    "detail": "lookup.ts: locked view gives envelope.id and impact.sheets 9; GET /public/verify/<that id> -> {status:'sent', signers:2, signed:0, approvers:1, pages:{documents:3}, sent_at}. Fix: leave id and impact out of lockedView (the code screen does not use them)."
+   },
+   {
+    "title": "Pass cookie is one fixed value per link and never expires on the server",
+    "severity": "low",
+    "where": "src/server/signercode.ts deviceStamp/passCookie",
+    "detail": "stranger.ts #6: two devices that passed get the identical cookie value; a copied cookie opens the link on a third client after checked_at was moved 3 days back. README: 'stays passed for that link for a day'. Fix: sign an issued-at into the cookie and refuse it after 24 hours."
+   },
+   {
+    "title": "Code screen tells a 'link shared by the sender' person that 'The link in your email keeps working'",
+    "severity": "low",
+    "where": "src/components/sign/CodeCheck.tsx toldNote (line 133)",
+    "detail": "certificate.ts #2: a link_by_sender recipient with sms_code (no email) can press 'I do not get the code' (200); the told note then says the link in their email keeps working, but they have no email from us. Fix: use env recipient link_by_sender to say 'The link you were given keeps working'."
+   },
+   {
+    "title": "Premium-rate and international-network numbers are accepted for texting",
+    "severity": "low",
+    "where": "src/lib/checks.ts normalPhone",
+    "detail": "race.ts #6: '+1 900 555 0100', '+44 909 879 0000', '+882 1234 5678', '+881 6 1234 5678', '+999 1234 5678' all normalise and would be texted; a sender can then ask for codes on their own links (up to 200 a day per account). The builder names this as left open. Fix: refuse +881/+882/+883/+888/+979 and known premium ranges, validate with libphonenumber, optional SMS_COUNTRIES allow list."
+   },
+   {
+    "title": "Per-caller code limit is off or spoofable depending on TRUSTED_PROXY_HOPS",
+    "severity": "low",
+    "where": "src/server/router.ts clientIp; src/server/signercode.ts requestCode skips the caller limit for 'unknown'",
+    "detail": "Code reading: TRUSTED_PROXY_HOPS=0 makes every ip 'unknown', which requestCode does not count at all; the default 1 on a server with no proxy takes the caller's own X-Forwarded-For, so each request can name a new address (the tests themselves do exactly this). Fix: say in README that the caller limit needs a correct TRUSTED_PROXY_HOPS, and fall back to a per-recipient-and-account bucket when the address is unknown."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "README.md 'Checking who signs', Text messages",
+    "claim": "Someone who declined or reported the document is not texted again ... none while the sender is paused or the envelope reads like a fake payment notice",
+    "reality": "Timer retries of a link text skip every one of these checks (retry.ts #3, #4, #5), and code texts go out while paused (paused.ts)."
+   },
+   {
+    "where": "README.md 'When the code does not come' and help page",
+    "claim": "After 'not my number' no further code and no text with the link goes to that number until the sender corrects it / 'We stop texting it at once, codes and links alike'",
+    "reality": "Only for that one link and not for retries: the timer texts the disowned number (retry.ts #2) and the next envelope from the same sender texts it again (notmine-scope.ts)."
+   },
+   {
+    "where": "README.md 'The code'",
+    "claim": "Our stored copy of a code email or text loses the code once the mail server or the provider has taken it",
+    "reality": "True for texts; a code email taken on a timer retry keeps the code in emails.html (mailretry.ts)."
+   },
+   {
+    "where": "README.md 'The code'",
+    "claim": "A device that passed stays passed for that link for a day",
+    "reality": "Only the browser's Max-Age limits it; the cookie value is the same on every device and the server accepts it for as long as the link and check_gen last (stranger.ts #6)."
+   },
+   {
+    "where": "src/server/signercode.ts comment above linkStamp, and builder report item 3",
+    "claim": "A passed check stops counting by itself the moment the link is replaced: the address was corrected to another person's ...",
+    "reality": "A correction to another person at the same address keeps the link, so the new person inherits the pass and the certificate says they passed (certificate.ts #3)."
+   },
+   {
+    "where": "Builder report, item 7 browser check",
+    "claim": "Checked in a browser on phone and desktop: ... (44 px line, Space ticks it)",
+    "reality": "The line is 44 px but the checkbox itself is 7x13 px at 390 wide and the select text is clipped, visible in the builder's own 21-phone-confirm-number.png."
+   },
+   {
+    "where": "Builder report, abuse_and_stuck",
+    "claim": "'Not my number' stops all texts to that number, now including link texts. Tested. / Pause and the fake-payment-notice filter are re-checked at the moment of every link text.",
+    "reality": "Not on timer retries, and not across envelopes; pause not checked for code texts."
+   },
+   {
+    "where": "README.md Text messages",
+    "claim": "a refusal for good (a number that does not exist) ends at once",
+    "reality": "With Twilio a well-formed but unassigned or landline number is normally accepted (201) and fails later through status callbacks the app never asks for, so it is recorded as 'sent' and the sender is not told (see doubts)."
+   },
+   {
+    "where": "Builder report, abuse_and_stuck",
+    "claim": "15 an hour per caller address ... Tested (as protection)",
+    "reality": "The same limit refuses the 16th colleague of an office behind one address (lockout.ts #1), and the 15 a day per mailbox can be used up by another account or an anonymous form visitor (lockout.ts #2, #3)."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "Twilio request shape: POST https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json, application/x-www-form-urlencoded with To, Body and From or MessagingServiceSid, Basic auth AccountSid:AuthToken, 201 with a JSON sid. This matches Twilio's long-stable Messages API; I am about 90 percent sure, from the documented API, not a live call. API key auth (SK sid + secret) is not supported by this code, which is fine because the settings ask for the account SID and auth token.",
+   "Twilio acceptance is not delivery: unassigned numbers, landlines and carrier-filtered messages usually return 201 and fail later (errors 30003, 30005, 30006, 30007) via StatusCallback, which the code never sets. So the app records 'sent' and never tells the sender; the 'I do not get the code' button is the only fallback. About 75 percent sure about which failures surface at API time (21211 invalid format, 21610 opted out, 21408 country not enabled, 21614 not a mobile all come back as 400 and are correctly final).",
+   "Duplicates: a 15-second timeout after Twilio actually accepted the message leads to a second send on the timer; the Messages API has no idempotency key. Low cost, same code in both, but counts once in sms_usage and twice on the bill.",
+   "Segments: with a 40-character sender name and a normal host the code text is about 180 GSM-7 characters (2 segments); any non-GSM character in the sender's name (for example '\u00eb', Polish or any CJK) switches to UCS-2 at 70 per segment, 3 or more segments. SMS_DAILY_PER_ACCOUNT counts messages, not segments.",
+   "The last line '@host #code' matches the WebOTP / origin-bound one-time code format (must be the last line, host without port), which the code does. Fairly sure; Android Chrome honours it, iOS reads the code from the text anyway.",
+   "Generic hook: POST JSON {to, text} with Authorization: Bearer is exactly the contract the brief defines, so it is what an adapter written for it expects. It accepts http:// URLs, which would send the token, numbers and codes in clear text, and any 2xx is taken as sent with no later failure path.",
+   "Premium-rate numbers: Twilio blocks premium-rate destinations and limits countries by Geo Permissions by default (fairly sure); a hook provider may not, and this code accepts +1 900, +44 909, +881/+882 and unassigned country codes."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/01-code-start-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/02-code-wrong-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/03-code-trouble-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/04-code-stopped-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/05-after-code-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/01-code-start-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/02-code-wrong-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/03-code-trouble-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/05-after-code-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/06-envelope-page-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/07-correct-dialog-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/08-correct-confirm-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-signercode/09-after-confirm-phone.png"
+  ]
+ },
+ "verify:tplroles": {
+  "checks": [
+   {
+    "item": "1. Three settings per template, stored on the template, set only by its owner and admins (PUT /envelopes/:id/access), with history",
+    "holds": true,
+    "evidence": "tests/templates.test.ts tests 1-2 pass (8/8). My probes (tests/out/verify-tplroles/probe2.ts section L): another team's owner gets 404 on GET and PUT access; chosen changer Chad gets 403 on PUT access; duplicate member ids are merged; locked:1 refused 400. Each PUT that changes the rule writes one 'Who can use and change it' audit line with Before.",
+    "still_broken": "Odd input gives a wrong message: PUT access {\"use\":[\"team\"]} answers 400 '\"use\" is \"team\", which does not exist. Use one of: team, admins, chosen.' and {\"use\":{\"a\":1}} says '\"[object Object]\"'. A chosen member leaving or being removed changes who can use the template with no history line (probe3 P: audit lines before 1, after 1, sentence silently becomes 'because nobody else has been chosen yet').",
+    "suggested_fix": "In routes-templates.ts pick(): refuse non-strings with their JSON text ('\"use\" must be one of team, admins, chosen, as a string'). In forgetChosen() write an audit line on each template it touched ('<name> left the team and is no longer chosen')."
+   },
+   {
+    "item": "2. Who can use it: enforced everywhere a template is read, for a browser and for an API key",
+    "holds": false,
+    "evidence": "probe.ts section E, Otto's API key on an admins-only template named 'Layoffs 2026 letter' in folder 'Layoffs': list by q=<id>, q=Layoffs, folder=Layoffs, q=Kenya (document text) all return 0 rows and folders []; GET /powerforms 0; pay-link 403 template_not_for_you; comments 404; evidence 404. Re-invited member (probe2 D) is no longer chosen: 403 with 'Ask Maya Lopez or an admin of your team to add you'.",
+    "still_broken": "GET /api/files/<file id of the template's document>/content returns the template's PDF to Otto: 200, 864 bytes (probe.ts E 'file by id: 200 864 bytes'). Anyone who saw the file id earlier (an envelope he started before the rule changed, an earlier GET /envelopes/:id) keeps reading the HR document. The builder noted this as out of scope, but the brief says enforced everywhere a template is read.",
+    "suggested_fix": "In GET /files/:id/content, require that the caller can open at least one envelope or template that uses the file: SELECT envelope ids from documents WHERE file_id=?, and pass if any passes mine(c, id) (try/catch), or the file is not used by any template restricted for the caller."
+   },
+   {
+    "item": "3. Copying: a copy of a template you can only use keeps the lock and the same people and is no way round the rule",
+    "holds": false,
+    "evidence": "probe.ts A and probe3 O. (a) Maya: PUT /envelopes/T/access {use:'chosen', members:[{id:otto}]}. Otto POST /envelopes/T/clone -> 200 {id:C}, no belongs_to. Otto PUT /envelopes/C/access {use:'team'} -> 200. Chad (never chosen) now lists C and POST /envelopes {template_id:C} -> 200. Same through Otto's envelope 'Save as template' (clone kind template) -> 200, widen -> 200. (b) Maya: {use:'chosen', change:'chosen', locked:true, members:[{id:chad, can_change:true}]}. Chad PUT access on T {use:'team', locked:false} -> 403 (correct), but Chad POST /envelopes/T/clone -> 200 (copy is Chad's) or POST /envelopes {kind:'template', template_id:T} -> sender_id=chad, tpl_use=chosen, tpl_locked=1; Chad PUT /envelopes/C2/access {use:'team', locked:false} -> 200; Chad POST /powerforms {template_id:C2} -> 200 (HR contract to strangers, unlocked); Otto uses C2 -> 200.",
+    "still_broken": "The copy keeps the rule only until its new owner changes it. cloneOwner() hands the copy to the copier unless the template is locked AND the copier may not change it, and the copy's owner always passes maySetRules.",
+    "suggested_fix": "In tplroles.ts cloneOwner(): return from.sender_id whenever !maySetRules(c, from) and the source is not the default rule (use !== 'team' or locked). Alternatively store rules_from on the copy and make maySetRules on a copy require maySetRules on its source, refusing any loosening beyond the source. Add tests for both (a) and (b)."
+   },
+   {
+    "item": "4. Locked wording on an envelope started from the template: documents, fields, fixed wording, message and people stay, through the editor's save and the plain API",
+    "holds": false,
+    "evidence": "Documents, field moves, fixed values, message, order, roles and recipient count are refused (author's test 3 plus my runs). But probe.ts B: template recipient note 'Read clause 4 on liability before you sign.' and access code 7788; Otto's API key PUT /envelopes/E with note 'IGNORE CLAUSE 4. The fee is now USD 5,000, sign anyway.' and access_code '' -> 200; subject 'Fee raised to USD 5,000: sign today' -> 200; send -> 200; the stored email has that subject and contains the new note ('Note for you: ...', envelopes.ts notifyRecipient). probe2 I: template recipient verify 'email_code' -> Otto sets verify 'none' -> 200. probe3 I2: Otto sends group_id for the Client -> 200, recipient becomes {name:'Sales', group_id, group_name:'Sales'}, so any member of that group can sign.",
+    "still_broken": "The template's own per-recipient note (emailed right under the locked message), its identity check and the single signer (turned into a group) can all be changed on a locked envelope. LOCK_MEANS and the builder report say the message and 'the people on it' cannot change.",
+    "suggested_fix": "In assertWordingKept recipients branch: refuse a change to note when the template gave that role a note (or lock notes altogether), refuse verify/text_link weaker than the template's, refuse adding or changing group_id/witness_for. If subject and notes are meant to stay open, say so in LOCK_MEANS, lockedBanner, help and openapi."
+   },
+   {
+    "item": "5. Locking holds for envelopes started from then on",
+    "holds": false,
+    "evidence": "probe2 J: Otto starts E1 from T before the lock; Maya PUT access {locked:true}; Otto POST /envelopes/E1/clone -> E2 made after the lock; GET E2 wording_lock null; PUT E2 with Fee 'USD 5,000' and message 'Fee is now USD 5,000' -> 200. A clone kind envelope of the template itself is locked (correct).",
+    "still_broken": "One draft from before the lock lets its holder mint unlocked envelopes with the template's wording for ever.",
+    "suggested_fix": "In carryRules kind 'envelope' with no src.wording_from but a src.template_id whose template is locked now and the copier may not change it: mark the copy (wording_from = template id, fixed = note/strike fields and fields still holding the template's value), or refuse the clone and point to 'Use' on the template."
+   },
+   {
+    "item": "6. Bulk send follows the rule",
+    "holds": false,
+    "evidence": "Author's test 5 and probe.ts C: Otto's batch on a locked template is locked per envelope; admins-only refuses /bulk and /bulk/check for Otto by browser and key; a column filling an empty field (Start date) works for Otto. probe2 G: Otto POST /bulk with Idempotency-Key 'order-1' (2 rows) -> 200; Maya sets use 'admins'; row 2 reopened as after a crash; Otto repeats the same call -> 200 sent 2 while POST /envelopes {template_id} -> 403.",
+    "still_broken": "(a) probe.ts C: on her own locked template Maya POST /bulk rows [{Client:{...}, fields:{Plan:'Silver'}}] -> 400 'The column \"Plan\" ... holds the template's own wording and cannot be changed by a row. Nothing was sent.'; the admin gets the same 400; unlocked the same call is 200. logic.ts planValues checks src.tpl_locked without asking who sends, so the people responsible are locked out. (b) The Idempotency-Key replay path and sendBatch never re-check mayUse.",
+    "suggested_fix": "(a) Pass the caller into rowFieldProblem/planValues and use (f.readonly || (src.tpl_locked && !mayChange(c, src))). (b) In POST /bulk's prior branch call mine(c, prior.template_id, 'template') before sendBatch, and in sendBatch check mayUse for the batch sender before each new copy, failing the row with who to ask."
+   },
+   {
+    "item": "7. Public forms: only people who may change a template publish it; forms on templates you may not use are hidden",
+    "holds": true,
+    "evidence": "Author's test 5; probe E: forms list empty for Otto on an admins-only template. Otto's POST /powerforms refused with who to ask.",
+    "still_broken": "Only through the copy bypass in check 3: Chad publishes his own unlocked, widened copy (probe3 O: 200).",
+    "suggested_fix": "Fixed by the cloneOwner change in check 3."
+   },
+   {
+    "item": "8. Nothing is locked away from the people responsible (owner of the account, admins, the template's owner)",
+    "holds": false,
+    "evidence": "probe3 N: Maya's locked template T; Maya POST /envelopes {template_id:T} -> E; PUT E {message} -> 200; Maya DELETE /envelopes/T -> 200; Maya PUT E {message:'Maya wording 2'} -> 403 wording_locked '...started from a template whose wording was locked... ask an admin of your team'. The admin can (200).",
+    "still_broken": "wordingLock() treats a deleted template as locked for everyone but admins, including the person whose template it was and who started the envelope.",
+    "suggested_fix": "When a template is deleted, keep its owner on the envelopes (a wording_owner column set at copy time or at delete) and let that person through in wordingLock, or clear wording_from on envelopes sent by the person deleting it."
+   },
+   {
+    "item": "9. Hand-over when a member leaves or is removed: their chosen entries go, templates pass with their rules, refusals name the successor; invited back is not chosen",
+    "holds": true,
+    "evidence": "Author's test 6 passes; probe2 D: chosen Chad removed -> 0 template_members lines; invited back and signed in from the invitation -> POST /envelopes {template_id} 403 'Ask Maya Lopez or an admin of your team to add you'; not listed. probe F: a changer taken off the list gets his own envelope locked (403).",
+    "still_broken": "No history line on the template when this happens (see check 1).",
+    "suggested_fix": "Audit line in forgetChosen."
+   },
+   {
+    "item": "10. An existing database: templates from before have the defaults",
+    "holds": true,
+    "evidence": "Author's test 7 drops the five columns and the table and reopens; ruleOf() maps NULL to team/owner, usableSql uses COALESCE(e.tpl_use,'team'), tpl_locked added NOT NULL DEFAULT 0. lifecycle.test.ts 27/27 pass including 'members use every template but change only their own'.",
+    "suggested_fix": ""
+   },
+   {
+    "item": "11. Screens at 390x844: rule in a sentence, marks, dialog, locked editor shows locked parts and lets empty fields be filled",
+    "holds": true,
+    "evidence": "tests/out/verify-tplroles/screens.cjs on port 3564: list, Maya's dialog, Chad's read-only dialog (0 enabled inputs), locked editor steps 1 and 2, template page, template editor card: scrollWidth 390 = width, no page errors, no refused API calls. In step 2 Otto clicked the empty 'Start date' field, typed '1 March 2027', autosave stored it; the prefilled 'Plan' field shows 'This holds wording from the template' and no input. The step 2 palette overflows inside its own scroll strip, not the page.",
+    "still_broken": "Sentence grammar with two or more chosen people, shown in the dialog, editor card and history: 'Only admins, Maya Lopez and Chad Chosen and Otto Other can use it.' and 'Maya Lopez, admins and Chad Chosen and Otto Other can change it.' (probe3 Q, 03-dialog-chad-phone). In 02-dialog-maya-phone.png the radio before the wrapped 'Maya Lopez-Fernandez de la Cruz Montenegro and admins' is drawn smaller than the others.",
+    "suggested_fix": "accessSentence: listNames(['admins', owner, ...users]) and listNames([owner, 'admins', ...editors]). Give .sn-choice input flex-shrink:0."
+   },
+   {
+    "item": "12. Docs and on-screen promises match the code",
+    "holds": false,
+    "evidence": "help page (src/app/help/page.tsx line 293): 'A copy of a template keeps who can use it, and a copy of a locked one stays with its owner, so a copy is no way round the lock.' openapi /envelopes/{id}/clone: 'so a copy is never a way round the lock'. Template page (envelopes/[id]/page.tsx line 165) invites 'make your own copy: the copy is yours' on a restricted template. LOCK_MEANS: '...cannot change ... the message'.",
+    "still_broken": "False per checks 3, 4 and 5.",
+    "suggested_fix": "Fix the code (checks 3-5) or reword: a copy you own can be opened up by you; the subject, private notes and identity checks stay open on a locked envelope."
+   },
+   {
+    "item": "13. No em dashes in the changed files; type check",
+    "holds": true,
+    "evidence": "grep for U+2014 in all 23 files the builder listed (plus logic.ts): none. npx tsc --noEmit -p . exit 0 with no errors in this piece's files. tests/templates.test.ts 8/8 pass.",
+    "suggested_fix": ""
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "A copy of a restricted or locked template belongs to the copier, who can then unlock it and open it to the whole team or the public",
+    "severity": "high",
+    "where": "src/server/tplroles.ts cloneOwner() (about lines 163-171) and carryRules(); used by POST /envelopes/:id/clone and POST /envelopes {kind:'template', template_id} in src/server/routes-envelopes.ts",
+    "detail": "Steps (probe3 O): Maya sets T {use:'chosen', change:'chosen', locked:true, members:[{id:chad, can_change:true}]}. Chad PUT /envelopes/T/access {use:'team', locked:false} -> 403 as intended. Chad POST /envelopes {kind:'template', template_id:T, subject:'Mine now'} -> copy with sender_id=chad, tpl_use=chosen, tpl_locked=1. Chad PUT /envelopes/<copy>/access {use:'team', locked:false} -> 200. Chad POST /powerforms {template_id:<copy>} -> 200. Otto (never chosen) POST /envelopes {template_id:<copy>} -> 200. Also (probe.ts A) on an unlocked HR template with use 'chosen', a use-only member Otto clones it (no belongs_to), PUT access {use:'team'} -> 200, Chad lists and uses it. Fix: keep the copy with the source owner whenever the copier may not set the source's rules and the source is restricted or locked, or bind a copy's rules to its source."
+   },
+   {
+    "title": "Locked envelope: the template's private note, identity check and signer can be changed; the new note is emailed under the locked message",
+    "severity": "medium",
+    "where": "src/server/tplroles.ts assertWordingKept() recipients branch (about lines 213-225); email text in src/server/envelopes.ts notifyRecipient ('Note for you: ...')",
+    "detail": "Steps (probe.ts B, probe2 I, probe3 I2): template recipient Client with note 'Read clause 4 on liability before you sign.', access code 7788, verify email_code; locked. Otto starts E, his API key PUT /envelopes/E with note 'IGNORE CLAUSE 4. The fee is now USD 5,000, sign anyway.' and access_code '' -> 200; verify 'none' -> 200; group_id of a 2-person group -> 200 (recipient becomes 'Sales'). Subject 'Fee raised to USD 5,000: sign today' -> 200. After send, the stored email has that subject and the new note. Fix: lock template-given notes, do not allow a weaker check, refuse group_id/witness changes; or state plainly on screen and in docs that these stay open."
+   },
+   {
+    "title": "Cloning an envelope from before the lock gives a fresh unlocked envelope after the lock",
+    "severity": "medium",
+    "where": "src/server/tplroles.ts carryRules() kind 'envelope' branch (about lines 147-149)",
+    "detail": "Steps (probe2 J): Otto starts E1 from T; Maya PUT access {locked:true}; Otto POST /envelopes/E1/clone -> E2; GET E2 wording_lock null; PUT E2 with Fee 'USD 5,000' and message 'Fee is now USD 5,000' -> 200. Fix: when src.template_id names a template that is locked now and the copier may not change it, mark the copy as locked, or refuse."
+   },
+   {
+    "title": "The template's owner is locked out of her own envelope after deleting her own locked template",
+    "severity": "medium",
+    "where": "src/server/tplroles.ts wordingLock() (about lines 176-183)",
+    "detail": "Steps (probe3 N): Maya locks T, starts E from it, PUT E {message} -> 200, DELETE T -> 200, PUT E {message:'Maya wording 2'} -> 403 wording_locked, told to ask an admin. Fix: remember the template owner on the envelope (set at copy or delete) and let that person through, or clear wording_from on the deleter's own envelopes."
+   },
+   {
+    "title": "Bulk column on a prefilled field refused for the template's owner and admins once it is locked",
+    "severity": "medium",
+    "where": "src/server/logic.ts planValues() line 237: if (f.value && (f.readonly || src.tpl_locked))",
+    "detail": "Steps (probe.ts C): Maya's template with text field 'Plan' = 'Gold' (not read-only). Unlocked: Maya POST /bulk rows [{Client:{name,email}, fields:{Plan:'Silver'}}] -> 200 sent 1. After locking: Maya same -> 400 'Row 1: The column \"Plan\" is for Plan, which holds the template's own wording and cannot be changed by a row. Nothing was sent.'; the admin gets the same. The lock is meant only for those who may not change the template. Fix: pass the caller and use src.tpl_locked && !mayChange(c, src)."
+   },
+   {
+    "title": "A template's document stays readable by file id after the template is restricted",
+    "severity": "medium",
+    "where": "src/server/routes-envelopes.ts GET /files/:id/content (lines 78-82)",
+    "detail": "Steps (probe.ts E): Maya sets her template to admins only; Otto GET /api/files/<its document file_id>/content -> 200 with the 864-byte PDF. Every other route refuses him. Pre-existing route, flagged by the builder as out of scope, but it defeats 'enforced everywhere a template is read'. Fix: only serve a file used by at least one envelope or template the caller may open."
+   },
+   {
+    "title": "Bulk replay with the same Idempotency-Key keeps sending after the caller lost use of the template",
+    "severity": "low",
+    "where": "src/server/routes-envelopes.ts POST /bulk prior branch (lines 588-595) and sendBatch()",
+    "detail": "Steps (probe2 G): Otto POST /bulk with Idempotency-Key 'order-1' (2 rows) -> 200; Maya sets use 'admins'; row 2 reopened as after a crash; Otto repeats the call -> 200, sent 2, while POST /envelopes {template_id} -> 403. Fix: mine(c, prior.template_id, 'template') before sendBatch, and a mayUse check per row in sendBatch."
+   },
+   {
+    "title": "No history line when a chosen member leaves or is removed",
+    "severity": "low",
+    "where": "src/server/tplroles.ts forgetChosen()",
+    "detail": "Steps (probe3 P): Maya chooses Chad (1 history line); Chad POST /account/leave -> still 1 line, while the sentence becomes 'Only admins and Maya Lopez can use it, because nobody else has been chosen yet.' Fix: write an audit line on each affected template."
+   },
+   {
+    "title": "Rule sentence wrong with two or more chosen people",
+    "severity": "low",
+    "where": "src/lib/tplroles.ts accessSentence() lines 36 and 39",
+    "detail": "accessSentence({use:'chosen', chosen_use:['Chad Chosen','Otto Other'], owner:'Maya Lopez'}) gives 'Only admins, Maya Lopez and Chad Chosen and Otto Other can use it.'; the change sentence gives 'Maya Lopez, admins and Chad Chosen and Otto Other can change it.' Seen in the dialog (03-dialog-chad-phone.png) and written into history. Fix: one listNames over the whole list."
+   },
+   {
+    "title": "PUT access with a list or object for use gives a false message",
+    "severity": "low",
+    "where": "src/server/routes-templates.ts pick() lines 25-28",
+    "detail": "PUT /envelopes/T/access {\"use\":[\"team\"]} -> 400 '\"use\" is \"team\", which does not exist. Use one of: team, admins, chosen.' {\"use\":{\"a\":1}} -> '\"[object Object]\"'. Fix: refuse non-strings with their JSON text."
+   },
+   {
+    "title": "Radio drawn smaller next to a long owner name in the rule dialog on a phone",
+    "severity": "low",
+    "where": "src/app/styles/tplroles.css or the shared .sn-choice style",
+    "detail": "02-dialog-maya-phone.png at 390x844: the radio before 'Maya Lopez-Fernandez de la Cruz Montenegro and admins' shrinks when the label wraps. Fix: .sn-choice input { flex-shrink: 0 }."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "src/app/help/page.tsx line 293 (help, 'Who can use and change a template')",
+    "claim": "A copy of a template keeps who can use it, and a copy of a locked one stays with its owner, so a copy is no way round the lock.",
+    "reality": "A use-only member's copy of an unlocked restricted template is theirs, and a chosen changer's copy of a locked template is theirs too. Both can be unlocked and opened to the team in one PUT (probe.ts A, probe3 O)."
+   },
+   {
+    "where": "src/server/openapi.ts /envelopes/{id}/clone description",
+    "claim": "A copy ... has the same rule as that template ... so a copy is never a way round the lock.",
+    "reality": "Same as above: the copy's owner can change its rule straight away."
+   },
+   {
+    "where": "research/continue.json build:tplroles, Abuse 3",
+    "claim": "A member chosen to change a template tries to widen who can use it, lift the lock or delete it ... All are refused and nothing changes.",
+    "reality": "Refused on the template itself, but done through a copy: clone, then PUT access {use:'team', locked:false} -> 200, then a public form -> 200 (probe3 O)."
+   },
+   {
+    "where": "research/continue.json build:tplroles item 1, and LOCK_MEANS in src/lib/tplroles.ts",
+    "claim": "They cannot change ... the message, ... the people on it, their roles or the signing order. / cannot change ... the message",
+    "reality": "The template's per-recipient note, emailed as 'Note for you' under the message, can be replaced; the signer can be turned into a signing group; the identity check can be removed; the subject can be changed (probe.ts B, probe2 I, probe3 I2)."
+   },
+   {
+    "where": "src/app/help/page.tsx line 293 and the rule dialog ('This holds for envelopes started from now on')",
+    "claim": "Locking holds for envelopes started from then on.",
+    "reality": "A clone made after the lock of an envelope started before it is unlocked, and its fee and message can be changed (probe2 J)."
+   },
+   {
+    "where": "src/app/app/envelopes/[id]/page.tsx line 165 (template page, unlocked template of a colleague)",
+    "claim": "To change something, make your own copy: the copy is yours and the original stays as it is.",
+    "reality": "True, but on a template for chosen members or admins only, this button invites the copier to own an HR template they can then open to everyone."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "Email: I checked the stored outbox row (emails.subject and payload) in the dev outbox, not a real mail provider. The altered subject and the replaced note are in the HTML we hand over, so I am highly confident a real inbox shows them, since the provider only delivers what we send.",
+   "No payment provider is involved in this piece; the bulk probes ran with credits switched off (no STRIPE_SECRET_KEY), so signature counting was not exercised."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/01-list-otto-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/02-dialog-maya-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/03-dialog-chad-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/04-locked-editor-otto-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/05-locked-editor-otto-step2-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/06-template-page-otto-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/07-template-editor-maya-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/08-dialog-maya-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/09-fill-start-date-phone.png",
+   "Probes: /home/user/treegens-app/sign-and-grow/tests/out/verify-tplroles/probe.ts, probe2.ts, probe3.ts (shared setup in common.ts), browser run screens.cjs"
+  ]
+ },
+ "verify:bounces": {
+  "checks": [
+   {
+    "item": "1. Our own ids on every email: a stored Message-ID and X-SG-Mail, the same on every try, provider headers only through that provider's SMTP host",
+    "holds": true,
+    "evidence": "Read mail.ts: deliver() sends messageId `<row.message_id>` and mailHeaders(row.id) on every try. retryMail goes through deliver(), so the id stays the same. The author's test 1 passes, and I re-ran tests/bounces.test.ts: 18/18 pass. Rows from before this work have message_id NULL and still get X-SG-Mail. No defect found."
+   },
+   {
+    "item": "2a. The secret in its three forms, a wrong one, no setting, timing of the comparison",
+    "holds": true,
+    "evidence": "Probe tests/out/verify-bounces/p4-auth.ts. These answer 200: the query; 'bearer' in lower case; Bearer with a trailing space; Basic with the password and no colon; a wrong query token together with a right Bearer. These answer 401: two token params where the right one is second; the token in another header; the token as the Basic USER name; garbage base64; 'Bearer tsk_abc'. With the setting unset the answer is 404 {error:'Not found'}, the same shape as an unknown route. Both sides are sha256-hashed and then compared with timingSafeEqual on equal-length hex, so the comparison is constant time. A wrong secret is rate-limited per IP and a right one never is.",
+    "still_broken": "A secret made with `openssl rand -base64` that contains '+' and is pasted raw into ?token= answers 401 for ever, because URLSearchParams decodes '+' as a space (p4: 'base64 secret raw in query' gives 401, percent-encoded gives 200). The README only says 'at least 16 characters'.",
+    "suggested_fix": "Say 'letters and digits only' in README and .env.example, or refuse a MAIL_EVENTS_TOKEN with characters outside [A-Za-z0-9_-] at start-up and log why."
+   },
+   {
+    "item": "2b. Matching: by our id or Message-ID when present, else by address among emails of the last 3 days, never to the wrong email",
+    "holds": false,
+    "evidence": "p11-evade.ts: a sender sends to p1, p2 and p3, then voids and deletes each envelope, which deletes its email rows. Postmark SpamComplaint events carrying our exact Metadata sg-mail ids arrive later. Two complaints were applied to an honest account that had emailed p1 and p2 afterwards, and the third was unmatched. Result: 'reports against the deleter: 0', 'reports against the honest account: 2'. p10-deleted.ts: a Postmark HardBounce with our exact id, for a stranger's deleted envelope, was matched to Vic's own team invitation (matched email id 3 'Vic Boss invited you...'). findMail (routes-bounces.ts 41-54) falls through to address matching whenever the id is given but no row is found.",
+    "still_broken": "An event that names our id is pinned on a different email. Address matching also crosses accounts (see the complaint and banner checks).",
+    "suggested_fix": "In findMail: when ev.mail_id or ev.message_id is present and names no row (or a row with another address), answer 'unmatched' and do not fall back to the address. Keep email rows (or a small id->account tombstone) for BOUNCE_MATCH_DAYS after an envelope is deleted, so that news about them still counts against the account that sent them, the way forgotten_codes does for the report link."
+   },
+   {
+    "item": "3a. Hard bounce to a recipient: mark, record, sender told at once, page and list, reminders stop until corrected or Try again, envelope.updated, no 'not opened' alert",
+    "holds": false,
+    "evidence": "The direct path holds: the author's tests pass, and p5 G shows two simultaneous bounces of the request and the reminder tell the sender once. p9-retry-and-warn.ts B: a reminder that the mail server refused at first waits for the timer. The first email then hard-bounces. retryMail() delivered the waiting reminder to the dead address anyway ('B reminder delivered to the bounced address by the timer: 1'), because mail.ts tooLate() never looks at recipients.bounced_at.",
+    "still_broken": "Reminders that were already waiting for another try still go out after the bounce.",
+    "suggested_fix": "In mail.ts tooLate(): when row.recipient_id is set and the payload is a reminder or expiring notice ('untilDone' or a kind flag), drop it quietly if recipients.bounced_at or complained_at is set."
+   },
+   {
+    "item": "3b. Reminders start again (after Try again, Correct, or a later delivery)",
+    "holds": false,
+    "evidence": "p13-soft-hard-delivered.ts: an address soft-bounced on two earlier days. Today's email soft-bounces too, which escalates it to hard ('the mailbox is full, on 3 separate days', added to the do-not-mail list). The provider keeps retrying and the SAME email is then delivered. Result: '{marked: \"the mailbox is full, on 3 separate days\", listed: true, row: {dl:1, bounce_kind:\"hard\"}}', and the reminder is refused with 409 email_bounced. delivered() returns early when m.bounce_kind === 'hard' (routes-bounces.ts 174), so nothing is cleared.",
+    "still_broken": "A mailbox that was full and then took the email stays 'Could not be delivered' with reminders stopped until the sender happens to press Try again.",
+    "suggested_fix": "Do not turn the current email into 'hard' on the third soft day: keep the email 'soft' and record the escalation on the address and recipient. Or, in delivered(), when this same email's delivered_at is later than its bounced_at, clear the recipient mark, the list entry and the login mark as it does for later emails."
+   },
+   {
+    "item": "3c. Soft bounce noted, nothing stopped, three separate days count as hard",
+    "holds": false,
+    "evidence": "p1-crossaccount.ts C: another account's two emails to greylisted@corp.example soft-bounced on two earlier days. Hal (a different account) gets his FIRST ever deferral for that address, and his recipient is marked hard at once: 'the mail server asked us to try again later, on 3 separate days'. Hal gets 'Could not be delivered', and the address goes on HAL's do-not-mail list. soft_bounce_days is keyed by address only (bounces.ts 215-224). p12-soft-then-delivered.ts: a plain greylisting run IN ORDER (deferred, then delivered 8 minutes later) leaves the delivery row at {delivered_at: set, bounce_kind: 'soft'}. MailNews.tsx deliveredLine needs !bounce_kind, and BackNews shows 'Not delivered yet ... That usually sorts itself out' for ever.",
+    "still_broken": "Escalation crosses accounts and lands on an email that was deferred once. A delivered email reads 'Not delivered yet' on the envelope page.",
+    "suggested_fix": "Count soft days per account (key on account_id + address), and require that no email to the address was delivered in between. In delivered(), set bounce_kind=NULL (keep bounce_reason for the record) when the stored kind is 'soft', so the page shows 'Delivered to the mail server of ...'."
+   },
+   {
+    "item": "4a. Complaint: never mail that person about that envelope again, only they can undo it",
+    "holds": false,
+    "evidence": "p5-complaint.ts A: after a complaint, the sender calls POST /envelopes/:id/correct to someone.else@... and then back to the original address. Both answer 200, complained_at is null after the round trip, the request email went to the complainer at once, and a reminder answered 200. The record reads 'Marked as spam, Reported as suspicious, Recipient corrected, Recipient corrected, Reminder sent'. The db.ts trigger recipients_address_changed (803-805) clears complained_at on any address change. p5 C: the sender's second login, which is not a member of the sending account, used the copied link on POST /sign/:token/mail-again and got {changed:true}. p9 A: a reminder waiting for the mail timer was delivered after the complaint ('A delivered to the complainer after the complaint: [\"Reminder: Simple agreement\"]').",
+    "still_broken": "Three ways for the sender to keep emailing a person who said spam, against the promise in the sender's email, the envelope card and the help page.",
+    "suggested_fix": "Keep complaints per (envelope, address) in their own table instead of a column that the address-change trigger clears. Check that table in notifyRecipient, correctRecipient (refuse a correction back to a complained address with a 409 that explains why) and mail.ts tooLate(). For mail-again, ask the recipient to type a one-time code sent to their address, or the access code, rather than trusting link possession alone."
+   },
+   {
+    "item": "4b. A complaint counts as a report the way 'Report this email' does, and cannot be used to pause an honest sender",
+    "holds": false,
+    "evidence": "p1-crossaccount.ts A: a spammer emails v1, v2 and v3, and an honest account emails the same people afterwards. Three Resend email.complained events, which carry no ids of ours, all land on the honest account: 'A honest account paused: true', 'A spammer account paused: false', reports 3 vs 0. The honest owner got 'Sending is paused on your Sign&Grow account'. p11: with exact Postmark ids, a sender who voids and deletes after sending gets 0 reports, and 2 land on an honest account. p5 E: after the recipient pressed 'Email me again', the report still counts towards the pause (2 counted after both undos).",
+    "still_broken": "Address-only complaints are blamed on whoever wrote last, across accounts. Deleting the envelope evades the count.",
+    "suggested_fix": "Never count an address-only match as a report (record it for an operator instead), or count it only when exactly one account emailed that address in the window. Count complaints about deleted envelopes against their account (see 2b). Consider marking the report 'withdrawn' when the recipient asks for emails again."
+   },
+   {
+    "item": "4c. A stranger cannot mark a customer's own address as bouncing (banner, team admins emailed)",
+    "holds": false,
+    "evidence": "p1 B: a stranger sends an envelope to Vera (a customer), then asks POST /auth/forgot for her address, so the newest email to Vera is the reset. A Resend email.bounced (550 5.7.1 content rejected) for the stranger's email then marks Vera's LOGIN: email_problem {reason:'the mail server refused the email'}, and the stranger's recipient is not marked. p10: with exact Postmark ids, after the stranger voids and deletes the envelope, the bounce falls back to Vic's own invitation email. Vic gets the banner and his boss gets 'Our emails to Vic Customer are not arriving'. hardBounce (routes-bounces.ts 76-82) also treats any email whose envelope is gone as an email to a login.",
+    "still_broken": "The banner and the email to the team can be set off by a stranger whose email is rejected by the customer's mail filter.",
+    "suggested_fix": "Fix 2b. In hardBounce, only call loginBounce for an email that is about the login itself (envelope_id NULL and about_user NULL, or the sender's own notice). Never do it for a missing envelope or an address-only match on a non-envelope email when other emails to that address left in the window."
+   },
+   {
+    "item": "5. Do-not-mail warning at send time with a way to send anyway, every path",
+    "holds": true,
+    "evidence": "p9 C: a member (not admin) is warned about an address that bounced on the owner's envelope (409 bounced_address, 'old.client@probe.example bounced on 20 November: no such mailbox. Check the address. Nothing was sent...'). An API key with 'Old.Client@Probe.Example ' (mixed case, trailing space) is warned too. send_anyway as the string \"true\" is still 409, as documented (boolean only). Code read: sendEnvelope, POST /envelopes send:true, POST /bulk and sendBatch rows all check it. Public forms are skipped on purpose.",
+    "still_broken": "Not a NEW envelope, so outside the brief: POST /envelopes/:id/correct to an address on the list sends at once with no warning (p9 D: 200, email sent).",
+    "suggested_fix": "Optionally give correct the same 409 + send_anyway as send."
+   },
+   {
+    "item": "6. Banner for a login whose own address bounces, cleared by moving the address or 'It works now'",
+    "holds": true,
+    "evidence": "The author's test passes. Screens at 390x844 (tests/out/verify-bounces/shots/home.png, settings.png): the banner shows on every app page, has no horizontal scroll, and both buttons are 44px or taller. GET /me email_problem appears and clears. The weakness is who can set it off (check 4c)."
+   },
+   {
+    "item": "7. 'Delivered to the mail server of example.com' instead of only 'Sent', never 'read'",
+    "holds": false,
+    "evidence": "It holds for a clean delivery: screens2 shows 'Delivered to the mail server of example.org on Nov 20, 07:53 PM' after the dev rows were set to 'sent'. It fails after any deferral (p12), and p2 B shows that a soft bounce arriving after 'delivered' writes the record line 'has not arrived yet ... Nothing was stopped' and flips the page to 'Not delivered yet'. softBounce never checks m.delivered_at.",
+    "suggested_fix": "In softBounce: if m.delivered_at is set, answer 'repeat' and write nothing. In delivered: clear bounce_kind 'soft' (see 3c)."
+   },
+   {
+    "item": "8. SNS confirmation fetched only for Amazon SNS",
+    "holds": true,
+    "evidence": "p7-sns.ts: the real SNS hosts, including cn-north-1 .amazonaws.com.cn and GovCloud, are fetched. A trailing dot and the bad hosts in the author's test are refused. Upper case is normalised by URL. Only someone holding the secret can trigger a fetch, and nothing from the answer is read.",
+    "still_broken": "Low: the pattern also accepts S3 hosts of a bucket named 'sns' (https://sns.s3.amazonaws.com/, sns.s3-accelerate.amazonaws.com, sns.s3-us-west-2.amazonaws.com were all FETCHED and reported 'confirmed'), and an Action=Unsubscribe link is fetched as a 'confirmation'. SNS message signatures are not verified (stated as left open).",
+    "suggested_fix": "Also require u.searchParams.get('Action') === 'ConfirmSubscription' and a TopicArn param equal to body.TopicArn. Reject hostnames whose middle label starts with 's3'. Optionally verify the SNS signature against SigningCertURL on sns.<region>.amazonaws.com."
+   },
+   {
+    "item": "9. Huge or malformed bodies: never a 500, unknown shapes 202 and logged once",
+    "holds": true,
+    "evidence": "p8-bodies.ts: 500k-deep [ and 150k-deep {\"a\": both get 202. A 1,040,055-byte body is read (under 1 MiB). The author's test covers 413 with and without content-length. No 500 was seen anywhere.",
+    "still_broken": "Low: an SNS Notification whose inner JSON has an unknown shape, and an SNS UnsubscribeConfirmation, answer 200 understood:true events:0 and are never logged (p7), contrary to README 'answered 202 and logged once'. A batch of 2001 events answers 200 with events:2000, and the last one is dropped silently (p8 E).",
+    "suggested_fix": "Treat `one(inner) === null` inside SNS as unknown (202, log once). Answer 413 for more than MAX_EVENTS so the provider splits the batch, or process all of them."
+   },
+   {
+    "item": "10. The same event twice, and two at the same moment",
+    "holds": true,
+    "evidence": "p5 F: two identical complaints in Promise.all give applied 1 and repeat 1, one abuse report and one sender email. p5 G: two different emails to the same person bouncing at the same moment tell the sender once. p8 C: the same 300-event batch posted twice gives repeat:300 in 24 ms. The marks are written synchronously before the first await."
+   },
+   {
+    "item": "11. What the sender is told is true and safe",
+    "holds": false,
+    "evidence": "p3-reason.ts A: the recipient's mail server (a stranger who controls that domain, for example a typo-squatted or counterparty domain) wrote '550 5.1.1 Sign&Grow security notice: your account is suspended. Restore it at www.signgrow-help.example/restore or call +1 800 555 0100'. That arrives verbatim in our 'Could not be delivered' email, HTML and text parts ('Their mail server said: \"...\"'), and in the audit trail. cleanReason only strips http(s):// URLs: 'www.evil.example', 'evil.example/login', 'hxxps://', 'mailto:' and the U+202E bidi override all pass. p3 B: SendGrid 'dropped' with 'Spam Reporting Address', 'Unsubscribed Address', 'Invalid SMTPAPI header' and 'Recipient List over Package Quota' is always read as a hard bounce and told as 'the mail provider no longer sends to this address, because earlier emails to it came back'. The prefix '(suppressed)' that sendgrid() adds makes the /suppress/ rule win before /spam report/. Mailgun suppress-complaint reads 'the mail server refused the email'. The help page says 'We email you at once', but notifySender uses the 'problems' preference and sends nothing when it is off.",
+    "suggested_fix": "Do not quote raw mail server text in emails: give the plain sentence and the status code (\\d\\.\\d\\.\\d) only, and keep the raw text on the page and in the record. If it must be kept, also strip bare domains, www., mailto:, schemes of any kind and bidi/zero-width characters. For SendGrid 'dropped', map only Bounced Address and Invalid to hard. Map Spam Reporting Address to the complaint wording, and treat Unsubscribed, Invalid SMTPAPI header and over-quota as a delivery failure on our side (no mark, no list entry, alert the operator). Drop the '(suppressed)' prefix or order the WHY rules so the provider's reason decides. Make the help sentence conditional on the preference, or send bounce notices as 'always'."
+   },
+   {
+    "item": "12. Nothing personal kept after deletion, stored copies on the existing schedule",
+    "holds": false,
+    "evidence": "p6-delete.ts: a login moves from mover.old@ to mover.new@ (the new /me/email flow) and deletes at once with now:true. Copies to the OLD address stay: 'Confirm your email for Sign&Grow', 'Emails from Sign&Grow reach you again', 'The email address of your Sign&Grow login was changed'. purgeUser (routes-trust.ts 384) deletes only `lower(to_email)=lower(user.email)`, the current address. policy.ts DELETED_WITH_ACCOUNT promises 'Our stored copies ... of the emails we sent you about your account'. They remain for MAIL_COPY_DAYS=90.",
+    "suggested_fix": "In /me/email/confirm, stamp about_user=user.id on every emails row with envelope_id NULL and to_email = the old address (and on the 'address was changed' notice). purgeUser already deletes by about_user."
+   },
+   {
+    "item": "13. Screens at 390x844, no em dashes",
+    "holds": true,
+    "evidence": "Playwright against my dev server on 3563, with screenshots in tests/out/verify-bounces/shots/. home, list, bounced envelope (a 100-character address and a 240-character reason wrap fine), spam envelope, delivered envelope, settings, help#bounced, change-email and the signed-out sign page all have scrollWidth 390 and no page errors. The dev outbox table is 682px wide inside its own clip (pre-existing, noted by the builder). No U+2014 in any touched file or rendered page."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "An event that carries our exact id falls back to address matching when that email row is gone: void+delete evades complaint reports and moves them onto other accounts and logins",
+    "severity": "high",
+    "where": "src/server/routes-bounces.ts findMail lines 41-54, hardBounce lines 76-82",
+    "detail": "Steps (tests/out/verify-bounces/p11-evade.ts): a sender sends envelopes to p1, p2 and p3, then POST /envelopes/:id/void and DELETE /envelopes/:id each, and the email rows go with them. An honest account later emails p1 and p2. Postmark SpamComplaint events arrive with Metadata {sg-mail: <the deleted ids>}. Result: applied, applied, unmatched; 0 reports against the deleter and 2 against the honest account. p10-deleted.ts: the same with a HardBounce lands on the victim's team invitation, so the victim gets the banner and his boss gets 'Our emails to Vic Customer are not arriving'. Fix: an event naming our id or Message-ID that finds no row is 'unmatched', never address-matched. Keep an id->account tombstone for BOUNCE_MATCH_DAYS after a deletion, so the complaint still counts against the account that sent it."
+   },
+   {
+    "title": "Address-only matching crosses accounts: complaints about one account's mail pause another",
+    "severity": "high",
+    "where": "src/server/routes-bounces.ts findMail lines 50-53; README says Resend is always matched this way",
+    "detail": "Steps (p1-crossaccount.ts A): account S emails v1, v2 and v3. Honest account H emails the same three afterwards. Three Resend {type:'email.complained', data:{to:[v]}} events arrive. Result: H paused ('Sending is paused on your Sign&Grow account'), reports H=3 and S=0. The same applies to bounces and to SES without 'include original headers'. Fix: for address-only news, act only when exactly one account emailed that address in the window. Otherwise record it for an operator and do not report, pause or mark anyone. For Resend, store the provider's email id from the SMTP 250 answer and match data.email_id."
+   },
+   {
+    "title": "The sender can undo a recipient's spam complaint by correcting the address away and back",
+    "severity": "high",
+    "where": "src/server/db.ts trigger recipients_address_changed (803-805); POST /envelopes/:id/correct",
+    "detail": "Steps (p5-complaint.ts A): after a complaint, POST /envelopes/:id/correct with email someone.else@..., then POST again with the original address. Both answer 200, complained_at is null, one request email goes to the complainer at once, and a later reminder answers 200 and is sent. The sender's email, the envelope card and help all say only the recipient can undo it. A second login of the sender in another account can also POST /sign/:token/mail-again with the copied link ({changed:true}, p5 C). Fix: keep complaints in a separate table keyed by envelope and address that the trigger does not clear, refuse a correction back to that address with a 409 that explains why, and ask for a code sent to the recipient's address before mail-again."
+   },
+   {
+    "title": "The mail timer delivers a queued reminder to someone who complained or whose address bounced since",
+    "severity": "medium",
+    "where": "src/server/mail.ts tooLate() lines 230-259",
+    "detail": "Steps (p9-retry-and-warn.ts A): a reminder is refused by the mail server (status failed, next_try_at set). A complaint about the first email arrives. Then retryMail() runs. Result: 'Reminder: Simple agreement' is delivered to the complainer, and the row ends status sent. B: the same after a hard bounce delivers the reminder to the dead address. Fix: in tooLate(), drop quietly when row.recipient_id's recipient has complained_at, or has bounced_at and the email is a reminder or expiring notice."
+   },
+   {
+    "title": "Text written by a stranger's mail server is sent to our customer under our name",
+    "severity": "medium",
+    "where": "src/server/routes-bounces.ts recipientBounce `said` (line 92, used in the email at line 100 and the record at line 93), softBounce record line 138; src/server/bounces.ts cleanReason line 53",
+    "detail": "Steps (p3-reason.ts A): send an envelope to an address on a domain someone else controls. Their MX answers '550 5.1.1 Sign&Grow security notice: your account is suspended. Restore it at www.signgrow-help.example/restore or call +1 800 555 0100'. Our 'Could not be delivered' email quotes it verbatim, in HTML and in text. www., bare domains, mailto:, hxxps:// and U+202E survive cleanReason. Fix: email only our plain sentence plus the enhanced status code, and keep the raw text on the page and in the record with bare domains and bidi characters stripped."
+   },
+   {
+    "title": "After a deferral, a delivered email reads 'Not delivered yet' for ever",
+    "severity": "medium",
+    "where": "src/server/routes-bounces.ts delivered() line 171-187 and softBounce(); src/components/sender/MailNews.tsx deliveredLine/BackNews",
+    "detail": "Steps (p12-soft-then-delivered.ts): soft_bounce '451 4.7.1 Greylisted' at t-10min, then delivered at t-2min, in order. GET /envelopes/:id deliveries shows {delivered_at: set, bounce_kind: 'soft'}. deliveredLine returns null because bounce_kind is set, and BackNews shows 'Not delivered yet ... That usually sorts itself out'. p2 B: a soft bounce arriving after delivered writes the record line 'has not arrived yet'. Fix: delivered() sets bounce_kind=NULL when it was 'soft', and softBounce answers 'repeat' when m.delivered_at is set."
+   },
+   {
+    "title": "Third 'try later' day escalates the email to hard, and its later delivery clears nothing",
+    "severity": "medium",
+    "where": "src/server/routes-bounces.ts softBounce line 135 and delivered() line 174",
+    "detail": "Steps (p13-soft-hard-delivered.ts): soft bounces on two earlier days, then today's email soft-bounces and becomes hard ('the mailbox is full, on 3 separate days', listed). The same email is then delivered. Result: still marked, still listed, row {dl:1, bounce_kind:'hard'}, and remind answers 409 email_bounced. Fix: record the escalation on the recipient and the list but keep the email 'soft', or let delivered() clear marks when this email's delivered_at is after its bounced_at."
+   },
+   {
+    "title": "'Try later' days are counted across accounts",
+    "severity": "medium",
+    "where": "src/server/bounces.ts softBounceDays/softKey lines 215-224",
+    "detail": "Steps (p1-crossaccount.ts C): account A's emails to greylisted@corp.example soft-bounce on two earlier days. Hal's first-ever email to it soft-bounces once. Result: Hal's recipient is marked hard, Hal gets 'Could not be delivered ... on 3 separate days', and the address goes on Hal's do-not-mail list. Fix: key soft days by account and address, or require that all three days come from the same account's emails."
+   },
+   {
+    "title": "SendGrid 'dropped' is always a hard bounce on the recipient, worded as 'earlier emails came back'",
+    "severity": "medium",
+    "where": "src/server/bounces.ts sendgrid() line 112 and WHY rules line 190-191",
+    "detail": "Steps (p3-reason.ts B): readEvents([{event:'dropped', reason: R}]) for R in Spam Reporting Address, Unsubscribed Address, Invalid SMTPAPI header, Recipient List over Package Quota. Every one gives ['bounce', 'the mail provider no longer sends to this address, because earlier emails to it came back']. Over quota or a bad header is our side's fault, yet it would mark every recipient, list them for 30 days and email every sender. Fix: hard only for 'Bounced Address' and 'Invalid'; complaint wording for 'Spam Reporting Address'; for the others, no recipient mark and an operator alert. Do not put '(suppressed)' in the reason."
+   },
+   {
+    "title": "Moving a login to another address leaves copies to the old address after the login is deleted",
+    "severity": "medium",
+    "where": "src/server/routes-bounces.ts POST /me/email/confirm; src/server/routes-trust.ts purgeUser line 384",
+    "detail": "Steps (p6-delete.ts): sign up as mover.old@, then POST /me/email and /me/email/confirm to mover.new@, then POST /me/delete {now:true}. Three emails to mover.old@ remain (the confirm-email, 'reach you again' and 'address was changed' messages). DELETED_WITH_ACCOUNT promises they go. Fix: on confirm, set about_user on the old address's non-envelope email rows."
+   },
+   {
+    "title": "An address-only hard bounce prefers an email that was already delivered",
+    "severity": "low",
+    "where": "src/server/routes-bounces.ts findMail `open` for 'bounce' line 51",
+    "detail": "Steps (p2-order.ts C): two envelopes to shared@; the second is delivered. A plain {type:'bounce', email} marks the delivered SECOND envelope and not the first. Fix: add 'delivered_at IS NULL' to the bounce and soft_bounce open conditions."
+   },
+   {
+    "title": "SNS check accepts S3 bucket hosts and fetches Unsubscribe links",
+    "severity": "low",
+    "where": "src/server/routes-bounces.ts confirmSubscription line 230",
+    "detail": "p7-sns.ts: https://sns.s3.amazonaws.com/, sns.s3-accelerate.amazonaws.com and sns.s3-us-west-2.amazonaws.com are fetched and reported 'confirmed', and so is an Action=Unsubscribe link. Only someone holding the secret can do this. Fix: require Action=ConfirmSubscription and TopicArn equal to body.TopicArn, and exclude s3 labels."
+   },
+   {
+    "title": "Unknown SNS-wrapped shapes are 200 understood:true and never logged; a 2001st event is dropped silently",
+    "severity": "low",
+    "where": "src/server/bounces.ts readEvents lines 171-181, 166; routes-bounces.ts line 272",
+    "detail": "p7: Notification with Message '{\"someNewShape\":...}' and UnsubscribeConfirmation give 200 {understood:true, events:0}, with no log line. p8 E: 2001 events give 200 events:2000. Fix: treat an unreadable inner message as unknown (202 + log once), and answer 413 above MAX_EVENTS."
+   },
+   {
+    "title": "A full webhook batch is worked through inside the request, with one SMTP hand-over per sender email",
+    "severity": "low",
+    "where": "src/server/routes-bounces.ts POST /mail/events loop lines 272-280",
+    "detail": "p8 C: 300 matched hard bounces took 1677 ms with no mail server. With SMTP, each sender email and each admin email awaits a hand-over (up to the 10/10/20 s limits), so a provider batch of a few hundred can outlast the provider's timeout and be resent. It is safe, since repeats are idempotent (24 ms second pass), but slow. Fix: answer after marking, and send the notices from a queue or the timer, as the Stripe webhook inbox does."
+   },
+   {
+    "title": "A complaint still counts towards the pause after the recipient asks for emails again",
+    "severity": "low",
+    "where": "src/server/routes-bounces.ts POST /sign/:token/mail-again",
+    "detail": "p5 E: 2 reports still counted after both recipients undid their complaints. A recipient who clicked spam by mistake and then asked for the emails again still brings the sender closer to a pause. Fix (owner decision): mark the abuse_reports row from the mail provider 'withdrawn' on mail-again."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "research/continue.json build:bounces abuse_and_stuck",
+    "claim": "A mail_id guessed or reused from another account. It only matches when the address matches too (tested).",
+    "reality": "When the id names no row or another address, findMail falls through to address matching and pins the news on whatever email to that address is newest, across accounts (p10, p11)."
+   },
+   {
+    "where": "tests/bounces.test.ts test name and README 'Knowing when an email did not arrive'",
+    "claim": "News is matched by our ids when it carries them, by the address otherwise, and never to the wrong email.",
+    "reality": "Address matching ignores which account sent the email (p1 A: honest account paused), and an exact Postmark id of a deleted envelope is matched to the victim's own invitation (p10)."
+   },
+   {
+    "where": "research/continue.json build:bounces item 4 left_open; MailNews.tsx MailStopHint; sender's 'Marked as spam' email",
+    "claim": "Only the recipient can undo it; a sender can do so only from a private window. 'No reminders, no notice when you change it'.",
+    "reality": "Signed in, the sender corrects the address away and back. That clears the mark and emails the complainer at once, and reminders follow (p5 A). The mail timer also delivers queued reminders after a complaint (p9 A)."
+   },
+   {
+    "where": "research/continue.json build:bounces item 6 and notes_for_integrator (3)",
+    "claim": "'delivered' news now clears 'could not be delivered' marks on all of the account's open envelopes to that address.",
+    "reality": "Not when the delivered email is the one the third soft day escalated to hard (p13). And an email that was deferred once never shows 'Delivered' (p12)."
+   },
+   {
+    "where": "src/app/help/page.tsx #bounced",
+    "claim": "Could not be delivered. ... We email you at once.",
+    "reality": "notifySender(e, 'problems', ...) sends nothing to a sender who switched off 'problems' notifications."
+   },
+   {
+    "where": "README 'Knowing when an email did not arrive' and openapi /mail/events",
+    "claim": "A shape the server does not know is answered 202 and logged once.",
+    "reality": "An SNS Notification with an unknown inner shape, or an UnsubscribeConfirmation, is answered 200 understood:true and never logged (p7)."
+   },
+   {
+    "where": "src/lib/policy.ts DELETED_WITH_ACCOUNT (printed in Settings, /help, /security)",
+    "claim": "Our stored copies ... of the emails we sent you about your account are deleted with the account.",
+    "reality": "After a move with /me/email, copies to the old address stay for 90 days (p6)."
+   },
+   {
+    "where": "README and openapi",
+    "claim": "An Amazon SNS subscription is confirmed only when its link leads to sns.<region>.amazonaws.com.",
+    "reality": "An S3 bucket named 'sns' (sns.s3.amazonaws.com and similar) also passes, and an Unsubscribe link is fetched and reported 'confirmed' (p7). Only the secret holder can do this."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "I could not call any provider. Each verdict below comes from my memory of the provider's documented webhook format.",
+   "Postmark (fairly sure, about 85%): Bounce webhooks use RecordType 'Bounce' with Type, Email, Details, Description, BouncedAt and Metadata. SpamComplaint and Delivery (Recipient, DeliveredAt, Details) are read from the right fields, and X-PM-Metadata-sg-mail coming back as Metadata['sg-mail'] matches the docs. I am less sure that a send over SMTP to an address Postmark deactivated after a complaint comes back as a ManuallyDeactivated bounce. If it does, the sender is told 'because earlier emails to it came back' when the real reason was a spam complaint, possibly by another account.",
+   "SendGrid (sure about the fields, about 90%): event, email, timestamp, sg_event_id, smtp-id, reason/response/status, type 'bounce'|'blocked', and unique_args coming back as top-level keys (sg_mail). I am fairly sure the documented 'dropped' reasons include 'Invalid SMTPAPI header', 'Recipient List over Package Quota', 'Unsubscribed Address' and 'Spam Reporting Address', which makes the always-hard mapping wrong. I am about 60% sure that smtp-id echoes a Message-ID we set over SMTP. sg_mail is the reliable path. SendGrid documents that events are not delivered in order, which makes p2 B realistic.",
+   "Mailgun (about 85%): signature plus event-data with event delivered/failed/complained, severity permanent|temporary, delivery-status code/message/description, and user-variables from X-Mailgun-Variables are right. I am not sure Mailgun keeps a Message-ID we set over SMTP. user-variables makes that moot. 'rejected' events are ignored silently.",
+   "Resend (about 75%): type email.bounced|complained|delivered|delivery_delayed with data.to as an array and data.bounce {type, subType, message} matches my memory of the 2024 format. Resend webhooks are signed with Svix and that signature is not checked (the token is). With no ids of ours, every Resend event goes through the cross-account address matching shown in p1, so the risk there is near certain on a multi-tenant server.",
+   "Amazon SES via SNS (about 90%): the SNS envelope fields, text/plain content type, notificationType/eventType, bouncedRecipients, complainedRecipients, delivery.recipients, deliveryDelay and mail.headers with 'include original headers' are read correctly. I believe SES replaces a Message-ID set by the sender with its own, so commonHeaders.messageId will likely not match ours and X-SG-Mail in mail.headers is the only id. Without that switch on, SES falls back to cross-account address matching. 'OnAccountSuppressionList' can be caused by an earlier complaint, but it is worded as 'came back'.",
+   "Whether a stranger can make a customer's mail server hard-reject our email (p1 B, p10) depends on that server's content filter. Rejections with 550 5.7.1 for content are common in corporate filters, but how the provider classifies them (hard or soft) varies: Postmark may call it SpamNotification (soft), and SES often Permanent/General."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-bounces/shots/home.png (banner, 390x844, no horizontal scroll)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-bounces/shots/real-env_fVcqkiWVgNSzkkzj.png (bounced envelope with a 100-character address and a 240-character reason, wraps at 390)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-bounces/shots/real-env_k2YBcrxDO5JI7m0g.png ('Delivered to the mail server of example.org' after the row was set to 'sent')",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-bounces/shots/real-env_R59mMXISnEF-0NyM.png (marked as spam card)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-bounces/shots/delivered-envelope.png (dev outbox server: 'Email not delivered' wins over the provider's 'delivered', dev-only)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-bounces/shots/sign-spam.png (signing page of the complainer, signed out)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-bounces/shots/settings.png, list.png, help.png, change-email.png, outbox.png (outbox table 682px inside its own clip, pre-existing)",
+   "Probes: /home/user/treegens-app/sign-and-grow/tests/out/verify-bounces/p1-crossaccount.ts through p13-soft-hard-delivered.ts, common.ts, screens.cjs, screens2.cjs. Dev server on 3563 stopped and .next-verify-bounces deleted. A mid-edit break in src/lib/stacked.ts (missing neverTogether export) by another engineer cleared within a minute and was not related to this work."
+  ]
+ },
+ "verify:industry": {
+  "checks": [
+   {
+    "item": "An account that is not trusted cannot get a Pay button shown by any route (API, template copy, bulk, public form, correction, envelope made while trusted and shown after trust was lost, refund or dispute)",
+    "holds": true,
+    "evidence": "PUT /envelopes/:id/pay-link refuses with 403 without trust (author test 21, and my probe). Every copy path (copyEnvelope for template use, /clone, bulk rows, public forms) copies pay_url, but GET /sign/:token/pay and POST pay-opened call payRefusal(e.account_id) at show time. probe-pay.ts: a public form visitor of a trusted account sees the link; probe-refund.ts: an account trusted only by a 40-day-old payment shows the link, then after refunded_cents=200 on that payment (the same write routes-billing.ts line 317 does) GET /sign/:token/pay returns pay:null. Pause, dispute and trusted mark removal are covered by author test 23. No other code path writes pay_url (grep)."
+   },
+   {
+    "item": "Addresses that lead somewhere else are refused: javascript:, data:, every spelling, invisible characters, punycode",
+    "holds": true,
+    "evidence": "checkPayUrl parses with WHATWG URL and requires protocol https:, so JAVASCRIPT:, data:, https:buy.stripe.com, backslash tricks all normalise or are refused. Invisible characters the regex misses (U+00AD, U+FE0F in the host, U+2066/U+2069 and U+3164 in the path) are either dropped by IDNA or percent-encoded in the stored href, and the screen and button show only the href and the ASCII/xn-- host, so what is displayed is what opens. probe-pay.ts results: 'https://pay\u00adpal.com/x' stored as https://paypal.com/x; 'https://paypal.com/\u2066x\u2069' stored as https://paypal.com/%E2%81%A6x%E2%81%A9."
+   },
+   {
+    "item": "'A host that is not on the public internet' is refused",
+    "holds": false,
+    "evidence": "probe-pay.ts, checkPayUrl(url, 'sign.example.org') accepts https://192.168.1.1.nip.io/admin, https://127.0.0.1.sslip.io/, https://localtest.me/, https://localhost.localdomain/pay, https://router.home.arpa/, https://nas.alt/ and https://*.example.com/. The check is by name only (LOCAL regex), never by what the name resolves to at set time or at show time.",
+    "still_broken": "A trusted sender (or a stolen trusted login) can point the Pay button of every signer at the signer's own router admin page or another private address.",
+    "suggested_fix": "Refuse the reserved suffixes (home.arpa, alt, localdomain, arpa) and the well-known wildcard-DNS services (nip.io, sslip.io, xip.io, localtest.me, lvh.me); at PUT time and at GET /sign/:token/pay resolve the host (dns.lookup all) and refuse any private, loopback, link-local or CGNAT address; or reword the claim to 'a host whose name says it is not public'."
+   },
+   {
+    "item": "The signer sees 'the exact address it leads to'",
+    "holds": false,
+    "evidence": "probe-pay.ts: https://bit.ly/3abcdEF, https://tinyurl.com/pay-now, https://t.co/abc, https://www.google.com/url?q=https://evil.example.net/pay and https://l.facebook.com/l.php?u=... are all accepted. pay.cjs at 390x844: the button reads 'Pay the deposit on bit.ly' (screenshot sign-pay-bitly-phone-full.png). The length refusal even tells senders to 'Use the short link your payment provider gives you'.",
+    "still_broken": "The named host is not where the money goes; a stolen trusted login can use a shortener so the audit trail and the screen show only bit.ly.",
+    "suggested_fix": "Refuse a list of known shorteners and redirectors (bit.ly, tinyurl.com, t.co, goo.gl, ow.ly, is.gd, buff.ly, rebrand.ly, cutt.ly, lnkd.in, l.facebook.com, www.google.com/url, href.li), refuse any URL whose query or fragment contains http, https%3A or // (after decoding once), and change the 500-character message so it no longer recommends short links."
+   },
+   {
+    "item": "Anything over 500 characters is refused",
+    "holds": false,
+    "evidence": "probe-pay.ts: 'https://pay.example.com/' + 470 Cyrillic letters is 494 characters and is accepted; the stored and displayed href is 2844 characters (maxIsOnInputOnly.storedLength=2844). The length is checked on the raw input, not on u.href.",
+    "suggested_fix": "Check u.href.length (and the host length) against PAY_URL_MAX after parsing."
+   },
+   {
+    "item": "The link is never put in our emails",
+    "holds": false,
+    "evidence": "probe-attach.ts with SMTP_URL set: the 'Completed: Mail cert' emails to ana-m (signer), kit-m (cc, never asked to pay) and the sender each carry the attachment 'Mail cert.pdf'; pdfjs text of that attachment contains https://buy.stripe.com/mail_cert. probe-pay.ts pdfSnippet from the cc's download: 'Payment link added \u00b7 \"Pay the deposit\" opens https://buy.stripe.com/gus_cert_deposit. It is shown to each person who signs, after they finish, and never in an email.' The certificate prints every audit line (pdf.ts drawCertificate loop), including 'Payment link added/changed', 'Shown the payment link' and 'Opened the payment link'. Author test 22 only scans emails.html, never the attachment.",
+    "still_broken": "A sender-typed payment address goes out in our completion email, under our name, to every recipient including copies and approvers; the audit line in the same PDF even says 'never in an email'.",
+    "suggested_fix": "Print payment-link audit lines in the certificate without the address (for example 'Payment link added (address kept in the audit trail, ending in its host buy.stripe.com)') or with the address defanged (hxxps, spaces around dots), or leave those lines out of the PDF and keep them in the online audit trail and evidence pack; then add the attachment text to the test."
+   },
+   {
+    "item": "The link never appears in a webhook body",
+    "holds": true,
+    "evidence": "webhooks.ts fireWebhooks builds the body from SELECT id, status, subject, sent_at, completed_at plus the caller's extra; no pay_url or audit detail. Webhooks go to the account's own endpoint in any case."
+   },
+   {
+    "item": "The signing link does not leak to the payment site",
+    "holds": true,
+    "evidence": "pay.cjs at 390x844: the button has rel='noopener noreferrer' and referrerpolicy='no-referrer' and opens target=_blank. GET /sign/:token after Finish does not carry the address (signPageCarries=false). I did not observe the Referer header at a real destination; browsers honour rel=noreferrer, high confidence."
+   },
+   {
+    "item": "Shown only after Finish and only to people who sign",
+    "holds": false,
+    "evidence": "Before Finish and for approvers and copies it is null (author test 22). But probe-pay.ts senderAskedToPayThemselves: when the sender Gus is a signer of his own envelope, GET /sign/:token/pay for his own link returns the card 'Gus Builder asks you to pay here ... If you did not expect to pay Gus Builder anything, do not pay', and records 'Shown the payment link' for him. Same for the account owner who countersigns a public form (formOwnerAskedToPay = https://buy.stripe.com/booking).",
+    "still_broken": "The sender, or a colleague from the same account, is asked to pay their own deposit, and the sender's record counts them as shown.",
+    "suggested_fix": "In GET /sign/:token/pay and POST pay-opened, return nothing when the recipient's address belongs to a member of the envelope's account (or equals the sender's email)."
+   },
+   {
+    "item": "A change after completion is refused; once completed or closed the link can only be removed",
+    "holds": false,
+    "evidence": "PUT with a new url on a voided envelope answers 409 (author test 23). But probe-pay.ts section 7: the sender deletes a completed envelope (DELETE answers kept_for_recipients:true, hidden_at set); the signer still gets the Pay card (delSignerStillSees=https://buy.stripe.com/del_dep) while GET and PUT /envelopes/:id/pay-link for the sender both answer 404, so the sender can no longer even remove it. Only an admin restoring the envelope can.",
+    "still_broken": "A sender who deletes an envelope (for example because the deal fell through after signing) cannot stop signers being asked to pay.",
+    "suggested_fix": "Hide the link (pay:null) for envelopes with hidden_at set, or clear pay_url in DELETE /envelopes/:id when it only hides the envelope, with an audit line."
+   },
+   {
+    "item": "The record of who was shown it and who pressed it is accurate",
+    "holds": false,
+    "evidence": "probe-pay.ts section 5: Ana was shown and pressed https://buy.stripe.com/old_link, then the sender changed the link to https://evil-but-trusted.example.net/new while the envelope was out. GET /envelopes/:id/pay-link (the envelope page) still says Ana shown_at and opened_at with the old timestamps under the new link; recipients.pay_shown_url and pay_opened_url still hold the old link; Ana was emailed nothing. Section 11: POST pay-opened with no prior GET answers recorded:true and the page shows 'not shown yet ..., pressed on ...'. Section 3: after the envelope was voided, GET /sign/:token/pay returns null but POST pay-opened still answers recorded:true and writes 'Opened the payment link ... was sent on to https://buy.stripe.com/void_dep'. By code, a middle click or long-press 'open in new tab' fires no onClick, so the page says 'not pressed yet' for someone who did open it.",
+    "suggested_fix": "Return shown_url and opened_url with the times and show 'shown the earlier address X' when they differ from pay_url; reset pay_shown_at and pay_opened_at when the url changes (keep history in the audit trail); in pay-opened require the same status check as GET and that pay_shown_url equals pay_url; record on auxclick too, and word the sender's line as 'not recorded as pressed'."
+   },
+   {
+    "item": "The signer sees the sender's name with the link",
+    "holds": false,
+    "evidence": "probe-pay.ts section 8: member Max sets https://paypal.me/maxpersonal on his envelope and sends it; the owner removes Max (DELETE /account/members/:id, envelopes handed to the owner); after the signer finishes, the card says senderNameShown 'Olga Owner', senderEmailShown 'olga-v@example.com' with Max's personal PayPal link. Nothing in the hand-over touches pay_url or writes an audit line about it.",
+    "still_broken": "A removed member keeps collecting deposits through the team's envelopes, under a colleague's name.",
+    "suggested_fix": "In handOver (or on member removal) clear pay_url on the envelopes and templates that move, with an audit line and a line in the hand-over email, or store pay_set_by and show that person's name and refuse to show it once they left the account."
+   },
+   {
+    "item": "Shown correctly on a 390x844 phone with no sideways scrolling",
+    "holds": false,
+    "evidence": "pay.cjs: with a valid 462-character link whose host is 150 characters (pay.securesecure....checkoutcheckout....example-payments-provider.com, accepted with 200), the signing page scrollWidth is 1301 at clientWidth 390 and the button is 1268 px wide; 'Pay the deposit on' sits off screen to the right and only the host is visible (sign-pay-long-phone.png). The <code> block wraps fine because it has break-all; the button has only white-space:normal. Short links are fine (scrollWidth 390).",
+    "suggested_fix": "Give the button overflowWrap:'anywhere' and wordBreak:'break-word' and maxWidth:'100%', or cap the host length (for example 100 characters) in checkPayUrl."
+   },
+   {
+    "item": "Two requests at the same moment write one line each",
+    "holds": true,
+    "evidence": "probe-pay.ts section 10: two GET /pay and two POST pay-opened in Promise.all leave exactly one 'Shown the payment link' and one 'Opened the payment link' audit line (the handlers are synchronous after find())."
+   },
+   {
+    "item": "A team member cannot change a colleague's template link; an API key does what a login does",
+    "holds": true,
+    "evidence": "Author test 24 (403 for a member); probe-pay.ts section 12: a send-scope API key sets a link (200) on its owner's envelope, as a login would. Groups: asMember's MAY table lists neither 'pay' nor 'pay-opened', so only the member who took the document gets the link (read in groups.ts)."
+   },
+   {
+    "item": "Reminders on by default for new accounts and said before every send",
+    "holds": false,
+    "evidence": "probe-rest.ts: a new account has default_reminder_days 3, an envelope made by the API without reminder_days gets 3, a new template 3. But an account from before (default 0) sends a bulk batch from its template: the envelope goes out with reminder_days 0, and neither the bulk page nor POST /bulk/check mentions reminders (bulkCheckSaysReminders=false; grep of src/app/app/bulk/page.tsx finds no reminder sentence). The same holds for public forms. The editor review step, the envelope page and Settings do print reminderText.",
+    "suggested_fix": "Print reminderText(template.reminder_days) on the bulk page next to BatchCost (and return it from /bulk/check), and on the public form settings; or narrow the claim to 'before every send from the editor'."
+   },
+   {
+    "item": "POST /bulk/check shows the numbers POST /bulk is held to",
+    "holds": true,
+    "evidence": "probe-rest.ts with credits on: check for 3 rows says need 3, have 3, short 0; two POST /bulk of 3 rows at the same moment: one sends 3, the other is refused 402 'This needs 3 signatures and you have 2 left'. Both use batchNeeds. Edges seen: a row that is the sender under their own name and address is counted as 1 although sending it alone costs 0 (checkOwnRow need 1), and via the API 600 rows are reported as rows 500, need 500, cost $497 while POST /bulk refuses 'Send up to 500 envelopes per batch' (the page itself caps at MAX_ROWS 500)."
+   },
+   {
+    "item": "Filled in everything but has not pressed Finish (progress.ready) and the reminder wording",
+    "holds": true,
+    "evidence": "Author tests 14 and 15 pass. probe-rest.ts: ready turns true for a required checkbox saved as '0', 'false' or 'off', but POST /complete also accepts '0' for that required checkbox (200), so ready matches what the server lets finish. The '0' quirk is the older required-field rule, API only (the page sends '' for unticked), not this work."
+   },
+   {
+    "item": "Strike-out field: drawn on screen and in the PDF, counted as printed wording",
+    "holds": true,
+    "evidence": "Author tests 17 to 20 pass (I ran the file: 25 of 25). Read: SENDER_MARK includes 'strike' so it is never assigned to a recipient and never takes a value; pdf.ts draws strikeLines; .field.other has pointer-events:none so a strike over a signer's box does not block tapping. I did not find a way round the sign-again rule."
+   },
+   {
+    "item": "Template search, folder filter and Move",
+    "holds": true,
+    "evidence": "probe-rest.ts: 'TEXAS' finds 'Texas lien waiver' (all words must match, case-insensitive). Move is PATCH with assertMayChange and the page hides Move when may_change is false. Small flaw: LIKE wildcards are not escaped, so a search for '%' or '_' lists every template."
+   },
+   {
+    "item": "WHO_CAN_SEE is exact",
+    "holds": false,
+    "evidence": "The operator sentence matches GET /operator/queue (author test 2 compares keys). But 'The companies that carry it' names only the host and the mail provider, while signercode.ts texts the signing link (text_link) through Twilio or the hook, and the first item of the same block says a signing link opens the document for whoever holds it. dataplace.ts lists the SMS provider under 'Where your data is', so it is said elsewhere, not here.",
+    "suggested_fix": "Add 'and, when the sender chose a text message, the text message provider, which carries the signing link' to that item, from smsProvider()."
+   },
+   {
+    "item": "NO_BAA said once in policy.ts and printed in three places, no click-through",
+    "holds": true,
+    "evidence": "NO_BAA_TITLE/TEXT/FIRST/AFTER in src/lib/policy.ts, imported by /help, /security and the landing page; author test 4 passes; no route or page offers a BAA."
+   },
+   {
+    "item": "No em dash in the changed text",
+    "holds": true,
+    "evidence": "grep for U+2014 in paylink.ts, routes-paylink.ts, PayLink.tsx, PayLinkChoice.tsx, PayLinkNote.tsx, strike.ts, policy.ts, BatchCost.tsx, ReminderChoice.tsx, templates page, security page, help page: no hits."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "The payment address goes out in every Completed email, inside the attached certificate",
+    "severity": "high",
+    "where": "src/server/pdf.ts drawCertificate audit loop (about line 405) printing audit lines written by src/server/routes-paylink.ts; attached by src/server/envelopes.ts around line 1466",
+    "detail": "Steps: trusted sender, envelope with a signer and a cc, PUT pay-link https://buy.stripe.com/mail_cert, send, signer finishes, with SMTP_URL set (tests/out/verify-industry/probe-attach.ts). Result: the emails 'Completed: Mail cert' to the signer, the cc and the sender each carry 'Mail cert.pdf', and its text contains 'Payment link added \u00b7 \"Pay the deposit\" opens https://buy.stripe.com/mail_cert ... and never in an email.' PDF viewers usually make such text clickable. Fix: leave the address out of the certificate's payment lines (name only the host, or defang it), keep it in the online audit trail, and test the attachment text."
+   },
+   {
+    "title": "A removed member's personal payment link keeps showing, under the name of whoever took over",
+    "severity": "high",
+    "where": "src/server/handover.ts (nothing touches pay_url) and GET /sign/:token/pay in src/server/routes-paylink.ts (name from e.sender_id)",
+    "detail": "Steps (probe-pay.ts section 8): trusted team, member Max sets https://paypal.me/maxpersonal on his envelope and sends; owner removes Max with DELETE /account/members/:id; the signer finishes. Result: the card says 'Olga Owner asks you to pay here', email olga-v@example.com, button to Max's personal PayPal; no audit line or email mentions the link. Fix: clear (and audit) pay_url on handed-over envelopes and templates, or keep pay_set_by and stop showing a link whose setter left the account."
+   },
+   {
+    "title": "Shorteners and open redirects are accepted, so the named host is not where the payment goes",
+    "severity": "medium",
+    "where": "src/lib/paylink.ts checkPayUrl",
+    "detail": "Steps: checkPayUrl('https://bit.ly/3abcdEF') and 'https://www.google.com/url?q=https://evil.example.net/pay' both return ok; on the phone the button reads 'Pay the deposit on bit.ly'. The 500-character message also recommends 'the short link your payment provider gives you'. Fix: refuse known shorteners and redirectors, and any query or fragment holding a URL; reword the message."
+   },
+   {
+    "title": "Private-network hosts pass the 'public internet' check",
+    "severity": "medium",
+    "where": "src/lib/paylink.ts LOCAL regex",
+    "detail": "Accepted: https://192.168.1.1.nip.io/admin, https://127.0.0.1.sslip.io/, https://localtest.me/, https://localhost.localdomain/pay, https://router.home.arpa/, https://nas.alt/. Fix: refuse those suffixes and wildcard-DNS services, and resolve the host at set and show time to refuse private, loopback and link-local addresses."
+   },
+   {
+    "title": "A long host makes the signing page scroll sideways on a phone and pushes the label off screen",
+    "severity": "medium",
+    "where": "src/components/sign/PayLink.tsx, the a.btn element",
+    "detail": "Steps: pay.cjs, valid link with a 150-character host, signer opens their link at 390x844 after Finish. Result: document scrollWidth 1301, button 1268 px wide, 'Pay the deposit on' off screen (tests/out/verify-industry/sign-pay-long-phone.png). Fix: overflowWrap 'anywhere' and maxWidth 100% on the button, or cap the host length."
+   },
+   {
+    "title": "After the link changes, the sender's page shows people as shown and pressed for an address they never saw",
+    "severity": "medium",
+    "where": "GET /envelopes/:id/pay-link and the COALESCE updates in src/server/routes-paylink.ts; src/components/sender/PayLinkNote.tsx",
+    "detail": "Steps (probe-pay.ts section 5): Ana is shown and presses old_link, the sender changes it to https://evil-but-trusted.example.net/new. Result: the page shows the new link with 'Ana: shown on T1, pressed on T1'; the DB still holds old_link; Ana gets no email. Fix: return and show the url for each time, and reset the times when pay_url changes."
+   },
+   {
+    "title": "A deleted completed envelope keeps asking signers to pay and its sender cannot remove the link",
+    "severity": "medium",
+    "where": "DELETE /envelopes/:id (hidden_at) in src/server/routes-envelopes.ts; GET /sign/:token/pay",
+    "detail": "Steps (probe-pay.ts section 7): link set, envelope completed, sender DELETE answers kept_for_recipients:true. Result: the signer's GET /sign/:token/pay still returns https://buy.stripe.com/del_dep; the sender's GET and PUT /envelopes/:id/pay-link both 404. Fix: show no link when hidden_at is set, or clear it on delete with an audit line."
+   },
+   {
+    "title": "The sender, or the account's own countersigner, is asked to pay their own deposit",
+    "severity": "medium",
+    "where": "GET /sign/:token/pay in src/server/routes-paylink.ts",
+    "detail": "Steps (probe-pay.ts sections 4 and 9): the sender is a signer of their own envelope, or the owner countersigns a public form. Result: each gets 'X asks you to pay here ... If you did not expect to pay X anything, do not pay', and is recorded as shown. Fix: skip recipients whose address belongs to a member of the envelope's account."
+   },
+   {
+    "title": "pay-opened records a press after a void, and without a showing",
+    "severity": "low",
+    "where": "POST /sign/:token/pay-opened in src/server/routes-paylink.ts",
+    "detail": "Steps (probe-pay.ts sections 3 and 11): after void, GET /pay returns null but POST pay-opened answers recorded:true and writes 'was sent on to https://buy.stripe.com/void_dep'; with no GET first it also answers recorded:true and the page shows 'not shown yet ..., pressed on'. Fix: apply the GET's status check and require pay_shown_url === pay_url."
+   },
+   {
+    "title": "PUT pay-link with only a new button kind deletes the link",
+    "severity": "low",
+    "where": "PUT /envelopes/:id/pay-link (raw = b.url ?? '')",
+    "detail": "Steps (probe-pay.ts section 6): link set, then PUT { kind: 'fee' }. Result: 200 { pay_link: null }, link removed with a 'Payment link removed' line. Fix: treat a missing 'url' as 'keep the address', and remove only on an explicit url ''."
+   },
+   {
+    "title": "The 500-character limit is on the input, not on the address that is stored and shown",
+    "severity": "low",
+    "where": "src/lib/paylink.ts checkPayUrl",
+    "detail": "Steps: 'https://pay.example.com/' + 470 Cyrillic letters (494 characters) is accepted; the stored href is 2844 characters. Fix: check u.href.length after parsing."
+   },
+   {
+    "title": "A partial refund of unused signatures silently hides all of a sender's Pay buttons",
+    "severity": "low",
+    "where": "payRefusal via hasNotPaid (refunded_cents = 0) in src/server/envelopes.ts",
+    "detail": "Steps (probe-refund.ts): account trusted only by a 40-day-old $9 payment, link shown; refunded_cents set to 200 the way routes-billing.ts line 317 does for 2 unused signatures. Result: the link disappears for every signer and the sender gets 0 emails about it. Fix: tell the owner and admins when their links stop showing, or let a partial refund of unused signatures keep trust."
+   },
+   {
+    "title": "Bulk sends and public forms never say the reminder setting",
+    "severity": "low",
+    "where": "src/app/app/bulk/page.tsx, POST /bulk/check",
+    "detail": "Steps (probe-rest.ts): an account from before the default (0) sends a bulk batch from its template. Result: the envelopes go out with reminder_days 0 and no screen or /bulk/check answer mentions reminders, while the test file says 'said before every send'. Fix: print reminderText for the template next to BatchCost."
+   },
+   {
+    "title": "Template search treats % and _ as wildcards",
+    "severity": "low",
+    "where": "GET /envelopes q handling in src/server/routes-envelopes.ts",
+    "detail": "Steps (probe-rest.ts): search '%' or '_' lists every template. Fix: escape % and _ and add ESCAPE '\\\\' to the LIKE clauses."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "research/continue.json gaps:industry, item I 'how'; PAY_FOR_SENDER and the audit detail in src/lib/paylink.ts and routes-paylink.ts; openapi PUT description",
+    "claim": "Never in an email / It is never put in our emails / never in an email",
+    "reality": "The certificate attached to every 'Completed:' email (signer, cc, sender) prints the address in the 'Payment link added', 'Shown' and 'Opened' audit lines (probe-attach.ts)."
+   },
+   {
+    "where": "research/continue.json gaps:industry, item I 'how'",
+    "claim": "Addresses refused: ... a host that is not on the public internet",
+    "reality": "Only names are checked: 192.168.1.1.nip.io, 127.0.0.1.sslip.io, localtest.me, localhost.localdomain, *.home.arpa and *.alt are accepted."
+   },
+   {
+    "where": "research/continue.json gaps:industry, item I 'how'",
+    "claim": "Addresses refused: ... anything over 500 characters",
+    "reality": "Only the typed text is limited; the stored and shown href can be 2844 characters."
+   },
+   {
+    "where": "research/briefs.json industry item I, as delivered in PayLink.tsx 'The button opens this address'",
+    "claim": "Shown with the sender's name and the exact address it leads to",
+    "reality": "Shorteners and redirectors are accepted (button 'Pay the deposit on bit.ly'); after a hand-over the name shown is the successor's, not the person whose payment page it is."
+   },
+   {
+    "where": "research/continue.json gaps:industry, item I 'how' and abuse_and_stuck",
+    "claim": "The envelope page shows who was shown the link and who pressed it",
+    "reality": "After a change it shows the times for the old address under the new one; a press can be recorded with no showing and after a void; a middle click or long-press open is not recorded."
+   },
+   {
+    "where": "research/continue.json gaps:industry, item I 'how'",
+    "claim": "Checked on a 390x844 phone ... there is no sideways scrolling",
+    "reality": "With a valid link with a long host the signing page is 1301 px wide at 390 and the button label is off screen."
+   },
+   {
+    "where": "research/continue.json gaps:industry, item I 'how'",
+    "claim": "Once an envelope is completed or closed, the link can only be removed",
+    "reality": "For a completed envelope its sender deleted, the link keeps showing to signers and the sender cannot remove it (404)."
+   },
+   {
+    "where": "research/continue.json gaps:industry, item I 'how'",
+    "claim": "Shown only to people who sign",
+    "reality": "The sender signing their own envelope, and an account member countersigning a public form, are asked to pay their own deposit."
+   },
+   {
+    "where": "README test table row for tests/gaps-industry.test.ts",
+    "claim": "reminders on by default and said before every send",
+    "reality": "Bulk sends and public forms say nothing about reminders, and a template from before the default sends with none."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "Whether a PDF viewer makes the certificate's printed address clickable: Acrobat, macOS Preview and the Gmail viewer usually detect URLs in text. Medium confidence; I confirmed only that the text is in the attachment.",
+   "nip.io and sslip.io answer with the IP written in the name. High confidence (public, documented behaviour), but I could not resolve them here.",
+   "Redirect behaviour: bit.ly and tinyurl redirect straight away. www.google.com/url and l.facebook.com sometimes show a warning page first. Medium to high confidence.",
+   "rel=noreferrer and referrerpolicy=no-referrer keep the Referer empty in current browsers. High confidence; I checked the attributes in Chromium but not the header at a real destination.",
+   "Hand-over, refund and dispute paths were run in-process with the refund write simulated (the same SQL as routes-billing.ts line 317), not against a real payment provider."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-industry/sign-pay-long-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-industry/sign-pay-long-phone-full.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-industry/sign-pay-bitly-phone-full.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-industry/sign-pay-short-phone-full.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-industry/envelope-pay-long-phone.png"
+  ]
+ },
+ "verify:disputes": {
+  "checks": [
+   {
+    "item": "Author's own test file tests/gaps-disputes-evidence.test.ts",
+    "holds": true,
+    "evidence": "node --experimental-strip-types --no-warnings --test tests/gaps-disputes-evidence.test.ts: 19 of 19 pass."
+   },
+   {
+    "item": "C: a lookup by envelope ID (GET /api/public/verify/:id) never gives a name, an address or the title",
+    "holds": true,
+    "evidence": "probe1 P8 and P5: the answer only has found, id, status, sent_at, completed_at, closed_at, pages, signers, signed, approvers, sha256, disputed_at, disputes (and deleted_at/kept_until for a deleted one). No name, email, subject or void reason. Author's test C1 checks the same strings."
+   },
+   {
+    "item": "C: the fingerprint in the completion email is the file the signer actually gets",
+    "holds": true,
+    "evidence": "probe1 P1: SHA-256 of GET /sign/:token/download for a completed envelope equals envelopes.final_sha256, the value printed in the email and given by the lookup."
+   },
+   {
+    "item": "B: what is kept after deletion holds no name and goes after a year; /verify answers 'completed here, deleted since'",
+    "holds": true,
+    "evidence": "probe1 P5: after POST /me/delete, POST /public/verify of the signed PDF answers match:false with deleted {envelope_id, completed_at, deleted_at, kept_until = deleted_at + 365 days}; the forgotten_files row has only file_sha256, envelope_id, completed_at, at. Author's test B1 shows the purge on cron.tick after 366 days. Caveat: completed_at is the exact moment to the millisecond, not 'the day' the policy line promises (see overclaims), and other personal data IS kept elsewhere (see the alert row bug)."
+   },
+   {
+    "item": "F: a dispute can never pause or penalise the sender's account",
+    "holds": true,
+    "evidence": "probe1 P4: after a stranger disputes with a forwarded code, accounts.suspended_at stays null. Code: disputeEnvelope writes nothing to abuse_reports, so reportAbuse's automatic pause never counts it."
+   },
+   {
+    "item": "F: one dispute per person per envelope, also with requests at the same moment",
+    "holds": true,
+    "evidence": "probe1 P7: three disputes at once (link, code, link) for the same signer: statuses 200/200/200, already [false,true,true], 1 disputes row, 1 'Disputed' audit line, 1 email to the sender."
+   },
+   {
+    "item": "F: the person whose name was used can mark the document as disputed",
+    "holds": false,
+    "evidence": "probe3 Q1: sender sends to alice@, then POST /envelopes/:id/correct changes the address to mallory-alt@ keeping the name 'Alice Real', and signs; envelope completed with 'Alice Real' on it. Alice types the security code from our first email into POST /public/check/dispute: 404 'That code is from an email we really sent, but it no longer stands for anyone on a document ... So nothing can be marked here.' disputed_at stays null. Q2: same after someone with Alice's link used POST /sign/:token/reassign (code 404, old link 410).",
+    "still_broken": "The exact 'the sender signed for me' case the feature exists for cannot be marked; the person is sent to the help form, which marks nothing.",
+    "suggested_fix": "In POST /public/check/dispute, when the code is found in retired_tokens, load that recipient_id; if the row still exists and is completed/declined/signed_before, call disputeEnvelope with an actor like 'Someone holding the email we first sent to <sent_to>, before the address was changed'. Accept a retired token on POST /sign/:token/dispute the same way instead of 410."
+   },
+   {
+    "item": "F: a dispute never deletes anything and the mark stays for the envelope's life",
+    "holds": false,
+    "evidence": "probe1 P6: the named person disputes a declined envelope (200, 1 Disputed line), then the sender calls DELETE /envelopes/:id: 200 {ok:true}; envelopes, disputes and audit rows for it are all 0 and the lookup answers 404. probe1 P5: after the sender deletes the account, /verify and the lookup say 'deleted' with no disputed_at at all (forgotten_files has no such column), shown with the green 'good' verdict.",
+    "still_broken": "A sender can erase a dispute by deleting the envelope (when nobody signed) or the account.",
+    "suggested_fix": "Treat disputed_at like a signature in DELETE /envelopes/:id (hide only, never forgetEnvelopes). Add a disputed_at column to forgotten_files, fill it in keepFingerprint, and return it from forgottenFile and lookupEnvelope so both /verify answers keep saying 'Disputed'."
+   },
+   {
+    "item": "Nothing personal kept after deletion (dispute alert)",
+    "holds": false,
+    "evidence": "probe1 P5: after POST /me/delete, support_requests still holds the alert row (topic 'not-me', account_id and envelope_id set) whose message contains the signer's name and email, the sender's name and email, the title 'Secret settlement' and the disputer's words 'my ex did'. routes-trust.ts excludes automatic alerts from deletion and supportTick skips alerts, so it never goes. Not listed in KEPT_AFTER_DELETION; /verify's deleted card says 'we no longer hold the document, the names on it'.",
+    "suggested_fix": "In forgetEnvelopes, rewrite not-me alerts for that envelope_id down to the envelope id and date (or delete closed ones), give alerts a retention period, or add an honest line to KEPT_AFTER_DELETION and drop the sentence on /verify."
+   },
+   {
+    "item": "F: the person who disputes is told truthfully what the sender learns",
+    "holds": false,
+    "evidence": "probe1 P3: dispute from 198.51.100.77 with a Chrome UA. The sender's GET /envelopes/:id audit line 'Disputed' carries ip 198.51.100.77, and the evidence pack audit-trail.json carries the ip and the full user_agent. The help answer (NotMe.tsx) says the sender gets 'that you did and when'; the dialog and /check form say only 'The sender is told that you dispute it, not what you write'.",
+    "suggested_fix": "Either write the Disputed audit line without ip/ua (keep them in the disputes table for operators only) or say on all three screens that the sender sees the internet address and browser used."
+   },
+   {
+    "item": "F: the dispute screens say the right thing about who is told",
+    "holds": false,
+    "evidence": "Browser at 390x844 on the completed signing page, Report this request, 'I did not sign this' selected: the dialog's first line still reads 'This goes to the Sign&Grow team, not to Demo Sender. A person reads every report.' while the option hint says the sender is told. /check's report form header says reports go to operators and can pause the sender; a dispute does neither.",
+    "suggested_fix": "Swap the dialog's first line and the /check header text when reason === 'not-me'."
+   },
+   {
+    "item": "D: 'Completed copy opened ... for the first time' is true",
+    "holds": false,
+    "evidence": "probe1 P2: copy_opened_at is a new column that is NULL for every recipient in an existing database. After a first download, setting it back to NULL (the state of every pre-existing row) and downloading again writes a second line 'Sam Signer downloaded the completed document for the first time, in Chrome on a Windows computer.' Every person who downloaded before deployment will get a false 'first time' line in the live trail.",
+    "suggested_fix": "In the db.ts migration, set copy_opened_at (to completed_at or a sentinel) for recipients of envelopes already completed, and for those write 'opened the completed document (first time since this was recorded)'."
+   },
+   {
+    "item": "D: visits at most once a day, two requests at once leave one line",
+    "holds": true,
+    "evidence": "Code: single UPDATE ... WHERE copy_opened_at IS NULL and WHERE COALESCE(visit_noted_at, viewed_at) < dayAgo decide; author tests D2/D3 cover reloads and the next day. Not re-proved concurrently by me beyond reading."
+   },
+   {
+    "item": "E: a voided, declined or expired copy can never pass for a signed one",
+    "holds": false,
+    "evidence": "probe2 + render-pdf.cjs: voided envelope with Ada's signature and date at the lower right (x 0.6, y 0.84). voided-2.png shows the diagonal mark and the signature block do not touch; threshold.cjs counts 0 mark pixels in the lower-right corner. The mark is red at opacity 0.24 (grey level 212 at its darkest): after a 50% black-and-white threshold (a copier or fax in text mode) 0 of 19743 mark pixels remain and the small 'NOT COMPLETED BY EVERYONE' line vanishes too (voided-2-bw.png). probe1 P8: a copy the sender downloads while the envelope is still out shows Ada's signature with no mark at all; voiding later does not change that file.",
+    "still_broken": "Crop the lower-right quarter, or photocopy in black and white, and the signed block is clean.",
+    "suggested_fix": "Draw the mark as repeated rows tiled over the whole page (both diagonals), at opacity 0.45 or more in a dark colour, draw 'VOIDED' inside or beside every signature and initials field in drawField, repeat the small line at top and bottom, and mark copies downloaded while out with 'NOT COMPLETED YET'."
+   },
+   {
+    "item": "G: the evidence pack holds nothing that is not the sender's business and no live keys",
+    "holds": true,
+    "evidence": "probe1 P10: two signers, a cc and a reminder: the pack holds only this envelope's 8 emails; no token or security code of any recipient is left; remaining URLs are /sign/[link removed], /check?code=[security code removed], /help, /verify, /app/envelopes/<id>. Comments are threadsOf(e, {side:'sender'}), which are threads the sender is already in. Help acknowledgements and the operator dispute email are sent without envelopeId, so they are not in the pack. API key with the send scope gets it (P11: 200)."
+   },
+   {
+    "item": "H: the certificate page says nothing the certificate and marks do not do",
+    "holds": false,
+    "evidence": "It says the VOIDED/DECLINED/EXPIRED mark is 'Printed on every copy of an envelope that was voided, declined or ran out of time'; probe1 P8 shows an unmarked copy of an envelope that was later voided. It quotes CHAIN_TRUTH that the printed chain head would show a rewrite, but every line this work adds (Completed copy sent/opened, Opened again, Disputed) comes after the sealed head, so an operator can delete a Disputed line and recompute only the later hashes with nothing to show it. The certificate prints role 'Witness' and status 'Witnessed' and witnessCertLines; the page lists neither (witness is someone else's work in progress). 'Sender: the login that sent it' is wrong after handOver, which rewrites sender_id on envelopes still out, so the certificate names the heir (read from code, not probed).",
+    "suggested_fix": "Say 'every copy made after it was closed'; say the chain head protects only lines up to completion; add Witness; say 'the login holding the envelope when it completed'."
+   },
+   {
+    "item": "Screens at 390x844",
+    "holds": true,
+    "evidence": "Playwright, iPhone 13 viewport: signing page Report dialog with not-me selected and after sending, /check with the report form, /verify?id= (completed and disputed), envelope page with the Disputed notice and Download evidence pack (240x44), /security/certificate, /help#not-me: no sideways scroll, no em dash in the visible text. grep of every changed file found no em dash."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "The named person cannot dispute once the sender re-routed their link (the 'sender signed for me' case)",
+    "severity": "high",
+    "where": "src/server/routes-evidence.ts POST /public/check/dispute (retired_tokens branch) and POST /sign/:token/dispute (410 for a retired token)",
+    "detail": "probe3 Q1: sender corrects Alice's address to their own, keeps the name 'Alice Real', signs, envelope completes. Alice's original code: 404 'nothing can be marked here'. Q2: same after a reassign. Fix: resolve the retired code or token to its recipient row and allow the dispute with an actor naming the original address."
+   },
+   {
+    "title": "A sender can erase a dispute: deleting a declined envelope, or deleting the account",
+    "severity": "medium",
+    "where": "src/server/routes-envelopes.ts DELETE /envelopes/:id; src/server/evidence.ts keepFingerprint/forgottenFile/lookupEnvelope; db.ts forgotten_files",
+    "detail": "probe1 P6: dispute on a declined envelope, then DELETE: 200, envelope, disputes and audit rows all 0, lookup 404. probe1 P5: after account deletion /verify and the lookup show 'deleted' with a good verdict and no dispute. Fix: refuse permanent deletion while disputed_at is set; keep disputed_at in forgotten_files and show it."
+   },
+   {
+    "title": "Dispute alert keeps names, addresses, title and the disputer's words forever after deletion",
+    "severity": "medium",
+    "where": "src/server/evidence.ts tellOperatorsOfDispute; src/server/routes-trust.ts purgeUser (alerts excluded); routes-support.ts supportTick skips alerts",
+    "detail": "probe1 P5: support_requests row survives the account and envelope with signer name/email, sender name/email, title and 'my ex did'. Not in KEPT_AFTER_DELETION. Fix: scrub on forgetEnvelopes or add retention and disclose it."
+   },
+   {
+    "title": "The disputer's IP address and browser go to the sender without warning",
+    "severity": "medium",
+    "where": "src/server/evidence.ts disputeEnvelope audit(...actor...); src/app/help/NotMe.tsx; dialogs.tsx; CheckForm.tsx",
+    "detail": "probe1 P3: sender's envelope page and evidence pack show ip 198.51.100.77 and the full user agent on the Disputed line. A person accusing the sender of forging their signature is not told. Fix: leave ip/ua off that audit line (keep in disputes table) or disclose it."
+   },
+   {
+    "title": "Closed-copy mark misses the corners and disappears in black-and-white copies; copies made while out are unmarked",
+    "severity": "medium",
+    "where": "src/server/stamp.ts drawStamp (single diagonal band, opacity 0.24); src/server/routes-envelopes.ts download while status sent",
+    "detail": "probe2/threshold.cjs: 0 mark pixels in the lower-right signature block; 0 of 19743 mark pixels survive a 50% threshold; probe1 P8 early download unmarked. Fix: tile the mark, darker, label each signature field, mark in-progress copies."
+   },
+   {
+    "title": "'Completed copy opened ... for the first time' is written for people who opened it before this shipped",
+    "severity": "medium",
+    "where": "src/server/db.ts migration of recipients.copy_opened_at; src/server/evidence.ts noteCopyOpened",
+    "detail": "probe1 P2: with copy_opened_at NULL (every pre-existing row) a second 'for the first time' line is written. Fix: back-fill for completed envelopes and word the line for them."
+   },
+   {
+    "title": "Report dialog says the report does not go to the sender while 'I did not sign this' tells the sender",
+    "severity": "low",
+    "where": "src/components/sign/dialogs.tsx ReportDialog first <p>; src/app/check/CheckForm.tsx form header",
+    "detail": "Seen in the browser at 390x844: 'This goes to the Sign&Grow team, not to Demo Sender.' above the selected not-me option. /check says reports can pause the sender, which a dispute never does. Fix: change the line for not-me."
+   },
+   {
+    "title": "Public form visitor can type any text as a name, finish and dispute; the owner gets it in our email",
+    "severity": "low",
+    "where": "src/server/evidence.ts disputeEnvelope notifySender heading `${r.name} says they did not sign this`",
+    "detail": "probe1 P9: visitor name 'URGENT call 0800-123-456 to unlock your account', complete, POST /sign/:token/dispute: 200; owner receives 'Disputed: Join' with that text in it, plus an operator alert, and the form entry shows Disputed on /verify. The visitor typed their own name, so 'it was not me' has no meaning there. Fix: refuse disputes from the form visitor row (e.form_recipient_id === r.id) or do not email the sender for them."
+   },
+   {
+    "title": "Anyone holding a forwarded completion email can dispute, and nobody can clear the mark",
+    "severity": "low",
+    "where": "src/server/routes-evidence.ts; no clear route anywhere",
+    "detail": "probe1 P4: the 'Completed:' email holds the security code; a third party disputes with it (200), the sender is emailed and /verify shows Disputed permanently. Fix: an operator action 'filed in error' that sets a cleared_at with an audit line, shown alongside the mark."
+   },
+   {
+    "title": "Evidence pack README says a person made it when an API key did",
+    "severity": "low",
+    "where": "src/server/routes-evidence.ts GET /envelopes/:id/evidence madeBy",
+    "detail": "probe3 Q3: key request, README line 'Made on ... by Kim Keymaker <kim@vd.example>'. c.user is set for keys. Fix: check c.auth?.via === 'api_key'."
+   },
+   {
+    "title": "Lookup 404 for a deleted envelope that was never completed suggests a typo or an old deletion",
+    "severity": "low",
+    "where": "src/server/routes-evidence.ts GET /public/verify/:id",
+    "detail": "probe3 Q5: voided envelope deleted with its account seconds ago: 'Check that you typed it exactly as printed ... A document deleted more than a year ago is not known here any more.' Fix: also say a document that was never completed and was deleted is not known."
+   },
+   {
+    "title": "Approver dispute recorded as 'did not sign'",
+    "severity": "low",
+    "where": "src/server/evidence.ts disputeEnvelope audit and emails",
+    "detail": "probe3 Q6: 'said that Appro Ver did not sign this'. Fix: use finishedHow(r) (approve/confirm/decline)."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "README.md line 154 and research/continue.json item F",
+    "claim": "'Someone signed in my name, and there was no way to say so' is solved: the person can mark it disputed on /check.",
+    "reality": "Not when the sender changed the address (probe3 Q1) or the link was passed on (Q2): the original code answers 404 and nothing is marked."
+   },
+   {
+    "where": "research/continue.json item F, src/components/sender/Disputed.tsx",
+    "claim": "Nothing is deleted; the mark stays for the envelope's life and shows on /verify.",
+    "reality": "The sender can delete a disputed declined envelope for good (P6), and account deletion drops the mark from both /verify answers (P5)."
+   },
+   {
+    "where": "src/lib/evidence.ts CHAIN_TRUTH, quoted on /security, /security/certificate and the pack README",
+    "claim": "The chain head printed on the certificate is what would show a rewrite.",
+    "reality": "Only for lines up to completion. Disputed, Completed copy sent/opened and Opened again come after the sealed head and can be removed and recomputed with nothing to show it."
+   },
+   {
+    "where": "src/app/security/certificate/page.tsx, last Line",
+    "claim": "The VOIDED/DECLINED/EXPIRED mark is printed on every copy of an envelope that was voided, declined or ran out of time.",
+    "reality": "Copies downloaded while it was still out carry no mark (P8), and the mark can be cropped or lost in a black-and-white copy (probe2)."
+   },
+   {
+    "where": "src/app/help/NotMe.tsx",
+    "claim": "The sender learns 'that you did and when'.",
+    "reality": "The sender also gets the disputer's internet address and full browser string on the envelope page and in the evidence pack (P3)."
+   },
+   {
+    "where": "src/app/verify/page.tsx deleted card",
+    "claim": "'We deleted what we knew about it too, so we no longer hold the document, the names on it or its audit trail.'",
+    "reality": "A disputed envelope's operator alert with signer and sender names, emails, title and the disputer's words is kept forever (P5)."
+   },
+   {
+    "where": "src/lib/policy.ts KEPT_AFTER_DELETION and README",
+    "claim": "Only the fingerprint, envelope ID and 'the day it was completed' are kept.",
+    "reality": "completed_at is kept and published to the millisecond (e.g. 2026-11-20T19:37:29.540Z)."
+   },
+   {
+    "where": "research/continue.json item D",
+    "claim": "'Completed copy opened' marks the first time each person opens the completed copy.",
+    "reality": "For every recipient already in the database the first download after deployment is labelled 'for the first time' whatever they did before (P2)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/s-sign-dialog-not-me.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/s-sign-dialog-sent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/s-envelope-disputed.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/s-verify-id-disputed.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/r-check.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/r-sign.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/q-certificate.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/q-help-not-me.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/voided-2.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-disputes/voided-2-bw.png"
+  ],
+  "doubts_about_outside_services": [
+   "Black-and-white copies: the 50% threshold models a copier, fax or scanner in text or bilevel mode. Many devices in greyscale or photo mode would keep a light grey mark, so I am fairly sure but not certain the mark disappears on real office copiers; the corner crop finding does not depend on any device.",
+   "Forwarded completion emails: whether recipients forward them (to a landlord, bank, colleague) is user behaviour I cannot measure; the code in the email is confirmed (P4).",
+   "Mail link scanners: 'Completed copy opened' and 'Opened again' can be written by a scanner that runs JavaScript on the /sign page; I could not test a real scanner. The completion email's button points at the page, not the download, which lowers the risk.",
+   "The dev server reloaded many times while other engineers edited files (signing page and /check took several tries to render); that looked like work in progress elsewhere, not a fault of this piece. Final passes rendered every screen."
+  ]
  }
 }
