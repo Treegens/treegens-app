@@ -235,10 +235,12 @@ export const CHAT_TOOLS: ChatTool[] = [
   { id: 'not-me', label: 'I did not sign this', href: '/help#not-me', what: 'what to do when you are named on a document you did not sign.', words: /\b(did ?n[o']?t sign|never signed|not me|forg\w+|dispute\w*)\b/ },
   { id: 'security', label: 'Security and trust', href: '/security', what: 'who can see documents, where the data is, what is deleted and what is kept.', words: /\b(who can see|privacy|private|data|stored|where.*(?:data|server)|encrypt\w*|delet\w*|gdpr)\b/ },
 ];
-/** The tools that fit a question (and the answer to it), at most three, in the order of the list. */
-export function toolsFor(text: string): { id: string; label: string; href: string }[] {
-  const t = String(text || '').toLowerCase().replace(/[’‘]/g, "'");
-  return CHAT_TOOLS.filter((x) => x.words.test(t)).slice(0, 3).map(({ id, label, href }) => ({ id, label, href }));
+/** The tools that fit a question, then those that fit the answer to it, at most three. */
+export function toolsFor(question: string, answer = ''): { id: string; label: string; href: string }[] {
+  const low = (s: string) => String(s || '').toLowerCase().replace(/[’‘]/g, "'");
+  const q = low(question), a = low(answer);
+  const hit = [...CHAT_TOOLS.filter((x) => x.words.test(q)), ...CHAT_TOOLS.filter((x) => !x.words.test(q) && x.words.test(a))];
+  return hit.slice(0, 3).map(({ id, label, href }) => ({ id, label, href }));
 }
 /** Only these addresses are ever made into links in an answer. Anything else a model writes stays plain text. */
 export const CHAT_LINKABLE = new Set(['/help', '/check', '/verify', '/security', '/security/processing', '/security/certificate', ...CHAT_TOOLS.map((t) => t.href)]);

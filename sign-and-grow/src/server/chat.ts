@@ -99,7 +99,7 @@ export function admit(who: Who): { ok: true } | { ok: false; which: ChatLimit; u
 // ---- What every answer carries -----------------------------------------------------------------------------------
 export type Extras = { person: HandOver | null; tools: { id: string; label: string; href: string }[]; removed: Removed[] };
 export function extrasFor(c: Cleaned, answer = ''): Extras {
-  return { person: handOverReason(c.turns), tools: toolsFor(`${c.question} ${answer}`), removed: c.removed };
+  return { person: handOverReason(c.turns), tools: toolsFor(c.question, answer), removed: c.removed };
 }
 /** The built-in answer, as the route sends it. `why` says why it is not the model. */
 export function builtIn(c: Cleaned, why: 'off' | 'limit' | 'down' | 'slow' | 'empty', note?: string) {
@@ -249,7 +249,7 @@ function relay(upstream: Response, c: Cleaned, finish: () => void, late: () => b
         send({ fallback: b });
       } else {
         for (const line of backstop(text)) take(`\n\n${line}`);
-        const tools = toolsFor(`${c.question} ${text}`);
+        const tools = toolsFor(c.question, text);
         send({ done: true, sig: signAnswer(text), tools, ...(late() || broke ? { cut: true } : {}) });
       }
       controller.close();
