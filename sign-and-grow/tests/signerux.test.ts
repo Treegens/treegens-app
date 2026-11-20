@@ -12,6 +12,7 @@ import { accountMarks, tapOnMark, restoreMarks, saveBody, sameName, pageTitle, p
 import { scanWarning, pageList } from '../src/lib/scans.ts';
 import { extractPages } from '../src/server/text.ts';
 import { MAIL_RETRY_MINUTES } from '../src/server/mail.ts';
+import { ACCESS_CODE_TRIES } from '../src/lib/policy.ts';
 
 let db: Server['db'];
 let env: Server['env'];
@@ -990,4 +991,69 @@ test('an email tried again later never asks someone who has finished, never carr
     delete g.__tsmail;
     db.run("UPDATE emails SET next_try_at=NULL WHERE status='failed'");
   }
+});
+
+test('a frozen access code on a closed envelope can be replaced, so the signer reaches their copy again; a damaged PDF is refused in words; a fresh link to a finished document says view', async () => {
+  const fe = await sender('Fe Sender', 'fe.code@example.com');
+  const e = await draft(fe, { ordered: false, subject: 'Frozen after closing', recipients: [
+    { id: 'r1', role: 'signer', name: 'Ada Signer', email: 'ada.code@example.com', routing_order: 1, access_code: '123456' },
+    { id: 'r2', role: 'signer', name: 'Ben Signer', email: 'ben.code@example.com', routing_order: 1 }] });
+  assert.equal((await fe.post(`/envelopes/${e.id}/send`)).status, 200);
+  const ada = db.get("SELECT id, token FROM recipients WHERE envelope_id=? AND email='ada.code@example.com'", e.id);
+  const own = visitor();
+  await own.post(`/sign/${ada.token}/unlock`, { code: '123456' });
+  await own.post(`/sign/${ada.token}/consent`);
+  const v = (await own.get(`/sign/${ada.token}`)).data;
+  const values = Object.fromEntries(v.fields.map((f: any) => [f.id, f.type === 'text' ? 'x' : '1']));
+  assert.equal((await own.post(`/sign/${ada.token}/complete`, { values, signature_png: PNG, initials_png: PNG, version: v.version })).status, 200);
+  assert.equal((await fe.post(`/envelopes/${e.id}/void`, { reason: 'Plans changed' })).status, 200);
+  // Wrong codes typed on the closed document, from anywhere, freeze the code. The right one opens nothing now.
+  for (let i = 0; i < ACCESS_CODE_TRIES; i++) await visitor().post(`/sign/${ada.token}/unlock`, { code: `wrong${i}` });
+  const phone = visitor();
+  const frozen = await phone.post(`/sign/${ada.token}/unlock`, { code: '123456' });
+  assert.equal(frozen.status, 423);
+  assert.match(frozen.data.error, /Fe Sender has been told and can set a new code\. Ask them for the new one/);
+  assert.equal((await phone.get(`/sign/${ada.token}/download`)).status, 401);
+  // What that screen says can be done, can be done: "Ask the sender" goes through on a closed envelope ...
+  assert.equal((await phone.post(`/sign/${ada.token}/ask-code`)).status, 200);
+  const toFe = (s: string) => mailTo('fe.code@example.com').filter((m) => m.subject === `${s}: Frozen after closing`);
+  assert.equal(toFe('Access code needed').length, 1);
+  assert.match(toFe('Access code frozen')[0].html, /choose Correct next to their name and type a new access code/);
+  // ... the envelope page offers Correct for the code once the envelope is closed ...
+  assert.match(fs.readFileSync(new URL('../src/components/sender/Recipients.tsx', import.meta.url), 'utf8'), /e\.status !== 'draft' && !!r\.access_code && \([\s\S]{0,200}onCorrect\(\{ \.\.\.r, code_only: true \}\)/);
+  // ... and Correct takes a new code there. Only the code: who the person is cannot change once it is closed.
+  const renamed = await fe.post(`/envelopes/${e.id}/correct`, { recipient_id: ada.id, name: 'Ada Other', email: 'ada.code@example.com' });
+  assert.equal(renamed.status, 400);
+  assert.match(renamed.data.error, /no longer out for signature, so the name and the address of Ada Signer can no longer be changed\. Nothing was changed/);
+  assert.equal((await fe.post(`/envelopes/${e.id}/correct`, { recipient_id: ada.id, access_code: '654321' })).status, 200);
+  assert.equal((await phone.post(`/sign/${ada.token}/unlock`, { code: '654321' })).status, 200);
+  const copy = await phone.get(`/sign/${ada.token}/download`);
+  assert.equal(copy.status, 200, 'her copy, from a new phone, after the envelope was voided');
+  assert.equal(Buffer.from(copy.data.slice(0, 5)).toString(), '%PDF-');
+
+  // A file that starts like a PDF and is cut short is the person's file, not our fault: 400 in words, never 500.
+  const live = await simple(fe, 'attach.code@example.com', { subject: 'Attach a file' });
+  await fe.post(`/envelopes/${live.id}/send`);
+  const cut = new TextEncoder().encode('%PDF-1.4 this is not really a pdf');
+  const asFile = () => {
+    const f = new FormData();
+    f.append('file', new Blob([cut], { type: 'application/pdf' }), 'cut-short.pdf');
+    return f;
+  };
+  for (const r of [await visitor().call('POST', `/sign/${tokenFor(live.id, 'attach.code@example.com')}/upload`, asFile()), await fe.call('POST', '/files', asFile())]) {
+    assert.equal(r.status, 400);
+    assert.match(r.data.error, /That file could not be read as a PDF\. It looks damaged or cut short/);
+  }
+
+  // "Email me the current link" for a document everyone has finished: the email offers to view it, not to sign.
+  const done = await simple(fe, 'was.code@example.com', { subject: 'Done later' });
+  await fe.post(`/envelopes/${done.id}/send`);
+  const old = tokenFor(done.id, 'was.code@example.com');
+  await fe.post(`/envelopes/${done.id}/correct`, { recipient_id: (await full(fe, done.id)).envelope.recipients[0].id, name: 'Sam Signer', email: 'is.code@example.com' });
+  assert.equal((await signAll(done.id, 'is.code@example.com')).status, 200);
+  assert.equal((await visitor().post('/public/links/resend', { token: old })).data.result, 'sent');
+  const fresh = mailTo('is.code@example.com').pop()!;
+  assert.match(fresh.html, /You asked for a fresh link/);
+  assert.match(fresh.html, /View completed document/);
+  assert.doesNotMatch(fresh.html, /Review and sign/);
 });
