@@ -77,7 +77,12 @@ function limits(e: any, author: string, burstKey: string, burst: number) {
 // ---- The signing page ------------------------------------------------------------------------
 
 const visitorOf = (e: any, r: any) => !!e.powerform_id && e.form_recipient_id === r.id;
-const viewerOf = (r: any): Viewer & { side: 'recipient' } => ({ side: 'recipient', rid: r.id, party: partyOf(r) });
+// On a device where people sign in person one after the other, the page of someone who no longer holds it reads only
+// what is for everyone: no private thread is with "away", and nothing is written there in that person's name
+// (handlive.ts). Without a request (the emails) the viewer is the person themselves.
+const AWAY = 'away';
+const viewerOf = (r: any, c?: Ctx): Viewer & { side: 'recipient' } => ({ side: 'recipient', rid: r.id, party: c && !holdsDevice(c, r) ? AWAY : partyOf(r) });
+const awayText = (e: any, r: any) => `This is the signing page of ${r.name}, and this device has been handed to someone else since. So ${r.name}'s private questions are not shown here, and nothing can be written here in their name. What is written for everyone is still shown. If you are ${r.name}, ask ${senderName(e)} to open your page for you again with "Host signing now".`;
 
 // Someone on the envelope reads comments while they can read the document: once it is their turn, while it is out and
 // after everyone finished. They write only while it is out. A closed envelope keeps its comments for the sender.
@@ -87,15 +92,17 @@ function signerSide(e: any, r: any, writing: boolean) {
   if (writing && e.status !== 'sent') throw bad(`Everyone has finished, so the comments on this document can be read but no longer added to. To reach ${reachSender(e)}, write to them directly.`, 409, { code: 'read_only' });
 }
 
-function signerView(e: any, r: any) {
-  const v = viewerOf(r);
+function signerView(e: any, r: any, c: Ctx) {
+  const v = viewerOf(r, c);
+  const away = v.party === AWAY;
   const threads = threadsOf(e, v);
   const left = COMMENTS_PER_PERSON - get('SELECT COUNT(*) n FROM comments WHERE envelope_id=? AND author=?', e.id, `r:${r.id}|${v.party}`).n;
   return {
     threads,
     // Questions of this person that the sender's side has not answered yet: said, never blocking, before Finish.
     waiting: threads.filter((t) => t.waiting && t.comments[t.comments.length - 1]?.mine).length,
-    may_write: e.status === 'sent',
+    may_write: e.status === 'sent' && !away,
+    away: away ? awayText(e, r) : null,
     // A visitor of a public form typed their own name: what they write goes to the form's owner only.
     for_everyone: !visitorOf(e, r),
     // Where an answer is emailed, or null when it is not: no address, or signing in person on the host's device.
