@@ -317,7 +317,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     const answered = correcting && !!old && !senderOwned && old.value !== old.prefill && (finished || old.value != null || String(f.value ?? '') === String(old.prefill));
     const value = answered ? old.value : prefilled ? fit(f.value, 4000, `${which}: the value`) || null : correcting && old ? old.value : null;
     // A date the sender fills in is held to the rule a signer's is (applyValues): a real day, written year-month-day.
-    if (f.type === 'date' && value && !answered && !isDateValue(value)) throw bad(`${which}, a date field, was sent with "${String(value).slice(0, 40)}". ${DATE_PROBLEM} Nothing was saved.`);
+    if (f.type === 'date' && value && !answered && !isDateValue(value)) throw bad(`${which}, a date field, was sent with "${String(value).slice(0, 40)}". A date is taken as a real day written year-month-day, like 2027-03-20, and printed in the envelope's date format. Nothing was saved.`);
     const readonly = ro || SENDER_MARK(f.type) ? 1 : 0;
     // The sender's own wording in a field its signer may still change. Kept beside the value: see db.ts. A signer
     // who emptied the field did not change what the sender wrote, so a save that leaves it empty keeps the wording.

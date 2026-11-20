@@ -495,7 +495,10 @@ export function StepFields({ ed }: { ed: Ed }) {
                 {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
                 {PREFILL.includes(selected.type) && selected.formula == null && (
                   <>
-                    <label className="f"><span>{selected.type === 'note' ? 'Text' : 'Prefilled value'}</span><textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>
+                    {/* A date is picked, never typed: the server takes a real day as year-month-day (isDateValue). */}
+                    <label className="f"><span>{selected.type === 'note' ? 'Text' : 'Prefilled value'}</span>{selected.type === 'date'
+                      ? <input type="date" style={{ minHeight: 44 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} />
+                      : <textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} />}</label>
                     {selected.type !== 'note' && <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.readonly} onChange={(e) => patchField(selected.id, { readonly: e.target.checked })} /> Read only</label>}
                   </>
                 )}
