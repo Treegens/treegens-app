@@ -54,9 +54,7 @@
     ".next-repair-mobile/types/**/*.ts",
     ".next-repair-mobile/dev/types/**/*.ts",
     ".next-build-chat/types/**/*.ts",
-    ".next-build-chat/dev/types/**/*.ts",
-    ".next-pay-round4/types/**/*.ts",
-    ".next-pay-round4/dev/types/**/*.ts"
+    ".next-build-chat/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

@@ -140,6 +140,7 @@ export async function signAll(envelopeId: string, email: string, extra: Record<s
   await c.post(`/sign/${tok}/consent`);
   const v = (await c.get(`/sign/${tok}`)).data;
   const values: Record<string, string> = { ...extra };
-  for (const f of v.fields || []) if (!(f.id in values)) values[f.id] = f.type === 'text' ? 'filled in' : '1';
+  // A date field takes a real day written year-month-day (isDateValue in src/lib/dates.ts).
+  for (const f of v.fields || []) if (!(f.id in values)) values[f.id] = f.type === 'text' ? 'filled in' : f.type === 'date' ? '2026-01-15' : '1';
   return c.post(`/sign/${tok}/complete`, { values, signature_png: PNG, initials_png: PNG });
 }

@@ -768,3 +768,44 @@ test('a reminder held for the morning is dropped when the sender turns reminders
   assert.match(passOn()[0].html, /Hand A, Hand B and Hand C have not finished yet/);
   assert.equal(rem('asleep-one@example.com'), 0, 'and the one asleep waits for the morning');
 });
+
+test('a date field takes a real day written year-month-day, from the page and through the API, and an impossible day is never reformatted', async () => {
+  const { isDateValue, DATE_PROBLEM } = await import('../src/lib/dates.ts');
+  for (const ok of ['2026-02-28', '2028-02-29', '2026-12-31', '1999-01-01']) assert.equal(isDateValue(ok), true, ok);
+  for (const no of ['2026-02-31', '2027-02-29', '2026-13-01', '2026-00-10', '2026-04-31', '03/04/2026', 'next Tuesday', '2026-1-5', ' 2026-01-05', '0099-01-01', '', null, 20260105]) assert.equal(isDateValue(no), false, String(no));
+  // What cannot be a day stays as it is: 31 February is never printed as if it were real.
+  assert.equal(formatDateValue('2026-02-31', 'DD/MM/YYYY'), '2026-02-31');
+  assert.equal(formatDateValue('2028-02-29', 'DD/MM/YYYY'), '29/02/2028');
+  // The page tells the signer before Finish, in the same words the server uses.
+  assert.equal(problemWith({ type: 'date' }, '2026-02-31'), DATE_PROBLEM);
+  assert.equal(problemWith({ type: 'date' }, '2026-02-28'), '');
+  assert.doesNotMatch(DATE_PROBLEM, /—/);
+
+  const c = await signUp('Dot Sender', 'dot-dates@example.com', ip());
+  const e = await sendTo(c, [{ name: 'Dee Dates', email: 'dee-dates@example.com', type: 'date' }], { date_format: 'DD/MM/YYYY' });
+  const d = fieldOf(e, 'dee-dates@example.com', 'date');
+  const tok = tokenFor(e.id, 'dee-dates@example.com');
+  const k = new Client();
+  await k.post(`/sign/${tok}/consent`);
+  const v = (await k.get(`/sign/${tok}`)).data;
+  const values = (date: string) => Object.fromEntries(v.fields.map((f: any) => [f.id, f.id === d.id ? date : f.type === 'text' ? 'ok' : '1']));
+  for (const bad of ['2026-02-31', '03/04/2026', 'next Tuesday']) {
+    const r = await k.post(`/sign/${tok}/complete`, { values: values(bad), signature_png: PNG, initials_png: PNG });
+    assert.equal(r.status, 400, bad);
+    assert.ok(r.data.error.includes(DATE_PROBLEM), r.data.error);
+    assert.match(r.data.error, /Nothing was saved\.$/);
+    // "Finish later" is held to it too, and keeps nothing of a refused save.
+    assert.equal((await k.post(`/sign/${tok}/save`, { values: values(bad) })).status, 400);
+    assert.equal(s.db.get('SELECT value FROM fields WHERE id=?', d.id).value, null);
+  }
+  assert.equal((await k.post(`/sign/${tok}/complete`, { values: values('2026-03-04'), signature_png: PNG, initials_png: PNG })).status, 200);
+  assert.ok((await extractPages((await c.get(`/envelopes/${e.id}/download`)).data))[0].includes('04/03/2026'));
+
+  // A date the sender fills in for the signer is held to the same rule, and the editor offers a date picker for it.
+  const file = await upload(c, 1);
+  const draft = await c.post('/envelopes', { subject: 'Prefilled date', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'Pre Fill', email: 'pre-fill@example.com' }], fields: [{ id: 's', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.1, w: 0.3, h: 0.05 }, { id: 'p', document_id: 'd', recipient_id: 'r', type: 'date', value: '31/02/2026', page: 0, x: 0.1, y: 0.3, w: 0.3, h: 0.03 }] });
+  assert.equal(draft.status, 400);
+  assert.match(draft.data.error, /a date field, was sent with "31\/02\/2026"\. A date is taken as a real day written year-month-day, like 2027-03-20/);
+  const editor = fs.readFileSync('src/components/editor/StepFields.tsx', 'utf8');
+  assert.match(editor, /selected\.type === 'date'\s*\? <input type="date"/);
+});

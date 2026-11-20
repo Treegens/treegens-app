@@ -21,6 +21,8 @@ import { STAMP_IS } from '../lib/stamps.ts';
 
 // A machine-readable description of the developer API, served at /api/openapi.json.
 // It is written by hand and kept honest by a test: every path here must exist in the router.
+// The help chat (/public/chat, src/server/routes-chat.ts) is left out on purpose: it is the app's own dialog, not
+// part of the developer API, and refuses API keys.
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const body = (schema: any) => ({ required: true, content: { 'application/json': { schema } } });

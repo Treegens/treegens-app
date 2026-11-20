@@ -899,8 +899,9 @@ export function findInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, ph
  * red margin line. The colour kept is that of the ink chosen, when the picture has marks in it (a blue stamp on a
  * brown desk keeps the blue even if the desk's brown is the larger colour), or else the main colour found. Never for
  * black: black ink cannot be told apart from black print.
- * Two repairs after that. A weak, nearly colourless pixel right next to kept ink is the faint edge of that ink (faint
- * ink shows little colour), so it stays. And where printed text crossed a stroke of the stamp, the strong mark left
+ * Two repairs after that. A light, nearly colourless pixel within about a millimetre of kept ink is faint ink of the
+ * stamp (thin faint strokes lose their colour in a photo), so it stays; print is dark, so it does not come back that
+ * way. And where printed text crossed a stroke of the stamp, the strong mark left
  * out has kept ink on both sides of it, along a row or a column: it is filled in at the strength of the ink beside it,
  * so the stroke has no bite out of it.
  */
@@ -922,9 +923,15 @@ export function onlyInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, fo
     v[p] = before[p] * keep[p];
   }
   const kept = new Float32Array(v.length);
-  for (let p = 0; p < v.length; p++) kept[p] = v[p] > 0.3 ? 1 : 0;
-  const near = extremePlane(kept, w, h, 2, true);
-  for (let p = 0; p < v.length; p++) if (pale[p] && before[p] < 0.6 && near[p] > 0) v[p] = Math.max(v[p], before[p]);
+  for (let p = 0; p < v.length; p++) kept[p] = v[p] > 0.3 && !pale[p] ? 1 : 0;
+  const near = extremePlane(kept, w, h, Math.max(2, Math.round(Math.max(w, h) * 0.012)), true);
+  for (let p = 0; p < v.length; p++) {
+    if (!pale[p] || !near[p]) continue;
+    // How dark the pixel is against its paper, whatever the cut: print is dark, faint ink is not.
+    let take = 0;
+    for (let c = 0; c < 3; c++) take = Math.max(take, 1 - d[p * 4 + c] / Math.max(24, paper[p * 3 + c]));
+    if (take < 0.45) v[p] = Math.max(v[p], before[p]);
+  }
   const r = Math.max(3, Math.round(Math.max(w, h) * 0.004));
   const filled = new Float32Array(v);
   for (let y = 0; y < h; y++)

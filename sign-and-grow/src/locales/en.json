@@ -1,0 +1,11 @@
+{
+  "legal.in_english": "This part is in English because its translation has not yet been checked by a person.",
+  "language.browser": "As their browser asks, or English",
+  "editor.language.label": "Language",
+  "editor.language.hint": "What we show this person is in this language where it has been translated and checked, and in English where it has not. Your subject, message and documents are never translated: they stay as you wrote them.",
+  "settings.language.title": "Language",
+  "settings.language.label": "New recipients start in",
+  "settings.language.hint": "Whoever sends can change it for each person, under More next to their name. Your subject, message and documents are never translated: they stay as you wrote them.",
+  "settings.language.button": "Save language",
+  "settings.language.saved": "Saved. New recipients start in {language}."
+}

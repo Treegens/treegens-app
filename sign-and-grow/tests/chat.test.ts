@@ -657,3 +657,24 @@ test('"Where your data is" lists the help chat provider from the same settings, 
     assert.match(fs.readFileSync(f, 'utf8'), /p\.id === 'chat'\) \?/, `${f} says "no AI service" only when there is none`);
   assert.match(fs.readFileSync('src/app/security/page.tsx', 'utf8'), /chatPrivacyPoint\(\)/);
 });
+
+// ---- 8. Where the button is ------------------------------------------------------------------------------------------
+
+test('the Help button is on the public pages, in the app and the editor, and on the signing page only inside Other actions', () => {
+  const read = (f: string) => fs.readFileSync(f, 'utf8');
+  assert.match(read('src/components/Public.tsx'), /<HelpChatButton className="btn sm hc-open">Ask for help<\/HelpChatButton>/);
+  assert.match(read('src/components/Public.tsx'), /<HelpChatButton className="hc-menu">Ask for help<\/HelpChatButton>/, 'and in the menu, where a phone has room for it');
+  assert.match(read('src/components/AppShell.tsx'), /HelpChatButton/);
+  assert.match(read('src/components/Editor.tsx'), /HelpChatButton/);
+  const sign = read('src/app/sign/[token]/page.tsx');
+  assert.match(sign, /\{ key: 'help', label: 'Help'/);
+  assert.match(sign, /open === 'help' && <HelpChat screen="signing" link=\{token\} code=\{data\.help_code\}/);
+  assert.ok(!/HelpChatButton/.test(sign) && !/HelpChatButton/.test(read('src/components/sign/parts.tsx')), 'no floating button on the signing page');
+  const ui = read('src/components/HelpChat.tsx');
+  for (const must of ['<Dialog title=', 'aria-live="polite"', 'role="log"', 'Talk to a person', 'CHAT_DO_NOT_TYPE', '<ContactForm chat='])
+    assert.ok(ui.includes(must), must);
+  assert.match(read('src/app/styles/chat.css'), /prefers-reduced-motion: reduce/);
+  // No page or component imports the server.
+  for (const f of ['src/components/HelpChat.tsx', 'src/app/help/tools.tsx', 'src/app/security/DataPlace.tsx', 'src/app/security/page.tsx'])
+    assert.ok(!/from '@\/server\//.test(read(f)), f);
+});
