@@ -135,13 +135,15 @@ const admins = (accountId: string) => all("SELECT u.id, u.email, u.name, u.tz FR
 
 // Every email about money goes to all owners and admins, and carries the way out for as long as there is a renewal
 // to stop: a link that turns it off without logging in.
-async function mailAdmins(accountId: string, subject: string, heading: string, lines: string[], cta?: Cta | 'stop') {
+async function mailAdmins(accountId: string, subject: string, heading: string, lines: string[], cta?: Cta | 'stop', expiresAt?: string) {
   const a = account(accountId);
   for (const u of admins(accountId)) {
     const stop = { label: 'Stop renewing (no login needed)', url: stopUrl(accountId, u.id) };
     await sendMail({
       to: u.email, subject: dated(subject, u.tz), heading: dated(heading, u.tz), lines: lines.map((l) => dated(l, u.tz)),
       cta: cta === 'stop' ? stop : cta,
+      // An email that is only worth reading before a certain moment is not retried after it.
+      ...(expiresAt ? { expiresAt } : {}),
       links: cta !== 'stop' && a && renewing(a) ? [{ label: 'Do not renew', url: stop.url, note: 'Stops the monthly plan in one click, without logging in.' }] : undefined,
     });
   }
@@ -1182,11 +1184,11 @@ async function remindRenewal(acct: any, cents?: number | null, currency = 'usd')
   if (raised && !due)
     await mailAdmins(a.id, `Correction: your plan renews on ${day(when)} for ${amount}, not ${money(told, currency)}`, 'The amount of your next charge changed', [
       `We told you ${money(told, currency)} for ${a.name}. The payment provider now says the charge on ${day(when)} will be ${amount}. That is the full amount, and if more than this is taken we send the difference back.`, left, out,
-    ], 'stop');
+    ], 'stop', when);
   else
     await mailAdmins(a.id, stage === '1' ? `Last reminder: your plan renews on ${day(when)} for ${amount}` : `Heads up: your plan renews on ${day(when)} for ${amount}`, stage === '1' ? 'Your plan renews in about a day' : 'Your plan renews soon', [
       `On ${day(when)} we will charge ${amount} for ${a.name} and add ${sigs(PRICING.monthlySignatures)}. That is the full amount: there are no extras, and if more than this is ever taken we send the difference back.`, left, out,
-    ], 'stop');
+    ], 'stop', when);
   return true;
 }
 

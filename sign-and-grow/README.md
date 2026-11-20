@@ -193,8 +193,9 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SMTP_URL`, `MAIL_FROM` | Mail server, for example `smtps://user:pass@smtp.example.com`. Without it nothing is delivered, and the audit trail of an envelope says "Not emailed" instead of "Sent to recipient". An email the mail server will not take is kept and tried again by the timer (see `CRON_SECRET`): after 5 minutes, 30 minutes, 2 hours, 6 hours and a day, six tries in all. The envelope page and the audit trail say how it goes, and after the last try the sender is told. | none |
 | `CRON_SECRET` | Lets a scheduler call `POST /api/cron`. Call it at least once an hour: it sends signer reminders and renewal reminders, tries emails again that the mail server would not take (so the gaps between tries are never shorter than the gap between calls), expires envelopes, retries refunds and cancellations the payment provider could not take the first time, and closes accounts. A renewal that is charged with no reminder on record raises an alert. | none |
 | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_GROVE`, `STRIPE_WEBHOOK_SECRET` | Turns on paying. Without them nothing is counted and there is nothing to buy. `STRIPE_PRICE_GROVE` is the monthly price. Point a Stripe webhook at `/api/stripe/webhook` and send it these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `invoice.paid`, `invoice.upcoming`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`, `charge.refunded`, `charge.dispute.created`. | none |
-| `ACCEPT_DISPUTES_UP_TO_USD` | A card dispute always stops billing, takes back the unused signatures the disputed payment bought, switches new payments off until a person has looked (the operator page has the button to switch them back on), and tells the customer in writing. Disputes up to this amount are also accepted with the payment provider automatically instead of being fought; larger ones are left for a person to decide. `0` (or `ACCEPT_DISPUTES=0`) leaves every dispute to a person. | `25` |
-| `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, receives every help request with the sender as reply-to, and gets the alerts that need a person: a payment nobody could be matched to, a refund that keeps failing, a card dispute. Those alerts also go to `OPERATOR_EMAILS` and always appear in the operator queue, so they are seen even when this is not set. When set, the address is also printed in the footer of every public page and in the app's menu. A production server that starts without it logs a loud warning, because the pages promise that a person answers. | none |
+| `STRIPE_API_VERSION` | Pins the version of the payment provider's API that calls are made with, for example the one shown in your Stripe dashboard when you tested. Set the webhook endpoint to the same version. Unset, the account's default version is used; both the older and the newer shapes of invoices and subscriptions are read. | account default |
+| `ACCEPT_DISPUTES_UP_TO_USD` | A card dispute always stops billing, takes the signatures the disputed payment bought off the balance (also ones held for envelopes that are out), switches new payments off until a person has looked (the operator page has the button to switch them back on), and tells the customer in writing. Disputes up to this amount are also accepted with the payment provider automatically instead of being fought; larger ones are left for a person to decide, and if the bank then lets the payment stand the signatures come back by themselves. `0` (or `ACCEPT_DISPUTES=0`) leaves every dispute to a person. | `25` |
+| `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, receives every help request with the sender as reply-to, and gets the alerts that need a person: a payment nobody could be matched to, a refund that keeps failing, a card dispute. Those alerts also go to `OPERATOR_EMAILS` and are kept in the operator queue. Set at least one of the two: with neither, nobody can open the queue and an alert is only a loud line in the server log. When set, the address is also printed in the footer of every public page and in the app's menu. A production server that starts without it logs a loud warning, because the pages promise that a person answers. | none |
 | `ABUSE_EMAIL` | Where reports of suspicious documents go. | `SUPPORT_EMAIL` |
 | `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, pausing or unpausing an account, and marking an account as trusted. | nobody |
 | `FREE_PLAN_CODES` | Comma-separated codes that make the monthly plan free for whoever enters one. Set it to an empty value to have none. | `GROWalition` |
@@ -222,9 +223,15 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
   refunding a monthly payment ends the plan; an unused plan stops renewing after 90 days (once per renewal, and
   "keep it" is respected); a small card dispute is accepted rather than contested (`ACCEPT_DISPUTES_UP_TO_USD`);
   someone on a free code who was paying has their paid subscription ended the moment the code is applied; signing
-  in person always uses a signature; a public form holds none of its owner's signatures until a visitor actually
-  signs, which also means a stranger can use them up by really signing (20 starts an hour per address); only US
-  dollars are accepted.
+  in person always uses a signature; signing your own document is free only under your own name and address;
+  being asked to sign again after a change is free; a public form holds none of its owner's signatures, stops
+  taking new people once those who have started would use up what is left, and uses one when a visitor actually
+  signs (so a stranger can use them up by really signing, 20 starts an hour per address); only US dollars are
+  accepted.
+- **After someone has signed**, any change to what is printed on the pages asks everyone who finished to sign
+  again (the sender has to choose that; nothing changes silently). That lock covers the whole envelope, including
+  a new empty field for someone who has not signed yet. It is deliberately strict; loosen it in `printedView()`
+  in `src/server/envelopes.ts` if you prefer a per-document rule.
 - **Raising the price** is not handled for you. Changing the price at the payment provider changes what existing
   subscribers pay at their next renewal. The reminder a week before will state the new amount, but nothing here
   asks for their agreement or gives 60 days of notice. Decide that policy before touching the price.
@@ -243,7 +250,9 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
   the least certain part. Finding the card charge behind a monthly payment asks Stripe for the invoice's payment,
   whose shape changed between API versions; both shapes are read, but only test mode will prove it. Card
   statements show only your Stripe account's statement descriptor; set one that people will recognise. If the
-  Stripe account is shared with something else, invoices and disputes that are not Sign&Grow's are left alone.
+  Stripe account is shared with something else: everything Sign&Grow starts there carries its own mark
+  (`sg_account` in the metadata), and invoices, checkouts, subscriptions and disputes without that mark or for
+  another price are left alone. Also send the webhook these events: `charge.dispute.closed`, `refund.failed`.
 - **Storage** is SQLite on one disk, which is fine for one server. Back the `DATA_DIR` folder up. Moving to
   Postgres and object storage is the step to take before running more than one instance.
 - **`/security`** lists only what the code does. If hosting adds something (disk encryption, backups, a
