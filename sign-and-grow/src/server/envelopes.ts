@@ -85,6 +85,25 @@ export function createEnvelope(account: any, userId: string, kind: 'envelope' | 
 
 const clamp01 = (n: any) => Math.min(1, Math.max(0, Number(n) || 0));
 const int = (n: any, lo: number, hi: number, d: number) => (Number.isFinite(Number(n)) ? Math.min(hi, Math.max(lo, Math.round(Number(n)))) : d);
+// Nothing in a request is cut short, moved to the nearest allowed value or dropped without a word. Text that is too
+// long, a number outside its range and a part that is not the list it should be are refused, and the answer names
+// the part and its limit. `what` starts the sentence: "The subject", "Field 2 (\"Amount\"): the value".
+const fit = (v: any, max: number, what: string): string => {
+  const s = v == null ? '' : String(v);
+  if (s.length > max) throw bad(`${what} is ${fmtNum(s.length)} characters long, and the most that fits is ${fmtNum(max)}. Shorten it and save again. Nothing was saved.`);
+  return s;
+};
+const whole = (v: any, lo: number, hi: number, d: number, what: string): number => {
+  if (v == null || v === '') return d;
+  if (typeof v === 'boolean' || !Number.isInteger(Number(v)) || Number(v) < lo || Number(v) > hi) throw bad(`${what} must be a whole number from ${lo} to ${hi}, and "${str(v, 40)}" is not. Nothing was saved.`);
+  return Number(v);
+};
+// A list that is left out of a request stays as it is, like a subject that is left out. One that is sent must be a list.
+const listOf = (body: any, key: 'documents' | 'recipients' | 'fields', kept: any[]): any[] => {
+  if (body[key] === undefined) return kept;
+  if (!Array.isArray(body[key])) throw bad(`"${key}" must be a list, written with square brackets, and it is not. Nothing was saved.`);
+  return body[key];
+};
 
 // Writes documents, recipients and fields from the editor's full state. Recipient rows are updated in place, so
 // their progress (status, link, consent, signature) survives a correction made after sending.
@@ -108,9 +127,9 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
   const recId = keep(e.recipients, 'rcp', 'recipients');
   const fldId = keep(e.fields, 'fld', 'fields');
 
-  const docs = Array.isArray(body.documents) ? body.documents : [];
-  const recs = Array.isArray(body.recipients) ? body.recipients : [];
-  const flds = Array.isArray(body.fields) ? body.fields : [];
+  const docs = listOf(body, 'documents', e.documents);
+  const recs = listOf(body, 'recipients', e.recipients);
+  const flds = listOf(body, 'fields', e.fields);
   // Limits are said out loud. Nothing is ever dropped quietly.
   if (docs.length > 30) throw bad('An envelope can hold up to 30 documents. Remove some, or send the rest in a second envelope.');
   if (recs.length > 50) throw bad('An envelope can have up to 50 recipients. For more people, use bulk send so each gets their own copy.');
