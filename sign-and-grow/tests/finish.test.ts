@@ -445,3 +445,42 @@ test('deleting a login never removes a copy that strangers\' words point at, nor
     delete process.env.SUPPORT_EMAIL;
   }
 });
+
+test('reports made through a public form never count towards pausing its owner, also after the owner deleted the abandoned starts', async () => {
+  const owner = await person('Polly Forms', 'polly@formreports.example');
+  const form = await formOf(owner, 'Volunteer waiver');
+  const acc = (await me(owner)).account.id;
+  // Someone starts the form three times under three addresses of their own and walks away.
+  const starts: { code: string; e: string }[] = [];
+  for (let i = 0; i < 3; i++) {
+    const s = await visitor().post(`/public/powerforms/${form.slug}/start`, { name: `Troll ${i}`, email: `troll${i}@formreports.example` });
+    assert.equal(s.status, 200, JSON.stringify(s.data));
+    starts.push({ code: db.get('SELECT check_code c FROM recipients WHERE token=?', s.data.url.split('/sign/')[1]).c, e: envelopeOf(s.data.url) });
+  }
+  // The timer closes them after a day, and the owner tidies up: nobody signed, so they are deleted for good.
+  for (const { e } of starts) (db.run('UPDATE envelopes SET sent_at=? WHERE id=?', ago(2), e), db.run('UPDATE audit SET at=? WHERE envelope_id=?', ago(2), e));
+  await cron.tick();
+  for (const { e } of starts) {
+    assert.equal((await owner.call('DELETE', `/envelopes/${e}`)).status, 200);
+    assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', e).n, 0);
+  }
+  // The three codes are still recognised and can still be reported. Each report is kept for a person to read, and
+  // none counts towards the pause, exactly as while the starts existed.
+  for (const { code } of starts) {
+    assert.equal((await visitor().post('/public/check', { code })).data.can_report, true);
+    assert.equal((await visitor().post('/public/check/report', { code, reason: 'phishing' })).status, 200);
+  }
+  assert.deepEqual(db.all('SELECT via_form FROM abuse_reports WHERE account_id=?', acc).map((r: any) => r.via_form), [1, 1, 1]);
+  assert.equal(db.get('SELECT suspended_at FROM accounts WHERE id=?', acc).suspended_at, null, 'not paused');
+  // Nothing about the visitors is kept with the mark: only that the code was a form visitor's.
+  assert.ok(!/troll|Troll/.test(JSON.stringify(db.all('SELECT * FROM forgotten_codes'))));
+
+  // An ordinary recipient of the same account, whose document was deleted, still reports like anyone else.
+  const e = await simple(owner, 'reader@formreports.example', { subject: 'Ordinary letter' });
+  assert.equal((await owner.post(`/envelopes/${e.id}/send`)).status, 200);
+  const code = db.get('SELECT check_code c FROM recipients WHERE envelope_id=?', e.id).c;
+  assert.equal((await owner.post(`/envelopes/${e.id}/void`, { reason: 'Mistake' })).status, 200);
+  assert.equal((await owner.call('DELETE', `/envelopes/${e.id}`)).status, 200);
+  assert.equal((await visitor().post('/public/check/report', { code, reason: 'spam' })).status, 200);
+  assert.equal(db.get('SELECT COUNT(*) n FROM abuse_reports WHERE account_id=? AND via_form=0', acc).n, 1);
+});
