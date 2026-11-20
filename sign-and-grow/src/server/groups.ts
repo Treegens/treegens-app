@@ -5,6 +5,7 @@ import { audit, loadEnvelope, notifySender, senderOf, emailRefusal, notOpen, dec
 import type { Ctx } from './router.ts';
 import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUPS_PER_ACCOUNT, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { actingName, whoIs, groupInvite, groupDoes, groupDid } from '../lib/groups.ts';
+import { isSelf } from './credits.ts';
 
 // Signing groups: a recipient that is a group of people, any one of whom can act ("HR team", "Accounts payable").
 //
@@ -630,9 +631,15 @@ export function takeOn<T extends { e: any; r: any; actor: Actor }>(x: T, why = '
   const m = x.r?.member;
   if (!m || x.r.group_state !== 'open') return x;
   const t = now();
-  const got = run(`UPDATE recipients SET claimed_by=?, claimed_at=?, name=?, email=?, token=?, check_code=?, muted=?, viewed_at=?, ip=?, user_agent=?, sender_name=NULL, self_name=NULL
+  // Money: the sender who takes a group's document on under their own name and address signs their own document,
+  // which is free, as it is when they sign it directly (isSelf in credits.ts). So the signature held for the group
+  // is let go. A group whose signature was used once stays free whoever signs (settleGroups). Handing it back puts
+  // the hold back (unclaim).
+  const own = isSelf({ role: x.r.role, name: m.name, email: m.email }, senderOf(x.e) || '') ? 1 : 0;
+  const got = run(`UPDATE recipients SET claimed_by=?, claimed_at=?, name=?, email=?, token=?, check_code=?, muted=?, viewed_at=?, ip=?, user_agent=?, sender_name=NULL, self_name=NULL,
+        free=CASE WHEN COALESCE(free, 0)=1 THEN 1 ELSE ? END
       WHERE id=? AND group_name IS NOT NULL AND claimed_by IS NULL AND status IN ('sent','viewed') AND (SELECT status FROM envelopes WHERE id=recipients.envelope_id)='sent'`,
-    m.id, t, m.name, m.email, m.token, m.check_code, m.muted ? 1 : 0, m.viewed_at || t, x.actor.ip || null, (x.actor.ua || '').slice(0, 300) || null, x.r.id).changes;
+    m.id, t, m.name, m.email, m.token, m.check_code, m.muted ? 1 : 0, m.viewed_at || t, x.actor.ip || null, (x.actor.ua || '').slice(0, 300) || null, own, x.r.id).changes;
   if (!got) {
     const cur = get('SELECT * FROM recipients WHERE id=?', x.r.id);
     if (cur?.claimed_by && cur.claimed_by !== m.id) throw bad(takenText(x.e, cur), 409, { code: 'taken' });
