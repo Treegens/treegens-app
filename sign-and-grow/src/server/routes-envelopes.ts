@@ -153,14 +153,17 @@ route('GET', '/envelopes', (c) => {
   // still finds an envelope by its id.
   const words = q.split(/\s+/).filter(Boolean).slice(0, 8);
   if (words.length) {
-    const word = `(e.subject LIKE ? OR e.folder LIKE ? OR EXISTS (SELECT 1 FROM recipients r WHERE r.envelope_id=e.id AND (r.name LIKE ? OR r.email LIKE ? OR r.role_name LIKE ?))
-      OR EXISTS (SELECT 1 FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=e.id AND (d.name LIKE ? OR f.text LIKE ?))
+    // A % or _ that was typed is that character, not "anything": "50%" finds "Discount 50% offer" and "%" alone finds
+    // only names with a % in them, never every template (ESCAPE, and likeWord below).
+    const word = `(e.subject LIKE ? ESCAPE '\\' OR e.folder LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM recipients r WHERE r.envelope_id=e.id AND (r.name LIKE ? ESCAPE '\\' OR r.email LIKE ? ESCAPE '\\' OR r.role_name LIKE ? ESCAPE '\\'))
+      OR EXISTS (SELECT 1 FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=e.id AND (d.name LIKE ? ESCAPE '\\' OR f.text LIKE ? ESCAPE '\\'))
       OR e.id IN (SELECT value FROM json_each(?)))`;
+    const likeWord = (w: string) => `%${w.replace(/[\\%_]/g, '\\$&')}%`;
     // Text kept encrypted (FILE_ENCRYPTION_KEY) cannot be searched by the database: it is opened in memory, for this
     // account only, and the envelopes whose documents hold each word come back as a list (searchtext.ts).
     const sealed = sealedTextHits(c.account.id, kind, words, own ? c.user.id : undefined);
     where.push(`(e.id = ? OR (${words.map(() => word).join(' AND ')}))`);
-    p.push(q, ...words.flatMap((w, i) => [...Array(7).fill(`%${w}%`), JSON.stringify(sealed[i])]));
+    p.push(q, ...words.flatMap((w, i) => [...Array(7).fill(likeWord(w)), JSON.stringify(sealed[i])]));
   }
   const limit = Math.min(200, Number(c.q.get('limit')) || 100);
   const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, e.sender_id, u.name sender, e.hidden_at removed_at

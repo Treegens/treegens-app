@@ -4,7 +4,7 @@ import { bad, hmac, now, id, isEmail, str, rateLimit, baseUrl, safeEqual, HttpEr
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { sendMail, recordMail, deliverQueued, type Mail } from './mail.ts';
 import { billingEnabled, hasNotPaid } from './envelopes.ts';
-import { grant, creditSummary, available, balance, findFreeCode, paidAvailable } from './credits.ts';
+import { grant, creditSummary, available, balance, findFreeCode, paidAvailable, STANDING_PAYMENT } from './credits.ts';
 import { PRICING, mangrovesFor } from '../lib/impact.ts';
 import { refundDays, dormantStopDays, refundRuleText, newAccountDailyRecipients, unpaidDailyRecipients, PRICE_NOTICE_DAYS, priceRuleText, priceChangeDay, PAID_TRUST_DAYS } from '../lib/policy.ts';
 
@@ -589,7 +589,7 @@ const PAYMENT_LABEL: Record<string, string> = { plan: 'Monthly plan', topup: 'To
 // stop once a payment has stood for PAID_TRUST_DAYS without being refunded or disputed, or when a person cleared
 // the account. The Plan page shows exactly that rule, and the day a young payment will lift them.
 const liftsOn = (accountId: string): string | null => {
-  const at = get("SELECT MIN(at) at FROM payments WHERE account_id=? AND kind IN ('plan','topup') AND applied_at IS NOT NULL AND amount_cents > 0 AND refunded_cents = 0 AND disputed IS NULL", accountId)?.at;
+  const at = get(`SELECT MIN(at) at FROM payments WHERE account_id=? AND ${STANDING_PAYMENT}`, accountId)?.at;
   return at ? new Date(Date.parse(at) + PAID_TRUST_DAYS * 864e5).toISOString() : null;
 };
 

@@ -6,6 +6,7 @@ import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
+import { STANDING_PAYMENT } from './credits.ts';
 import { DATE_FORMATS, momentText, momentForEmail, isDaytime, validZone, REMINDER_DAY_START } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
@@ -957,14 +958,16 @@ export function outOfSignatures(account: any, need: number, have: number): strin
 // least PAID_TRUST_DAYS old and was neither refunded nor disputed, or a person's word (trusted_at, set from the
 // operator queue). Paying does not switch them off at once: nine dollars must not buy a day of fake notices to
 // hundreds of people, to be taken back the same evening. The name is from when any payment was enough.
+// A payment counts when it stands (STANDING_PAYMENT in credits.ts): a small refund the software sent by itself because
+// more was charged than we said does not undo it.
 export function hasNotPaid(account: any): boolean {
   if (!account || account.trusted_at) return false;
-  return !get("SELECT 1 x FROM payments WHERE account_id=? AND kind IN ('plan','topup') AND applied_at IS NOT NULL AND amount_cents > 0 AND refunded_cents = 0 AND disputed IS NULL AND at <= ? LIMIT 1",
+  return !get(`SELECT 1 x FROM payments WHERE account_id=? AND ${STANDING_PAYMENT} AND at <= ? LIMIT 1`,
     account.id, new Date(Date.now() - PAID_TRUST_DAYS * 864e5).toISOString());
 }
 // The payment that will lift the checks once it is old enough, if the account has one: the day it was made.
 const youngPayment = (account: any): string | null =>
-  get("SELECT MIN(at) at FROM payments WHERE account_id=? AND kind IN ('plan','topup') AND applied_at IS NOT NULL AND amount_cents > 0 AND refunded_cents = 0 AND disputed IS NULL", account.id)?.at || null;
+  get(`SELECT MIN(at) at FROM payments WHERE account_id=? AND ${STANDING_PAYMENT}`, account.id)?.at || null;
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 // How many people this account may newly email in a day while the limit applies to it.
