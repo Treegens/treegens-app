@@ -1,18 +1,21 @@
 'use client';
 // What a signing link says once its envelope was purged (src/server/records.ts): the sender deleted the document,
-// nothing is left here to open, and where a copy may still be. The words are PURGED_LINK in src/lib/retention.ts,
-// which the server sends too.
+// nothing is left here to open, and where a copy may still be. In the person's language where it has been translated
+// (src/locales), as the browser asks: the link carries nothing else about them any more. The server's own answer is
+// PURGED_LINK in src/lib/retention.ts, the same words in English.
 import Link from 'next/link';
 import { Shell, StateCard } from './parts';
-import { PURGED_LINK } from '@/lib/retention';
+import { t } from '@/lib/i18n';
 
 export function PurgedLink({ day }: { day?: string | null }) {
+  const lang = typeof navigator !== 'undefined' ? navigator.language : 'en';
   return (
     <Shell>
-      <StateCard tone="stop" title="The sender deleted this document">
-        <p>{PURGED_LINK}</p>
-        {day && <p className="muted small">Deleted on {day}.</p>}
-        <p className="muted small">The sender decides how long their documents are kept, so questions about this one are for them. For anything else, use <Link href="/help?topic=signing#contact">the help page</Link>.</p>
+      <StateCard tone="stop" title={t(lang, 'sign.purged.title')}>
+        <p>{t(lang, 'sign.purged.body')}</p>
+        {day && <p className="muted small">{t(lang, 'sign.purged.day', { day })}</p>}
+        <p className="muted small">{t(lang, 'sign.purged.ask')}</p>
+        <p><Link className="btn" href="/help?topic=signing#contact">{t(lang, 'sign.purged.help')}</Link></p>
       </StateCard>
     </Shell>
   );

@@ -864,11 +864,12 @@ async function redeemNow(accountId: string, typed: any): Promise<string> {
     code, now(), reference || null, unixNow(), a.id);
   log(a.id, 'code', `Code ${code}: the monthly plan is free.`);
   await mailAdmins(a.id, `Code ${code} accepted: your plan is free`, 'Your monthly plan is free', [
-    `${a.name} is on the monthly plan at no charge with the code ${code}. ${sigs(PRICING.monthlySignatures)} are added to your balance at the start of every month, and what you do not use rolls over.`,
+    `${a.name} is on the monthly plan at no charge with the code ${code}. ${sigs(PRICING.monthlySignatures)} come with every calendar month (in UTC), starting with this one. They belong to that month: the ones you have not used when it ends expire, and the next month brings a fresh ${PRICING.monthlySignatures}.`,
     ...(wasPaying ? [
       `Your paid subscription ended today and will not be charged again. Cancellation reference: ${reference}.`,
-      `The signatures you already paid for stay yours. ${refundRuleText(refundDays())}`,
+      `The signatures you already paid for can still be used until their own dates: what is left of the month you paid for until that month ends, top-ups until ${TOPUP_EXPIRY_MONTHS} months after their payment. ${refundRuleText(refundDays())}`,
     ] : []),
+    whatYouKeep(a.id),
     ...(a.stripe_customer_id ? ['If a card is still saved from an earlier payment, it stays saved for top-ups. You can remove it on the Plan page at any time.'] : []),
     `Nothing is charged for the plan, so there is nothing to cancel. If you need more in a busy month you can top up at ${money(PRICING.topUpUsd * 100)} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`,
   ], { label: 'Open the Plan page', url: planUrl() });
@@ -883,7 +884,7 @@ route('POST', '/billing/redeem', async (c) => {
 }, 'admin');
 
 // When a code is switched off (taken out of FREE_PLAN_CODES), the plans it made free end, and the people on it are
-// told. They keep every signature they have. A code has to be missing for three days in a row before that happens,
+// told. They keep the signatures they have, each until its own date. A code has to be missing for three days in a row before that happens,
 // so a slip in a deployment does not end everyone's plan; no signatures are added in the meantime.
 export async function endRemovedCodes(): Promise<number> {
   let ended = 0;
@@ -901,7 +902,7 @@ export async function endRemovedCodes(): Promise<number> {
       log(a.id, 'code-ended', `The code ${a.promo_code} is no longer active.`);
       await mailAdmins(a.id, `The code ${a.promo_code} has ended`, 'Your free monthly plan has ended', [
         `The code ${a.promo_code} is no longer active, so ${a.name} no longer gets ${sigs(PRICING.monthlySignatures)} a month for free. Nothing was charged and nothing will be.`,
-        `You keep the ${sigs(Math.max(0, available(a.id)))} you have. They never expire, and signing your own documents is always free.`,
+        whatYouKeep(a.id, true),
         `To keep getting ${sigs(PRICING.monthlySignatures)} a month you can start the monthly plan for ${PLAN_PRICE()} on the Plan page. Every dollar plants ${PRICING.treesPerUsd} mangrove trees.`,
       ], { label: 'Open the Plan page', url: planUrl() });
       ended++;
