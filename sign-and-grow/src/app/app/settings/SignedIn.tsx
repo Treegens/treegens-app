@@ -1,11 +1,12 @@
 'use client';
 import { useState } from 'react';
 import { api, useLoad, fmtDate } from '@/components/ui';
+import { sessionWords } from '@/lib/policy';
 
 // Where a person is signed in: every browser that holds a session of theirs, as GET /me/sessions lists them. A
 // browser stays signed in while it is used (src/server/auth.ts), so this is also where one that should not be
 // signed in any more is ended: a phone that was lost, a computer at work.
-type Row = { id: string; device: string; browser: string; signed_in_at: string | null; last_used_at: string | null; current: boolean; handed_over: boolean };
+type Row = { id: string; device: string; browser: string; signed_in_at: string | null; last_used_at: string | null; signs_out_at: string; current: boolean; handed_over: boolean };
 
 export function SignedIn() {
   const [d, reload, failed] = useLoad<{ sessions: Row[]; days: number; max_days: number; noted_every_minutes: number }>(() => api('/me/sessions'));
@@ -25,7 +26,7 @@ export function SignedIn() {
     <section className="card" aria-labelledby="where-h">
       <h2 id="where-h" style={{ marginBottom: 4 }}>Where you are signed in</h2>
       <p className="muted small">
-        A browser stays signed in for {d.days} days after you last used Sign&Grow in it, and every visit starts the {d.days} days again. So a phone you use at least once a month does not ask you to sign in again.
+        {sessionWords(d.days, d.max_days)}{' '}
         Signing in on another device does not sign this one out. The device and browser are what the browser told us, and &ldquo;last used&rdquo; is noted at most once every {d.noted_every_minutes} minutes.
       </p>
       {said && <div className={`notice${said.err ? ' err' : ''}`} role={said.err ? 'alert' : 'status'} style={{ margin: '10px 0' }}>{said.text}</div>}
@@ -36,7 +37,8 @@ export function SignedIn() {
               <b>{name(s)}</b>{s.current && <> <span className="badge completed">This browser</span></>}
               <div className="muted small">
                 {s.signed_in_at ? `Signed in ${fmtDate(s.signed_in_at, true)}.` : 'Signed in before we kept this list.'}{' '}
-                {s.current ? 'In use now.' : s.last_used_at ? `Last used ${fmtDate(s.last_used_at, true)}.` : 'Not used since.'}
+                {s.current ? 'In use now.' : s.last_used_at ? `Last used ${fmtDate(s.last_used_at, true)}.` : 'Not used since.'}{' '}
+                {`Signed out by itself on ${fmtDate(s.signs_out_at)}.`}
                 {s.handed_over && ' Locked: it was handed to someone to sign in person, and nobody has typed the password there since.'}
               </div>
             </div>
