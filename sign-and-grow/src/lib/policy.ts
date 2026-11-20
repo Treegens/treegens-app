@@ -174,6 +174,11 @@ export const SUPPORT_REPLIES_PER_ADDRESS = 30;
  * is all a stranger can send to somebody's inbox through the form. The owner's own messages never count against it.
  */
 export const SUPPORT_OTHERS_PER_ADDRESS = 3;
+/**
+ * A closed help request that belongs to no login (written without one, or under an address whose login is gone) is
+ * deleted this many days after it was closed, with everything written on it. A login's requests go with the login.
+ */
+export const SUPPORT_KEEP_DAYS = 90;
 
 // ---- What a signer agrees to before any field opens ------------------------------------------------
 // The signing screen shows these words, the server writes their version into the audit line when the signer agrees,

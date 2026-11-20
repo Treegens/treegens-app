@@ -522,3 +522,73 @@ test('a template whose wording is locked keeps its rules and formulas: someone w
   assert.equal(f2.status, 403);
   assert.equal((await mo.put(`/envelopes/${e.id}`, { fields: e.fields })).status, 200, 'sent back as it is, it saves');
 });
+
+// ---- The editor and the signing page --------------------------------------------------------------------------
+
+test('the editor predicts the sign-again choice for a changed rule or formula, as the server decides it', async () => {
+  const { signsAgain } = await import('../src/components/editor/changes.ts');
+  const base: any = {
+    documents: [{ id: 'd', file_id: 'f' }],
+    recipients: [{ id: 'r1', name: 'Ann', email: 'ann@x.example', role: 'signer', status: 'completed' }, { id: 'r2', name: 'Bob', email: 'bob@x.example', role: 'signer', status: 'sent' }],
+    fields: [
+      { id: 'box', document_id: 'd', recipient_id: 'r2', type: 'checkbox', page: 0, x: 0.1, y: 0.1, w: 0.03, h: 0.02 },
+      { id: 'txt', document_id: 'd', recipient_id: 'r2', type: 'text', page: 0, x: 0.1, y: 0.2, w: 0.3, h: 0.03, show_when: { field: 'box', is: 'checked' } },
+      { id: 'n', document_id: 'd', recipient_id: 'r2', type: 'number', page: 0, x: 0.1, y: 0.3, w: 0.2, h: 0.03 },
+      { id: 't', document_id: 'd', recipient_id: 'r2', type: 'number', page: 0, x: 0.5, y: 0.3, w: 0.2, h: 0.03, formula: '{n} * 2' },
+    ],
+  };
+  const edit = (fid: string, p: any) => ({ ...base, fields: base.fields.map((f: any) => (f.id === fid ? { ...f, ...p } : f)) });
+  assert.deepEqual(signsAgain(base, base).map((r: any) => r.name), []);
+  assert.deepEqual(signsAgain(base, edit('txt', { show_when: { field: 'box', is: 'unchecked' } })).map((r: any) => r.name), ['Ann']);
+  assert.deepEqual(signsAgain(base, edit('txt', { show_when: null })).map((r: any) => r.name), ['Ann']);
+  assert.deepEqual(signsAgain(base, edit('t', { formula: '{n} * 3' })).map((r: any) => r.name), ['Ann']);
+  assert.deepEqual(signsAgain(base, edit('txt', { show_when: JSON.stringify({ field: 'box', is: 'checked' }) })).map((r: any) => r.name), [], 'the same rule written as stored is no change');
+});
+
+test('the signing page shows, hides and works out live, with other people\'s answers counted as the server counts them', async () => {
+  const { liveLogic, calcNote } = await import('../src/components/sign/logic.ts');
+  const mine = [
+    { id: 'co', type: 'checkbox', label: 'Has a co-signer', recipient_id: 'me' },
+    { id: 'name', type: 'text', label: 'Co-signer name', required: 1, recipient_id: 'me', show_when: { field: 'co', is: 'checked' } },
+    { id: 'q', type: 'number', label: 'Quantity', recipient_id: 'me' },
+    { id: 'p', type: 'number', label: 'Unit price', readonly: 1, value: '12,50', recipient_id: 'me' },
+    { id: 't', type: 'number', label: 'Total', required: 1, recipient_id: 'me', formula: 'round({q} * {p} + {fee} + {later}, 2)' },
+  ];
+  const others = [
+    { id: 'fee', type: 'number', label: 'Fee', value: '5', from: 'sender' },
+    { id: 'later', type: 'number', label: 'Their extra', value: '100', from: 'start' },
+  ];
+  let live = liveLogic(mine, others, { co: '', q: '2' });
+  assert.deepEqual(live.fields.map((f: any) => f.id), ['co', 'q', 'p', 't'], 'the co-signer name is not on the screen');
+  const t = live.fields.find((f: any) => f.id === 't');
+  assert.equal(t.readonly, 1, 'nobody types in a calculated field');
+  assert.equal(t.required, 0);
+  assert.equal(t.value, '30,00', "the sender's fee counts; someone else's unfinished answer does not");
+  assert.match(t.calc_note, /^Worked out for you from round\('Quantity' × 'Unit price' \+ 'Fee' \+ 'Their extra', 2\)\. With Quantity 2, Unit price 12,5, Fee 5, Their extra 0, that comes to 30,00\. Empty fields count as 0\.$/);
+  live = liveLogic(mine, others, { co: '1', q: '' });
+  assert.ok(live.fields.some((f: any) => f.id === 'name'));
+  assert.equal(live.fields.find((f: any) => f.id === 't').value, '5,00');
+  assert.match(calcNote({ formula: '{a} / {b}' }, { value: null, text: null, error: 'This cannot be worked out yet: it would divide by 0, because \'B\' is 0 or empty.', empty: false, ambiguous: [], numbers: '' }, (id) => id.toUpperCase()), /Worked out for you from 'A' ÷ 'B'\. This cannot be worked out yet: it would divide by 0/);
+  assert.match(calcNote({ formula: '{a}' }, { value: null, text: null, error: null, empty: true, ambiguous: [], numbers: '' }, (id) => id), /Fills in by itself once the fields it is worked out from are filled in/);
+});
+
+test('a bulk list: a column named like a field fills it for that row, and nothing else is taken', async () => {
+  const { readFieldColumns, fillableColumns } = await import('../src/components/sender/fieldColumns.ts');
+  const { readRecipients } = await import('../src/components/sender/csv.ts');
+  const fields = [
+    { id: 'p', type: 'dropdown', label: 'Plan', options: ['Gold', 'Silver'] },
+    { id: 's', type: 'number', label: 'Seats' },
+    { id: 't', type: 'number', label: 'Total', formula: '{s} * 2' },
+    { id: 'fee', type: 'text', label: 'Fee', readonly: 1, value: 'USD 500' },
+    { id: 'a', type: 'radio', label: 'Monthly', group_name: 'Billing' }, { id: 'b', type: 'radio', label: 'Yearly', group_name: 'Billing' },
+    { id: 'sig', type: 'signature', label: 'Sign' },
+  ];
+  assert.deepEqual([...fillableColumns(fields).values()], ['Plan', 'Seats', 'Billing'], 'not the total, the fixed fee or the signature');
+  const csv = 'Client name,Client email,plan,SEATS,Total,Notes,Billing\nAda,ada@x.example,Gold,3,999,hi,Yearly\nBen,ben@x.example,,,,,\n';
+  const reading = readRecipients(csv, [{ key: 'Client', label: 'Client' }]);
+  const cols = readFieldColumns(csv, fields, reading.header);
+  assert.deepEqual(cols.names, ['plan', 'SEATS', 'Billing']);
+  assert.deepEqual(cols.byRow.get(reading.rows[0].row), { Plan: 'Gold', Seats: '3', Billing: 'Yearly' });
+  assert.equal(cols.byRow.get(reading.rows[1].row), undefined, 'empty cells fill nothing');
+  assert.deepEqual(readFieldColumns('Ada,ada@x.example,Gold', fields, false).names, [], 'without a header row no column can name a field');
+});

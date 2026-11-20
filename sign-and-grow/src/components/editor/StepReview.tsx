@@ -12,6 +12,7 @@ import { ReminderChoice } from './ReminderChoice';
 import { PayLinkChoice } from './PayLinkChoice';
 import { PrintCheck } from './PrintCheck';
 import { LabelCheck } from './LabelCheck';
+import { LogicCheck } from './FieldLogic';
 import { phoneWeight } from '@/lib/phone';
 import { isGroupRow, groupLine } from './GroupRecipient';
 
@@ -144,6 +145,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       ))}
       {/* Fields a screen reader can only name by their type, each with a way to the box where the label is typed. */}
       {!closed && <LabelCheck ed={ed} />}
+      {!closed && <LogicCheck ed={ed} />}
       {/* The check before sending: a word that often means paper, a witness or a notary. It warns and never blocks. */}
       {!closed && <PrintCheck subject={env.subject || ''} docs={docs} rcps={rcps} fields={fields} />}
       {!closed && <PaperCheck envelopeId={env.id} subject={env.subject || ''} docs={docs} sending={!isTpl && !correcting} />}

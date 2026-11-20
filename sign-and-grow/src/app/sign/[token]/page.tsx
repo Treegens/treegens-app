@@ -16,6 +16,7 @@ import { MenuDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDia
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
+import { useLiveLogic } from '@/components/sign/logic';
 import { keepTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
 import { docUrl, allOnScreen } from '@/components/sign/fields';
 import { useAutoReview } from '@/components/sign/autoReview';
@@ -248,7 +249,8 @@ export default function SignPage() {
   const items = useMemo(() => buildItems(ordered, filled), [ordered, filled]);
   const required = items.filter((i) => i.required);
   const left = required.filter((i) => !i.done);
-  const nextField = left[0]?.first;
+  // A required field that just appeared comes first, so Next goes to it (useLiveLogic).
+  const nextField = (logic.appeared && left.find((i) => i.fields.some((f: any) => f.id === logic.appeared))?.first) || left[0]?.first;
   // Today's date where this person is: the date of signing is the calendar day in their own time zone.
   const dateText = formatDate(new Date(), env?.date_format, deviceZone());
   const byId = (id: string | null | undefined) => fields.find((f) => f.id === id);
@@ -896,7 +898,7 @@ export default function SignPage() {
       );
     }
     if (AUTO.includes(f.type)) return <div key={f.id} {...common} title="Added for you"><span className="sg-val" dir="auto">{f.type === 'full_name' ? me.name : f.type === 'email' ? me.email : dateText}</span></div>;
-    if (f.readonly) return <div key={f.id} {...common}><span className="sg-val" dir="auto">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.type === 'date' ? formatDateValue(f.value, env.date_format) : f.value}</span></div>;
+    if (f.readonly) return <div key={f.id} {...common} title={f.calc_note}><span className="sg-val" dir="auto">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.type === 'date' ? formatDateValue(f.value, env.date_format) : f.value}</span>{f.calc_note && <span className="sg-vh">{f.calc_note}</span>}</div>;
     // Tick boxes and radio buttons are the browser's own controls, drawn in the place the page gives them. So the
     // keyboard works as everywhere else (Space ticks, the arrow keys move through a group of radio buttons) and a
     // screen reader says what they are, whether they are on, and which group a radio button belongs to.
@@ -1012,6 +1014,8 @@ export default function SignPage() {
   return (
     <Shell data={data} bar={bar} bottom={bottom} footer={report} titleIsHeading live={live} helpInNewTab>
       {notice}
+      {/* A field that appears or goes because of an answer is said to a screen reader (useLiveLogic). */}
+      <p className="sg-vh" role="status" aria-live="polite">{logic.said}</p>
       {changedOpen && (
         <div className="notice warn sg-top" role="alert">
           <b>{sender.name} changed this document while you had it open.</b> Nothing was signed. What you filled in is still here wherever its field still exists. Look at the document again before you finish.

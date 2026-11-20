@@ -57,7 +57,7 @@ export function CommentsDialog({ base, sender, documents, onClose }: { base: str
   // What happens next, in words, once something is sent: who reads it, and where an answer comes.
   const next = (everyone: boolean) => {
     const answer = data?.answers_to ? `Their answer appears here, and we email it to ${data.answers_to}.` : 'Their answer appears here when you open this link again.';
-    return everyone ? `Sent. Everyone on this document can read it on their signing page, and ${sender.name} is emailed. ${answer}` : `Sent. Only ${sender.name} can read it, and they are emailed. ${answer}`;
+    return everyone ? `Sent. Everyone on this document can read it on their signing page, and ${sender.name} is emailed. ${answer}` : `Sent. Only ${sender.name} and the admins of their account can read it, and ${sender.name} is emailed. ${answer}`;
   };
 
   async function send(body: any, everyone: boolean) {
@@ -125,18 +125,18 @@ export function CommentsDialog({ base, sender, documents, onClose }: { base: str
                 {data.may_write && (replyTo === t.id ? (
                   <form className="cm-reply" onSubmit={async (ev) => {
                     ev.preventDefault();
-                    if (!reply.trim()) return setError('Type your answer first. Nothing was sent.');
+                    if (!reply.trim()) return setError('Type your reply first. Nothing was sent.');
                     if (await send({ thread_id: t.id, text: reply }, !t.private)) (setReply(''), setReplyTo(''));
                   }}>
-                    <label className="f"><span>Your answer</span><textarea dir="auto" rows={3} maxLength={COMMENT_MAX_CHARS} value={reply} onChange={(e) => setReply(e.target.value)} autoFocus /></label>
+                    <label className="f"><span>Your reply</span><textarea dir="auto" rows={3} maxLength={COMMENT_MAX_CHARS} value={reply} onChange={(e) => setReply(e.target.value)} autoFocus /></label>
                     <div className="row wrap">
-                      <button className="btn primary" disabled={busy}>{busy ? 'Sending' : 'Send answer'}</button>
+                      <button className="btn primary" disabled={busy}>{busy ? 'Sending' : 'Send reply'}</button>
                       <button type="button" className="btn" onClick={() => (setReplyTo(''), setReply(''))}>Cancel</button>
                     </div>
                   </form>
                 ) : (
                   <div className="row wrap cm-acts">
-                    {canWrite && <button type="button" className="btn sm" onClick={() => (setReplyTo(t.id), setReply(''), setSaid(''), setError(''))}>Answer<span className="sg-vh"> in conversation {i + 1}</span></button>}
+                    {canWrite && <button type="button" className="btn sm" onClick={() => (setReplyTo(t.id), setReply(''), setSaid(''), setError(''))}>Reply<span className="sg-vh"> in conversation {i + 1}</span></button>}
                     {mayEnd && <button type="button" className="btn sm" disabled={busy} onClick={() => settle(t)}>That settles it<span className="sg-vh">: conversation {i + 1}</span></button>}
                   </div>
                 ))}
@@ -164,10 +164,10 @@ export function CommentsDialog({ base, sender, documents, onClose }: { base: str
           {data.for_everyone ? (
             <fieldset className="cm-for">
               <legend>Who can read it</legend>
-              <label className="check"><input type="radio" name={`${ids}-for`} checked={forWhom === 'sender'} onChange={() => setForWhom('sender')} /> <span>Only {sender.name}. The other people on this document do not see it.</span></label>
+              <label className="check"><input type="radio" name={`${ids}-for`} checked={forWhom === 'sender'} onChange={() => setForWhom('sender')} /> <span>Only {sender.name}, and the admins of their account. The other people on this document do not see it.</span></label>
               <label className="check"><input type="radio" name={`${ids}-for`} checked={forWhom === 'everyone'} onChange={() => setForWhom('everyone')} /> <span>Everyone on this document</span></label>
             </fieldset>
-          ) : <p className="muted small">Only {sender.name} can read it.</p>}
+          ) : <p className="muted small">Only {sender.name} and the admins of their account can read it.</p>}
           {pages.length > 0 && (
             <label className="f"><span>What is it about? <span className="hint">Optional</span></span>
               <select value={about} onChange={(e) => setAbout(e.target.value)}>

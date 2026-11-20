@@ -8,6 +8,7 @@ import { useAllowance, voidCostLine } from '@/components/sender/allowance';
 import { BatchView } from '@/components/sender/BatchView';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { headerFor, readRecipients, MAX_ROWS, type BulkRow, type Role } from '@/components/sender/csv';
+import { readFieldColumns, fillableColumns } from '@/components/sender/fieldColumns';
 import { dayTime, explain, plural } from '@/components/sender/lib';
 import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 
@@ -49,6 +50,8 @@ function BulkSend({ preset }: { preset: string }) {
   const sameName = open.length > roles.length;
   const header = headerFor(roles);
   const reading = useMemo(() => readRecipients(csv, roles), [csv, roles]);
+  // Columns named like a field of the template fill that field in each row's envelope (fieldColumns.ts).
+  const fieldCols = useMemo(() => readFieldColumns(csv, loaded?.fields, reading.header), [csv, loaded, reading.header]);
   const ready = reading.missing.length ? [] : reading.rows.filter((r) => !r.problems.length);
   const stuck = reading.rows.filter((r) => r.problems.length);
   const tooMany = reading.rows.length > MAX_ROWS;
@@ -120,7 +123,7 @@ function BulkSend({ preset }: { preset: string }) {
   const sendKey = useRef<{ sig: string; key: string } | null>(null);
   async function send(rows: BulkRow[], anyway = false) {
     // "send_anyway": the sender has seen which addresses bounced before and chose to send (src/lib/mailnews.ts).
-    const body = { template_id: tid, name: name.trim() || undefined, rows: rows.map((x) => x.cells), ...(anyway ? { send_anyway: true } : {}) };
+    const body = { template_id: tid, name: name.trim() || undefined, rows: rows.map((x) => (fieldCols.byRow.has(x.row) ? { ...x.cells, fields: fieldCols.byRow.get(x.row) } : x.cells)), ...(anyway ? { send_anyway: true } : {}) };
     const sig = JSON.stringify(body);
     if (sendKey.current?.sig !== sig) sendKey.current = { sig, key: `bulk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` };
     const r = await api('/bulk', { body, headers: { 'Idempotency-Key': sendKey.current.key } });
@@ -167,7 +170,7 @@ function BulkSend({ preset }: { preset: string }) {
               {fileNote && <span className="small muted" role="status">{fileNote}</span>}
             </div>
             <p className="muted small" id="sn-csv-help">
-              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.
+              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.{fillableColumns(loaded?.fields).size ? ` A column named like a field of the template (${[...fillableColumns(loaded?.fields).values()].slice(0, 4).join(', ')}) fills that field in each envelope, as if you had typed it in, and anything that depends on it shows or hides from the start.` : ''}
               {' '}No header row? Then use exactly that order.
             </p>
 
@@ -182,7 +185,8 @@ function BulkSend({ preset }: { preset: string }) {
                     {' '}<span className="muted">
                       {reading.header ? 'We matched your columns by their names.' : `No header row found, so we read the columns in this order: ${header.replace(/,/g, ', ')}.`}
                       {reading.swapped ? ' The names and emails looked swapped, so we put them the right way round.' : ''}
-                      {reading.ignored.length ? ` Not used: ${reading.ignored.join(', ')}.` : ''}
+                      {fieldCols.names.length ? ` These columns fill fields of the template, as if you had typed the value in: ${fieldCols.names.join(', ')}.` : ''}
+                      {reading.ignored.filter((c) => !fieldCols.names.includes(c)).length ? ` Not used: ${reading.ignored.filter((c) => !fieldCols.names.includes(c)).join(', ')}.` : ''}
                     </span>
                   </p>
                 )}

@@ -5,7 +5,7 @@ import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { loadEnvelope, helpAsked, canBeStuck } from './envelopes.ts';
 import { sameEmail } from './credits.ts';
 import { isOperator } from './routes-trust.ts';
-import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS, SUPPORT_OTHERS_PER_ADDRESS } from '../lib/policy.ts';
+import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS, SUPPORT_OTHERS_PER_ADDRESS, SUPPORT_KEEP_DAYS } from '../lib/policy.ts';
 import { TOPIC_LABEL, firstName, whenText, knownZone, spanText } from '../lib/support.ts';
 
 // Help requests as tickets. Every request has a reference, a state the customer can see (open: waiting for us,
@@ -69,8 +69,10 @@ const say = (t: any, kind: 'customer' | 'answer' | 'question' | 'note' | 'event'
   run('INSERT INTO support_messages (request_id, kind, by_id, by_name, body, at) VALUES (?,?,?,?,?,?)', t.id, kind, by.id ?? null, by.name, body, now());
 
 // The private link to a request: its secret is made from the server's own secret, so every email about a request
-// can carry the same link, and the database only ever holds a fingerprint of it. Whoever has the link has the
-// mailbox it was sent to. That is the proof, so the link is only ever put in an email, never on a screen.
+// can carry the same link. The request itself only holds a fingerprint of it. Our stored copies of the emails about
+// it do hold the link, like every email we keep, until they are deleted (MAIL_COPY_DAYS, or with the request).
+// Whoever has the link has the mailbox it was sent to. That is the proof, so the link is only ever put in an email,
+// never on a screen.
 function linkFor(t: any): string {
   const key = hmac(`support-link:${t.id}`).slice(0, 40);
   const print = sha256(key);
@@ -235,10 +237,14 @@ function writer(c: Ctx) {
 }
 
 // Tells the people who answer. The customer is named as "Name <address>" so that deleting an account finds this copy.
+// A line break typed into the form never reaches the subject line of an email: the subject is one line.
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 async function announce(t: any, extra: string[] = []) {
   const account = t.account_id ? get('SELECT name, plan FROM accounts WHERE id=?', t.account_id) : null;
+  // With neither SUPPORT_EMAIL nor OPERATOR_EMAILS nobody hears of a request, so the server log says so every time.
+  if (!desk().length) console.error(`[support] HELP REQUEST ${refOf(t)} ARRIVED AND NOBODY WAS TOLD (set SUPPORT_EMAIL or OPERATOR_EMAILS). It is stored and waits in the operator queue.`);
   for (const to of desk())
-    await sendMail({ to, subject: `[${t.topic}] ${refOf(t)}: ${t.message.slice(0, 60)}`, heading: `Help request ${refOf(t)}`,
+    await sendMail({ to, subject: `[${t.topic}] ${refOf(t)}: ${oneLine(t.message.slice(0, 60))}`, heading: `Help request ${refOf(t)}`,
       lines: [`From ${who(t)}${account ? `, account ${account.name} (${account.plan})` : ', not logged in'}.`, ...(t.envelope_id ? [`About envelope ${t.envelope_id}.`] : []), ...extra,
         t.due_at ? `${priorityOf(t) === 'urgent' ? 'Urgent. ' : ''}The customer was told a person will have answered by ${whenText(t.due_at, tzOf(to))}.` : 'No response time was promised for this one.',
         t.message, 'Answer it from the queue, not by replying to this email: only an answer written there reaches the request, is emailed to the customer and stops the clock.'],
@@ -369,7 +375,7 @@ async function customerReply(t: any, text: any, userId: string | null) {
   if (was !== 'open') {
     const owner = ownerOf(fresh);
     for (const to of owner ? [owner.email] : desk())
-      await sendMail({ to, subject: `[reply] ${refOf(t)}: ${message.slice(0, 60)}`, heading: `${t.name || 'The customer'} replied on request ${refOf(t)}`,
+      await sendMail({ to, subject: `[reply] ${refOf(t)}: ${oneLine(message.slice(0, 60))}`, heading: `${t.name || 'The customer'} replied on request ${refOf(t)}`,
         lines: [`From ${who(t)}.`, message, due ? `They were told a person will have answered by ${whenText(due, tzOf(to))}.` : 'No response time was promised for this one.', 'Answer it from the queue, not by replying to this email.'],
         cta: { label: 'Open the request', url: `${baseUrl()}/app/operator?ticket=${t.id}` } });
   }
@@ -759,5 +765,11 @@ export async function supportTick(): Promise<{ late: number }> {
   // so the reply would not be lost. If none has come after SUPPORT_REOPEN_DAYS, it is deleted like the rest was. So
   // is one whose answer the mail server never took: it was kept only until that answer had left.
   for (const t of all("SELECT * FROM support_requests WHERE forget=1 AND status!='open' AND COALESCE(updated_at, at) < ?", new Date(Date.now() - SUPPORT_REOPEN_DAYS * 864e5).toISOString())) forgetNow(t);
+  // A closed request that belongs to no login is not kept for ever: a signer who wrote once would leave their name,
+  // address and words with us with no end. It goes SUPPORT_KEEP_DAYS after it was closed (well after the days in
+  // which a reply reopens it), with its thread and our copies of the emails about it. Requests under the confirmed
+  // address of a login are shown to that person under "Your requests" and go with the login. Alerts stay.
+  for (const t of all(`SELECT * FROM support_requests s WHERE status='closed' AND closed_at < ? AND user_id IS NULL AND ${NOT_ALERT}
+      AND NOT EXISTS (SELECT 1 FROM users u WHERE u.email_verified=1 AND lower(u.email)=lower(s.email)) LIMIT 500`, new Date(Date.now() - SUPPORT_KEEP_DAYS * 864e5).toISOString())) forgetNow(t);
   return { late };
 }

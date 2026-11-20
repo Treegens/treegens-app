@@ -9,6 +9,8 @@ import { MAX_FIELDS, MIN_H, MIN_W, PREFILL, SIGNS, TLABEL, TYPES, clamp, makeFie
 import { SENDER_MARK } from './shared';
 import { strikeClass, STRIKE_HELP } from '@/lib/strike';
 import { WordingField } from '../templates/WhoCanUse';
+import { FieldLogic } from './FieldLogic';
+import { WitnessBlockButton } from './WitnessChoice';
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
 const DRAG_START_PX = 3; // a press only becomes a drag after this much movement, so a click never moves anything
@@ -31,13 +33,14 @@ export function StepFields({ ed }: { ed: Ed }) {
   const pressed = useRef(false); // a press that started on a field must not count as a click on the page
 
   // Signers in the order they sign, which is also what {{signature2}} counts by.
+  // A witness takes no place in the order, so {{signature2}} never means a witness (editor/WitnessChoice.tsx).
   const signers = useMemo(() => {
-    const l = rcps.filter(SIGNS);
+    const l = rcps.filter((r) => SIGNS(r) && r.role !== 'witness');
     return env.ordered ? [...l].sort((a, b) => a.routing_order - b.routing_order) : l;
   }, [rcps, env.ordered]);
   // Fields can be placed for anyone who signs. For someone who has finished that means they sign again, which is
   // asked before the change is saved, so the people who have not signed yet come first when nothing is picked.
-  const open = signers;
+  const open = useMemo(() => [...signers, ...rcps.filter((r) => r.role === 'witness')], [signers, rcps]);
   const active = open.some((r) => r.id === activeId) ? activeId : (open.find((r) => !lockedIds.has(r.id)) || open[0])?.id || '';
   const list = fields.value;
   const selected = list.find((f) => f.id === sel);
@@ -335,7 +338,7 @@ export function StepFields({ ed }: { ed: Ed }) {
             <h3 id="ed-for">Fields for</h3>
             {signers.length === 0 && <div className="notice warn small">Add a signer in step 1 to place fields.</div>}
             <div className="ed-signers" role="group" aria-labelledby="ed-for">
-              {signers.map((r) => {
+              {open.map((r) => {
                 const locked = lockedIds.has(r.id);
                 return (
                   <button key={r.id} type="button" className={`btn sm${active === r.id ? ' on' : ''}`} style={{ ['--fc' as any]: color(r.id) }}
@@ -345,6 +348,8 @@ export function StepFields({ ed }: { ed: Ed }) {
                 );
               })}
             </div>
+            {/* For a witness: their whole block at once, next to the signature they witness (editor/WitnessChoice.tsx). */}
+            <WitnessBlockButton ed={ed} witness={rcps.find((r) => r.id === active && r.role === 'witness')} onPlaced={(id) => (setSel(id), (reveal.current = { id, focus: true }))} />
           </div>
           <div className="ed-only-sm">{undoRedo}</div>
         </div>
@@ -482,6 +487,8 @@ export function StepFields({ ed }: { ed: Ed }) {
                 )}
                 {selected.type === 'dropdown' && <label className="f"><span>Options <span className="hint">(one per line)</span></span><textarea value={(selected.options || []).join('\n')} onChange={(e) => patchField(selected.id, { options: e.target.value.split('\n') })} onBlur={(e) => patchField(selected.id, { options: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} /></label>}
                 {selected.type === 'radio' && <label className="f"><span>Group <span className="hint">(one choice per group)</span></span><input value={selected.group_name || ''} onChange={(e) => patchField(selected.id, { group_name: e.target.value })} /></label>}
+                {/* "Only show when..." and "Calculate from...", each said back as a sentence (FieldLogic.tsx). */}
+                <FieldLogic key={selected.id} field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />
                 <div className="grid ed-size">
                   <label className="f"><span>Width <span className="hint">(%)</span></span><input type="number" inputMode="decimal" min={1} max={100} step={0.5} value={pct(selected.w)} onChange={(e) => setSize(selected, 'w', e.target.value)} /></label>
                   <label className="f"><span>Height <span className="hint">(%)</span></span><input type="number" inputMode="decimal" min={0.5} max={100} step={0.5} value={pct(selected.h)} onChange={(e) => setSize(selected, 'h', e.target.value)} /></label>

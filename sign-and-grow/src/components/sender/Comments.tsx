@@ -41,6 +41,12 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
   useEffect(() => {
     if (shown) load();
   }, [e.id, e.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The email about new comments links to #comments. This card appears only once its data is here, after the
+  // browser looked for the anchor, so it is brought into view then.
+  const arrived = !!data;
+  useEffect(() => {
+    if (arrived && window.location.hash === '#comments') document.getElementById('comments')?.scrollIntoView({ block: 'start' });
+  }, [arrived]);
 
   if (!shown) return null;
   // Closed with nothing written: nothing to show and nothing to do.

@@ -138,6 +138,15 @@ export function forgetNamedWitness(signerId: string) {
   }
 }
 
+/**
+ * newerVersion() in envelopes.ts, after any change made outside the editor (a hand-over, a correction, a signer fixing
+ * their name): a witness still to be named is called after the signer as the signer is named now.
+ */
+export function openNames(envelopeId: string) {
+  for (const w of all("SELECT w.id, w.name, s.name signer FROM recipients w JOIN recipients s ON s.id=w.witness_for WHERE w.envelope_id=? AND w.role='witness' AND w.email=''", envelopeId))
+    if (w.name !== openWitnessName({ name: w.signer })) run('UPDATE recipients SET name=? WHERE id=?', openWitnessName({ name: w.signer }), w.id);
+}
+
 // ---- The signing page ------------------------------------------------------------------------------------------
 
 type WitnessState = 'open' | 'waiting' | 'asked' | 'absent' | 'done';

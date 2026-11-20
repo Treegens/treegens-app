@@ -699,6 +699,10 @@ function powerformTemplate(templateId: string) {
   if (!tpl || tpl.kind !== 'template') throw bad('Template not found.', 404);
   const open = tpl.recipients.filter(rowFills); // a group is filled in by its members, and a witness the signer names by that signer, not by a row or a visitor
   if (open.length !== 1 || !['signer', 'approver'].includes(open[0].role)) throw bad('A PowerForm needs a template with exactly one open signer role. Give every other recipient a name and email in the template.');
+  // Anyone can start a public form, as often as they like. A signing group on its template would let any visitor
+  // make every member of that group get an email, so a form never sends to a group (groups.ts).
+  if (tpl.recipients.some((r: any) => r.group_name || r.group_id))
+    throw bad('This form cannot be used while its template names a signing group: anyone who opens a public form could make every member of that group get an email. Its owner can name one person for that role in the template instead.');
   return { tpl, open: open[0] };
 }
 

@@ -27,7 +27,7 @@ import { carryRules } from './tplroles.ts';
 // Around the certificate: the fingerprint in the completion email and the record of each completed copy (evidence.ts).
 import { fingerprintLines, noteCopyMailed } from './evidence.ts';
 // A witness for one signer: asked straight after that signer, never charged, a statement of their own (witness.ts).
-import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot } from './witness.ts';
+import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames } from './witness.ts';
 import { waitsForName } from '../lib/witness.ts';
 // Conditional fields and formulas: checked when saved, worked out again from what is stored (logic.ts).
 import { saveLogic, settleLogic, hiddenAfter, hiddenOf, copyLogic, logicChanges } from './logic.ts';
@@ -348,6 +348,8 @@ function assertFresh(e: any, body: any) {
 export function newerVersion(envelopeId: string, by: Actor, how: string) {
   const t = now();
   run('UPDATE envelopes SET edit_version=edit_version+1, edited_by=?, edited_at=?, edited_how=?, updated_at=? WHERE id=?', by.name || null, t, str(how, 300), t, envelopeId);
+  // A witness still to be named is called after their signer as the signer is named now (witness.ts).
+  openNames(envelopeId);
 }
 
 // Replaces the whole draft: documents, recipients and fields. The editor sends its full state on every save.

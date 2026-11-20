@@ -2,6 +2,7 @@
 // person, and keeps the editor honest when signers act while the sender is still editing.
 // These functions mirror correctEnvelope() and advance() in src/server/envelopes.ts. Plain data in, plain data out.
 import { ownOutcome } from '../../lib/bysender.ts';
+import { logicKey } from '../../lib/logic.ts';
 
 export type Content = { ordered?: any; date_format?: any; documents: any[]; recipients: any[]; fields: any[] };
 
@@ -59,7 +60,7 @@ function askView(x: Content, recipientId: string, text: (f: any) => string): str
     docs: x.documents.map((d) => [d.file_id, s(d.name)]),
     me: s(x.recipients.find((r) => r.id === recipientId)?.name).trim(),
     fields: x.fields.filter((f) => !f.recipient_id || f.recipient_id === recipientId)
-      .map((f) => [f.id, f.document_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), words(f)]).sort(byFirst),
+      .map((f) => [f.id, f.document_id, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), req(f), s(f.label), words(f), logicKey(f)]).sort(byFirst),
     words: x.fields.filter((f) => f.recipient_id && f.recipient_id !== recipientId && words(f))
       .map((f) => [f.id, f.document_id, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), words(f)]).sort(byFirst),
   });
@@ -74,7 +75,8 @@ function printedView(x: Content, text: (f: any) => string, dates: string): strin
   return JSON.stringify({
     docs: x.documents.map((d) => [d.id, d.file_id]),
     dates,
-    fields: x.fields.map((f) => [f.id, f.document_id, f.recipient_id || null, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.readonly || f.type === 'note' ? 1 : 0, words(f)]).sort(byFirst),
+    // logicKey: when a field is shown and what it is worked out from are part of what the page says (src/lib/logic.ts).
+    fields: x.fields.map((f) => [f.id, f.document_id, f.recipient_id || null, f.type, f.page, r6(f.x), r6(f.y), r6(f.w), r6(f.h), f.readonly || f.type === 'note' ? 1 : 0, words(f), logicKey(f)]).sort(byFirst),
   });
 }
 

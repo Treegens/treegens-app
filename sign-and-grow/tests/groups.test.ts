@@ -603,3 +603,219 @@ test('an email to one member that comes back: the sender is told whose it was an
     delete process.env.MAIL_EVENTS_TOKEN;
   }
 });
+
+// ---- 4. Money: one group recipient is one signature ----------------------------------------------------------------
+
+test('a group holds one signature while it is out and uses one when it signs, however many members it has, and signing again after a change is free', async () => {
+  const was = process.env.STRIPE_SECRET_KEY;
+  process.env.STRIPE_SECRET_KEY = 'sk_test_groups'; // signatures are counted; nothing here calls the payment provider
+  try {
+    const credits = await import('../src/server/credits.ts');
+    const { c, e, maya } = await setup('money');
+    const acct = db.get('SELECT account_id a FROM envelopes WHERE id=?', e.id).a;
+    const start = credits.available(acct);
+    await send(c, e.id);
+    assert.equal(credits.reserved(acct), 1, 'three members, one signature held');
+    assert.equal(credits.available(acct), start - 1);
+    // Handing back and taking on again holds nothing more.
+    const link = linkOf(e.id, maya);
+    ok(await agree(link));
+    ok(await from().post(`/sign/${link}/hand-back`, {}));
+    ok(await agree(linkOf(e.id, (await fresh(c, e.id)).recipients[0].members[1].email)));
+    assert.equal(credits.reserved(acct), 1);
+    const benLink = row(e.id).token;
+    ok(await finish(benLink));
+    const used = (rid?: string) => db.get(`SELECT COUNT(*) n FROM credits WHERE account_id=? AND reason='signature'${rid ? ' AND ref LIKE ?' : ''}`, acct, ...(rid ? [`${rid}|%`] : [])).n;
+    assert.equal(used(), 1, 'one signature used');
+    assert.equal(credits.reserved(acct), 0);
+    assert.equal(credits.available(acct), start - 1);
+
+    // With a second signer the group can be asked to sign again after a change. That second time is free.
+    const pay = await makeGroup(c, three('money2'), 'Payroll');
+    const f2 = await upload(c, 1);
+    const sig = (rid: string, y: number) => ({ document_id: 'd', recipient_id: rid, type: 'signature', page: 0, x: 0.1, y, w: 0.3, h: 0.06 });
+    const e2 = ok(await c.post('/envelopes', { subject: 'Two', send: true, documents: [{ id: 'd', file_id: f2.id }], recipients: [{ id: 'g', role: 'signer', group_id: pay.id }, { id: 'p', role: 'signer', name: 'Pat Person', email: `pat.${++g}@example.com` }], fields: [sig('g', 0.3), sig('p', 0.6)] })).envelope;
+    assert.equal(credits.reserved(acct), 2, 'the group and Pat: two held');
+    const rid = row(e2.id).id;
+    const first = linkOf(e2.id, pay.members[0].email);
+    ok(await agree(first));
+    ok(await finish(first));
+    assert.equal(used(rid), 1);
+    const cur = asBody(await fresh(c, e2.id));
+    const moved = { ...cur, fields: cur.fields.map((f: any) => (f.recipient_id === rid ? { ...f, x: 0.15 } : f)), resign: true };
+    ok(await c.put(`/envelopes/${e2.id}`, moved), 'change that asks the group again');
+    assert.notEqual(row(e2.id).status, 'completed', 'the group is asked again');
+    assert.equal(credits.reserved(acct), 1, 'nothing more is held for the group: it has signed once');
+    ok(await finish(row(e2.id).token));
+    assert.equal(used(rid), 1, 'signing again after a change uses no second signature');
+  } finally {
+    if (was === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = was;
+  }
+});
+
+// ---- 5. The group as it was sent, and corrections to its members ---------------------------------------------------
+
+test('changing or deleting the saved group later does not change an envelope that is out', async () => {
+  const { c, e, group, maya, ben } = await setup('asSent');
+  await send(c, e.id);
+  ok(await c.put(`/groups/${group.id}`, { name: 'People team', members: [{ name: 'Zoe Zed', email: `zoe.${++g}@hr.example` }, { name: 'Yan Yu', email: `yan.${++g}@hr.example` }] }));
+  let cur = await fresh(c, e.id);
+  assert.equal(cur.recipients[0].group_name, 'HR team', 'the name it went out under');
+  assert.deepEqual(cur.recipients[0].members.map((m: any) => m.email), [maya, ben, cur.recipients[0].members[2].email]);
+  ok(await c.call('DELETE', `/groups/${group.id}`));
+  cur = await fresh(c, e.id);
+  assert.equal(cur.recipients[0].members.length, 3);
+  // The members can still act, and a correction that leaves the members alone keeps them.
+  ok(await c.put(`/envelopes/${e.id}`, { ...asBody(cur), subject: 'Staff handbook 2026' }));
+  assert.equal((await fresh(c, e.id)).recipients[0].members.length, 3);
+  ok(await agree(linkOf(e.id, ben)));
+  ok(await finish(linkOf(e.id, ben)));
+  assert.equal(db.get('SELECT status FROM envelopes WHERE id=?', e.id).status, 'completed');
+});
+
+test('a correction changes who can act: someone added gets a link, someone taken out is told, and taking out the one who had it asks the group again', async () => {
+  const { c, e, maya, ben, cy } = await setup('correct');
+  await send(c, e.id);
+  const [mayaLink, benLink] = [maya, ben].map((m) => linkOf(e.id, m));
+  ok(await agree(mayaLink));
+  const textId = (await view(mayaLink)).fields.find((f: any) => f.type === 'text').id;
+  ok(await from().post(`/sign/${mayaLink}/save`, { values: { [textId]: 'half done' } }));
+
+  const cur = await fresh(c, e.id);
+  const dee = `dee.${++g}@hr.example`;
+  const body = { ...asBody(cur), recipients: [{ id: cur.recipients[0].id, role: 'signer', members: [{ name: 'Ben Ortiz', email: ben }, { name: 'Cy Tan', email: cy }, { name: 'Dee Diaz', email: dee }] }] };
+  ok(await c.put(`/envelopes/${e.id}`, body));
+  const r = row(e.id);
+  assert.equal(r.claimed_by, null, 'Maya had it and was taken out: nobody has it now');
+  assert.deepEqual(values(e.id), [''], 'and what she typed went with her');
+  assert.equal(mailTo(dee).length, 1, 'Dee is emailed her own link at once');
+  assert.ok(mailTo(dee)[0].link.endsWith(`/sign/${linkOf(e.id, dee)}`));
+  assert.ok(subjects(maya).includes('No longer needed: Staff handbook'), 'Maya is told');
+  const gone = await from().get(`/sign/${mayaLink}`);
+  assert.equal(gone.data.recipient?.group?.state ?? gone.data.code, 'removed');
+  assert.equal((await agree(mayaLink)).status, 403, 'and her link opens nothing');
+  const line = trail(e.id).find((a: any) => /Dee Diaz/.test(a.detail || ''));
+  assert.match(line.detail, new RegExp(`Dee Diaz <${dee}> added to the group`));
+  assert.match(trail(e.id).map((a: any) => a.detail).join('\n'), new RegExp(`Maya Lopez <${maya}> taken out of the group`));
+  // Ben, who was there all along, keeps his link.
+  assert.equal(linkOf(e.id, ben), benLink);
+  ok(await agree(benLink));
+  ok(await finish(benLink));
+});
+
+test('the members of a group that has signed cannot change, and a group cannot shrink below two or be checked by text', async () => {
+  const c = await person('Cora Correct', `cora.${++g}@example.com`);
+  const grp = await makeGroup(c, three('locked'));
+  const f = await upload(c, 1);
+  const sig = (rid: string, y: number) => ({ document_id: 'd', recipient_id: rid, type: 'signature', page: 0, x: 0.1, y, w: 0.3, h: 0.06 });
+  const e = ok(await c.post('/envelopes', { subject: 'Two', send: true, documents: [{ id: 'd', file_id: f.id }], recipients: [{ id: 'g', role: 'signer', group_id: grp.id }, { id: 'p', role: 'signer', name: 'Pat Person', email: `pat.${++g}@example.com` }], fields: [sig('g', 0.3), sig('p', 0.6)] })).envelope;
+  const link = linkOf(e.id, grp.members[0].email);
+  ok(await agree(link));
+  ok(await finish(link));
+  const cur = await fresh(c, e.id);
+  const gr = cur.recipients.find((r: any) => r.group_name);
+  const fewer = await c.put(`/envelopes/${e.id}`, { ...asBody(cur), recipients: asBody(cur).recipients.map((r: any) => (r.id === gr.id ? { ...r, members: gr.members.slice(0, 2).map((m: any) => ({ name: m.name, email: m.email })) } : r)) });
+  assert.equal(fewer.status, 409);
+  assert.match(fewer.data.error, /HR team has already finished: Maya Lopez signed for it\. Its members can no longer be changed/);
+  // On an envelope that is still with the group: one member is too few, and a text-message check is refused.
+  const s2 = await setup('shrink');
+  await send(s2.c, s2.e.id);
+  const c2 = await fresh(s2.c, s2.e.id);
+  const one = await s2.c.put(`/envelopes/${s2.e.id}`, { ...asBody(c2), recipients: [{ id: c2.recipients[0].id, role: 'signer', members: [{ name: 'Maya Lopez', email: s2.maya }] }] });
+  assert.equal(one.status, 400);
+  assert.match(one.data.error, /at least 2 members/);
+  const texted = await s2.c.post(`/envelopes/${s2.e.id}/correct`, { recipient_id: c2.recipients[0].id, verify: 'sms_code', phone: '+447700900123' });
+  assert.equal(texted.status, 400);
+  assert.match(texted.data.error, /A one-time code and a text message go to one person/);
+  // The quick correction has no single name or address to change for a group, and says where members are changed.
+  const renamed = await s2.c.post(`/envelopes/${s2.e.id}/correct`, { recipient_id: c2.recipients[0].id, name: 'Someone', email: 'someone@example.com' });
+  assert.equal(renamed.status, 400);
+  assert.match(renamed.data.error, /HR team is a group, so there is no single name or address to correct here.*Edit envelope/);
+  // Its access code can be set there, one for the whole group.
+  ok(await s2.c.post(`/envelopes/${s2.e.id}/correct`, { recipient_id: c2.recipients[0].id, access_code: 'quay-2026' }));
+  assert.equal(row(s2.e.id).access_code, 'quay-2026');
+  assert.equal(c2.recipients[0].members.length, 3);
+});
+
+// ---- 6. Templates, bulk sends and public forms ----------------------------------------------------------------------
+
+test('a template can name a group for a role; envelopes from it and bulk sends go to the group as it is when each is sent; a public form never does', async () => {
+  const c = await person('Tia Template', `tia.${++g}@example.com`);
+  const members = three('tpl');
+  const grp = await makeGroup(c, members, 'Accounts payable');
+  const f = await upload(c, 1);
+  const tpl = ok(await c.post('/envelopes', { kind: 'template', subject: 'Supplier form', documents: [{ id: 'd', file_id: f.id }],
+    recipients: [{ id: 's', role: 'signer', role_name: 'Supplier' }, { id: 'g', role: 'approver', role_name: 'Accounts', group_id: grp.id }],
+    fields: [{ document_id: 'd', recipient_id: 's', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] })).envelope;
+  assert.equal(tpl.recipients.find((r: any) => r.group_name).members.length, 3);
+
+  // The group changes after the template was made: an envelope from it goes to the group as it is when it is sent.
+  const newcomer = `new.${++g}@ap.example`;
+  ok(await c.put(`/groups/${grp.id}`, { name: 'Accounts payable', members: [...members.slice(0, 2), { name: 'Nia New', email: newcomer }] }));
+  const used = ok(await c.post('/envelopes', { template_id: tpl.id, send: true, recipients: { Supplier: { name: 'Sue Supplier', email: `sue.${++g}@example.com` } } })).envelope;
+  const gr = used.recipients.find((r: any) => r.group_name);
+  assert.equal(gr.group_name, 'Accounts payable');
+  assert.deepEqual(gr.members.map((m: any) => m.email), [members[0].email, members[1].email, newcomer]);
+  assert.equal(mailTo(members[2].email).length, 0, 'someone no longer in the group is not sent it');
+
+  // Bulk: every row's envelope has the group, each member gets one email per envelope with their own link each time.
+  const bulk = await c.post('/bulk', { template_id: tpl.id, rows: [1, 2].map((i) => ({ Supplier: { name: `Sup ${i}`, email: `sup${i}.${g}@example.com` } })) });
+  assert.equal(bulk.status, 200, JSON.stringify(bulk.data));
+  const links = db.all('SELECT token FROM recipient_members WHERE email=? ORDER BY rowid', newcomer).map((x: any) => x.token);
+  assert.equal(links.length, 3, 'one envelope by hand and two in bulk');
+  assert.equal(new Set(links).size, 3, 'a link of her own on each');
+
+  // A public form is not for groups: it is refused where it is made, in words.
+  const form = await c.post('/powerforms', { template_id: tpl.id, name: 'Supplier sign-up' });
+  assert.equal(form.status, 400);
+  assert.match(form.data.error, /cannot be used while its template names a signing group: anyone who opens a public form could make every member of that group get an email/);
+});
+
+test('the screens: a member\'s page says who has it and before declining that it is for everyone; the sender\'s page has each member\'s link and Give back to the group', async () => {
+  const sign = read('src/app/sign/[token]/page.tsx');
+  assert.match(sign, /if \(groupAway\(data\) && stage !== 'locked'\)/, 'a member whose colleague has it sees who, not the document');
+  assert.match(sign, /note=\{groupDeclineText\(data\)\}/, 'the decline dialog says it declines for the group');
+  assert.match(sign, /<GroupConsentNote data=\{data\} \/>/, 'the consent screen says that agreeing takes it on');
+  assert.match(sign, /me\.group\?\.can_hand_back \? \[\{ key: 'handback'/);
+  assert.match(sign, /\(me\.role === 'signer' \|\| me\.role === 'approver'\) && !me\.group \? \[\{ key: 'reassign'/, 'nobody passes a group\'s document outside the group');
+  assert.match(sign, /if \(e\?\.code === 'taken'\) return void load\(\);/, 'losing the race to a colleague shows who won');
+  const { groupDeclineNote, groupTakeOn } = await import('../src/lib/groups.ts');
+  assert.match(groupDeclineNote('HR team'), /closes the document for everyone, the rest of HR team included/);
+  assert.match(groupTakeOn('HR team', 'signer'), /you take this on for HR team/);
+  const rec = read('src/components/sender/Recipients.tsx');
+  assert.match(rec, /\{!!r\.group_name && <GroupMembers /);
+  assert.match(rec, /const reachable = turn && !isMe && r\.role !== 'inperson' && !own && !openGroup;/, 'no link of "the group" is offered while nobody has it');
+  const card = read('src/components/sender/GroupMembers.tsx');
+  assert.match(card, /member_id: m\.id/);
+  assert.match(card, /\/recipients\/\$\{r\.id\}\/release/);
+  for (const f of ['src/components/sign/GroupNotice.tsx', 'src/components/sender/GroupMembers.tsx', 'src/components/sender/SigningGroups.tsx', 'src/components/editor/GroupRecipient.tsx', 'src/lib/groups.ts', 'src/server/groups.ts', 'src/server/routes-groups.ts', 'tests/groups.test.ts'])
+    assert.ok(!read(f).includes(String.fromCharCode(0x2014)), `no em dash in ${f}`);
+});
+
+test('a draft whose group was deleted says so and is not sent; choosing another group mends it', async () => {
+  const { c, e, group } = await setup('gone');
+  ok(await c.call('DELETE', `/groups/${group.id}`));
+  const d = await fresh(c, e.id);
+  assert.equal(d.recipients[0].group_missing, true);
+  const no = await c.post(`/envelopes/${e.id}/send`);
+  assert.equal(no.status, 400);
+  assert.match(no.data.error, /The group "HR team" no longer exists, so this cannot be sent to it/);
+  assert.equal(db.get('SELECT COUNT(*) n FROM recipient_members WHERE envelope_id=?', e.id).n, 0, 'nobody was written to');
+  const other = await makeGroup(c, three('gone2'), 'Payroll');
+  ok(await c.put(`/envelopes/${e.id}`, { ...asBody(d), recipients: [{ id: d.recipients[0].id, role: 'signer', group_id: other.id }] }));
+  const sent = await send(c, e.id);
+  assert.equal(sent.recipients[0].group_name, 'Payroll');
+});
+
+test('the README and the help page say what groups do, and no page says they do not exist', async () => {
+  const readme = read('README.md');
+  const notIn = readme.slice(readme.indexOf('## What is not in it'), readme.indexOf('\n## ', readme.indexOf('## What is not in it') + 5));
+  assert.doesNotMatch(notIn, /recipient groups|signing groups/i);
+  assert.match(readme, /- Signing groups: a recipient that is a group of 2 to 20 people/);
+  assert.match(readme, /\| `tests\/groups\.test\.ts` \|/);
+  const help = read('src/app/help/page.tsx');
+  assert.match(help, /<QA id="signing-groups"/);
+  assert.match(help, /<QA id="group-taken"/);
+  for (const f of ['src/app/page.tsx', 'src/app/help/page.tsx', 'src/app/security/page.tsx', 'src/app/developers/page.tsx']) assert.doesNotMatch(read(f), /no (signing|recipient) groups|groups are not/i, f);
+});

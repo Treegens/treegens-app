@@ -65,7 +65,7 @@
 
 /* On a phone, and on anything used by touch, everything that can be tapped is at least 44 px high. */
 @media (max-width: 900px), (pointer: coarse) {
-  .tk .btn, .tk select, .tk-filters button, .tk-kinds label, .rq .btn, .rq-item > summary { min-height: 44px; }
+  .tk .btn, .tk select, .tk input[type='search'], .tk-filters button, .tk-kinds label, .rq .btn, .rq-item > summary { min-height: 44px; }
   .tk textarea, .tk select, .rq textarea { font-size: 16px; }
   .rq .pub-link, .rq .linklike { display: inline-flex; align-items: center; min-height: 44px; }
   /* "Do not mention the document" sits just above the Send button of the help form. */

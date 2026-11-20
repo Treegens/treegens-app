@@ -58,7 +58,7 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
     return (
       <div className="sg-row">
         <div className="sg-row-label">{name}</div>
-        <div><bdi>{shown}</bdi> <span className="muted small">{f.readonly ? 'Filled in by the sender.' : 'Added for you.'}</span></div>
+        <div><bdi>{shown}</bdi> <span className="muted small">{f.calc_note || (f.readonly ? 'Filled in by the sender.' : 'Added for you.')}</span></div>
       </div>
     );
   }

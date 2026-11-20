@@ -78,7 +78,7 @@ export function FindRequests() {
   if (a.done)
     return (
       <Result show>
-        <p><b>Check the inbox of {a.done}.</b> If anyone wrote to us from that address in the last 90 days, an email with the link to each request is on its way. Only that inbox receives it.</p>
+        <p><b>Check the inbox of {a.done}.</b> If anyone wrote to us from that address in the last 90 days, an email with the link to each request is on its way, except any request the address told us it did not write. Only that inbox receives it.</p>
         <p>Nothing after a few minutes? Look in the spam folder. If you wrote from another address, try that one. If nothing comes, write to us again with the form above and mention the reference if you still have it.</p>
         <button type="button" className="pub-link" onClick={a.reset}>Try another address</button>
       </Result>

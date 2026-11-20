@@ -48,8 +48,10 @@ export const knownZone = (tz: any): string | null => (typeof tz === 'string' && 
 export function whenText(iso: string, tz?: string | null): string {
   const zone = tz === undefined ? undefined : zoneOk(tz) ? tz : 'UTC';
   const p: Record<string, string> = {};
-  for (const x of new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: zone }).formatToParts(new Date(iso))) p[x.type] = x.value;
-  const text = `${p.weekday} ${p.day} ${p.month}, ${p.hour}:${p.minute}`;
+  for (const x of new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: zone }).formatToParts(new Date(iso))) p[x.type] = x.value;
+  // The year only for a moment more than half a year away, so a request from last October is not read as this one.
+  const far = Math.abs(Date.parse(iso) - Date.now()) > 182 * 864e5;
+  const text = `${p.weekday} ${p.day} ${p.month}${far ? ` ${p.year}` : ''}, ${p.hour}:${p.minute}`;
   if (zone === undefined) return text;
   return zoneOk(tz) ? `${text} (${zone.replace(/_/g, ' ')} time)` : `${text} UTC (we do not know your time zone, so this is UTC)`;
 }

@@ -127,9 +127,11 @@ export default function Operator() {
         {q.reports.length === 0 && <div className="empty" style={{ padding: 24 }}>No open reports.</div>}
         {q.reports.map((r: any) => (
           <div key={r.id} className="queue-item">
-            <div className="row between wrap"><b>{r.envelope_deleted ? 'A document its sender has deleted since' : r.subject}</b><span className="muted small">{r.reason} · {fmtDate(r.at, true)}</span></div>
-            <div className="small">{r.envelope_deleted ? 'Nothing of the document is left. ' : `Sent by ${r.sender_name} (${r.sender_email}). `}Reported by {/^link:/.test(r.reporter || '') ? 'a person with no email address here, whose link the sender shared' : r.reporter}.</div>
-            {r.via_form && <div className="small" style={{ marginTop: 4 }}><span className="badge">Public form</span> This person came through a public form and typed their own name and address. The report does not count towards the automatic pause.</div>}
+            <div className="row between wrap"><b>{r.clickwrap_id ? `Click-to-agree page: ${r.clickwrap_name || 'deleted since'}` : r.envelope_deleted ? 'A document its sender has deleted since' : r.subject}</b><span className="muted small">{r.reason} · {fmtDate(r.at, true)}</span></div>
+            {/* A report from the page of click-to-agree terms: anyone can open that page, so it never counts towards the pause. */}
+            {r.clickwrap_id ? <div className="small">{r.clickwrap_slug && <><a href={`/agree/${r.clickwrap_slug}`} target="_blank" rel="noreferrer">Open the page</a>. </>}Reported by {r.reporter}. Anyone can open such a page, so the report does not count towards the automatic pause.</div>
+              : <div className="small">{r.envelope_deleted ? 'Nothing of the document is left. ' : `Sent by ${r.sender_name} (${r.sender_email}). `}Reported by {/^link:/.test(r.reporter || '') ? 'a person with no email address here, whose link the sender shared' : r.reporter}.</div>}
+            {r.via_form && !r.clickwrap_id && <div className="small" style={{ marginTop: 4 }}><span className="badge">Public form</span> This person came through a public form and typed their own name and address. The report does not count towards the automatic pause.</div>}
             {about(r)}
             {r.message && <pre>{r.message}</pre>}
             {r.detail && <div className="small" style={{ marginBottom: 10 }}>The recipient wrote: {r.detail}</div>}

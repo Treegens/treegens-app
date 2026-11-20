@@ -527,7 +527,7 @@ test('corrections: changing the witness is not a change to what the signer signe
   assert.equal(yes.status, 200, JSON.stringify(yes.data));
   const w2 = witnessRow(two.id);
   assert.equal(w2.status, 'pending', 'the witness waits for the signature they have to see');
-  assert.equal(row(ta).status, 'pending');
+  assert.equal(row(ta).status, 'sent', 'Ann is asked to sign again at once');
   assert.equal(mailTo('late@deed.example').length, 0);
 });
 
@@ -545,7 +545,7 @@ test('a signer asked to sign again takes the witness back with her: their earlie
   const cur = (await s.get(`/envelopes/${e.id}`)).data.envelope;
   const changed = await s.put(`/envelopes/${e.id}`, { edit_version: cur.edit_version, resign: true, documents: cur.documents, recipients: cur.recipients, fields: [...cur.fields, { document_id: cur.documents[0].id, type: 'note', value: 'Clause 4 removed', page: 0, x: 0.6, y: 0.9, w: 0.3, h: 0.03 }] });
   assert.equal(changed.status, 200, JSON.stringify(changed.data));
-  assert.equal(row(ann).status, 'pending');
+  assert.equal(row(ann).status, 'sent', 'Ann is asked to sign again at once');
   assert.equal(row(wit).status, 'pending', 'the witness gives the turn back until Ann has signed again');
   assert.equal((await finish(tokenFor(e.id, row(ann).email))).status, 200);
   assert.equal(row(wit).status, 'sent');
@@ -572,9 +572,10 @@ test('templates, bulk sends and public forms: the witness stays tied to the same
   // A bulk row fills in the giver only.
   const bulk = await s.post('/bulk', { template_id: t.id, rows: [{ Giver: { name: 'Bo Bulk', email: 'bo@deed.example' } }, { Giver: { name: 'Cy Bulk', email: 'cy@deed.example' } }] });
   assert.equal(bulk.status, 200, JSON.stringify(bulk.data));
+  assert.equal(bulk.data.sent, 2, JSON.stringify(bulk.data));
   for (const x of bulk.data.results) {
-    const wr = witnessRow(x.envelope_id);
-    assert.equal(wr.witness_for, db.get("SELECT id FROM recipients WHERE envelope_id=? AND role='signer'", x.envelope_id).id);
+    const wr = witnessRow(x.id);
+    assert.equal(wr.witness_for, db.get("SELECT id FROM recipients WHERE envelope_id=? AND role='signer'", x.id).id);
     assert.equal(wr.email, '');
   }
   // A witness the sender names each time is a column like any open role.

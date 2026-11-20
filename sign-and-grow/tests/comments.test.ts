@@ -137,6 +137,73 @@ test('"Ask the sender a question" is a private comment now: one way to ask, answ
   assert.equal((await s.get(`/envelopes/${e.id}/comments`)).data.threads.length, 1);
 });
 
+test('a visitor of a public form writes to the form\'s owner only: they typed their own name, and the others on it did not choose them', async () => {
+  const s = await person('Fay Former', 'fay@comments.example');
+  const tpl = await (async () => {
+    const file = await upload(s, 1);
+    const r = await s.post('/envelopes', { kind: 'template', subject: 'Volunteer form', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'v', role: 'signer', role_name: 'Volunteer' }],
+      fields: [{ id: 'f', document_id: 'd', recipient_id: 'v', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    return r.data.envelope;
+  })();
+  const form = await s.post('/powerforms', { template_id: tpl.id, name: 'Volunteers' });
+  assert.equal(form.status, 200, JSON.stringify(form.data));
+  const slug = form.data.powerform?.slug || db.get('SELECT slug FROM powerforms WHERE template_id=?', tpl.id).slug;
+  const v = browser();
+  const start = await v.post(`/public/powerforms/${slug}/start`, { name: 'Walk In', email: 'walkin.v1@example.com' });
+  assert.equal(start.status, 200, JSON.stringify(start.data));
+  const tok = String(start.data.url).split('/sign/')[1];
+  const page = (await v.get(`/sign/${tok}/comments`)).data;
+  assert.equal(page.for_everyone, false);
+  const all = await v.post(`/sign/${tok}/comments`, { text: 'Hello everyone', for: 'everyone' });
+  assert.equal(all.status, 403);
+  assert.equal(all.data.error, 'On a public form, what you write here goes to Fay Former only. Send it to them instead. Nothing was sent.');
+  assert.equal((await v.post(`/sign/${tok}/comments`, { text: 'Can I bring a friend?' })).status, 200);
+});
+
+test('in a signing group, a private thread is with the member who wrote it, also once they have taken the document on', async () => {
+  const s = await person('Gus Sender', 'gus@comments.example');
+  const members = [{ name: 'Maya Lopez', email: 'maya.c1@hr.example' }, { name: 'Bo Ortiz', email: 'bo.c1@hr.example' }];
+  const group = await s.post('/groups', { name: 'HR team', members });
+  assert.equal(group.status, 200, JSON.stringify(group.data));
+  const file = await upload(s, 1);
+  const r = await s.post('/envelopes', { subject: 'Handbook', send: true, documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'g', role: 'signer', group_id: group.data.group.id }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'g', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const e = r.data.envelope;
+  const link = (email: string) => db.get('SELECT token FROM recipient_members WHERE envelope_id=? AND email=?', e.id, email).token;
+  const M = browser(), B = browser();
+  const q = await M.post(`/sign/${link('maya.c1@hr.example')}/comments`, { text: 'Only for you: is section 3 final?' });
+  assert.equal(q.status, 200, JSON.stringify(q.data));
+  assert.deepEqual((await B.get(`/sign/${link('bo.c1@hr.example')}/comments`)).data.threads, [], 'a colleague in the group does not read it');
+  // The sender cannot write privately to a group nobody has taken on: there is no one person yet.
+  const gid = e.recipients[0].id;
+  const dm = await s.post(`/envelopes/${e.id}/comments`, { for: gid, text: 'To the group' });
+  assert.equal(dm.status, 409);
+  assert.match(dm.data.error, /Nobody in HR team has taken the document on yet/);
+  // The sender answers Maya: she alone is emailed, with her own link.
+  assert.equal((await s.post(`/envelopes/${e.id}/comments`, { thread_id: q.data.thread_id, text: 'Yes, final.' })).status, 200);
+  const toMaya = mailTo('maya.c1@hr.example').filter((m: any) => /wrote to you about/.test(m.subject));
+  assert.equal(toMaya.length, 1);
+  assert.equal(toMaya[0].link, `http://test.local/sign/${link('maya.c1@hr.example')}`);
+  assert.ok(mailTo('bo.c1@hr.example').every((m: any) => !m.html.includes('section 3')));
+  // Maya takes the document on: her thread is still hers.
+  assert.equal((await M.post(`/sign/${link('maya.c1@hr.example')}/consent`)).status, 200);
+  const hers = (await M.get(`/sign/${link('maya.c1@hr.example')}/comments`)).data;
+  assert.deepEqual(hers.threads.map((t: any) => t.comments.length), [2]);
+});
+
+test('what anyone writes is shown as text: markup in a comment is never run or rendered, in an email or on a page', async () => {
+  const s = await person('Esc Sender', 'esc@comments.example');
+  const { e, ada } = await out(s, 'x1');
+  const evil = '<img src=x onerror=alert(1)> <b>bold</b> & <a href="http://evil.example">click</a>';
+  assert.equal((await browser().post(`/sign/${ada}/comments`, { text: evil })).status, 200);
+  const mail = mailTo('esc@comments.example').filter((m: any) => m.subject === 'Questions and comments: Lease x1')[0];
+  assert.doesNotMatch(mail.html, /<img src=x|<a href="http:\/\/evil/);
+  assert.match(mail.html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.equal((await s.get(`/envelopes/${e.id}/comments`)).data.threads[0].comments[0].body, evil, 'kept exactly as typed; the pages print it as text');
+});
+
 // ---- 2. Telling people ---------------------------------------------------------------------------------------
 
 test('the sender gets one email for new comments, at most one every ten minutes for each envelope, with the comments in it', async () => {

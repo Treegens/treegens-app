@@ -12,8 +12,10 @@ export function pinWords(pin: Pin | null | undefined, documents = 1): string {
   return `${documents > 1 && pin.document ? `${pin.document}, ` : ''}${page}${where}`;
 }
 
-/** Who can read a thread, said to the person reading it. */
+/** Who can read a thread, said to the person reading it. The sender's side is the sender and the admins of their account
+ * (and its API keys), so a private thread is never called "only the two of you". */
 export function audienceWords(t: { private: boolean; with?: { name: string } | null }, side: 'sender' | 'recipient', senderName = 'the sender'): string {
   if (!t.private) return 'Everyone on this document can read this.';
-  return side === 'sender' ? `Only you and ${t.with?.name || 'this person'} can read this.` : `Only you and ${senderName} can read this.`;
+  return side === 'sender' ? `Private between your account and ${t.with?.name || 'this person'}. Nobody else on the envelope can read it.`
+    : `Private between you and ${senderName}. The admins of their account can read it too. Nobody else on this document can.`;
 }

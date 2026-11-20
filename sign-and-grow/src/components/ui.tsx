@@ -75,7 +75,7 @@ export const Leaf = ({ size = 20, color = 'currentColor' }: { size?: number; col
 const STATUS: Record<string, string> = { draft: 'Draft', sent: 'Waiting for others', completed: 'Completed', declined: 'Declined', voided: 'Voided', expired: 'Expired', pending: 'Not yet sent', viewed: 'Viewed' };
 export const Status = ({ s, label }: { s: string; label?: string }) => <span className={`badge ${s}`}>{label || STATUS[s] || s}</span>;
 
-export const ROLE_LABEL: Record<string, string> = { signer: 'Needs to sign', approver: 'Needs to approve', cc: 'Receives a copy', viewer: 'Needs to view', inperson: 'Signs in person' };
+export const ROLE_LABEL: Record<string, string> = { signer: 'Needs to sign', approver: 'Needs to approve', cc: 'Receives a copy', viewer: 'Needs to view', inperson: 'Signs in person', witness: 'Witnesses a signature' };
 export const COLORS = ['#1f6f43', '#2f5f9e', '#b3392f', '#8a4fb0', '#b97712', '#0f7f86', '#a8457a', '#5b6b1e'];
 
 export function fmtDate(s?: string | null, time = false) {

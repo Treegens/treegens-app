@@ -16,6 +16,8 @@ import { SigningOnPhone } from './phone';
 import { NotMeAnswer } from './NotMe';
 import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
 import { PAID_TRUST_DAYS } from '@/lib/policy';
+import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUP_RULE } from '@/lib/policy';
+import { TWO_STEP_LOST, TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES } from '@/lib/policy';
 
 export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in and without a chatbot. Find your documents, stop a subscription, or write to a person.' };
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
@@ -110,7 +112,7 @@ export default function Help() {
 
           <QA id="while-signing" q="What else can I do on the signing page?">
             <ul className="pub-list">
-              <li>Ask the sender a question before you sign.</li>
+              <li>Ask the sender a question before you sign, under Questions and comments. Only the sender and the admins of their account read it, unless you choose everyone on the document, and their answer appears on the same page and comes by email. Comments are not printed on the document and are not part of what you sign.</li>
               <li>Fix a slip in the spelling of your own name. A small one, such as a letter missing or two swapped, a space, a hyphen or a dot, is corrected at once. When the software cannot tell that the new name is still you, for example a name written in another alphabet, it changes nothing and asks the sender, who can correct it for you.</li>
               <li>Pass the document to someone else who should sign instead.</li>
               <li>Decline, with a reason.</li>
@@ -121,6 +123,9 @@ export default function Help() {
           </QA>
           <SigningOnPhone />
 
+          <QA id="group-taken" q="It says a colleague has taken this on">
+            <p>The document was sent to a group you are in, and any one of you can act on it. The first person who agreed to sign took it on, so your link now says who has it, and you do not need to do anything. If you should do it instead, for example because they are away, press the button on your link that asks the sender to give it back. Only the sender can do that. If you took it on by mistake, open <b>Other actions</b> and choose <b>Hand back</b> before you finish: it goes back to the whole group, and what you filled in is cleared.</p>
+          </QA>
           <QA id="one-time-code" q="I was asked for a one-time code">
             <p>The sender asked us to check who opens the document. When you press <b>Send me the code</b> we send a {SIGNER_CODE_DIGITS}-digit code {textsOn ? 'to your email address, or by text message to a mobile number the sender typed for you' : 'to your email address'}. The screen shows where it goes with most of it hidden. Type the code in and the document opens. On that device it stays open for a day.</p>
             <ul className="pub-list">
@@ -279,6 +284,10 @@ export default function Help() {
             <p>If you signed something and were shown a Pay button: your signature is complete whether you pay or not. The page names the sender and the full address the button opens. Sign&Grow cannot confirm or refund a payment, so ask the sender about it, and if you did not expect to pay anything, do not pay and report the request from the signing page.</p>
           </QA>
 
+          <QA id="signing-groups" q="Can I send to a team, where anyone in it can sign?">
+            <p>Yes, with a signing group, such as &ldquo;HR team&rdquo;. Admins make them under Contacts, with {GROUP_MIN_MEMBERS} to {GROUP_MAX_MEMBERS} people each, and everyone on the team can choose one as a recipient, also in templates. {GROUP_RULE}</p>
+            <p>Each member has a link of their own. Once someone has taken it on, the others see who has it, and only you can give it back to the whole group: on the envelope page, choose <b>Give back to the group</b>. To change who is in the group on an envelope that is already out, choose <b>Edit envelope</b>. Changing the group under Contacts only changes what you send from then on. A one-time code by email or text message goes to one person, so it cannot be asked of a group. Public forms cannot send to a group.</p>
+          </QA>
           <QA id="template-access" q="Who can use and change a template, and what does a locked wording mean?">
             <p>Each template has three settings, under <b>Who can use this</b> on the Templates page and in the template editor. <b>Who can use it</b>: everyone on the team (the usual), admins only, or members you choose. Nobody else sees it in their list. <b>Who can change it</b>: the person it belongs to and admins (the usual), members you choose as well, or everyone on the team. <b>Lock the wording</b>: someone who may not change the template can still fill in names, email addresses and the fields left empty for them, but not the documents, the fixed wording, the fields, the message or who signs in what order. The editor shows those parts as locked from the start, so nobody types and is turned down at the end.</p>
             <p>Only the person a template belongs to and admins can change these settings or delete the template, and every change is written to the template&apos;s history. The owner and admins of the account can always use and change every template. A copy of a template keeps who can use it, and a copy of a locked one stays with its owner, so a copy is no way round the lock. Locking holds for envelopes started from then on; unlocking frees the ones already started. When someone leaves the team or is removed, they are taken off every list of chosen members, and their templates pass to the person who takes over their work.</p>
@@ -301,6 +310,9 @@ export default function Help() {
             <p><b>Forgot the password?</b> <Link href="/forgot">Reset it here</Link>. The link we email works for one hour.</p>
             {signInWith && <p><b>Made your login with {signInWith}?</b> Use that button on the <Link href="/login">sign-in page</Link>. Such a login has no password until you choose one: <Link href="/forgot">the same link by email</Link> lets you do that, and under Settings, Profile you see every way into your login and can connect or disconnect {signInWith}. The last way in cannot be removed.</p>}
             {signInWith && <p><b>Told that you already have a login with this address?</b> Then {signInWith} did not confirm to us that the address is yours, and we never open an existing login on the strength of an address alone. Sign in with your password once (or choose one with the link by email), then connect it under Settings, Profile.</p>}
+            <p><b>Lost the phone with your authenticator app?</b> Type one of your recovery codes in place of the code. Each works once. Without them:</p>
+            <ul>{TWO_STEP_LOST.map((l) => <li key={l}>{l}</li>)}</ul>
+            <p>After {TWO_STEP_TRIES} wrong codes in a row, wait {TWO_STEP_PAUSE_MINUTES} minutes before the next one, and check that the time on your phone is set automatically: the codes depend on it.</p>
             <p><b>No longer have that mailbox?</b> You can still <a href="#stop-by-card">stop the billing with your card</a>. Then <a href="#contact" data-topic="cannot-log-in">write to us</a> and a person will help with the account.</p>
             <p><b>On a team?</b> An owner or admin can remove someone who has left. What that person sent (envelopes, drafts, templates and bulk sends) passes to a member the admin chooses, and each envelope&apos;s audit trail says so. The owner can hand the whole account to someone else under Settings, then Team.</p>
             <p><b>Were you removed from a team?</b> Your login still works. Sign in and you get an empty workspace of your own, with your inbox of documents sent to you. A team can invite you again at any time: sign in from the invitation and you are on it.</p>

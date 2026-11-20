@@ -380,8 +380,9 @@ test('small things that stop people getting stuck', async () => {
   for (let i = 0; i < 50; i++) await many.get(`/sign/${tok}`);
   assert.equal((await many.get(`/sign/${tok}`)).status, 200);
 
-  // The signer fixes the spelling of their own name: logged, and the sender is told.
-  assert.equal((await many.post(`/sign/${tok}/name`, { name: 'Ada Signer-Lovelace' })).status, 200);
+  // The signer fixes the spelling of their own name: logged, and the sender is told. (A second family name put in is
+  // a spelling of the same person. Dropping the initial as well would be two changes, and goes to the sender.)
+  assert.equal((await many.post(`/sign/${tok}/name`, { name: 'Ada S. Signer-Lovelace' })).status, 200);
   assert.ok((await info()).audit.some((a: any) => a.action === 'Signer corrected their name'));
   assert.ok(mailTo('jo@example.com').some((m) => m.subject.startsWith('Name corrected:')));
 

@@ -1,5 +1,6 @@
 /* Two-step login: the setup, the recovery codes and the second screen at sign-in (src/components/TwoStep.tsx). */
 .twostep .btn { min-height: 44px; white-space: normal; text-align: center; }
+.twostep input:not([type='checkbox']), .twostep select { min-height: 44px; }
 .twostep input[type='checkbox'] { width: 22px; height: 22px; }
 .twostep .setting-row { min-height: 44px; align-items: center; }
 .ts-code { font-family: var(--mono, ui-monospace, monospace); font-size: 20px; letter-spacing: 0.12em; min-height: 48px; }
@@ -17,3 +18,7 @@
   body:has(.ts-codes) .ts-codes, body:has(.ts-codes) .ts-codes * { visibility: visible; }
   .ts-codes { position: absolute; top: 0; left: 0; border: 0; }
 }
+.twostep summary { font-weight: 600; color: var(--green-deep, #17482f); list-style: none; }
+.twostep summary::-webkit-details-marker { display: none; }
+.twostep summary::before { content: '\25B8'; margin-right: 8px; }
+.twostep details[open] > summary::before { content: '\25BE'; }

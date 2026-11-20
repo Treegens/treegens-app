@@ -531,9 +531,11 @@ route('GET', '/operator/queue', (c) => {
     // A report stays in the queue when the envelope it was about has been deleted since (envelope_deleted): a sender
     // who voids and deletes what was reported must not make the earlier reports disappear from a person's view.
     // via_form marks a report from the visitor of a public form, which does not count towards the automatic pause.
-    reports: all(`SELECT r.*, e.subject, e.message, e.id IS NULL envelope_deleted, u.name sender_name, u.email sender_email, a.id about_account, ${about}
+    // clickwrap_id marks a report made from the page of click-to-agree terms (routes-clickwrap.ts), not about an envelope.
+    reports: all(`SELECT r.*, e.subject, e.message, e.id IS NULL envelope_deleted, u.name sender_name, u.email sender_email, a.id about_account, ${about},
+        (SELECT k.name FROM clickwraps k WHERE k.id=r.clickwrap_id) clickwrap_name, (SELECT k.slug FROM clickwraps k WHERE k.id=r.clickwrap_id) clickwrap_slug
       FROM abuse_reports r LEFT JOIN envelopes e ON e.id=r.envelope_id LEFT JOIN users u ON u.id=e.sender_id JOIN accounts a ON a.id=r.account_id WHERE r.status='open' ORDER BY r.at LIMIT 200`)
-      .map((r) => ({ ...r, envelope_deleted: !!r.envelope_deleted, via_form: !!r.via_form })),
+      .map((r) => ({ ...r, envelope_deleted: !!r.envelope_deleted && !r.clickwrap_id, via_form: !!r.via_form })),
     paused: all('SELECT id, name, plan, created_at, trusted_at, suspended_at, suspended_reason FROM accounts WHERE suspended_at IS NOT NULL ORDER BY suspended_at DESC'),
   };
 });

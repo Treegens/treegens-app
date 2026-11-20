@@ -18,6 +18,7 @@ import { MAX_DOCS, SIGNS, clamp, plural, who, type Confirm, type Ed, type Upload
 import { sendAnywayAsk } from '@/lib/mailnews';
 import { stackedFields } from '@/lib/stacked';
 import { WordingBanner, type WordingLock } from './templates/WhoCanUse';
+import { witnessProblem } from '@/lib/witness';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -117,7 +118,9 @@ export function Editor({ id }: { id: string }) {
       // "I will send the link myself": a name and no address, for envelopes only (editor/SendMyself.tsx).
       link_by_sender: !isTpl && !!r.link_by_sender,
       // A signing group instead of a person, and on an envelope that is out who can act for it (GroupRecipient.tsx).
-      group_id: r.group_id || null, ...(correcting && r.group_id && r.members ? { members: r.members.map((m: any) => ({ name: m.name, email: m.email })) } : {}) })),
+      group_id: r.group_id || null, ...(correcting && r.group_id && r.members ? { members: r.members.map((m: any) => ({ name: m.name, email: m.email })) } : {}),
+      // A witness: whose signature, and whether that signer names them (editor/WitnessChoice.tsx).
+      ...(r.role === 'witness' ? { witness_for: r.witness_for || null, named_by_signer: !!r.named_by_signer } : {}) })),
     fields: flds,
   });
   latest.current = env && body();
@@ -319,7 +322,12 @@ export function Editor({ id }: { id: string }) {
         // A group has no address of its own: its members have (editor/GroupRecipient.tsx).
         const no = groupProblem(r);
         if (no) p.push(no);
+      } else if (r.role === 'witness' && r.named_by_signer) {
+        // A witness the signer names has no name or address of the sender's (editor/WitnessChoice.tsx).
       } else if (!isTpl && (!r.name.trim() || !validEmail(r.email))) p.push(`${name} needs a name and a valid email.`);
+      // Whose signature a witness witnesses, and what cannot work: one rule with the server (src/lib/witness.ts).
+      const wit = witnessProblem(r, { recipients: rcps, fields: fields.value });
+      if (wit) p.push(wit);
       if (isTpl && !r.role_name?.trim() && !r.email) p.push('Give every open recipient a role name, such as "Client".');
       if (isTpl && r.email && !validEmail(r.email)) p.push(`${name} needs a valid email, or leave it empty to fill in later.`);
       if (SIGNS(r) && !fields.value.some((f) => f.recipient_id === r.id)) p.push(`${name} has no fields to sign yet.`);

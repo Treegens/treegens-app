@@ -23,7 +23,8 @@ export const MAX_RECIPIENTS = 50;
 export const MAX_FIELDS = 2000;
 
 export const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
-export const SIGNS = (r: any) => r.role === 'signer' || r.role === 'inperson';
+// A witness signs too, in a block of their own (editor/WitnessChoice.tsx), and never uses a signature.
+export const SIGNS = (r: any) => r.role === 'signer' || r.role === 'inperson' || r.role === 'witness';
 export const who = (r: any) => r?.name || r?.role_name || r?.email || 'Unnamed';
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 

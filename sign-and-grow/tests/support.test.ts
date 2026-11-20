@@ -921,7 +921,9 @@ test('"send me the links again" answers as fast for an address that wrote to us 
     // Before, an address that had written answered only once the mail server had taken the email: 250 ms or more.
     assert.ok(Math.max(...wrote) < 150, `answered in ${wrote.map(Math.round)} ms, not after the mail server`);
     assert.ok(Math.max(...never) < 150);
-    await settle();
+    // Wait (while the stand-in is still in place) until the mail server has had every one of them.
+    const pending = () => db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE 'wrote_@cust.test' AND subject LIKE 'Your requests to%' AND status='queued'").n;
+    for (let i = 0; i < 50 && pending(); i++) await settle(100);
   });
   // The email still goes, a moment later, and only to the addresses that wrote.
   for (let i = 0; i < 3; i++) assert.equal(db.get("SELECT status FROM emails WHERE to_email=? AND subject LIKE 'Your requests to%'", `wrote${i}@cust.test`)?.status, 'sent');
@@ -1212,4 +1214,87 @@ test('a reply after the promised time keeps the lateness on record, and the publ
   // The help page says what the number counts: a first reply from a person, a question back included.
   const fs = await import('node:fs');
   assert.match(fs.readFileSync(new URL('../src/app/help/tools.tsx', import.meta.url), 'utf8'), /got their first reply from a person in that time \(an answer, or a question back to the writer\)/);
+});
+
+test('a closed request that belongs to no login is deleted 90 days after closing; a login\'s requests and alerts stay', async () => {
+  const { SUPPORT_KEEP_DAYS } = await import('../src/lib/policy.ts');
+  const days = (n: number) => new Date(Date.now() - n * 864e5).toISOString();
+  const nobody = await ask({ email: 'once.signer@cust.test', name: 'Once Signer', message: 'ONCE-WORDS: I signed once and asked once.' });
+  const recent = await ask({ email: 'recent.signer@cust.test', message: 'Closed not so long ago.' });
+  const open = await ask({ email: 'still.open@cust.test', message: 'Nobody has answered this yet.' });
+  const holder = await person('Login Holder', 'login.holder@cust.test');
+  const theirs = await ask({ email: 'login.holder@cust.test', message: 'Typed under a confirmed login address.' });
+  for (const r of [nobody, recent, theirs]) await act(maya, row(r.reference).id, { action: 'close', text: 'Answered and closed.' });
+  const l = link('once.signer@cust.test', nobody.reference);
+  db.run('UPDATE support_requests SET closed_at=? WHERE ref IN (?, ?)', days(SUPPORT_KEEP_DAYS + 1), nobody.reference, theirs.reference);
+  db.run('UPDATE support_requests SET closed_at=? WHERE ref=?', days(SUPPORT_KEEP_DAYS - 1), recent.reference);
+  db.run('UPDATE support_requests SET at=? WHERE ref=?', days(400), open.reference);
+  db.run("INSERT INTO support_requests (id, email, name, topic, message, status, at, closed_at) VALUES ('sup_oldalert000001', 'maya@ops.test', 'Sign&Grow (automatic alert)', 'billing', 'An old handled alert.', 'closed', ?, ?)", days(400), days(400));
+  // Our copy of an email the mail server took goes with it (in tests there is none, so make one look taken).
+  db.run("UPDATE emails SET status='sent' WHERE to_email='once.signer@cust.test'");
+  await cron.tick();
+  assert.equal(row(nobody.reference), null, 'gone, with its thread');
+  assert.equal(db.get("SELECT COUNT(*) n FROM support_messages WHERE body LIKE 'ONCE-%'").n, 0);
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email='once.signer@cust.test'").n, 0, 'and our copies of the emails with the link');
+  assert.equal((await from().get(l.api)).status, 404);
+  assert.ok(row(recent.reference), 'closed 89 days ago: kept');
+  assert.ok(row(open.reference), 'open: kept until it is answered');
+  assert.ok(row(theirs.reference), 'under the confirmed address of a login: goes with the login');
+  assert.ok(db.get("SELECT 1 x FROM support_requests WHERE id='sup_oldalert000001'"), 'alerts stay');
+  void holder;
+});
+
+test('someone signed in can say "I did not write to you" about a request a stranger typed their address into, and dates read alike', async () => {
+  const pat = await person('Pat Signed', 'pat.signed@cust.test');
+  const typed = await ask({ email: 'pat.signed@cust.test', message: 'Typed by somebody else under the address of Pat.' });
+  const listed = (await pat.get('/support/mine')).data.requests.find((r: any) => r.reference === typed.reference);
+  assert.deepEqual([listed.held, listed.can_reply], [true, true]);
+  assert.equal((await pat.post(`/support/mine/${listed.id}/solved`, { not_mine: true })).status, 200);
+  assert.equal(row(typed.reference).closed_how, 'disowned');
+  // The screens: the button is offered wherever the first message came from someone we do not know, not only on
+  // the page behind the link; and "Your requests" writes the day as every other support screen does.
+  const fs = await import('node:fs');
+  const view = fs.readFileSync(new URL('../src/app/help/RequestView.tsx', import.meta.url), 'utf8');
+  assert.match(view, /\{solved && !closed && r\.held && <button[^>]*>|\{solved && !closed && r\.held && <button/);
+  assert.doesNotMatch(view, /linked && r\.held/);
+  const tools = fs.readFileSync(new URL('../src/app/help/tools.tsx', import.meta.url), 'utf8');
+  assert.match(tools, /· sent \{whenText\(r\.at\)\}/);
+  assert.doesNotMatch(tools, /\{billDay\(r\.at\)\}/);
+});
+
+test('a line break typed into the form never reaches a subject line, and a request that reaches nobody is logged loudly', async () => {
+  const r = await ask({ email: 'crlf@cust.test', name: 'Evil\r\nBcc: x@y.z', message: 'line1\r\nBcc: victim@x.test\r\nmore words here' });
+  const subject = mailTo('maya@ops.test').filter((m) => m.subject.includes(r.reference)).at(-1)!.subject;
+  assert.doesNotMatch(subject, /[\r\n]/);
+  assert.equal(subject, `[other] ${r.reference}: line1 Bcc: victim@x.test more words here`);
+  // Nobody set up to answer: the server log says so for every request.
+  const was = process.env.OPERATOR_EMAILS;
+  const logged: string[] = [];
+  const error = console.error;
+  console.error = (...a: any[]) => void logged.push(a.join(' '));
+  try {
+    process.env.OPERATOR_EMAILS = '';
+    const n = await ask({ email: 'unheard@cust.test', message: 'Is anybody there at all?' });
+    assert.ok(logged.some((l) => l.includes(`HELP REQUEST ${n.reference} ARRIVED AND NOBODY WAS TOLD`)), logged.join('\n'));
+  } finally {
+    console.error = error;
+    process.env.OPERATOR_EMAILS = was;
+  }
+});
+
+test('the queue lets a long name and address wrap, and prints the whole address in the opened request; old dates carry their year', async () => {
+  const longEmail = `maximiliana.alexandrina.wolfeschlegelsteinhausenbergerdorff@${'subdomain.'.repeat(6)}example.co.uk`;
+  const t = await ask({ email: longEmail, name: 'Maximiliana-Alexandrina Wolfeschlegelsteinhausenbergerdorff' });
+  assert.equal((await opView(maya, row(t.reference).id)).email, longEmail, 'the whole address, for the screen to print');
+  // The screen (looked at in a browser at 390 and 1280 wide: tests/out/repair-support/drive.cjs and shots/).
+  const fs = await import('node:fs');
+  const css = fs.readFileSync(new URL('../src/app/styles/support.css', import.meta.url), 'utf8');
+  assert.match(css, /\.tk-line > span \{ min-width: 0; \}/);
+  assert.match(css, /\.tk-line b, \.tk-facts > div \{ overflow-wrap: anywhere; \}/);
+  assert.match(css, /\.tk input\[type='search'\][^{]*\{ min-height: 44px; \}|\.tk input\[type='search'\],/);
+  assert.match(fs.readFileSync(new URL('../src/app/app/operator/tickets.tsx', import.meta.url), 'utf8'), /Answers go to <b>\{t\.email\}<\/b>/);
+  // A request from more than half a year ago says which year; today's and next week's do not need to.
+  const old = new Date(Date.now() - 400 * 864e5).toISOString();
+  assert.match(whenText(old, 'UTC'), new RegExp(`^\\w+day \\d{1,2} \\w+ ${new Date(old).getUTCFullYear()}, \\d\\d:\\d\\d`));
+  assert.match(whenText(hoursFromNow(30), 'UTC'), /^\w+day \d{1,2} \w+, \d\d:\d\d/);
 });
