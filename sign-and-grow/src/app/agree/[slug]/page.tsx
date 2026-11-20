@@ -47,8 +47,12 @@ export default function Agree() {
   // Inside a frame: the page around it learns how tall the terms are, so it can make the frame fit.
   useEffect(() => {
     if (!embed) return;
-    const ro = new ResizeObserver(() => tell({ type: 'height', height: document.documentElement.scrollHeight }));
-    ro.observe(document.body);
+    // The page itself is measured, not the document: a document is never shorter than its frame, so a frame that
+    // was made tall would never shrink again after the visitor accepted.
+    const main = document.querySelector('main');
+    if (!main) return;
+    const ro = new ResizeObserver(() => tell({ type: 'height', height: Math.ceil(main.getBoundingClientRect().height) + 2 }));
+    ro.observe(main);
     return () => ro.disconnect();
   }, [embed]);
 

@@ -320,7 +320,7 @@ export async function certificatePdf(r: any): Promise<Uint8Array> {
     s.h2('When and where');
     s.kv('Accepted', stamp(r.at));
     s.kv('How', VIA_LABEL[r.via as Via] || r.via);
-    s.kv(r.via === 'api' ? 'Page, as the website said' : 'Page, as the browser said', r.page_url || '-');
+    s.kv('Page', r.page_url ? `${r.page_url} (as the ${r.via === 'api' ? 'website said' : 'browser reported it'})` : '-');
     s.kv(r.via === 'api' ? 'Address of the website' : 'Internet address', r.ip || '-');
     s.kv(r.via === 'api' ? 'Program of the website' : 'Browser', r.ua || '-');
     if (r.via === 'api') {
