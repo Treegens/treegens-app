@@ -23,17 +23,26 @@ export function freeCodes(): Map<string, string> {
 }
 export const findFreeCode = (typed: any): string | null => freeCodes().get(String(typed ?? '').trim().toUpperCase()) || null;
 
-// An account on a free code gets this month's signatures the first time anything looks at its balance in a new
-// month. The ledger line is unique per month, so it can never be granted twice.
+// An account on a free code gets the plan's signatures for every calendar month (UTC) since the code was entered,
+// including months when nobody opened the account. They are written the first time anything looks at the balance
+// afterwards. The ledger line is one per month whatever the code, so a month can never be granted twice, and a code
+// that has been switched off adds nothing more.
 function monthlyCodeGrant(accountId: string) {
-  const a = get('SELECT promo_code FROM accounts WHERE id=?', accountId);
-  if (!a?.promo_code) return;
-  grant(accountId, PRICING.monthlySignatures, 'code', `${a.promo_code}:${now().slice(0, 7)}`);
+  const a = get('SELECT promo_code, promo_at FROM accounts WHERE id=?', accountId);
+  if (!a?.promo_code || !findFreeCode(a.promo_code)) return;
+  const month = now().slice(0, 7);
+  if (get("SELECT 1 x FROM credits WHERE account_id=? AND reason='code' AND ref=?", accountId, month)) return;
+  let m = String(a.promo_at || now()).slice(0, 7);
+  for (let i = 0; i < 240 && m <= month; i++) {
+    grant(accountId, PRICING.monthlySignatures, 'code', m, m === month ? undefined : `${m}-01T00:00:00.000Z`);
+    const [y, mo] = m.split('-').map(Number);
+    m = mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`;
+  }
 }
 
 // Adds a line to the ledger once. The same (reason, ref) can never be applied twice, which makes retries harmless.
-export function grant(accountId: string, delta: number, reason: CreditReason, ref: string): boolean {
-  return run('INSERT OR IGNORE INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,?,?,?)', accountId, delta, reason, ref, now()).changes > 0;
+export function grant(accountId: string, delta: number, reason: CreditReason, ref: string, at?: string): boolean {
+  return run('INSERT OR IGNORE INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,?,?,?)', accountId, delta, reason, ref, at || now()).changes > 0;
 }
 
 export function balance(accountId: string): number {
@@ -46,15 +55,21 @@ export function reserved(accountId: string): number {
   return get(
     `SELECT COUNT(*) n FROM recipients r JOIN envelopes e ON e.id=r.envelope_id JOIN users u ON u.id=e.sender_id
       WHERE e.account_id=? AND e.kind='envelope' AND e.status='sent' AND r.status IN ('pending','sent','viewed')
-        AND r.role IN ('signer','inperson') AND r.email != u.email`,
+        AND r.role IN ('signer','inperson') AND (r.free = 0 OR (r.free IS NULL AND r.email != u.email))`,
     accountId,
   ).n;
 }
 
 export const available = (accountId: string): number => balance(accountId) - reserved(accountId);
 
+export const sameEmail = (a: any, b: any) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+
+// Does this person's signature cost one? Once a request has gone out the answer is stored on the recipient (free),
+// so handing an envelope to another sender, or the sender changing their own address, never turns a free signature
+// into a paid one. Before that, and for requests sent before the flag existed, it is the sender's own address that
+// decides.
 export const isChargeable = (r: any, senderEmail: string) =>
-  (r.role === 'signer' || r.role === 'inperson') && String(r.email).toLowerCase() !== String(senderEmail).toLowerCase();
+  (r.role === 'signer' || r.role === 'inperson') && (r.free == null ? !sameEmail(r.email, senderEmail) : !r.free);
 
 // How many signatures an envelope still needs: its signers who have not finished, not counting the sender signing
 // their own document.

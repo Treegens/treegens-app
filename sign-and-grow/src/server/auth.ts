@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { get, run } from './db.ts';
-import { sha256, token, now } from './util.ts';
+import { sha256, token, now, HttpError } from './util.ts';
 
 export const SESSION_COOKIE = 'ts_session';
 const DAYS = 30;
@@ -34,23 +34,42 @@ export function createSession(userId: string, accountId: string, secure: boolean
   return cookie(SESSION_COOKIE, t, DAYS * 86400, secure);
 }
 
-export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key'; sessionId?: string };
+// A key's scope: 'send' does the everyday work, 'admin' may also change account settings. What each can reach is
+// decided in one place, router.ts.
+export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key'; sessionId?: string; scope?: 'send' | 'admin' };
 
-export function authenticate(req: Request): Auth | null {
-  const bearer = /^Bearer\s+(tsk_[A-Za-z0-9_-]+)$/.exec(req.headers.get('authorization') || '')?.[1];
+const KEYS_PAGE = 'Settings, API and webhooks';
+
+// With "required" (every route that needs signing in), a key that was sent but cannot be used is refused in words
+// that say which thing went wrong, because a program cannot act on "Please sign in." Without it, on public routes,
+// such a caller is simply nobody.
+export function authenticate(req: Request, required = false): Auth | null {
+  const refuse = (status: number, message: string): null => {
+    if (required) throw new HttpError(status, message);
+    return null;
+  };
+  const header = (req.headers.get('authorization') || '').trim();
+  // The scheme name is not case sensitive in HTTP, and some clients send "bearer".
+  const bearer = /^Bearer\s+(tsk_[A-Za-z0-9_-]+)$/i.exec(header)?.[1];
   if (bearer) {
     const k = get('SELECT * FROM api_keys WHERE key_hash=?', sha256(bearer));
-    if (!k) return null;
+    if (!k) return refuse(401, `This API key is not known here. It was revoked, or it was not copied in full. Create a new key under ${KEYS_PAGE}.`);
     const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', k.account_id, k.user_id);
-    if (!m) return null;
+    if (k.stopped_at || !m) return refuse(401, `This API key stopped working${k.stopped_at ? ` on ${k.stopped_at.slice(0, 10)}` : ''} because the person who created it is no longer in the account. An admin of the account can create a new key under ${KEYS_PAGE}.`);
+    const user = get('SELECT * FROM users WHERE id=?', k.user_id);
+    const account = get('SELECT * FROM accounts WHERE id=?', k.account_id);
+    // Closing an account signs every browser out. A key must not keep sending for it in the meantime: whatever it
+    // sent would be deleted with the account when the grace period ends.
+    const closing = account.closing_at || user.closing_at;
+    if (closing) return refuse(403, `${account.closing_at ? 'This account is being closed' : 'The person who created this API key is closing their login'}, so the key is switched off. Nothing is deleted before ${closing.slice(0, 10)}. Signing in to the app before then restores everything, and this key works again.`);
     run('UPDATE api_keys SET last_used_at=? WHERE id=?', now(), k.id);
-    return { user: get('SELECT * FROM users WHERE id=?', k.user_id), account: get('SELECT * FROM accounts WHERE id=?', k.account_id), role: m.role, via: 'api_key' };
+    return { user, account, role: m.role, via: 'api_key', scope: k.scope === 'admin' ? 'admin' : 'send' };
   }
   const t = readCookie(req, SESSION_COOKIE);
-  if (!t) return null;
-  const s = get('SELECT * FROM sessions WHERE id=? AND expires_at > ?', sha256(t), now());
-  if (!s) return null;
-  const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', s.account_id, s.user_id);
-  if (!m) return null;
-  return { user: get('SELECT * FROM users WHERE id=?', s.user_id), account: get('SELECT * FROM accounts WHERE id=?', s.account_id), role: m.role, via: 'session', sessionId: s.id };
+  const s = t ? get('SELECT * FROM sessions WHERE id=? AND expires_at > ?', sha256(t), now()) : null;
+  const m = s ? get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', s.account_id, s.user_id) : null;
+  if (m) return { user: get('SELECT * FROM users WHERE id=?', s.user_id), account: get('SELECT * FROM accounts WHERE id=?', s.account_id), role: m.role, via: 'session', sessionId: s.id };
+  // Something was sent in place of a key, but not in the form a key has.
+  if (header) return refuse(401, `We could not read an API key from the Authorization header. Send it as "Authorization: Bearer tsk_..." with a key from ${KEYS_PAGE}.`);
+  return null;
 }

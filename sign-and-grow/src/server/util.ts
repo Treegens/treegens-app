@@ -46,9 +46,22 @@ export function rateLimit(key: string, max: number, windowMs: number) {
   if (++b.n > max) throw new HttpError(429, 'Too many attempts. Please wait a bit and try again.');
 }
 
-// Public base URL for links in emails. APP_URL wins; otherwise the origin of the latest request.
+// Public base URL for links in emails. On a real deployment APP_URL is the only source. A Host or X-Forwarded-Host
+// header is whatever the caller typed, and a password reset or signing link that points at somebody else's server
+// hands them the account or the signature. Without APP_URL, the address of a request is used only when it names
+// this machine itself, which is local development. Any other host is ignored, with one loud warning.
 const g = globalThis as any;
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const setOrigin = (o: string) => {
-  g.__tsorigin = o;
+  if (process.env.APP_URL) return;
+  let u: URL | null = null;
+  try {
+    u = new URL(o);
+  } catch {}
+  if (u && LOCAL_HOSTS.has(u.hostname) && (u.protocol === 'http:' || u.protocol === 'https:')) g.__tsorigin = u.origin;
+  else if (!g.__tsoriginWarned) {
+    g.__tsoriginWarned = true;
+    console.error(`\n[config] APP_URL IS NOT SET. A request arrived for "${u?.host || 'a host name we could not read'}", and that address is NOT used for links in emails, because a request header can be forged. Links in emails point at ${baseUrl()} until APP_URL is set to the public address of this app, for example APP_URL=https://sign.example.com\n`);
+  }
 };
 export const baseUrl = (): string => (process.env.APP_URL || g.__tsorigin || 'http://localhost:3000').replace(/\/$/, '');

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { PDFDocument, PDFPage, PDFFont, rgb, degrees } from 'pdf-lib';
+import { PDFDocument, PDFPage, PDFFont, PDFName, PDFDict, PDFRef, PDFArray, PDFNumber, PDFStream, rgb, degrees, pushGraphicsState, popGraphicsState, translate, drawObject } from 'pdf-lib';
 import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
 import { bad } from './util.ts';
@@ -319,6 +319,87 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   );
 }
 
+// ---- Fillable forms in uploaded documents ---------------------------------------------------
+
+const nm = (s: string) => PDFName.of(s);
+
+// Something a form keeps on the field or on one of its parents: the kind of field (FT) or what is filled in (V).
+function inherited(widget: PDFDict, key: string) {
+  for (let d: any = widget, hops = 0; d instanceof PDFDict && hops < 32; d = d.lookup(nm('Parent')), hops++) {
+    const v = d.lookup(nm(key));
+    if (v !== undefined) return v;
+  }
+}
+
+// The picture a form field shows on the page right now, if it has one.
+function widgetPicture(widget: PDFDict): PDFRef | undefined {
+  const ap = widget.lookup(nm('AP'));
+  let n = ap instanceof PDFDict ? ap.get(nm('N')) : undefined;
+  const states = n instanceof PDFRef ? widget.context.lookup(n) : n;
+  // A check box or radio button has one picture per state, and the page shows the one the field is in.
+  if (states instanceof PDFDict) {
+    const state = widget.lookup(nm('AS')) ?? inherited(widget, 'V');
+    n = (state instanceof PDFName && states.get(state)) || states.get(nm('Off'));
+  }
+  return n instanceof PDFRef && widget.context.lookup(n) instanceof PDFStream ? n : undefined;
+}
+
+// A fillable form the sender uploaded becomes ordinary page content, so the signed file has nothing left to fill in,
+// to change or to sign later. Each field's picture is drawn where the field was, then the field is taken off the
+// page. A field with no picture and nothing in it is just taken off: the usual one is an empty digital-signature
+// box, which must not be left waiting in a document that is already signed. pdf-lib's own flatten() is not used. It
+// gives up at the first field without a picture, which left every field after it live, and it leaves each page
+// pointing at field objects it has deleted, which strict readers and filing systems reject.
+function flattenForm(src: PDFDocument) {
+  try {
+    const form = src.getForm();
+    for (const field of form.getFields()) {
+      try {
+        if (field.needsAppearancesUpdate()) field.defaultUpdateAppearances(form.getDefaultFont());
+      } catch {
+        /* this field keeps the picture it came with, if it has one */
+      }
+    }
+  } catch {
+    /* no readable form: the pages are still gone through below */
+  }
+  for (const page of src.getPages()) {
+    const annots = page.node.Annots();
+    for (let i = 0; annots && i < annots.size(); ) {
+      const a = annots.lookup(i);
+      const widget = a instanceof PDFDict && a.lookup(nm('Subtype')) === nm('Widget') ? a : null;
+      // Links, comments and the like stay as they are. An entry that points at nothing is dropped.
+      if (a instanceof PDFDict && !widget) {
+        i++;
+        continue;
+      }
+      if (widget) {
+        const picture = widgetPicture(widget);
+        const value: any = inherited(widget, 'V');
+        const filled = value !== undefined && value !== nm('Off') && value.decodeText?.() !== '';
+        // Filled in but with no picture we could draw (text in a script the built-in font cannot write, say): the
+        // field stays as it is, because taking it off would take what it says out of a document people signed.
+        if (!picture && filled && inherited(widget, 'FT') !== nm('Sig')) {
+          i++;
+          continue;
+        }
+        const flags = widget.lookup(nm('F'));
+        const hidden = flags instanceof PDFNumber && (flags.asNumber() & 34) !== 0; // hidden, or not shown on screen
+        const rect = widget.lookup(nm('Rect'));
+        if (picture && !hidden && rect instanceof PDFArray && rect.size() === 4) {
+          try {
+            const at = rect.asRectangle();
+            page.pushOperators(pushGraphicsState(), translate(at.x, at.y), drawObject(page.node.newXObject('FlatWidget', picture)), popGraphicsState());
+          } catch {
+            /* no usable place on the page, so nothing was shown there either */
+          }
+        }
+      }
+      annots.remove(i);
+    }
+  }
+}
+
 // Builds the signed PDF: every document with field values stamped in, signer attachments, then the certificate.
 export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any }): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -329,11 +410,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
 
   for (const d of e.documents) {
     const src = await PDFDocument.load(readBlob(d.sha256), { updateMetadata: false });
-    try {
-      src.getForm().flatten();
-    } catch {
-      /* documents without a usable form are fine */
-    }
+    flattenForm(src);
     const flat = await PDFDocument.load(await src.save());
     const pages = await doc.copyPages(flat, flat.getPageIndices());
     pages.forEach((p) => doc.addPage(p));

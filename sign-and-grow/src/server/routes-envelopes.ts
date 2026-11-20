@@ -1,6 +1,6 @@
-import { route, pdfResponse, type Ctx } from './router.ts';
-import { all, get, run, saveBlob, readBlob } from './db.ts';
-import { bad, id, token, now, str, rateLimit, isEmail, baseUrl } from './util.ts';
+import { route, json, pdfResponse, type Ctx } from './router.ts';
+import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
+import { bad, id, token, now, str, rateLimit, isEmail, baseUrl, sha256, HttpError } from './util.ts';
 import { inspectPdf, imageToPdf } from './pdf.ts';
 import { extractText } from './text.ts';
 import { sendMail } from './mail.ts';
@@ -8,6 +8,7 @@ import { creditsEnabled, available, isChargeable } from './credits.ts';
 import {
   loadEnvelope, publicEnvelope, createEnvelope, saveDraft, copyEnvelope, sendEnvelope, voidEnvelope, remindEnvelope,
   correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl, outOfSignatures,
+  advance, type Actor,
 } from './envelopes.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
@@ -50,6 +51,15 @@ function mine(c: Ctx, envelopeId: string, kind?: string) {
   if (e.kind === 'envelope' && !c.admin && e.sender_id !== c.user.id) throw bad('Envelope not found.', 404);
   return e;
 }
+
+// The Idempotency-Key a call came with, or '' when it sent none. The key is kept with a hash of the body, so a
+// repeat can be told from a different request that reuses the key by mistake.
+function idemKey(c: Ctx): string {
+  const key = (c.req.headers.get('idempotency-key') || '').trim();
+  if (key.length > 200) throw bad('An Idempotency-Key can be up to 200 characters long. Send a shorter one.');
+  return key;
+}
+const bodyHash = (b: any) => sha256(JSON.stringify(b));
 
 route('GET', '/envelopes', (c) => {
   const kind = c.q.get('kind') === 'template' ? 'template' : 'envelope';
@@ -96,11 +106,21 @@ route('GET', '/inbox', (c) => {
 route('POST', '/envelopes', async (c) => {
   const b = await c.body();
   const kind = b.kind === 'template' ? 'template' : 'envelope';
-  // A retried or timed-out call with the same Idempotency-Key gets the first envelope back instead of sending twice.
-  const idem = str(c.req.headers.get('idempotency-key'), 200).trim();
+  // A retried or timed-out call with the same Idempotency-Key gets the envelope the first call made instead of
+  // sending twice. A key belongs to whoever used it (a person, or the owner of the API key), so two members of a
+  // team who pick the same text, say an order number, never see each other's envelope. The same key with a different
+  // body is refused, because answering with the first envelope would hide that the new one was never made.
+  const idem = idemKey(c);
   if (idem) {
-    const done = get('SELECT envelope_id FROM idempotency_keys WHERE account_id=? AND key=?', c.account.id, idem);
-    const prior = done && loadEnvelope(done.envelope_id);
+    const done = get('SELECT envelope_id, request_hash FROM idempotency_keys WHERE account_id=? AND user_id=? AND key=?', c.account.id, c.user.id, idem);
+    let prior: any = null;
+    try {
+      prior = done && mine(c, done.envelope_id);
+    } catch {
+      // The envelope has passed to someone else since. The key starts afresh below.
+    }
+    if (prior && done.request_hash && done.request_hash !== bodyHash(b))
+      throw bad(`This Idempotency-Key was already used for a different request, which made envelope ${prior.id}. Nothing new was created. Repeat a call with its own key, and use a new key for each new envelope.`, 409);
     if (prior) return new Response(JSON.stringify({ envelope: publicEnvelope(prior) }), { headers: { 'content-type': 'application/json; charset=utf-8', 'idempotent-replay': 'true' } });
   }
   let eid: string;
@@ -111,14 +131,16 @@ route('POST', '/envelopes', async (c) => {
     eid = createEnvelope(c.account, c.user.id, kind, b);
     if (b.documents || b.recipients || b.fields) saveDraft(loadEnvelope(eid), b, c.account.id);
   }
-  if (idem) run('INSERT OR IGNORE INTO idempotency_keys (account_id, key, envelope_id, at) VALUES (?,?,?,?)', c.account.id, idem, eid, now());
+  // The key row goes when its envelope goes (the database deletes it with the envelope), so a key never points at
+  // nothing. REPLACE covers the one case left: a key whose envelope now belongs to somebody else.
+  if (idem) run('INSERT OR REPLACE INTO idempotency_keys (account_id, user_id, key, envelope_id, request_hash, at) VALUES (?,?,?,?,?,?)', c.account.id, c.user.id, idem, eid, bodyHash(b), now());
   if (b.send && kind === 'envelope') {
     try {
       await sendEnvelope(eid, c.actor);
     } catch (e) {
-      // "Create and send" either sends or leaves nothing behind. No stray drafts after a refusal.
+      // "Create and send" either sends or leaves nothing behind. No stray drafts after a refusal, and the key is
+      // free again, so the same call can be repeated once the reason for the refusal is fixed.
       run('DELETE FROM envelopes WHERE id=?', eid);
-      if (idem) run('DELETE FROM idempotency_keys WHERE account_id=? AND key=?', c.account.id, idem);
       throw e;
     }
   }
@@ -138,15 +160,24 @@ route('GET', '/envelopes/:id', (c) => {
   return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries };
 });
 
+// Reading a request body means waiting, and while a handler waits another request can send, sign, void or complete
+// the same envelope. So a handler that changes what an envelope holds, its deadline or its status reads the body
+// first and looks the envelope up after it, with nothing waited for between that look and the change. One that
+// looked first would act on a copy that is out of date.
+
 // Drafts are simply saved. An envelope that is already out is corrected in place: no void, no resend, no extra count.
 route('PUT', '/envelopes/:id', async (c) => {
+  const b = await c.body();
   const e = mine(c, c.params.id);
-  if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, await c.body(), c.account.id, c.actor);
-  else saveDraft(e, await c.body(), c.account.id);
+  if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, b, c.account.id, c.actor);
+  else saveDraft(e, b, c.account.id);
   return { envelope: publicEnvelope(loadEnvelope(e.id)) };
 });
 
-route('POST', '/envelopes/:id/extend', async (c) => ({ expires_at: await extendEnvelope(mine(c, c.params.id, 'envelope'), (await c.body()).days, c.actor) }));
+route('POST', '/envelopes/:id/extend', async (c) => {
+  const { days } = await c.body();
+  return { expires_at: await extendEnvelope(mine(c, c.params.id, 'envelope'), days, c.actor) };
+});
 
 route('PATCH', '/envelopes/:id', async (c) => {
   const e = mine(c, c.params.id);
@@ -168,7 +199,10 @@ route('POST', '/envelopes/:id/send', async (c) => {
 });
 
 route('POST', '/envelopes/:id/void', async (c) => {
-  await voidEnvelope(mine(c, c.params.id, 'envelope'), str((await c.body()).reason, 500), c.actor);
+  // Two Void requests at the same moment, or a void that crosses the last signature: the second one sees the
+  // envelope as it now is and is refused, instead of voiding (and emailing everyone about) a copy from before.
+  const reason = str((await c.body()).reason, 500);
+  await voidEnvelope(mine(c, c.params.id, 'envelope'), reason, c.actor);
 });
 
 route('POST', '/envelopes/:id/remind', async (c) => {
@@ -191,11 +225,18 @@ route('POST', '/envelopes/:id/clone', async (c) => {
 
 // Embedded signing: get a signing link for one recipient to open inside your own flow.
 route('POST', '/envelopes/:id/recipient-view', async (c) => {
-  const e = mine(c, c.params.id, 'envelope');
   const rid = str((await c.body()).recipient_id);
+  const e = mine(c, c.params.id, 'envelope');
   const r = e.recipients.find((x: any) => x.id === rid);
   if (!r || !r.token) throw bad('Recipient not found, or the envelope has not been sent.', 404);
-  audit(e.id, c.actor, 'Signing link issued', `${r.name} <${r.email}>`);
+  // Handing out the link belongs in the record, but one line a day says it. An integration that asks for the link
+  // on every page view must not fill the audit trail, which is printed in full on the certificate. A link that
+  // replaced an earlier one (a corrected address, a reassignment) is a new link and gets its own line. One
+  // statement decides, so two requests at the same moment still leave one line.
+  const first = run(`UPDATE recipients SET link_issued_at=? WHERE id=? AND (link_issued_at IS NULL OR link_issued_at < ?
+    OR link_issued_at <= COALESCE((SELECT MAX(retired_at) FROM retired_tokens WHERE recipient_id=recipients.id), ''))`,
+    now(), r.id, new Date(Date.now() - 864e5).toISOString()).changes;
+  if (first) audit(e.id, c.actor, 'Signing link issued', `${r.name} <${r.email}>`);
   return { url: signUrl(r) };
 });
 
@@ -214,8 +255,70 @@ route('GET', '/bulk', (c) => ({
     FROM bulk_batches b LEFT JOIN envelopes t ON t.id=b.template_id WHERE b.account_id=? ORDER BY b.created_at DESC LIMIT 50`, c.account.id),
 }));
 
+// Batches that a request in this process is sending right now. A repeat of the call never sends alongside it: it is
+// told how far the first has got. The list lives in memory, so it is empty again after a restart, and that is the
+// one moment a batch can be left half sent with nobody working on it. A repeat with the same key then finishes it.
+const sendingNow: Set<string> = ((globalThis as any).__tsbulk ??= new Set());
+
+// Sends every row of a batch that has not been tried yet, one after another, and writes each outcome to the batch
+// record as it happens. It can be run again on a batch that stopped half way: a row that went out is never sent
+// again, a copy that was made but not sent is sent, and the rest are made and sent.
+async function sendBatch(b: { id: string; account_id: string; sender_id: string; template_id: string }, actor: Actor) {
+  sendingNow.add(b.id);
+  try {
+    // A draft in the batch that no row points at was made in the instant before the process stopped. Its row is
+    // still open and makes a new copy, so the old one goes.
+    run("DELETE FROM envelopes WHERE bulk_id=? AND status='draft' AND id NOT IN (SELECT envelope_id FROM bulk_rows WHERE bulk_id=? AND envelope_id IS NOT NULL)", b.id, b.id);
+    const tpl = loadEnvelope(b.template_id);
+    for (const row of all('SELECT position, fill, envelope_id FROM bulk_rows WHERE bulk_id=? AND sent_at IS NULL AND error IS NULL ORDER BY position', b.id)) {
+      const set = (what: string, ...p: any[]) => run(`UPDATE bulk_rows SET ${what} WHERE bulk_id=? AND position=?`, ...p, b.id, row.position);
+      try {
+        let eid: string = row.envelope_id;
+        if (!eid) {
+          if (!tpl || tpl.kind !== 'template') throw bad('The template was deleted before this row could be sent.');
+          eid = copyEnvelope(tpl, { accountId: b.account_id, senderId: b.sender_id, kind: 'envelope', fill: JSON.parse(row.fill), extra: { bulk_id: b.id } });
+          set('envelope_id=?', eid);
+        }
+        const status = get('SELECT status FROM envelopes WHERE id=?', eid)?.status;
+        if (!status) throw bad('The envelope for this row was deleted before it was sent.');
+        // No longer a draft means the process stopped just after sending it. advance() only makes sure whoever is
+        // next has been asked. Nobody who was already asked is asked again.
+        if (status === 'draft') await sendEnvelope(eid, actor);
+        else await advance(eid);
+        set('sent_at=?, fill=NULL', now());
+      } catch (e: any) {
+        if (!(e instanceof HttpError)) console.error('[bulk]', b.id, row.position, e);
+        set('error=?', e instanceof HttpError ? e.message : 'Something went wrong on our side while sending this row. If it was saved as a draft in the batch, open it and send it from there.');
+      }
+    }
+  } finally {
+    sendingNow.delete(b.id);
+  }
+}
+
+// What a batch has done so far, read from its record: the answer to the call that made it and to every repeat.
+function batchResult(bulkId: string) {
+  const results: any[] = all('SELECT envelope_id, sent_at, error FROM bulk_rows WHERE bulk_id=? ORDER BY position', bulkId)
+    .map((r) => (r.sent_at ? { ok: true, id: r.envelope_id } : r.error ? { ok: false, error: r.error } : { ok: false, pending: true }));
+  return { id: bulkId, sent: results.filter((r) => r.ok).length, failed: results.filter((r) => r.error), pending: results.filter((r) => r.pending).length, results };
+}
+
 route('POST', '/bulk', async (c) => {
   const b = await c.body();
+  // A bulk send takes as long as the mail server needs for every row, which is when a caller gives up and tries
+  // again. With an Idempotency-Key the repeat gets the batch the first call made and nobody is sent a second copy.
+  // While the first call is still sending, the repeat is answered at once with how far it has got (202). If the
+  // process stopped half way, the repeat sends the rows that are left. Like on POST /envelopes, the key belongs to
+  // whoever used it, and the same key with a different body is refused.
+  const idem = idemKey(c);
+  const prior = idem ? get('SELECT * FROM bulk_batches WHERE account_id=? AND sender_id=? AND idem_key=?', c.account.id, c.user.id, idem) : null;
+  if (prior) {
+    if (prior.request_hash !== bodyHash(b))
+      throw bad(`This Idempotency-Key was already used for a different bulk send, which made batch ${prior.id}. Nothing new was sent. Repeat a call with its own key, and use a new key for each new list.`, 409);
+    const busy = sendingNow.has(prior.id);
+    if (!busy) await sendBatch(prior, c.actor);
+    return json(batchResult(prior.id), busy ? 202 : 200, { 'idempotent-replay': 'true' });
+  }
   const tpl = mine(c, str(b.template_id), 'template');
   const rows: any[] = Array.isArray(b.rows) ? b.rows : [];
   if (!rows.length) throw bad('Add at least one row of recipients.');
@@ -233,19 +336,16 @@ route('POST', '/bulk', async (c) => {
     const have = available(c.account.id);
     if (perRow * rows.length > have) throw bad(outOfSignatures(c.account, perRow * rows.length, have), 402);
   }
-  const bid = id('blk');
-  run('INSERT INTO bulk_batches (id, account_id, sender_id, template_id, name, total, created_at) VALUES (?,?,?,?,?,?,?)', bid, c.account.id, c.user.id, tpl.id, str(b.name, 120) || tpl.subject || 'Bulk send', rows.length, now());
-  const results: any[] = [];
-  for (const row of rows) {
-    try {
-      const eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: c.user.id, kind: 'envelope', fill: row, extra: { bulk_id: bid } });
-      await sendEnvelope(eid, c.actor);
-      results.push({ ok: true, id: eid });
-    } catch (e: any) {
-      results.push({ ok: false, error: e.message });
-    }
-  }
-  return { id: bid, sent: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok), results };
+  // The batch and every one of its rows are written down together before anything is sent, so the record always
+  // says what was asked for and how far it got. Nothing is waited for between the key lookup above and this.
+  const made = { id: id('blk'), account_id: c.account.id, sender_id: c.user.id, template_id: tpl.id };
+  tx(() => {
+    run('INSERT INTO bulk_batches (id, account_id, sender_id, template_id, name, total, created_at, idem_key, request_hash) VALUES (?,?,?,?,?,?,?,?,?)',
+      made.id, made.account_id, made.sender_id, tpl.id, str(b.name, 120) || tpl.subject || 'Bulk send', rows.length, now(), idem || null, bodyHash(b));
+    rows.forEach((row, i) => run('INSERT INTO bulk_rows (bulk_id, account_id, position, fill) VALUES (?,?,?,?)', made.id, made.account_id, i, JSON.stringify(row)));
+  });
+  await sendBatch(made, c.actor);
+  return batchResult(made.id);
 });
 
 // A batch is one thing: see everyone's status, nudge the stragglers, or void what is still open, in one go.
@@ -255,10 +355,14 @@ function batch(c: Ctx, bulkId: string) {
   return b;
 }
 route('GET', '/bulk/:id', (c) => {
-  const b = batch(c, c.params.id);
+  const { idem_key: _k, request_hash: _h, ...b } = batch(c, c.params.id);
   const envelopes = all('SELECT id, status, subject, sent_at, completed_at FROM envelopes WHERE bulk_id=? ORDER BY created_at', b.id);
   for (const e of envelopes) e.recipients = all('SELECT name, email, role, status, viewed_at, completed_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
-  return { batch: b, envelopes };
+  // The record row by row: which rows went out, which could not and why, and which have not been tried yet. The row
+  // itself (names and emails as submitted) is shown until it is sent. After that its envelope has them.
+  const rows = all('SELECT position, fill, envelope_id, sent_at, error FROM bulk_rows WHERE bulk_id=? ORDER BY position', b.id)
+    .map((r) => ({ position: r.position, status: r.sent_at ? 'sent' : r.error ? 'failed' : 'pending', envelope_id: r.envelope_id, sent_at: r.sent_at, error: r.error, row: r.fill ? JSON.parse(r.fill) : null }));
+  return { batch: b, envelopes, rows, sending: sendingNow.has(b.id) };
 });
 route('POST', '/bulk/:id/remind', async (c) => {
   const b = batch(c, c.params.id);

@@ -6,6 +6,10 @@
 /** Unused signatures from the latest payment are refunded on request within this many days. */
 export const refundDays = (): number => Number(process.env.REFUND_DAYS) || 30;
 
+/** The refund rule as one sentence. Every email, page and error that states it uses this, so they cannot disagree. */
+export const refundRuleText = (days: number): string =>
+  `Signatures you have not used are refunded in full within ${days} days of the payment that bought them, from the Plan page, without talking to anyone. Refunding a monthly payment also ends the monthly plan.`;
+
 /** A paid plan nobody has used for this many days is not renewed. 0 turns the rule off. */
 export const dormantStopDays = (): number => (process.env.DORMANT_AUTO_STOP_DAYS === undefined ? 90 : Number(process.env.DORMANT_AUTO_STOP_DAYS) || 0);
 

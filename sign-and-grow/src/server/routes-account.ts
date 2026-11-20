@@ -3,10 +3,11 @@ import { all, get, run, tx } from './db.ts';
 import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { hashPassword, checkPassword, createSession, cookie, SESSION_COOKIE } from './auth.ts';
 import { sendMail } from './mail.ts';
-import { assertPublicUrl, WEBHOOK_EVENTS, redeliver } from './webhooks.ts';
+import { assertPublicUrl, WEBHOOK_EVENTS, redeliver, deliveryView, MAX_WEBHOOKS, KEEP_BODIES } from './webhooks.ts';
 import { billingEnabled, verifyChain, notifyPrefs } from './envelopes.ts';
 import { grant, creditSummary, findFreeCode } from './credits.ts';
 import { tick } from './cron.ts';
+import { redeemCode } from './routes-billing.ts';
 import { trustInfo } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 
@@ -35,6 +36,10 @@ route('POST', '/auth/signup', async (c) => {
   if (get('SELECT id FROM users WHERE email=?', email)) throw bad('An account with this email already exists. Sign in instead.', 409);
   const invite = b.invite ? get('SELECT * FROM invites WHERE token=? AND accepted_at IS NULL', str(b.invite)) : null;
   if (b.invite && (!invite || invite.email.toLowerCase() !== email)) throw bad('This invitation is not valid for that email address.');
+  // A code that makes the plan free is checked before anything is created, so a typo is said out loud instead of
+  // quietly giving an ordinary account. It only applies to a new workspace, not to joining someone else's team.
+  const typedCode = str(b.code, 80).trim();
+  if (typedCode && !invite && !findFreeCode(typedCode)) throw bad('We do not recognise that code. Check the spelling, or leave the code box empty and add it later on the Plan page.');
   const uid = id('usr');
   let accountId = invite?.account_id;
   const t = now();
@@ -49,12 +54,10 @@ route('POST', '/auth/signup', async (c) => {
       run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'owner',?)", accountId, uid, t);
       // A few free signatures to try the product with. Once per account.
       grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
-      // A free-plan code entered at sign-up takes effect straight away. A wrong one is simply ignored here; it can be
-      // entered again on the Plan page, which says so if it is not recognised.
-      const code = findFreeCode(b.code);
-      if (code) run("UPDATE accounts SET promo_code=?, promo_at=?, plan='grove', subscription_status='free' WHERE id=?", code, t, accountId);
     }
   });
+  // A free-plan code entered at sign-up takes effect straight away, and is confirmed by email like one entered later.
+  if (typedCode && !invite) await redeemCode(accountId, typedCode);
   const u = get('SELECT * FROM users WHERE id=?', uid);
   if (!invite) await sendVerification(u);
   c.cookies.push(createSession(uid, accountId, c.secure));
@@ -133,6 +136,15 @@ route('POST', '/auth/switch', async (c) => {
 route('GET', '/me', (c) => {
   if (!c.auth) return { user: null };
   const a = c.account;
+  // The browser says which time zone it is in. Emails with dates in them (renewals, cancellations) use it, so the
+  // day in the email is the day on the screen.
+  const tz = str(c.req.headers.get('x-tz'), 64);
+  if (tz && tz !== c.user.tz && /^[A-Za-z_]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(tz)) {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: tz });
+      run('UPDATE users SET tz=? WHERE id=?', tz, c.user.id);
+    } catch {}
+  }
   return {
     user: publicUser(c.user),
     role: c.role,
@@ -219,17 +231,33 @@ route('PATCH', '/account/members/:id', async (c) => {
   run('UPDATE memberships SET role=? WHERE account_id=? AND user_id=?', role, c.account.id, c.params.id);
 }, 'admin');
 
-route('DELETE', '/account/members/:id', (c) => {
-  const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
+route('DELETE', '/account/members/:id', async (c) => {
+  const m = get('SELECT m.role, u.name, u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id=?', c.account.id, c.params.id);
   if (!m) throw bad('Member not found.', 404);
   if (m.role === 'owner') throw bad('The owner cannot be removed. Make someone else the owner first.');
   // Their envelopes and templates stay with the team: they pass to a chosen successor, or to whoever removed them.
   const to = c.q.get('to');
   const successor = to && get('SELECT user_id FROM memberships WHERE account_id=? AND user_id=? AND user_id!=?', c.account.id, to, c.params.id) ? to : c.user.id;
+  const keys = all('SELECT id, name, prefix, scope, last_used_at FROM api_keys WHERE account_id=? AND user_id=? AND stopped_at IS NULL', c.account.id, c.params.id);
+  const admins = all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin') AND m.user_id!=?", c.account.id, c.params.id);
   run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', successor, c.account.id, c.params.id);
   run('DELETE FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
   run('DELETE FROM sessions WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
-  run('DELETE FROM api_keys WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
+  // Their API keys stop with them, and whatever used those keys breaks. Nobody should learn that from a failing
+  // integration. The keys stay listed as stopped, and the answer, the admins and the person removed are all told
+  // which ones they were.
+  run('UPDATE api_keys SET stopped_at=? WHERE account_id=? AND user_id=? AND stopped_at IS NULL', now(), c.account.id, c.params.id);
+  if (keys.length) {
+    const n = keys.length === 1 ? 'An API key' : `${keys.length} API keys`;
+    const list = keys.map((k) => `"${k.name}" (${k.prefix}..., ${k.last_used_at ? `last used ${k.last_used_at.slice(0, 10)}` : 'never used'})`).join('\n');
+    for (const a of admins)
+      await sendMail({ to: a.email, subject: `${n} stopped working: ${m.name} was removed from ${c.account.name}`, heading: `${n} stopped working`,
+        lines: [`${c.user.name} removed ${m.name} from ${c.account.name}. The API keys ${m.name} created stopped working at that moment:`, list, 'Anything that used one of them now gets an error that says the key has stopped. To carry on, create a new key and put it into the integration.'],
+        cta: { label: 'Open API keys', url: `${baseUrl()}/app/settings?tab=developers` } });
+    await sendMail({ to: m.email, subject: `Your API keys for ${c.account.name} stopped working`, heading: `${n} of yours stopped working`,
+      lines: [`${c.user.name} removed you from ${c.account.name} on Sign&Grow. The API keys you created there stopped working at that moment:`, list, `If something still uses one of them, it now gets an error. Ask an admin of ${c.account.name} for a new key.`] });
+  }
+  return { ok: true, keys_stopped: keys };
 }, 'admin');
 
 // Hand the account to someone else, so it never depends on one person's mailbox.
@@ -264,21 +292,48 @@ route('DELETE', '/contacts/:id', (c) => {
 
 // ---- API keys and webhooks -----------------------------------------------------------------
 
-route('GET', '/api-keys', (c) => ({ keys: all('SELECT id, name, prefix, created_at, last_used_at FROM api_keys WHERE account_id=? AND user_id=?', c.account.id, c.user.id) }));
+// Members see their own keys. Admins see every key in the account, with its owner, because an integration that
+// hangs on one person's key is the whole team's business. The secret is never stored, so it can never be shown.
+route('GET', '/api-keys', (c) => ({
+  keys: all(`SELECT k.id, k.name, k.prefix, k.scope, k.created_at, k.last_used_at, k.stopped_at, k.user_id, u.name owner_name, u.email owner_email
+    FROM api_keys k LEFT JOIN users u ON u.id=k.user_id WHERE k.account_id=?${c.admin ? '' : ' AND k.user_id=?'} ORDER BY k.created_at`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id]))
+    .map((k) => ({ ...k, mine: k.user_id === c.user.id })),
+}));
+// A new key gets the "send" scope: everyday work, no account settings. "admin" has to be asked for by name, and
+// only an admin can ask. What neither scope can ever do is listed in router.ts.
 route('POST', '/api-keys', async (c) => {
+  const b = await c.body();
+  if (b.scope != null && b.scope !== 'send' && b.scope !== 'admin') throw bad('Choose what the key may do: "send" for everyday work, or "admin" to also change account settings.');
+  const scope = b.scope === 'admin' ? 'admin' : 'send';
+  if (scope === 'admin' && !c.admin) throw bad('Only account admins can create a key with the "admin" scope. Leave the scope out for a "send" key.', 403);
   const key = `tsk_${token(30)}`;
-  run('INSERT INTO api_keys (id, account_id, user_id, name, prefix, key_hash, created_at) VALUES (?,?,?,?,?,?,?)', id('key'), c.account.id, c.user.id, str((await c.body()).name, 80) || 'API key', key.slice(0, 10), sha256(key), now());
-  return { key }; // shown once
+  run('INSERT INTO api_keys (id, account_id, user_id, name, prefix, key_hash, created_at, scope) VALUES (?,?,?,?,?,?,?,?)', id('key'), c.account.id, c.user.id, str(b.name, 80) || 'API key', key.slice(0, 10), sha256(key), now(), scope);
+  return { key, scope }; // the key is shown once
 });
+// Revoke your own key, or as an admin any key in the account.
 route('DELETE', '/api-keys/:id', (c) => {
-  run('DELETE FROM api_keys WHERE id=? AND account_id=? AND user_id=?', c.params.id, c.account.id, c.user.id);
+  run(`DELETE FROM api_keys WHERE id=? AND account_id=?${c.admin ? '' : ' AND user_id=?'}`, ...(c.admin ? [c.params.id, c.account.id] : [c.params.id, c.account.id, c.user.id]));
 });
 
-route('GET', '/webhooks', (c) => ({
-  events: WEBHOOK_EVENTS,
-  webhooks: all('SELECT id, url, events, active, secret, created_at FROM webhooks WHERE account_id=?', c.account.id),
-  deliveries: all('SELECT d.id, d.event, d.envelope_id, d.status, d.error, d.attempts, d.at, d.body IS NOT NULL can_redeliver, w.url FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE w.account_id=? ORDER BY d.id DESC LIMIT 30', c.account.id),
-}), 'admin');
+// The delivery log, newest first, a page at a time. ?webhook= shows one webhook only, ?before= (the next_before of
+// the page before) goes further back.
+const DELIVERY_PAGE = 30;
+route('GET', '/webhooks', (c) => {
+  const hook = c.q.get('webhook');
+  const before = Number(c.q.get('before')) || 0;
+  const rows = all(`SELECT d.id, d.webhook_id, d.event, d.envelope_id, d.status, d.error, d.attempts, d.at, d.done, d.body IS NOT NULL has_body, w.url
+    FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE w.account_id=?${hook ? ' AND w.id=?' : ''}${before ? ' AND d.id<?' : ''} ORDER BY d.id DESC LIMIT ${DELIVERY_PAGE + 1}`,
+    ...[c.account.id, hook, before].filter(Boolean));
+  const page = rows.slice(0, DELIVERY_PAGE);
+  // A "send" key may read this, but the signing secrets are for people and "admin" keys only.
+  const secrets = c.auth?.via !== 'api_key' || c.auth.scope === 'admin';
+  return {
+    events: WEBHOOK_EVENTS,
+    webhooks: all('SELECT id, url, events, active, secret, created_at FROM webhooks WHERE account_id=?', c.account.id).map((w) => (secrets ? w : { ...w, secret: null })),
+    deliveries: page.map(deliveryView),
+    next_before: rows.length > DELIVERY_PAGE ? page[page.length - 1].id : null,
+  };
+}, 'admin');
 route('POST', '/webhooks', async (c) => {
   const b = await c.body();
   try {
@@ -286,13 +341,15 @@ route('POST', '/webhooks', async (c) => {
   } catch (e: any) {
     throw bad(e.message);
   }
+  if (get('SELECT COUNT(*) n FROM webhooks WHERE account_id=?', c.account.id).n >= MAX_WEBHOOKS) throw bad(`An account can have up to ${MAX_WEBHOOKS} webhooks. Delete one that is no longer used, then add this one.`);
   const events = Array.isArray(b.events) && b.events.length ? b.events.filter((e: any) => WEBHOOK_EVENTS.includes(e)).join(',') : '*';
   run('INSERT INTO webhooks (id, account_id, url, secret, events, created_at) VALUES (?,?,?,?,?,?)', id('whk'), c.account.id, str(b.url, 500), `whsec_${token(24)}`, events || '*', now());
 }, 'admin');
 route('POST', '/webhooks/deliveries/:id/redeliver', async (c) => {
-  const d = get('SELECT d.*, w.account_id FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE d.id=?', Number(c.params.id));
+  const d = get('SELECT d.*, d.body IS NOT NULL has_body, w.account_id FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE d.id=?', Number(c.params.id));
   if (!d || d.account_id !== c.account.id) throw bad('Delivery not found.', 404);
-  if (!d.body) throw bad('This delivery is too old to send again.');
+  if (deliveryView(d).state === 'pending') throw bad('This delivery is still being tried. Wait a minute, look at the log again, and send it again if it failed.', 409);
+  if (!d.body) throw bad(`This delivery is too old to send again: only the latest ${KEEP_BODIES} deliveries of each webhook are kept in full. Read the envelope itself to see how it stands now.`);
   redeliver(d.webhook_id, d.event, d.envelope_id, d.body);
 }, 'admin');
 route('DELETE', '/webhooks/:id', (c) => {

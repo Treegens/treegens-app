@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
-import { WEBHOOK_EVENTS } from '@/server/webhooks';
+import { WEBHOOK_EVENTS, MAX_WEBHOOKS, KEEP_BODIES } from '@/server/webhooks';
 import { ROLES, FIELD_TYPES } from '@/server/envelopes';
 
 export const metadata = { title: 'API reference', description: 'The Sign&Grow JSON API: the same on every plan, no go-live review. Send, correct, extend, export and get webhooks.' };
@@ -39,11 +39,14 @@ const GROUPS: [string, Endpoint[]][] = [
     ['GET', '/api/export', 'One ZIP file with signed PDFs, audit trails and a CSV index. Add ?ids= for some envelopes only.', true],
     ['GET', '/api/reports/summary', 'Counts, completion time and paper saved.'],
   ]],
-  ['Webhooks (account admins)', [
-    ['GET', '/api/webhooks', 'Your webhooks, the event names and the 30 latest deliveries.'],
-    ['POST', '/api/webhooks', 'Add a webhook with a url and, if you like, a list of events. Leave events out to get all of them.'],
+  ['API keys', [
+    ['GET', '/api/api-keys', 'Your keys with their name, scope and last use. An admin gets every key in the account and who made it. The key itself is never returned.', true],
+  ]],
+  ['Webhooks (account admins; changing them needs a key with the admin scope)', [
+    ['GET', '/api/webhooks', 'Your webhooks, the event names and the delivery log, newest first, 30 at a time. Add ?webhook= for one webhook, and ?before= with the next_before of the last page to go further back.'],
+    ['POST', '/api/webhooks', `Add a webhook with a url and, if you like, a list of events. Leave events out to get all of them. Up to ${MAX_WEBHOOKS} per account.`],
     ['DELETE', '/api/webhooks/:id', 'Remove a webhook.'],
-    ['POST', '/api/webhooks/deliveries/:id/redeliver', 'Send a past delivery again, exactly as it was.', true],
+    ['POST', '/api/webhooks/deliveries/:id/redeliver', `Send a past delivery again, exactly as it was. Works for the latest ${KEEP_BODIES} deliveries of each webhook.`, true],
   ]],
   ['No key needed', [
     ['POST', '/api/public/verify', 'Check whether a PDF is an unmodified completed document.'],
@@ -74,6 +77,8 @@ export default function Developers() {
             <li><b>There is no go-live review.</b> A key works the moment you create it, against the real service. There is no separate test environment to move out of.</li>
             <li><b>Running out never turns into a charge.</b> A send needs one signature for each signer, the same as in the app. If the account has too few, the call returns <C>402</C> and says how many are needed and how many are left. Nothing is billed.</li>
             <li><b>Errors are written for people.</b> Every error is JSON with an <C>error</C> that says what went wrong and what to do, and a <C>request_id</C>. The same id is in the <C>X-Request-Id</C> header of every response. Quote it when you ask for help.</li>
+            <li><b>A key does everyday work, and nothing else unless you say so.</b> A new key has the <C>send</C> scope: envelopes, templates, files, contacts, bulk sends, export and reports. An admin can create a key with the <C>admin</C> scope, which also covers account settings, invitations and webhooks. No key of either scope can create or revoke keys, remove a team member, hand over or close the account, or change the plan, pay or refund. Those answer <C>403</C> and need a person signed in to the app.</li>
+            <li><b>A key that cannot be used says why.</b> <C>401</C> tells you whether the header could not be read, the key is unknown or revoked, or the person who created it has left the account. While an account is being closed its keys answer <C>403</C> until someone signs in again. The word <C>Bearer</C> may be in any case.</li>
             <li><b>Retries are safe.</b> Send an <C>Idempotency-Key</C> header with <C>POST /api/envelopes</C>. A repeated call with the same key returns the first envelope instead of sending twice.</li>
             <li>All times are ISO 8601 in UTC. A machine-readable description is at <a href="/api/openapi.json">/api/openapi.json</a>.</li>
           </ul>
@@ -161,15 +166,15 @@ curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" 
             <li><b>New event: <C>envelope.corrected</C>.</b> Sent whenever an envelope that is out is corrected. Read the envelope again to see how it stands.</li>
             <li><b>Recipient events</b> and <C>envelope.declined</C> also carry a <C>recipient_id</C>.</li>
             <li><b>The <C>text</C> property</b> is a one-line summary of the event. Slack and Microsoft Teams incoming webhooks show whatever is in <C>text</C>, so you can paste an incoming webhook URL as the webhook address and get every event as a chat message. No code needed.</li>
-            <li><b>Retries.</b> A delivery that fails is tried three times in all, a few seconds apart. Your endpoint has 10 seconds to answer with a 2xx status.</li>
-            <li><b>Redelivery.</b> Every delivery is kept in a log. After you fix your side, send any of the recent ones again from Settings, or with <C>POST /api/webhooks/deliveries/:id/redeliver</C>. The <C>id</C> in the body stays the same, so you can ignore repeats.</li>
+            <li><b>Retries.</b> A delivery that fails is tried three times in all, a few seconds apart. Your endpoint has 10 seconds to answer with a 2xx status. A redirect is not followed and counts as a failure. Only the status of your answer is read.</li>
+            <li><b>Redelivery.</b> Every delivery is in the log from before the first try, so an event is listed even if our side restarts halfway. After you fix your side, send any of the latest {KEEP_BODIES} deliveries of that webhook again from Settings, or with <C>POST /api/webhooks/deliveries/:id/redeliver</C>. Older ones stay listed but can no longer be sent again. The <C>id</C> in the body stays the same, so you can ignore repeats.</li>
             <li><b>No silent failures.</b> After three failed deliveries in a row, the account admins get an email.</li>
           </ul>
           <Code label="Example: verify a webhook signature">{`// Verify a delivery (Node.js)
 const expected = "sha256=" + crypto.createHmac("sha256", WEBHOOK_SECRET)
   .update(req.headers["x-signandgrow-timestamp"] + "." + rawBody).digest("hex");
 const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers["x-signandgrow-signature"]));`}</Code>
-          <p className="muted small">Webhook addresses must use https and point to a public address.</p>
+          <p className="muted small">Webhook addresses must use https and point to a public address. The name is looked up when each delivery starts, and the delivery goes to exactly the address that passed the check.</p>
         </div>
 
         <div className="card" id="embedded">

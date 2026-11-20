@@ -6,48 +6,11 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { boot, Client, simple, draft, signUp, signAll, mailTo, tokenFor, type Server } from './helpers.ts';
 
-process.env.STRIPE_SECRET_KEY = 'sk_test_x';
-process.env.STRIPE_PRICE_GROVE = 'price_grove';
+import { stripe, unix } from './stripe-fake.ts';
 
 let db: Server['db'];
 let billing: Server['billing'];
 let cron: Server['cron'];
-
-// A tiny stand-in for the payment provider's API.
-const unix = (days: number) => Math.floor(Date.now() / 1000) + days * 86400;
-const stripe = {
-  calls: [] as [string, string, Record<string, string>][],
-  sub: { id: 'sub_1', status: 'active', cancel_at_period_end: false, current_period_end: unix(20) } as any,
-  charges: [] as any[],
-  cards: [{ id: 'pm_1', card: { last4: '4242' } }] as any[],
-  refunds: [] as Record<string, string>[],
-  sessions: {} as Record<string, any>,
-};
-const realFetch = globalThis.fetch;
-globalThis.fetch = (async (url: any, init: any = {}) => {
-  const u = new URL(String(url));
-  if (u.host !== 'api.stripe.com') return realFetch(url, init);
-  const path = u.pathname.replace('/v1/', '');
-  const method = init.method || 'GET';
-  const params = Object.fromEntries(new URLSearchParams(method === 'GET' ? u.search : String(init.body || '')));
-  stripe.calls.push([method, path, params]);
-  let out: any = {};
-  if (path === 'checkout/sessions') out = { url: `https://pay.example/${params.mode}` };
-  else if (path.startsWith('checkout/sessions/')) out = stripe.sessions[path.split('/')[2]] || {};
-  else if (path.startsWith('subscriptions/') && method === 'POST') out = Object.assign(stripe.sub, { cancel_at_period_end: params.cancel_at_period_end === 'true' });
-  else if (path.startsWith('subscriptions/') && method === 'DELETE') out = Object.assign(stripe.sub, { status: 'canceled' });
-  else if (path.startsWith('subscriptions/')) out = stripe.sub;
-  else if (path === 'charges') out = { data: stripe.charges };
-  else if (path.startsWith('charges/')) out = { id: path.split('/')[1], customer: 'cus_1' };
-  else if (path === 'refunds') {
-    stripe.refunds.push(params);
-    const ch = stripe.charges.find((c) => c.id === params.charge);
-    if (ch) ch.refunded = true;
-    out = { id: `re_${stripe.refunds.length}` };
-  } else if (path === 'payment_methods') out = { data: stripe.cards };
-  else if (path.endsWith('/detach')) (stripe.cards = stripe.cards.filter((c) => !path.includes(c.id))), (out = {});
-  return new Response(JSON.stringify(out), { status: 200, headers: { 'content-type': 'application/json' } });
-}) as any;
 
 let owner: Client;
 let accountId: string;
@@ -56,9 +19,9 @@ const sig = async (c: Client = owner) => (await c.get('/billing')).data.signatur
 const subjects = (email: string) => mailTo(email).map((m) => m.subject);
 const event = (type: string, object: any) => billing.applyStripeEvent({ type, data: { object } });
 const subscribe = () => event('checkout.session.completed', { mode: 'subscription', client_reference_id: accountId, customer: 'cus_1', subscription: 'sub_1' });
-const monthly = async (invoice: string) => {
-  stripe.charges.unshift({ id: `ch_${invoice}`, paid: true, refunded: false, amount: 900, customer: 'cus_1' });
-  await event('invoice.paid', { id: invoice, customer: 'cus_1', amount_paid: 900, currency: 'usd', hosted_invoice_url: `https://pay.example/${invoice}`, lines: { data: [{ period: { end: unix(30) } }] } });
+const monthly = async (invoice: string, sub = 'sub_1', over: any = {}) => {
+  stripe.charges.unshift({ id: `ch_${invoice}`, paid: true, refunded: false, amount: 900, customer: 'cus_1', invoice });
+  await event('invoice.paid', { id: invoice, customer: 'cus_1', subscription: sub, amount_paid: 900, currency: 'usd', status: 'paid', hosted_invoice_url: `https://pay.example/${invoice}`, lines: { data: [{ period: { start: unix(0), end: unix(30) } }] }, ...over });
 };
 const topUp = (id: string, credits: number, cents = credits * 100, who = accountId) =>
   event('checkout.session.completed', { id, mode: 'payment', client_reference_id: who, customer: 'cus_1', payment_status: 'paid', amount_total: cents, currency: 'usd', payment_intent: `pi_${id}`, metadata: { kind: 'topup', credits: String(credits) } });
@@ -204,7 +167,7 @@ test('signatures roll over, and a reminder comes before each renewal with a one-
   assert.equal((await anon.post('/public/billing/stop', { token: token + 'x' })).status, 410, 'a tampered link is refused');
   const stopped = await anon.post('/public/billing/stop', { token });
   assert.match(stopped.data.reference, /^SG-/);
-  assert.equal(stripe.sub.cancel_at_period_end, true, 'the provider was told straight away');
+  assert.equal(stripe.sub('sub_1').cancel_at_period_end, true, 'the provider was told straight away');
   const conf = mailTo('olive@example.com').find((x) => x.subject === 'Your Grove plan is cancelled')!;
   assert.match(conf.html, new RegExp(stopped.data.reference));
   assert.match(conf.html, /never expire/);
@@ -223,7 +186,8 @@ test('cancelling keeps every signature; a charge after cancellation refunds itse
   assert.equal((await owner.post('/billing/cancel')).data.reference, r.data.reference, 'cancelling twice is harmless');
   const kept = (await sig()).balance;
 
-  await event('customer.subscription.deleted', { customer: 'cus_1', status: 'canceled' });
+  await event('customer.subscription.deleted', { id: 'sub_1', customer: 'cus_1', status: 'canceled' });
+  stripe.sub('sub_1').status = 'canceled';
   assert.equal(account().plan, 'seedling');
   assert.equal((await sig()).balance, kept, 'paid-for signatures survive the plan ending');
   assert.match(mailTo('olive@example.com').find((m) => m.subject === 'Your monthly plan has ended')!.html, /never expire/);
@@ -248,7 +212,7 @@ test('unused signatures from the latest payment are refunded on request, to the 
   const pid = (await pat.get('/me')).data.account.id;
   await event('checkout.session.completed', { mode: 'subscription', client_reference_id: pid, customer: 'cus_p', subscription: 'sub_p' });
   stripe.charges.unshift({ id: 'ch_p1', paid: true, refunded: false, amount: 900, customer: 'cus_p' });
-  await event('invoice.paid', { id: 'in_p1', customer: 'cus_p', amount_paid: 900, currency: 'usd' });
+  await event('invoice.paid', { id: 'in_p1', customer: 'cus_p', subscription: 'sub_p', amount_paid: 900, currency: 'usd' });
   assert.deepEqual((await pat.get('/billing')).data.signatures, { balance: 12, held: 0, available: 12 });
   assert.equal((await pat.get('/billing')).data.refund.amount, '$9.00');
 
@@ -264,19 +228,21 @@ test('unused signatures from the latest payment are refunded on request, to the 
   const done = await pat.post('/billing/refund');
   assert.equal(done.data.refunded, '$7.00');
   assert.equal(done.data.plan_ended, true);
-  assert.deepEqual(stripe.refunds.at(-1), { charge: 'ch_p1', amount: '700' });
+  assert.deepEqual(stripe.refunds.at(-1)!.params, { charge: 'ch_p1', amount: '700' });
+  assert.equal(stripe.sub('sub_p').status, 'canceled', 'the plan was ended with the provider before any money moved');
   assert.equal((await pat.get('/billing')).data.signatures.balance, 0);
   assert.equal((await pat.get('/billing')).data.plan, 'seedling');
   assert.equal((await pat.post('/billing/refund')).status, 400, 'nothing left to refund');
 
   // A top-up is refunded through its own payment and leaves the plan alone.
   const before = (await sig()).balance;
-  await event('checkout.session.completed', { mode: 'subscription', client_reference_id: accountId, customer: 'cus_1', subscription: 'sub_1' });
+  await event('checkout.session.completed', { mode: 'subscription', client_reference_id: accountId, customer: 'cus_1', subscription: 'sub_2' });
+  assert.equal(account().plan, 'grove');
   await topUp('cs_top9', 4);
   assert.equal((await owner.get('/billing')).data.refund.amount, '$4.00');
   const back = await owner.post('/billing/refund');
   assert.equal(back.data.plan_ended, false);
-  assert.deepEqual(stripe.refunds.at(-1), { payment_intent: 'pi_cs_top9', amount: '400' });
+  assert.deepEqual(stripe.refunds.at(-1)!.params, { payment_intent: 'pi_cs_top9', amount: '400' });
   assert.equal((await sig()).balance, before);
 
   // Outside the window there is no automatic refund.
@@ -293,8 +259,6 @@ test('unused signatures from the latest payment are refunded on request, to the 
 });
 
 test('locked out? stop billing by card, or find every subscription by email', async () => {
-  stripe.sub.status = 'active';
-  stripe.sub.cancel_at_period_end = false;
   const anon = new Client();
   assert.equal((await anon.post('/public/billing/stop-by-card', { email: 'olive@example.com', last4: '0000' })).status, 404);
   const ok = await anon.post('/public/billing/stop-by-card', { email: 'olive@example.com', last4: '4242' });
@@ -330,14 +294,13 @@ test('bulk send checks the whole batch first; a public form with no signatures s
 });
 
 test('paying but not using it: a nudge, then the renewal is stopped for them', async () => {
-  await event('checkout.session.completed', { mode: 'subscription', client_reference_id: accountId, customer: 'cus_1', subscription: 'sub_1' });
+  await owner.post('/billing/resume');
   db.run('UPDATE accounts SET created_at=?, cancel_at=NULL WHERE id=?', new Date(Date.now() - 120 * 864e5).toISOString(), accountId);
   db.run('UPDATE envelopes SET sent_at=? WHERE account_id=? AND sent_at IS NOT NULL', new Date(Date.now() - 100 * 864e5).toISOString(), accountId);
   assert.equal((await cron.tick()).nudged, 1);
   assert.equal((await cron.tick()).nudged, 0);
   assert.ok(subjects('olive@example.com').includes('Still using Sign&Grow?'));
 
-  stripe.sub.cancel_at_period_end = false;
   await event('invoice.upcoming', { customer: 'cus_1', amount_due: 900, next_payment_attempt: unix(3) });
   assert.ok(account().cancel_at, 'renewal turned off after 90 quiet days');
   assert.equal(account().plan, 'grove', 'the paid month is kept');
@@ -356,11 +319,13 @@ test('back from checkout the plan is active at once; a card dispute stops all fu
   await event('checkout.session.completed', { mode: 'subscription', client_reference_id: nid, customer: 'cus_n', subscription: 'sub_n' });
   assert.equal(subjects('nina@example.com').filter((s) => s === 'Welcome to Grove').length, 1, 'the late event does not welcome them twice');
 
-  stripe.sub.status = 'active';
-  db.run("UPDATE accounts SET plan='grove', cancel_at=NULL WHERE id=?", accountId);
-  await event('charge.dispute.created', { charge: 'ch_x' });
+  await owner.post('/billing/resume');
+  stripe.charges.unshift({ id: 'ch_x', customer: 'cus_1', amount: 900, currency: 'usd' });
+  await event('charge.dispute.created', { id: 'dp_1', charge: 'ch_x' });
   assert.equal(account().plan, 'seedling');
-  assert.equal(stripe.sub.status, 'canceled');
+  assert.equal(stripe.sub('sub_2').status, 'canceled');
+  assert.deepEqual(stripe.disputesClosed, ['dp_1'], 'the dispute is accepted with the provider, not fought');
+  assert.match(mailTo('olive@example.com').find((m) => m.subject === 'We stopped all billing on your account')!.html, /not contesting it/);
 });
 
 test('the code GROWalition makes the monthly plan free', async () => {
@@ -380,7 +345,7 @@ test('the code GROWalition makes the monthly plan free', async () => {
 
   // Next month the plan's signatures arrive again, on top of what is left.
   const gid = (await gro.get('/me')).data.account.id;
-  db.run("UPDATE credits SET ref='GROWalition:2026-01' WHERE account_id=? AND reason='code'", gid);
+  db.run("UPDATE credits SET ref='2026-01' WHERE account_id=? AND reason='code'", gid);
   assert.equal((await gro.get('/billing')).data.signatures.balance, 21);
 
   // They can send, and top up like anyone on the plan. There is nothing to cancel and nothing to check out.
@@ -404,11 +369,10 @@ test('the code GROWalition makes the monthly plan free', async () => {
   // Someone already paying who adds the code is never charged again, and keeps the plan when the old one winds down.
   const payer = await signUp('Paying Member', 'payer@example.com');
   const pid = (await payer.get('/me')).data.account.id;
-  await event('checkout.session.completed', { mode: 'subscription', client_reference_id: pid, customer: 'cus_pay', subscription: 'sub_1' });
-  stripe.sub.cancel_at_period_end = false;
+  await event('checkout.session.completed', { mode: 'subscription', client_reference_id: pid, customer: 'cus_pay', subscription: 'sub_pay' });
   await payer.post('/billing/redeem', { code: 'GROWalition' });
-  assert.equal(stripe.sub.cancel_at_period_end, true, 'the paid renewal was turned off');
-  await event('customer.subscription.deleted', { customer: 'cus_pay', status: 'canceled' });
+  assert.equal(stripe.sub('sub_pay').status, 'canceled', 'the paid subscription was ended there and then');
+  await event('customer.subscription.deleted', { id: 'sub_pay', customer: 'cus_pay', status: 'canceled' });
   assert.equal(db.get('SELECT plan FROM accounts WHERE id=?', pid).plan, 'grove');
   assert.equal(subjects('payer@example.com').includes('Your monthly plan has ended'), false);
 

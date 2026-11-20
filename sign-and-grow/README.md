@@ -32,6 +32,7 @@ What the test files cover:
 | `tests/billing.test.ts` | Paying, against a simulated payment provider: free signatures for a new account, the monthly plan, top-ups, roll-over, renewal reminders, cancelling in the app, from an email link and by card, a charge after cancelling, refunds of unused signatures, a card dispute, an unused plan, free codes. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
 | `tests/autoplace.test.ts` | Placing fields automatically from the text of a document. |
+| `tests/platform.test.ts` | Platform and security: links in emails never come from a request header, the caller's address behind a proxy, what an API key may do and what it says when it cannot be used, keys when a member is removed or an account is closing, and webhooks (logged before the first try, sent to the address that was checked, sent again, paged). |
 
 ## What the bad reviews taught us
 
@@ -64,7 +65,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | The account belonged to someone who left. | Ownership can be handed over. When a member is removed their envelopes pass to the team. Billing can be stopped with the card, without the mailbox. |
 | Signers cannot get their copy later. | The completion email links to the signed document and attaches it when small enough. `/help` sends it again at any time. |
 | The API costs extra and needs a go-live review. | The API is the same on every plan, and a key works as soon as it is created. Errors say what to do and carry a request id. Retries are safe with an `Idempotency-Key`. |
-| Integrations break without anyone noticing. | Webhook deliveries are logged and can be sent again. After three failures in a row the admins get an email. |
+| Integrations break without anyone noticing. | Every webhook delivery is in the log from before the first try, and the latest 200 of each webhook can be sent again. After three failures in a row the admins get an email. Removing a team member lists the API keys that stop with them and emails the admins. A key that cannot be used says why. |
 | Closing an account by mistake loses everything. | Closing keeps everything for 30 days, and signing in again undoes it. |
 
 ## What is in it
@@ -129,7 +130,11 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 **Developers**
 - JSON API for everything the app does, API keys, embedded signing links. Reference at `/developers`, and a
   machine-readable description at `/api/openapi.json`.
-- Webhooks with HMAC signatures, retries, a delivery log and redelivery. Private network targets are refused.
+- API keys have a scope. A key does everyday work (envelopes, templates, files, contacts, bulk sends, reports)
+  unless an admin creates it with the "admin" scope. No key can create or revoke keys, remove a member, hand over
+  or close the account, or touch the plan and payments. Admins see every key in the account, never the secret.
+- Webhooks with HMAC signatures, retries, a delivery log with paging, and redelivery of the latest 200 events of
+  each webhook. Private network targets are refused, and a delivery connects to the address that was checked.
 
 **Environment**
 - Paper, water and CO2e saved shown on every envelope, on the certificate, in emails, in the dashboard, in
@@ -159,11 +164,13 @@ e-signature product, not all of it. Not built:
 
 ## Configuration
 
-Copy `.env.example` to `.env.local`. Everything is optional for local use.
+Copy `.env.example` to `.env.local`. Everything is optional for local use. A real deployment must set `APP_URL`,
+and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one.
 
 | Variable | What it does | Default |
 | --- | --- | --- |
-| `APP_URL` | Public address, used in email links. Set this in production. | the address of the latest request |
+| `APP_URL` | Public address of the app, for example `https://sign.example.com`. **Required on a real deployment:** every link in every email is built from it. The address of a request is never used for a real host, because a request header can be forged. Without `APP_URL` the app logs a warning and links only work on your own machine. | `http://localhost:3000`, or the localhost address you opened the app on |
+| `TRUSTED_PROXY_HOPS` | How many proxies of your own sit in front of the app (load balancer, CDN, the platform's router). The caller's address, used for rate limits and the audit trail, is read that many places from the right of `X-Forwarded-For`; anything further left is whatever the caller typed. `0` means nothing is in front: the header is ignored and every visitor shares one set of rate limits. | `1` |
 | `DATA_DIR` | Where the database and files live. Must be a persistent disk. | `./data` |
 | `APP_SECRET` | Secret for access-code cookies and stop links. | generated and kept in `DATA_DIR` |
 | `SMTP_URL`, `MAIL_FROM` | Mail server, for example `smtps://user:pass@smtp.example.com`. Without it nothing is delivered. | none |

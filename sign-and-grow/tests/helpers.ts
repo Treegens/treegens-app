@@ -53,8 +53,9 @@ export class Client {
 }
 
 // A signed-up user whose email is confirmed, ready to send.
-export async function signUp(name: string, email: string): Promise<Client> {
+export async function signUp(name: string, email: string, ip?: string): Promise<Client> {
   const c = new Client();
+  if (ip) c.ip = ip; // sign-ups are limited per address; tests that make many people give each their own
   const r = await c.post('/auth/signup', { name, email, password: 'correct horse battery' });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   const t = server.db.get('SELECT verify_token t FROM users WHERE email=?', email).t;

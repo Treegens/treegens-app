@@ -1,10 +1,19 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
 
+// The reader's time zone, sent along when the app loads, so dates in emails match the dates on screen.
+function timeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
 export async function api<T = any>(path: string, opts: { method?: string; body?: any; form?: FormData } = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method: opts.method || (opts.body || opts.form ? 'POST' : 'GET'),
-    headers: opts.body ? { 'content-type': 'application/json' } : undefined,
+    headers: { ...(opts.body ? { 'content-type': 'application/json' } : {}), ...(path === '/me' && !opts.method ? { 'x-tz': timeZone() } : {}) },
     body: opts.form || (opts.body ? JSON.stringify(opts.body) : undefined),
     credentials: 'same-origin',
   });

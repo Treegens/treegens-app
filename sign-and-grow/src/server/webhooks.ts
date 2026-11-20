@@ -1,4 +1,6 @@
 import dns from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import { all, get, run } from './db.ts';
 import { hmac, now, id, baseUrl } from './util.ts';
@@ -15,68 +17,119 @@ function isPrivate(ip: string): boolean {
   return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80') || v.startsWith('::ffff:');
 }
 
-// Webhook targets are user supplied, so refuse anything that points back into a private network.
-export async function assertPublicUrl(raw: string) {
+export const MAX_WEBHOOKS = 20; // per account
+export const KEEP_BODIES = 200; // deliveries of each webhook that can be sent again
+const TIMEOUT_MS = 10_000;
+const MAX_REPLY_BYTES = 64 * 1024;
+const PENDING_MS = 2 * 60_000; // three tries with their waits end well inside this
+
+// One answer for "does not resolve" and "resolves to a private address", so this check cannot be used to find
+// out which names exist inside our own network.
+const REFUSED = 'That address cannot be used for a webhook. It has to be an https address on the public internet that we can reach.';
+
+type Target = { url: URL; address: string; family: number };
+
+// Webhook targets are user supplied, so refuse anything that points back into a private network. The host name is
+// looked up once, here, and the delivery connects to exactly the address that passed the check. A name that
+// answers with a public address first and a private one a moment later gets nowhere.
+export async function resolvePublic(raw: string): Promise<Target> {
   let u: URL;
   try {
     u = new URL(raw);
   } catch {
     throw new Error('Enter a full URL, starting with https://');
   }
-  if (process.env.ALLOW_PRIVATE_WEBHOOKS === '1') return;
-  if (u.protocol !== 'https:') throw new Error('Webhook URLs must use https.');
+  const open = process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
+  if (u.protocol !== 'https:' && !(open && u.protocol === 'http:')) throw new Error('Webhook URLs must use https.');
   const host = u.hostname.replace(/^\[|\]$/g, '');
-  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true }).catch(() => []);
-  if (!addrs.length) throw new Error('That hostname does not resolve.');
-  if (addrs.some((a) => isPrivate(a.address))) throw new Error('Webhook URLs must point to a public address.');
+  const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await dns.lookup(host, { all: true }).catch(() => []);
+  if (!addrs.length || (!open && addrs.some((a) => isPrivate(a.address)))) throw new Error(REFUSED);
+  return { url: u, address: addrs[0].address, family: addrs[0].family };
+}
+export async function assertPublicUrl(raw: string) {
+  await resolvePublic(raw);
+}
+
+// POSTs to the address that was checked, not to whatever the name resolves to by now. The Host header and the TLS
+// server name still carry the host name, so the receiving server and its certificate are the right ones. Redirects
+// are not followed. Only the status is kept: the reply is read up to a limit and thrown away.
+function post(t: Target, headers: Record<string, string>, body: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const lookup = (_host: string, opts: any, cb: any) => (opts?.all ? cb(null, [{ address: t.address, family: t.family }]) : cb(null, t.address, t.family));
+    const req = (t.url.protocol === 'https:' ? https : http).request(t.url, { method: 'POST', agent: false, lookup, headers: { ...headers, 'content-length': String(Buffer.byteLength(body)) } }, (res) => {
+      let seen = 0;
+      res.on('data', (chunk: Buffer) => {
+        if ((seen += chunk.length) > MAX_REPLY_BYTES) req.destroy();
+      });
+      resolve(res.statusCode as number);
+    });
+    // One deadline for the whole exchange, so a server that answers a byte a minute cannot hold a connection open.
+    const timer = setTimeout(() => req.destroy(new Error(`No answer within ${TIMEOUT_MS / 1000} seconds.`)), TIMEOUT_MS);
+    req.on('error', reject);
+    req.on('close', () => clearTimeout(timer));
+    req.end(body);
+  });
+}
+
+// How a delivery is shown: pending while it is being tried, then delivered or failed. A row still marked as being
+// tried long after the last try could have ended was cut short by a restart. It counts as failed and can be sent again.
+export function deliveryView(d: any) {
+  const cut = !d.done && Date.parse(d.at) < Date.now() - PENDING_MS;
+  const state = !d.done && !cut ? 'pending' : d.done && d.status && d.status < 300 ? 'delivered' : 'failed';
+  return {
+    id: d.id, webhook_id: d.webhook_id, url: d.url, event: d.event, envelope_id: d.envelope_id, state, status: d.status,
+    error: cut ? 'The server restarted before this delivery finished. Send it again.' : d.error, attempts: d.attempts, at: d.at,
+    can_redeliver: state !== 'pending' && !!d.has_body,
+  };
 }
 
 async function deliver(hook: any, event: string, envelopeId: string, body: string) {
+  // The row is written before the first try. An event that is in flight when the server stops is then still in the
+  // log, and can be sent again from there.
+  const rowId = Number(run('INSERT INTO webhook_deliveries (webhook_id, event, envelope_id, attempts, at, body, done) VALUES (?,?,?,0,?,?,0)', hook.id, event, envelopeId, now(), body).lastInsertRowid);
+  // Keep the log useful but small: the content of the latest deliveries of THIS webhook is kept for sending again.
+  // Counted per webhook, never by the row id, which every account shares.
+  run('UPDATE webhook_deliveries SET body=NULL WHERE webhook_id=? AND body IS NOT NULL AND id NOT IN (SELECT id FROM webhook_deliveries WHERE webhook_id=? ORDER BY id DESC LIMIT ?)', hook.id, hook.id, KEEP_BODIES);
   let status: number | null = null;
   let error: string | null = null;
   let attempts = 0;
   while (attempts < 3) {
     attempts++;
     try {
-      await assertPublicUrl(hook.url);
+      const target = await resolvePublic(hook.url);
       const ts = Math.floor(Date.now() / 1000);
-      const res = await fetch(hook.url, {
-        method: 'POST',
-        redirect: 'manual',
-        signal: AbortSignal.timeout(10_000),
-        headers: {
-          'content-type': 'application/json',
-          'user-agent': 'SignAndGrow-Webhook/1',
-          'x-signandgrow-event': event,
-          'x-signandgrow-timestamp': String(ts),
-          'x-signandgrow-signature': `sha256=${hmac(`${ts}.${body}`, hook.secret)}`,
-        },
-        body,
-      });
-      status = res.status;
+      status = await post(target, {
+        'content-type': 'application/json',
+        'user-agent': 'SignAndGrow-Webhook/1',
+        'x-signandgrow-event': event,
+        'x-signandgrow-timestamp': String(ts),
+        'x-signandgrow-signature': `sha256=${hmac(`${ts}.${body}`, hook.secret)}`,
+      }, body);
       error = null;
-      if (res.status < 300) break;
+      if (status < 300) break;
     } catch (e: any) {
+      status = null;
       error = String(e?.message || e).slice(0, 300);
     }
+    run('UPDATE webhook_deliveries SET status=?, error=?, attempts=? WHERE id=?', status, error, attempts, rowId);
     if (attempts < 3) await new Promise((r) => setTimeout(r, attempts * 2000));
   }
-  run('INSERT INTO webhook_deliveries (webhook_id, event, envelope_id, status, error, attempts, at, body) VALUES (?,?,?,?,?,?,?,?)', hook.id, event, envelopeId, status, error, attempts, now(), body);
+  run('UPDATE webhook_deliveries SET status=?, error=?, attempts=?, done=1 WHERE id=?', status, error, attempts, rowId);
   // Three failures in a row and nobody told: that is how integrations break silently. Email the admins, once a day at most.
   const ok = status !== null && status < 300;
   if (!ok) {
-    const last = all('SELECT status FROM webhook_deliveries WHERE webhook_id=? ORDER BY id DESC LIMIT 3', hook.id);
+    const last = all('SELECT status FROM webhook_deliveries WHERE webhook_id=? AND done=1 ORDER BY id DESC LIMIT 3', hook.id);
     const fresh = get('SELECT alerted_at FROM webhooks WHERE id=?', hook.id);
     if (last.length === 3 && last.every((d) => !d.status || d.status >= 300) && (!fresh?.alerted_at || Date.parse(fresh.alerted_at) < Date.now() - 864e5)) {
       run('UPDATE webhooks SET alerted_at=? WHERE id=?', now(), hook.id);
       for (const u of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", hook.account_id))
         void sendMail({ to: u.email, subject: 'A Sign&Grow webhook keeps failing', heading: 'Your webhook is not receiving events',
-          lines: [`The last three deliveries to ${hook.url} failed (${error || `HTTP ${status}`}).`, 'Nothing is lost: every event is kept in the delivery log, and once your side is fixed you can send each one again from Settings.'],
+          lines: [`The last three deliveries to ${hook.url} failed (${error || `HTTP ${status}`}).`,
+            `The latest ${KEEP_BODIES} events for this webhook are kept in full in the delivery log. Once your side is fixed, you can send each of them again from Settings, API and webhooks.`,
+            'Older events stay listed, but can no longer be sent again. The sooner this is fixed, the less there is to catch up on by hand.'],
           cta: { label: 'Open the delivery log', url: `${baseUrl()}/app/settings?tab=developers` } }).catch(() => {});
     }
   }
-  // Keep the log useful but small: bodies of older deliveries are dropped.
-  run('UPDATE webhook_deliveries SET body=NULL WHERE webhook_id=? AND id < (SELECT MAX(id) - 200 FROM webhook_deliveries WHERE webhook_id=?)', hook.id, hook.id);
 }
 
 // Send a past delivery again, exactly as it was, after fixing whatever made it fail.

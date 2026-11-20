@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   id INTEGER PRIMARY KEY AUTOINCREMENT, webhook_id TEXT NOT NULL, event TEXT NOT NULL, envelope_id TEXT,
   status INTEGER, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS webhook_deliveries_hook ON webhook_deliveries(webhook_id, id);
 CREATE TABLE IF NOT EXISTS emails (
   id INTEGER PRIMARY KEY AUTOINCREMENT, to_email TEXT NOT NULL, subject TEXT NOT NULL, html TEXT NOT NULL,
   link TEXT, envelope_id TEXT, status TEXT NOT NULL, error TEXT, at TEXT NOT NULL
@@ -104,12 +105,24 @@ CREATE TABLE IF NOT EXISTS bulk_batches (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL, sender_id TEXT NOT NULL, template_id TEXT NOT NULL, name TEXT NOT NULL,
   total INTEGER NOT NULL, created_at TEXT NOT NULL
 );
+-- One line per row of a bulk send, written before anything is sent: which envelope it became, when it went out, or
+-- why it could not. This is what lets a batch be finished after the process died half way without sending anyone
+-- twice. fill is the row as it was submitted (names and emails) and is cleared once the row is sent.
+CREATE TABLE IF NOT EXISTS bulk_rows (
+  bulk_id TEXT NOT NULL, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, position INTEGER NOT NULL,
+  fill TEXT, envelope_id TEXT, sent_at TEXT, error TEXT, PRIMARY KEY (bulk_id, position)
+);
 CREATE TABLE IF NOT EXISTS payments (
   id TEXT PRIMARY KEY, account_id TEXT, amount_cents INTEGER NOT NULL, currency TEXT NOT NULL, at TEXT NOT NULL
 );
+-- An Idempotency-Key on POST /envelopes. It belongs to the person who used it (user_id), so the same text used by
+-- two members of a team never meets, and it goes when its envelope goes. request_hash is the body it came with.
 CREATE TABLE IF NOT EXISTS idempotency_keys (
-  account_id TEXT NOT NULL, key TEXT NOT NULL, envelope_id TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (account_id, key)
+  account_id TEXT NOT NULL, user_id TEXT NOT NULL, key TEXT NOT NULL,
+  envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, request_hash TEXT, at TEXT NOT NULL,
+  PRIMARY KEY (account_id, user_id, key)
 );
+CREATE INDEX IF NOT EXISTS idempotency_keys_env ON idempotency_keys(envelope_id);
 CREATE TABLE IF NOT EXISTS credits (
   id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, delta INTEGER NOT NULL, reason TEXT NOT NULL, ref TEXT NOT NULL,
   at TEXT NOT NULL, UNIQUE (account_id, reason, ref)
@@ -120,6 +133,15 @@ CREATE TABLE IF NOT EXISTS abuse_reports (
   id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL, account_id TEXT NOT NULL, reporter TEXT, reason TEXT NOT NULL, detail TEXT,
   ip TEXT, status TEXT NOT NULL DEFAULT 'open', at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS billing_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, at TEXT NOT NULL, what TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS billing_log_account ON billing_log(account_id);
+CREATE TABLE IF NOT EXISTS billing_todo (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, ref TEXT NOT NULL, account_id TEXT, detail TEXT NOT NULL DEFAULT '',
+  tries INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, done_at TEXT, UNIQUE (kind, ref)
+);
+CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS support_requests (
   id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT, topic TEXT NOT NULL, message TEXT NOT NULL, envelope_id TEXT,
   user_id TEXT, account_id TEXT, status TEXT NOT NULL DEFAULT 'open', at TEXT NOT NULL
@@ -161,6 +183,29 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['accounts', 'promo_code', 'TEXT'],
   ['accounts', 'promo_at', 'TEXT'],
   ['emails', 'recipient_id', 'TEXT'],
+  // 1 when this signer is the sender signing their own document (free), 0 when the signature is paid for. Decided
+  // when the request goes out, so a later change of sender or of the sender's own address cannot flip it.
+  ['recipients', 'free', 'INTEGER'],
+  ['users', 'tz', 'TEXT'],
+  ['accounts', 'renewal_reminded', 'TEXT'],
+  ['accounts', 'renewal_quoted_cents', 'INTEGER'],
+  ['accounts', 'sub_event_at', 'INTEGER'],
+  ['accounts', 'trusted_at', 'TEXT'],
+  ['payments', 'customer_id', 'TEXT'],
+  ['payments', 'applied_at', 'TEXT'],
+  ['payments', 'self_refund_at', 'TEXT'],
+  ['payments', 'refund_pending_at', 'TEXT'],
+  // What a key may do: 'send' (everyday work, the default) or 'admin' (account settings too). See router.ts.
+  ['api_keys', 'scope', "TEXT NOT NULL DEFAULT 'send'"],
+  // Set when the key's owner was removed from the account. The row stays so admins can see which keys stopped.
+  ['api_keys', 'stopped_at', 'TEXT'],
+  // 0 while a webhook delivery is still being tried. The row is written before the first try.
+  ['webhook_deliveries', 'done', 'INTEGER NOT NULL DEFAULT 1'],
+  // The Idempotency-Key a bulk send came with, and a hash of its body. The key belongs to the batch's sender.
+  ['bulk_batches', 'idem_key', 'TEXT'],
+  ['bulk_batches', 'request_hash', 'TEXT'],
+  // When "Signing link issued" was last written to the audit trail for this recipient. At most once a day per link.
+  ['recipients', 'link_issued_at', 'TEXT'],
 ];
 
 function migrate(d: any) {
@@ -169,6 +214,27 @@ function migrate(d: any) {
     if (!have) d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
   d.exec('CREATE INDEX IF NOT EXISTS recipients_check ON recipients(check_code)');
+  // One batch per person per Idempotency-Key, whatever else happens.
+  d.exec('CREATE UNIQUE INDEX IF NOT EXISTS bulk_batches_idem ON bulk_batches(account_id, sender_id, idem_key) WHERE idem_key IS NOT NULL');
+  // idempotency_keys used to be keyed by account alone and kept rows whose envelope had been deleted. The new shape
+  // has a different primary key and a foreign key, which SQLite cannot add to a table that exists, so a table in the
+  // old shape is made again once. Keys whose envelope still exists move to that envelope's sender; the rest pointed
+  // at nothing and are dropped.
+  if (!d.prepare('PRAGMA table_info(idempotency_keys)').all().some((c: any) => c.name === 'user_id')) {
+    try {
+      d.exec(`BEGIN;
+        ALTER TABLE idempotency_keys RENAME TO idempotency_keys_v1;
+        DROP INDEX IF EXISTS idempotency_keys_env;
+        ${SCHEMA}
+        INSERT OR IGNORE INTO idempotency_keys (account_id, user_id, key, envelope_id, at)
+          SELECT k.account_id, e.sender_id, k.key, k.envelope_id, k.at FROM idempotency_keys_v1 k JOIN envelopes e ON e.id=k.envelope_id;
+        DROP TABLE idempotency_keys_v1;
+        COMMIT;`);
+    } catch (e) {
+      d.exec('ROLLBACK');
+      throw e;
+    }
+  }
 }
 
 export function db(): any {

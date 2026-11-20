@@ -127,6 +127,9 @@ function Team() {
   const [inv, setInv] = useState({ email: '', role: 'member' });
   const [remove, setRemove] = useState<any>(null);
   const [to, setTo] = useState('');
+  // Admins see every API key in the account, so the Remove dialog can say which ones stop with the person.
+  const [keys, reloadKeys] = useLoad(() => (admin ? api('/api-keys') : Promise.resolve(null)));
+  const theirKeys: any[] = remove ? (keys?.keys || []).filter((k: any) => k.user_id === remove.id && !k.stopped_at) : [];
   const members: any[] = d?.members || [];
   const adminCount = members.filter((m) => m.role !== 'member').length;
   return (
@@ -155,7 +158,7 @@ function Team() {
                 ) : <span style={{ textTransform: 'capitalize' }}>{m.role}</span>}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {me.role === 'owner' && m.id !== me.user.id && <button className="btn sm ghost" onClick={() => window.confirm(`Make ${m.name} the owner of this account? You stay on as an admin.`) && api('/account/transfer-owner', { body: { user_id: m.id } }).then(() => (toast(`${m.name} is now the owner`), me.reload(), reload())).catch(oops)}>Make owner</button>}
-                  {admin && m.role !== 'owner' && m.id !== me.user.id && <button className="btn sm ghost danger" onClick={() => (setRemove(m), setTo(me.user.id))}>Remove</button>}
+                  {admin && m.role !== 'owner' && m.id !== me.user.id && <button className="btn sm ghost danger" onClick={() => (reloadKeys(), setRemove(m), setTo(me.user.id))}>Remove</button>}
                 </td>
               </tr>
             ))}
@@ -171,6 +174,15 @@ function Team() {
       {remove && (
         <Modal title={`Remove ${remove.name}`} onClose={() => setRemove(null)}>
           <p>They lose access to this account straight away. Nothing they sent is lost: their envelopes, drafts and templates pass to the person you choose, and anything still out for signature carries on.</p>
+          {theirKeys.length > 0 && (
+            <div className="notice warn" style={{ marginBottom: 12 }}>
+              <b>{theirKeys.length === 1 ? 'This API key stops' : `These ${theirKeys.length} API keys stop`} working the moment you remove {remove.name}:</b>
+              <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
+                {theirKeys.map((k) => <li key={k.id}><b>{k.name}</b> <span className="mono">{k.prefix}…</span>, {k.last_used_at ? `last used ${fmtDate(k.last_used_at)}` : 'never used'}</li>)}
+              </ul>
+              Anything that uses one of them starts failing. If an integration depends on it, create a replacement key on the API and webhooks tab first. All admins and {remove.name} get an email that names these keys.
+            </div>
+          )}
           <label className="f"><span>Hand their documents to</span>
             <select value={to} onChange={(e) => setTo(e.target.value)}>
               {members.filter((m) => m.id !== remove.id).map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === me.user.id ? ' (you)' : ''}</option>)}
@@ -178,7 +190,7 @@ function Team() {
           </label>
           <div className="actions">
             <button className="btn" onClick={() => setRemove(null)}>Cancel</button>
-            <button className="btn primary" onClick={() => api(`/account/members/${remove.id}?to=${encodeURIComponent(to)}`, { method: 'DELETE' }).then(() => (toast(`${remove.name} was removed. Their documents were handed over.`), setRemove(null), reload())).catch(oops)}>Remove and hand over</button>
+            <button className="btn primary" onClick={() => api(`/account/members/${remove.id}?to=${encodeURIComponent(to)}`, { method: 'DELETE' }).then((r) => (toast(`${remove.name} was removed. Their documents were handed over.${r.keys_stopped?.length ? ` Stopped API key${r.keys_stopped.length === 1 ? '' : 's'}: ${r.keys_stopped.map((k: any) => k.name).join(', ')}.` : ''}`), setRemove(null), reload())).catch(oops)}>Remove and hand over</button>
           </div>
         </Modal>
       )}
@@ -190,30 +202,69 @@ function Developers() {
   const me = useMe();
   const admin = me.role !== 'member';
   const [keys, reloadKeys] = useLoad(() => api('/api-keys'));
-  const [hooks, reloadHooks] = useLoad(() => (admin ? api('/webhooks') : Promise.resolve(null)));
+  // The delivery log: one webhook or all of them, the newest page first, older pages added underneath on request.
+  const [only, setOnly] = useState('');
+  const [hooks, reloadHooks] = useLoad(() => (admin ? api(`/webhooks${only ? `?webhook=${encodeURIComponent(only)}` : ''}`) : Promise.resolve(null)), [only]);
+  const [older, setOlder] = useState<{ rows: any[]; next: number | null } | null>(null);
+  useEffect(() => setOlder(null), [hooks]);
+  const deliveries: any[] = [...(hooks?.deliveries || []), ...(older?.rows || [])];
+  const nextBefore: number | null = older ? older.next : hooks?.next_before ?? null;
+  const showOlder = () => api(`/webhooks?before=${nextBefore}${only ? `&webhook=${encodeURIComponent(only)}` : ''}`).then((r) => setOlder({ rows: [...(older?.rows || []), ...r.deliveries], next: r.next_before })).catch(oops);
   const [fresh, setFresh] = useState('');
   const [url, setUrl] = useState('');
+  const [making, setMaking] = useState<null | { name: string; scope: 'send' | 'admin' }>(null);
+  const revoke = (k: any) => {
+    if (!k.mine && !k.stopped_at && !window.confirm(`Revoke "${k.name}", made by ${k.owner_name || 'someone else'}? Whatever uses it stops working at once.`)) return;
+    api(`/api-keys/${k.id}`, { method: 'DELETE' }).then(reloadKeys).catch(oops);
+  };
   return (
     <div className="stack">
       <div className="card">
         <div className="row between wrap"><h2>API keys</h2><a href="/developers" target="_blank">API reference ↗</a></div>
-        <p className="muted small">Included on every plan, with the same limits as the app. A key works straight away: there is no review step and no separate test environment.</p>
+        <p className="muted small">Included on every plan, with the same limits as the app. A key works straight away: there is no review step and no separate test environment.{admin ? ' As an admin you see every key in this account and who made it. The key itself is shown once, to the person who creates it, and never again.' : ''}</p>
         {fresh && <div className="notice" style={{ marginBottom: 12 }}>Copy your key now. It is not shown again:<div className="mono" style={{ marginTop: 4 }}>{fresh}</div></div>}
         {(keys?.keys || []).map((k: any) => (
           <div key={k.id} className="row between wrap" style={{ padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
-            <span><b>{k.name}</b> <span className="mono muted">{k.prefix}…</span></span>
-            <span className="row"><span className="muted small">{k.last_used_at ? `last used ${fmtDate(k.last_used_at)}` : 'never used'}</span><button className="btn sm ghost danger" onClick={() => api(`/api-keys/${k.id}`, { method: 'DELETE' }).then(reloadKeys).catch(oops)}>Revoke</button></span>
+            <span>
+              <b>{k.name}</b> <span className="mono muted">{k.prefix}…</span> <span className={`badge${k.scope === 'admin' ? ' expired' : ''}`}>{k.scope === 'admin' ? 'Admin: account settings too' : 'Send: everyday work'}</span>
+              {!k.mine && <span className="muted small"> made by {k.owner_name || 'someone who has left'}</span>}
+              {k.stopped_at && <span className="small" style={{ display: 'block', color: 'var(--red)' }}>Stopped working on {fmtDate(k.stopped_at)}, when {k.owner_name || 'the person who made it'} was removed from the team. Whatever used it needs a new key.</span>}
+            </span>
+            <span className="row"><span className="muted small">{k.last_used_at ? `last used ${fmtDate(k.last_used_at)}` : 'never used'}</span><button className="btn sm ghost danger" onClick={() => revoke(k)}>{k.stopped_at ? 'Clear from list' : 'Revoke'}</button></span>
           </div>
         ))}
-        <button className="btn" style={{ marginTop: 12 }} onClick={() => { const name = window.prompt('Name this key (for example "Website integration"):'); if (name !== null) api('/api-keys', { body: { name } }).then((r) => (setFresh(r.key), reloadKeys())).catch(oops); }}>Create API key</button>
+        <button className="btn" style={{ marginTop: 12 }} onClick={() => setMaking({ name: '', scope: 'send' })}>Create API key</button>
       </div>
+      {making && (
+        <Modal title="Create an API key" onClose={() => setMaking(null)}>
+          <label className="f"><span>Name <span className="hint">(what will use it, for example "Website integration")</span></span><input value={making.name} autoFocus maxLength={80} onChange={(e) => setMaking({ ...making, name: e.target.value })} /></label>
+          <div role="radiogroup" aria-label="What the key may do">
+            <label className="setting-row">
+              <input type="radio" name="key-scope" checked={making.scope === 'send'} onChange={() => setMaking({ ...making, scope: 'send' })} />
+              <span><b>Send</b><span className="muted small" style={{ display: 'block' }}>Envelopes, templates, files, contacts, bulk sends, export and reports. It cannot change account settings, the team or webhooks. Right for almost every integration.</span></span>
+            </label>
+            {admin && (
+              <label className="setting-row">
+                <input type="radio" name="key-scope" checked={making.scope === 'admin'} onChange={() => setMaking({ ...making, scope: 'admin' })} />
+                <span><b>Admin</b><span className="muted small" style={{ display: 'block' }}>Everything a send key can do, and also account settings, invitations, member roles and webhooks.</span></span>
+              </label>
+            )}
+          </div>
+          {making.scope === 'admin' && <div className="notice warn" role="alert"><b>Choose this only if the integration manages the account itself.</b> Whoever gets hold of an admin key can rename the account, invite people as admins and point your webhooks somewhere else. If the key only sends documents, pick Send.</div>}
+          <p className="muted small" style={{ marginBottom: 0 }}>No key of either kind can create or revoke keys, remove a team member, hand over or close the account, or touch the plan and payments. Those always need a person who is signed in.</p>
+          <div className="actions">
+            <button className="btn" onClick={() => setMaking(null)}>Cancel</button>
+            <button className="btn primary" onClick={() => api('/api-keys', { body: making }).then((r) => (setFresh(r.key), setMaking(null), reloadKeys())).catch(oops)}>Create {making.scope === 'admin' ? 'admin' : 'send'} key</button>
+          </div>
+        </Modal>
+      )}
       {admin && (
         <div className="card">
           <h2>Webhooks</h2>
           <p className="muted small">We POST JSON to your URL when an envelope is sent, opened, signed, corrected, completed, declined, voided or expires. Check the <span className="mono">X-SignAndGrow-Signature</span> header with the signing secret. Each payload also carries a one-line <span className="mono">text</span> summary for tools that just want a message to show.</p>
           {(hooks?.webhooks || []).map((h: any) => (
             <div key={h.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
-              <div className="row between"><b className="truncate">{h.url}</b><button className="btn sm ghost danger" onClick={() => api(`/webhooks/${h.id}`, { method: 'DELETE' }).then(reloadHooks).catch(oops)}>Delete</button></div>
+              <div className="row between"><b className="truncate">{h.url}</b><button className="btn sm ghost danger" onClick={() => api(`/webhooks/${h.id}`, { method: 'DELETE' }).then(() => (only === h.id ? setOnly('') : reloadHooks())).catch(oops)}>Delete</button></div>
               <div className="mono muted">Secret: {h.secret}</div>
             </div>
           ))}
@@ -221,22 +272,35 @@ function Developers() {
             <input placeholder="https://example.com/hooks/sign-and-grow" value={url} onChange={(e) => setUrl(e.target.value)} required aria-label="Webhook URL" />
             <button className="btn">Add webhook</button>
           </form>
-          {hooks?.deliveries?.length > 0 && (
+          {(deliveries.length > 0 || !!only) && (
             <div style={{ marginTop: 16 }}>
-              <div className="row between"><h3>Recent deliveries</h3><button className="btn sm ghost" onClick={reloadHooks}>Refresh</button></div>
-              <p className="muted small">Each delivery is tried three times. If your side was down, fix it and send the same event again.</p>
-              {hooks.deliveries.map((d: any) => {
-                const ok = d.status && d.status < 300;
+              <div className="row between wrap"><h3>Deliveries</h3>
+                <span className="row">
+                  {(hooks?.webhooks || []).length > 1 && (
+                    <select value={only} onChange={(e) => setOnly(e.target.value)} aria-label="Show deliveries for" style={{ maxWidth: 260 }}>
+                      <option value="">All webhooks</option>
+                      {hooks.webhooks.map((h: any) => <option key={h.id} value={h.id}>{h.url}</option>)}
+                    </select>
+                  )}
+                  <button className="btn sm ghost" onClick={reloadHooks}>Refresh</button>
+                </span>
+              </div>
+              <p className="muted small">A delivery is listed from the moment it starts, and is tried three times. If your side was down, fix it and send the same event again. The latest 200 events of each webhook can be sent again. Older ones stay listed.</p>
+              {deliveries.length === 0 && <p className="muted small">Nothing has been sent to this webhook yet.</p>}
+              {deliveries.map((d: any) => {
+                const ok = d.state === 'delivered';
+                const trying = d.state === 'pending';
                 return (
                   <div key={d.id} className="row between wrap small" style={{ padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
-                    <span><span className={`badge ${ok ? 'completed' : 'declined'}`}>{ok ? `Delivered (${d.status})` : d.status ? `Failed (${d.status})` : 'Failed'}</span> <span className="mono">{d.event}</span></span>
+                    <span><span className={`badge ${ok ? 'completed' : trying ? 'sent' : 'declined'}`}>{ok ? `Delivered (${d.status})` : trying ? 'Trying now' : d.status ? `Failed (${d.status})` : 'Failed'}</span> <span className="mono">{d.event}</span>{!only && (hooks?.webhooks || []).length > 1 && <span className="muted"> to {d.url}</span>}</span>
                     <span className="row">
-                      <span className="muted">{!ok && d.error ? `${d.error} · ` : ''}{fmtDate(d.at, true)}</span>
+                      <span className="muted">{!ok && !trying && d.error ? `${d.error} · ` : ''}{fmtDate(d.at, true)}</span>
                       {!!d.can_redeliver && <button className="btn sm" onClick={() => api(`/webhooks/deliveries/${d.id}/redeliver`, { method: 'POST' }).then(() => (toast('Sent again. Refresh in a moment to see the result.'), setTimeout(reloadHooks, 2500))).catch(oops)}>Send again</button>}
                     </span>
                   </div>
                 );
               })}
+              {nextBefore && <button className="btn sm ghost" style={{ marginTop: 10 }} onClick={showOlder}>Show older deliveries</button>}
             </div>
           )}
         </div>

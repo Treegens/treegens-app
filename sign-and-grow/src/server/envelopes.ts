@@ -4,7 +4,7 @@ import { sendMail } from './mail.ts';
 import { renderEnvelopePdf } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
-import { creditsEnabled, available, needed, isChargeable, grant } from './credits.ts';
+import { creditsEnabled, available, needed, isChargeable, grant, sameEmail } from './credits.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients } from '../lib/policy.ts';
 
@@ -230,14 +230,11 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
     if (lockedView(after, done) !== before)
       throw bad(`${done.map((r: any) => r.name).join(' and ')} already finished, so the documents and what they signed are locked. You can still change what the remaining recipients need to do, or void this envelope and send a new one.`, 409);
     assertSendable(after);
-    if (creditsEnabled()) {
-      // Signers added by this correction need signatures like any others. Everything already out is counted as held.
-      const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
-      const have = available(e.account_id);
-      if (have < 0) throw bad(outOfSignatures(account, needed(after, senderOf(e)?.email || ''), have + needed(after, senderOf(e)?.email || '')), 402);
-    }
+    const senderEmail = senderOf(e)?.email || '';
     for (const r of after.recipients) {
       const old = oldById.get(r.id);
+      // Whether a signature is paid for is settled when a person is added or their address changes, and kept otherwise.
+      if (!old || !sameEmail(old.email, r.email) || old.free == null) run('UPDATE recipients SET free=? WHERE id=?', sameEmail(r.email, senderEmail) ? 1 : 0, r.id);
       if (!old) {
         run('UPDATE recipients SET token=?, check_code=? WHERE id=?', token(), checkCode(), r.id);
         continue;
@@ -258,6 +255,13 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       if (after.recipients.some((r: any) => r.id === old.id)) continue;
       retireToken(old);
       if (old.status === 'sent' || old.status === 'viewed') removed.push(old);
+    }
+    if (creditsEnabled()) {
+      // Signers added by this correction need signatures like any others. A change that needs no more than before
+      // (a name, a field, a date) is never refused, whatever the balance.
+      const more = needed(loadEnvelope(e.id), senderEmail) - needed(e, senderEmail);
+      const have = available(e.account_id);
+      if (more > 0 && have < 0) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), more, have + more), 402);
     }
     const pages = after.documents.reduce((n: number, d: any) => n + d.pages, 0);
     run('UPDATE envelopes SET sheets=? WHERE id=?', sheetsSaved(pages, after.recipients.length), e.id);
@@ -371,7 +375,8 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
   // and it comes back by itself if the envelope is voided, declined or expires.
   const before = creditsEnabled() ? available(account.id) : Infinity;
   const need = creditsEnabled() ? needed(e, sender.email) : 0;
-  if (need > before) throw bad(outOfSignatures(account, need, before), 402);
+  // Signing your own documents, approvals and copies cost nothing, so they go out whatever the balance is.
+  if (need > 0 && need > before) throw bad(outOfSignatures(account, need, before), 402);
 
   const pages = e.documents.reduce((n: number, d: any) => n + d.pages, 0);
   const t = now();
@@ -380,7 +385,7 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
       t, t, new Date(Date.now() + e.expire_days * 864e5).toISOString(), sheetsSaved(pages, e.recipients.length),
       e.subject || `Please sign: ${e.documents[0].name}`, e.id);
     for (const r of e.recipients) {
-      run('UPDATE recipients SET token=?, check_code=? WHERE id=?', token(), checkCode(), r.id);
+      run('UPDATE recipients SET token=?, check_code=?, free=? WHERE id=?', token(), checkCode(), sameEmail(r.email, sender.email) ? 1 : 0, r.id);
       run('INSERT INTO contacts (id, account_id, name, email, created_at) VALUES (?,?,?,?,?) ON CONFLICT(account_id, email) DO NOTHING', id('con'), e.account_id, r.name, r.email, t);
     }
     audit(e.id, actor, 'Envelope sent', `${e.recipients.length} recipient${e.recipients.length === 1 ? '' : 's'}, ${pages} page${pages === 1 ? '' : 's'}`);
@@ -392,12 +397,21 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
     const after = before - need;
     for (const mark of [2, 0])
       if (before > mark && after <= mark) {
-        await sendMail({ to: sender.email, subject: after <= 0 ? 'You have used all your signatures' : `${after} signature${after === 1 ? '' : 's'} left`,
-          heading: after <= 0 ? 'That was your last signature' : `You have ${after} signature${after === 1 ? '' : 's'} left`,
-          lines: [`${account.name} has ${Math.max(0, after)} signature${after === 1 ? '' : 's'} left to send. Envelopes already out are covered and can still be signed.`,
-            account.plan === 'grove' ? `Your plan adds ${PRICING.monthlySignatures} more with each monthly payment, and you can top up any time at $${PRICING.topUpUsd} a signature.` : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures.`,
-            `Nothing is ever charged without you choosing it. Every dollar plants ${PRICING.treesPerUsd} mangrove trees.`],
-          cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } });
+        // Goes to the people who can buy more (owners and admins) as well as to whoever sent, so a member using the
+        // last signature never leaves the team stuck without anyone knowing.
+        const buyers = all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", account.id).map((u) => u.email);
+        const isBuyer = buyers.some((b) => sameEmail(b, sender.email));
+        const more = account.promo_code ? `Your plan is free with the code ${account.promo_code}: ${PRICING.monthlySignatures} more arrive at the start of next month at no charge, and you can top up any time at $${PRICING.topUpUsd} a signature.`
+          : account.plan === 'grove' ? `Your plan adds ${PRICING.monthlySignatures} more with each monthly payment, and you can top up any time at $${PRICING.topUpUsd} a signature.`
+          : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures.`;
+        for (const to of new Set([sender.email, ...buyers]))
+          await sendMail({ to, subject: after <= 0 ? 'You have used all your signatures' : `${after} signature${after === 1 ? '' : 's'} left`,
+            heading: after <= 0 ? 'That was your last signature' : `You have ${after} signature${after === 1 ? '' : 's'} left`,
+            lines: [`${account.name} has ${Math.max(0, after)} signature${after === 1 ? '' : 's'} left to send${sameEmail(to, sender.email) ? '' : `, after ${sender.name} sent "${e.subject || e.documents[0].name}"`}. Envelopes already out are covered and can still be signed.`,
+              more,
+              ...(sameEmail(to, sender.email) && !isBuyer ? ['Only an owner or admin of your team can buy more. We have told them too.'] : []),
+              `Nothing is ever charged without you choosing it. Every dollar plants ${PRICING.treesPerUsd} mangrove trees.`],
+            ...(sameEmail(to, sender.email) && !isBuyer ? {} : { cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } }) });
         break;
       }
   }
@@ -537,6 +551,19 @@ export async function remindEnvelope(e: any, actor: Actor, recipientId?: string)
   return reminded.length;
 }
 
+// When a signer's address changes to a different person, is the new person's signature free (the sender signing
+// their own document) or paid for? Sending to yourself is free, so pointing that request at somebody else afterwards
+// has to need a signature like any other, or it would be a way round paying. Returns the new value of `free`.
+function takeOverCost(e: any, r: any, newEmail: string): number {
+  const senderEmail = senderOf(e)?.email || '';
+  const free = sameEmail(newEmail, senderEmail) ? 1 : 0;
+  if (creditsEnabled() && ACTS(r.role) && !isChargeable(r, senderEmail) && !free) {
+    const have = available(e.account_id);
+    if (have < 1) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), 1, have), 402);
+  }
+  return free;
+}
+
 // Fix a recipient's name or email while the envelope is out. Old links stop working.
 export async function correctRecipient(e: any, recipientId: string, patch: { name?: string; email?: string; access_code?: string }, actor: Actor) {
   if (e.status !== 'sent') throw bad('Only envelopes that are out for signature can be corrected.');
@@ -553,9 +580,10 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
     audit(e.id, actor, 'Recipient corrected', `${r.name} is now ${name}${code !== r.access_code ? ', access code changed' : ''}`);
     return;
   }
+  const free = takeOverCost(e, r, email);
   retireToken(r);
-  run('UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, status=? WHERE id=?',
-    name, email, code, token(), checkCode(), r.status === 'pending' ? 'pending' : 'sent', r.id);
+  run('UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, status=?, free=? WHERE id=?',
+    name, email, code, token(), checkCode(), r.status === 'pending' ? 'pending' : 'sent', free, r.id);
   audit(e.id, actor, 'Recipient corrected', `${r.name} <${r.email}> is now ${name} <${email}>`);
   if (r.status !== 'pending') await notifyRecipient(loadEnvelope(e.id), get('SELECT * FROM recipients WHERE id=?', r.id));
 }
@@ -609,7 +637,9 @@ export const okImage = (s: any) => typeof s === 'string' && /^data:image\/(png|j
 
 export async function completeRecipient(e: any, r: any, body: any, actor: Actor) {
   if (e.status !== 'sent') throw bad('This envelope is no longer open for signing.');
-  if (r.status !== 'sent' && r.status !== 'viewed') throw bad(r.status === 'completed' ? 'You have already finished this document.' : 'It is not your turn to sign yet.');
+  // A second Finish (a double tap, a retry) is a conflict with the first, not a mistake in the request: 409.
+  if (r.status === 'completed') throw bad('You have already finished this document.', 409);
+  if (r.status !== 'sent' && r.status !== 'viewed') throw bad('It is not your turn to sign yet.');
   if (!r.consent_at) throw bad('Please agree to use electronic records and signatures first.');
   let verb = 'Viewed';
   if (ACTS(r.role)) {
@@ -618,14 +648,22 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
     const needsIni = mine.some((f: any) => f.type === 'initials' && (f.required || body.values?.[f.id]));
     if (needsSig && !okImage(body.signature_png)) throw bad('Adopt a signature before finishing.');
     if (needsIni && !okImage(body.initials_png)) throw bad('Adopt your initials before finishing.');
-    tx(() => {
-      applyValues(e, r, body.values || {}, true);
-      run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(body.signature_png) ? body.signature_png : null, okImage(body.initials_png) ? body.initials_png : null, r.id);
-    });
     verb = 'Signed';
   } else if (r.role === 'approver') verb = 'Approved';
   const t = now();
-  run("UPDATE recipients SET status='completed', completed_at=?, viewed_at=COALESCE(viewed_at, ?), ip=?, user_agent=? WHERE id=?", t, t, actor.ip || null, (actor.ua || '').slice(0, 300), r.id);
+  // Finishing is claimed by one statement that only changes a row while this recipient and the envelope are both
+  // still open. e and r were read before this and may be out of date: a second Finish, a decline or a void can have
+  // got in since. Whoever comes second changes no row and stops here with nothing written: no values, no audit
+  // line, no webhook, no signature used, no email. Nothing is waited for between the claim and the values it
+  // guards, and a value that fails its check undoes the claim with the rest.
+  tx(() => {
+    const claimed = run("UPDATE recipients SET status='completed', completed_at=?, viewed_at=COALESCE(viewed_at, ?), ip=?, user_agent=? WHERE id=? AND status IN ('sent','viewed') AND (SELECT status FROM envelopes WHERE id=recipients.envelope_id)='sent'",
+      t, t, actor.ip || null, (actor.ua || '').slice(0, 300), r.id).changes;
+    if (!claimed) throw bad(get('SELECT status FROM recipients WHERE id=?', r.id)?.status === 'completed' ? 'You have already finished this document.' : 'This envelope is no longer open for signing.', 409);
+    if (!ACTS(r.role)) return;
+    applyValues(e, r, body.values || {}, true);
+    run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(body.signature_png) ? body.signature_png : null, okImage(body.initials_png) ? body.initials_png : null, r.id);
+  });
   audit(e.id, actor, verb, `${r.name} <${r.email}>`);
   fireWebhooks(e.account_id, 'recipient.completed', e.id, { recipient_id: r.id });
   if (creditsEnabled() && isChargeable(r, senderOf(e)?.email || '')) grant(e.account_id, -1, 'signature', r.id);
@@ -635,12 +673,21 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
 }
 
 export async function declineRecipient(e: any, r: any, reason: string, actor: Actor) {
+  // A second Decline (a double tap, a retry) is a conflict with the first: 409, like a second Finish.
+  if (r.status === 'declined') throw bad('This envelope is no longer open for signing.', 409);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw bad('This envelope is no longer open for signing.');
   if (r.role === 'cc' || r.role === 'viewer') throw bad('Only signers and approvers can decline.');
   if (!reason.trim()) throw bad('Please tell the sender why you are declining.');
   const t = now();
-  run("UPDATE recipients SET status='declined', decline_reason=?, completed_at=?, ip=? WHERE id=?", str(reason, 500), t, actor.ip || null, r.id);
-  run("UPDATE envelopes SET status='declined', updated_at=? WHERE id=?", t, e.id);
+  // Claimed the same way as finishing: one statement that only changes a row while the recipient and the envelope
+  // are both still open, with nothing waited for before it. A decline that comes second, or that crosses a Finish
+  // or a void, changes no row and stops here, so there is never a second audit line, webhook or email.
+  tx(() => {
+    const claimed = run("UPDATE recipients SET status='declined', decline_reason=?, completed_at=?, ip=? WHERE id=? AND status IN ('sent','viewed') AND (SELECT status FROM envelopes WHERE id=recipients.envelope_id)='sent'",
+      str(reason, 500), t, actor.ip || null, r.id).changes;
+    if (!claimed) throw bad('This envelope is no longer open for signing.', 409);
+    run("UPDATE envelopes SET status='declined', updated_at=? WHERE id=?", t, e.id);
+  });
   audit(e.id, actor, 'Declined', `${r.name}: ${str(reason, 500)}`);
   fireWebhooks(e.account_id, 'envelope.declined', e.id, { recipient_id: r.id });
   await notifySender(e, 'problems', `Declined: ${e.subject}`, `${r.name} declined to sign`, [`Reason: ${reason}`, 'The envelope is closed. You can clone it, change what needs changing and send it again.']);
@@ -653,9 +700,10 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   const name = str(to.name, 120).trim();
   const email = str(to.email, 254).trim();
   if (!name || !isEmail(email)) throw bad('Enter the name and email of the person who should sign instead.');
+  const free = takeOverCost(e, r, email);
   retireToken(r);
-  run("UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, reassigned_from=? WHERE id=?",
-    name, email, token(), checkCode(), now(), `${r.name} <${r.email}>`, r.id);
+  run("UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, reassigned_from=?, free=? WHERE id=?",
+    name, email, token(), checkCode(), now(), `${r.name} <${r.email}>`, free, r.id);
   audit(e.id, actor, 'Reassigned', `${r.name} <${r.email}> assigned this to ${name} <${email}>${to.reason ? `: ${str(to.reason, 300)}` : ''}`);
   await notifyRecipient(loadEnvelope(e.id), get('SELECT * FROM recipients WHERE id=?', r.id));
   await notifySender(e, 'problems', `Reassigned: ${e.subject}`, `${r.name} assigned signing to ${name}`, [`${name} <${email}> will sign instead.`, ...(to.reason ? [`Reason: ${to.reason}`] : [])]);
