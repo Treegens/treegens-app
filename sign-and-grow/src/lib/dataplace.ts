@@ -85,7 +85,7 @@ export function dataPlace(env: Env = process.env): DataPlace {
       purpose: 'Delivers every email this server sends.',
       data: 'The recipient\'s email address and name, the sender\'s name, the subject and the sender\'s message, the signing link, and the signed PDF when it is small enough to attach.',
       who: 'Everyone who is emailed: signers, people who get a copy, and account holders.',
-      missing: [...need(name, 'which company delivers its email'), ...need(country, 'in which country that company handles email')],
+      missing: [...need(name, 'which company delivers its email'), ...need(country, 'in which country its mail provider handles email')],
     });
   } else off.push('No mail server is set up on this server, so no email leaves it.');
 
@@ -120,7 +120,7 @@ export function dataPlace(env: Env = process.env): DataPlace {
       purpose: 'Delivers text messages: a one-time code, or a notice with a link, when the sender chose that for a signer.',
       data: 'The mobile number the sender typed for that signer, and the text of the message.',
       who: 'Only signers whose sender asked for a text message.',
-      missing: [...need(name, 'which company delivers its text messages'), ...need(country, 'in which country that company handles them')],
+      missing: [...need(name, 'which company delivers its text messages'), ...need(country, 'in which country its text message provider handles text messages')],
     });
   } else off.push('Text messages are switched off on this server, so no phone number goes to a text message provider.');
 

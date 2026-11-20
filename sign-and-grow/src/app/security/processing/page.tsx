@@ -32,7 +32,7 @@ export default function ProcessingSummary() {
         </header>
 
         <h2>What this page is, and what it is not</h2>
-        <p>It describes what the software does with personal data. It is not a contract and not legal advice. If you need a signed data processing agreement, for example because the GDPR applies to you, that agreement is between you and whoever runs this server{d.operator ? <>: {d.operator}</> : null}. The software cannot sign one for them, and no standard contract comes with it. {!d.operator && notSaid('who they are')} Reach them through <Link href="/help#contact">the contact form</Link>.</p>
+        <p>It describes what the software does with personal data. It is not a contract and not legal advice. If you need a signed data processing agreement, for example because the GDPR applies to you, that agreement is between you and whoever runs this server{d.operator ? <> ({d.operator})</> : null}. The software cannot sign one for them, and no standard contract comes with it. {!d.operator && notSaid('who they are')} Reach them through <Link href="/help#contact">the contact form</Link>.</p>
 
         <h2>Who decides, and who handles</h2>
         <ul className="pub-list">

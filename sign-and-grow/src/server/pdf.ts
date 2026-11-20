@@ -6,7 +6,7 @@ import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
 import { bad } from './util.ts';
 import { impactOf, fmtTrees, fmtNum, PRICING } from '../lib/impact.ts';
-import { formatDate } from '../lib/dates.ts';
+import { formatDate, formatDateValue, localStamp, validZone } from '../lib/dates.ts';
 import { typesetterFor } from './pdftext.ts';
 import { isolate, hasRtl } from './bidi.ts';
 import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
@@ -119,7 +119,7 @@ function wrap(font: PDFFont, text: string, size: number, maxW: number): string[]
   return out;
 }
 
-type Ctx = { doc: PDFDocument; font: PDFFont; bold: PDFFont; images: Map<string, any>; recipients: Map<string, any>; dateFormat?: string | null };
+type Ctx = { doc: PDFDocument; font: PDFFont; bold: PDFFont; images: Map<string, any>; recipients: Map<string, any>; dateFormat?: string | null; tz?: string | null };
 
 async function image(ctx: Ctx, dataUrl: string | null | undefined) {
   if (!dataUrl) return null;
@@ -140,11 +140,17 @@ async function image(ctx: Ctx, dataUrl: string | null | undefined) {
 // A name or an email field prints the name and the address the sender gave its owner, from the start: they are
 // wording on the page, shown to every signer before signing, so a copy made at any time prints them too. The date
 // of signing is different. It only exists once its signer has finished.
-export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null): string {
+//
+// Every date on the pages is written in the one format the sender chose for the envelope: the date of signing, and
+// a date a signer picked in a date field. The date of signing is the calendar day where the signer was: in the time
+// zone their device reported when they agreed and when they finished. If it reported none, the sender's zone
+// (`senderTz`) is used, and failing that UTC. The certificate gives the exact moment in UTC beside it.
+export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null, senderTz?: string | null): string {
   switch (f.type) {
     case 'full_name': return r?.name || '';
     case 'email': return r?.email || '';
-    case 'date_signed': return r?.completed_at ? formatDate(r.completed_at, dateFormat) : '';
+    case 'date_signed': return r?.completed_at ? formatDate(r.completed_at, dateFormat, validZone(r.tz) || senderTz) : '';
+    case 'date': return formatDateValue(f.value, dateFormat);
     default: return f.value || '';
   }
 }
@@ -186,7 +192,7 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
   }
   if (f.type === 'attachment') return;
 
-  const text = clean(fieldDisplayValue(f, r, ctx.dateFormat));
+  const text = clean(fieldDisplayValue(f, r, ctx.dateFormat, ctx.tz));
   if (!text) return;
   const base = Math.max(6, Math.min(11, vh * 0.62));
   const multi = vh > base * 2.6 || text.includes('\n');
@@ -509,6 +515,9 @@ export async function withNotice(pdf: Uint8Array, envelopeId: string, notice: { 
   return doc.save();
 }
 
+/** The time zone of whoever sent an envelope, as their browser last reported it. Null when it never did. */
+export const senderZone = (e: any): string | null => validZone(e?.sender_id ? get('SELECT tz FROM users WHERE id=?', e.sender_id)?.tz : null);
+
 // Builds the signed PDF: every document with field values stamped in, signer attachments, then the certificate.
 // `notice` is for a copy of an envelope that was never completed (voided, declined or out of time), made for someone
 // who had signed it: the copy opens with a page that says so and why, and every page carries the words too.
@@ -518,7 +527,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
   if (opts.notice) noticeSheet(doc, font, bold, `Sign&Grow · Not completed · Envelope ${e.id}`, opts.notice);
-  const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])), dateFormat: e.date_format };
+  const ctx: Ctx = { doc, font, bold, images: new Map(), recipients: new Map(e.recipients.map((r: any) => [r.id, r])), dateFormat: e.date_format, tz: senderZone(e) };
   // A copy made for one recipient (`viewer`) while others are still at work shows the pages as that recipient's
   // screen does: everything the sender wrote, what people who have finished filled in, and what the viewer has
   // entered so far. Another person's half-filled answer, saved signature or uploaded file is not printed until that

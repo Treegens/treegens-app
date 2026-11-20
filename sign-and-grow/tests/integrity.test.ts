@@ -1233,3 +1233,42 @@ test('someone whose turn was taken back is told to wait, not that the envelope i
   }
   assert.equal(statusOf(e.id, 'ada@example.com'), 'pending');
 });
+
+test('someone who is asked to sign again and has to wait for their turn can still download what they signed', async () => {
+  const e = await draft(jo, { ordered: false, subject: 'Waits again' });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const ada = await open(e.id, 'ada@example.com');
+  assert.equal((await ada.finish()).status, 200);
+  // The sender adds a clause, asks Ada to sign again, and puts Ben in front of her.
+  const body = await current(e.id);
+  body.ordered = true;
+  person(body, 'ada@example.com').routing_order = 2;
+  person(body, 'ben@example.com').routing_order = 1;
+  body.fields.push({ document_id: body.documents[0].id, type: 'note', value: 'Clause 12 added', page: 0, x: 0.1, y: 0.1, w: 0.4, h: 0.03 });
+  assert.equal((await jo.put(`/envelopes/${e.id}`, { ...body, resign: true })).status, 200);
+  const page = (await ada.c.get(`/sign/${ada.tok}`)).data;
+  assert.deepEqual([page.recipient.status, !!page.recipient.signed_before, page.recipient.earlier_copy], ['pending', true, true]);
+  // Her page says it is not her turn. The document as it is now is not hers to open yet, and what she signed is.
+  const dl = await ada.c.get(`/sign/${ada.tok}/download`);
+  assert.equal(dl.status, 200, JSON.stringify(dl.data).slice(0, 200));
+  const text = (await textOf(dl.data)).replace(/\s+/g, ' ');
+  assert.match(text, /Signed before the document was changed/);
+  assert.match(text, /It shows "Waits again" exactly as Ada Signer signed it on /);
+  assert.equal((await ada.c.get(`/sign/${ada.tok}/doc/${body.documents[0].id}`)).status, 403);
+});
+
+test('while someone is still asked to sign again, a later change is added to what they are told, not put in its place', async () => {
+  const e = await draft(jo, { ordered: false, subject: 'Told everything' });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const ada = await open(e.id, 'ada@example.com');
+  assert.equal((await ada.finish()).status, 200);
+  const body = await current(e.id);
+  body.fields.push({ document_id: body.documents[0].id, type: 'note', value: 'The price is now 1 dollar', page: 0, x: 0.1, y: 0.1, w: 0.4, h: 0.03 });
+  assert.equal((await jo.put(`/envelopes/${e.id}`, { ...body, resign: true })).status, 200);
+  // Before Ada has signed again, Ben's name is put right with the quick correction.
+  const benId = person(await current(e.id), 'ben@example.com').id;
+  assert.equal((await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, name: 'Benjamin Signer' })).status, 200);
+  const changed = (await ada.c.get(`/sign/${ada.tok}`)).data.changed;
+  assert.match(changed, /New wording from the sender on page 1, as a note: "The price is now 1 dollar"\./, 'what she has to sign again for is still said');
+  assert.match(changed, /The name "Ben Signer" is now written "Benjamin Signer"\.$/);
+});

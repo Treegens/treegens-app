@@ -32,6 +32,7 @@ const GROUPS: [string, Endpoint[]][] = [
   ]],
   ['Batches', [
     ['POST', '/api/bulk', 'Send a template to up to 500 people in one call. Returns the batch id and a result for every row.'],
+    ['POST', '/api/bulk/check', 'What a list would hold before you send it: how many signatures, how many you have, how many are missing and what they cost, and whether a pause or the daily limit would refuse it. Sends nothing.', true],
     ['GET', '/api/bulk', 'List batches, with how many envelopes each created and completed.', true],
     ['GET', '/api/bulk/:id', 'One batch with every envelope and the status of every recipient.', true],
     ['POST', '/api/bulk/:id/remind', 'Remind everyone in the batch who has not finished.', true],

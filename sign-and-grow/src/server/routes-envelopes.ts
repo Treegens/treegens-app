@@ -15,6 +15,8 @@ import { correctWithCheck, assertBulkChecks, assertFormChecks, textsOf } from '.
 import { cookie, readCookie } from './auth.ts';
 import { forgetEnvelopes, removeUnusedBlobs } from './routes-trust.ts';
 import { sendWarnings } from './warnings.ts';
+import { emailRefusal } from './envelopes.ts';
+import { PRICING } from '../lib/impact.ts';
 import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
 
@@ -424,6 +426,46 @@ function batchResult(bulkId: string) {
   return { id: bulkId, sent: results.filter((r) => r.ok).length, failed: results.filter((r) => r.error), pending: results.filter((r) => r.pending).length, results, warnings: tpl ? sendWarnings(tpl) : [] };
 }
 
+// What a batch holds, counted in one place for the send itself and for the question the bulk page asks before the
+// Send button (POST /bulk/check): one signature for each person in the template who signs and is not the sender
+// signing under their own name, times the rows. An open role is always somebody else.
+function batchNeeds(c: Ctx, tpl: any, rows: number): { perRow: number; need: number; have: number } {
+  const perRow = tpl.recipients.filter((r: any) => isChargeable({ role: r.role, email: r.email || 'someone-else', name: r.name }, c.user)).length;
+  return { perRow, need: perRow * rows, have: available(c.account.id) };
+}
+
+// "What would this batch hold, and would it go out?" Asked by the bulk page while the list is being put together,
+// with the body POST /bulk takes, so the price is on screen before the Send button and not in the refusal after it.
+// It writes nothing and sends nothing. The numbers are the ones POST /bulk is held to a moment later:
+//   need     signatures the batch holds, one for each person who signs (signers_per_row times rows)
+//   have     signatures free to send with now (the balance without what is held for envelopes that are out)
+//   short    how many are missing. A batch only goes out when this is 0
+//   cost     what the missing ones cost on this account's plan. On the monthly plan that is a top-up. On the free
+//            plan a top-up needs the monthly plan first, so it is the plan's payment (which brings the month's
+//            signatures) plus a top-up for the rest
+//   refusal  what POST /bulk would answer because of a pause, the filter for fake notices or the daily limit on
+//            people newly emailed, with the same words. null when none of them stands in the way
+// counted is false when no payment provider is connected: nothing is counted then, and every batch goes out.
+route('POST', '/bulk/check', async (c) => {
+  const b = await c.body();
+  const tpl = mine(c, str(b.template_id), 'template');
+  const rows: any[] = Array.isArray(b.rows) ? b.rows.slice(0, 500) : [];
+  const open = tpl.recipients.filter((r: any) => !r.email);
+  const counted = creditsEnabled();
+  const { perRow, need, have } = counted ? batchNeeds(c, tpl, rows.length) : { perRow: 0, need: 0, have: 0 };
+  const short = Math.max(0, need - Math.max(0, have));
+  const onPlan = c.account.plan === 'grove';
+  const planSignatures = onPlan ? 0 : Math.min(short, PRICING.monthlySignatures);
+  const topUp = short - planSignatures;
+  const reach = [...tpl.recipients.map((r: any) => r.email), ...rows.flatMap((row) => open.map((r: any) => str(row?.[r.role_name || r.id]?.email).trim()))].filter(Boolean);
+  const refusal = rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) : null;
+  return {
+    counted, rows: rows.length, signers_per_row: perRow, need, have: Math.max(0, have), short, plan: c.account.plan,
+    cost: counted && short > 0 ? { usd: (onPlan ? 0 : PRICING.monthlyUsd) + topUp * PRICING.topUpUsd, plan_usd: onPlan ? 0 : PRICING.monthlyUsd, plan_signatures: onPlan ? 0 : PRICING.monthlySignatures, top_up: topUp, top_up_usd: topUp * PRICING.topUpUsd } : null,
+    refusal: refusal ? { status: refusal.status, message: refusal.message } : null,
+  };
+});
+
 route('POST', '/bulk', async (c) => {
   const b = await c.body();
   // A bulk send takes as long as the mail server needs for every row, which is when a caller gives up and tries
@@ -459,10 +501,9 @@ route('POST', '/bulk', async (c) => {
   assertMayEmail({ ...tpl, sender_id: c.user.id }, [...tpl.recipients.map((r: any) => r.email), ...rows.flatMap((row) => open.map((r: any) => str(row[r.role_name || r.id].email).trim()))].filter(Boolean));
   // Check the whole batch against the balance first, so it never stops half way through.
   if (creditsEnabled()) {
-    const perRow = tpl.recipients.filter((r: any) => isChargeable({ role: r.role, email: r.email || 'someone-else', name: r.name }, c.user)).length;
-    const have = available(c.account.id);
+    const { perRow, need, have } = batchNeeds(c, tpl, rows.length);
     // A batch that needs none (approvals, viewers, copies) goes out whatever the balance.
-    if (perRow > 0 && perRow * rows.length > have) throw bad(outOfSignatures(c.account, perRow * rows.length, have), 402);
+    if (perRow > 0 && need > have) throw bad(outOfSignatures(c.account, need, have), 402);
   }
   // The batch and every one of its rows are written down together before anything is sent, so the record always
   // says what was asked for and how far it got. Nothing is waited for between the key lookup above and this.

@@ -28,7 +28,8 @@
 /* ---- Security: where your data is -------------------------------------------------------------- */
 .pub-data { width: 100%; border-collapse: collapse; font-size: 14px; margin: 4px 0 0; }
 .pub-data caption { text-align: left; font-weight: 600; padding: 0 0 6px; }
-.pub-data th, .pub-data td { text-align: left; vertical-align: top; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.pub-data th, .pub-data td { text-align: left; vertical-align: top; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line); overflow-wrap: break-word; }
+.pub-data tbody th { min-width: 130px; }
 .pub-data thead th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
 .pub-data tbody th { font-weight: 600; }
 .pub-data tr:last-child th, .pub-data tr:last-child td { border-bottom: 0; }

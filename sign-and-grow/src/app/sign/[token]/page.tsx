@@ -9,6 +9,7 @@ import { consentWording } from '@/lib/policy';
 import { fmtNum } from '@/lib/impact';
 import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
+import { CodeCheck } from '@/components/sign/CodeCheck';
 import { MenuDialog, AskDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDialog, ReviewDialog, FieldSheet, type MenuItem } from '@/components/sign/dialogs';
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
@@ -510,6 +511,16 @@ export default function SignPage() {
   );
 
   if (stage === 'locked') {
+    // The sender asked for a one-time code, by email or by text message, before the document opens. Until it is
+    // typed, the server tells this page nothing about the document, so the bar above shows no title either.
+    if (data.needs === 'code' && data.check)
+      return (
+        <Shell data={data} footer={report}>
+          {notice}
+          <CodeCheck base={base} check={data.check} env={env} brand={data.brand} onOpen={load} />
+          {dialogs}
+        </Shell>
+      );
     const askSender = askedCode === 'asked'
       ? <div className="notice sg-confirmed" role="status"><b>Done. We asked {sender.name}.</b> They will give you the code themselves, by phone or message. It never comes in an email from us.</div>
       : <button type="button" className="btn" disabled={askedCode === 'busy'} onClick={askForCode}>{askedCode === 'busy' ? 'Asking' : 'Ask the sender'}</button>;
@@ -554,6 +565,7 @@ export default function SignPage() {
           <div className="sg-state-icon lock"><Icon name="lock" size={26} /></div>
           <h1 className="serif" id="sg-h1" tabIndex={-1}>Enter your access code</h1>
           <p>{sender.name} protected this document with a code and will have given it to you separately. It is not in the email from us.</p>
+          {data.code_next && <p className="muted">After that there is one more check: we send you a one-time code, and you type it in on the next screen.</p>}
           <label className="f"><span>Access code</span><input value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" autoCapitalize="off" spellCheck={false} aria-invalid={!!formError} /></label>
           {formError && <div className="notice err sg-problem" role="alert">{formError}</div>}
           <button className="btn primary lg" disabled={busy}>{busy ? 'Opening' : 'Open document'}</button>
@@ -598,7 +610,7 @@ export default function SignPage() {
                 : <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this on {fmtDate(me.signed_before, true)}. After that, {sender.name} changed the document and asked you to {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again, and it was closed before you did. You can still download {me.earlier_copy ? `the document as you ${acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} it` : 'a copy of the document as it stood when it was closed'}. Its first page says what happened, so nobody takes it for a finished agreement.</p>}
               <div className="row wrap sg-actions">
                 {data.locked
-                  ? <button type="button" className="btn lg" onClick={() => setWantCopy(true)}><Icon name="lock" /> Enter your access code to download it</button>
+                  ? <button type="button" className="btn lg" onClick={() => setWantCopy(true)}><Icon name="lock" /> {data.needs === 'code' ? 'Type a one-time code to download it' : 'Enter your access code to download it'}</button>
                   : <a className="btn lg" href={downloadUrl}><Icon name="download" /> Download what you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'}</a>}
               </div>
             </>

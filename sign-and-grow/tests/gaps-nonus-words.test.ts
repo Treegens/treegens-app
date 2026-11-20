@@ -468,7 +468,7 @@ test('"Where your data is" comes from settings, lists only what is switched on, 
   // A provider that is switched on but not described is listed, with what is missing said in its place.
   const half = dataPlace({ SMTP_URL: 'smtp://relay', STRIPE_SECRET_KEY: 'sk', SMS_WEBHOOK_URL: 'https://texts.example.com/send' });
   assert.deepEqual(half.processors.map((p) => p.id), ['host', 'mail', 'payments', 'sms']);
-  assert.deepEqual(half.processors.find((p) => p.id === 'mail')!.missing, ['The operator of this server has not said which company delivers its email. Ask them.', 'The operator of this server has not said in which country that company handles email. Ask them.']);
+  assert.deepEqual(half.processors.find((p) => p.id === 'mail')!.missing, ['The operator of this server has not said which company delivers its email. Ask them.', 'The operator of this server has not said in which country its mail provider handles email. Ask them.']);
   assert.deepEqual(half.processors.find((p) => p.id === 'payments')!.missing, ['The operator of this server has not said which Stripe company and country its payments go through. Ask them.']);
   assert.equal(half.processors.find((p) => p.id === 'sms')!.name, null);
   assert.equal(half.unstated.length, 9);

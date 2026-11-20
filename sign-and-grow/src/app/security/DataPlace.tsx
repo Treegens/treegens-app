@@ -8,8 +8,8 @@ import { dataPlace, notSaid, type DataPlace, type Processor } from '@/lib/datapl
 
 const Unstated = ({ children }: { children: string }) => <span className="pub-unstated">{children}</span>;
 
-/** A value the operator stated, or the sentence that says they did not. */
-export const Stated = ({ value, what }: { value: string | null; what: string }) => (value ? <>{value}</> : <Unstated>{notSaid(what)}</Unstated>);
+/** A value the operator stated, closed with a full stop so the next sentence does not run into it, or the sentence that says they did not state it. */
+export const Stated = ({ value, what }: { value: string | null; what: string }) => (value ? <>{value}{/[.!?]$/.test(value) ? '' : '.'}</> : <Unstated>{notSaid(what)}</Unstated>);
 
 const unnamed: Record<Processor['id'], string> = {
   host: 'The hosting company', mail: 'The mail provider', payments: 'The payment provider', google: 'Google', microsoft: 'Microsoft', sms: 'The text message provider',
@@ -60,7 +60,7 @@ export function WhereYourDataIs() {
         </div>
       )}
       <ul className="pub-points" style={{ marginTop: 14 }}>
-        <li><b>A summary you can keep, and what a signed agreement would be.</b><span>The <Link href="/security/processing">data processing summary</Link> says what is processed, for whom, for how long and how it is deleted, on one page you can save as a PDF. It is a description, not a contract. If you need a signed data processing agreement, it is between you and whoever runs this server{d.operator ? <>: {d.operator}</> : null}. The software cannot sign one for them.</span></li>
+        <li><b>A summary you can keep, and what a signed agreement would be.</b><span>The <Link href="/security/processing">data processing summary</Link> says what is processed, for whom, for how long and how it is deleted, on one page you can save as a PDF. It is a description, not a contract. If you need a signed data processing agreement, it is between you and whoever runs this server{d.operator ? <> ({d.operator})</> : null}. The software cannot sign one for them.</span></li>
       </ul>
     </section>
   );
