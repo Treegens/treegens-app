@@ -2,7 +2,7 @@
 export default {
   // Lets several dev servers run side by side on one checkout (each with its own NEXT_DIST_DIR).
   distDir: process.env.NEXT_DIST_DIR || '.next',
-  serverExternalPackages: ['pdf-lib', '@pdf-lib/fontkit', 'nodemailer'],
+  serverExternalPackages: ['pdf-lib', '@pdf-lib/fontkit', 'nodemailer', 'pdfjs-dist'],
   poweredByHeader: false,
   async headers() {
     return [{

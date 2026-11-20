@@ -67,7 +67,10 @@ export function refundOffer(account: any): { payment_id: string; amount: string;
   return null;
 }
 
-export function billingState(account: any) {
+// How long a paid account can go without sending anything before its renewal is stopped for it. 0 turns this off.
+export const dormantStopDays = () => (process.env.DORMANT_AUTO_STOP_DAYS === undefined ? 90 : Number(process.env.DORMANT_AUTO_STOP_DAYS) || 0);
+
+export function billingState(account: any, user?: any) {
   const enabled = billingEnabled();
   const limit = account.plan === 'seedling' && enabled ? PLANS.seedling.envelopesPerMonth : null;
   return {
@@ -82,19 +85,23 @@ export function billingState(account: any) {
     resets_at: usageResetsAt(),
     refund: account.plan === 'grove' || lastPayment(account.id) ? refundOffer(account) : null,
     refund_days: refundDays(),
+    dormant_stop_days: dormantStopDays(),
+    // Other paid plans this person already manages, so nobody pays twice without noticing.
+    other_paid: user ? all("SELECT a.name FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role IN ('owner','admin') AND a.plan='grove' AND a.id!=?", user.id, account.id).map((r) => r.name) : [],
     payments: all('SELECT id, amount_cents, currency, at, receipt_url, refunded_at FROM payments WHERE account_id=? ORDER BY at DESC LIMIT 60', account.id)
       .map((p) => ({ ...p, amount: money(p.amount_cents, p.currency) })),
   };
 }
 
 // Cancelling. One state change with the payment provider, a reference number, and an email that says when billing stops.
-export async function cancelPlan(account: any, by: string): Promise<{ ends_at: string; reference: string }> {
+export async function cancelPlan(account: any, by: string, quiet = false): Promise<{ ends_at: string; reference: string }> {
   if (account.plan !== 'grove' || !account.stripe_subscription_id) throw bad('There is no paid plan on this account, so there is nothing to cancel and nothing will be charged.');
   if (account.cancel_at) return { ends_at: account.cancel_at, reference: account.cancel_ref || '' };
   const sub = await stripe('POST', `subscriptions/${account.stripe_subscription_id}`, { cancel_at_period_end: 'true' });
   const ends = periodEnd(sub) || account.renews_at || now();
   const reference = `SG-${account.id.slice(-5).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
   run('UPDATE accounts SET cancel_at=?, cancel_ref=? WHERE id=?', ends, reference, account.id);
+  if (quiet) return { ends_at: ends, reference };
   await mailAdmins(account.id, 'Your Grove plan is cancelled', 'Cancelled. You will not be charged again.', [
     `Cancellation reference: ${reference}. Cancelled ${by}.`,
     `Grove stays active until ${day(ends)}, because that time is already paid for. After that the account moves to the free Seedling plan.`,
@@ -117,7 +124,7 @@ async function refundPayment(account: any, p: any, why: string): Promise<string>
   return refund.id;
 }
 
-route('GET', '/billing', (c) => billingState(c.account));
+route('GET', '/billing', (c) => billingState(c.account, c.user));
 
 route('POST', '/billing/checkout', async (c) => {
   if (!billingEnabled() || !process.env.STRIPE_PRICE_GROVE) throw bad('Billing is not set up on this server yet.', 501);
@@ -125,10 +132,38 @@ route('POST', '/billing/checkout', async (c) => {
   if (a.plan === 'grove' && !a.cancel_at) throw bad('This account is already on Grove.');
   const s = await stripe('POST', 'checkout/sessions', {
     mode: 'subscription', 'line_items[0][price]': process.env.STRIPE_PRICE_GROVE, 'line_items[0][quantity]': '1',
-    client_reference_id: a.id, success_url: `${baseUrl()}/app/settings?tab=billing&upgraded=1`, cancel_url: `${baseUrl()}/app/settings?tab=billing`,
+    client_reference_id: a.id, success_url: `${baseUrl()}/app/settings?tab=billing&upgraded=1&session_id={CHECKOUT_SESSION_ID}`, cancel_url: `${baseUrl()}/app/settings?tab=billing`,
     ...(a.stripe_customer_id ? { customer: a.stripe_customer_id } : { customer_email: c.user.email }),
   });
   return { url: s.url };
+}, 'admin');
+
+// Turns the paid plan on. Used by the provider's event and by the return from checkout, whichever arrives first.
+async function activate(accountId: string, customer: string, subscription: string): Promise<boolean> {
+  const a = get('SELECT * FROM accounts WHERE id=?', accountId);
+  if (!a) return false;
+  if (a.plan === 'grove' && a.stripe_subscription_id === subscription && !a.cancel_at) return false;
+  run("UPDATE accounts SET plan='grove', stripe_customer_id=?, stripe_subscription_id=?, subscription_status='active', cancel_at=NULL, cancel_ref=NULL WHERE id=?", customer, subscription, accountId);
+  await mailAdmins(accountId, 'Welcome to Grove', 'Thank you. Your subscription plants trees.', [
+    `You are on Grove at ${money(PLANS.grove.price * 100)} a month. It is month to month: no contract, no notice period, no extra charges, ever.`,
+    'You get a receipt for every charge and a reminder before each renewal. The amount in the reminder is the amount we charge.',
+    `Changed your mind? Any charge is refunded in full within ${refundDays()} days, from the Plan page, without talking to anyone.`,
+    'To stop renewing, use the Cancel button on the Plan page or the link below. It works without logging in.',
+  ], { label: 'Stop renewing (no login needed)', url: stopUrl(accountId) });
+  return true;
+}
+
+// Coming back from checkout: switch the plan on now instead of waiting for the provider's event to arrive.
+route('POST', '/billing/sync', async (c) => {
+  const sessionId = str((await c.body()).session_id, 200);
+  if (!billingEnabled() || !/^cs_[A-Za-z0-9_]+$/.test(sessionId)) return billingState(c.account, c.user);
+  const s = await stripe('GET', `checkout/sessions/${sessionId}`);
+  if (s.client_reference_id === c.account.id && s.subscription && ['paid', 'no_payment_required'].includes(s.payment_status)) {
+    await activate(c.account.id, s.customer, s.subscription);
+    const sub = await stripe('GET', `subscriptions/${s.subscription}`).catch(() => null);
+    if (sub) run('UPDATE accounts SET renews_at=? WHERE id=?', periodEnd(sub), c.account.id);
+  }
+  return billingState(get('SELECT * FROM accounts WHERE id=?', c.account.id), c.user);
 }, 'admin');
 
 // The provider's own page, for changing the card or downloading invoices.
@@ -238,19 +273,15 @@ export async function applyStripeEvent(ev: any) {
   const byCustomer = () => (o.customer ? get('SELECT * FROM accounts WHERE stripe_customer_id=?', o.customer) : null);
 
   if (ev.type === 'checkout.session.completed' && o.client_reference_id) {
-    run("UPDATE accounts SET plan='grove', stripe_customer_id=?, stripe_subscription_id=?, subscription_status='active', cancel_at=NULL, cancel_ref=NULL WHERE id=?", o.customer, o.subscription, o.client_reference_id);
-    await mailAdmins(o.client_reference_id, 'Welcome to Grove', 'Thank you. Your subscription plants trees.', [
-      `You are on Grove at ${money(PLANS.grove.price * 100)} a month. It is month to month: no contract, no notice period, no extra charges, ever.`,
-      'You get a receipt for every charge and a reminder before each renewal. The amount in the reminder is the amount we charge.',
-      `Changed your mind? Any charge is refunded in full within ${refundDays()} days, from the Plan page, without talking to anyone.`,
-      'To stop renewing, use the Cancel button on the Plan page or the link below. It works without logging in.',
-    ], { label: 'Stop renewing (no login needed)', url: stopUrl(o.client_reference_id) });
+    await activate(o.client_reference_id, o.customer, o.subscription);
     return;
   }
 
   if (ev.type === 'invoice.paid' && o.amount_paid > 0) {
     const a = byCustomer();
     const fresh = run('INSERT OR IGNORE INTO payments (id, account_id, amount_cents, currency, at, receipt_url) VALUES (?,?,?,?,?,?)', o.id, a?.id ?? null, o.amount_paid, o.currency || 'usd', now(), o.hosted_invoice_url || o.invoice_pdf || null).changes;
+    if (!a && fresh && process.env.SUPPORT_EMAIL)
+      await sendMail({ to: process.env.SUPPORT_EMAIL, subject: 'A payment could not be matched to an account', heading: 'Unmatched payment', lines: [`Invoice ${o.id}, ${money(o.amount_paid, o.currency)}, customer ${o.customer}. Nobody got a plan for this money. Find the payer and either activate their plan or refund it.`] });
     if (!a || !fresh) return;
     const next = iso(o.lines?.data?.[0]?.period?.end);
     // Safety net for "charged after I cancelled": if the plan had already ended, the money goes straight back.
@@ -272,6 +303,19 @@ export async function applyStripeEvent(ev: any) {
     const a = byCustomer();
     if (!a || a.plan !== 'grove' || a.cancel_at) return;
     const when = iso(o.next_payment_attempt || o.period_end);
+    // Nobody should be charged for something they stopped using. After a long quiet spell the renewal is stopped for
+    // them, with one click to keep it. Set DORMANT_AUTO_STOP_DAYS=0 to only warn instead.
+    const stopAfter = dormantStopDays();
+    if (stopAfter > 0 && Date.parse(a.created_at) < Date.now() - stopAfter * 864e5
+      && get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at > ?", a.id, new Date(Date.now() - stopAfter * 864e5).toISOString()).n === 0) {
+      const r = await cancelPlan(a, `automatically, because nothing was sent in ${stopAfter} days`, true);
+      await mailAdmins(a.id, 'We stopped your Grove renewal so you are not charged for nothing', `You will not be charged on ${day(when)}`, [
+        `${a.name} has not sent anything in ${stopAfter} days, so we turned the renewal off rather than charge you again. Reference ${r.reference}.`,
+        `Grove stays active until ${day(r.ends_at)}. After that you are on the free plan, with every document kept.`,
+        'If you want to keep Grove (thank you: every cent plants trees), one click on the Plan page turns it back on.',
+      ], { label: 'Keep Grove', url: `${baseUrl()}/app/settings?tab=billing` });
+      return;
+    }
     const quiet = get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at > ?", a.id, new Date(Date.now() - 60 * 864e5).toISOString()).n === 0;
     await mailAdmins(a.id, `Heads up: Grove renews on ${day(when)} for ${money(o.amount_due ?? PLANS.grove.price * 100, o.currency)}`, 'Your plan renews soon', [
       `On ${day(when)} we will charge ${money(o.amount_due ?? PLANS.grove.price * 100, o.currency)} for ${a.name}. That is the full amount: there are no extras.`,

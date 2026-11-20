@@ -69,7 +69,7 @@ export function openapi() {
         AuditEvent: { type: 'object', properties: { seq: { type: 'integer' }, at: time, actor: str, action: str, detail: str, ip: { ...str, nullable: true }, prev_hash: str, hash: str } },
         WebhookEvent: {
           type: 'object', description: 'POSTed to your webhook URL. Verify the X-SignAndGrow-Signature header: "sha256=" + HMAC-SHA256(secret, X-SignAndGrow-Timestamp + "." + raw body).',
-          properties: { event: { type: 'string', enum: WEBHOOK_EVENTS }, created_at: time, text: { ...str, description: 'A one-line summary.' }, recipient_id: str, envelope: { type: 'object', properties: { id: str, status: str, subject: str, sent_at: time, completed_at: time } } },
+          properties: { id: { ...str, description: 'Unique per event. A delivery that is sent again keeps the same id, so repeats can be ignored.' }, event: { type: 'string', enum: WEBHOOK_EVENTS }, created_at: time, text: { ...str, description: 'A one-line summary.' }, recipient_id: str, envelope: { type: 'object', properties: { id: str, status: str, subject: str, sent_at: time, completed_at: time } } },
         },
       },
     },

@@ -2,6 +2,7 @@ import { route, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, saveBlob, readBlob } from './db.ts';
 import { bad, id, token, now, str, rateLimit, isEmail, baseUrl } from './util.ts';
 import { inspectPdf, imageToPdf } from './pdf.ts';
+import { extractText } from './text.ts';
 import {
   loadEnvelope, publicEnvelope, createEnvelope, saveDraft, copyEnvelope, sendEnvelope, voidEnvelope, remindEnvelope,
   correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl,
@@ -24,8 +25,11 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   if (info.pages > 500) throw bad('Documents can have up to 500 pages.');
   const fid = id('fil');
   const name = str(file.name, 200).replace(/\.(pdf|png|jpe?g)$/i, '') || 'Document';
-  run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at) VALUES (?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now());
-  return { id: fid, name, pages: info.pages, page_sizes: info.sizes };
+  // Text is kept for the sender's own search. Files uploaded by signers are not indexed.
+  const text = isPdf && accountId ? await extractText(bytes) : '';
+  run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text) VALUES (?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), text || null);
+  // A PDF with no text at all is almost always a scan: it cannot be searched, and screen readers cannot read it.
+  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, is_scan: isPdf && !!accountId && !text.trim() };
 }
 
 route('POST', '/files', (c) => storeUpload(c, c.account.id));
@@ -54,10 +58,13 @@ route('GET', '/envelopes', (c) => {
   const boxes: Record<string, string> = { drafts: "e.status='draft'", sent: "e.status!='draft'", waiting: "e.status='sent'", completed: "e.status='completed'", closed: "e.status IN ('voided','declined','expired')" };
   if (kind === 'envelope' && boxes[box]) where.push(boxes[box]);
   if (c.q.get('folder')) (where.push('e.folder=?'), p.push(c.q.get('folder')));
+  if (c.admin && c.q.get('sender')) (where.push('e.sender_id=?'), p.push(c.q.get('sender')));
   const q = (c.q.get('q') || '').trim();
   if (q) {
-    where.push('(e.subject LIKE ? OR e.id = ? OR EXISTS (SELECT 1 FROM recipients r WHERE r.envelope_id=e.id AND (r.name LIKE ? OR r.email LIKE ?)))');
-    p.push(`%${q}%`, q, `%${q}%`, `%${q}%`);
+    // Matches the subject, the envelope id, anyone on it, a document's name, or the words inside the documents.
+    where.push(`(e.subject LIKE ? OR e.id = ? OR EXISTS (SELECT 1 FROM recipients r WHERE r.envelope_id=e.id AND (r.name LIKE ? OR r.email LIKE ?))
+      OR EXISTS (SELECT 1 FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=e.id AND (d.name LIKE ? OR f.text LIKE ?)))`);
+    p.push(`%${q}%`, q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
   const limit = Math.min(200, Number(c.q.get('limit')) || 100);
   const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, u.name sender
@@ -67,7 +74,9 @@ route('GET', '/envelopes', (c) => {
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;
   }
   const folders = all("SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind=? AND folder IS NOT NULL AND folder != ''", c.account.id, kind).map((r) => r.folder);
-  return { envelopes: rows, folders };
+  // Admins can narrow the list to one person's envelopes.
+  const senders = c.admin ? all('SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind=? ORDER BY u.name', c.account.id, kind) : [];
+  return { envelopes: rows, folders, senders };
 });
 
 // Documents addressed to the signed-in user, from any sender.
@@ -99,7 +108,13 @@ route('GET', '/envelopes/:id', (c) => {
   const e = mine(c, c.params.id);
   // Whether each email actually left, so "I never got it" can be answered without guessing.
   const deliveries = all('SELECT to_email, subject, status, error, at FROM emails WHERE envelope_id=? ORDER BY id DESC LIMIT 60', e.id);
-  return { envelope: publicEnvelope(e), audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries };
+  // How far each signer has got, so the sender can help someone who is stuck without being able to sign for them.
+  const env = publicEnvelope(e);
+  for (const r of env.recipients) {
+    const theirs = e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !['date_signed', 'full_name', 'email'].includes(f.type));
+    r.progress = { fields: theirs.length, filled: theirs.filter((f: any) => f.value).length, required_left: theirs.filter((f: any) => f.required && !f.value).length };
+  }
+  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries };
 });
 
 // Drafts are simply saved. An envelope that is already out is corrected in place: no void, no resend, no extra count.

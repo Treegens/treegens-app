@@ -249,6 +249,11 @@ function Billing() {
   const me = useMe();
   const admin = me.role !== 'member';
   const [b, reload] = useLoad(() => api('/billing'));
+  useEffect(() => {
+    const again = () => (reload(), me.reload());
+    window.addEventListener('sg-billing-changed', again);
+    return () => window.removeEventListener('sg-billing-changed', again);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [modal, setModal] = useState<'' | 'cancel' | 'refund' | 'card'>('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<any>(null);
@@ -326,6 +331,9 @@ function Billing() {
                 <p className="plan-line"><b>{b.used} of {b.limit}</b> envelopes used this month. The count starts again on {longDate(b.resets_at)}. When you reach the limit, sending pauses. Nothing extra is ever charged.</p>
               </>
             ) : <p className="plan-line">No limits apply on this server.</p>}
+            {admin && b.enabled && b.other_paid?.length > 0 && (
+              <div className="notice warn" style={{ marginBottom: 12 }}>You already pay for Grove on {b.other_paid.map((n: string) => `"${n}"`).join(' and ')}. Upgrading here starts a second, separate subscription. Each team needs only one.</div>
+            )}
             {admin && b.enabled && (
               <div className="row wrap">
                 <button className="btn primary" disabled={busy} onClick={() => go('/billing/checkout')}>Upgrade to Grove for {price} a month</button>
@@ -354,6 +362,7 @@ function Billing() {
           <li><b>No extra charges.</b> There are no overage fees and no per-person fees. Your whole team is covered by one plan.</li>
           <li><b>The free plan stops, it never bills.</b> {PLANS.seedling.envelopesPerMonth} envelopes a month. Only envelopes that are out for signature or completed count. Voided, declined and expired ones do not. Correcting a sent envelope and sending reminders are free. Signing your own documents is always free.</li>
           <li><b>Refunds are automatic.</b> Any charge is refunded in full within {b.refund_days} days from this page, or later if you sent nothing since that charge.</li>
+          {b.dormant_stop_days > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {b.dormant_stop_days} days when a renewal comes up, we stop the renewal and tell you, with one click to keep it.</li>}
           <li><b>Charged after cancelling?</b> That should never happen. If it does, the software refunds it by itself.</li>
           <li><b>Stopping never costs you your documents.</b> Cancelling, a failed payment or moving to the free plan deletes nothing and locks nothing. Export is free on every plan.</li>
           <li><b>Every plan has every feature.</b> Templates, bulk send, public forms, branding, the API and webhooks are on both plans.</li>
@@ -485,7 +494,14 @@ export default function Settings() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get('tab')) setTab(q.get('tab')!);
-    if (q.get('upgraded')) toast('Welcome to Grove. Thank you for planting trees.');
+    if (q.get('upgraded')) {
+      // Back from checkout: switch the plan on right away rather than waiting for the payment provider to tell us.
+      api('/billing/sync', { body: { session_id: q.get('session_id') || '' } }).catch(() => {}).finally(() => {
+        toast('Welcome to Grove. Thank you for planting trees.');
+        window.history.replaceState(null, '', '/app/settings?tab=billing');
+        window.dispatchEvent(new Event('sg-billing-changed'));
+      });
+    }
   }, []);
   const pick = (k: string) => {
     setTab(k);

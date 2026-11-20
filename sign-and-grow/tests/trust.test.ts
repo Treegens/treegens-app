@@ -330,3 +330,68 @@ test('public forms do not multiply envelopes, and dates follow the chosen format
   const { fieldDisplayValue } = await import('../src/server/pdf.ts');
   assert.match(fieldDisplayValue(done.fields.find((f: any) => f.type === 'date_signed'), done.recipients[0], done.date_format), /^\d\d\/\d\d\/\d{4}$/);
 });
+
+test('envelopes can be found by the words inside their documents', async () => {
+  const e = await simple(jo, 'search@example.com', { subject: 'Nothing to do with the contents' });
+  const hit = (await jo.get('/envelopes?q=' + encodeURIComponent('Agreement page 1'))).data.envelopes;
+  assert.ok(hit.some((x: any) => x.id === e.id), 'found by document text');
+  assert.equal((await jo.get('/envelopes?q=zebra-crossing-xyz')).data.envelopes.length, 0);
+  const other = await signUp('Other Team', 'otherteam@example.com');
+  assert.equal((await other.get('/envelopes?q=' + encodeURIComponent('Agreement page 1'))).data.envelopes.length, 0, 'never across accounts');
+});
+
+test('small things that stop people getting stuck', async () => {
+  const e = await draft(jo, { ordered: false, subject: 'Stuck test' });
+  await jo.post(`/envelopes/${e.id}/send`);
+  const info = async () => (await full(jo, e.id));
+  const ada = (await info()).envelope.recipients.find((r: any) => r.email === 'ada@example.com');
+  const tok = tokenFor(e.id, 'ada@example.com');
+
+  // Fixing only a name keeps the same link (so embedded and already-emailed links keep working).
+  assert.equal((await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: ada.id, name: 'Ada S. Signer', email: 'ada@example.com' })).status, 200);
+  assert.equal(tokenFor(e.id, 'ada@example.com'), tok);
+  assert.equal((await new Client().get(`/sign/${tok}`)).data.recipient.name, 'Ada S. Signer');
+
+  // A link opened fifty times still works.
+  const many = new Client();
+  for (let i = 0; i < 50; i++) await many.get(`/sign/${tok}`);
+  assert.equal((await many.get(`/sign/${tok}`)).status, 200);
+
+  // The signer fixes the spelling of their own name: logged, and the sender is told.
+  assert.equal((await many.post(`/sign/${tok}/name`, { name: 'Ada Signer-Lovelace' })).status, 200);
+  assert.ok((await info()).audit.some((a: any) => a.action === 'Signer corrected their name'));
+  assert.ok(mailTo('jo@example.com').some((m) => m.subject.startsWith('Name corrected:')));
+
+  // The sender sees how far each signer has got, without being able to sign for them.
+  await many.post(`/sign/${tok}/consent`);
+  const v = (await many.get(`/sign/${tok}`)).data;
+  await many.post(`/sign/${tok}/save`, { values: { [v.fields.find((f: any) => f.type === 'text').id]: 'half way' } });
+  const prog = (await info()).envelope.recipients.find((r: any) => r.email === 'ada@example.com').progress;
+  assert.deepEqual(prog, { fields: 2, filled: 1, required_left: 1 });
+  assert.equal((await many.get(`/sign/${tok}`)).data.fields.find((f: any) => f.type === 'text').value, 'half way', 'saved values come back');
+
+  // Three wrong access codes: the signer is told who to ask, and the sender hears about it once.
+  const ben = new Client();
+  const bt = tokenFor(e.id, 'ben@example.com');
+  let last: any;
+  for (let i = 0; i < 3; i++) last = await ben.post(`/sign/${bt}/unlock`, { code: 'nope' });
+  assert.match(last.data.error, /jo@example\.com/);
+  assert.equal(mailTo('jo@example.com').filter((m) => m.subject.startsWith('Could not open:')).length, 1);
+
+  // Nobody opened it for two days: the sender is told once, with ways around email.
+  db.run("UPDATE recipients SET sent_at=?, status='sent' WHERE envelope_id=? AND email='ben@example.com'", new Date(Date.now() - 3 * 864e5).toISOString(), e.id);
+  assert.equal((await cron.tick()).unopened, 1);
+  assert.equal((await cron.tick()).unopened, 0);
+  assert.ok(mailTo('jo@example.com').some((m) => m.subject.startsWith('Not opened yet:')));
+
+  // Admins can narrow the list to one sender; a scan is flagged at upload.
+  const meId = (await jo.get('/me')).data.user.id;
+  const list = (await jo.get(`/envelopes?sender=${meId}`)).data;
+  assert.ok(list.envelopes.length > 0 && list.senders.some((x: any) => x.id === meId));
+  const { PDFDocument } = await import('pdf-lib');
+  const blank = await PDFDocument.create();
+  blank.addPage([300, 300]);
+  const f = new FormData();
+  f.append('file', new Blob([await blank.save()], { type: 'application/pdf' }), 'scan.pdf');
+  assert.equal((await jo.call('POST', '/files', f)).data.is_scan, true);
+});

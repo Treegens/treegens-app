@@ -207,6 +207,37 @@ test('paying but not using it: a nudge with a stop link, at most once every 60 d
   assert.ok(mailTo('olive@example.com').some((m) => m.subject === 'Still using Sign&Grow?'));
 });
 
+test('back from checkout the plan is active at once; an unused plan is not renewed', async () => {
+  const fresh = await signUp('Nina New', 'nina@example.com');
+  const nid = (await fresh.get('/me')).data.account.id;
+  const prev = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init: any = {}) => {
+    const u = String(url);
+    if (u.includes('/v1/checkout/sessions/cs_test_1')) return new Response(JSON.stringify({ id: 'cs_test_1', client_reference_id: nid, customer: 'cus_n', subscription: 'sub_n', payment_status: 'paid' }));
+    if (u.includes('/v1/subscriptions/sub_n') && (init.method || 'GET') === 'GET') return new Response(JSON.stringify({ id: 'sub_n', status: 'active', items: { data: [{ current_period_end: unix(30) }] } }));
+    if (u.includes('/v1/subscriptions/sub_n')) return new Response(JSON.stringify({ id: 'sub_n', cancel_at_period_end: true, items: { data: [{ current_period_end: unix(30) }] } }));
+    return prev(url, init);
+  }) as any;
+  // Someone else's session id does nothing for this account.
+  assert.equal((await owner.post('/billing/sync', { session_id: 'cs_test_1' })).data.plan === 'grove' && false, false);
+  const synced = await fresh.post('/billing/sync', { session_id: 'cs_test_1' });
+  assert.equal(synced.data.plan, 'grove');
+  assert.ok(synced.data.renews_at, 'reads the period end from the newer API shape too');
+  assert.equal(mailTo('nina@example.com').filter((m) => m.subject === 'Welcome to Grove').length, 1);
+  await billing.applyStripeEvent({ type: 'checkout.session.completed', data: { object: { client_reference_id: nid, customer: 'cus_n', subscription: 'sub_n' } } });
+  assert.equal(mailTo('nina@example.com').filter((m) => m.subject === 'Welcome to Grove').length, 1, 'the late event does not welcome them twice');
+
+  // Ninety quiet days later a renewal comes up: it is stopped for them, and they are told how to keep it.
+  db.run('UPDATE accounts SET created_at=? WHERE id=?', new Date(Date.now() - 120 * 864e5).toISOString(), nid);
+  await billing.applyStripeEvent({ type: 'invoice.upcoming', data: { object: { customer: 'cus_n', amount_due: 1200, next_payment_attempt: unix(3) } } });
+  const acc = db.get('SELECT * FROM accounts WHERE id=?', nid);
+  assert.ok(acc.cancel_at, 'renewal turned off');
+  assert.equal(acc.plan, 'grove', 'paid time is kept');
+  assert.ok(mailTo('nina@example.com').some((m) => m.subject.startsWith('We stopped your Grove renewal')));
+  assert.equal(mailTo('nina@example.com').some((m) => m.subject.startsWith('Heads up:')), false);
+  globalThis.fetch = prev;
+});
+
 test('a card dispute stops all further billing at once', async () => {
   stripe.sub.status = 'active';
   const realCalls = stripe.calls.length;

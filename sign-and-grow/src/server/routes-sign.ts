@@ -2,12 +2,14 @@ import { route, pdfResponse, type Ctx } from './router.ts';
 import { get, run, readBlob } from './db.ts';
 import { bad, hmac, now, str, rateLimit, safeEqual, HttpError } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
-import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, askSender } from './envelopes.ts';
+import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, askSender, renameSelf, noteDeadLink } from './envelopes.ts';
 import { fieldDisplayValue } from './pdf.ts';
 import { storeUpload } from './routes-envelopes.ts';
 import { impactOf } from '../lib/impact.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
+
+const sender = (e: any) => get('SELECT name, email FROM users WHERE id=?', e.sender_id) || { name: 'The sender', email: '' };
 
 function find(c: Ctx, needUnlocked = true) {
   rateLimit(`sign:${c.ip}`, 600, 600_000);
@@ -40,6 +42,7 @@ route('GET', '/sign/:token', (c) => {
     recipient: { id: r.id, name: r.name, email: r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted },
   };
   if (locked) return { ...base, locked: true };
+  if (e.status === 'expired' && r.status !== 'completed') void noteDeadLink(e, r, `The deadline passed on ${String(e.expires_at).slice(0, 10)}. You can reopen the envelope with a new deadline, and nobody who already signed has to sign again.`).catch(() => {});
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
   if (e.status === 'sent' && r.status === 'sent') markViewed(e, r, actor);
   const byId = new Map<string, any>(e.recipients.map((x: any) => [x.id, x]));
@@ -69,7 +72,10 @@ route('POST', '/sign/:token/unlock', async (c) => {
   rateLimit(`code:${r.id}`, 8, 900_000);
   if (!r.access_code || !safeEqual(str((await c.body()).code).trim(), r.access_code)) {
     audit(e.id, actor, 'Access code failed', r.name);
-    throw bad('That access code is not right.', 401);
+    // After three wrong tries the sender is told, because the usual cause is that the code never reached the signer.
+    const fails = get("SELECT COUNT(*) n FROM audit WHERE envelope_id=? AND action='Access code failed' AND detail=?", e.id, r.name).n;
+    if (fails === 3) void noteDeadLink(e, r, `They entered the wrong access code three times. Check that you gave them the right one (it is ${r.access_code}), or change it from the envelope page. Their link keeps working.`).catch(() => {});
+    throw bad(`That access code is not right. ${sender(e).name} chose the code and can tell you what it is: ${sender(e).email}. It is not in the email we sent you.`, 401);
   }
   c.cookies.push(cookie(`ts_ac_${r.id}`, hmac(`ac:${r.id}:${r.access_code}`), 86400, c.secure));
   audit(e.id, actor, 'Access code accepted', r.name);
@@ -120,6 +126,12 @@ route('POST', '/sign/:token/decline', async (c) => {
 route('POST', '/sign/:token/reassign', async (c) => {
   const { e, r, actor } = find(c);
   await reassignRecipient(e, r, await c.body(), actor);
+}, 'public');
+
+route('POST', '/sign/:token/name', async (c) => {
+  const { e, r, actor } = find(c);
+  rateLimit(`name:${r.id}`, 5, 3600_000);
+  await renameSelf(e, r, (await c.body()).name, actor);
 }, 'public');
 
 // Ran out of time: ask the sender for more instead of starting over.

@@ -142,6 +142,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['envelopes', 'date_format', 'TEXT'],
   ['users', 'closing_at', 'TEXT'],
   ['accounts', 'closing_at', 'TEXT'],
+  ['files', 'text', 'TEXT'],
+  ['recipients', 'unopened_alerted_at', 'TEXT'],
+  ['recipients', 'dead_link_alerted_at', 'TEXT'],
+  ['webhooks', 'alerted_at', 'TEXT'],
 ];
 
 function migrate(d: any) {

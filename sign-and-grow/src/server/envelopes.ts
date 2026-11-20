@@ -454,7 +454,7 @@ async function completeEnvelope(e: any) {
     const to = r.role === 'inperson' ? '' : r.email.toLowerCase();
     if (!to || sent.has(to)) continue;
     sent.add(to);
-    await sendMail({ to: r.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines: [...lines, 'Keep this email. The link below keeps working, and the PDF is attached when it is small enough to send.'], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code });
+    await sendMail({ to: r.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines: [...lines, `Keep this email. The link below keeps working for as long as ${sender?.name || 'the sender'} keeps their Sign&Grow account, and the PDF is attached when it is small enough to send. Lost it later? Any time, ${baseUrl()}/help can send your documents to this address again.`], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code });
   }
   if (sender && !sent.has(sender.email.toLowerCase()) && notifyPrefs(sender).completed)
     await sendMail({ to: sender.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines, cta: { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand, attachments });
@@ -509,8 +509,14 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   const email = str(patch.email ?? r.email, 254).trim();
   if (!name || !isEmail(email)) throw bad('Enter a name and a valid email address.');
   const code = patch.access_code === undefined ? r.access_code : str(patch.access_code, 50).trim() || null;
+  if (email.toLowerCase() === r.email.toLowerCase()) {
+    // Same person, same inbox: fixing a name or an access code never breaks the link they already have.
+    run('UPDATE recipients SET name=?, access_code=? WHERE id=?', name, code, r.id);
+    audit(e.id, actor, 'Recipient corrected', `${r.name} is now ${name}${code !== r.access_code ? ', access code changed' : ''}`);
+    return;
+  }
   retireToken(r);
-  run('UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, status=? WHERE id=?',
+  run('UPDATE recipients SET name=?, email=?, access_code=?, token=?, check_code=?, viewed_at=NULL, consent_at=NULL, muted=0, unopened_alerted_at=NULL, status=? WHERE id=?',
     name, email, code, token(), checkCode(), r.status === 'pending' ? 'pending' : 'sent', r.id);
   audit(e.id, actor, 'Recipient corrected', `${r.name} <${r.email}> is now ${name} <${email}>`);
   if (r.status !== 'pending') await notifyRecipient(loadEnvelope(e.id), get('SELECT * FROM recipients WHERE id=?', r.id));
@@ -651,7 +657,7 @@ export async function resendFromRetired(oldToken: string): Promise<boolean> {
   if (!r?.token || r.status === 'pending' || r.status === 'declined') return false;
   const e = loadEnvelope(r.envelope_id);
   if (!e || (e.status !== 'sent' && e.status !== 'completed')) return false;
-  return notifyRecipient(e, r, 'resent');
+  return notifyRecipient(e, e.recipients.find((x: any) => x.id === r.id) || r, 'resent');
 }
 
 // "I cannot find the email": send every open or recently completed document to the address that asks for it.
@@ -671,6 +677,24 @@ export async function emailMyLinks(email: string): Promise<number> {
     footnote: 'If you did not ask for this, you can ignore it. Nobody else received these links.',
   });
   return rows.length;
+}
+
+// A signer can fix the spelling of their own name. It is logged and the sender is told, so nothing changes quietly.
+export async function renameSelf(e: any, r: any, newName: string, actor: Actor) {
+  if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw bad('This envelope is no longer open for signing.');
+  const name = str(newName, 120).trim();
+  if (name.length < 2) throw bad('Type your name as it should appear.');
+  if (name === r.name) return;
+  run('UPDATE recipients SET name=? WHERE id=?', name, r.id);
+  audit(e.id, actor, 'Signer corrected their name', `"${r.name}" is now "${name}"`);
+  await notifySender(e, 'problems', `Name corrected: ${e.subject}`, `${r.name} corrected their name to ${name}`, [`The signer at ${r.email} changed how their name is written, from "${r.name}" to "${name}". It is recorded in the audit trail. If this is not who you expected, void the envelope.`]);
+}
+
+// Told once per recipient: somebody tried to open a link that no longer works, so the sender can help before being asked.
+export async function noteDeadLink(e: any, r: any, why: string) {
+  if (r.dead_link_alerted_at || r.status === 'completed') return;
+  run('UPDATE recipients SET dead_link_alerted_at=? WHERE id=?', now(), r.id);
+  await notifySender(e, 'problems', `Could not open: ${e.subject}`, `${r.name} tried to open your document and could not`, [why]);
 }
 
 // A signer who is unsure can ask before signing, instead of signing blind or giving up.
@@ -721,10 +745,11 @@ export async function reportAbuse(e: any, r: any, body: any, actor: Actor) {
 
 // ---- Scheduled work: expirations and automatic reminders -----------------------------------
 
-export async function cronTick(): Promise<{ expired: number; reminded: number; warned: number }> {
+export async function cronTick(): Promise<{ expired: number; reminded: number; warned: number; unopened: number }> {
   let expired = 0;
   let reminded = 0;
   let warned = 0;
+  let unopenedAlerts = 0;
   const t = now();
   for (const row of all("SELECT id FROM envelopes WHERE status='sent' AND kind='envelope'")) {
     const e = loadEnvelope(row.id);
@@ -744,10 +769,19 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
       await notifySender(e, 'problems', `Expires soon: ${e.subject}`, 'This envelope expires in three days', [`Still waiting on ${waiting.map((r: any) => r.name).join(', ') || 'nobody'}. You can extend the deadline if they need longer.`], { label: 'Extend deadline', url: `${baseUrl()}/app/envelopes/${e.id}?extend=1` });
       warned++;
     }
+    // "I never got it": if a request sits unopened, tell the sender once so they can share the link another way.
+    const quietMs = (Number(process.env.UNOPENED_ALERT_HOURS) || 48) * 3600_000;
+    const unopened = e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && !r.unopened_alerted_at && r.sent_at && Date.now() - Date.parse(r.sent_at) > quietMs);
+    if (unopened.length) {
+      for (const r of unopened) run('UPDATE recipients SET unopened_alerted_at=? WHERE id=?', t, r.id);
+      await notifySender(e, 'problems', `Not opened yet: ${e.subject}`, `${unopened.map((r: any) => r.name).join(', ')} ${unopened.length === 1 ? 'has' : 'have'} not opened your document`,
+        ['The email may be sitting in a spam folder or have gone to the wrong address.', 'From the envelope page you can copy their signing link and send it yourself by text or chat, nudge them, or correct the address without voiding anything.']);
+      unopenedAlerts += unopened.length;
+    }
     if (e.reminder_days > 0) {
       const last = e.last_reminder_at || e.sent_at;
       if (Date.now() - new Date(last).getTime() >= e.reminder_days * 864e5) reminded += (await remindEnvelope(e, { name: 'System' })) ? 1 : 0;
     }
   }
-  return { expired, reminded, warned };
+  return { expired, reminded, warned, unopened: unopenedAlerts };
 }

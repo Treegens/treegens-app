@@ -39,6 +39,9 @@ route('POST', '/public/support', async (c) => {
   return { reference: ref };
 }, 'public');
 
+// What you asked and whether it has been answered, for people who are logged in.
+route('GET', '/support/mine', (c) => ({ requests: all('SELECT id, topic, message, status, at FROM support_requests WHERE user_id=? OR email=? ORDER BY at DESC LIMIT 30', c.user.id, c.user.email).map((r) => ({ ...r, reference: r.id.slice(-8).toUpperCase() })) }));
+
 // ---- Is this email real? -------------------------------------------------------------------
 
 route('POST', '/public/check', async (c) => {
