@@ -69,7 +69,7 @@ export const PAPER_KINDS: PaperKind[] = [
   {
     id: 'witness', a: 'a document that needs a witness or a notary',
     why: 'A witness usually has to be physically present when the document is signed, and so does a notary. Sign&Grow can add a witness who states that they were there, and it cannot check that they were. It has no notary step.',
-    words: ['executed as a deed', 'signed as a deed', 'in the presence of a witness', 'notary public', 'notarised', 'notarized', 'notariell*', 'ante notario', 'devant notaire', 'affidavit', 'statutory declaration', { word: 'deed', title: true }],
+    words: ['executed as a deed', 'signed as a deed', 'in the presence of a witness', 'notary public', 'notarised', 'notarized', 'notariell*', 'ante notario', 'devant notaire', 'affidavit', 'statutory declaration', 'deed of gift', 'deed of assignment', 'deed of variation', 'deed of covenant', 'deed poll', 'mortgage deed'],
   },
 ];
 
