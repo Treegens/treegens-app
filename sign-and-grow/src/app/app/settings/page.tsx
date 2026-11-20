@@ -13,6 +13,8 @@ const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   r.readAsDataURL(file);
 });
 const longDate = (s?: string | null) => (s ? new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '');
+// A charge happens at a moment, not on a day: "cancel any time before" needs the time as well.
+const longMoment = (s?: string | null) => (s ? `${longDate(s)} at ${new Date(s).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` : '');
 
 function Profile() {
   const me = useMe();
@@ -416,7 +418,7 @@ function Billing() {
         )}
         {grove && !free && !b.ends_at && !b.problem && (
           <>
-            <p className="plan-line">{b.renews_at ? <>Next charge: <b>{b.next_amount || price} on {longDate(b.renews_at)}</b>, which adds {n(P.monthlySignatures)} and plants {mangrovesFor(P.monthlyUsd)} mangroves. That is the whole amount. We remind you by email a week before and again the day before, and you can cancel right up to the charge.</> : <>Billed {price} each month. We remind you by email a week before and again the day before every charge.</>}</p>
+            <p className="plan-line">{b.renews_at ? <>Next charge: <b>{b.next_amount || price} on {longMoment(b.renews_at)}</b>, which adds {n(P.monthlySignatures)} and plants {mangrovesFor(P.monthlyUsd)} mangroves. That is the whole amount. We remind you by email a week before and again the day before, and you can cancel right up to the charge.</> : <>Billed {price} each month. We remind you by email a week before and again the day before every charge.</>}</p>
             {admin && <div className="row wrap"><button className="btn" onClick={() => setModal('cancel')}>Cancel plan</button></div>}
           </>
         )}
@@ -553,7 +555,7 @@ function Billing() {
           <ul className="rules">
             <li>You will not be charged again.</li>
             {b.problem ? <li>The last payment did not go through, so the plan ends today and that payment is not tried again.</li>
-              : <li>The plan runs until {b.renews_at ? longDate(b.renews_at) : 'the end of the month you paid for'}, because that month is already paid for.</li>}
+              : <li>The plan runs until {b.renews_at ? longMoment(b.renews_at) : 'the end of the month you paid for'}, because that month is already paid for.</li>}
             <li>Your signatures stay yours. {s ? `The ${n(Math.max(0, s.available))} you have never expire.` : ''}</li>
             <li>Nothing is deleted. Every document, audit trail and invoice stays in your account.</li>
           </ul>

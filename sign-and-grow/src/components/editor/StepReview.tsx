@@ -1,8 +1,8 @@
 'use client';
 import Link from 'next/link';
-import { ROLE_LABEL, Leaf, fmtDate, api, useLoad } from '../ui';
+import { ROLE_LABEL, Leaf, fmtDate, api, useLoad, oops } from '../ui';
 import { useMe } from '../AppShell';
-import { fmtNum, sheetsSaved, impactOf, fmtTrees, PRICING } from '@/lib/impact';
+import { fmtNum, sheetsSaved, impactOf, fmtTrees, PRICING, mangrovesFor } from '@/lib/impact';
 import { formatDate } from '@/lib/dates';
 import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
@@ -41,15 +41,31 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
   const each = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
   if (need === 0)
     return <div className="notice">{correcting ? 'These changes use no extra signatures.' : 'This envelope uses none of your signatures. Signing your own documents, approving, viewing and copies are always free.'}</div>;
-  if (need > have)
+  if (need > have) {
+    // Out of signatures: say so before the Send button does, and put every way forward on the table.
+    const short = need - have;
+    const admin = me.role !== 'member';
+    const next = b.free_next_at || b.renews_at;
+    const pay = (path: string, body?: any) => api(path, { method: 'POST', body }).then((r) => { window.location.href = r.url; }).catch(oops);
     return (
       <div className="notice warn" role="alert">
-        <b>This needs {each(need)} and you have {have} ready.</b> {b.plan === 'grove'
-          ? <>Top up for ${PRICING.topUpUsd} a signature. Each one plants {PRICING.treesPerUsd} mangrove trees.</>
-          : <>The monthly plan is ${PRICING.monthlyUsd} for {PRICING.monthlySignatures} signatures, and every dollar plants {PRICING.treesPerUsd} mangrove trees.</>} Nothing is charged unless you choose it, and your work here is saved.
-        <div className="row wrap" style={{ marginTop: 10 }}><Link href="/app/settings?tab=billing" className="btn sm">Open the Plan page</Link></div>
+        <b>This needs {each(need)} and you have {have} ready.</b> Nothing is charged unless you choose it, and your work here is saved. You can:
+        <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+          {b.plan === 'grove'
+            ? <li><b>Top up {each(short)} for ${short * PRICING.topUpUsd}.</b> One payment, nothing recurring, and it plants {mangrovesFor(short * PRICING.topUpUsd)} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>
+            : <li><b>Start the monthly plan:</b> ${PRICING.monthlyUsd} a month for {PRICING.monthlySignatures} signatures, month to month, and every dollar plants {PRICING.treesPerUsd} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>}
+          {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Voiding an envelope you no longer need gives its signatures back at once.</li>}
+          {next && b.plan === 'grove' && <li><b>Wait.</b> The next {each(PRICING.monthlySignatures)} arrive on {fmtDate(next)}.</li>}
+          <li><b>Send to fewer people now.</b> Signing your own copy, approvers, viewers and copies are always free.</li>
+        </ul>
+        <div className="row wrap" style={{ marginTop: 10 }}>
+          {admin && b.enabled && b.plan === 'grove' && <button type="button" className="btn sm primary" onClick={() => pay('/billing/topup', { quantity: short })}>Pay ${short * PRICING.topUpUsd} and add {each(short)}</button>}
+          {admin && b.enabled && b.plan !== 'grove' && <button type="button" className="btn sm primary" onClick={() => pay('/billing/checkout')}>Start the plan for ${PRICING.monthlyUsd} a month</button>}
+          <Link href="/app/settings?tab=billing" className="btn sm">Open the Plan page</Link>
+        </div>
       </div>
     );
+  }
   return (
     <div className="notice">
       <b>{correcting ? 'These changes hold' : 'Sending holds'} {each(need)}</b> of the {have} you have ready, one for each person who signs. A signature is only used when that person actually signs. If you void the envelope, or they decline or run out of time, it comes straight back.
