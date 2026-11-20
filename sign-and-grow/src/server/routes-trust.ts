@@ -18,6 +18,7 @@ import { memberForCode } from './groups.ts';
 import { forgetChosen } from './tplroles.ts';
 import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
 import { commentsText } from './comments.ts';
+import { forgetClickwraps } from './clickwrap.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -350,6 +351,9 @@ export function purgeUser(userId: string): any[] {
       // the recipient and their address. The address goes; the line keeps a name of its own.
       run("UPDATE credits SET ref = substr(ref, 1, instr(ref, '|')) || id WHERE account_id=? AND reason='signature' AND instr(ref, '|') > 0", a.id);
       run('UPDATE payments SET receipt_url=NULL WHERE account_id=?', a.id);
+      // Click-to-agree terms, versions and acceptances go with the account row; our copies of the emails that sent
+      // people what they accepted are removed here (clickwrap.ts).
+      forgetClickwraps(a.id);
       run('DELETE FROM accounts WHERE id=?', a.id);
     }
     // In teams they only belonged to, what they sent passes to the owner so nothing is stranded.

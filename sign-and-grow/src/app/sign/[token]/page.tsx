@@ -216,7 +216,11 @@ export default function SignPage() {
   const me = data?.recipient;
   const env = data?.envelope;
   const allShown = allOnScreen(data?.documents, onScreen);
-  const fields: any[] = useMemo(() => data?.fields || [], [data?.fields]);
+  // "Only show when" and formulas, live: hidden fields are left out, a calculated one holds its result (logic.ts).
+  const ownFields: any[] = useMemo(() => data?.fields || [], [data?.fields]);
+  const otherFields: any[] = useMemo(() => data?.others || [], [data?.others]);
+  const logic = useLiveLogic(ownFields, otherFields, values, setValues);
+  const fields: any[] = logic.fields;
   const acts = me?.role === 'signer' || me?.role === 'inperson';
   const closed = !!env && (env.status === 'voided' || env.status === 'declined' || env.status === 'expired' || me.status === 'declined');
   const iAmDone = !!finished || me?.status === 'completed';
