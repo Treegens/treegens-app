@@ -4,10 +4,10 @@
 // a signer saves or finishes. The server decides: a hidden field is not required and keeps no answer, and a
 // calculated field holds what the server worked out, whatever the browser sent for either.
 import { all, run } from './db.ts';
-import { bad, str } from './util.ts';
+import { bad, str, sha256 } from './util.ts';
 import {
   ruleOf, parseFormula, FormulaError, refsOf, renameRefs, workOut, loopsIn, CONDS, CONDS_FOR, NEEDS_VALUE, RULE_VALUE_MAX, ALWAYS_SHOWN,
-  readNumber, ruleWords, formulaWords, COND_WORDS, logicKey,
+  readNumber, ruleWords, formulaWords, COND_WORDS, logicKey, longestChain, MAX_CHAIN, canonOf, namesIn,
 } from '../lib/logic.ts';
 
 const TYPE_WORD: Record<string, string> = { checkbox: 'tick box', radio: 'radio button', dropdown: 'choice', text: 'text', number: 'number', date: 'date', attachment: 'attachment', company: 'company', title: 'job title', signature: 'signature', initials: 'initials', full_name: 'full name', email: 'email', date_signed: 'date signed', stamp: 'stamp' };
@@ -103,8 +103,17 @@ export function saveLogic(e: any, entries: Entry[]) {
     });
     throw bad(`These fields depend on each other in a circle, so none of them could ever be shown or worked out: ${said.join('; ')}. Change one of the rules or formulas so the circle is broken.${NO}`, 400, { code: 'logic_loop', fields: loop });
   }
+  // A very long line of fields that each depend on the next would take the signing page (and the server) more steps
+  // than it can count at once. Refused in words, so it never becomes an error of ours.
+  const chain = longestChain(view);
+  if (chain.length > MAX_CHAIN)
+    throw bad(`${label(stored.get(chain.id)!)} depends on a line of ${chain.length - 1} other fields, each shown after or worked out from the next, and at most ${MAX_CHAIN} fields can depend on each other in one line. Make the line shorter, for example by adding the lines up at once with sum({Line 1}, {Line 2}).${NO}`, 400, { code: 'logic_chain' });
   for (const [fid, v] of out)
     if (v.rule || v.formula) run('UPDATE fields SET show_when=?, formula=? WHERE id=?', v.rule ? JSON.stringify(v.rule) : null, v.formula, fid);
+  // writeContent wrote every field again. A calculated value that was kept (someone who has finished keeps what they
+  // signed) keeps the number it stands for, so it is never read again from its shown text (canonOf in logic.ts).
+  for (const old of e.fields || [])
+    if (old?.calc_num != null && out.get(old.id)?.formula) run('UPDATE fields SET calc_num=? WHERE id=? AND value IS ?', old.calc_num, old.id, old.value ?? null);
   // A calculated field is never typed into, so it is never required, never read only, and holds no wording of the
   // sender's: its value is whatever it works out to.
   run('UPDATE fields SET required=0, readonly=0, prefill=NULL WHERE envelope_id=? AND formula IS NOT NULL', e.id);
@@ -134,41 +143,101 @@ export function settleLogic(envelopeId: string, acting?: string | null, fields?:
   const owners = new Set<string>(list.filter((f: any) => f.recipient_id && (f.formula || ruleOf(f))).map((f: any) => f.recipient_id));
   for (const R of owners) {
     if (R !== acting && done(R)) continue;
-    const view = list.map((f: any) => (f.recipient_id && f.recipient_id !== R && !f.readonly && !done(f.recipient_id) ? { ...f, value: null } : f));
-    const o = workOut(view, { stored: (f) => f.recipient_id !== R, name: nameOf });
+    const o = workOut(viewFor(list, R, done), { stored: (f) => f.recipient_id !== R, name: nameOf });
     for (const f of list) {
       if (f.recipient_id !== R) continue;
       const hidden = o.hidden.has(f.id);
       if (hidden && R === acting) hiddenMine.add(f.id);
-      let next = f.value ?? null;
-      if (f.formula && f.type === 'number') next = hidden ? null : o.calc.get(f.id)?.text ?? null;
+      // A calculated field holds its result twice: as it is shown, and as a plain number for every later reader.
+      const calc = !!f.formula && f.type === 'number';
+      let next = f.value ?? null, num = calc ? f.calc_num ?? null : null;
+      if (calc) (next = hidden ? null : o.calc.get(f.id)?.text ?? null), (num = next == null ? null : o.calc.get(f.id)?.canon ?? null);
       else if (hidden && !f.readonly) next = f.prefill ?? null;
-      if ((next ?? null) === (f.value ?? null)) continue;
+      if ((next ?? null) === (f.value ?? null) && num === (calc ? f.calc_num ?? null : null)) continue;
       f.value = next;
+      if (calc) f.calc_num = num;
       // Never over an answer of someone who has finished, unless it is the person finishing in this very moment.
-      run(`UPDATE fields SET value=? WHERE id=?${R === acting ? '' : " AND (SELECT status FROM recipients WHERE id=?)!='completed'"}`, next, f.id, ...(R === acting ? [] : [R]));
+      run(`UPDATE fields SET value=?, calc_num=? WHERE id=?${R === acting ? '' : " AND (SELECT status FROM recipients WHERE id=?)!='completed'"}`, next, num, f.id, ...(R === acting ? [] : [R]));
     }
   }
   return hiddenMine;
 }
 
-/** A browser's answer as applyValues stores it, for working out what is shown before anything is stored. */
-const asStored = (f: any, v: any) => {
-  const s = str(v, 4000);
-  if (f.type === 'dropdown' && s && !(f.options || []).includes(s)) return ''; // not one of its choices: stored as empty
-  return f.type === 'checkbox' || f.type === 'radio' || f.type === 'signature' || f.type === 'initials' ? (s ? '1' : '') : s;
-};
+/**
+ * The envelope's fields as they count for recipient R: what someone else filled in is empty until that person has
+ * finished, because it can still change; the sender's own values (read only) count from the start. The one view
+ * that settleLogic works R out with and that R's screen is given (formulaInputs), so the two never disagree.
+ */
+function viewFor(list: any[], R: string, done: (rid: string | null) => boolean): any[] {
+  return list.map((f: any) => (f.recipient_id && f.recipient_id !== R && !f.readonly && !done(f.recipient_id) ? { ...f, value: null } : f));
+}
 
 /**
- * The fields of recipient `r` that are not shown once `values` (a Finish or a save from their screen) is applied.
- * Used before a Finish is claimed, so a signature field that the person's own answers hide is not asked for.
+ * The fields of other people that the formulas of recipient `rid` use (also through another calculated field of
+ * theirs), as they count for `rid` right now: a value only once its owner has finished and while it is shown. The
+ * signing page works the formulas out with exactly these (src/components/sign/logic.ts), and names them by their
+ * labels. `key` stands for all of it: the screen sends it back with Finish (assertInputs), so a Finish from a screen
+ * that was given other answers than count now signs nothing.
  */
-export function hiddenAfter(e: any, r: any, values: Record<string, any>): Set<string> {
-  if (!e.fields.some((f: any) => ruleOf(f))) return new Set();
-  const view = e.fields.map((f: any) => (f.recipient_id === r.id && !f.readonly && !f.formula && values && f.id in values ? { ...f, value: asStored(f, values[f.id]) } : f));
-  const o = workOut(view, { stored: (f) => f.recipient_id !== r.id });
-  const mine = new Set<string>(view.filter((f: any) => f.recipient_id === r.id).map((f: any) => f.id));
-  return new Set([...o.hidden].filter((id) => mine.has(id)));
+export function formulaInputs(e: any, rid: string): { key: string | null; fields: any[] } {
+  const own = e.fields.filter((f: any) => f.recipient_id === rid && f.formula && f.type === 'number');
+  if (!own.length) return { key: null, fields: [] };
+  const byId = new Map<string, any>(e.fields.map((f: any) => [f.id, f]));
+  const people = new Map<string, any>(e.recipients.map((r: any) => [r.id, r]));
+  const done = (x: string | null) => !!x && people.get(x)?.status === 'completed';
+  const view = viewFor(e.fields, rid, done);
+  const counted = new Map<string, any>(view.map((f: any) => [f.id, f]));
+  const hidden = workOut(view, { stored: (f) => f.recipient_id !== rid }).hidden;
+  const seen = new Set<string>(), out: any[] = [];
+  const todo: string[] = own.map((f: any) => f.id);
+  while (todo.length) {
+    const id = todo.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const f = byId.get(id);
+    if (!f || f.type !== 'number') continue;
+    if (f.recipient_id === rid) {
+      if (f.formula) todo.push(...namesIn(f.formula));
+      continue;
+    }
+    const v = counted.get(id), shows = !hidden.has(id) && v.value != null && v.value !== '';
+    out.push({ id, type: f.type, label: f.label, by: people.get(f.recipient_id)?.name || people.get(f.recipient_id)?.role_name || null, from: shows ? 'signer' : 'start', value: shows ? String(v.value) : null, num: shows ? canonOf(v) : null, pending: !done(f.recipient_id) });
+  }
+  out.sort((a, b) => (a.id < b.id ? -1 : 1));
+  return { key: out.length ? sha256(JSON.stringify(out.map((x) => [x.id, x.value, x.num, x.pending]))).slice(0, 24) : null, fields: out };
+}
+
+/**
+ * At Finish: the other people's answers that count in this person's formulas must still be the ones their screen
+ * was given (GET /sign gives `inputs`, the screen sends it back). When someone has finished in between, their answer
+ * now counts and the result changed under the person, so nothing is signed: 409 "changed", and the page loads the
+ * document again with the new result. A caller that sends no `inputs` was shown nothing and is not held to it.
+ */
+export function assertInputs(e: any, r: any, body: any) {
+  if (!body || body.inputs === undefined) return;
+  const now = formulaInputs(e, r.id);
+  if ((body.inputs ?? null) === now.key) return;
+  const finished = [...new Set(now.fields.filter((x) => !x.pending && x.by).map((x) => x.by))];
+  const results = e.fields.filter((f: any) => f.recipient_id === r.id && f.formula && f.type === 'number').map((f: any) => `'${nameOf(f)}'`);
+  const who = finished.length ? `${finished.slice(0, 3).join(', ')}${finished.length > 3 ? ' and others' : ''} finished` : 'Someone else on this document finished';
+  throw bad(`${who} while you had this document open, and what they filled in counts in ${results.slice(0, 3).join(', ') || 'what is worked out for you'}. Nothing was signed. It is worked out again below with their answers: look at it before you finish.`, 409, { code: 'changed', why: 'inputs', version: e.content_version });
+}
+
+/**
+ * Radio buttons of one group have one answer. A save or a Finish that chooses two of them at once is refused in
+ * words; one that chooses one takes the others of its group off, also those the request leaves out, so two branches
+ * that depend on them can never both be shown and printed. Returns the answers to store.
+ */
+export function oneChoice(mine: any[], values: Record<string, any>): Record<string, any> {
+  const groups = new Map<string, any[]>();
+  for (const f of mine) if (f.type === 'radio') groups.set(f.group_name || f.id, [...(groups.get(f.group_name || f.id) || []), f]);
+  let out = values;
+  for (const list of groups.values()) {
+    const chosen = list.filter((f) => f.id in values && str(values[f.id], 4000));
+    if (chosen.length > 1) throw bad(`Only one option can be chosen for ${list[0].group_name || 'one question'}, and ${chosen.length} were chosen: ${chosen.map((f) => nameOf(f)).join(', ')}. Choose one and try again. Nothing was saved.`);
+    if (chosen.length === 1) out = { ...out, ...Object.fromEntries(list.filter((f) => f !== chosen[0]).map((f) => [f.id, ''])) };
+  }
+  return out;
 }
 
 /**

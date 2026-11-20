@@ -531,7 +531,10 @@ test('the security page and the processing summary print those facts and invent 
   assert.match(page, /\{KEPT_AFTER_DELETION\.map\(/);
   assert.match(page, /closed after \{powerformIdleHours\(\)\} hours/);
   assert.match(page, /<ProcessorTable d=\{d\} \/>/);
-  assert.match(page, /it adds no encryption of its own to stored files/);
+  // What the software does not do comes from the setting (src/lib/storedfiles.ts): with it off, that it does not
+  // encrypt the files it stores now and never the database (files encrypted while it was on stay so).
+  assert.match(page, /<b>What the software does not do:<\/b> \{processingNotDone\(\)\}/);
+  assert.match(read('src/lib/storedfiles.ts'), /'on this server it does not encrypt the files it stores now, and it never encrypts the database, so how the disk is protected depends on the host\.'/);
   assert.match(page, /An envelope that somebody signed<\/b> cannot be erased by itself/);
   assert.equal(MAIL_COPY_DAYS, 90);
   assert.equal(CLOSE_GRACE_DAYS, 30);

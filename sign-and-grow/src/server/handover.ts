@@ -17,6 +17,7 @@ import { get, run } from './db.ts';
 import { bad, now, rateLimit, sha256, str } from './util.ts';
 import { checkPassword, hasPassword, readCookie, cookie, sessionEnd, SESSION_COOKIE } from './auth.ts';
 import { HAND_OVER_TRIES } from '../lib/policy.ts';
+import { noteHand, clearHand } from './handlive.ts';
 
 const note = (s: any): { envelope_id?: string; signer?: string; wrong?: number } => {
   try {
@@ -36,9 +37,11 @@ const lockedSession = (req: Request): any => {
 // Only then: a signer who opens a link on a device of their own, signed in to an account of their own, is left alone.
 export function handDevice(c: Ctx, e: any, r: any): void {
   if (r?.role !== 'inperson' || r.status === 'completed' || e?.status !== 'sent') return;
-  if (c.auth?.via !== 'session' || !c.auth.sessionId) return;
-  if (!get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', e.account_id, c.user.id)) return;
+  // Who holds the device is noted too, so the next person on it never reads this one's private questions (handlive.ts).
+  if (c.auth?.via !== 'session' || !c.auth.sessionId) return noteHand(c, e, r, false);
+  if (!get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', e.account_id, c.user.id)) return noteHand(c, e, r, false);
   run('UPDATE sessions SET locked_at=?, locked_note=?, unlock_tries=0 WHERE id=? AND locked_at IS NULL', now(), JSON.stringify({ envelope_id: e.id, signer: str(r.name, 120) }), c.auth.sessionId);
+  noteHand(c, e, r, true);
 }
 
 // What the app's lock screen needs to know about this browser, or null when it is not locked: whose it is (the name
@@ -86,5 +89,7 @@ route('POST', '/auth/unlock', async (c) => {
     throw bad(`That password is not right, so the account stays locked on this device. ${left === 1 ? 'One more try' : `${left} more tries`}, then this browser is signed out.`, 401, { code: 'wrong_password', tries_left: left });
   }
   run('UPDATE sessions SET locked_at=NULL, locked_note=NULL, unlock_tries=0 WHERE id=?', s.id);
+  // The device is back with its owner: nobody signing in person holds it any more (handlive.ts).
+  clearHand(c);
   return { ok: true, envelope_id: note(s).envelope_id || null };
 }, 'public');

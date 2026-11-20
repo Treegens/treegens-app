@@ -78,7 +78,8 @@ test('a browser that cannot show the document is told so in words, with a way fo
   assert.ok(!/setError\(e\?\.message/.test(viewer) && !/\{error\}/.test(viewer), 'PdfDoc shows no raw error text');
   assert.match(viewer, /whyNotShown\(/);
   // The signing page puts its own notice in the place of the pages: download, another browser, ask the sender.
-  assert.match(signPage(), /failed=\{\(why, retry\) => <NoViewer /);
+  // `said`: what the server answered when it refused the stored file (tests/qr-encrypt-repair.test.ts).
+  assert.match(signPage(), /failed=\{\(why, retry, said\) => <NoViewer /);
   const notice = read('src/components/sign/NoViewer.tsx');
   for (const way of ['CANNOT_SHOW_WAYS[0]', 'CANNOT_SHOW_WAYS[1]', 'CANNOT_SHOW_WAYS[2]', 'SIGNING_BROWSERS', 'Download PDF', 'Copy this link', "addEventListener('online'"]) assert.ok(notice.includes(way), `the notice has ${way}`);
   assert.ok(notice.includes('You cannot sign in it'), 'it says plainly that signing cannot happen in that browser');

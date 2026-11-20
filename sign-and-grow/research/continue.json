@@ -4136,5 +4136,216 @@
   ],
   "needs_from_billing": "Nothing. Acceptances never touch credits, routes-billing.ts or the Billing() component.",
   "notes_for_integrator": "Behaviour others will notice:\n- /agree/* is the only path that may be framed by other sites (next.config.mjs). The signing page keeps X-Frame-Options SAMEORIGIN, as /developers says.\n- The Sheet class in pdf.ts is now exported, and sheetPdf() is appended at the end of the file.\n- abuse_reports rows can have envelope_id '' and a clickwrap_id. The operator queue query and page handle this.\n- Copy emails mark about_user with 'clickwrap:<agreement id>' so they go with the account. No login id ever starts with that, so purgeUser's existing about_user rule is unaffected.\n\nDecisions for the owner (also in the README under Things to decide):\n- whether to price acceptances or tie the limit to the plan;\n- whether any site may frame the terms, or only sites a team lists (today any site may);\n- a lawyer should read the words in src/lib/clickwrap.ts.\n\nNot done, or only partly:\n- No README 'What the bad reviews taught us' row: there is no sourced complaint to put in it.\n- The 'scrolled to the end' rule is checked by the visitor's browser only, and the record says it was asked for.\n- A program that loads our page and posts directly is recorded as a hosted-page acceptance. The server-measured time the terms were open is the only hint, and EMBED_CANNOT says this.\n- 'Email me a copy' sends to a typed address. That is limited to once per acceptance an hour and 5 an hour per address, but it is not counted in the daily limit on new people.\n- When the page is framed, the 'page it came from' is usually only the site's origin, because the browser gives no more (location.ancestorOrigins). The record says 'as the browser reported it'.\n\nTesting note: Chromium blocks a public page from framing localhost (local network access), and drops a click on a frame from another site that moved in the last half second. So tests/out/build-clickwrap/look.cjs serves its host pages from 127.0.0.1:3999 and waits before clicking.\n\nOut of scope and broken: tests/gaps-nonus-words.test.ts:830 fails against someone else's current edit of src/app/sign/[token]/page.tsx.\n\nThe rename was not done. All new copy says Sign&Grow."
+ },
+ "repair:misc-today": {
+  "found": "The skeptic's report (research/verify-new.json, \"verify:misc-today\") lists 6 checks that do not hold, 13 new bugs, 7 overclaims and 3 screen problems. It has no regressions key. I ran all seven probes in tests/out/verify-misc-today before changing anything, and every finding reproduced exactly as reported:\n\n- p4-mail: when Vic deleted his login, Carol's acknowledgement, the operators' copy and Nina's invitation went with it (1,1,1 became 0,0,0). The two waiting copies would never have been sent.\n- p3-check: form reports made after the owner deleted the starts were stored with via_form 0,0,0, and the account was paused. With the account deleted too, the report answered 404 while the page said \"we do know which account sent it\".\n- p1b-race:\n  - A (owner hands over while Lea leaves): both calls 200 and the account had 0 owners.\n  - B (Ann names Bea while Bea leaves): both 200, and the envelope's sender was Bea, who was no longer a member.\n- p1-leave:\n  - 1.1: two Leave presses both answered 200, and the owner got 2 emails that said different things.\n  - 1.7: the removal email said \"a workspace of your own\", but the person landed in Otto's team.\n- p2-forms:\n  - 2.1: the 21st visitor from one address got 429 \"Too many attempts\".\n  - 2.2 and 2.3: cleared form starts emailed the owner \"Could not open\" (\"The deadline passed...\"), and the visitor's \"ask for more time\" emailed \"More time needed\".\n- p5-hidden:\n  - 5.1: a hidden expired envelope emailed Mona links that answer 404.\n  - 5.2: the envelope where only a viewer had finished was deleted for good, and the viewer's download went from 200 to 404.\n  - 5.3: the dialog's rule said kept=false while the server answered kept_for_recipients true.\n  - 5.5: retrying with the same Idempotency-Key gave 200 with a new envelope and 1 new email to the signer.\n- p6-small: holds, as the skeptic said.\n\nNo earlier fix attempt was in place: the code was exactly as the skeptic described. During the work, other engineers were editing the same files at the same time (routes-trust.ts, routes-account.ts, routes-sign.ts, the envelope page, the help page, openapi.ts). For short spells their half-finished edits stopped the code base loading.",
+  "done": [
+   {
+    "item": "New bug (high): Deleting one login deletes other customers' stored emails, including ones not delivered yet (routes-trust.ts purgeUser)",
+    "status": "done",
+    "how": "purgeUser now deletes copies outside a document's record only by the address they were sent to. If the login's address was never confirmed, it deletes only copies written since the login was made, and none marked as being about another login. It still deletes copies marked as being about this login (emails.about_user). It never matches the email text, and it never deletes a copy that is still waiting to be delivered (NOT_WAITING applies to both deletes). The operators' copy of a help request, and of a customer's reply, is now marked about: the confirmed login of the request's address, or the login that wrote it under its own address (aboutOf in routes-support.ts). The copy goes with that login, and is no longer found by '<address>' in the html.",
+    "test": "tests/finish.test.ts 'deleting a login never removes a copy that strangers' words point at, nor an email still waiting to be delivered': Carol's help message names Vic, Mallory uses Vic's address as her own name, and the desk copy, Nina's invite and one email to Vic himself are waiting to be delivered. Vic deletes his login: nobody else loses anything, and Vic's own waiting copy stays. Someone who never confirmed Nina's address deletes their login: Mallory's invitation to Nina stays. Carol deletes hers: her copies and the desk's copy about her request go. Probe p4 after: 1,1,1 kept."
+   },
+   {
+    "item": "Check 4: Deleting a login never removes a copy that only shares a name or part of an address, and nothing still to be delivered",
+    "status": "done",
+    "how": "Same fix as the new bug above.",
+    "test": "Same test, plus the existing 'whatever the two are called' test."
+   },
+   {
+    "item": "Overclaim: KEPT_AFTER_DELETION (src/lib/policy.ts) 'Any other copy that happens to mention your name goes with all such copies'",
+    "status": "done",
+    "how": "The text now says what the code does: copies marked as being about you when they were sent (an invitation you sent, a notice about your keys or that you left, our note to the help desk about your request) go with your login. Any other copy, including one where somebody else typed your name or address, and any email still waiting to be delivered, goes 90 days after it was sent.",
+    "test": "Covered by the purge test above, which shows the code doing what the sentence says."
+   },
+   {
+    "item": "New bug (high): A stranger can pause an account through its public form once the owner deletes abandoned starts",
+    "status": "done",
+    "how": "New column forgotten_codes.via_form, added through COLUMNS in db.ts. forgetEnvelopes (routes-trust.ts) sets it for the security codes that belong to the form visitor's recipient, including replaced links. /public/check/report passes via_form through to reportAbuse, and reportAbuse (envelopes.ts, one line) treats e.via_form as a form report. Such a report is kept for a person to read and never counts towards a pause.",
+    "test": "finish.test.ts 'reports made through a public form never count towards pausing its owner, also after the owner deleted the abandoned starts': 3 starts are cleared by the timer and deleted for good, then reported. Result: via_form [1,1,1], not paused, nothing about the visitors kept. An ordinary recipient's report on a deleted document still counts (via_form 0). Probe p3 after: via_form 1,1,1, paused false."
+   },
+   {
+    "item": "Check 3: A report on a deleted document still counts against the account, like any other",
+    "status": "done",
+    "how": "Fixed by the via_form change above. The check page part is in the next item.",
+    "test": "Same test as above."
+   },
+   {
+    "item": "Overclaim: CheckForm.tsx 'We do know which account sent it, and your report counts against that account like any other'",
+    "status": "done",
+    "how": "POST /public/check now answers can_report for a deleted document: whether the account that sent it still exists. When it does not, the page says the account was deleted as well, points to 'Ask us about this email', and shows no report form. Otherwise the page says the report is filed against that account, the same as a report about a document that still exists. That wording no longer claims a form visitor's report counts.",
+    "test": "finish.test.ts 'the code of a genuine email is still recognised...': the existing key-list assertion is updated to include can_report, and the test checks can_report true, then false once the account is unknown. Browser: check-deleted-noaccount-390.png has 0 report buttons and the honest sentence."
+   },
+   {
+    "item": "New bug (medium) and check 1 'The owner cannot leave': owner hands the account to a member while that member leaves, leaving no owner",
+    "status": "done",
+    "how": "POST /account/leave reads the body first. It then decides everything inside one tx from the rows as they are at that moment: the caller's own role, the list of members, the heir and whether they are closing, and the keys. POST /account/transfer-owner re-checks inside its tx that the caller is still the owner and the target is still a member. Choosing yourself now gets its own message.",
+    "test": "finish.test.ts 'handing over and leaving at the same moment...': Promise.all of transfer and leave leaves exactly one owner, exactly one call succeeds, and the other is told why. Probe p1b A after: owners 1, and Lea's leave was refused with 'You own ...'."
+   },
+   {
+    "item": "New bug (medium) and check 1 'what was sent passes to the chosen member': leaving and naming someone who leaves at the same moment hands envelopes to a non-member",
+    "status": "done",
+    "how": "The heir is chosen inside the tx after the body is read (see above).",
+    "test": "Same test: Bea leaves while Ann leaves naming Bea, and the envelope always ends with a current member. Probe p1b B after: Ann refused 'not on the team. Nothing was changed', and the holder is on the team."
+   },
+   {
+    "item": "New bug (low): Double-submitted Leave sends a second, contradictory email",
+    "status": "done",
+    "how": "Inside the tx, a caller with no membership left gets 409 'You are no longer on the team X, so there was nothing to leave. Nothing was changed.' No email is sent.",
+    "test": "Same test: two Leave presses give [200, 409], 1 email to the owner and 1 workspace of his own. Probe p1 1.1 after: [200,409] and owner_mails 1."
+   },
+   {
+    "item": "Overclaim: removal email and Remove dialog say 'a workspace of your own'",
+    "status": "done",
+    "how": "DELETE /account/members/:id names where the person lands, by the same rule as signing in: the workspace they used last if they still belong to it, otherwise the one they joined first, otherwise a workspace of their own. The Remove dialog in settings and the help page now say the same.",
+    "test": "finish.test.ts 'someone an admin removes is told where they will be the next time they sign in': the email names Otto's workspace, and signing in lands there. Someone in no other team is told 'a workspace of your own'. Probe p1 1.7 after: says_own_workspace false."
+   },
+   {
+    "item": "Overclaim: Leave dialog 'You stay signed in, in your other workspace'",
+    "status": "done",
+    "how": "/me now lists accounts oldest membership first (ORDER BY m.created_at), and the dialog names the first of the others: 'in X, the workspace you joined first among your others', or 'a new workspace of your own'.",
+    "test": "finish.test.ts 'the Leave dialog can name where the person lands': with 3 workspaces, the name the dialog shows equals now_in. Browser: the dialog named Otto's workspace."
+   },
+   {
+    "item": "Check 1 / screen: Leave card on the Team tab squeezed to a 60 px column at 390x844",
+    "status": "done",
+    "how": "The text column gets flex: 1 1 220px, and the button is 'Leave this team' with a minimum height of 44. At 390 the button wraps under the text.",
+    "test": "Browser at 390: the text box is 320 px wide and the button is 44 px high, with no sideways scroll (team-card-only-390.png). Opened by keyboard (focus, then Enter)."
+   },
+   {
+    "item": "New bug (medium) and check 2: shared-device form refuses the 21st person in an hour with 'Too many attempts'",
+    "status": "done",
+    "how": "New constants in src/lib/policy.ts: POWERFORM_SHARED_STARTS_PER_HOUR = 120 (counted per form and per address) and POWERFORM_STARTS_PER_HOUR = 20 (all ordinary forms together, per address, as before). formStartLimit in routes-envelopes.ts looks up the form before choosing the limit, and replaces 'Too many attempts' with words that state the limit, the minutes to wait, and what to do (use the QR code on phones, or ask for the shared-device mark). The cap of 30 unfinished starts still applies.",
+    "test": "finish.test.ts 'a shared-device form takes a steady stream of people from one front desk...': 120 starts from one address pass, the 121st gets 429 naming 120 and the minutes, ordinary forms from the same address still take 20 and then name the shared-device option, and another address is unaffected. Probe p2 2.1 after: 0 refused, 25 signed."
+   },
+   {
+    "item": "Overclaim: 30 unfinished starts promised (powerforms page, README :108 and :615)",
+    "status": "done",
+    "how": "The PowerForms page and both README rows now give both limits: unfinished starts at a time, and starts an hour.",
+    "test": "Page text checked in the browser (powerforms-390.png)."
+   },
+   {
+    "item": "New bug (medium) and check 2: 'Start a new form for the next person' does not clear the page; Back shows the previous visitor's document",
+    "status": "done",
+    "how": "On a shared-device form, /f/[slug] opens the start with location.replace. The next-person button (new src/components/sign/SharedDevice.tsx) also uses location.replace, so the tab history holds neither the previous form page nor /sign/<token>. The name and email fields of a shared-device form have autocomplete off. The card tells the visitor to close another tab or delete a downloaded file first. The long button label wraps on phones.",
+    "test": "Browser (tests/out/repair-misc-today/ui.cjs and ui2.cjs, Chromium 820x1180): finish, press the button, press Back. Back leaves the site (url '/'), with 0 'Download PDF' links and 0 traces of the previous email or name, and the new form is empty (shared-back.png, shared-done-390.png). There is no node test because this is browser history."
+   },
+   {
+    "item": "Overclaim: sign page 'Press the button ... it clears this page'",
+    "status": "done",
+    "how": "The card now says 'it closes this page, so Back does not bring it up again', which the replace() above makes true. It also warns about other tabs and downloads.",
+    "test": "Browser test above."
+   },
+   {
+    "item": "New bug (medium): Cleared form starts email the owner 'The deadline passed... reopen with a new deadline'",
+    "status": "done",
+    "how": "New src/server/formstart.ts. closedFormStart(e, r) is true for the form visitor's own start once it has expired. It is false for a visitor who pressed Finish while no signature was free (form_waits_at): that start is still the owner's to reopen. For such a start:\n- noteDeadLink sends nothing.\n- requestExtension answers 409 with the words to start again.\n- Finish and save answer the same words: start again at /f/<slug>, or 'the form is not taking new people right now' when it is paused.\n- GET /sign/:token answers form_cleared and start_again.\nThe sign page shows 'This form was cleared before it was finished' with a 'Start the form again' button (FormCleared in SharedDevice.tsx) and no 'ask for more time'.",
+    "test": "finish.test.ts 'a form start that was cleared offers the visitor a fresh form and emails its owner nothing about deadlines': the timer clears the start, and the view, Finish and request-extension give the right words and send the owner nothing. A paused form says there is no place to start again. A start with form_waits_at still emails the owner. Probe p2 2.2 and 2.3 after: owner_got [] and emails 0. Browser: form-cleared-390.png, and the button opens /f/<slug> by keyboard."
+   },
+   {
+    "item": "Overclaim: envelopes.ts cron comment 'The visitor loses nothing but the start: the form simply gives them a new one'",
+    "status": "done",
+    "how": "The comment now says what happens: the start is lost, the link says it was cleared and offers an empty form, and the owner is not emailed.",
+    "test": "Behaviour covered by the cleared-start test."
+   },
+   {
+    "item": "New bug (medium): Hidden expired envelope: signer visits and 'ask for more time' email the sender links that 404",
+    "status": "done",
+    "how": "noteDeadLink returns early for e.hidden_at. requestExtension answers 409: '<Sender> has removed this document from their list, so it cannot be opened again from here and we did not ask them for more time. If you still need to sign it, ask them to send it again.' GET /sign answers removed, and the sign page shows that sentence without the 'Ask for more time' button. After an admin restores the envelope, everything works as before.",
+    "test": "finish.test.ts 'an expired envelope its sender removed tells the signer so...': no email to Mona, removed true, 409 with the words, and after restore removed is false and the extension answers 200. Probe p5 5.1 after: extension 409 and mona_got []."
+   },
+   {
+    "item": "Check 5 and new bug (low): a voided envelope where only a viewer had finished is deleted for good",
+    "status": "done",
+    "how": "New src/server/deleting.ts: keptOnDelete(e) = a completed envelope, or any recipient for whom keepsCopy holds (every role except cc, completed or signed_before). DELETE /envelopes/:id uses it.",
+    "test": "finish.test.ts 'deleting keeps every envelope on which somebody keeps a copy...': viewer only, voided, deleted gives kept_for_recipients true, and the viewer's download still answers 200. Probe p5 5.2 after: gone_for_good false, download_after 200."
+   },
+   {
+    "item": "Check 5 and new bug (low): delete dialog says 'removed for good' for an envelope the server keeps",
+    "status": "done",
+    "how": "GET /envelopes/:id answers kept_on_delete from the same keptOnDelete, and the dialog in [id]/page.tsx uses it, falling back to the old rule only for an older server. The dialog's sentence now says 'Someone on it has already done their part (signed, approved, witnessed or confirmed they viewed it)' instead of 'signed'.",
+    "test": "Same test: kept_on_delete is true for the viewer-only and the signed-before cases and false when nobody finished, and the server agrees each time. Browser: the delete dialog for the viewer-only envelope says it is kept."
+   },
+   {
+    "item": "New bug (low): Idempotency-Key replay after the sender deleted a completed envelope sends it again",
+    "status": "done",
+    "how": "POST /envelopes: if the key's envelope still exists, hidden from this sender, the call answers 409. It creates nothing and emails nobody, and the message says to use a new key to send it again on purpose. openapi.ts says the same. This deliberately changes the old rule that 'the key is free again'.",
+    "test": "Same finish.test.ts test: the retry gets 409, the signer gets no new email, and there is still only 1 envelope. tests/lifecycle.test.ts was updated where it pinned the old behaviour (see notes). Probe p5 5.5 after: replay 409, 0 new emails."
+   },
+   {
+    "item": "Check 2 / screen: PowerForms page at 390: checkbox 5.8 px wide; row actions off the right edge",
+    "status": "done",
+    "how": "globals.css: label.check > checkbox/radio gets flex: none, so a long label can never squeeze the box again anywhere in the app. On this page the box is 20x20 and its label at least 44 px high. The Shared device, Pause and Delete buttons moved under the form's name, each at least 44 px high and with an aria-label that includes the form's name. The empty last column is gone.",
+    "test": "Browser at 390: checkbox 20x20, label 63 px high, the Delete buttons' right edge at 151 px, no sideways scroll (powerforms-390.png, powerforms-check-390.png). tests/lifecycle.test.ts source assertion updated (see notes)."
+   },
+   {
+    "item": "Checks that held (API key cannot leave; stay signed in / welcome once; admins told; removed person told; deleted-code fingerprint; 90-day sweep; hidden envelope everywhere; 'not opened yet'; phone top bar; welcome once per address)",
+    "status": "done",
+    "how": "No change needed. Re-ran p1, p3, p5 and p6 after my changes and they still hold (p1 1.2 to 1.9, p5 5.4 and restore, p6).",
+    "test": "Existing tests plus the re-run probes."
+   }
+  ],
+  "files_changed": [
+   "src/server/routes-trust.ts (purgeUser mail deletion; forgetEnvelopes via_form; /public/check can_report; report passes via_form)",
+   "src/server/routes-support.ts (aboutOf: operators' copies of help requests and replies marked with the login they belong to)",
+   "src/server/mail.ts (unchanged: the 'about' field it already had is now used for help requests)",
+   "src/server/db.ts (COLUMNS: forgotten_codes.via_form)",
+   "src/server/envelopes.ts (one line in reportAbuse for e.via_form; notOpen and completeRecipient words for a cleared form start; requestExtension guards; noteDeadLink guard; cron comment; import)",
+   "src/server/routes-account.ts (POST /account/leave decided in one tx, 409 on double press; transfer-owner re-checked in tx; removal email names where they land; /me accounts ordered oldest first)",
+   "src/server/routes-envelopes.ts (formStartLimit for public form starts; DELETE uses keptOnDelete; GET /envelopes/:id kept_on_delete; Idempotency-Key 409 for an envelope hidden by this sender)",
+   "src/server/routes-sign.ts (GET /sign/:token: form_cleared, start_again, removed)",
+   "src/server/formstart.ts (new)",
+   "src/server/deleting.ts (new)",
+   "src/server/openapi.ts (kept_on_delete, DELETE rule, Idempotency-Key, /public/check deleted/can_report, report via_form after delete)",
+   "src/lib/policy.ts (POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR; KEPT_AFTER_DELETION mail sentence)",
+   "src/components/sign/SharedDevice.tsx (new: NextPerson, FormCleared)",
+   "src/app/sign/[token]/page.tsx (import; expired title and text for a cleared start and a removed envelope; NextPerson card)",
+   "src/app/f/[slug]/page.tsx (location.replace and no autofill on shared-device forms)",
+   "src/app/check/CheckForm.tsx (sentence and report form depend on can_report)",
+   "src/app/app/envelopes/[id]/page.tsx (dialog uses kept_on_delete; 'done their part' wording)",
+   "src/app/app/settings/page.tsx (Leave card layout and label; Leave dialog names the workspace; Remove dialog wording; Billing() not touched)",
+   "src/app/app/powerforms/page.tsx (checkbox size, actions under the name, limits copy)",
+   "src/app/globals.css (label.check boxes never shrink)",
+   "src/app/help/page.tsx (removed-from-a-team answer)",
+   "README.md (shared-device row; two new rows in 'What the bad reviews taught us'; POWERFORM_SHARED_IDLE_MINUTES row)",
+   "tests/finish.test.ts (9 new tests, 2 assertions updated)",
+   "tests/lifecycle.test.ts (2 assertions updated, see notes)",
+   "tests/out/repair-misc-today/ (ui.cjs, ui2.cjs, screenshots, results, probe outputs in after/)"
+  ],
+  "suite": "tests/finish.test.ts: 17 of 17 pass.\n\nFull suite (npm test), last clean run (suite4): 827 tests, 822 pass, 5 fail. None of the 5 is in code I touched:\n- 'the provider is answered quickly...' (billing): a timing assertion, 'answered in 212 ms', on a busy machine.\n- gaps-mobile-sign.test.ts:63 and :269, and gaps-nonus-words.test.ts:830: they look in src/app/sign/[token]/page.tsx for lines other engineers changed or removed in their own commits (git log -S traces answerComesTo(me) and the Finish-message pattern to commits 50cdd82, 7739e4e and 3bcd806; NoViewer gained a 'said' argument). This is likely mobile-repair item 3 in progress.\n- gaps-nonus-words.test.ts:502: the security and processing page wording that the encryption repair is changing.\n\nTwo earlier full runs failed by the hundreds at once (\"Expected ',', got 'ident'\"). That was another engineer's half-finished edit to src/server/openapi.ts, which loads cleanly again a few minutes later. An earlier run (suite1) also showed the clickwrap, template-roles and two-step tests failing while their owners worked; they pass in suite4.\n\nIn suite1 two lifecycle tests failed because of my deliberate changes. I updated them; they pass, and are described in the notes.\n\nnpx tsc --noEmit -p .: no errors in any file I touched. The last run showed 2 errors in src/server/routes-templates.ts lines 29-30, which belongs to the template-roles repair.",
+  "abuse_and_stuck": [
+   "Mail purge, abuse 1: a stranger types the victim's '<address>' into a help message. Nothing of anyone else's is deleted (finish.test.ts strangers' words test).",
+   "Mail purge, abuse 2: a stranger puts the victim's address into their own user name and sends invitations. The invitee's copy stays (same test).",
+   "Mail purge, abuse 3: a stranger signs up with someone else's address without confirming it, then deletes the login to wipe that mailbox's copies. Only copies written since that login was made, and not about another login, go. Mallory's earlier invitation to that address stays (same test).",
+   "Mail purge, honest 1: an email still waiting for the mail server when its own login is deleted is kept and still delivered (for example a confirmation link to a login that no longer exists). This follows the owner's rule; named in left_open.",
+   "Mail purge, honest 2: the operators lose their email copy of a help request when its writer deletes their login. The request itself stays in the queue while it is open.",
+   "Mail purge, honest 3: the 90-day sweep still removes everything else. Nothing reads copies older than that (checked by the skeptic).",
+   "Form reports, abuse 1: start a form three times, wait for the tidy-up, then report. Never counts (finish.test.ts form reports test).",
+   "Form reports, abuse 2: a visitor whose link was replaced, then deleted. The replaced code also carries via_form (the forgetEnvelopes UNION now keeps the recipient id).",
+   "Form reports, abuse 3: the account is deleted too. The check page offers no report, and the API still answers 404 (finish.test.ts and the browser check).",
+   "Form reports, honest 1: a person who really was scammed through a public form cannot pause it by reports alone. Their report goes to a person in the operator queue, by the owner's rule.",
+   "Form reports, honest 2: someone holding an email whose account is gone is sent to the contact form, in words.",
+   "Form reports, honest 3: an ordinary recipient's report on a deleted document still counts (tested).",
+   "Leaving and handing over, abuse and races: transfer plus leave at once, leaving while naming someone who is leaving, and Leave pressed twice. All three are tested.",
+   "Leaving, honest: Lea presses Leave just after she was made owner, and is told 'You own X... Make someone else the owner first'. True, and it says what to do.",
+   "Leaving, honest: the double-press 409 tells the person to reload to see where they are now.",
+   "Shared-form limits, abuse 1: one connection floods a shared-device form. 120 starts an hour for that form, still at most 30 unfinished at a time, and each finish uses one of the owner's signatures.",
+   "Shared-form limits, abuse 2: someone makes their own shared-device form to send many emails. It is still their own account, under the daily limit for new accounts per form.",
+   "Shared-form limits, abuse 3: with TRUSTED_PROXY_HOPS misconfigured, every visitor is 'unknown' and shares one bucket. This was already so before; named in left_open.",
+   "Shared-form limits, honest: a desk that goes past 120 an hour is told to use the QR code on phones. An ordinary form at a busy place is told to ask for the shared-device mark. Both say how many minutes to wait (tested).",
+   "Shared device, abuse: Back after the next-person button reaches nothing of the previous visitor (browser check), and the next person is not offered their name or address by autofill.",
+   "Shared device, not covered: the address bar's history list, a View tab left open, or a downloaded file. See left_open.",
+   "Shared device, honest: a visitor can still view or download their copy on the tablet, and the card tells them to close that tab or delete the file before handing the device on.",
+   "Cleared starts, abuse: reopening many cleared starts on a tablet no longer floods the owner's inbox (probe p2 2.3: 0 emails).",
+   "Cleared starts, honest: the visitor is told to start again on an empty form. A paused form tells them to contact whoever gave them the link. A visitor who was promised their answers are kept (form_waits_at) keeps the old way, through the owner (tested).",
+   "Hidden expired envelope, honest: the signer is told the sender removed it and to ask them to send it again. An admin's restore brings the extension request back (tested).",
+   "Deleting, honest: the dialog now states the server's own rule, and a viewer keeps their copy (tested).",
+   "Retry key, honest: an integration that reuses a key on purpose after deleting gets 409 with 'use a new key' (tested)."
+  ],
+  "needs_from_billing": "Nothing. I did not touch routes-billing.ts, credits.ts, tests/billing*.test.ts, tests/stripe-fake.ts or the Billing() component.",
+  "notes_for_integrator": "Behaviour changes others will notice:\n- POST /envelopes with an Idempotency-Key whose envelope this sender has since deleted from their lists (hidden, because somebody signed) now answers 409 and sends nothing. It used to treat the key as free and send again. I updated tests/lifecycle.test.ts ('a completed envelope its sender deletes...', the 'A repeat of the call' lines) to the new rule, and openapi.ts says it. The owner should confirm this choice. The skeptic offered either a replay or 409; I chose 409 because a replay would show the member an envelope they deleted.\n- PowerForms page: the Shared device, Pause and Delete buttons moved from their own column to under the form's name, so phones can reach them. I updated the source assertion in tests/lifecycle.test.ts ('the screens offer what the server allows...') with the same intent.\n- POST /account/leave can now answer 409 (already left). /me 'accounts' are now ordered oldest membership first, which also changes the order of the workspace switcher.\n- POST /public/check for a deleted document now also answers can_report. GET /envelopes/:id answers kept_on_delete. GET /sign/:token envelope gains form_cleared, start_again and removed.\n- Public form starts: a 429 now carries specific words instead of 'Too many attempts'. Shared-device forms have their own count of 120 an hour per form and address; ordinary forms still share 20 an hour per address.\n- globals.css: label.check > checkbox/radio has flex: none. This applies app-wide, so a box can no longer shrink to a sliver.\n\nPromises in copy I added or changed:\n- The PowerForms page and README give the limits as numbers taken from policy.ts.\n- KEPT_AFTER_DELETION now says waiting emails and copies with someone's name typed by others go after 90 days.\n- The check page says the account was deleted as well, when it was.\n- The Leave dialog names the workspace.\n- The removal email and the help page say where a removed person lands.\n- The shared-device card says Back does not bring the page up again.\n\nleft_open:\n- On a shared tablet, the browser's address-bar history (typing to pick an older /sign/<token>), a 'View completed document' tab left open, or a downloaded PDF can still show the previous visitor's document. The card warns about the tab and the file. A server-side fix would be a long-lived cookie set by the next-person button that hides finished starts of that form in that browser. Not done.\n- An email still waiting for delivery when its own login is deleted is delivered afterwards, by the owner's rule.\n- routes-support.ts forgetNow still matches '<address>' in html, but only within emails whose subject carries that request's reference. Not reachable across customers in any way I found; not changed.\n- The 'open' count on the PowerForms list still includes a visitor who is 'pending' behind a countersigner. This was a note on a check that holds; not changed.\n- With TRUSTED_PROXY_HOPS misconfigured, all form visitors share the 'unknown' bucket. This was already so before my work.\n- forgotten_codes rows written before today have via_form 0. A form visitor's code from a start deleted before this change could still count.\n\nOut of scope, seen broken:\n- tsc errors in src/server/routes-templates.ts lines 29-30.\n- Sign-page source tests expecting lines other engineers removed (answerComesTo(me), NoViewer failed=(why, retry), the Finish message regex).\n- A dev server started before another engineer added envelopes.final_due_at 500s on /cron until restarted (columns are added at process start).\n\nRename: all new copy says Sign&Grow.\n\ntsconfig.json: the .next-repair-misc-today lines were already there before my dev server started, so I left them.",
+  "settings": [
+   "No new environment settings. Two new constants in src/lib/policy.ts: POWERFORM_STARTS_PER_HOUR = 20 (the old hard-coded limit) and POWERFORM_SHARED_STARTS_PER_HOUR = 120 (the owner asked for at least 60). The README row for POWERFORM_SHARED_IDLE_MINUTES names both, so .env.example needs no change."
+  ]
  }
 }

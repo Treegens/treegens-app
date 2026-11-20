@@ -26,7 +26,7 @@ import { noteVisit, noteCopyOpened } from './evidence.ts';
 // A witness for one signer: what the page shows each of them, and what has to happen before Finish (witness.ts).
 import { witnessFacts, beforeFinish } from './witness.ts';
 // Fields of other people that their answers hide are not on this screen either (logic.ts).
-import { hiddenFor } from './logic.ts';
+import { hiddenFor, formulaInputs } from './logic.ts';
 // A stamp on someone else's part of the page, or the sender's own (stamps.ts).
 import { stampSeen } from './stamps.ts';
 
@@ -143,10 +143,15 @@ route('GET', '/sign/:token', (c) => {
   const signedBefore = String(r.signed_before || '').split('\n').filter(Boolean).pop() || null;
   const words = printedWords(e);
   const hideOthers = hiddenFor(e, r.id);
+  // Other people's fields that this person's formulas use, as they count right now (named, with a value only once
+  // their owner has finished), and a key for them that Finish sends back (formulaInputs in logic.ts).
+  const inputs = formulaInputs(e, r.id);
   return {
     ...base,
     locked: false,
     version: e.content_version,
+    inputs: inputs.key,
+    formula_inputs: inputs.fields,
     // What the sender's latest correction changed on the documents, in words, for a screen that has to say so.
     changed: e.last_change || null,
     message: e.message,

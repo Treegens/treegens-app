@@ -3,18 +3,22 @@
 // with the same functions the server uses (src/lib/logic.ts). The server works it all out again from what is stored
 // when the person saves and finishes, so nothing here decides what is signed.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { workOut, formulaWords, CALC_EMPTY, type Calc } from '../../lib/logic.ts';
+import { workOut, formulaWords, namesIn, CALC_EMPTY, type Calc } from '../../lib/logic.ts';
 import { fieldName, AUTO } from './fields.ts';
 
 const OTHER = '\u0000other';
 
-/** A calculated field's line under it: how it is worked out, from which numbers, or why it is empty. */
-export function calcNote(f: any, c: Calc | undefined, nameOf: (id: string) => string): string {
+/**
+ * A calculated field's line under it: how it is worked out, from which numbers, or why it is empty. `waiting` says
+ * which of its fields someone else fills in and counts only once they have finished.
+ */
+export function calcNote(f: any, c: Calc | undefined, nameOf: (id: string) => string, waiting: string[] = []): string {
   const how = `Worked out for you from ${formulaWords(f.formula, nameOf)}.`;
-  if (!c) return how;
-  if (c.error) return `${how} ${c.error}`;
-  if (c.empty) return `${how} ${CALC_EMPTY}`;
-  return `${how} With ${c.numbers}, that comes to ${c.text}. Empty fields count as 0.${c.ambiguous.length ? ` ${c.ambiguous.join(' ')}` : ''}`;
+  const later = waiting.length ? ` ${waiting.join(' ')}` : '';
+  if (!c) return how + later;
+  if (c.error) return `${how} ${c.error}${later}`;
+  if (c.empty) return `${how} ${CALC_EMPTY}${later}`;
+  return `${how} With ${c.numbers}, that comes to ${c.text}. Empty fields count as 0.${c.ambiguous.length ? ` ${c.ambiguous.join(' ')}` : ''}${later}`;
 }
 
 /**
@@ -22,20 +26,24 @@ export function calcNote(f: any, c: Calc | undefined, nameOf: (id: string) => st
  * people that are on the page (`others`) and the answers as they stand. `fields` is what the page shows: the hidden
  * ones are left out, and a calculated field is read only, holding its result, with `calc_note` saying how. Other
  * people's answers only count once they have finished ("signer") or when the sender wrote them ("sender"), as on
- * the server.
+ * the server. The page passes the server's `formula_inputs` as `others`: every other field its formulas use, named,
+ * as they count for this person on the server, with `num` the stored number of a calculated one (canonOf).
  */
 export function liveLogic(mine: any[], others: any[], values: Record<string, string>) {
   const view = [
     ...mine.map((f) => ({ ...f, value: f.readonly ? f.value : values[f.id] ?? '' })),
-    ...others.map((o) => ({ id: o.id, type: o.type, label: o.label, recipient_id: OTHER, value: o.from === 'signer' || o.from === 'sender' ? o.value : null })),
+    ...others.map((o) => ({ id: o.id, type: o.type, label: o.label, recipient_id: OTHER, value: o.from === 'signer' || o.from === 'sender' ? o.value : null, calc_num: o.num ?? null })),
   ];
   const names = new Map<string, string>(view.map((f) => [f.id, fieldName(f)]));
-  const nameOf = (id: string) => names.get(id) || 'a field';
+  const nameOf = (id: string) => names.get(id) || 'another field';
   const out = workOut(view, { stored: (f) => f.recipient_id === OTHER, name: (f) => fieldName(f) });
+  // An input someone else fills in, who has not finished: said by name, so 0 on the screen is not a mystery.
+  const waiting = (f: any) => [...new Set(namesIn(f.formula))].map((id) => others.find((o) => o.id === id && o.pending)).filter(Boolean)
+    .map((o: any) => `'${fieldName(o)}' counts once ${o.by || 'the person who fills it in'} has finished.`);
   const fields = mine.filter((f) => !out.hidden.has(f.id)).map((f) => {
     if (!f.formula) return f;
     const c = out.calc.get(f.id);
-    return { ...f, readonly: 1, required: 0, value: c?.text ?? '', calc_note: calcNote(f, c, nameOf) };
+    return { ...f, readonly: 1, required: 0, value: c?.text ?? '', calc_note: calcNote(f, c, nameOf, waiting(f)) };
   });
   return { fields, hidden: out.hidden };
 }

@@ -58,7 +58,9 @@
     ".next-build-stamp/types/**/*.ts",
     ".next-build-stamp/dev/types/**/*.ts",
     ".next-repair-signin/types/**/*.ts",
-    ".next-repair-signin/dev/types/**/*.ts"
+    ".next-repair-signin/dev/types/**/*.ts",
+    ".next-repair-twostep/types/**/*.ts",
+    ".next-repair-twostep/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

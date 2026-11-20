@@ -93,7 +93,8 @@ export default function SignPage() {
   const [wantCopy, setWantCopy] = useState(false);
   // Set when the sender changed the document while this page was open: the page has loaded the new version and
   // asks the person to look again before they finish.
-  const [changedOpen, setChangedOpen] = useState(false);
+  // true: the sender changed the document. Text: what else changed under the screen, in the server's words.
+  const [changedOpen, setChangedOpen] = useState<boolean | string>(false);
   // Which file of each document is on this screen right now: the fingerprint of the file whose pages are drawn, or
   // read out in the text view. When the sender replaces a file, the page loads the new one, and Finish does not
   // work until its pages are here. Nobody finishes on pages they were not shown.
@@ -232,7 +233,8 @@ export default function SignPage() {
   const allShown = allOnScreen(data?.documents, onScreen);
   // "Only show when" and formulas, live: hidden fields are left out, a calculated one holds its result (logic.ts).
   const ownFields: any[] = useMemo(() => data?.fields || [], [data?.fields]);
-  const otherFields: any[] = useMemo(() => data?.others || [], [data?.others]);
+  // Formulas count other people's fields exactly as the server does: the ones it gives in formula_inputs.
+  const otherFields: any[] = useMemo(() => data?.formula_inputs || data?.others || [], [data?.formula_inputs, data?.others]);
   const logic = useLiveLogic(ownFields, otherFields, values, setValues);
   const fields: any[] = logic.fields;
   // Of two fields that overlap, the smaller is drawn on top, so both can be tapped (layers in src/lib/stacked.ts).
@@ -518,7 +520,7 @@ export default function SignPage() {
     // What the page does once the server has this person's part, however that became known.
     const landed = (r?: any) => (canSave.current = false, writeKept(token, null, null), dropAnswers(token), setFinishPending(false), setOpen(''), r && setFinished(r));
     try {
-      landed(await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, tz: deviceZone() } }));
+      landed(await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, inputs: data?.inputs ?? null, tz: deviceZone() } }));
     } catch (e: any) {
       const msg = e?.message || 'Something went wrong on our side.';
       const say = (said: string) => (open === 'review' ? setFinishError(said) : toast(said, true));
@@ -541,9 +543,10 @@ export default function SignPage() {
         say(now === 'unknown' ? finishUnknown(navigator.onLine !== false, finish) : isConnectionError(e) ? finishNotSent(!offline, finish) : `${msg} Nothing was signed. Try again in a moment.`);
       } else if (e?.code === 'changed') {
         // Nothing was signed. Show the document as it is now, with the answers that still have a field, and ask
-        // for another look before finishing.
+        // for another look before finishing. Someone else who finished meanwhile is said in the server's own words
+        // ("why": "inputs"): it was not the sender, and the total worked out for this person changed with it.
         setOpen('');
-        setChangedOpen(true);
+        setChangedOpen(e?.data?.why === 'inputs' ? msg : true);
         await load();
         window.scrollTo({ top: 0 });
       } else if (/no longer open|not your turn/i.test(msg)) {
@@ -1075,8 +1078,8 @@ export default function SignPage() {
       <p className="sg-vh" role="status" aria-live="polite">{logic.said}</p>
       {changedOpen && (
         <div className="notice warn sg-top" role="alert">
-          <b>{sender.name} changed this document while you had it open.</b> Nothing was signed. What you filled in is still here wherever its field still exists. Look at the document again before you finish.
-          {data.changed ? ` What changed: ${data.changed}` : ''}{' '}
+          {typeof changedOpen === 'string' ? <b>{changedOpen}</b> : <><b>{sender.name} changed this document while you had it open.</b> Nothing was signed. What you filled in is still here wherever its field still exists. Look at the document again before you finish.
+          {data.changed ? ` What changed: ${data.changed}` : ''}</>}{' '}
           {/* The pages below are the changed ones once they have loaded. Until then there is nothing to have looked at. */}
           {allShown ? <button type="button" className="sg-link" onClick={() => setChangedOpen(false)}>I have looked</button> : <span role="status">The changed pages are loading. You can finish once they are on your screen.</span>}
         </div>

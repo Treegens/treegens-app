@@ -1295,3 +1295,14 @@ test('no way of signing in with Google or Microsoft skips two-step login', async
   landed(await signIn(real, 'google', google('tina.two@gmail.com')));
   assert.equal((await whoIs(real)).email, 'tina.two@gmail.com');
 });
+
+test('the list of what was removed reads as plain sentences, one thing or many, and is empty when nothing went', () => {
+  assert.equal(removedText({}), '');
+  assert.equal(removedText({ name: 'Ann' }), '', 'a name that did not change is not news');
+  assert.equal(removedText({ kept: { drafts: 1, templates: 0, contacts: 0, groups: 0 } }), 'Still there from before: 1 draft. Look at who it names before you use it.');
+  assert.equal(removedText({ webhooks: 2, hooks_to: ['a.example', 'b.example'], forms: 1, agreements: 1 }),
+    'What had been set up in it was removed: 2 webhooks (sending to a.example and b.example). We switched off 1 public form and 1 click-to-agree page, so nobody can use them now. If they are yours, switch them on again in the app.');
+  assert.equal(removedText({ agreements: 1 }), 'We switched off 1 click-to-agree page, so nobody can use it now. If it is yours, switch it on again in the app.');
+  for (const t of [removedText({ webhooks: 1, keys: 3, invites: 2, profile: ['name'], name: 'x', workspace: ['logo'], stamps: 2, disconnected: ['Microsoft'] })])
+    assert.ok(!t.includes(String.fromCharCode(0x2014)) && !t.includes(String.fromCharCode(0x2013)));
+});

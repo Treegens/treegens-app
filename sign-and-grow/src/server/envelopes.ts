@@ -30,7 +30,7 @@ import { fingerprintLines, noteCopyMailed } from './evidence.ts';
 import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames, withWitnesses, witnessBits, witnessesSetAside, witnessedBy, assertWitnessesAfter, witnessesWaiting } from './witness.ts';
 import { waitsForName } from '../lib/witness.ts';
 // Conditional fields and formulas: checked when saved, worked out again from what is stored (logic.ts).
-import { saveLogic, settleLogic, hiddenAfter, hiddenOf, copyLogic, logicChanges } from './logic.ts';
+import { saveLogic, settleLogic, hiddenOf, copyLogic, logicChanges, assertInputs, oneChoice } from './logic.ts';
 import { ruleOf, logicKey } from '../lib/logic.ts';
 // A public form's visitor whose start was closed is offered a fresh form, and the owner is not emailed (formstart.ts).
 import { closedFormStart, closedStartText } from './formstart.ts';
@@ -1833,8 +1833,13 @@ export function markViewed(e: any, r: any, actor: Actor) {
 // and 1,23,456 are numbers like 1,234.56 is. Whatever was typed is stored and printed as typed.
 const VALIDATORS: Record<string, RegExp> = { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, number: NUMBER_RULE, phone: /^[+()\d][\d\s().-]{5,}$/ };
 
-export function applyValues(e: any, r: any, values: Record<string, any>, strict: boolean) {
+// `atFinish` is told which of this person's fields are not shown, worked out once from the answers as now stored,
+// before anything is checked: the same result then decides what is required, which marks need a picture, and what
+// the PDF prints (completeRecipient, logic.ts). Returns that set.
+export function applyValues(e: any, r: any, values: Record<string, any>, strict: boolean, atFinish?: (hidden: Set<string>) => void): Set<string> {
   const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !AUTO_TYPES.includes(f.type));
+  // One answer per group of radio buttons: two at once is refused, and one takes the others off (logic.ts).
+  values = oneChoice(mine, values);
   for (const f of mine) {
     // A calculated field is the server's to work out: whatever the browser sent for it is not taken (logic.ts). A
     // stamp is put on and taken off by its own request (POST /sign/:token/stamp), never by the answers.
@@ -1849,7 +1854,8 @@ export function applyValues(e: any, r: any, values: Record<string, any>, strict:
   // What is shown and what every formula comes to, worked out again from what is now stored. A field this person's
   // answers hide loses its answer and is not required, whatever the browser said about it (logic.ts).
   const hidden = settleLogic(e.id, r.id, e.fields);
-  if (!strict) return;
+  atFinish?.(hidden);
+  if (!strict) return hidden;
   const groups = new Map<string, { ok: boolean; required: boolean }>();
   for (const f of mine) {
     if (f.formula || hidden.has(f.id)) continue;
@@ -1870,6 +1876,7 @@ export function applyValues(e: any, r: any, values: Record<string, any>, strict:
     }
   }
   for (const [name, gr] of groups) if (gr.required && !gr.ok) throw bad(`Choose an option for ${name}.`);
+  return hidden;
 }
 
 export const okImage = (s: any) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < 700_000;
@@ -1898,17 +1905,12 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   const shown = shownVersion(r, body);
   if (shown != null && shown !== e.content_version) throw changedSince(e);
   if (!r.consent_at) throw bad('Please agree to use electronic records and signatures first.');
+  // What other people filled in that this person's formulas count must be what their screen was given: someone who
+  // finished meanwhile changes the result, and then nothing is signed until the person has seen it (logic.ts).
+  assertInputs(e, r, body);
   let verb = 'Viewed';
-  if (ACTS(r.role)) {
-    // A signature field that this person's own answers hide is not asked for (logic.ts).
-    const hide = hiddenAfter(e, r, body.values || {});
-    const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !hide.has(f.id));
-    const needsSig = mine.some((f: any) => f.type === 'signature' && (f.required || body.values?.[f.id]));
-    const needsIni = mine.some((f: any) => f.type === 'initials' && (f.required || body.values?.[f.id]));
-    if (needsSig && !okImage(body.signature_png)) throw bad('Adopt a signature before finishing.');
-    if (needsIni && !okImage(body.initials_png)) throw bad('Adopt your initials before finishing.');
-    verb = r.role === 'witness' ? 'Witnessed' : 'Signed';
-  } else if (r.role === 'approver') verb = 'Approved';
+  if (ACTS(r.role)) verb = r.role === 'witness' ? 'Witnessed' : 'Signed';
+  else if (r.role === 'approver') verb = 'Approved';
   // A public form holds none of its owner's signatures while people fill it in, so this is the moment that decides:
   // a visitor's signature needs one that is free right now. It never takes one that is held for an envelope the
   // owner has out, and a form never takes the balance below zero. What the visitor filled in is kept, the owner is
@@ -1941,7 +1943,14 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
       throw bad(cur?.status === 'completed' ? 'You have already finished this document.' : 'This envelope is no longer open for signing.', 409, cur?.status === 'completed' ? { code: 'already_finished' } : undefined);
     }
     if (!ACTS(r.role)) return;
-    applyValues(e, r, body.values || {}, true);
+    // Which fields are shown is worked out once, here, from the answers as stored (settleLogic in logic.ts), and the
+    // same result decides what is required, which signature and initials need a picture, and what the PDF prints.
+    // So nobody finishes as signed with a mark on the page and no picture behind it, whatever the browser claimed.
+    applyValues(e, r, body.values || {}, true, (hidden) => {
+      const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !hidden.has(f.id));
+      if (mine.some((f: any) => f.type === 'signature' && (f.required || f.value)) && !okImage(body.signature_png)) throw bad('Adopt a signature before finishing.');
+      if (mine.some((f: any) => f.type === 'initials' && (f.required || f.value)) && !okImage(body.initials_png)) throw bad('Adopt your initials before finishing.');
+    });
     run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(body.signature_png) ? body.signature_png : null, okImage(body.initials_png) ? body.initials_png : null, r.id);
   });
   // Each stamp they put on: which, where, when and its fingerprint (stamps.ts). A stamp uses no signature.

@@ -146,7 +146,8 @@ export function removedText(r: Removed | null | undefined): string {
   const several = (r.forms || 0) + (r.agreements || 0) > 1;
   if (off.length) said.push(`We switched off ${andList(off)}, so nobody can use ${several ? 'them' : 'it'} now. If ${several ? 'they are' : 'it is'} yours, switch ${several ? 'them' : 'it'} on again in the app.`);
   if (r.profile?.includes('name') && r.name) said.push(`Your name is now "${r.name}". You can change it under Settings, Profile.`);
-  if (kept.length) said.push(`Still there from before: ${andList(kept)}. Look at who they name before you use them.`);
+  const one = k ? k.drafts + k.templates + k.contacts + k.groups === 1 : false;
+  if (kept.length) said.push(`Still there from before: ${andList(kept)}. Look at who ${one ? 'it names' : 'they name'} before you use ${one ? 'it' : 'them'}.`);
   return said.join(' ');
 }
 

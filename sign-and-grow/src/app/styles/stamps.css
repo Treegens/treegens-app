@@ -38,9 +38,11 @@
 .st-range { margin-bottom: 8px; }
 .st-range input[type='range'] { width: 100%; min-height: 44px; margin: 0; accent-color: var(--green); }
 .st-range > span:first-child, .st-range > label { display: block; font-size: 13px; font-weight: 600; }
-.st-ends { display: flex; justify-content: space-between; gap: 8px; font-weight: 400; }
+.st-ends, .st-range > .st-ends { display: flex; justify-content: space-between; gap: 8px; font-weight: 400; margin: 0; }
 .st-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.st-row .btn, .st-other, .st-dialog .actions .btn, .st-list .btn { min-height: 44px; }
+/* Every control of a stamp is at least 44 pixels tall, also the small buttons inside a dialog (sign.css makes those 40). */
+.st-row .btn, .st-other, .st-dialog .actions .btn, .st-list .btn, .sg-dialog .st-row .btn.sm, .sg-dialog .btn.sm.st-other, .ed-stamp .btn.sm { min-height: 44px; }
+.sg-others img.st-thumb { max-height: 96px; }
 .st-check { min-height: 44px; align-items: flex-start; padding-top: 10px; }
 .st-check input { width: 20px; height: 20px; flex: none; }
 .st-edges { grid-column: 1 / -1; }
