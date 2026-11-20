@@ -1,0 +1,45 @@
+// Every environmental number shown in the product comes from this file.
+// These are estimates. The sources and the reasoning are spelled out on /impact so nobody has to take them on faith.
+
+export const IMPACT = {
+  // One average pulpwood tree yields roughly 8,333 sheets of office paper (Conservatree's widely used estimate).
+  sheetsPerTree: 8333,
+  // Paper making is water hungry. About 10 litres per A4 sheet is the commonly cited figure.
+  litresWaterPerSheet: 10,
+  // Lifecycle emissions of office paper, roughly 4.5 g CO2e per sheet (about 0.9 kg CO2e per kg of paper, 5 g per sheet).
+  gramsCo2PerSheet: 4.5,
+  // Wood needed per sheet, in grams (about 2x to 3x the weight of the 5 g sheet it becomes).
+  gramsWoodPerSheet: 15,
+};
+
+// Sheets an envelope would have used on paper: every party gets one printed copy of every page.
+// "Parties" is the number of recipients, at least one. The sender's own copy is not counted, to stay conservative.
+export function sheetsSaved(pages: number, recipients: number): number {
+  return Math.max(0, Math.round(pages)) * Math.max(1, Math.round(recipients));
+}
+
+export function impactOf(sheets: number) {
+  return {
+    sheets,
+    trees: sheets / IMPACT.sheetsPerTree,
+    litresWater: sheets * IMPACT.litresWaterPerSheet,
+    kgCo2: (sheets * IMPACT.gramsCo2PerSheet) / 1000,
+    kgWood: (sheets * IMPACT.gramsWoodPerSheet) / 1000,
+  };
+}
+
+export function fmtTrees(trees: number): string {
+  if (trees >= 10) return Math.round(trees).toLocaleString('en');
+  if (trees >= 1) return trees.toFixed(1);
+  if (trees >= 0.01) return trees.toFixed(2);
+  return trees > 0 ? trees.toFixed(4) : '0';
+}
+
+export const fmtNum = (n: number, digits = 0) => n.toLocaleString('en', { maximumFractionDigits: digits });
+
+// Plans. Signing is always free for recipients. Everything paid goes to tree planting.
+export const PLANS = {
+  seedling: { name: 'Seedling', price: 0, blurb: 'For occasional signing', envelopesPerMonth: 5 },
+  grove: { name: 'Grove', price: 12, blurb: 'Unlimited envelopes for you and your team', envelopesPerMonth: Infinity },
+} as const;
+export type PlanId = keyof typeof PLANS;

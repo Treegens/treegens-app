@@ -1,0 +1,11 @@
+node_modules
+.next
+data
+public/pdfjs
+public/fonts
+assets/fonts
+next-env.d.ts
+*.tsbuildinfo
+.env
+.env.local
+tests/out
