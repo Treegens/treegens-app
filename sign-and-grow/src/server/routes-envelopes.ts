@@ -27,7 +27,7 @@ import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
 import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../lib/policy.ts';
 import { reminderText } from '../lib/policy.ts';
-import { keptOnDelete } from './deleting.ts';
+import { keptOnDelete, keptLine } from './deleting.ts';
 // Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner, noteCopy, copyIsTheirs, fileHeldBack, templateGoes, assertCorrectionKept, asMember, forRows, askWho } from './tplroles.ts';
 // A witness for one signer (src/server/witness.ts): one the signer names is no open role for a bulk row or a form.
@@ -359,7 +359,7 @@ route('DELETE', '/envelopes/:id', (c) => {
   // who signed and was then asked to sign again (signed_before), does not lose theirs (deleting.ts).
   if (keptOnDelete(e)) {
     run('UPDATE envelopes SET hidden_at=? WHERE id=?', now(), e.id);
-    audit(e.id, c.actor, 'Removed from the sender\'s lists', 'The sender deleted this envelope from their account. Everyone on it keeps their link and their copy.');
+    audit(e.id, c.actor, 'Removed from the sender\'s lists', keptLine(e));
     return { ok: true, kept_for_recipients: true };
   }
   const shas = tx(() => {

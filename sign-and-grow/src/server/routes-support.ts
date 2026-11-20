@@ -5,8 +5,10 @@ import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { loadEnvelope, helpAsked, canBeStuck } from './envelopes.ts';
 import { sameEmail } from './credits.ts';
 import { isOperator } from './routes-trust.ts';
+import { closeDisputes } from './evidence.ts';
 import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS, SUPPORT_OTHERS_PER_ADDRESS, SUPPORT_KEEP_DAYS } from '../lib/policy.ts';
 import { TOPIC_LABEL, firstName, whenText, knownZone, spanText } from '../lib/support.ts';
+import { attachedChat, attachedOf } from './chat.ts';
 
 // Help requests as tickets. Every request has a reference, a state the customer can see (open: waiting for us,
 // waiting: we asked them something, answered, closed), an owner, a time by which a person will have answered, and a
@@ -159,7 +161,7 @@ function forOperator(t: any, full = false) {
   // for another try, given up, or come back later (news from the mail provider, src/server/routes-bounces.ts).
   const last = get('SELECT subject, status, error, next_try_at, bounced_at, bounce_reason, at FROM emails WHERE envelope_id IS NULL AND lower(to_email)=lower(?) AND instr(subject, ?) > 0 ORDER BY id DESC LIMIT 1', t.email, refOf(t));
   return {
-    ...base, ...accountFacts(t),
+    ...base, ...accountFacts(t), chat: attachedOf(t),
     mail: last ? { subject: last.subject, at: last.at, status: last.status, error: last.status === 'failed' ? last.error || null : null, retrying: last.status === 'failed' && !!last.next_try_at, bounced: last.bounced_at ? last.bounce_reason || 'it came back' : null } : null,
     // Everything, oldest first: messages both ways, internal notes, and what was done with who and when. A message
     // from the customer with nobody's login behind it came through the private link, so from their mailbox.
@@ -316,7 +318,11 @@ route('POST', '/public/support', async (c) => {
   // else an envelope id. The request keeps the envelope's id either way, so the people who answer see it.
   const coded = aboutCode(b.code);
   const t = openRequest({ email, name: str(b.name || c.user?.name, 120) || null, topic, message, envelope_id: coded?.e.id || str(b.envelope_id, 60) || null, user_id: c.user?.id ?? null, account_id: c.account?.id ?? null, verified: known, tz: knownZone(b.tz) || (known ? c.user.tz : null), came_by: known ? 'signed_in' : 'form' });
-  await announce(t);
+  // The help chat the writer chose to send along ("Talk to a person" in the chat), for the people who answer only:
+  // never in an email, never to the document's sender (src/server/chat.ts attachedChat).
+  const chat = attachedChat(b.chat);
+  if (chat) run('UPDATE support_requests SET chat=? WHERE id=?', JSON.stringify(chat), t.id);
+  await announce(t, chat ? [`The writer attached their chat with the helper (${chat.length} lines). Read it with the request in the queue.`] : []);
   await acknowledge(t);
   // A problem with signing that names a document the writer is a recipient of also goes to its sender, who can
   // usually fix it at once. The writer is on it when they hold the security code of the email we sent that
@@ -639,6 +645,9 @@ route('POST', '/operator/support/:id', async (c) => {
         say(t, 'note', text, me);
         say(t, 'event', 'Closed', me);
         run("UPDATE support_requests SET status='closed', closed_at=?, closed_how='handled', due_at=NULL, owner_id=?, updated_at=? WHERE id=?", now(), keep, now(), t.id);
+        // The alert of a dispute: closing it closes the dispute (closeDisputes in evidence.ts), so its sender may
+        // delete the envelope again and what was kept of it after a deletion goes.
+        if (t.topic === 'not-me' && t.envelope_id) closeDisputes(t.envelope_id, me, 'handled', text);
       });
       return { request: forOperator(load(t.id), true) };
     }

@@ -139,6 +139,10 @@ CREATE TABLE IF NOT EXISTS forgotten_codes (code_hash TEXT PRIMARY KEY, at TEXT 
 -- "completed here on that day, deleted by its sender since" instead of "no match". Kept a year (src/server/evidence.ts).
 CREATE TABLE IF NOT EXISTS forgotten_files (file_sha256 TEXT PRIMARY KEY, envelope_id TEXT NOT NULL, completed_at TEXT, at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS forgotten_files_env ON forgotten_files(envelope_id);
+-- A dispute that was still open when its envelope was deleted with the sender's account (src/server/evidence.ts):
+-- the envelope id, the fingerprint of the signed file if there was one, the day of the dispute and the state the
+-- envelope was in. No name, no address, no title, no words. It goes when a person at Sign&Grow closes the dispute.
+CREATE TABLE IF NOT EXISTS forgotten_disputes (envelope_id TEXT PRIMARY KEY, file_sha256 TEXT, disputed_on TEXT NOT NULL, status TEXT NOT NULL, at TEXT NOT NULL);
 -- "I did not sign this, or this was not me", from a person named on the envelope (src/server/evidence.ts). One row
 -- per person and envelope. Nothing is ever deleted because of one; the row goes with the envelope.
 CREATE TABLE IF NOT EXISTS disputes (
@@ -454,6 +458,10 @@ CREATE TABLE IF NOT EXISTS pay_seen (
   url TEXT NOT NULL, shown_at TEXT NOT NULL, opened_at TEXT, PRIMARY KEY (recipient_id, url)
 );
 CREATE INDEX IF NOT EXISTS pay_seen_envelope ON pay_seen(envelope_id);
+-- The help chat's limits (src/server/chat.ts): how many questions went to the model in one minute or one day (slot),
+-- counted under a keyed fingerprint of an internet address, a signing link or an account, or for everyone ('all').
+-- Nothing of what was asked or answered. Rows go after two days.
+CREATE TABLE IF NOT EXISTS chat_counts (key TEXT NOT NULL, slot TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, PRIMARY KEY (key, slot));
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -928,6 +936,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['envelopes', 'pay_gone_note', 'TEXT'],
   ['envelopes', 'pay_told_at', 'TEXT'],
   ['accounts', 'pay_told_at', 'TEXT'],
+  // The help chat a person chose to send with a help request, as JSON lines (src/server/chat.ts attachedChat). It goes
+  // with the request. Nothing else of any chat is ever stored.
+  ['support_requests', 'chat', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

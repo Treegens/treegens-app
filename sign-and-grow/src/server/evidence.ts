@@ -32,14 +32,57 @@ const SYSTEM: Actor = { name: 'System' };
 // in src/lib/policy.ts. Call it from forgetEnvelopes (src/server/routes-trust.ts), before the envelope goes.
 export function keepFingerprint(envelopeId: string) {
   const e = get("SELECT id, final_sha256, completed_at FROM envelopes WHERE id=? AND status='completed' AND final_sha256 IS NOT NULL", envelopeId);
-  if (e) run('INSERT OR IGNORE INTO forgotten_files (file_sha256, envelope_id, completed_at, at) VALUES (?,?,?,?)', e.final_sha256, e.id, e.completed_at, now());
+  // The day, as KEPT_AFTER_DELETION says: not the moment.
+  if (e) run('INSERT OR IGNORE INTO forgotten_files (file_sha256, envelope_id, completed_at, at) VALUES (?,?,?,?)', e.final_sha256, e.id, String(e.completed_at || '').slice(0, 10) || null, now());
+  keepDispute(envelopeId);
 }
 
 /** The deleted document a signed file or an envelope id belongs to, with the last day we keep knowing it. */
-export function forgottenFile(o: { sha256?: string; id?: string }): { envelope_id: string; completed_at: string | null; deleted_at: string; kept_until: string } | null {
+export function forgottenFile(o: { sha256?: string; id?: string }): { envelope_id: string; completed_at: string | null; deleted_at: string; kept_until: string; disputed_on: string | null; dispute_open: boolean } | null {
   const f = o.sha256 ? get('SELECT * FROM forgotten_files WHERE file_sha256=?', o.sha256) : o.id ? get('SELECT * FROM forgotten_files WHERE envelope_id=? ORDER BY at DESC LIMIT 1', o.id) : null;
   if (!f) return null;
-  return { envelope_id: f.envelope_id, completed_at: f.completed_at, deleted_at: f.at, kept_until: new Date(Date.parse(f.at) + FINGERPRINT_KEPT_DAYS * 864e5).toISOString() };
+  // A dispute that was open when it was deleted is still said, for as long as it is open (keepDispute).
+  const d = get('SELECT disputed_on FROM forgotten_disputes WHERE envelope_id=?', f.envelope_id);
+  return { envelope_id: f.envelope_id, completed_at: String(f.completed_at || '').slice(0, 10) || null, deleted_at: String(f.at).slice(0, 10), kept_until: new Date(Date.parse(f.at) + FINGERPRINT_KEPT_DAYS * 864e5).toISOString().slice(0, 10),
+    disputed_on: d?.disputed_on || null, dispute_open: !!d };
+}
+
+// ---- A dispute outlives a deletion -------------------------------------------------------------------------------
+
+// The owner's rule. While a dispute is open its sender cannot delete the envelope for good: deleting only takes it
+// out of their lists (keptOnDelete in deleting.ts). When the account is deleted, a minimal record of the dispute is
+// kept until a person at Sign&Grow closes it: the envelope id, the fingerprint of the signed file if there is one, the
+// day of the dispute and the state the envelope was in. No names, no addresses, no title, no words. The alert in the
+// operators' queue goes the way of a help request whose writer deleted their account: it is kept while it is open,
+// then forgotten (supportTick in routes-support.ts), and DISPUTE_KEPT in src/lib/evidence.ts says so to everyone.
+export const disputeOpen = (envelopeId: string): boolean => !!get('SELECT 1 x FROM disputes WHERE envelope_id=? AND closed_at IS NULL', envelopeId);
+
+function keepDispute(envelopeId: string) {
+  const e = get('SELECT id, status, final_sha256, disputed_at FROM envelopes WHERE id=?', envelopeId);
+  if (e?.disputed_at && disputeOpen(e.id))
+    run('INSERT OR IGNORE INTO forgotten_disputes (envelope_id, file_sha256, disputed_on, status, at) VALUES (?,?,?,?,?)', e.id, e.final_sha256 || null, String(e.disputed_at).slice(0, 10), e.status, now());
+  run("UPDATE support_requests SET forget=1, account_id=NULL, user_id=NULL WHERE envelope_id=? AND topic='not-me' AND name=?", envelopeId, ALERT);
+}
+
+// A person at Sign&Grow closes the disputes of an envelope: 'handled' when they have looked into it (that decides
+// nothing about who is right, so the mark stays), 'in_error' when it was filed in error (a forwarded email, a
+// mistake), which /verify then says next to the mark. Either way the sender may delete the envelope again, and the
+// record kept after a deletion goes. Closing the dispute's alert in the queue closes it as 'handled'.
+export function closeDisputes(envelopeId: string, by: { name: string }, how: 'handled' | 'in_error', note = '') {
+  const t = now();
+  const n = Number(run('UPDATE disputes SET closed_at=?, closed_how=?, closed_note=? WHERE envelope_id=? AND closed_at IS NULL', t, how, str(note, 2000) || null, envelopeId).changes);
+  const gone = Number(run('DELETE FROM forgotten_disputes WHERE envelope_id=?', envelopeId).changes);
+  if (n && get('SELECT 1 x FROM envelopes WHERE id=?', envelopeId))
+    audit(envelopeId, { name: `${by.name}, Sign&Grow` }, 'Dispute closed', how === 'in_error'
+      ? 'A person at Sign&Grow looked into the dispute and found that it was filed in error. The dispute stays on the record with this line.'
+      : 'A person at Sign&Grow looked into the dispute and closed it. That does not decide who is right: the envelope stays marked as disputed.');
+  return n + gone;
+}
+
+/** What /verify and the lookup say about the disputes of an envelope we still hold. */
+export function disputeFacts(envelopeId: string) {
+  const d = get("SELECT COUNT(*) n, SUM(closed_at IS NULL) open, SUM(closed_how='in_error') wrong, MAX(closed_at) last FROM disputes WHERE envelope_id=?", envelopeId);
+  return { disputes: d.n || 0, disputes_open: d.open || 0, dispute_in_error_on: d.n && d.wrong === d.n ? String(d.last).slice(0, 10) : null };
 }
 
 /** Run from the timer, next to the year of the security codes (purgeClosedAccounts). */
@@ -59,8 +102,11 @@ export async function lookupEnvelope(envelopeId: string): Promise<any> {
   const e = get("SELECT id, status, sent_at, completed_at, final_sha256, final_pages, disputed_at FROM envelopes WHERE id=? AND kind='envelope' AND status!='draft'", envelopeId);
   if (!e) {
     const gone = forgottenFile({ id: envelopeId });
-    return gone ? { found: true, id: gone.envelope_id, status: 'deleted', completed_at: gone.completed_at, deleted_at: gone.deleted_at, kept_until: gone.kept_until, sha256: get('SELECT file_sha256 s FROM forgotten_files WHERE envelope_id=?', envelopeId)?.s }
-      : { found: false };
+    if (gone) return { found: true, id: gone.envelope_id, status: 'deleted', completed_at: gone.completed_at, deleted_at: gone.deleted_at, kept_until: gone.kept_until, sha256: get('SELECT file_sha256 s FROM forgotten_files WHERE envelope_id=?', envelopeId)?.s,
+      disputed_at: gone.disputed_on, dispute_open: gone.dispute_open };
+    // One that was never completed but deleted while a dispute was open: that much is kept until the dispute is closed.
+    const d = get('SELECT * FROM forgotten_disputes WHERE envelope_id=?', envelopeId);
+    return d ? { found: true, id: d.envelope_id, status: 'deleted', was: d.status, completed_at: null, deleted_at: String(d.at).slice(0, 10), sha256: d.file_sha256 || null, disputed_at: d.disputed_on, dispute_open: true } : { found: false };
   }
   const people = all("SELECT role, status FROM recipients WHERE envelope_id=? AND role IN ('signer','inperson','approver')", e.id);
   const signers = people.filter((r) => r.role !== 'approver');
@@ -70,7 +116,7 @@ export async function lookupEnvelope(envelopeId: string): Promise<any> {
     pages: { documents: get('SELECT COALESCE(SUM(f.pages), 0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n, signed_file: e.final_sha256 ? await finalPages(e) : null },
     signers: signers.length, signed: signers.filter((r) => r.status === 'completed').length, approvers: people.length - signers.length,
     sha256: e.final_sha256 || null,
-    disputed_at: e.disputed_at || null, disputes: e.disputed_at ? get('SELECT COUNT(*) n FROM disputes WHERE envelope_id=?', e.id).n : 0,
+    disputed_at: e.disputed_at || null, ...disputeFacts(e.id),
   };
 }
 

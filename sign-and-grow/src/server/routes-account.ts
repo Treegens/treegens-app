@@ -21,7 +21,7 @@ import { emailProblem } from './bounces.ts';
 import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
-import { forgottenFile } from './evidence.ts';
+import { forgottenFile, disputeFacts } from './evidence.ts';
 import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe, sessionMade, passwordChanged } from './twostep.ts';
 
 // `c`: with an API key, two_step is left out, because no key reads anything of two-step login (twostep.ts).
@@ -739,7 +739,7 @@ route('POST', '/public/verify', async (c) => {
   const mask = (email: string) => email.replace(/^(.).*(@.*)$/, '$1***$2');
   return {
     // disputed_at: when a person named on it first said they did not sign it, or that it was not them (evidence.ts).
-    match: true, hash, envelope: { id: e.id, subject: e.subject, completed_at: e.completed_at, sender: e.sender, disputed_at: e.disputed_at || null }, chain,
+    match: true, hash, envelope: { id: e.id, subject: e.subject, completed_at: e.completed_at, sender: e.sender, disputed_at: e.disputed_at || null, ...(e.disputed_at ? disputeFacts(e.id) : {}) }, chain,
     signers: all("SELECT name, email, role, completed_at FROM recipients WHERE envelope_id=? AND role != 'cc' ORDER BY routing_order, position", e.id).map((r) => ({ ...r, email: mask(r.email) })),
   };
 }, 'public');

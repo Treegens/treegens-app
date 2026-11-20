@@ -11,6 +11,7 @@ import { typesetterFor } from './pdftext.ts';
 import { isolate, hasRtl } from './bidi.ts';
 import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
 import { strikeLines } from '../lib/strike.ts';
+import { payLineForPrint } from '../lib/paylink.ts';
 import { certName, certGroup } from '../lib/groups.ts';
 import { labelOf } from '../lib/bysender.ts';
 // A witness is listed under the person they witnessed, with their statement (src/server/witness.ts).
@@ -443,7 +444,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     s.need(24);
     const y0 = s.y;
     s.page.drawText(ts(a.at), { x: s.L, y: y0 - 8, size: 7.5, font: ctx.font, color: MUTED });
-    s.text(known(`${a.action}${a.detail ? ` · ${a.detail}` : ''}`), { size: 8, x: s.L + 118, maxW: 330 });
+    // A payment link's address never goes out in this certificate, also from a line written before it was kept out.
+    s.text(known(`${a.action}${a.detail ? ` · ${payLineForPrint(a.action, a.detail)}` : ''}`), { size: 8, x: s.L + 118, maxW: 330 });
     s.text(known(`${a.actor}${a.ip ? ` · ${a.ip}` : ''} · ${a.hash.slice(0, 16)}${zones.has(a.actor) ? ` · their time ${localStamp(a.at, zones.get(a.actor))}` : ''}`), { size: 6.5, x: s.L + 118, color: MUTED, gap: 3 });
   }
   if (audit.length) s.kv('Chain head', audit[audit.length - 1].hash, s.L, 70);

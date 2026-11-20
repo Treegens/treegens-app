@@ -712,7 +712,8 @@ function unclaim(r: any, alsoWaiting: boolean): boolean {
 // like a fake notice, nobody is emailed in the sender's name: the links work all the same, and the record says so.
 // Answers how many were emailed and how many were not (for a mark of their own, or because sending is held back),
 // so whoever is told about it afterwards is told the truth.
-async function tellGroup(e: any, r: any, said: string, skip?: string): Promise<{ emailed: number; not: number }> {
+type Told = { emailed: number; not: number; outbox?: number };
+async function tellGroup(e: any, r: any, said: string, skip?: string): Promise<Told> {
   const size = active(r.id).length;
   const { to: members, stopped } = reachable(r, active(r.id).filter((m: any) => m.id !== skip));
   if (r.status === 'pending') return { emailed: 0, not: 0 };
@@ -720,22 +721,24 @@ async function tellGroup(e: any, r: any, said: string, skip?: string): Promise<{
   if (!members.length) return { emailed: 0, not: stopped.length };
   if (emailRefusal(e)) return (audit(e.id, SYSTEM, 'Change not emailed', `Emails in the sender's name are held back on this account or for this envelope, so the members of ${r.group_name} were not emailed that the document is with the group again: ${listNames(members)}. Their links work.`), { emailed: 0, not: members.length + stopped.length });
   const sender = senderOf(e);
+  let outbox = 0; // with no mail server set up, nothing leaves this server, and that is said as such
   for (const m of members) {
-    await sendMail({
+    if ((await sendMail({
       to: m.email, subject: `Back with ${r.group_name}: ${e.subject}`, heading: `This document is with ${r.group_name} again`,
       lines: [said, groupInvite(r.group_name, size, r.role),
         ...(r.access_code ? [`You will need an access code to open it. ${sender?.name || 'The sender'} will give it to you separately. It is not in this email.`] : []),
         `Sent by ${sender?.name} (${sender?.email}). Reply to this email to reach them directly.`],
       cta: { label: r.role === 'approver' ? 'Review and approve' : r.role === 'viewer' ? 'View document' : 'Review and sign', url: linkOf(m) },
       envelopeId: e.id, recipientId: r.id, brand: brandOf(e.account_id), replyTo: sender?.email, fromName: sender?.name, code: m.check_code, askForPdf: sender?.name,
-    });
+    })) === 'outbox') outbox++;
     if (!m.sent_at) run('UPDATE recipient_members SET sent_at=? WHERE id=?', now(), m.id);
   }
-  return { emailed: members.length, not: stopped.length };
+  return { emailed: members.length - outbox, not: stopped.length, outbox };
 }
 // What the sender is told about that, in one sentence.
-const toldText = (t: { emailed: number; not: number }) =>
-  !t.emailed ? 'Nobody was emailed about it (the envelope\'s record says why), so if it is urgent, copy their links from the envelope page and send them yourself.'
+const toldText = (t: Told) =>
+  !t.emailed && t.outbox ? 'No mail server is set up here, so no email went out. Copy their links from the envelope page and send them yourself.'
+  : !t.emailed ? 'Nobody was emailed about it (the envelope\'s record says why), so if it is urgent, copy their links from the envelope page and send them yourself.'
     : `${many(t.emailed, 'member')} ${t.emailed === 1 ? 'was' : 'were'} emailed their link${t.not ? `, and ${many(t.not, 'other')} ${t.not === 1 ? 'was' : 'were'} not (the envelope's record says why)` : ''}.`;
 
 /**
@@ -779,7 +782,7 @@ export async function releaseGroup(e: any, recipientId: string, actor: Actor): P
   const t = await tellGroup(fresh, row, `${sender?.name || 'The sender'} gave this back to all of ${r.group_name}. ${r.name} had taken it on before, and what ${r.name} had filled in was not kept.`);
   // The screen says what became of the emails (GroupMembers.tsx), never more than happened: while sending is paused,
   // or for members who stopped our emails, nobody is emailed.
-  return { ok: true, emailed: t.emailed, not_emailed: t.not, told: row.status === 'pending' ? `It is not the turn of ${r.group_name} yet: every member is emailed their link when it is.` : toldText(t) };
+  return { ok: true, emailed: t.emailed, not_emailed: t.not + (t.outbox || 0), told: row.status === 'pending' ? `It is not the turn of ${r.group_name} yet: every member is emailed their link when it is.` : toldText(t) };
 }
 
 /** A member whose colleague has the document asks the sender to give it back to the group. Only the sender can. */

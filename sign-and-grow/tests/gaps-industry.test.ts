@@ -1160,6 +1160,19 @@ test('the payment address is in no email, attached certificate, export or eviden
   assert.equal(pack.status, 200);
   assert.ok(Buffer.from(pack.data).includes(payPrint(url)) && !Buffer.from(pack.data).includes('buy.stripe.com'), 'the evidence pack names it by its fingerprint only');
   for (const m of s.db.all('SELECT html FROM emails WHERE envelope_id=? OR to_email=?', e.id, 'cal-carpenter@example.com')) assert.ok(!m.html.includes('stripe'));
+
+  // A line written the way it was before this repair, with the address in it, stays in the record as it was (the
+  // chain of hashes holds it), and the certificate that is emailed still leaves the address out.
+  const { payLineForPrint } = await import('../src/lib/paylink.ts');
+  assert.equal(payLineForPrint('Shown the payment link', 'Ana was shown "Pay", which opens https://buy.stripe.com/x?a=1.'), 'Ana was shown "Pay", which opens [the address, kept on the envelope page].');
+  assert.equal(payLineForPrint('Signed', 'see https://example.com/x'), 'see https://example.com/x', 'other lines are printed as they are');
+  const old2 = await simple(c, 'leg-acy@example.com', { send: true });
+  const { audit } = await import('../src/server/envelopes.ts');
+  audit(old2.id, { name: 'Cal Carpenter' }, 'Payment link changed', '"Pay the deposit" opens https://buy.stripe.com/cal_legacy (it opened https://buy.stripe.com/cal_older before). It is shown to each person who signs.');
+  assert.equal((await signAll(old2.id, 'leg-acy@example.com')).status, 200);
+  const legacy = flat(await pdfText((await new Client().get(`/sign/${tokenFor(old2.id, 'leg-acy@example.com')}/download`)).data));
+  assert.match(legacy, /opens\[theaddress,keptontheenvelopepage\]\(itopened\[theaddress,keptontheenvelopepage\]before\)/);
+  assert.doesNotMatch(legacy, /stripe|cal_legacy/);
 });
 
 test('a payment link belongs to the person who set it: it goes when they leave the team, the envelope page says so, and the signer sees whose page it is', async () => {

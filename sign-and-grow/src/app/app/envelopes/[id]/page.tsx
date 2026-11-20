@@ -86,6 +86,8 @@ export default function EnvelopeDetail() {
   // The server's own rule decides (kept_on_delete, src/server/deleting.ts), so this dialog never says "for good" about
   // one that is kept. The line after ?? is only for an answer from a server older than that flag.
   const kept = data.kept_on_delete ?? (!isTpl && e.status !== 'draft' && (done || e.recipients.some((r: any) => r.status === 'completed' && r.role !== 'cc')));
+  // Kept for nothing but an open dispute: a declined or voided one nobody had finished.
+  const keptForDispute = kept && !!e.disputed_at && !done && !e.recipients.some((r: any) => r.role !== 'cc' && (r.status === 'completed' || r.signed_before));
   const waiting = out ? waitingOn(e.recipients, me.user.email) : null;
   const unopened = out ? e.recipients.filter((r: any) => neverOpened(r)) : [];
   // People who filled in everything required and have not pressed Finish, by the server's count (progress.ready).
@@ -335,7 +337,7 @@ export default function EnvelopeDetail() {
         <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this envelope'} confirmLabel={kept ? 'Delete from my account' : 'Delete for good'} onClose={() => setDialog('')}
           onConfirm={async () => {
             await api(`/envelopes/${e.id}`, { method: 'DELETE' });
-            toast(kept ? 'Deleted from your account. Everyone who was on it keeps their copy.' : 'Deleted.');
+            toast(kept ? (keptForDispute ? 'Deleted from your account. It is kept while the dispute about it is open.' : 'Deleted from your account. Everyone who was on it keeps their copy.') : 'Deleted.');
             router.push(isTpl ? '/app/templates' : '/app/envelopes');
           }}>
           {kept ? (
@@ -345,7 +347,8 @@ export default function EnvelopeDetail() {
               {isAdmin
                 ? <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves the lists, the search, the export and the reports. It is not destroyed: you and the other admins of this account still find it under Envelopes, in the tab <b>Removed by its sender</b>, and can put it back from there.</p>
                 : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back yourself. An admin of your team still finds it under Envelopes, in the tab <b>Removed by its sender</b>, and can put it back, so ask one of them if you need it again. Download the PDF first if you want to keep a copy of your own.</p>}
-              <p className="muted">{done ? 'It is a completed document, so it is not only yours.' : 'Someone on it has already done their part (signed, approved, witnessed or confirmed they viewed it), so it is not only yours.'} Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>
+              {/* Kept only because a dispute is open (keptOnDelete in src/server/deleting.ts): said as that, not as a copy someone keeps. */}
+              {keptForDispute ? <p className="muted">A person named on it disputes it, and Sign&amp;Grow has not closed that dispute yet, so it cannot be deleted for good until then.</p> : <p className="muted">{done ? 'It is a completed document, so it is not only yours.' : 'Someone on it has already done their part (signed, approved, witnessed or confirmed they viewed it), so it is not only yours.'} Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>}
             </>
           ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its audit trail will be removed for good. This cannot be undone.</p>}
         </ConfirmDialog>

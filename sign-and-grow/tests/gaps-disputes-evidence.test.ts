@@ -106,14 +106,14 @@ test('B: after the account is deleted, /verify still knows the signed file by it
   const kept = db.all('SELECT * FROM forgotten_files WHERE envelope_id=?', e.id);
   assert.equal(kept.length, 1);
   assert.deepEqual(Object.keys(kept[0]).sort(), ['at', 'completed_at', 'envelope_id', 'file_sha256']);
-  assert.equal(kept[0].completed_at, e.completed_at);
+  assert.equal(kept[0].completed_at, e.completed_at.slice(0, 10), 'the day, as the policy says, not the moment');
   for (const gone of ['Lease', 'Flat 3', 'Gone Sender', 'disputes.example', 'Sam Signer']) assert.ok(!JSON.stringify(kept).includes(gone), `${gone} is not kept`);
 
   const after = await verify(pdf);
   assert.equal(after.status, 200);
   assert.equal(after.data.match, false, 'match is for a document we still hold');
   assert.equal(after.data.deleted.envelope_id, e.id);
-  assert.equal(after.data.deleted.completed_at, e.completed_at);
+  assert.equal(after.data.deleted.completed_at, e.completed_at.slice(0, 10));
   assert.ok(after.data.deleted.kept_until > after.data.deleted.deleted_at);
   assert.ok(!/Lease|Gone Sender|Sam Signer|disputes\.example/.test(JSON.stringify(after.data)), 'nothing about who or what');
   // The page says so, and the pages that list what stays after a deletion say it too.
@@ -189,7 +189,7 @@ test('C: the envelope ID on a printed copy leads to its status, day, pages, sign
   assert.equal((await sender.post('/me/delete', { password: PW, now: true })).status, 200);
   const gone = (await anon.get(`/public/verify/${e.id}`)).data;
   assert.equal(gone.status, 'deleted');
-  assert.equal(gone.completed_at, e.completed_at);
+  assert.equal(gone.completed_at, e.completed_at.slice(0, 10));
   assert.equal(gone.sha256, e.final_sha256);
   assert.equal((await anon.get(`/public/verify/${out.id}`)).status, 404, 'one that was never completed leaves nothing');
 });
@@ -815,4 +815,27 @@ test('Repair 3: every screen says, before it is sent, exactly what the sender wi
   assert.match(help, /including the internet address and the browser a dispute came from/);
   assert.match(DISPUTE_DOES, /Nothing is changed, held or deleted/);
   assert.match(src('src/components/sender/Disputed.tsx'), /\/envelopes\/\$\{envelope\.id\}\/disputes/);
+});
+
+test('Repair 5: on a database from before first opens were written, the first open after the upgrade is not called the first', async () => {
+  const sender = await person('Old Opens', 'old-opens@disputes.example');
+  const e = await completed(sender, 'old-opener@disputes.example');
+  const tok = tokenFor(e.id, 'old-opener@disputes.example');
+  // The database as it was: no opens_noted_from, and copy_opened_at empty for everyone, whatever they did before.
+  db.run('UPDATE recipients SET copy_opened_at=NULL WHERE envelope_id=?', e.id);
+  db.run('ALTER TABLE envelopes DROP COLUMN opens_noted_from');
+  const g = globalThis as any;
+  g.__tsdb.close();
+  g.__tsdb = undefined; // the next query opens the same file again and runs the upgrade, as a restart does
+  assert.ok(db.get('SELECT opens_noted_from f FROM envelopes WHERE id=?', e.id).f, 'set for what was completed before');
+  await from().call('GET', `/sign/${tok}/download`, undefined, { 'user-agent': UA });
+  const line = auditOf(e.id).filter((a: any) => a.action === 'Completed copy opened');
+  assert.equal(line.length, 1);
+  assert.match(line[0].detail, /^Sam Signer downloaded the completed document, in Safari on an iPhone\. That is the first time since we began writing this down on \d{4}-\d\d-\d\d; they may have opened it before that\.$/);
+  assert.doesNotMatch(line[0].detail, /for the first time/);
+  // An envelope completed after the upgrade is written as before.
+  const fresh = await completed(sender, 'new-opener@disputes.example');
+  assert.equal(db.get('SELECT opens_noted_from f FROM envelopes WHERE id=?', fresh.id).f, null);
+  await from().call('GET', `/sign/${tokenFor(fresh.id, 'new-opener@disputes.example')}/download`, undefined, { 'user-agent': UA });
+  assert.match(auditOf(fresh.id).find((a: any) => a.action === 'Completed copy opened').detail, /downloaded the completed document for the first time, in Safari on an iPhone\./);
 });

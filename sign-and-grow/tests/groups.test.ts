@@ -841,6 +841,22 @@ async function mailEvent(body: any) {
 const reminders = (to: string) => subjects(to).filter((x: string) => /^Reminder/.test(x)).length;
 const senderMail = (envelopeId: string) => db.get('SELECT u.email FROM users u JOIN envelopes e ON e.sender_id=u.id WHERE e.id=?', envelopeId).email;
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+// A mail server that takes every email, for the length of `fn` only (our own transport, as in bounces.test.ts): the
+// stub sees only this file's emails, because the tests of one file run one after another. Nothing reaches the network.
+async function withMailServer<T>(fn: () => Promise<T>): Promise<T> {
+  const gl = globalThis as any;
+  const was = { url: process.env.SMTP_URL, t: gl.__tsmail };
+  process.env.SMTP_URL = 'smtp://u:p@smtp.groups-test.example:587';
+  gl.__tsmail = { sendMail: async () => ({ messageId: '<stub@groups-test.example>' }) };
+  try {
+    return await fn();
+  } finally {
+    if (was.url === undefined) delete process.env.SMTP_URL;
+    else process.env.SMTP_URL = was.url;
+    if (was.t === undefined) delete gl.__tsmail;
+    else gl.__tsmail = was.t;
+  }
+}
 const codeFor = (to: string) => /(\d{6}) is your code/.exec(mailTo(to).filter((m: any) => m.subject === 'Your code to get our emails again').pop()?.html || '')?.[1] || '';
 
 test('repair: a member who marks our email as spam is emailed nothing more, the sender is told exactly that, and only the member can undo it', async () => {
@@ -996,7 +1012,7 @@ test('repair: a hand-back note goes to the sender and the record only, never int
   await send(c, e.id);
   ok(await agree(linkOf(e.id, maya)));
   const lure = 'PayPal billing: your payment of $499.99 was charged today. To cancel call +1 888 555 0199 or visit http://paypal-refund.example';
-  ok(await from().post(`/sign/${linkOf(e.id, maya)}/hand-back`, { reason: lure }));
+  await withMailServer(async () => ok(await from().post(`/sign/${linkOf(e.id, maya)}/hand-back`, { reason: lure })));
   const back = mailTo(ben).filter((m: any) => m.subject === 'Back with HR team: Staff handbook');
   assert.equal(back.length, 1, 'Ben is told it is with the group again');
   assert.doesNotMatch(back[0].html, /499|888 555|paypal/i, 'without a word of the note');
@@ -1165,7 +1181,10 @@ test('repair: giving it back while sending is paused says nobody was emailed, an
   const ok2 = await setup('pausedBack2');
   await send(ok2.c, ok2.e.id);
   ok(await agree(linkOf(ok2.e.id, ok2.maya)));
-  assert.equal(ok(await ok2.c.post(`/envelopes/${ok2.e.id}/recipients/${row(ok2.e.id).id}/release`, {})).told, '3 members were emailed their link.');
+  assert.equal((await withMailServer(async () => ok(await ok2.c.post(`/envelopes/${ok2.e.id}/recipients/${row(ok2.e.id).id}/release`, {})))).told, '3 members were emailed their link.');
+  // With no mail server set up, nothing left this server, and the screen says that instead of "emailed".
+  ok(await agree(linkOf(ok2.e.id, ok2.ben)));
+  assert.match(ok(await ok2.c.post(`/envelopes/${ok2.e.id}/recipients/${row(ok2.e.id).id}/release`, {})).told, /^No mail server is set up here, so no email went out\./);
   const page = read('src/components/sender/GroupMembers.tsx');
   assert.match(page, /x\?\.told/);
   assert.doesNotMatch(page, /Every member was emailed their link/);

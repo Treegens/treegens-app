@@ -13,8 +13,14 @@ const STATE: Record<string, (r: any) => { title: string; text: string; good: boo
   voided: (r) => ({ good: false, title: `Voided${r.closed_at ? ` on ${fmtDate(r.closed_at, true)}` : ''}`, text: 'Its sender cancelled it before everyone had signed. It is not a signed document, whatever a copy of it shows.' }),
   declined: (r) => ({ good: false, title: `Declined${r.closed_at ? ` on ${fmtDate(r.closed_at, true)}` : ''}`, text: 'Someone who was asked to sign declined, which closed it for everyone. It is not a signed document, whatever a copy of it shows.' }),
   expired: (r) => ({ good: false, title: `Ran out of time${r.closed_at ? ` on ${fmtDate(r.closed_at, true)}` : ''}`, text: 'The deadline passed before everyone had signed. It is not a signed document, whatever a copy of it shows.' }),
-  deleted: (r) => ({ good: true, title: `Completed on ${fmtDate(r.completed_at, true)}, deleted since`, text: `Its sender deleted it with their account on ${fmtDate(r.deleted_at, true)}. We kept only its fingerprint and this day, until ${fmtDate(r.kept_until, true)}, and nothing about who signed it.` }),
+  // What is kept after a deletion is days, not moments (keepFingerprint and keepDispute in src/server/evidence.ts).
+  deleted: (r) => (r.completed_at
+    ? { good: true, title: `Completed on ${day(r.completed_at)}, deleted since`, text: `Its sender deleted it with their account on ${day(r.deleted_at)}. We kept only its fingerprint and this day, until ${day(r.kept_until)}, and nothing about who signed it.` }
+    : { good: false, title: 'Never completed, deleted since', text: `It was ${WAS[r.was] || 'not completed'} when its sender deleted it with their account on ${day(r.deleted_at)}. It is not a signed document, whatever a copy of it shows. We keep this only while the dispute below is open, and nothing about who was on it.` }),
 };
+const WAS: Record<string, string> = { sent: 'still out for signature', voided: 'voided', declined: 'declined', expired: 'out of time' };
+// A day kept as 2026-11-20 is that day in UTC, shown as that day wherever the reader is; a moment is shown as before.
+const day = (s?: string | null) => (s && /^\d{4}-\d\d-\d\d$/.test(s) ? new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : fmtDate(s, true));
 
 async function fingerprint(file: File): Promise<string> {
   // In this browser, when it can: the file stays on this device.
@@ -90,7 +96,7 @@ export function ById() {
         <div ref={result} tabIndex={-1} role="status" className={`card pub-verdict ${s.good ? 'good' : 'bad'} pub-focus`} style={{ marginTop: 18 }}>
           <h3 style={{ margin: '0 0 6px' }}>{s.title}</h3>
           <p style={{ margin: '0 0 10px' }}>{s.text}</p>
-          {res.disputed_at && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {fmtDate(res.disputed_at, true)}, {res.disputes === 1 ? 'a person' : `${res.disputes} people`} named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that. Who is right is not something this page can tell you.</div>}
+          {res.disputed_at && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {day(res.disputed_at)}, {res.disputes > 1 ? `${res.disputes} people` : 'a person'} named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that. Who is right is not something this page can tell you.{res.dispute_in_error_on ? ` On ${day(res.dispute_in_error_on)} a person at Sign&Grow looked into it and found that it was filed in error.` : res.dispute_open || res.disputes_open ? ' A person at Sign&Grow has not closed it yet.' : ''}</div>}
           <dl className="pub-facts">
             <dt>Envelope</dt><dd className="mono">{res.id}</dd>
             {res.pages && <><dt>Pages</dt><dd>{res.pages.documents} in the documents{res.pages.signed_file ? <small>{res.pages.signed_file} in the signed file, with the certificate and any files signers attached</small> : null}</dd></>}

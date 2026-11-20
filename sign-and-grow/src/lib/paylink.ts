@@ -77,6 +77,13 @@ export function checkPayUrl(raw: any, ownHost = ''): { href: string; host: strin
   return { href: u.href, host };
 }
 
+/**
+ * An audit line about a payment link as the certificate prints it. Lines are named by a fingerprint since 2026-11-20,
+ * but lines written before that held the address, and the certificate is emailed: there the address is left out.
+ */
+export const payLineForPrint = (action: string, detail: string): string =>
+  /payment link/i.test(action) ? String(detail).replace(/https?:\/\/[^\s"()]+?(?=[\s"()]|[.,](?:\s|$)|$)/gi, '[the address, kept on the envelope page]') : detail;
+
 /** What a signer reads above the button. The sender's name comes from their account, never from the link. */
 export const payForSigner = (sender: string): string =>
   `${sender} asks you to pay here, on their own payment page. You have already finished: your signature does not depend on this payment, and it stays signed whether you pay now, later or not at all.`;

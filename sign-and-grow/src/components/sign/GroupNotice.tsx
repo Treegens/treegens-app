@@ -97,7 +97,7 @@ export function HandBackDialog({ base, data, onClose, onDone }: { base: string; 
           setBusy(false);
         }
       }}>
-        <p>The document goes back to everyone in {g.name}, and they are emailed. Any of them can take it on, you too. What you filled in so far is cleared and goes to nobody. {data.envelope.sender?.name} is told.</p>
+        <p>The document goes back to everyone in {g.name}, and any of them can take it on with their own link, you too. What you filled in so far is cleared and goes to nobody. {data.envelope.sender?.name} is told.</p>
         {/* The note goes to the sender and into the record only: words typed here never reach the others' inboxes (groups.ts handBack). */}
         <label className="f"><span>Why, for {data.envelope.sender?.name || 'the sender'} <span className="hint">(optional. It goes to {data.envelope.sender?.name || 'the sender'} and into the record, not to the others in {g.name})</span></span><textarea dir="auto" data-autofocus rows={2} maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
         {error && <div className="notice err sg-problem" role="alert">{error}</div>}
