@@ -220,9 +220,44 @@ export function SignedFieldDialog({ kind, image, onChange, onClear, onClose }: {
 
 // ---- Review before finishing -----------------------------------------------------------------
 
-export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish }: {
+// A signer whose name was typed wrong by the sender can put it right themselves. It is logged and the sender is told.
+function FixName({ name, onRename }: { name: string; onRename: (name: string) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(name);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState('');
+  const id = useId();
+  if (!open) return <button type="button" className="sg-link" onClick={() => setOpen(true)}>Not spelled right? Fix my name</button>;
+  const save = async () => {
+    setBusy(true);
+    setProblem('');
+    try {
+      await onRename(value.trim());
+      setOpen(false);
+    } catch (e: any) {
+      setProblem(e?.message || 'That did not save. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="sg-fixname">
+      <label htmlFor={id} className="small">Your name as it should appear</label>
+      <div className="row wrap">
+        <input id={id} value={value} maxLength={120} autoComplete="name" onChange={(e) => setValue(e.target.value)} />
+        <button type="button" className="btn sm primary" disabled={busy || value.trim().length < 2} onClick={save}>Save name</button>
+        <button type="button" className="btn sm ghost" onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+      {problem && <p className="sg-problem" role="alert">{problem}</p>}
+      <p className="muted small" style={{ margin: '6px 0 0' }}>The sender is told about the change and it is recorded in the audit trail.</p>
+    </div>
+  );
+}
+
+export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish, onRename }: {
   me: any; sender: any; items: Item[]; sig: string | null; ini: string | null; usesSig: boolean; usesIni: boolean; approving?: boolean;
   busy: boolean; error: string; onChangeSig: (kind: 'signature' | 'initials') => void; onBack: () => void; onFinish: () => void;
+  onRename?: (name: string) => Promise<void>;
 }) {
   const filled = items.filter((i) => i.done).length;
   const optionalEmpty = items.filter((i) => !i.done && !i.required).length;
@@ -231,7 +266,7 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
       <dl className="sg-review">
         <div>
           <dt>{approving ? 'You are approving as' : 'You are signing as'}</dt>
-          <dd><b>{me.name}</b><br /><span className="muted">{me.email}</span></dd>
+          <dd><b>{me.name}</b><br /><span className="muted">{me.email}</span>{onRename && <div style={{ marginTop: 6 }}><FixName name={me.name} onRename={onRename} /></div>}</dd>
         </div>
         {usesSig && sig && (
           <div>

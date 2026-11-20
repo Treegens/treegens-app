@@ -158,7 +158,7 @@ export function Editor({ id }: { id: string }) {
         try {
           const f = await uploadFile(file, (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }));
           setUploads((u) => u.filter((x) => x.key !== key));
-          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes }]);
+          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan }]);
           setEnv((e: any) => (e.subject ? e : { ...e, subject: e.kind === 'template' ? f.name : `Please sign: ${f.name}` }));
           dirty();
         } catch (e: any) {
@@ -174,6 +174,23 @@ export function Editor({ id }: { id: string }) {
     n.splice(clamp(i + by, 0, n.length), 0, x);
     return n;
   }), dirty());
+  // Swap in a corrected file. The document keeps its place and its fields; a field on a page that no longer exists
+  // moves to the last page so nothing disappears quietly.
+  async function replaceDoc(did: string, file: File | null | undefined) {
+    if (!file) return;
+    const problem = precheck(file);
+    if (problem) return toast(problem, true);
+    try {
+      toast('Uploading the new file…');
+      const f = await uploadFile(file, () => {});
+      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan } : x)));
+      fields.set((l) => l.map((x) => (x.document_id === did && x.page >= f.pages ? { ...x, page: f.pages - 1 } : x)), { record: false });
+      dirty();
+      toast('File replaced. Your fields are where you left them. Check they still line up.');
+    } catch (e: any) {
+      toast(e?.message || 'The upload did not go through. Please try again in a moment.', true);
+    }
+  }
   function removeDoc(did: string) {
     const d = docs.find((x) => x.id === did);
     const n = fields.current().filter((f) => f.document_id === did).length;
@@ -349,7 +366,7 @@ export function Editor({ id }: { id: string }) {
 
   const ed: Ed = {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, docs, rcps, fields, contacts, uploads, color,
-    patchEnv, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, moveDoc, addRcp, patchRcp, removeRcp,
+    patchEnv, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
     setFields, undo, redo, modalOpen: !!ask, go,
   };
   const submit = correcting ? saveCorrection : send;

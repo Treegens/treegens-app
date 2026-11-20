@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
-import { ROLE_LABEL, Leaf, fmtDate } from '../ui';
-import { fmtNum, sheetsSaved, impactOf, fmtTrees } from '@/lib/impact';
+import { ROLE_LABEL, Leaf, fmtDate, api, useLoad } from '../ui';
+import { useMe } from '../AppShell';
+import { fmtNum, sheetsSaved, impactOf, fmtTrees, PRICING } from '@/lib/impact';
 import { formatDate } from '@/lib/dates';
 import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
@@ -24,6 +25,54 @@ export type ReviewProps = {
   onRestore: () => void;
   onDiscard: () => void;
 };
+
+// What this envelope costs in signatures, said before sending rather than after. One signature is held for each
+// person who signs (not the sender signing their own document) and is only used when they actually sign.
+function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean }) {
+  const me = useMe();
+  const [b] = useLoad(() => api('/billing'));
+  const s = b?.signatures;
+  if (!s) return null; // payments are not connected, so nothing is counted
+  const mine = me.user.email.toLowerCase();
+  const signers = rcps.filter((r) => (r.role === 'signer' || r.role === 'inperson') && (r.email || '').trim().toLowerCase() !== mine);
+  // When correcting, signers who were already asked are already held; only new ones need another signature.
+  const need = signers.filter((r) => !correcting || !r.status).length;
+  const have = Math.max(0, s.available);
+  const each = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
+  if (need === 0)
+    return <div className="notice">{correcting ? 'These changes use no extra signatures.' : 'This envelope uses none of your signatures. Signing your own documents, approving, viewing and copies are always free.'}</div>;
+  if (need > have)
+    return (
+      <div className="notice warn" role="alert">
+        <b>This needs {each(need)} and you have {have} ready.</b> {b.plan === 'grove'
+          ? <>Top up for ${PRICING.topUpUsd} a signature. Each one plants {PRICING.treesPerUsd} mangrove trees.</>
+          : <>The monthly plan is ${PRICING.monthlyUsd} for {PRICING.monthlySignatures} signatures, and every dollar plants {PRICING.treesPerUsd} mangrove trees.</>} Nothing is charged unless you choose it, and your work here is saved.
+        <div className="row wrap" style={{ marginTop: 10 }}><Link href="/app/settings?tab=billing" className="btn sm">Open the Plan page</Link></div>
+      </div>
+    );
+  return (
+    <div className="notice">
+      <b>{correcting ? 'These changes hold' : 'Sending holds'} {each(need)}</b> of the {have} you have ready, one for each person who signs. A signature is only used when that person actually signs. If you void the envelope, or they decline or run out of time, it comes straight back.
+    </div>
+  );
+}
+
+// Two people on one envelope with the same address: allowed (couples often share one), but worth saying.
+function SharedInbox({ rcps }: { rcps: any[] }) {
+  const byEmail = new Map<string, string[]>();
+  for (const r of rcps) {
+    const e = (r.email || '').trim().toLowerCase();
+    if (e && r.role !== 'cc') byEmail.set(e, [...(byEmail.get(e) || []), r.name || 'Unnamed']);
+  }
+  const shared = [...byEmail.entries()].filter(([, names]) => names.length > 1);
+  if (!shared.length) return null;
+  return (
+    <div className="notice warn">
+      {shared.map(([email, names]) => <div key={email}><b>{names.join(' and ')} share {email}.</b></div>)}
+      Each of them gets a separate email that says who it is for, with their own link and their own fields. Anyone who can read that inbox can open both, so give each person their own access code (step 1, More) if it matters who signs which.
+    </div>
+  );
+}
 
 // Step 3: one last look. For a draft that means "send"; for an envelope that is already out it spells out what
 // saving will do to each person before anything happens.
@@ -51,6 +100,8 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       )}
       {error && !closed && <div className="notice err" role="alert"><b>{correcting ? 'Not saved yet.' : isTpl ? 'Not saved yet.' : 'Not sent yet.'}</b> {error} Your changes are still here.</div>}
       {problems.length > 0 && <div className="notice warn"><b>Almost there.</b><ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
+      {!isTpl && !closed && rcps.length > 0 && <SignatureCost rcps={rcps} correcting={correcting} />}
+      {!isTpl && <SharedInbox rcps={rcps} />}
 
       <div className="card">
         <h2>{env.subject || '(no subject)'}</h2>

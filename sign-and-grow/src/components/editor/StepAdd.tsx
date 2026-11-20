@@ -58,16 +58,27 @@ export function StepAdd({ ed }: { ed: Ed }) {
         )}
 
         {docs.map((d, i) => (
-          <div key={d.id} className="row ed-doc">
+          <div key={d.id}>
+          <div className="row ed-doc">
             <input value={d.name} aria-label="Document name" maxLength={200} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
             <span className="muted small" style={{ whiteSpace: 'nowrap' }}>{plural(d.pages, 'page')}</span>
             {!anyLocked && (
               <>
+                <label className="btn sm ghost" title="Swap in a corrected version. Your fields stay where they are.">
+                  Replace file
+                  <input type="file" className="ed-sr" accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg" aria-label={`Replace the file for ${d.name || 'this document'}`} onChange={(e) => (ed.replaceDoc(d.id, e.target.files?.[0]), (e.target.value = ''))} />
+                </label>
                 <button type="button" className="btn sm ghost" disabled={i === 0} onClick={() => ed.moveDoc(i, -1)} aria-label={`Move ${d.name || 'document'} up`}>↑</button>
                 <button type="button" className="btn sm ghost" disabled={i === docs.length - 1} onClick={() => ed.moveDoc(i, 1)} aria-label={`Move ${d.name || 'document'} down`}>↓</button>
                 <button type="button" className="btn sm ghost danger" onClick={() => ed.removeDoc(d.id)} aria-label={`Remove ${d.name || 'document'}`}>Remove</button>
               </>
             )}
+          </div>
+          {d.is_scan && (
+            <p className="notice warn small" style={{ margin: '6px 0 0' }}>
+              This looks like a scan: it is a picture of the pages with no real text. People who use a screen reader will not be able to have it read to them, it cannot be found by searching, and Find fields for me has nothing to work with. If you have the original file, export a PDF from that and use Replace file.
+            </p>
+          )}
           </div>
         ))}
         {docs.length >= MAX_DOCS && <p className="muted small" style={{ margin: '10px 0 0' }}>An envelope can hold up to {MAX_DOCS} documents. Remove one to add another.</p>}

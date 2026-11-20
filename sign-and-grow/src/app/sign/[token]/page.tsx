@@ -713,7 +713,11 @@ export default function SignPage() {
       {open === 'review' && (
         <ReviewDialog me={me} sender={sender} items={items} sig={sig} ini={ini} approving={me.role === 'approver'} busy={busy} error={finishError}
           usesSig={fields.some((f) => f.type === 'signature' && filled(f))} usesIni={fields.some((f) => f.type === 'initials' && filled(f))}
-          onChangeSig={(kind) => setAdopt({ kind })} onBack={() => setOpen('')} onFinish={complete} />
+          onChangeSig={(kind) => setAdopt({ kind })} onBack={() => setOpen('')} onFinish={complete}
+          onRename={async (name) => {
+            await api(`${base}/name`, { body: { name } });
+            setData((d: any) => (d ? { ...d, recipient: { ...d.recipient, name } } : d));
+          }} />
       )}
       {adopt && (
         <AdoptSignature kind={adopt.kind} name={me.name} onClose={() => setAdopt(null)}

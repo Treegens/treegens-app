@@ -235,3 +235,7 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 @keyframes sg-up { from { transform: translateY(28px); opacity: 0.5; } }
 @media (prefers-reduced-motion: reduce) { .sg-dialog { animation: none !important; } }
 @media print { .sg-bottom, .sg-tools, .sg-foot, .sg-guide, .sg-flag, .sg-skip { display: none !important; } }
+
+/* Fixing the spelling of your own name, inside the review dialog */
+.sg-link { border: 0; background: none; padding: 6px 0; font: inherit; font-size: 14px; color: var(--green); text-decoration: underline; cursor: pointer; min-height: 32px; }
+.sg-fixname input { flex: 1 1 180px; min-height: 44px; }

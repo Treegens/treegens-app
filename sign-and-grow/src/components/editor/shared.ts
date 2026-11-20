@@ -59,6 +59,7 @@ export type Ed = {
   dismissUpload: (key: string) => void;
   renameDoc: (id: string, name: string) => void;
   removeDoc: (id: string) => void;
+  replaceDoc: (id: string, file: File | null | undefined) => void;
   moveDoc: (index: number, by: number) => void;
   addRcp: (p?: any) => void;
   patchRcp: (id: string, p: any) => void;
