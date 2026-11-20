@@ -101,7 +101,7 @@ export default function Contacts() {
         ) : shown.length === 0 ? (
           <div className="empty"><h3>Nobody matches &ldquo;{q.trim()}&rdquo;</h3>Try part of their name, email or company.<div style={{ marginTop: 14 }}><button className="btn" onClick={() => setQ('')}>Show everyone</button></div></div>
         ) : (
-          <ul className="sn-contacts">
+          <ul className="sn-contacts" role="list">
             {shown.map((c) => edit?.id === c.id ? (
               <li key={c.id} className="editing">
                 <form onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), cancel())} aria-label={`Edit ${c.name}`}>

@@ -43,6 +43,7 @@ export function StopView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState<Done | null>(null);
+  const [nothing, setNothing] = useState('');
   const [tries, setTries] = useState(0);
   const result = useRef<HTMLDivElement>(null);
 
@@ -74,7 +75,8 @@ export function StopView() {
       else if (!e?.status) setError('We could not reach Sign&Grow, so nothing was changed. Check your connection and press the button again.');
       else if (e.status === 429) setError('That is too many tries for now. Wait an hour, or use the help page and a person will stop it for you.');
       else if (e.status >= 500) setError(`${e.message} Nothing was changed. Press the button again in a minute. If it keeps failing, use the help page and a person will stop it for you.`);
-      else setError(e.message);
+      // The server found no monthly plan to stop (for example a plan that is free with a code). That is good news, not an error.
+      else setNothing(e.message);
     } finally {
       setBusy(false);
     }
@@ -142,14 +144,14 @@ export function StopView() {
       </>
     );
 
-  if (info.plan !== 'grove')
+  if (info.plan !== 'grove' || nothing)
     return (
       <>
         <Head title="Nothing to stop" />
-        <div className="card pub-verdict good">
+        <div className="card pub-verdict good" role="status">
           <span className="badge completed">No charges</span>
-          <h2>{info.account} has no monthly plan</h2>
-          <p>Nothing is being charged on this account and nothing will be. Every document is still there, and so are any signatures it has left.</p>
+          <h2>{info.account} has no paid monthly plan</h2>
+          <p>{nothing || 'Nothing is being charged on this account and nothing will be.'} Every document is still there, and so are any signatures the account has left.</p>
         </div>
         <section className="pub-aside" aria-labelledby="other-h">
           <h2 id="other-h">Still seeing a charge from us?</h2>
@@ -168,12 +170,13 @@ export function StopView() {
           <dd>{info.account}</dd>
           <dt>Plan</dt>
           <dd>{planName(info.plan)}, ${info.price} a month</dd>
-          <dt>Next charge</dt>
-          <dd>{info.renews_at ? <>${info.price} on {billDay(info.renews_at)}</> : <>${info.price} at the next monthly renewal</>}</dd>
+          {info.renews_at && <><dt>Next charge</dt><dd>${info.price} on {billDay(info.renews_at)}</dd></>}
           {typeof n === 'number' && <><dt>Signatures left</dt><dd>{n}<small>They stay yours after you stop</small></dd></>}
         </dl>
         {error && <div className="notice err" role="alert" style={{ marginBottom: 14 }}>{error}</div>}
-        <button type="button" className="btn primary lg" disabled={busy} onClick={stop}>{busy ? 'Stopping' : 'Stop renewing'}</button>
+        <div className="pub-actions-row" style={{ marginTop: 0 }}>
+          <button type="button" className="btn primary lg" disabled={busy} onClick={stop}>{busy ? 'Stopping' : 'Stop renewing'}</button>
+        </div>
         <ul className="pub-list muted small" style={{ margin: '18px 0 0' }}>
           <li>You are not charged again. The plan runs until the end of the month you already paid for.</li>
           <li>The signatures you have left stay yours and never expire. Nothing is deleted.</li>

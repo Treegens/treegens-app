@@ -221,6 +221,11 @@ export default function Envelopes() {
                         <span className="muted small">{fmtDate(e.updated_at)}</span>
                       </div>
                       {e.bulk_id && <Link href={`/app/bulk?batch=${e.bulk_id}`} className="small sn-batchlink" onClick={(ev) => ev.stopPropagation()}>Part of a bulk send</Link>}
+                      <div className="sn-only-sm sn-inlineactions" onClick={(ev) => ev.stopPropagation()}>
+                        {e.status === 'sent' && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
+                        {e.status === 'completed' && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
+                        <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move</button>
+                      </div>
                     </td>
                     <td className="hide-sm"><Status s={e.status} /></td>
                     <td className="hide-sm small sn-waiting">{waitingText}</td>

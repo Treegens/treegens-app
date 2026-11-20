@@ -61,7 +61,7 @@ export default function Home() {
           {todo.length > 0 && (
             <section className="card sn-wait you" aria-labelledby="sn-foryou-h">
               <h2 id="sn-foryou-h">Waiting for you</h2>
-              <ul>
+              <ul role="list">
                 {todo.map((i: any) => (
                   <li key={i.id + i.token}>
                     <div className="grow"><b>{i.subject}</b><div className="muted small">from {i.sender}{i.sent_at ? ` · ${howLong(i.sent_at)} ago` : ''}</div></div>
@@ -74,7 +74,7 @@ export default function Home() {
           {others.length > 0 && (
             <section className="card sn-wait" aria-labelledby="sn-onothers-h">
               <div className="row between"><h2 id="sn-onothers-h">Waiting on others</h2>{others.length > SHOWN && <Link href="/app/envelopes?box=waiting" className="small">See all {others.length}</Link>}</div>
-              <ul>
+              <ul role="list">
                 {others.slice(0, SHOWN).map(({ e, w }: any) => {
                   const cold = e.recipients.some((r: any) => neverOpened(r));
                   return (

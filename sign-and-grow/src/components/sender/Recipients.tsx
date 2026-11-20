@@ -114,7 +114,7 @@ export function Recipients({ envelope: e, deliveries, myEmail, onChanged, onCorr
   }
 
   return (
-    <ol className="sn-people">
+    <ol className="sn-people" role="list">
       {e.recipients.map((r: any, i: number) => {
         const turn = out && (r.status === 'sent' || r.status === 'viewed');
         const isMe = r.role !== 'inperson' && r.email.toLowerCase() === myEmail.toLowerCase();

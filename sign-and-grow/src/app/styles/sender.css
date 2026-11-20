@@ -114,6 +114,7 @@ table.sn-list tr.click:hover .sn-subject { text-decoration: underline; }
 .sn-usage-note { background: var(--amber-soft); color: #6f4706; border-radius: 10px; padding: 10px 12px; font-size: 14px; margin: 0 0 14px; }
 .sn-rules { margin: 0; padding-left: 18px; font-size: 14px; color: #3d4a42; columns: 2; column-gap: 36px; }
 .sn-rules li { margin-bottom: 4px; break-inside: avoid; }
+.sn-usage-top + .sn-rules, .sn-usage-top + .sn-usage-note { margin-top: 14px; }
 
 /* ---- Contacts ---- */
 .sn-addcontact { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 12px; align-items: end; }
