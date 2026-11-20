@@ -4,10 +4,11 @@ import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqua
 import { hashPassword, checkPassword, createSession, cookie, SESSION_COOKIE } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver } from './webhooks.ts';
-import { billingEnabled, usageThisMonth, verifyChain, notifyPrefs } from './envelopes.ts';
+import { billingEnabled, verifyChain, notifyPrefs } from './envelopes.ts';
+import { grant, creditSummary } from './credits.ts';
 import { tick } from './cron.ts';
 import { trustInfo } from './routes-trust.ts';
-import { impactOf, PLANS } from '../lib/impact.ts';
+import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 
 const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
@@ -46,6 +47,8 @@ route('POST', '/auth/signup', async (c) => {
       accountId = id('acc');
       run('INSERT INTO accounts (id, name, created_at) VALUES (?,?,?)', accountId, `${name.split(' ')[0]}'s workspace`, t);
       run("INSERT INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,'owner',?)", accountId, uid, t);
+      // A few free signatures to try the product with. Once per account.
+      grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
     }
   });
   const u = get('SELECT * FROM users WHERE id=?', uid);
@@ -133,7 +136,8 @@ route('GET', '/me', (c) => {
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
     ...trustInfo(c),
     accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?', c.user.id),
-    billing: { enabled: billingEnabled(), used: usageThisMonth(a.id), limit: a.plan === 'seedling' && billingEnabled() ? PLANS.seedling.envelopesPerMonth : null },
+    // used/limit are kept at their neutral values for older screens; signatures is the real balance.
+    billing: { enabled: billingEnabled(), used: 0, limit: null, signatures: billingEnabled() ? creditSummary(a.id) : null },
     outbox: devOutbox(),
   };
 }, 'public');
@@ -307,15 +311,14 @@ route('GET', '/reports/summary', (c) => {
 
 function globalImpact() {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE kind='envelope' AND status='completed'");
-  const pay = get('SELECT COALESCE(SUM(amount_cents),0) cents FROM payments WHERE refunded_at IS NULL');
-  const treeCost = Number(process.env.TREE_COST_USD) || null;
-  return { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: treeCost ? Math.floor(pay.cents / 100 / treeCost) : null };
+  const pay = get('SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments');
+  return { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: mangrovesFor(pay.cents / 100) };
 }
 route('GET', '/public/impact', () => globalImpact(), 'public');
 route('GET', '/impact', (c) => {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE account_id=? AND kind='envelope' AND status='completed'", c.account.id);
-  const pay = get('SELECT COALESCE(SUM(amount_cents),0) cents FROM payments WHERE account_id=? AND refunded_at IS NULL', c.account.id);
-  return { account: { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100 }, everyone: globalImpact() };
+  const pay = get('SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id=?', c.account.id);
+  return { account: { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: mangrovesFor(pay.cents / 100) }, everyone: globalImpact() };
 });
 
 // ---- Public verification -------------------------------------------------------------------

@@ -2,21 +2,28 @@ import { route } from './router.ts';
 import { all, get, run } from './db.ts';
 import { bad, hmac, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
 import { sendMail } from './mail.ts';
-import { billingEnabled, usageThisMonth, usageResetsAt } from './envelopes.ts';
-import { PLANS } from '../lib/impact.ts';
+import { billingEnabled } from './envelopes.ts';
+import { grant, creditSummary, available } from './credits.ts';
+import { PRICING, mangrovesFor } from '../lib/impact.ts';
 
-// Billing is built around the things people most often say went wrong elsewhere:
-//   - Month to month only. No annual term, no notice period, no overage. The free limit is a hard stop, never a bill.
+// How Sign&Grow charges:
+//   - $9 a month adds 9 signatures to the balance. Extra signatures are $1 each. Every dollar plants 10 mangroves.
+//   - Signatures never expire. One is used only when somebody actually signs.
+//   - Month to month. No annual term, no notice period, and nothing is ever charged without an explicit choice.
+// And the things people most often say went wrong elsewhere, handled in code rather than in a policy page:
 //   - Cancelling is one button. It also works from an email link without logging in, and by card for people locked out.
 //   - Every charge is announced before it happens and receipted after. The amount shown is the amount charged.
-//   - Refunds are automatic when the rule is met. Nobody has to argue for one.
+//   - Unused signatures from the latest payment are refunded automatically on request. Nobody has to argue for it.
 //   - A charge that arrives after cancellation is refunded by the software itself.
-//   - Stopping payment never deletes or locks anything.
+//   - Stopping payment never deletes or locks anything, and signatures already paid for stay usable.
 
 export const refundDays = () => Number(process.env.REFUND_DAYS) || 30;
 const money = (cents: number, currency = 'usd') => new Intl.NumberFormat('en', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);
 const day = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : '');
 const iso = (unix?: number | null) => (unix ? new Date(unix * 1000).toISOString() : null);
+const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
+const PLAN_PRICE = () => money(PRICING.monthlyUsd * 100);
+const trees = (cents: number) => `${mangrovesFor(cents / 100).toLocaleString('en')} mangrove trees`;
 
 async function stripe(method: 'GET' | 'POST' | 'DELETE', path: string, params: Record<string, string> = {}): Promise<any> {
   const qs = new URLSearchParams(params).toString();
@@ -50,75 +57,96 @@ export function readStopToken(tok: any): string | null {
 }
 const stopUrl = (accountId: string) => `${baseUrl()}/billing/stop?token=${stopToken(accountId)}`;
 
-// Only the most recent charge can be refunded from the app. Once it has been, there is nothing more to give back.
+// Only the most recent payment can be refunded from the app.
 function lastPayment(accountId: string) {
   const p = get('SELECT * FROM payments WHERE account_id=? ORDER BY at DESC, rowid DESC LIMIT 1', accountId);
   return p && !p.refunded_at ? p : null;
 }
 
-// The refund rule, in one place. A charge is refunded in full on request if it is recent, or if nothing was sent since.
-export function refundOffer(account: any): { payment_id: string; amount: string; reason: string } | null {
+// The refund rule, in one place: within the window, every signature from the latest payment that has not been used
+// is refunded at the price paid for it. Nobody needs to approve it.
+export function refundOffer(account: any): { payment_id: string; cents: number; amount: string; signatures: number; of: number; kind: string; reason: string } | null {
   const p = lastPayment(account.id);
-  if (!p) return null;
+  if (!p || !p.credits) return null;
   const ageDays = (Date.now() - Date.parse(p.at)) / 864e5;
-  const sentSince = get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at > ?", account.id, p.at).n;
-  if (ageDays <= refundDays()) return { payment_id: p.id, amount: money(p.amount_cents, p.currency), reason: `charged ${Math.max(0, Math.floor(ageDays))} day(s) ago, inside the ${refundDays()}-day window` };
-  if (sentSince === 0 && ageDays <= 370) return { payment_id: p.id, amount: money(p.amount_cents, p.currency), reason: 'nothing has been sent since this charge' };
-  return null;
+  if (ageDays > refundDays()) return null;
+  const unused = Math.min(p.credits, Math.max(0, available(account.id)));
+  if (unused <= 0) return null;
+  const cents = Math.round((p.amount_cents / p.credits) * unused);
+  return {
+    payment_id: p.id, cents, amount: money(cents, p.currency), signatures: unused, of: p.credits, kind: p.kind,
+    reason: unused === p.credits ? `none of its ${sigs(p.credits)} have been used` : `${unused} of its ${sigs(p.credits)} have not been used`,
+  };
 }
 
 // How long a paid account can go without sending anything before its renewal is stopped for it. 0 turns this off.
 export const dormantStopDays = () => (process.env.DORMANT_AUTO_STOP_DAYS === undefined ? 90 : Number(process.env.DORMANT_AUTO_STOP_DAYS) || 0);
 
+const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', adjust: 'Adjustment' };
+
 export function billingState(account: any, user?: any) {
   const enabled = billingEnabled();
-  const limit = account.plan === 'seedling' && enabled ? PLANS.seedling.envelopesPerMonth : null;
+  const paid = get('SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id=?', account.id).cents;
   return {
     enabled,
     plan: account.plan,
     status: account.subscription_status,
-    price: PLANS[account.plan as keyof typeof PLANS]?.price ?? 0,
+    price: PRICING.monthlyUsd,
+    pricing: PRICING,
     renews_at: account.plan === 'grove' && !account.cancel_at ? account.renews_at : null,
     ends_at: account.plan === 'grove' ? account.cancel_at : null,
-    used: usageThisMonth(account.id),
-    limit,
-    resets_at: usageResetsAt(),
-    refund: account.plan === 'grove' || lastPayment(account.id) ? refundOffer(account) : null,
+    // What can be sent right now: the balance, minus signatures held for people who have been asked and not signed yet.
+    signatures: enabled ? creditSummary(account.id) : null,
+    mangroves: mangrovesFor(paid / 100),
+    refund: enabled ? refundOffer(account) : null,
     refund_days: refundDays(),
     dormant_stop_days: dormantStopDays(),
     // Other paid plans this person already manages, so nobody pays twice without noticing.
     other_paid: user ? all("SELECT a.name FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role IN ('owner','admin') AND a.plan='grove' AND a.id!=?", user.id, account.id).map((r) => r.name) : [],
-    payments: all('SELECT id, amount_cents, currency, at, receipt_url, refunded_at FROM payments WHERE account_id=? ORDER BY at DESC LIMIT 60', account.id)
-      .map((p) => ({ ...p, amount: money(p.amount_cents, p.currency) })),
+    payments: all('SELECT id, amount_cents, currency, at, receipt_url, refunded_at, refunded_cents, kind, credits FROM payments WHERE account_id=? ORDER BY at DESC, rowid DESC LIMIT 60', account.id)
+      .map((p) => ({ ...p, amount: money(p.amount_cents, p.currency), refunded: p.refunded_cents ? money(p.refunded_cents, p.currency) : null })),
+    ledger: all('SELECT delta, reason, at FROM credits WHERE account_id=? ORDER BY id DESC LIMIT 40', account.id).map((l) => ({ ...l, label: LEDGER_LABEL[l.reason] || l.reason })),
+    // Left over from the first pricing model. Always neutral now.
+    used: 0, limit: null, resets_at: null,
   };
 }
 
 // Cancelling. One state change with the payment provider, a reference number, and an email that says when billing stops.
 export async function cancelPlan(account: any, by: string, quiet = false): Promise<{ ends_at: string; reference: string }> {
-  if (account.plan !== 'grove' || !account.stripe_subscription_id) throw bad('There is no paid plan on this account, so there is nothing to cancel and nothing will be charged.');
+  if (account.plan !== 'grove' || !account.stripe_subscription_id) throw bad('There is no monthly plan on this account, so there is nothing to cancel and nothing will be charged.');
   if (account.cancel_at) return { ends_at: account.cancel_at, reference: account.cancel_ref || '' };
   const sub = await stripe('POST', `subscriptions/${account.stripe_subscription_id}`, { cancel_at_period_end: 'true' });
   const ends = periodEnd(sub) || account.renews_at || now();
   const reference = `SG-${account.id.slice(-5).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
   run('UPDATE accounts SET cancel_at=?, cancel_ref=? WHERE id=?', ends, reference, account.id);
   if (quiet) return { ends_at: ends, reference };
-  await mailAdmins(account.id, 'Your Grove plan is cancelled', 'Cancelled. You will not be charged again.', [
+  const left = Math.max(0, available(account.id));
+  await mailAdmins(account.id, `Your ${PRICING.planName} plan is cancelled`, 'Cancelled. You will not be charged again.', [
     `Cancellation reference: ${reference}. Cancelled ${by}.`,
-    `Grove stays active until ${day(ends)}, because that time is already paid for. After that the account moves to the free Seedling plan.`,
-    'Nothing is deleted. Every document, audit trail and receipt stays available to you, on the free plan, for as long as the account exists.',
+    `The plan runs until ${day(ends)}, because that month is already paid for. No more payments are taken after that.`,
+    `Your signatures stay yours: the ${sigs(left)} you have left never expire, and signing your own documents is always free.`,
+    'Nothing is deleted. Every document, audit trail and receipt stays available to you for as long as the account exists.',
     'If a charge ever appears after this date, we refund it automatically.',
   ], { label: 'Changed your mind? Resume', url: `${baseUrl()}/app/settings?tab=billing` });
   return { ends_at: ends, reference };
 }
 
-async function refundPayment(account: any, p: any, why: string): Promise<string> {
-  const charges = await stripe('GET', 'charges', { customer: account.stripe_customer_id, limit: '20' });
-  const charge = (charges.data || []).find((c: any) => c.paid && !c.refunded && c.amount === p.amount_cents);
-  if (!charge) throw bad('We could not find that charge automatically. Use the contact form and a person will refund it by hand.', 502);
-  const refund = await stripe('POST', 'refunds', { charge: charge.id });
-  run('UPDATE payments SET refunded_at=?, charge_id=? WHERE id=?', now(), charge.id, p.id);
-  await mailAdmins(account.id, `Refund sent: ${money(p.amount_cents, p.currency)}`, 'Your refund is on its way', [
-    `We refunded ${money(p.amount_cents, p.currency)} in full to the card it was paid with (${why}).`,
+// Sends money back to where it came from and records it. `cents` may be part of the payment.
+async function refundPayment(account: any, p: any, cents: number, signatures: number, why: string): Promise<string> {
+  let target: Record<string, string>;
+  if (String(p.charge_id || '').startsWith('pi_')) target = { payment_intent: p.charge_id };
+  else if (String(p.charge_id || '').startsWith('ch_')) target = { charge: p.charge_id };
+  else {
+    const charges = await stripe('GET', 'charges', { customer: account.stripe_customer_id, limit: '20' });
+    const charge = (charges.data || []).find((c: any) => c.paid && !c.refunded && c.amount === p.amount_cents);
+    if (!charge) throw bad('We could not find that charge automatically. Use the contact form and a person will refund it by hand.', 502);
+    target = { charge: charge.id };
+  }
+  const refund = await stripe('POST', 'refunds', { ...target, amount: String(cents) });
+  run('UPDATE payments SET refunded_at=?, refunded_cents=refunded_cents+? WHERE id=?', now(), cents, p.id);
+  if (signatures > 0) grant(account.id, -signatures, 'refund', p.id);
+  await mailAdmins(account.id, `Refund sent: ${money(cents, p.currency)}`, 'Your refund is on its way', [
+    `We refunded ${money(cents, p.currency)} to the card it was paid with (${why}).`,
     `Refund reference: ${refund.id}. Banks usually show it within 5 to 10 working days.`,
   ]);
   return refund.id;
@@ -129,7 +157,7 @@ route('GET', '/billing', (c) => billingState(c.account, c.user));
 route('POST', '/billing/checkout', async (c) => {
   if (!billingEnabled() || !process.env.STRIPE_PRICE_GROVE) throw bad('Billing is not set up on this server yet.', 501);
   const a = c.account;
-  if (a.plan === 'grove' && !a.cancel_at) throw bad('This account is already on Grove.');
+  if (a.plan === 'grove' && !a.cancel_at) throw bad(`This account is already on the ${PRICING.planName} plan.`);
   const s = await stripe('POST', 'checkout/sessions', {
     mode: 'subscription', 'line_items[0][price]': process.env.STRIPE_PRICE_GROVE, 'line_items[0][quantity]': '1',
     client_reference_id: a.id, success_url: `${baseUrl()}/app/settings?tab=billing&upgraded=1&session_id={CHECKOUT_SESSION_ID}`, cancel_url: `${baseUrl()}/app/settings?tab=billing`,
@@ -138,30 +166,72 @@ route('POST', '/billing/checkout', async (c) => {
   return { url: s.url };
 }, 'admin');
 
-// Turns the paid plan on. Used by the provider's event and by the return from checkout, whichever arrives first.
+// Buy extra signatures. A one-off payment, chosen on purpose, with the exact price shown before paying.
+// It never changes the plan or the monthly price.
+route('POST', '/billing/topup', async (c) => {
+  if (!billingEnabled()) throw bad('Billing is not set up on this server yet.', 501);
+  const a = c.account;
+  if (a.plan !== 'grove') throw bad(`Top-ups are for accounts on the monthly plan. Start it for ${PLAN_PRICE()} a month and you get ${sigs(PRICING.monthlySignatures)} straight away.`);
+  const quantity = Math.round(Number((await c.body()).quantity));
+  if (!Number.isFinite(quantity) || quantity < 1 || quantity > PRICING.topUpMax) throw bad(`Choose between 1 and ${PRICING.topUpMax} signatures.`);
+  const s = await stripe('POST', 'checkout/sessions', {
+    mode: 'payment', 'line_items[0][quantity]': String(quantity),
+    'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': String(PRICING.topUpUsd * 100),
+    'line_items[0][price_data][product_data][name]': `Sign&Grow signature (plants ${PRICING.treesPerUsd} mangrove trees)`,
+    'metadata[kind]': 'topup', 'metadata[credits]': String(quantity),
+    client_reference_id: a.id, success_url: `${baseUrl()}/app/settings?tab=billing&topped=1&session_id={CHECKOUT_SESSION_ID}`, cancel_url: `${baseUrl()}/app/settings?tab=billing`,
+    ...(a.stripe_customer_id ? { customer: a.stripe_customer_id } : { customer_email: c.user.email }),
+  });
+  return { url: s.url, quantity, total: money(quantity * PRICING.topUpUsd * 100) };
+}, 'admin');
+
+// Turns the monthly plan on. Used by the provider's event and by the return from checkout, whichever arrives first.
 async function activate(accountId: string, customer: string, subscription: string): Promise<boolean> {
   const a = get('SELECT * FROM accounts WHERE id=?', accountId);
   if (!a) return false;
   if (a.plan === 'grove' && a.stripe_subscription_id === subscription && !a.cancel_at) return false;
   run("UPDATE accounts SET plan='grove', stripe_customer_id=?, stripe_subscription_id=?, subscription_status='active', cancel_at=NULL, cancel_ref=NULL WHERE id=?", customer, subscription, accountId);
-  await mailAdmins(accountId, 'Welcome to Grove', 'Thank you. Your subscription plants trees.', [
-    `You are on Grove at ${money(PLANS.grove.price * 100)} a month. It is month to month: no contract, no notice period, no extra charges, ever.`,
-    'You get a receipt for every charge and a reminder before each renewal. The amount in the reminder is the amount we charge.',
-    `Changed your mind? Any charge is refunded in full within ${refundDays()} days, from the Plan page, without talking to anyone.`,
+  await mailAdmins(accountId, `Welcome to ${PRICING.planName}`, 'Thank you. Your signatures plant mangroves.', [
+    `You are on the monthly plan: ${PLAN_PRICE()} a month adds ${sigs(PRICING.monthlySignatures)} to your balance with every payment. That is ${trees(PRICING.monthlyUsd * 100)} planted each month.`,
+    `Signatures never expire, so what you do not use rolls over. Need more? Top up any time at ${money(PRICING.topUpUsd * 100)} a signature.`,
+    'It is month to month: no contract, no notice period, and nothing is ever charged unless you choose it. You get a receipt for every payment and a reminder before each renewal.',
+    `Changed your mind? Unused signatures from your latest payment are refunded in full within ${refundDays()} days, from the Plan page, without talking to anyone.`,
     'To stop renewing, use the Cancel button on the Plan page or the link below. It works without logging in.',
   ], { label: 'Stop renewing (no login needed)', url: stopUrl(accountId) });
   return true;
 }
 
-// Coming back from checkout: switch the plan on now instead of waiting for the provider's event to arrive.
+// Records a paid top-up and adds its signatures. Safe to call twice for the same payment.
+async function applyTopUp(s: any): Promise<boolean> {
+  const a = s.client_reference_id ? get('SELECT * FROM accounts WHERE id=?', s.client_reference_id) : null;
+  const cents = Number(s.amount_total) || 0;
+  // Never trust the count alone: it can be no more than what was actually paid for.
+  const credits = Math.min(Math.round(Number(s.metadata?.credits)) || 0, Math.floor(cents / (PRICING.topUpUsd * 100)));
+  if (!a || s.metadata?.kind !== 'topup' || s.payment_status !== 'paid' || credits < 1) return false;
+  const fresh = run("INSERT OR IGNORE INTO payments (id, account_id, amount_cents, currency, at, kind, credits, charge_id) VALUES (?,?,?,?,?,'topup',?,?)", s.id, a.id, cents, s.currency || 'usd', now(), credits, s.payment_intent || null).changes;
+  if (!fresh) return false;
+  grant(a.id, credits, 'topup', s.id);
+  if (s.customer && !a.stripe_customer_id) run('UPDATE accounts SET stripe_customer_id=? WHERE id=?', s.customer, a.id);
+  await mailAdmins(a.id, `Receipt: ${money(cents, s.currency)} for ${sigs(credits)}`, `${sigs(credits)} added. Thank you.`, [
+    `${money(cents, s.currency)} for ${a.name}, paid today. You now have ${sigs(Math.max(0, available(a.id)))} to send.`,
+    `That plants ${trees(cents)} with Treegens.`,
+    `Signatures never expire. Any you have not used are refundable in full within ${refundDays()} days, from the Plan page.`,
+  ], { label: 'Open the Plan page', url: `${baseUrl()}/app/settings?tab=billing` });
+  return true;
+}
+
+// Coming back from checkout: apply the plan or the top-up now instead of waiting for the provider's event to arrive.
 route('POST', '/billing/sync', async (c) => {
   const sessionId = str((await c.body()).session_id, 200);
   if (!billingEnabled() || !/^cs_[A-Za-z0-9_]+$/.test(sessionId)) return billingState(c.account, c.user);
   const s = await stripe('GET', `checkout/sessions/${sessionId}`);
-  if (s.client_reference_id === c.account.id && s.subscription && ['paid', 'no_payment_required'].includes(s.payment_status)) {
-    await activate(c.account.id, s.customer, s.subscription);
-    const sub = await stripe('GET', `subscriptions/${s.subscription}`).catch(() => null);
-    if (sub) run('UPDATE accounts SET renews_at=? WHERE id=?', periodEnd(sub), c.account.id);
+  if (s.client_reference_id === c.account.id) {
+    if (s.mode === 'payment') await applyTopUp(s);
+    else if (s.subscription && ['paid', 'no_payment_required'].includes(s.payment_status)) {
+      await activate(c.account.id, s.customer, s.subscription);
+      const sub = await stripe('GET', `subscriptions/${s.subscription}`).catch(() => null);
+      if (sub) run('UPDATE accounts SET renews_at=? WHERE id=?', periodEnd(sub), c.account.id);
+    }
   }
   return billingState(get('SELECT * FROM accounts WHERE id=?', c.account.id), c.user);
 }, 'admin');
@@ -180,18 +250,21 @@ route('POST', '/billing/resume', async (c) => {
   if (!a.cancel_at || !a.stripe_subscription_id) throw bad('This plan is not set to end.');
   const sub = await stripe('POST', `subscriptions/${a.stripe_subscription_id}`, { cancel_at_period_end: 'false' });
   run('UPDATE accounts SET cancel_at=NULL, cancel_ref=NULL, renews_at=? WHERE id=?', periodEnd(sub) || a.renews_at, a.id);
-  return billingState(get('SELECT * FROM accounts WHERE id=?', a.id));
+  return billingState(get('SELECT * FROM accounts WHERE id=?', a.id), c.user);
 }, 'admin');
 
-// Self-serve refund. If the rule is met the money goes back straight away, and the paid plan ends now.
+// Self-serve refund of whatever has not been used from the latest payment. Refunding a plan payment also ends the plan.
 route('POST', '/billing/refund', async (c) => {
   const a = c.account;
   const offer = refundOffer(a);
-  if (!offer) throw bad(`A refund is automatic within ${refundDays()} days of a charge, or later if nothing was sent since. This charge is outside both, but use the contact form and a person will look at it.`);
-  const reference = await refundPayment(a, get('SELECT * FROM payments WHERE id=?', offer.payment_id), offer.reason);
-  if (a.stripe_subscription_id) await stripe('DELETE', `subscriptions/${a.stripe_subscription_id}`).catch(() => {});
-  run("UPDATE accounts SET plan='seedling', subscription_status='canceled', cancel_at=NULL, renews_at=NULL WHERE id=?", a.id);
-  return { refunded: offer.amount, reference };
+  if (!offer) throw bad(`Unused signatures from your latest payment are refunded automatically within ${refundDays()} days. There is nothing unused inside that window right now, but use the contact form and a person will look at it.`);
+  const p = get('SELECT * FROM payments WHERE id=?', offer.payment_id);
+  const reference = await refundPayment(a, p, offer.cents, offer.signatures, offer.reason);
+  if (p.kind === 'plan') {
+    if (a.stripe_subscription_id) await stripe('DELETE', `subscriptions/${a.stripe_subscription_id}`).catch(() => {});
+    run("UPDATE accounts SET plan='seedling', subscription_status='canceled', cancel_at=NULL, renews_at=NULL WHERE id=?", a.id);
+  }
+  return { refunded: offer.amount, signatures: offer.signatures, reference, plan_ended: p.kind === 'plan' };
 }, 'admin');
 
 // Take the card off file. The plan is set to end first, so nothing can fail to renew by surprise.
@@ -210,7 +283,7 @@ route('GET', '/public/billing/stop', (c) => {
   const id = readStopToken(c.q.get('token'));
   const a = id && get('SELECT * FROM accounts WHERE id=?', id);
   if (!a) throw bad('This link has expired. Use "Find my subscription" below and we will email you a new one.', 410);
-  return { account: a.name, plan: a.plan, price: PLANS.grove.price, renews_at: a.cancel_at ? null : a.renews_at, ends_at: a.cancel_at };
+  return { account: a.name, plan: a.plan, price: PRICING.monthlyUsd, renews_at: a.cancel_at ? null : a.renews_at, ends_at: a.cancel_at, signatures_left: Math.max(0, available(a.id)) };
 }, 'public');
 
 route('POST', '/public/billing/stop', async (c) => {
@@ -230,9 +303,9 @@ route('POST', '/public/billing/find', async (c) => {
   const rows = all("SELECT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id JOIN users u ON u.id=m.user_id WHERE u.email=? AND m.role IN ('owner','admin') AND a.plan='grove'", email);
   if (rows.length)
     await sendMail({
-      to: email, subject: 'Your Sign&Grow subscriptions', heading: 'Your paid plans',
+      to: email, subject: 'Your Sign&Grow subscriptions', heading: 'Your monthly plans',
       lines: ['You asked which paid plans are tied to this email address. Each link below stops that plan from renewing. No login needed.'],
-      links: rows.map((a) => ({ label: `Stop renewal for ${a.name}`, url: stopUrl(a.id), note: a.cancel_at ? `already cancelled, ends ${day(a.cancel_at)}` : `${money(PLANS.grove.price * 100)} a month${a.renews_at ? `, next charge ${day(a.renews_at)}` : ''}` })),
+      links: rows.map((a) => ({ label: `Stop renewal for ${a.name}`, url: stopUrl(a.id), note: a.cancel_at ? `already cancelled, ends ${day(a.cancel_at)}` : `${PLAN_PRICE()} a month${a.renews_at ? `, next charge ${day(a.renews_at)}` : ''}` })),
     });
   else
     await sendMail({ to: email, subject: 'Your Sign&Grow subscriptions', heading: 'No paid plans found', lines: ['There is no paid Sign&Grow plan tied to this email address, so we are not charging you.', 'If you see a charge from us anyway, it may be under a different address. Use the contact form with the date and amount and a person will trace it.'], cta: { label: 'Contact us', url: `${baseUrl()}/help` } });
@@ -273,27 +346,31 @@ export async function applyStripeEvent(ev: any) {
   const byCustomer = () => (o.customer ? get('SELECT * FROM accounts WHERE stripe_customer_id=?', o.customer) : null);
 
   if (ev.type === 'checkout.session.completed' && o.client_reference_id) {
-    await activate(o.client_reference_id, o.customer, o.subscription);
+    if (o.mode === 'payment') await applyTopUp(o);
+    else await activate(o.client_reference_id, o.customer, o.subscription);
     return;
   }
 
+  // The monthly payment. Each one adds the plan's signatures to the balance.
   if (ev.type === 'invoice.paid' && o.amount_paid > 0) {
     const a = byCustomer();
-    const fresh = run('INSERT OR IGNORE INTO payments (id, account_id, amount_cents, currency, at, receipt_url) VALUES (?,?,?,?,?,?)', o.id, a?.id ?? null, o.amount_paid, o.currency || 'usd', now(), o.hosted_invoice_url || o.invoice_pdf || null).changes;
+    const fresh = run("INSERT OR IGNORE INTO payments (id, account_id, amount_cents, currency, at, receipt_url, kind, credits) VALUES (?,?,?,?,?,?,'plan',?)", o.id, a?.id ?? null, o.amount_paid, o.currency || 'usd', now(), o.hosted_invoice_url || o.invoice_pdf || null, PRICING.monthlySignatures).changes;
     if (!a && fresh && process.env.SUPPORT_EMAIL)
-      await sendMail({ to: process.env.SUPPORT_EMAIL, subject: 'A payment could not be matched to an account', heading: 'Unmatched payment', lines: [`Invoice ${o.id}, ${money(o.amount_paid, o.currency)}, customer ${o.customer}. Nobody got a plan for this money. Find the payer and either activate their plan or refund it.`] });
+      await sendMail({ to: process.env.SUPPORT_EMAIL, subject: 'A payment could not be matched to an account', heading: 'Unmatched payment', lines: [`Invoice ${o.id}, ${money(o.amount_paid, o.currency)}, customer ${o.customer}. Nobody got signatures for this money. Find the payer and either add their signatures or refund it.`] });
     if (!a || !fresh) return;
     const next = iso(o.lines?.data?.[0]?.period?.end);
     // Safety net for "charged after I cancelled": if the plan had already ended, the money goes straight back.
     if (a.plan !== 'grove' || (a.cancel_at && Date.parse(a.cancel_at) < Date.now() - 3600_000)) {
-      await refundPayment(a, get('SELECT * FROM payments WHERE id=?', o.id), 'this plan was already cancelled').catch((e) => console.error('[billing] automatic refund failed', a.id, e?.message));
+      await refundPayment(a, get('SELECT * FROM payments WHERE id=?', o.id), o.amount_paid, 0, 'this plan was already cancelled').catch((e) => console.error('[billing] automatic refund failed', a.id, e?.message));
       return;
     }
+    grant(a.id, PRICING.monthlySignatures, 'plan', o.id);
     if (next) run('UPDATE accounts SET renews_at=? WHERE id=?', next, a.id);
-    await mailAdmins(a.id, `Receipt: ${money(o.amount_paid, o.currency)} for Sign&Grow Grove`, 'Payment received. Thank you.', [
-      `${money(o.amount_paid, o.currency)} for ${a.name}, charged today. All of it goes to Treegens tree planting.`,
-      ...(next && !a.cancel_at ? [`Next charge: ${money(PLANS.grove.price * 100)} on ${day(next)}. We will remind you before then.`] : []),
-      `Not what you wanted? Get this charge back in full within ${refundDays()} days from the Plan page.`,
+    await mailAdmins(a.id, `Receipt: ${money(o.amount_paid, o.currency)} for ${sigs(PRICING.monthlySignatures)}`, 'Payment received. Thank you.', [
+      `${money(o.amount_paid, o.currency)} for ${a.name}, charged today. ${sigs(PRICING.monthlySignatures)} added: you now have ${sigs(Math.max(0, available(a.id)))} to send.`,
+      `That plants ${trees(o.amount_paid)} with Treegens.`,
+      ...(next && !a.cancel_at ? [`Next charge: ${PLAN_PRICE()} on ${day(next)}. We will remind you before then.`] : []),
+      `Not what you wanted? Unused signatures from this payment are refunded in full within ${refundDays()} days, from the Plan page.`,
     ], o.hosted_invoice_url ? { label: 'View invoice', url: o.hosted_invoice_url } : { label: 'Open the Plan page', url: `${baseUrl()}/app/settings?tab=billing` });
     return;
   }
@@ -309,27 +386,28 @@ export async function applyStripeEvent(ev: any) {
     if (stopAfter > 0 && Date.parse(a.created_at) < Date.now() - stopAfter * 864e5
       && get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at > ?", a.id, new Date(Date.now() - stopAfter * 864e5).toISOString()).n === 0) {
       const r = await cancelPlan(a, `automatically, because nothing was sent in ${stopAfter} days`, true);
-      await mailAdmins(a.id, 'We stopped your Grove renewal so you are not charged for nothing', `You will not be charged on ${day(when)}`, [
+      await mailAdmins(a.id, 'We stopped your renewal so you are not charged for nothing', `You will not be charged on ${day(when)}`, [
         `${a.name} has not sent anything in ${stopAfter} days, so we turned the renewal off rather than charge you again. Reference ${r.reference}.`,
-        `Grove stays active until ${day(r.ends_at)}. After that you are on the free plan, with every document kept.`,
-        'If you want to keep Grove (thank you: every cent plants trees), one click on the Plan page turns it back on.',
-      ], { label: 'Keep Grove', url: `${baseUrl()}/app/settings?tab=billing` });
+        `You keep the ${sigs(Math.max(0, available(a.id)))} you already have. They never expire.`,
+        'If you want to keep the monthly plan (thank you: every dollar plants mangroves), one click on the Plan page turns it back on.',
+      ], { label: 'Keep my plan', url: `${baseUrl()}/app/settings?tab=billing` });
       return;
     }
-    const quiet = get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at > ?", a.id, new Date(Date.now() - 60 * 864e5).toISOString()).n === 0;
-    await mailAdmins(a.id, `Heads up: Grove renews on ${day(when)} for ${money(o.amount_due ?? PLANS.grove.price * 100, o.currency)}`, 'Your plan renews soon', [
-      `On ${day(when)} we will charge ${money(o.amount_due ?? PLANS.grove.price * 100, o.currency)} for ${a.name}. That is the full amount: there are no extras.`,
-      ...(quiet ? ['You have not sent anything in the last 60 days. If you are not using it, stop the renewal below. You keep every document either way.'] : []),
-      'To keep planting trees, do nothing. To stop, use the link below. It takes one click and needs no login.',
+    const left = Math.max(0, available(a.id));
+    const amount = money(o.amount_due ?? PRICING.monthlyUsd * 100, o.currency);
+    await mailAdmins(a.id, `Heads up: your plan renews on ${day(when)} for ${amount}`, 'Your plan renews soon', [
+      `On ${day(when)} we will charge ${amount} for ${a.name} and add ${sigs(PRICING.monthlySignatures)}. That is the full amount: there are no extras.`,
+      `You have ${sigs(left)} left at the moment. They roll over either way.`,
+      'To keep planting mangroves, do nothing. To stop, use the link below. It takes one click and needs no login.',
     ], { label: 'Do not renew', url: stopUrl(a.id) });
     return;
   }
 
   if (ev.type === 'invoice.payment_failed') {
     const a = byCustomer();
-    if (a) await mailAdmins(a.id, 'Your Grove payment did not go through', 'A payment failed', [
-      'Nothing is locked and nothing is deleted. If the payment keeps failing, the account simply moves to the free Seedling plan and every document stays available.',
-      'To stay on Grove, update the card on the Plan page.',
+    if (a) await mailAdmins(a.id, 'Your monthly payment did not go through', 'A payment failed', [
+      'Nothing is locked and nothing is deleted. If the payment keeps failing, the monthly plan simply ends. Every document stays available, and the signatures you already have stay yours.',
+      'To keep the plan, update the card on the Plan page.',
     ], { label: 'Open the Plan page', url: `${baseUrl()}/app/settings?tab=billing` });
     return;
   }
@@ -343,13 +421,15 @@ export async function applyStripeEvent(ev: any) {
     run('UPDATE accounts SET plan=?, subscription_status=?, renews_at=?, cancel_at=? WHERE id=?', live ? 'grove' : 'seedling', ended ? 'canceled' : o.status,
       live ? end : null, live && o.cancel_at_period_end ? end || a.cancel_at : null, a.id);
     if (!live && a.plan === 'grove')
-      await mailAdmins(a.id, 'Your Grove plan has ended', 'You are on the free plan now', ['You will not be charged again. Nothing was deleted: every document, audit trail and receipt is still in your account.', `You can still send ${PLANS.seedling.envelopesPerMonth} envelopes a month for free, and come back to Grove whenever you like.`]);
+      await mailAdmins(a.id, 'Your monthly plan has ended', 'Your plan has ended', ['You will not be charged again. Nothing was deleted: every document, audit trail and receipt is still in your account.', `You still have ${sigs(Math.max(0, available(a.id)))}. They never expire, and signing your own documents is always free. Come back to the monthly plan whenever you like.`]);
     return;
   }
 
   if (ev.type === 'charge.refunded') {
+    // A refund made outside the app (for example by a person in the provider's dashboard) is recorded too.
     const a = byCustomer();
-    if (a) run('UPDATE payments SET refunded_at=COALESCE(refunded_at, ?), charge_id=? WHERE id=(SELECT id FROM payments WHERE account_id=? AND amount_cents=? AND refunded_at IS NULL ORDER BY at DESC LIMIT 1)', now(), o.id, a.id, o.amount);
+    const p = a && get('SELECT * FROM payments WHERE account_id=? AND amount_cents=? AND refunded_cents < ? ORDER BY at DESC, rowid DESC LIMIT 1', a.id, o.amount, o.amount_refunded ?? o.amount);
+    if (p) run('UPDATE payments SET refunded_at=COALESCE(refunded_at, ?), refunded_cents=? WHERE id=?', now(), o.amount_refunded ?? o.amount, p.id);
     return;
   }
 
@@ -373,16 +453,16 @@ route('POST', '/stripe/webhook', async (c) => {
   return { received: true };
 }, 'public');
 
-// Once a month at most: tell people who pay but do not use it, so nobody funds a forgotten subscription by accident.
+// Once every two months at most: tell people who pay but do not send, so nobody funds a forgotten plan by accident.
 export async function dormancyNudges(): Promise<number> {
   const cutoff = new Date(Date.now() - 60 * 864e5).toISOString();
   const rows = all("SELECT * FROM accounts WHERE plan='grove' AND cancel_at IS NULL AND (dormant_nudged_at IS NULL OR dormant_nudged_at < ?) AND created_at < ?", cutoff, cutoff)
     .filter((a) => get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at > ?", a.id, cutoff).n === 0);
   for (const a of rows) {
     run('UPDATE accounts SET dormant_nudged_at=? WHERE id=?', now(), a.id);
-    await mailAdmins(a.id, 'Still using Sign&Grow?', 'You are paying for Grove but have not sent anything in 60 days', [
-      `${a.name} is on Grove at ${money(PLANS.grove.price * 100)} a month. Every cent plants trees, and we are grateful. But we would rather you paid on purpose.`,
-      'If you are not using it, stop the renewal with the link below. You keep every document, and the free plan stays yours.',
+    await mailAdmins(a.id, 'Still using Sign&Grow?', 'You are on the monthly plan but have not sent anything in 60 days', [
+      `${a.name} pays ${PLAN_PRICE()} a month and has ${sigs(Math.max(0, available(a.id)))} saved up. Every dollar plants mangroves, and we are grateful. But we would rather you paid on purpose.`,
+      'If you are not using it, stop the renewal with the link below. You keep every document and every signature you have already paid for.',
     ], { label: 'Stop renewing (no login needed)', url: stopUrl(a.id) });
   }
   return rows.length;

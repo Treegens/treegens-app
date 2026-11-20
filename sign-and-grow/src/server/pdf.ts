@@ -4,7 +4,7 @@ import { PDFDocument, PDFPage, PDFFont, rgb, degrees } from 'pdf-lib';
 import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
 import { bad } from './util.ts';
-import { impactOf, fmtTrees, fmtNum } from '../lib/impact.ts';
+import { impactOf, fmtTrees, fmtNum, PRICING } from '../lib/impact.ts';
 import { formatDate } from '../lib/dates.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
@@ -314,7 +314,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     { x: s.L + 14, y: s.y - 36, size: 8.5, font: ctx.font, color: INK },
   );
   s.page.drawText(
-    clean(`(${fmtTrees(i.trees)} of a tree, estimated). 100% of Sign&Grow subscription revenue goes to Treegens tree planting.`),
+    clean(`(${fmtTrees(i.trees)} of a tree, estimated). Every dollar paid to Sign&Grow plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`),
     { x: s.L + 14, y: s.y - 49, size: 8.5, font: ctx.font, color: INK },
   );
 }

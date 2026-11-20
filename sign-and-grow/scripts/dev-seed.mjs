@@ -75,10 +75,17 @@ async function make(name, recipients, send = true, extra = {}) {
 }
 
 const s = stamp;
-await make('Draft agreement', [{ name: 'Ada Sponsor', email: `ada-${s}@example.org` }], false);
-await make('Waiting agreement', [{ name: 'Ada Sponsor', email: `ada-${s}@example.org` }, { name: 'Ben Partner', email: `ben-${s}@example.org` }, { name: 'Cee Copy', email: `cee-${s}@example.org`, role: 'cc' }], true, { ordered: true });
-await make('Code agreement', [{ name: 'Dee Careful', email: `dee-${s}@example.org`, access_code: '4242' }]);
-const voidId = await make('Voided agreement', [{ name: 'Eve Early', email: `eve-${s}@example.org` }]);
-await api(`/envelopes/${voidId}/void`, { body: { reason: 'Sent the wrong version' } });
+// The voided one goes first: voiding hands its signature back, so a new account's free signatures cover the rest.
+const steps = [
+  async () => {
+    const voidId = await make('Voided agreement', [{ name: 'Eve Early', email: `eve-${s}@example.org` }]);
+    await api(`/envelopes/${voidId}/void`, { body: { reason: 'Sent the wrong version' } });
+  },
+  () => make('Draft agreement', [{ name: 'Ada Sponsor', email: `ada-${s}@example.org` }], false),
+  () => make('Waiting agreement', [{ name: 'Ada Sponsor', email: `ada-${s}@example.org` }, { name: 'Ben Partner', email: `ben-${s}@example.org` }, { name: 'Cee Copy', email: `cee-${s}@example.org`, role: 'cc' }], true, { ordered: true }),
+  () => make('Code agreement', [{ name: 'Dee Careful', email: `dee-${s}@example.org`, access_code: '4242' }]),
+];
+out.problems = [];
+for (const step of steps) await step().catch((e) => out.problems.push(e.message));
 
 console.log(JSON.stringify(out, null, 2));

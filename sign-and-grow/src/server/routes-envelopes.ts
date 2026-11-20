@@ -3,9 +3,11 @@ import { all, get, run, saveBlob, readBlob } from './db.ts';
 import { bad, id, token, now, str, rateLimit, isEmail, baseUrl } from './util.ts';
 import { inspectPdf, imageToPdf } from './pdf.ts';
 import { extractText } from './text.ts';
+import { sendMail } from './mail.ts';
+import { creditsEnabled, available, isChargeable } from './credits.ts';
 import {
   loadEnvelope, publicEnvelope, createEnvelope, saveDraft, copyEnvelope, sendEnvelope, voidEnvelope, remindEnvelope,
-  correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl,
+  correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl, outOfSignatures,
 } from './envelopes.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
@@ -214,6 +216,12 @@ route('POST', '/bulk', async (c) => {
       if (!v || !str(v.name).trim() || !isEmail(str(v.email).trim())) throw bad(`Row ${i + 1}: "${r.role_name || 'Recipient'}" needs a name and a valid email.`);
     }
   });
+  // Check the whole batch against the balance first, so it never stops half way through.
+  if (creditsEnabled()) {
+    const perRow = tpl.recipients.filter((r: any) => isChargeable({ role: r.role, email: r.email || 'someone-else' }, c.user.email)).length;
+    const have = available(c.account.id);
+    if (perRow * rows.length > have) throw bad(outOfSignatures(c.account, perRow * rows.length, have), 402);
+  }
   const bid = id('blk');
   run('INSERT INTO bulk_batches (id, account_id, sender_id, template_id, name, total, created_at) VALUES (?,?,?,?,?,?,?)', bid, c.account.id, c.user.id, tpl.id, str(b.name, 120) || tpl.subject || 'Bulk send', rows.length, now());
   const results: any[] = [];
@@ -307,6 +315,16 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   // Opening the form twice must not create two envelopes: pick up the one this person already started.
   const again = get("SELECT r.token FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.powerform_id=? AND e.status='sent' AND r.email=? AND r.status IN ('sent','viewed') ORDER BY e.sent_at DESC LIMIT 1", p.id, email);
   if (again) return { url: `${baseUrl()}/sign/${again.token}`, resumed: true };
+  // A public form uses one of its owner's signatures for each person who signs. When there are none left the form
+  // says so politely, and the owner is told (once a day at most) instead of finding out from a customer.
+  if (creditsEnabled() && available(p.account_id) < 1) {
+    if (!p.alerted_at || Date.parse(p.alerted_at) < Date.now() - 864e5) {
+      run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
+      const owner = get('SELECT email FROM users WHERE id=?', tpl.sender_id);
+      if (owner) await sendMail({ to: owner.email, subject: `Your form "${p.name}" has run out of signatures`, heading: 'Someone tried to sign your form and could not', lines: [`"${p.name}" needs one signature for each person who signs it, and your balance is empty. They were asked to try again later.`, 'Top up or start the monthly plan and the form works again at once.'], cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } });
+    }
+    throw bad('This form cannot take new signatures right now. Please try again a little later, or contact the people who sent you here.', 503);
+  }
   const eid = copyEnvelope(tpl, { accountId: p.account_id, senderId: tpl.sender_id, kind: 'envelope', subject: p.name, fill: { [open.id]: { name, email } }, extra: { powerform_id: p.id } });
   await sendEnvelope(eid, { name: `${name} <${email}> via PowerForm`, ip: c.ip, ua: c.ua });
   run('UPDATE powerforms SET uses=uses+1 WHERE id=?', p.id);

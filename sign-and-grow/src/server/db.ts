@@ -110,6 +110,11 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE TABLE IF NOT EXISTS idempotency_keys (
   account_id TEXT NOT NULL, key TEXT NOT NULL, envelope_id TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (account_id, key)
 );
+CREATE TABLE IF NOT EXISTS credits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, delta INTEGER NOT NULL, reason TEXT NOT NULL, ref TEXT NOT NULL,
+  at TEXT NOT NULL, UNIQUE (account_id, reason, ref)
+);
+CREATE INDEX IF NOT EXISTS credits_account ON credits(account_id);
 CREATE TABLE IF NOT EXISTS retired_tokens (token TEXT PRIMARY KEY, recipient_id TEXT NOT NULL, retired_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS abuse_reports (
   id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL, account_id TEXT NOT NULL, reporter TEXT, reason TEXT NOT NULL, detail TEXT,
@@ -149,6 +154,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['recipients', 'unopened_alerted_at', 'TEXT'],
   ['recipients', 'dead_link_alerted_at', 'TEXT'],
   ['webhooks', 'alerted_at', 'TEXT'],
+  ['payments', 'kind', "TEXT NOT NULL DEFAULT 'plan'"],
+  ['payments', 'credits', 'INTEGER NOT NULL DEFAULT 0'],
+  ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
+  ['powerforms', 'alerted_at', 'TEXT'],
 ];
 
 function migrate(d: any) {

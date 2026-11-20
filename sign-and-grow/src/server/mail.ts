@@ -1,5 +1,6 @@
 import { run } from './db.ts';
 import { esc, now, baseUrl, fmtCode } from './util.ts';
+import { PRICING } from '../lib/impact.ts';
 
 export type Mail = {
   to: string;
@@ -57,7 +58,7 @@ export function renderMail(m: Mail): string {
     We will tell you who sent it and open the document for you. Sign&amp;Grow never asks for a password, a card number or a payment by email.
   </div>` : ''}
   <p style="font-size:12px;color:#6b776f;line-height:1.6;padding:16px 4px 0">
-    Signed digitally, so no paper, no printer and no courier. Sent with Sign&amp;Grow, where 100% of subscription revenue goes to Treegens tree planting.
+    Signed digitally, so no paper, no printer and no courier. Sent with Sign&amp;Grow, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.
     ${m.cta ? `<br>If the button does not work, copy this link: ${esc(m.cta.url)}` : ''}
     ${m.code ? '<br>Do not forward this email. The link is personal to you.' : ''}
     <br>Need a hand? ${esc(baseUrl())}/help

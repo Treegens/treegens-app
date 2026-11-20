@@ -3,7 +3,8 @@ import { bad, id, token, sha256, now, isEmail, str, baseUrl, checkCode } from '.
 import { sendMail } from './mail.ts';
 import { renderEnvelopePdf } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
-import { sheetsSaved, impactOf, fmtNum, PLANS } from '../lib/impact.ts';
+import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
+import { creditsEnabled, available, needed, isChargeable, grant } from './credits.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 
 export const ROLES = ['signer', 'approver', 'cc', 'viewer', 'inperson'];
@@ -211,6 +212,12 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
     if (lockedView(after, done) !== before)
       throw bad(`${done.map((r: any) => r.name).join(' and ')} already finished, so the documents and what they signed are locked. You can still change what the remaining recipients need to do, or void this envelope and send a new one.`, 409);
     assertSendable(after);
+    if (creditsEnabled()) {
+      // Signers added by this correction need signatures like any others. Everything already out is counted as held.
+      const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
+      const have = available(e.account_id);
+      if (have < 0) throw bad(outOfSignatures(account, needed(after, senderOf(e)?.email || ''), have + needed(after, senderOf(e)?.email || '')), 402);
+    }
     for (const r of after.recipients) {
       const old = oldById.get(r.id);
       if (!old) {
@@ -280,25 +287,13 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
 
 export const billingEnabled = () => !!process.env.STRIPE_SECRET_KEY;
 
-// Envelopes that count toward the free plan this month: the ones out for signature and the ones completed.
-// Voided, declined and expired envelopes never count, corrections and resends are free, and a public form only
-// counts once somebody has actually signed it.
-export function usageThisMonth(accountId: string): number {
-  const start = new Date();
-  start.setUTCDate(1);
-  start.setUTCHours(0, 0, 0, 0);
-  return get(
-    `SELECT COUNT(*) n FROM envelopes e WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at >= ?
-       AND (e.status='completed' OR (e.status='sent' AND e.powerform_id IS NULL))
-       AND EXISTS (SELECT 1 FROM recipients r JOIN users u ON u.id=e.sender_id WHERE r.envelope_id=e.id AND r.email != u.email)`,
-    accountId, start.toISOString(),
-  ).n;
-}
-
-// When the free allowance starts again.
-export function usageResetsAt(): string {
-  const d = new Date();
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString();
+// Said whenever someone runs out of signatures. Nothing is ever charged without them choosing it.
+export function outOfSignatures(account: any, need: number, have: number): string {
+  const short = `This needs ${need} signature${need === 1 ? '' : 's'} and you have ${Math.max(0, have)} left.`;
+  const how = account.plan === 'grove'
+    ? `Top up on the Plan page: $${PRICING.topUpUsd} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`
+    : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`;
+  return `${short} ${how} Nothing is charged unless you choose it. Signing your own documents stays free.`;
 }
 
 // Fake payment notices ("your PayPal order, call this number") are the classic way e-signature services get abused.
@@ -347,8 +342,11 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
   }
   if (account.plan === 'seedling' && Date.now() - Date.parse(account.created_at) < 30 * 864e5 && looksLikeScam(e))
     throw bad('This reads like a payment notice from a well-known brand with a phone number to call, which is how scams look. We do not send those from new accounts. If it is genuine, use the contact form and a person will clear it for you.', 422);
-  if (billingEnabled() && account.plan === 'seedling' && usageThisMonth(account.id) >= PLANS.seedling.envelopesPerMonth)
-    throw bad(`The Seedling plan includes ${PLANS.seedling.envelopesPerMonth} envelopes a month and you have used them all. Nothing extra is ever charged. Upgrade to Grove for unlimited sending, or wait until the 1st.`, 402);
+  // A signature is held for every signer so nobody is stopped halfway. It is only used up when they actually sign,
+  // and it comes back by itself if the envelope is voided, declined or expires.
+  const before = creditsEnabled() ? available(account.id) : Infinity;
+  const need = creditsEnabled() ? needed(e, sender.email) : 0;
+  if (need > before) throw bad(outOfSignatures(account, need, before), 402);
 
   const pages = e.documents.reduce((n: number, d: any) => n + d.pages, 0);
   const t = now();
@@ -364,15 +362,19 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
   });
   fireWebhooks(e.account_id, 'envelope.sent', e.id);
   await advance(e.id);
-  // The free allowance never ends as a surprise: a heads-up at 80% and again when it is used up.
-  if (billingEnabled() && account.plan === 'seedling') {
-    const limit = PLANS.seedling.envelopesPerMonth;
-    const used = usageThisMonth(account.id);
-    if (used === limit || used === Math.ceil(limit * 0.8))
-      await sendMail({ to: sender.email, subject: used === limit ? 'You have used this month\'s free envelopes' : `${used} of ${limit} free envelopes used this month`,
-        heading: used === limit ? 'That was your last free envelope this month' : 'You are close to this month\'s free limit',
-        lines: [`${account.name} has used ${used} of ${limit} envelopes on the free Seedling plan. The count starts again on ${usageResetsAt().slice(0, 10)}.`, 'Nothing extra is ever charged. When the limit is reached, sending simply pauses until the reset or until you choose Grove. Voided, declined and expired envelopes do not count, and signing your own documents is always free.'],
-        cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } });
+  // Running low never comes as a surprise: one email at two signatures left, one at none.
+  if (creditsEnabled() && need > 0) {
+    const after = before - need;
+    for (const mark of [2, 0])
+      if (before > mark && after <= mark) {
+        await sendMail({ to: sender.email, subject: after <= 0 ? 'You have used all your signatures' : `${after} signature${after === 1 ? '' : 's'} left`,
+          heading: after <= 0 ? 'That was your last signature' : `You have ${after} signature${after === 1 ? '' : 's'} left`,
+          lines: [`${account.name} has ${Math.max(0, after)} signature${after === 1 ? '' : 's'} left to send. Envelopes already out are covered and can still be signed.`,
+            account.plan === 'grove' ? `Your plan adds ${PRICING.monthlySignatures} more with each monthly payment, and you can top up any time at $${PRICING.topUpUsd} a signature.` : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures.`,
+            `Nothing is ever charged without you choosing it. Every dollar plants ${PRICING.treesPerUsd} mangrove trees.`],
+          cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } });
+        break;
+      }
   }
 }
 
@@ -600,6 +602,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   run("UPDATE recipients SET status='completed', completed_at=?, viewed_at=COALESCE(viewed_at, ?), ip=?, user_agent=? WHERE id=?", t, t, actor.ip || null, (actor.ua || '').slice(0, 300), r.id);
   audit(e.id, actor, verb, `${r.name} <${r.email}>`);
   fireWebhooks(e.account_id, 'recipient.completed', e.id, { recipient_id: r.id });
+  if (creditsEnabled() && isChargeable(r, senderOf(e)?.email || '')) grant(e.account_id, -1, 'signature', r.id);
   const left = e.recipients.filter((x: any) => x.id !== r.id && x.status !== 'completed' && x.role !== 'cc');
   if (left.length) await notifySender(e, 'signed', `${verb}: ${e.subject}`, `${r.name} has ${verb.toLowerCase()} your document`, [`Still waiting on ${left.map((x: any) => x.name).join(', ')}.`]);
   await advance(e.id);
@@ -639,6 +642,12 @@ export async function extendEnvelope(e: any, days: any, actor: Actor) {
   if (e.kind !== 'envelope' || (e.status !== 'sent' && e.status !== 'expired')) throw bad('Only envelopes that are waiting for signatures, or that expired, can be given more time.');
   const add = int(days, 1, 365, 30);
   const reopened = e.status === 'expired';
+  if (reopened && creditsEnabled()) {
+    // Signatures came back when it expired. Reopening holds them again for whoever still has to sign.
+    const need = needed(e, senderOf(e)?.email || '');
+    const have = available(e.account_id);
+    if (need > have) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), need, have), 402);
+  }
   const from = reopened ? Date.now() : Math.max(Date.now(), Date.parse(e.expires_at || now()));
   const expires = new Date(from + add * 864e5).toISOString();
   run("UPDATE envelopes SET status='sent', expires_at=?, expiry_warned_at=NULL, updated_at=? WHERE id=?", expires, now(), e.id);

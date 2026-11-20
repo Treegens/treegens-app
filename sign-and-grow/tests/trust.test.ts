@@ -302,8 +302,9 @@ test('new free accounts cannot send fake payment notices; signing your own docum
   for (let i = 0; i < 7; i++) {
     const x = await simple(solo, 'solo@example.com');
     assert.equal((await solo.post(`/envelopes/${x.id}/send`)).status, 200, `self-signed document ${i + 1}`);
+    assert.equal((await signAll(x.id, 'solo@example.com')).status, 200);
   }
-  assert.equal((await solo.get('/billing')).data.used, 0);
+  assert.deepEqual((await solo.get('/billing')).data.signatures, { balance: 3, held: 0, available: 3 }, 'none of the free signatures were touched');
   delete process.env.STRIPE_SECRET_KEY;
 });
 
