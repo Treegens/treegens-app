@@ -678,3 +678,26 @@ test('the Help button is on the public pages, in the app and the editor, and on 
   for (const f of ['src/components/HelpChat.tsx', 'src/app/help/tools.tsx', 'src/app/security/DataPlace.tsx', 'src/app/security/page.tsx'])
     assert.ok(!/from '@\/server\//.test(read(f)), f);
 });
+
+test('a page that goes away mid-answer stops the model too, so nothing more is paid for', async () => {
+  provider('openrouter');
+  let aborted = false;
+  stub((c) => {
+    c.signal!.addEventListener('abort', () => (aborted = true));
+    return new Response(new ReadableStream({
+      start(ctl) {
+        ctl.enqueue(enc.encode(`data: ${JSON.stringify(piece('Part one. '))}\n\n`));
+        c.signal!.addEventListener('abort', () => ctl.error(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      },
+    }), { headers: { 'content-type': 'text/event-stream' } });
+  });
+  const { handle } = await import('../src/server/router.ts');
+  const res = await handle(new Request('http://test.local/api/public/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '198.51.200.7' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'Tell me everything' }], screen: 'help' }) }));
+  assert.equal(res.headers.get('content-type'), 'text/event-stream; charset=utf-8');
+  const reader = res.body!.getReader();
+  const first = new TextDecoder().decode((await reader.read()).value);
+  assert.match(first, /"open":true/);
+  await reader.cancel();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(aborted, true);
+});

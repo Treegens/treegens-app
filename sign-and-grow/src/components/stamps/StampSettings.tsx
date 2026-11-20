@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { api, toast, useLoad } from '@/components/ui';
 import { Dialog } from '@/components/sign/Dialog';
 import { StampMaker, OnPaper, type Made } from './StampMaker';
-import { STAMP_IS_TEAM, STAMP_DEFAULT_MM, STAMP_MIN_MM, STAMP_MAX_MM, STAMP_NAME_MAX } from '@/lib/stamps';
+import { STAMP_IS_TEAM, STAMP_DEFAULT_MM, STAMP_MIN_MM, STAMP_MAX_MM, STAMP_NAME_MAX, stampTurn, turnStyle } from '@/lib/stamps';
 import { INK_WORD } from '@/lib/stampink';
 
 // Settings, Stamps: the team's own stamps. Admins add them (a name, a picture made into an impression, its real size),
@@ -32,7 +32,7 @@ function StampForm({ stamp, onClose, onSaved }: { stamp?: any; onClose: () => vo
     setBusy(true);
     setError('');
     try {
-      const look = made ? { image: made.png, ink: made.look.ink, seed: made.look.seed, tilt: made.look.tilt, texture: made.look.texture } : {};
+      const look = made ? { image: made.png, ink: made.look.ink, seed: made.look.seed, tilt: made.look.tilt, texture: made.look.texture, turn: made.look.tilt } : {};
       if (stamp) {
         const r = await api(`/stamps/${stamp.id}`, { method: 'PUT', body: { name, size_mm: mm, ...look } });
         toast(made && r.kept_on_documents ? `Saved. The ${r.kept_on_documents === 1 ? 'document that already has it keeps' : `${r.kept_on_documents} documents that already have it keep`} the old picture.` : 'Saved.');
@@ -62,7 +62,7 @@ function StampForm({ stamp, onClose, onSaved }: { stamp?: any; onClose: () => vo
         {stamp && !file && (
           <OnPaper label={`"${stamp.name}" as it is now`}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img className="st-on st-ink" src={stamp.image_url} alt="" />
+            <img className="st-on st-ink" src={stamp.image_url} alt="" style={turnStyle(stampTurn(stamp.turn))} />
           </OnPaper>
         )}
         {!file && (
@@ -120,7 +120,7 @@ export function StampSettings() {
             <div key={s.id} className="st-item">
               <OnPaper label={`"${s.name}" in ${inkWord(s.ink).toLowerCase()} ink on a page of text`}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className="st-on st-ink" src={s.image_url} alt="" />
+                <img className="st-on st-ink" src={s.image_url} alt="" style={turnStyle(stampTurn(s.turn))} />
               </OnPaper>
               <h3>{s.name}</h3>
               <p className="muted small" style={{ margin: 0 }}>{inkWord(s.ink)} ink, {s.size_mm} mm across{s.updated_by ? `. Last changed by ${s.updated_by}.` : '.'}</p>

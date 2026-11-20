@@ -1185,7 +1185,7 @@ export default function SignPage() {
           }} />
       )}
       {stampField && (
-        <StampDialog base={base} field={stampField} version={version.current} current={stampUrl(stampField) ? { image_url: stampUrl(stampField)! } : null}
+        <StampDialog base={base} field={stampField} version={version.current} current={stampUrl(stampField) ? { image_url: stampUrl(stampField)!, turn: turns[stampField.id] ?? stampTurn(stampField.stamp_meta) } : null}
           onClose={() => setStampFor(null)}
           onChanged={() => { setStampFor(null); setChangedOpen(true); load(); }}
           onPut={(r) => {

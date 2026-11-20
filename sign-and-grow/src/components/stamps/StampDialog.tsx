@@ -3,20 +3,20 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '@/components/ui';
 import { Dialog } from '@/components/sign/Dialog';
 import { StampMaker, OnPaper, type Made } from './StampMaker';
-import { STAMP_IS_YOU } from '@/lib/stamps';
+import { STAMP_IS_YOU, stampTurn, turnStyle } from '@/lib/stamps';
 import { INK_WORD } from '@/lib/stampink';
 
 // Putting a stamp on one stamp field of the signing page: a saved stamp of the signer's own account (only when they
 // are signed in with the address the document went to), a picture of the stamp, or a photo taken now. The picture
 // becomes an impression in this browser (StampMaker) and is sent once, when it is put on. The field holds one.
 
-export type PutStamp = { value: string; image_url: string; stamp: { name: string | null; ink: string | null; from: string | null } };
+export type PutStamp = { value: string; image_url: string; turn?: number; stamp: { name: string | null; ink: string | null; from: string | null } };
 
 export function StampDialog({ base, field, current, version, onClose, onPut, onTakeOff, onChanged }: {
   base: string;
   field: any;
   /** The stamp on the field now, if there is one. */
-  current: { image_url: string; name?: string | null } | null;
+  current: { image_url: string; name?: string | null; turn?: number } | null;
   version: number | null;
   onClose: () => void;
   onPut: (r: PutStamp) => void;
@@ -67,7 +67,7 @@ export function StampDialog({ base, field, current, version, onClose, onPut, onT
       <Dialog title={`Your stamp: ${name}`} onClose={onClose}>
         <OnPaper label={`Your stamp${current.name ? ` "${current.name}"` : ''} on a page of text`}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="st-on st-ink" src={current.image_url} alt="" />
+          <img className="st-on st-ink" src={current.image_url} alt="" style={turnStyle(current.turn || 0)} />
         </OnPaper>
         <p className="muted small">{STAMP_IS_YOU}</p>
         {error && <div className="notice err" role="alert">{error}</div>}
@@ -90,7 +90,7 @@ export function StampDialog({ base, field, current, version, onClose, onPut, onT
                 <label key={s.id} className={`st-card${pick === s.id ? ' on' : ''}`}>
                   <input type="radio" name="st-saved" value={s.id} checked={pick === s.id} onChange={() => setPick(s.id)} />
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={s.image_url} alt="" />
+                  <img src={s.image_url} alt="" style={turnStyle(stampTurn(s.turn))} />
                   <span><b>{s.name}</b><span className="muted small">{INK_WORD[s.ink as keyof typeof INK_WORD] || ''} ink</span></span>
                 </label>
               ))}
@@ -119,7 +119,7 @@ export function StampDialog({ base, field, current, version, onClose, onPut, onT
         <div className="actions">
           <button type="button" className="btn" onClick={current ? () => setReplace(false) : onClose}>{current ? 'Back' : 'Cancel'}</button>
           {file ? (
-            <button type="button" className="btn primary" disabled={!made || busy} onClick={() => made && put({ image: made.png, ink: made.look.ink, seed: made.look.seed, tilt: made.look.tilt, texture: made.look.texture, from: made.from })}>
+            <button type="button" className="btn primary" disabled={!made || busy} onClick={() => made && put({ image: made.png, ink: made.look.ink, seed: made.look.seed, tilt: made.look.tilt, texture: made.look.texture, turn: made.look.tilt, from: made.from })}>
               {busy ? 'Putting it on' : 'Put this stamp on the page'}
             </button>
           ) : (
