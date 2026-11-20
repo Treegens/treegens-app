@@ -1363,3 +1363,94 @@ test('the certificate keeps how the link travelled for someone who signed in per
   assert.equal(checkLine({ role: 'signer', link_by_sender: 1 }, passed), 'Link shared by the sender. One-time code sent by email to s***@example.com, passed 12 March 2026 14:02 UTC');
   assert.equal(checkLine({ role: 'signer' }, passed), 'One-time code sent by email to s***@example.com, passed 12 March 2026 14:02 UTC');
 });
+
+test('limits on codes never let a stranger lock a person out of other senders\' documents, and an office behind one address all get theirs', async () => {
+  // An office: 20 colleagues, each with a document of their own from one sender, all behind one address.
+  const hr = await signUp('Hana Office', 'hana.office@example.com', ip());
+  db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), accountOf('hana.office@example.com'));
+  const office = ip();
+  for (let i = 0; i < 20; i++) {
+    const s = await one(hr, { verify: 'email_code', name: `Colleague ${i}` });
+    const c = Object.assign(new Client(), { ip: office });
+    assert.equal((await c.post(`/sign/${s.tok}/code`)).status, 200, `colleague ${i + 1} was refused a code`);
+  }
+  // Another account fills a mailbox's allowance of codes: Hana's real document to that person still sends one.
+  const victim = fresh('victim');
+  const mallory = await signUp('Mallory Other', 'mallory.other@example.com', ip());
+  db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), accountOf('mallory.other@example.com'));
+  for (let i = 0; i < SIGNER_CODES_PER_DESTINATION_DAY; i++) assert.equal((await visitor().post(`/sign/${(await one(mallory, { verify: 'email_code', email: victim })).tok}/code`)).status, 200);
+  const more = await visitor().post(`/sign/${(await one(mallory, { verify: 'email_code', email: victim })).tok}/code`);
+  assert.deepEqual([more.status, more.data.code], [429, 'wait_destination']);
+  const real = await one(hr, { verify: 'email_code', email: victim, name: 'Vic Victim' });
+  assert.equal((await visitor().post(`/sign/${real.tok}/code`)).status, 200, 'another account used up what Hana may send');
+
+  // A stranger types the person's address into Hana's own public form, again and again: the codes that brings are
+  // counted for the form alone, and Hana's real document to that person still sends one.
+  const victim2 = fresh('victim');
+  const file = await upload(hr, 1);
+  const tpl = (await hr.post('/envelopes', {
+    kind: 'template', subject: 'Visitor waiver', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Visitor', verify: 'email_code' }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }],
+  })).data.envelope;
+  const pf = await hr.post('/powerforms', { template_id: tpl.id, name: 'Visitor waiver' });
+  const slug = (await hr.get('/powerforms')).data.powerforms.find((p: any) => p.id === pf.data.id).slug;
+  const codes: number[] = [];
+  for (let i = 0; i <= SIGNER_CODES_PER_DESTINATION_DAY; i++) {
+    const v = visitor();
+    const st = await v.post(`/public/powerforms/${slug}/start`, { name: `Walk ${i}`, email: victim2 });
+    assert.equal(st.status, 200, JSON.stringify(st.data));
+    codes.push((await v.post(`/sign/${st.data.url.split('/sign/')[1]}/code`)).status);
+  }
+  assert.deepEqual([codes.filter((x) => x === 200).length, codes.pop()], [SIGNER_CODES_PER_DESTINATION_DAY, 429]);
+  const own = await one(hr, { verify: 'email_code', email: victim2 }, { subject: 'Real contract' });
+  const ok = await visitor().post(`/sign/${own.tok}/code`);
+  assert.equal(ok.status, 200, `a stranger at a public form locked the person out of a real document: ${ok.data.error}`);
+});
+
+test('"This is not my number" holds for every envelope of that sender until they confirm it, and never for another sender', async () => {
+  const kai = await signUp('Kai Sender', 'kai.sender@example.com', ip());
+  db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), accountOf('kai.sender@example.com'));
+  const phone = '+44 7700 900432';
+  const first = await one(kai, { verify: 'sms_code', phone }, { subject: 'First' });
+  assert.equal((await visitor().post(`/sign/${first.tok}/code/problem`, { what: 'not_mine' })).status, 200);
+  // The sender corrects the first envelope to another number. The disowned number is still not theirs.
+  assert.equal((await kai.post(`/envelopes/${first.id}/correct`, { recipient_id: first.rid, phone: '+44 7700 900433' })).status, 200);
+  // A new envelope from the same sender to that number: no link by text, no code, and the sender hears why.
+  const second = await one(kai, { verify: 'sms_code', phone, text_link: true }, { subject: 'Second' });
+  assert.deepEqual(texts(second.rid), [], 'the number someone disowned got a text from the same sender');
+  assert.match((await line(kai, second.id, 'Text not sent')).detail, /^Sam Signer: the signing link by text message to \+44 \*\*\* \*\*\* 0432 was not sent, because someone using a signing link from this account said this number is not theirs/);
+  const c = visitor();
+  assert.equal((await c.get(`/sign/${second.tok}`)).data.check.stopped, true);
+  const code = await c.post(`/sign/${second.tok}/code`);
+  assert.deepEqual([code.status, code.data.code], [409, 'stopped']);
+  assert.match(code.data.error, /No code is sent to \+44 \*\*\* \*\*\* 0432 any more, because someone using a signing link from Kai Sender said it is not their number\./);
+  assert.match(mailTo('kai.sender@example.com').filter((m) => m.subject === 'Cannot open: Second').pop()!.html, /Someone using another of your signing links told us that number is not theirs.*I checked with Sam Signer that this is their number/s);
+  assert.equal((await full(kai, second.id)).envelope.recipients[0].check.stopped, true);
+  // Another sender's document to the same number is not touched by it.
+  const other = await one(ada, { verify: 'sms_code', phone });
+  assert.equal((await visitor().post(`/sign/${other.tok}/code`)).status, 200);
+  // The sender confirms with the person that the number is theirs: texts go to it again, on every envelope.
+  const yes = await kai.post(`/envelopes/${second.id}/correct`, { recipient_id: second.rid, number_confirmed: true });
+  assert.equal(yes.status, 200, JSON.stringify(yes.data));
+  assert.equal((await c.get(`/sign/${second.tok}`)).data.check.stopped, false);
+  assert.equal((await c.post(`/sign/${second.tok}/code`)).status, 200);
+  assert.deepEqual(texts(second.rid).map((t: any) => t.kind), ['link', 'code']);
+});
+
+test('a code by text that waited for another try is not sent once sending is paused', async () => {
+  twilio();
+  try {
+    const ny = await signUp('Ny Paused', 'ny.paused@example.com', ip());
+    const s = await one(ny, { verify: 'sms_code', phone: '+44 7700 900434' });
+    sms.answers.push({ status: 503, body: {} });
+    assert.equal((await visitor().post(`/sign/${s.tok}/code`)).status, 502);
+    db.run("UPDATE accounts SET suspended_at=?, suspended_reason='reports' WHERE id=?", new Date().toISOString(), accountOf('ny.paused@example.com'));
+    const out = await retried(s.rid);
+    assert.deepEqual(out.to, []);
+    assert.match(out.rows[0].error, /Not sent again: sending is paused on this account\./);
+    assert.equal(out.rows[0].body.includes('is your Sign&Grow code'), false, 'the code stayed readable in our record');
+  } finally {
+    provider({ SMS_DEV_OUTBOX: '1' });
+    sms.answers.length = 0;
+  }
+});
