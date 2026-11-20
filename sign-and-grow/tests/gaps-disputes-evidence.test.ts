@@ -1030,3 +1030,75 @@ test('Repair 4: a copy made while the envelope is still out says so on every pag
   assert.ok(!(await pagesOf(await buildPdf(e, false, e.recipients[0].id, undefined, false))).some((p) => /NOT COMPLETED/.test(p)));
   assert.ok((await pagesOf(await buildPdf(e, false))).every((p) => /NOT COMPLETED YET/.test(p)), 'marked unless the caller says otherwise');
 });
+
+test('Repair 6: smaller things the skeptic found: approver words, a form visitor\'s typed name, a key-made pack, the lookup of a deleted one', async () => {
+  // An approver who approved is said to have approved, not signed.
+  const sender = await person('Lows Sender', 'lows@disputes.example');
+  const ap = await simple(sender, 'lows-signer@disputes.example', { recipients: [{ id: 'a', role: 'approver', name: 'Appro Ver', email: 'appro@disputes.example', routing_order: 1 }, { id: 'r', role: 'signer', name: 'Sam Signer', email: 'lows-signer@disputes.example', routing_order: 2 }], ordered: true });
+  assert.equal((await sender.post(`/envelopes/${ap.id}/send`)).status, 200);
+  assert.equal((await signAll(ap.id, 'appro@disputes.example')).status, 200);
+  assert.equal((await from().post('/public/check/dispute', { code: codeOf(ap.id, 'appro@disputes.example') })).status, 200);
+  assert.match(auditOf(ap.id).find((a: any) => a.action === 'Disputed').detail, /said that Appro Ver did not approve this, or that it was not them/);
+  assert.equal(mailTo('lows@disputes.example').filter((m: any) => m.subject.startsWith('Disputed')).pop().html.includes('Appro Ver says they did not approve this'), true);
+
+  // A visitor of a public form typed their own name: our email never puts it in the subject or the heading, and
+  // quotes it as typed. The person whose address was typed in can still dispute with the code of our email.
+  const tpl = await simple(sender, '', { kind: 'template', subject: 'Join the club', recipients: [{ id: 'r', role: 'signer', role_name: 'Member' }] });
+  assert.equal((await sender.post('/powerforms', { template_id: tpl.id, name: 'Join' })).status, 200);
+  const slug = (await sender.get('/powerforms')).data.powerforms[0].slug;
+  const visitor = from();
+  const lure = 'URGENT call 0800-123-456 to unlock your account';
+  const start = await visitor.post(`/public/powerforms/${slug}/start`, { name: lure, email: 'typed-in@disputes.example' });
+  assert.equal(start.status, 200, JSON.stringify(start.data));
+  const tok = String(start.data.url).split('/sign/')[1];
+  await visitor.post(`/sign/${tok}/consent`);
+  const view = (await visitor.get(`/sign/${tok}`)).data;
+  const { PNG } = await import('./helpers.ts');
+  assert.equal((await visitor.post(`/sign/${tok}/complete`, { values: Object.fromEntries(view.fields.map((f: any) => [f.id, '1'])), signature_png: PNG })).status, 200);
+  const formEnv = db.get('SELECT envelope_id e FROM recipients WHERE token=?', tok).e;
+  assert.equal((await from().post('/public/check/dispute', { code: codeOf(formEnv, 'typed-in@disputes.example') })).status, 200, 'the owner of the typed-in address');
+  const mail = mailTo('lows@disputes.example').filter((m: any) => m.subject === 'Disputed: Join').pop();
+  assert.ok(mail);
+  assert.ok(!mail.subject.includes('URGENT'));
+  assert.match(mail.html, /<h1[^>]*>Someone disputes an entry made through your form<\/h1>/);
+  assert.match(text(mail.html), /the person who filled in your form as "URGENT call 0800-123-456 to unlock your account" did not sign/);
+
+  // The evidence pack says an API key made it, not the person.
+  const done = await completed(sender, 'lows-pack@disputes.example');
+  const key = (await sender.post('/api-keys', { name: 'k' })).data.key;
+  const res = await new Client().call('GET', `/envelopes/${done.id}/evidence`, undefined, { authorization: `Bearer ${key}` });
+  assert.equal(res.status, 200);
+  assert.match(unzip(res.data)['README.txt'].toString(), /Made on \S+ by an API key that Lows Sender <lows@disputes\.example> created\./);
+  assert.match(unzip((await sender.get(`/envelopes/${done.id}/evidence`)).data)['README.txt'].toString(), /Made on \S+ by Lows Sender <lows@disputes\.example>\./);
+
+  // The lookup of an ID nobody holds says that a deleted document that was never completed is not known either.
+  const nothing = await from().get('/public/verify/env_ZZZZZZZZZZZZZZZZ');
+  assert.equal(nothing.status, 404);
+  assert.match(nothing.data.error, /of one that was never completed nothing at all, unless someone named on it disputes it/);
+});
+
+test('Repair 1: the emails about a hand-over disputed through a replaced code read as sentences', async () => {
+  process.env.OPERATOR_EMAILS = 'ops-r1b@disputes.example';
+  try {
+    const sender = await person('Grammar Sender', 'grammar@disputes.example');
+    const e = await simple(sender, 'alice3@disputes.example', { subject: 'Lease', recipients: [{ id: 'r', role: 'signer', name: 'Alice Three', email: 'alice3@disputes.example' }] });
+    assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+    const code = codeOf(e.id, 'alice3@disputes.example');
+    const tok = tokenFor(e.id, 'alice3@disputes.example');
+    await from().post(`/sign/${tok}/consent`);
+    assert.equal((await from().post(`/sign/${tok}/reassign`, { name: 'Other One', email: 'other3@disputes.example', reason: 'x' })).status, 200);
+    assert.equal((await from().post('/public/check/dispute', { code })).status, 200);
+    const told = mailTo('grammar@disputes.example').filter((m: any) => m.subject === 'Disputed: Lease').pop();
+    assert.match(told.html, /<h1[^>]*>Alice Three says they did not pass this document on to someone else<\/h1>/);
+    assert.match(text(told.html), /that Alice Three did not pass "Lease" on to someone else, or that it was not them\./);
+    assert.match(text(mailTo('ops-r1b@disputes.example').pop().html), /said that Alice Three did not pass "Lease" on to someone else, or that it was not them\./);
+    // And the usual case reads as before.
+    const done = await completed(sender, 'plain3@disputes.example', { subject: 'Car' });
+    assert.equal((await from().post('/public/check/dispute', { code: codeOf(done.id, 'plain3@disputes.example') })).status, 200);
+    const plain = mailTo('grammar@disputes.example').filter((m: any) => m.subject === 'Disputed: Car').pop();
+    assert.match(plain.html, /<h1[^>]*>Sam Signer says they did not sign this<\/h1>/);
+    assert.match(text(plain.html), /that Sam Signer did not sign "Car", or that it was not them\./);
+  } finally {
+    delete process.env.OPERATOR_EMAILS;
+  }
+});

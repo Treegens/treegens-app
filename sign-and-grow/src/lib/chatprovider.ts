@@ -8,7 +8,7 @@
 // /security ("Where your data is") and /security/processing list the provider from this same function, so the pages
 // name exactly whom the server sends the typed chat to. It reads the environment: server code and server components
 // only. It never returns the key itself, only the name of the setting that holds it.
-import { CHAT_DAILY_DEFAULT } from './chat.ts';
+import { CHAT_DAILY_DEFAULT, CHAT_KEPT_PAGE } from './chat.ts';
 
 type Env = Record<string, string | undefined>;
 const val = (v: string | undefined): string | null => (v || '').replace(/\s+/g, ' ').trim().slice(0, 200) || null;
@@ -70,3 +70,17 @@ export const chatDailyLimit = (env: Env = process.env): number => {
 /** What the security pages say reaches the provider. True of src/server/chat.ts: change both together. */
 export const CHAT_SENT = 'Only what people type into the help chat, after anything that looks like a card number, a private link, a code, a password or an email address is taken out, with the latest messages of that conversation and which kind of screen it was typed on (for example "the signing page"). Never a document, a name, an address, a signing link or a security code from the page itself, and nothing that says who is asking.';
 export const CHAT_WHO = 'Anyone who types into the help chat: visitors, signers and account holders. Nobody else.';
+
+/** Whether a model answers the help chat on this server: a provider, its key, and a daily limit above 0. */
+export const chatModelOn = (env: Env = process.env): boolean => {
+  const p = chatProvider(env);
+  return !!p && !!(env[p.keyVar] || '').trim() && chatDailyLimit(env) > 0;
+};
+
+/** The point on /security under "Privacy and AI", from the same settings. */
+export function chatPrivacyPoint(env: Env = process.env): { title: string; text: string } {
+  const p = chatProvider(env);
+  return chatModelOn(env) && p
+    ? { title: 'What you type into the help chat goes to an AI service.', text: `It goes to ${p.name}, which is listed under "Where your data is" below. ${CHAT_SENT} ${CHAT_KEPT_PAGE}` }
+    : { title: 'The help chat answers from the built-in help.', text: `No AI model is set up for it on this server, so nothing typed into it leaves the server. ${CHAT_KEPT_PAGE}` };
+}

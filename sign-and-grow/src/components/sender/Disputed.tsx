@@ -21,7 +21,7 @@ export function Disputed({ envelope, audit }: { envelope: any; audit: any[] }) {
       {lines.map((a: any, i: number) => <p key={i} style={{ margin: '0 0 6px' }}>{fmtDate(a.at, true)}: {a.detail}</p>)}
       {(said || []).filter((d: any) => d.detail).map((d: any, i: number) => (
         <blockquote key={i} style={{ margin: '0 0 8px', paddingLeft: 10, borderLeft: '3px solid currentColor', overflowWrap: 'anywhere' }}>
-          <p style={{ margin: 0 }}><b>What they wrote</b> on {fmtDate(d.at, true)}, word for word. Nobody has checked it, so do not call a number or open a link in it:</p>
+          <p style={{ margin: 0 }}><b>What was written</b> with the dispute about {d.name} on {fmtDate(d.at, true)}, word for word. Nobody has checked it, so do not call a number or open a link in it:</p>
           <p style={{ margin: 0, whiteSpace: 'pre-wrap' }} dir="auto">{d.detail}</p>
         </blockquote>
       ))}

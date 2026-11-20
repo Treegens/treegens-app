@@ -5,7 +5,7 @@ import { sendMail, type MailStatus } from './mail.ts';
 import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnvelope, type Actor } from './envelopes.ts';
 import { safeName, type ZipEntry } from './zip.ts';
 import { labelOf } from '../lib/bysender.ts';
-import { CONSENT_VERSION, consentWording } from '../lib/policy.ts';
+import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording } from '../lib/policy.ts';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '../lib/evidence.ts';
 import { FINGERPRINT_KEPT_DAYS } from '../lib/evidence.ts';
 import { deviceName } from '../lib/phone.ts';
@@ -254,6 +254,9 @@ export async function disputeReplaced(old: any, body: any, actor: Actor, via: 'c
     { ...actor, name: `Someone holding the ${via === 'sign' ? 'replaced link' : 'email'} sent to ${to || name}` }, via);
 }
 
+// "sign this" with the document named: "sign "Lease"", "pass "Lease" on to someone else".
+const titled = (did: string, e: any) => did.replace(/\bthis( document)?/, `"${e.subject}"`);
+
 type Disputer = { key: string; name: string; email: string | null; did: string; visitor: boolean; before?: { id: string; at: string } };
 async function fileDispute(e: any, p: Disputer, who: string, body: any, actor: Actor, via: 'check' | 'sign') {
   const detail = str(body?.detail, 2000).trim() || null;
@@ -272,8 +275,8 @@ async function fileDispute(e: any, p: Disputer, who: string, body: any, actor: A
   // A visitor of a public form typed their own name, so in our email it is quoted as typed, never put in the subject
   // or the heading where it would read as our words.
   const named = p.visitor ? `the person who filled in your form as "${p.name}"` : p.name;
-  await notifySender(e, 'always', `Disputed: ${e.subject}`, p.visitor ? 'Someone disputes an entry made through your form' : `${p.name} says they did not ${p.did.replace(/ this$/, '')} this`, [
-    `${who}${p.before ? ',' : ''} told us on ${t.slice(0, 16).replace('T', ' ')} UTC that ${named} did not ${p.did.replace(/ this$/, '')} "${e.subject}", or that it was not them.`,
+  await notifySender(e, 'always', `Disputed: ${e.subject}`, p.visitor ? 'Someone disputes an entry made through your form' : `${p.name} says they did not ${p.did}`, [
+    `${who}${p.before ? ',' : ''} told us on ${t.slice(0, 16).replace('T', ' ')} UTC that ${named} did not ${titled(p.did, e)}, or that it was not them.`,
     detail ? `What they wrote, word for word. We have not checked any of it, so do not call a number or open a link in it: "${detail}"` : 'They wrote nothing more.',
     `Nothing was changed or deleted. The document, its signatures and its audit trail stay exactly as they are. From now on the envelope is marked as disputed, on its page here and for anyone who looks it up at ${baseUrl()}/verify. While the dispute is open, the envelope cannot be deleted for good.`,
     ...(e.status === 'sent' ? ['The envelope is still out for signature, and nothing about it was stopped. If you agree that it was not them, void it and send it again to the right person.'] : []),
@@ -292,7 +295,7 @@ export const disputesFor = (envelopeId: string) =>
 async function tellOperatorsOfDispute(e: any, p: Disputer, who: string, detail: string | null, sender: any, actor: Actor): Promise<boolean> {
   const to = [...new Set([process.env.ABUSE_EMAIL || process.env.SUPPORT_EMAIL || '', ...(process.env.OPERATOR_EMAILS || '').split(',')].map((s) => s.trim().toLowerCase()).filter(isEmail))];
   const subject = `Disputed: envelope ${e.id}`;
-  const lines = [`${who}${p.before ? ',' : ''} said that ${p.name} did not ${p.did} "${e.subject}", or that it was not them.`,
+  const lines = [`${who}${p.before ? ',' : ''} said that ${p.name} did not ${titled(p.did, e)}, or that it was not them.`,
     `Envelope ${e.id} (${e.status}) from ${sender ? `${sender.name} <${sender.email}>` : 'a sender who is gone'}, account ${e.account_id}.`,
     detail ? `They wrote: ${detail}` : 'They wrote nothing more.',
     `It came from internet address ${actor.ip || 'unknown'}, ${onWhat(actor.ua)}${actor.ua ? ` (${String(actor.ua).slice(0, 300)})` : ''}. Only you see this: the sender does not.`,
@@ -371,12 +374,17 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   // The consent wording each person agreed to, by the version their audit line names (src/lib/policy.ts).
   const agreed = events.filter((a: any) => a.action === 'Agreed to electronic records and signatures');
   add('consent.txt', [
-    `What each person agreed to before signing "${e.subject}" (envelope ${e.id}). The audit line names the version of the wording their screen showed, and this is that wording.`, '',
+    `What each person agreed to before signing "${e.subject}" (envelope ${e.id}). Since November 2026 the audit line names the version of the wording their screen showed, and this is that wording. A line written before then names no version: see the note under it.`, '',
     ...(agreed.length ? agreed.flatMap((a: any) => {
-      const version = /Wording (\S+?),/.exec(a.detail)?.[1] || /wording in use was (\S+?),/.exec(a.detail)?.[1] || CONSENT_VERSION;
+      // A line that names no version was written before versions were recorded, by the code that showed the
+      // wording kept as UNVERSIONED_CONSENT. Today's words would put a sentence in front of that person they never saw.
+      const named = /Wording (\S+?),/.exec(a.detail)?.[1] || /wording in use was (\S+?),/.exec(a.detail)?.[1];
+      const version = named || UNVERSIONED_CONSENT;
       const r = people.find((p: any) => labelOf(p) === a.actor);
       const w = consentWording(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version);
-      return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. Wording ${w.version}${/did not say/.test(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : ''}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
+      const how = !named ? ' (their audit line names no wording, because it was written before Sign&Grow recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line and its date, not stated by their screen)'
+        : /did not say/.test(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
+      return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. Wording ${w.version}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
     }) : ['Nobody has agreed yet.']),
   ].join('\r\n'));
 
@@ -399,7 +407,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     'audit-trail.txt       every line of the audit trail, to read: time in UTC, who, internet address, what, and each line\'s hash.',
     `audit-trail.json      the same lines with prev_hash and hash, the browser string stored with each line, the people on the envelope, and the chain as checked now. ${HASH_HOW}`,
     'emails/               a copy of every email we stored about this envelope, as HTML. Signing links and security codes are taken out of these copies, because they would still open the document; nothing else is changed. emails/index.csv says what became of each: whether the mail server took it, every try, and what the mail provider told us later (delivered, came back, marked as spam), with the SHA-256 of the email as stored before anything was taken out.',
-    'consent.txt           the words each person agreed to before signing, in the version their audit line names.',
+    'consent.txt           the words each person agreed to before signing, in the version their audit line names (for a line from before versions were recorded, the wording shown then, marked as inferred).',
     ...(stamps.length ? [`stamps/               every stamp on the pages as a PNG picture, named by the start of its SHA-256, with stamps/index.csv saying who put it on, where and when. The audit trail names each one by its full SHA-256. ${STAMP_IS}`] : []),
     ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []),
     ...(disputes.length ? ['disputes.txt          each dispute: when, under which name, how the person reached us, what they wrote, and whether a person at Sign&Grow has closed it.'] : []), '',

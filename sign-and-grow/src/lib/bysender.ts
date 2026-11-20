@@ -70,3 +70,16 @@ export const noEmailCopyText = (sender: string, allDone: boolean): string =>
 /** On the signing page, when it is not yet their turn. */
 export const noEmailWaitText = (sender: string): string =>
   `Others need to finish first. We have no email address for you, so ${sender} will tell you when it is your turn. This same link opens the document then. There is nothing to do until then.`;
+
+/**
+ * On the signing page, once someone asked for more time: how an answer reaches them. Someone with no address here
+ * is never told "by email" (the sender has no address of theirs either, and is told so: answerLine in
+ * src/server/bysender.ts). `say` is the toast, `hint` the line under the menu item, `open` the expired screen.
+ */
+export const moreTimeWords = (sender: string, bySender: boolean): { say: string; hint: string; open: string } =>
+  bySender
+    ? { say: `We asked ${sender} for more time. They have no email address for you here, so they will reach you the way they sent you this link.`, hint: 'Asked. They will reach you the way they sent you this link.', open: `We cannot email you, so ${sender} will let you know when it is open again. This same link opens it then.` }
+    : { say: `We asked ${sender} for more time. They will be in touch by email.`, hint: 'Asked. They will be in touch by email.', open: 'You will get an email as soon as the document is open again.' };
+
+/** The toast after "Finish later": where the way back is. */
+export const laterWords = (bySender: boolean): string => (bySender ? 'Saved. Come back with this same link to finish.' : 'Saved. Use the link in your email to come back and finish.');

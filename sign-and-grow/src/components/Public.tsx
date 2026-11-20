@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, useLoad, Leaf } from './ui';
 import { fmtNum, fmtTrees, IMPACT, usd } from '@/lib/impact';
+import { HelpChatButton } from './HelpChat';
 
 // Shared frame of the public pages: the top navigation, the footer and the live impact numbers.
 
@@ -45,6 +46,8 @@ export function PublicNav() {
             {LINKS.map(([href, label]) => <Link key={href} href={href} className="btn ghost sm" {...current(href)}>{label}</Link>)}
           </nav>
           <div className="pub-actions">
+            {/* The help chat: answers at once, with a person one click away (HelpChat.tsx). */}
+            <HelpChatButton className="btn sm hc-open">Ask for help</HelpChatButton>
             <Link href="/login" className="btn sm pub-signin">Sign in</Link>
             <Link href="/signup" className="btn primary sm">Start free</Link>
             <button ref={menuButton} type="button" className="btn sm pub-menu-btn" aria-expanded={open} aria-controls="pub-menu" onClick={() => setOpen((o) => !o)}>
@@ -54,6 +57,8 @@ export function PublicNav() {
           </div>
         </div>
         <nav id="pub-menu" className="pub-menu" aria-label="Menu" hidden={!open}>
+          {/* On a phone the header has no room for the help chat's button, so it is the first thing in the menu. */}
+          <HelpChatButton className="hc-menu">Ask for help</HelpChatButton>
           {LINKS.map(([href, label]) => <Link key={href} href={href} {...current(href)} onClick={() => setOpen(false)}>{label}</Link>)}
           <Link href="/#pricing" onClick={() => setOpen(false)}>Pricing</Link>
           <Link href="/login" onClick={() => setOpen(false)}>Sign in</Link>

@@ -60,7 +60,7 @@ export function ReplacedLink({ token }: { token: string }) {
         )}
         <p className="muted small sg-after">Still stuck? <a href={helpHref(undefined, 'contact')}>Get help from a person</a>. If you have the email this link came in, the form there asks for its security code, so we know which document you mean.</p>
         {/* The person this link was sent to can still dispute what was done in their place (disputeReplaced in src/server/evidence.ts). */}
-        <p className="muted small">Was something signed or passed on in your name that you did not do? The security code in the email this link came in still works for that: type it on our <a href="/check?report=1">check page</a> and choose &ldquo;I did not sign this, or this was not me&rdquo;.</p>
+        <p className="muted small" style={{ marginTop: 12 }}>Was something signed or passed on in your name that you did not do? The security code in the email this link came in still works for that: type it on our <a href="/check?report=1">check page</a> and choose &ldquo;I did not sign this, or this was not me&rdquo;.</p>
       </StateCard>
     </Shell>
   );

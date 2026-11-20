@@ -11,7 +11,7 @@
 // It reads the environment: server code and server components only.
 import { signInProviders } from './signin.ts';
 import { smsProvider } from './checks.ts';
-import { chatProvider, chatDailyLimit, CHAT_SENT, CHAT_WHO } from './chatprovider.ts';
+import { chatProvider, chatModelOn, CHAT_SENT, CHAT_WHO } from './chatprovider.ts';
 
 type Env = Record<string, string | undefined>;
 const val = (v: string | undefined): string | null => (v || '').replace(/\s+/g, ' ').trim().slice(0, 200) || null;
@@ -128,7 +128,7 @@ export function dataPlace(env: Env = process.env): DataPlace {
 
   // The help chat: listed when a model answers it, from the same function the server asks (src/lib/chatprovider.ts).
   const chat = chatProvider(env);
-  if (chat && (env[chat.keyVar] || '').trim() && chatDailyLimit(env) > 0) {
+  if (chat && chatModelOn(env)) {
     processors.push({
       id: 'chat', name: chat.name, country: chat.country,
       purpose: `Writes the answers of the help chat (the AI model ${chat.model}, reached at ${chat.host}). What it keeps of a question, and for how long, is set by its own terms.`,
@@ -136,7 +136,8 @@ export function dataPlace(env: Env = process.env): DataPlace {
       who: CHAT_WHO,
       missing: need(chat.country, 'in which country its help chat provider handles what people type'),
     });
-  } else off.push('No AI model answers the help chat on this server: its answers come from the built-in help, and nothing typed into it leaves the server.');
+  }
+  // Without one nothing is added to `off`: /security says it under "Privacy and AI" (chatPrivacyPoint).
 
   const unstated = [...need(operator, 'who they are'), ...processors.flatMap((p) => p.missing), ...need(backups, 'whether and where backups are kept')];
   return { operator, region, host, backups, processors, off, unstated };

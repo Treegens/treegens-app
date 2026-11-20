@@ -13,6 +13,7 @@ import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from 
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
 import { CodeCheck } from '@/components/sign/CodeCheck';
 import { MenuDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDialog, ReviewDialog, FieldSheet, type MenuItem } from '@/components/sign/dialogs';
+import { HelpChat } from '@/components/HelpChat';
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
@@ -29,6 +30,7 @@ import { CANNOT_REACH, sameFieldAgain } from '@/components/sign/stuck';
 import { SIGNING_ONLINE } from '@/lib/mobile';
 import { PayLink } from '@/components/sign/PayLink';
 import { NoEmailDone, NoEmailWait } from '@/components/sign/NoEmail';
+import { moreTimeWords, laterWords } from '@/lib/bysender';
 // "Questions and comments": the one way to ask the sender something, and the note before Finish (Comments.tsx).
 import { CommentsDialog, OpenQuestion, useMyQuestions } from '@/components/sign/Comments';
 import { MailAgain } from '@/components/sign/MailAgain';
@@ -41,7 +43,7 @@ import { StampDialog } from '@/components/stamps/StampDialog';
 import { layers } from '@/lib/stacked';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
-type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback';
+type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback' | 'help';
 const SAVE_TEXT: Record<Save, string> = { idle: 'Saves as you go', pending: 'Saving', saving: 'Saving', saved: 'Saved', error: 'Not saved yet' };
 const FLAG: Record<string, string> = { signature: 'Sign here', initials: 'Initial here', checkbox: 'Tick here', radio: 'Choose one', dropdown: 'Choose here', attachment: 'Attach here', stamp: 'Stamp here' };
 // Phones, and anything else used mainly by touch, get a sheet with a large input instead of typing into the page.
@@ -620,6 +622,8 @@ export default function SignPage() {
   const dialogs = (
     <>
       {open === 'report' && <ReportDialog base={base} sender={sender} onClose={() => setOpen('')} />}
+      {/* The help chat lives in Other actions, never floating over Finish or the fields (components/HelpChat.tsx). */}
+      {open === 'help' && <HelpChat screen="signing" link={token} code={data.help_code} onClose={() => setOpen('')} />}
       {open === 'ask' && <CommentsDialog base={base} sender={sender} documents={data.documents || []} onClose={() => setOpen('')} />}
       {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
       {open === 'reassign' && <ReassignDialog base={base} sender={sender} onClose={() => setOpen('')} onDone={(name) => { canSave.current = false; writeKept(token, null, null); setOpen(''); setHandedTo(name); }} />}
@@ -722,7 +726,7 @@ export default function SignPage() {
             <>
               <p>The deadline{env.expires_at ? ` was ${momentText(env.expires_at, deviceZone())}` : ' has passed'}. {env.removed ? `${sender.name} has since removed this document from their list, so it cannot be opened again from here. If you still need to sign it, ask them to send it again.` : `Nothing is lost: ${sender.name} can open it again and you carry on from where you were.`}</p>
               {!env.removed && me.status !== 'completed' && me.status !== 'declined' && me.role !== 'cc' && (moreTime === 'asked' ? (
-                <div className="notice sg-confirmed" role="status"><b>Done. We asked {sender.name} for more time.</b> You will get an email as soon as the document is open again.</div>
+                <div className="notice sg-confirmed" role="status"><b>Done. We asked {sender.name} for more time.</b> {moreTimeWords(sender.name, !!me.link_by_sender).open}</div>
               ) : (
                 <button type="button" className="btn primary lg" disabled={moreTime === 'busy'} onClick={askForTime}>{moreTime === 'busy' ? 'Asking' : `Ask ${sender.name} for more time`}</button>
               ))}
@@ -821,16 +825,18 @@ export default function SignPage() {
   const go = (o: Open) => () => setOpen(o);
   const declineLabel = me.role === 'approver' ? 'Decline to approve' : 'Decline to sign';
   const menu: MenuItem[] = [
-    ...(stage === 'sign' && acts ? [{ key: 'later', label: 'Finish later', hint: 'Your answers are saved. Come back with the same link.', icon: 'clock', onClick: async () => { const ok = await flush(); setOpen(''); if (ok) toast('Saved. Use the link in your email to come back and finish.'); } }] : []),
+    ...(stage === 'sign' && acts ? [{ key: 'later', label: 'Finish later', hint: 'Your answers are saved. Come back with the same link.', icon: 'clock', onClick: async () => { const ok = await flush(); setOpen(''); if (ok) toast(laterWords(!!me.link_by_sender)); } }] : []),
+    { key: 'help', label: 'Help', hint: 'Ask the Sign&Grow helper, or write to a person. Nothing on this page is lost.', icon: 'mail', onClick: go('help') },
     { key: 'ask', label: 'Questions and comments', hint: `Ask ${sender.name} about the document, or read what was written. It signs nothing.`, icon: 'mail', onClick: go('ask') },
     { key: 'download', label: 'Download the document', icon: 'download', href: downloadUrl, download: true },
     { key: 'print', label: 'View or print the document', hint: 'Opens in a new tab.', icon: 'eye', href: `${downloadUrl}?inline=1` },
     ...(stage === 'sign' && acts && (sig || ini) ? [{ key: 'sig', label: 'Change my signature', icon: 'pen', onClick: () => { setOpen(''); changeMark(sig ? 'signature' : 'initials'); } }] : []),
-    ...(env.expires_at ? [{ key: 'time', label: `Ask ${sender.name} for more time`, hint: moreTime === 'asked' ? 'Asked. They will be in touch by email.' : `The deadline is ${momentText(env.expires_at, deviceZone())}.`, icon: 'clock', onClick: async () => { if (moreTime !== 'asked' && (await askForTime())) toast(`We asked ${sender.name} for more time. They will be in touch by email.`); } }] : []),
+    ...(env.expires_at ? [{ key: 'time', label: `Ask ${sender.name} for more time`, hint: moreTime === 'asked' ? moreTimeWords(sender.name, !!me.link_by_sender).hint : `The deadline is ${momentText(env.expires_at, deviceZone())}.`, icon: 'clock', onClick: async () => { if (moreTime !== 'asked' && (await askForTime())) toast(moreTimeWords(sender.name, !!me.link_by_sender).say); } }] : []),
     // The one who took on a group's document can hand it back to the group, and passes it to nobody outside it.
     ...(me.group?.can_hand_back ? [{ key: 'handback', label: `Hand back to ${me.group.name}`, hint: 'If a colleague should do it instead. What you filled in is not kept.', icon: 'link', onClick: go('handback') }] : []),
     ...((me.role === 'signer' || me.role === 'approver') && !me.group ? [{ key: 'reassign', label: 'Assign to someone else', hint: 'If you are not the right person to sign.', icon: 'link', onClick: go('reassign') }] : []),
-    ...(!muted && me.role !== 'inperson' ? [{ key: 'mute', label: 'Stop reminder emails', hint: 'For this document only.', icon: 'stop', onClick: () => { setOpen(''); mute(); } }] : []),
+    // Someone with no address gets no reminder emails, so there is nothing for them to stop.
+    ...(!muted && me.role !== 'inperson' && !me.link_by_sender ? [{ key: 'mute', label: 'Stop reminder emails', hint: 'For this document only.', icon: 'stop', onClick: () => { setOpen(''); mute(); } }] : []),
     // A witness does not close the document for the people who sign it: "I was not there" is theirs (sign/Witness.tsx).
     ...(me.role === 'witness' ? [{ key: 'absent', label: 'I was not there', hint: `Signs nothing, and tells ${me.witness_of?.name || 'the signer'} and ${sender.name}.`, icon: 'stop', onClick: async () => { setOpen(''); try { await api(`${base}/not-present`, { body: {} }); toast(`Done. We told ${me.witness_of?.name || 'the signer'} and ${sender.name}.`); load(); } catch (e: any) { toast(e?.message || 'Something went wrong on our side. Try again in a moment.', true); } } }] : []),
     ...(me.role !== 'viewer' && me.role !== 'cc' && me.role !== 'witness' ? [{ key: 'decline', label: declineLabel, hint: 'Closes the document for everyone.', icon: 'stop', danger: true, onClick: go('decline') }] : []),

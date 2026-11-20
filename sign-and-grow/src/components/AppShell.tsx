@@ -7,6 +7,7 @@ import { fmtNum, fmtTrees } from '@/lib/impact';
 import { HandedOver, type Locked } from './HandedOver';
 import { EmailProblemBanner } from './EmailProblem';
 import { TwoStepRequired, TwoStepResetBanner } from './TwoStep';
+import { HelpChatButton } from './HelpChat';
 
 type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
@@ -100,6 +101,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <Link href="/app" className="row" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}><Leaf color="#9ed88f" /> Sign&Grow</Link>
         {/* With more than one workspace, a phone shows which one this is without opening the menu. */}
         {me.accounts?.length > 1 && <span className="truncate" style={{ flex: 1, minWidth: 0, margin: '0 10px', textAlign: 'right', fontSize: 12.5, opacity: 0.85 }} title="The workspace you are in">{me.account.name}</span>}
+        <HelpChatButton className="btn sm hc-open" label="Help: ask the helper or write to a person">Help</HelpChatButton>
         <button className="btn sm" onClick={() => setOpen(!open)} aria-expanded={open}>Menu</button>
       </div>
       <div className="shell">
@@ -109,6 +111,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {NAV.map(([href, label]) => <Link key={href} href={href} className={`nav${on(href) ? ' on' : ''}`}>{label}</Link>)}
           {/* Click-to-agree terms speak for the team's website, so only its owner and admins manage them. */}
           {(me.role === 'owner' || me.role === 'admin') && <Link href="/app/agreements" className={`nav${on('/app/agreements') ? ' on' : ''}`}>Click-to-agree</Link>}
+          <HelpChatButton className="nav hc-open hc-nav">Ask for help</HelpChatButton>
           <Link href="/help" className="nav">Help</Link>
           {me.support_email && <a href={`mailto:${me.support_email}`} className="nav" style={{ fontSize: 12.5, paddingTop: 2 }} title={`Write to ${me.support_email}`}><span className="truncate">{me.support_email}</span></a>}
           {me.operator && <Link href="/app/operator" className={`nav${on('/app/operator') ? ' on' : ''}`}>Review queue</Link>}

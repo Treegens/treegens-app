@@ -22,7 +22,7 @@ import { bouncedBefore, bouncedRefusal, bouncedLine } from './bounces.ts';
 import { attachGroups, groupNames, saveGroups, copyGroup, assertGroups, groupReach, groupReachNew, snapshotGroups, settleGroups, groupPeople, notifyMembers, groupLine, groupWords, groupChange, groupsCorrected, memberLinks, assertGroupCorrection, memberMailStop } from './groups.ts';
 import { isOpenGroup, whoIs } from '../lib/groups.ts';
 // A person whose link the sender passes on themselves, with no email address (src/server/bysender.ts).
-import { saveBySender, bySenderProblem, reachKey, reporterKey, copyBySender, bySenderNotice, assertNudgeable, remindThroughSender, untoldLines, unopenedLines, noteNoCopy, senderCopyLines } from './bysender.ts';
+import { saveBySender, bySenderProblem, reachKey, reporterKey, copyBySender, bySenderNotice, assertNudgeable, remindThroughSender, untoldLines, unopenedLines, noteNoCopy, senderCopyLines, answerLine } from './bysender.ts';
 import { labelOf, signerAt } from '../lib/bysender.ts';
 import { carryRules } from './tplroles.ts';
 // Around the certificate: the fingerprint in the completion email and the record of each completed copy (evidence.ts).
@@ -2144,8 +2144,11 @@ export async function requestExtension(e: any, r: any, actor: Actor) {
   if (closedFormStart(e, r)) throw bad(closedStartText(e), 409);
   if (e.hidden_at) throw bad(`${senderOf(e)?.name || 'The sender'} has removed this document from their list, so it cannot be opened again from here and we did not ask them for more time. If you still need to sign it, ask them to send it again.`, 409);
   audit(e.id, actor, 'More time requested', `${r.name} asked for the deadline to be extended`);
+  // The deadline by the sender's own clock as well, as in "Expires soon". Someone with no address cannot be answered
+  // by email, and the sender is told so in the words the question email uses (answerLine in bysender.ts).
   await notifySender(e, 'always', `More time needed: ${e.subject}`, `${r.name} asked for more time to sign`,
-    [e.status === 'expired' ? 'The deadline has passed. You can reopen the envelope and nobody has to start again.' : `The deadline is ${momentText(e.expires_at)}. You can push it back.`],
+    [e.status === 'expired' ? 'The deadline has passed. You can reopen the envelope and nobody has to start again.' : `The deadline is ${momentForEmail(e.expires_at, senderZone(e))}. You can push it back.`,
+      ...(r.link_by_sender ? [answerLine(r)] : [])],
     { label: 'Give more time', url: `${baseUrl()}/app/envelopes/${e.id}?extend=1` });
 }
 

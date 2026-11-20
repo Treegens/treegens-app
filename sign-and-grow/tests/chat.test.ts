@@ -629,3 +629,31 @@ test('what is not in the product is README\'s list, bullet by bullet', () => {
   assert.equal(bullets.length, kb.NOT_IN_IT.length, 'a bullet was added or removed in README "What is not in it": change NOT_IN_IT in src/server/chatkb.ts too');
   kb.NOT_IN_IT.forEach((n, i) => assert.ok(bullets[i].startsWith(n.lead), `bullet ${i + 1}: "${bullets[i].slice(0, 60)}" should start with "${n.lead}"`));
 });
+
+// ---- 7. The data page ---------------------------------------------------------------------------------------------
+
+test('"Where your data is" lists the help chat provider from the same settings, with what is sent, and only while it answers', async () => {
+  const { dataPlace } = await import('../src/lib/dataplace.ts');
+  const off = dataPlace({});
+  assert.ok(!off.processors.some((p) => p.id === 'chat'));
+  assert.match(prov.chatPrivacyPoint({}).title, /answers from the built-in help/);
+  assert.match(prov.chatPrivacyPoint({}).text, /nothing typed into it leaves the server/);
+  const on = dataPlace({ OPENROUTER_API_KEY: 'k' });
+  const p = on.processors.find((x) => x.id === 'chat')!;
+  assert.equal(p.name, 'OpenRouter');
+  assert.equal(p.country, null);
+  assert.equal(p.data, prov.CHAT_SENT);
+  assert.match(p.data, /Only what people type into the help chat/);
+  assert.match(p.purpose, /moonshotai\/kimi-k3-20260715, reached at openrouter\.ai/);
+  assert.deepEqual(p.missing, ['The operator of this server has not said in which country its help chat provider handles what people type. Ask them.']);
+  assert.ok(on.unstated.includes(p.missing[0]));
+  const stated = dataPlace({ MOONSHOT_API_KEY: 'k', SUPPORT_CHAT_PROVIDER_COUNTRY: 'Singapore' }).processors.find((x) => x.id === 'chat')!;
+  assert.deepEqual([stated.name, stated.country, stated.missing], ['Moonshot AI', 'Singapore', []]);
+  assert.match(prov.chatPrivacyPoint({ MOONSHOT_API_KEY: 'k' }).text, /^It goes to Moonshot AI, which is listed under "Where your data is" below\./);
+  // A daily limit of 0 sends nothing, so nothing is listed.
+  assert.ok(!dataPlace({ OPENROUTER_API_KEY: 'k', SUPPORT_CHAT_DAILY_LIMIT: '0' }).processors.some((x) => x.id === 'chat'));
+  // The pages print these, and the sentence "no AI service" follows the setting.
+  for (const f of ['src/app/security/DataPlace.tsx', 'src/app/security/processing/page.tsx'])
+    assert.match(fs.readFileSync(f, 'utf8'), /p\.id === 'chat'\) \?/, `${f} says "no AI service" only when there is none`);
+  assert.match(fs.readFileSync('src/app/security/page.tsx', 'utf8'), /chatPrivacyPoint\(\)/);
+});

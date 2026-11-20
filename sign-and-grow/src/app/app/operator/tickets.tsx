@@ -2,6 +2,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 import { TOPIC_LABEL, STATUS_FOR_OPERATOR, whenText } from '@/lib/support';
+import { AttachedChat } from '@/components/HelpChat';
 
 // Help requests, for the people who answer them. The queue is sorted by the time a person should have answered by,
 // so the late ones lead. Opening a request shows everything written on it, the notes only operators see, what was
@@ -104,6 +105,8 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
         <div className="muted">Opened {whenText(t.at)}{t.first_reply_at ? ` · we first wrote back ${whenText(t.first_reply_at)}` : ''}{t.closed_at && closed ? ` · closed ${whenText(t.closed_at)}` : ''}</div>
       </div>
 
+      {/* The chat with the helper that the writer chose to send along (components/HelpChat.tsx). */}
+      {t.chat?.length > 0 && <AttachedChat lines={t.chat} />}
       <ol className="tk-thread" aria-label="Everything on this request, oldest first">
         {t.thread.map((m: any, i: number) =>
           m.kind === 'event' ? <li key={i} className="event">{m.by} · {m.body} · {whenText(m.at)}</li> : (

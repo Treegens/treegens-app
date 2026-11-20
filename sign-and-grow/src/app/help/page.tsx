@@ -20,8 +20,10 @@ import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
 import { PAID_TRUST_DAYS } from '@/lib/policy';
 import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUP_RULE } from '@/lib/policy';
 import { TWO_STEP_LOST, TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES } from '@/lib/policy';
+import { chatModelOn } from '@/lib/chatprovider';
+import { HelpChatButton } from '@/components/HelpChat';
 
-export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in and without a chatbot. Find your documents, stop a subscription, or write to a person.' };
+export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in. A helper answers at once and a person is one click away. Find your documents, stop a subscription, or write to a person.' };
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
 export const dynamic = 'force-dynamic';
 
@@ -53,7 +55,8 @@ export default function Help() {
       <main id="main" className="wrap pub-page">
         <header className="pub-top">
           <h1 className="pub-h1">Help</h1>
-          <p className="pub-lead">No chatbot and no login wall. Most things can be fixed right on this page. For everything else, write to us at the bottom and a person replies.</p>
+          <p className="pub-lead">No login wall. {chatModelOn() ? 'An AI helper' : 'Our helper, with answers from this page,'} answers at once, and a person is one click away from every answer. Most things can be fixed right on this page. For everything else, write to us at the bottom and a person replies.</p>
+          <p><HelpChatButton className="btn primary hc-open">Ask for help</HelpChatButton></p>
         </header>
 
         <nav className="pub-jump" aria-label="On this page">

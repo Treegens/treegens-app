@@ -3,9 +3,8 @@ import { get } from './db.ts';
 import { bad, rateLimit, str, HttpError } from './util.ts';
 import { addressKey } from './clickwrap.ts';
 import { answer, cleanConversation } from './chat.ts';
-import { chatProvider } from '../lib/chatprovider.ts';
+import { chatProvider, chatModelOn } from '../lib/chatprovider.ts';
 import { chatScreen, CHAT_AI_NOTE, CHAT_BUILTIN_NOTE, CHAT_DO_NOT_TYPE, CHAT_KEPT, CHAT_PER_ADDRESS_MINUTE, CHAT_PER_ADDRESS_DAY, CHAT_PER_LINK_DAY, CHAT_PER_ACCOUNT_DAY } from '../lib/chat.ts';
-import { chatDailyLimit } from '../lib/chatprovider.ts';
 
 // The help chat (src/server/chat.ts). These two routes are for the app's own help dialog and are NOT part of the
 // public API: they are left out of src/server/openapi.ts on purpose, an API key is refused, and their shape may
@@ -33,7 +32,7 @@ function fromOurPage(c: Ctx) {
 route('GET', '/public/chat', (c) => {
   if (c.auth?.via === 'api_key') throw new HttpError(403, 'An API key cannot use the help chat. It is for people, in the app and on our pages.');
   const p = chatProvider();
-  const ai = !!p && !!(process.env[p.keyVar] || '').trim() && chatDailyLimit() > 0;
+  const ai = chatModelOn();
   return {
     ai, provider: ai ? p!.name : null, note: ai ? CHAT_AI_NOTE : CHAT_BUILTIN_NOTE, do_not_type: CHAT_DO_NOT_TYPE, kept: CHAT_KEPT,
     limits: { per_address_minute: CHAT_PER_ADDRESS_MINUTE, per_address_day: CHAT_PER_ADDRESS_DAY, per_link_day: CHAT_PER_LINK_DAY, per_account_day: CHAT_PER_ACCOUNT_DAY },

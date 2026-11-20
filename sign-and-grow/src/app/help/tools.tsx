@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { api } from '@/components/ui';
 import { TOPIC_LABEL, STATUS_FOR_CUSTOMER, whenText, spanText, type CustomerRequest } from '@/lib/support';
 import { RequestView } from './RequestView';
+import type { ChatLine } from '@/lib/chat';
 
 // The self-service tools on the help page. Every one of them works without logging in.
 
@@ -194,8 +195,10 @@ export function ReplyRecord() {
 }
 
 // Reaches a person. Open to everyone: signers, free users, former customers and people who cannot log in.
-export function ContactForm() {
-  const [f, setF] = useState({ name: '', email: '', topic: 'signing', message: '' });
+// The help chat opens this same form (src/components/HelpChat.tsx) with its conversation attached (`chat`), a topic
+// and the document's security code: the writer sees what is attached and can take it off (`onDropChat`).
+export function ContactForm({ chat, onDropChat, topic: firstTopic, code: firstCode, message: firstMessage }: { chat?: ChatLine[] | null; onDropChat?: () => void; topic?: string; code?: string; message?: string } = {}) {
+  const [f, setF] = useState({ name: '', email: '', topic: firstTopic || 'signing', message: firstMessage || '' });
   const [envelope, setEnvelope] = useState('');
   // Which document the message is about. The Help link on a signing page and in a signing email brings the security
   // code of that email along (?code=), and someone who came another way can type it. The server says which document
@@ -230,9 +233,10 @@ export function ContactForm() {
     // Other pages can link straight to a filled-in form: /help?topic=suspicious&envelope=env_...#contact
     const q = new URLSearchParams(window.location.search);
     const topic = q.get('topic');
-    if (topic) setF((s) => ({ ...s, topic }));
-    if (q.get('envelope')) setEnvelope(q.get('envelope')!.slice(0, 60));
-    if (q.get('code')) (setCode(q.get('code')!.slice(0, 20)), lookUp(q.get('code')!));
+    if (topic && !firstTopic) setF((s) => ({ ...s, topic }));
+    if (q.get('envelope') && !firstTopic) setEnvelope(q.get('envelope')!.slice(0, 60));
+    const startCode = firstCode || (firstTopic ? '' : q.get('code'));
+    if (startCode) (setCode(startCode.slice(0, 20)), lookUp(startCode));
     // Someone who is signed in does not have to type who they are.
     api('/me').then((d) => d?.user && (setMine(d.user.email_verified ? d.user.email || '' : ''), setF((s) => ({ ...s, name: s.name || d.user.name || '', email: s.email || d.user.email || '' })))).catch(() => {});
     // Links on this page such as "Report with the contact form" choose the topic on the way down.
@@ -270,7 +274,7 @@ export function ContactForm() {
       onSubmit={(e) =>
         a.run(e, async () => {
           // The time zone of this browser goes along, so the time in the email is the reader's own time.
-          const r = await api('/public/support', { body: { name: f.name.trim(), email: f.email.trim(), topic, message: f.message.trim(), envelope_id: envelope || undefined, code: code.replace(/[^A-Za-z0-9]/g, '').length === 12 ? code : undefined, tz: browserZone() || undefined } });
+          const r = await api('/public/support', { body: { name: f.name.trim(), email: f.email.trim(), topic, message: f.message.trim(), envelope_id: envelope || undefined, code: code.replace(/[^A-Za-z0-9]/g, '').length === 12 ? code : undefined, tz: browserZone() || undefined, chat: chat?.length ? chat : undefined } });
           // "Your requests" below shows the new one straight away for someone who is signed in.
           window.dispatchEvent(new Event('sg-support-sent'));
           return { reference: r.reference, email: f.email.trim(), due_at: r.due_at || null, reply_hours: r.reply_hours || null };
@@ -307,6 +311,15 @@ export function ContactForm() {
           {codeNote && <span id="contact-code-note" className="hint" role="status">{codeNote}</span>}
         </label>
       ) : null}
+      {chat && chat.length > 0 && (
+        <div className="notice pub-form-hint hc-attached" id="contact-chat">
+          <p style={{ margin: 0 }}><b>Your chat with the helper is attached</b> ({chat.length} message{chat.length === 1 ? '' : 's'}). The person who answers reads it with your message. It is not passed to the sender of a document.</p>
+          <details><summary>See what is attached</summary>
+            <ol className="hc-attached-list">{chat.map((l, i) => <li key={i}><b>{l.from === 'you' ? 'You' : 'Helper'}:</b> {l.text}</li>)}</ol>
+          </details>
+          {onDropChat && <p style={{ margin: '6px 0 0' }}><button type="button" className="pub-link" onClick={onDropChat}>Take the chat off</button></p>}
+        </div>
+      )}
       {a.error && <div className="notice err" role="alert">{a.error}</div>}
       <div className="pub-contact-foot">
         <button className="btn primary" disabled={a.busy}>{a.busy ? 'Sending' : 'Send to a person'}</button>

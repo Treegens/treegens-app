@@ -196,7 +196,19 @@ export const SUPPORT_KEEP_DAYS = 90;
 // Plain functions with no environment in them, so a 'use client' file may import them.
 export type ConsentWording = { version: string; legal: string; practical: string; agree: string };
 export const CONSENT_VERSION = '2026-11';
+/**
+ * The wording the signing screen showed before versions were recorded (until 20 November 2026). Its audit lines
+ * name no version, only the person, so an evidence pack prints this one for them and says how it knows. It is
+ * kept word for word because it is what those people saw, and it is never shown to anyone again: it says a thing
+ * we no longer say ("the same legal effect as a handwritten one"). A screen cannot claim to have shown it.
+ */
+export const UNVERSIONED_CONSENT = 'before-2026-11';
 const CONSENT_WORDINGS: Record<string, (sender: string, signs: boolean) => Omit<ConsentWording, 'version'>> = {
+  [UNVERSIONED_CONSENT]: (sender, signs) => ({
+    legal: `You are about to review${signs ? ' and sign' : ''} this document on screen. An electronic signature has the same legal effect as a handwritten one.`,
+    practical: `You can download or print a copy before you ${signs ? 'sign' : 'finish'}, and afterwards you can download what you ${signs ? 'signed' : 'finished'} from this same link, also if the document is later cancelled, declined or runs out of time. You can decline, or ask ${sender} for a paper copy instead. We record the time, your IP address and each step you take in a tamper-evident audit trail.`,
+    agree: 'I agree to use electronic records and signatures.',
+  }),
   '2026-11': (sender, signs) => ({
     legal: signs
       ? `You are about to review and sign this document on screen, with a simple electronic signature: your name or mark on the page and a record of when and from where you signed. In many countries a signature like this can be used for agreements that need no special form. The rules differ by country and by kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature instead. Sign&Grow does not know which kind this document is. If you are not sure, ask ${sender} or a lawyer before you sign. By continuing, you accept this electronic method as a valid way for you and the other parties to sign this document.`
@@ -206,10 +218,11 @@ const CONSENT_WORDINGS: Record<string, (sender: string, signs: boolean) => Omit<
   }),
 };
 /** Whether a version is one we have shown. A screen that was open across a change of wording sends its own. */
-export const isConsentVersion = (v: unknown): v is string => typeof v === 'string' && Object.hasOwn(CONSENT_WORDINGS, v);
-/** The words of one version. `signs` is false for someone who approves or only reads. */
+export const isConsentVersion = (v: unknown): v is string => typeof v === 'string' && v !== UNVERSIONED_CONSENT && Object.hasOwn(CONSENT_WORDINGS, v);
+const keptVersion = (v: unknown): v is string => typeof v === 'string' && Object.hasOwn(CONSENT_WORDINGS, v);
+/** The words of one version, also the one from before versions (for the record). `signs` is false for someone who approves or only reads. */
 export const consentWording = (sender: string, signs: boolean, version: string = CONSENT_VERSION): ConsentWording =>
-  ({ version: isConsentVersion(version) ? version : CONSENT_VERSION, ...CONSENT_WORDINGS[isConsentVersion(version) ? version : CONSENT_VERSION](sender, signs) });
+  ({ version: keptVersion(version) ? version : CONSENT_VERSION, ...CONSENT_WORDINGS[keptVersion(version) ? version : CONSENT_VERSION](sender, signs) });
 /**
  * What the audit line says after the signer's name. The certificate prints it, so it says where the words can be
  * read. `stated` is false when the call that agreed did not say which wording its screen showed: the line then

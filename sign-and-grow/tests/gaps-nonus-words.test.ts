@@ -945,3 +945,92 @@ test('an old link whose person now has no address is answered "ask the sender", 
   // The record of the correction says where the address went, in words.
   assert.ok((await auditOf(ada, e.id)).some((a) => a.action === 'Envelope corrected' && /the email address changed from was\.mailed@example\.com to none\./.test(a.detail)));
 });
+
+// ---- Repairs after the skeptic's report (verify:nonus) -------------------------------------------------
+
+// The entries of a ZIP the app made (stored, not compressed), as tests/encrypt.test.ts reads them.
+function unzipped(z: Uint8Array): Record<string, Buffer> {
+  const b = Buffer.from(z);
+  const out: Record<string, Buffer> = {};
+  for (let i = 0; b.readUInt32LE(i) === 0x04034b50;) {
+    const size = b.readUInt32LE(i + 18), nameLen = b.readUInt16LE(i + 26), extra = b.readUInt16LE(i + 28);
+    out[b.subarray(i + 30, i + 30 + nameLen).toString('utf8')] = b.subarray(i + 30 + nameLen + extra, i + 30 + nameLen + extra + size);
+    i += 30 + nameLen + extra + size;
+  }
+  return out;
+}
+
+test('an evidence pack prints the wording a signer saw before versions were recorded, says it was inferred, and no screen can claim that old wording', async () => {
+  const { UNVERSIONED_CONSENT } = await import('../src/lib/policy.ts');
+  const old = consentWording('Ada Sender', true, UNVERSIONED_CONSENT);
+  assert.equal(old.version, UNVERSIONED_CONSENT);
+  assert.equal(old.legal, 'You are about to review and sign this document on screen. An electronic signature has the same legal effect as a handwritten one.', 'kept word for word, as the screen showed it until 20 November 2026');
+  assert.match(old.practical, /ask Ada Sender for a paper copy instead/);
+  assert.equal(consentWording('Ada Sender', false, UNVERSIONED_CONSENT).legal, 'You are about to review this document on screen. An electronic signature has the same legal effect as a handwritten one.');
+  // It is for the record only: a screen naming it is written down as a screen that named no wording we show.
+  assert.equal(isConsentVersion(UNVERSIONED_CONSENT), false);
+  const e0 = await simple(ada, 'claims-old@example.com');
+  await ada.post(`/envelopes/${e0.id}/send`);
+  assert.equal((await new Client().post(`/sign/${tokenFor(e0.id, 'claims-old@example.com')}/consent`, { wording: UNVERSIONED_CONSENT })).status, 200);
+  assert.match((await full(ada, e0.id)).audit.find((a: any) => a.action === 'Agreed to electronic records and signatures').detail, /The screen did not say which wording it showed\. The wording in use was 2026-11/);
+
+  // A line the way the server wrote it before versions: the action and the name, nothing else.
+  const e = await simple(ada, 'old.consent@example.com');
+  await ada.post(`/envelopes/${e.id}/send`);
+  env.audit(e.id, { name: 'Sam Signer <old.consent@example.com>', ip: '203.0.113.9' }, 'Agreed to electronic records and signatures', 'Sam Signer');
+  db.run('UPDATE recipients SET consent_at=? WHERE envelope_id=?', new Date().toISOString(), e.id);
+  // And one written today, with the version the screen named.
+  const e2 = await simple(ada, 'new.consent@example.com');
+  await ada.post(`/envelopes/${e2.id}/send`);
+  assert.equal((await new Client().post(`/sign/${tokenFor(e2.id, 'new.consent@example.com')}/consent`, { wording: CONSENT_VERSION })).status, 200);
+  const consentOf = async (id: string) => unzipped((await ada.get(`/envelopes/${id}/evidence`)).data)['consent.txt'].toString();
+  const before = await consentOf(e.id);
+  assert.match(before, new RegExp(`Wording ${UNVERSIONED_CONSENT} \\(their audit line names no wording, because it was written before Sign&Grow recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred`));
+  assert.ok(before.includes(old.legal.replace('Ada Sender', 'Ada Sender')), 'the words that person saw');
+  assert.ok(!before.includes('simple electronic signature'), 'not today\'s words');
+  assert.match(before, /A line written before then names no version: see the note under it\./);
+  const today = await consentOf(e2.id);
+  assert.match(today, new RegExp(`Wording ${CONSENT_VERSION}:`));
+  assert.ok(!today.includes('same legal effect'));
+  assert.equal(env.verifyChain(e.id).ok, true);
+});
+
+test('someone with no address who asks for more time is never told "by email", and the sender is told there is no address to answer', async () => {
+  const { moreTimeWords, laterWords } = await import('../src/lib/bysender.ts');
+  const { momentForEmail } = await import('../src/lib/dates.ts');
+  // The words: no email for someone the sender reaches themselves, as before for everyone else.
+  const by = moreTimeWords('Vera Sender', true), mailed = moreTimeWords('Vera Sender', false);
+  for (const t of [by.say, by.hint, by.open, laterWords(true)]) assert.doesNotMatch(t, /by email|in your email|get an email|we will email|we email you|in touch by/i, t);
+  assert.match(by.say, /^We asked Vera Sender for more time\. They have no email address for you here, so they will reach you the way they sent you this link\.$/);
+  assert.equal(mailed.say, 'We asked Vera Sender for more time. They will be in touch by email.');
+  assert.equal(laterWords(false), 'Saved. Use the link in your email to come back and finish.');
+  // The signing page picks them by me.link_by_sender, and offers no "Stop reminder emails" to someone who gets none.
+  const page = src('app/sign/[token]/page.tsx');
+  assert.doesNotMatch(page, /They will be in touch by email|You will get an email as soon as the document is open again|Use the link in your email to come back/);
+  assert.equal(page.match(/moreTimeWords\(sender\.name, !!me\.link_by_sender\)/g)?.length, 3);
+  assert.match(page, /toast\(laterWords\(!!me\.link_by_sender\)\)/);
+  assert.match(page, /key: 'mute'/);
+  assert.match(page, /!muted && me\.role !== 'inperson' && !me\.link_by_sender \? \[\{ key: 'mute'/);
+
+  // The sender's email: the deadline by their own clock too, and a plain word that there is no address to answer.
+  assert.equal((await ada.call('GET', '/me', undefined, { 'x-tz': 'Pacific/Auckland' })).status, 200);
+  const e = await simple(ada, '', { ...byHand('Wanjiru Time'), expire_days: 14 });
+  assert.equal((await ada.post(`/envelopes/${e.id}/send`)).status, 200);
+  const tok = linkOf(e.id).token;
+  const w = new Client();
+  assert.equal((await w.post(`/sign/${tok}/consent`, { wording: CONSENT_VERSION })).status, 200);
+  assert.equal((await w.post(`/sign/${tok}/request-extension`)).status, 200);
+  const closes = (await full(ada, e.id)).envelope.expires_at;
+  const asked = mailTo('ada.sender@example.com').filter((m: any) => m.subject === `More time needed: ${e.subject}`).pop()!;
+  assert.ok(asked.html.includes(`The deadline is ${momentForEmail(closes, 'Pacific/Auckland')}.`), asked.html.slice(0, 1500));
+  assert.ok(asked.html.includes('Wanjiru Time has no email address here, so this email has no reply address of theirs. Answer them the way you sent them the link.'));
+  // Someone with an address: no such line.
+  const e2 = await simple(ada, 'has.address@example.com', { expire_days: 14 });
+  await ada.post(`/envelopes/${e2.id}/send`);
+  const t2 = tokenFor(e2.id, 'has.address@example.com');
+  await new Client().post(`/sign/${t2}/consent`, { wording: CONSENT_VERSION });
+  assert.equal((await new Client().post(`/sign/${t2}/request-extension`)).status, 200);
+  const asked2 = mailTo('ada.sender@example.com').filter((m: any) => m.subject === `More time needed: ${e2.subject}`).pop()!;
+  assert.ok(!asked2.html.includes('no email address here'));
+  assert.equal((await ada.call('GET', '/me', undefined, { 'x-tz': 'UTC' })).status, 200);
+});

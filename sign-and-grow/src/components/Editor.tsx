@@ -19,6 +19,7 @@ import { sendAnywayAsk } from '@/lib/mailnews';
 import { stackedFields } from '@/lib/stacked';
 import { WordingBanner, type WordingLock } from './templates/WhoCanUse';
 import { witnessProblem } from '@/lib/witness';
+import { HelpChatButton } from './HelpChat';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -550,7 +551,7 @@ export function Editor({ id }: { id: string }) {
         </nav>
         <span className="muted small hide-sm" role="status">{status}</span>
         {/* Help opens beside the editor, so nothing that is being worked on is left behind. */}
-        <a className="btn sm ghost" href="/help?topic=sending#sending" target="_blank" rel="noreferrer" aria-label="Help (opens in a new tab)"><span className="ed-only-sm" aria-hidden="true">?</span><span className="hide-sm">Help</span></a>
+        <HelpChatButton className="btn sm ghost hc-open" label="Help: ask the helper or write to a person"><span className="ed-only-sm" aria-hidden="true">?</span><span className="hide-sm">Help</span></HelpChatButton>
         {step < 3 ? <button type="button" className="btn primary" onClick={() => go(step + 1)}>Next</button>
           : <button type="button" className="btn primary hide-sm" disabled={submitOff} onClick={submit}>{isTpl ? 'Save template' : correcting ? 'Save changes' : 'Send'}</button>}
       </div>

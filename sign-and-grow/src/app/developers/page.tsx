@@ -79,7 +79,8 @@ const GROUPS: [string, Endpoint[]][] = [
   ['No key needed', [
     ['POST', '/api/public/verify', 'Check whether a PDF is, byte for byte, a completed document we hold. A match shows it is unchanged since signing finished, not who signed. For a completed document whose sender deleted it in the last year, "deleted" says so.'],
     ['GET', '/api/public/verify/:id', 'Look an envelope up by the ID printed on every page: status, dates, pages, signers, the fingerprint of the signed file and whether it is disputed. Never a name, an address or the title.'],
-    ['POST', '/api/public/check/dispute', '"I did not sign this, or this was not me", with the security code of an email we sent. Marks the envelope as disputed; nothing is deleted.'],
+    ['POST', '/api/public/check/dispute', '"I did not sign this, or this was not me", with the security code of any email we sent that person, also after the address was changed. Marks the envelope as disputed; nothing is deleted.'],
+    ['GET', '/api/envelopes/:id/disputes', 'The disputes on one of your envelopes: when, under which name, what the person wrote, and whether Sign&Grow has closed it.'],
     ['POST', '/api/public/check', 'Check the security code from a signing email.', true],
     ['GET', '/api/auth/providers', 'Which of Google and Microsoft people can sign in with on this server, next to email and password. Empty when the operator has set up neither. Signing in itself is for a person in a browser, never for a key.', true],
     ['GET', '/api/openapi.json', 'This API as an OpenAPI 3 description, for code generators and API clients.'],

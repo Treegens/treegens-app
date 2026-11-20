@@ -14,11 +14,17 @@ export const PAPER_HELP = '/help#outside-us';
 
 // A word is matched as a whole word, in any letter case and with or without accents. A trailing * lets any letters
 // follow ("befrist*" finds befristet, befristeter and Befristung). Spaces also match a hyphen or a line break.
+// Document names are usually file names, so an underscore or a dot counts as a space and a capital inside a word
+// starts a new one ("Power_of_Attorney.pdf", "PowerOfAttorney.pdf"). An umlaut may be written out ("Kuendigung" for
+// "Kündigung") and ß as ss, as people do on a keyboard without them. Invisible characters (a soft hyphen, a
+// zero-width space) are skipped.
 // `title: true` means the word is only looked for in the subject and the document names: in the running text of an
 // ordinary contract it is too common to mean anything ("the tenant will...", "Kündigung" as a clause heading).
+// `name: true` is narrower still, document names only: "Will - Jo Bloggs.pdf" is a will, a subject "Will you sign
+// this?" is not.
 // `with` names stems of which one must appear somewhere in the same envelope, so that "fixed term" in a software
 // contract says nothing and "fixed term" in an employment contract does.
-type Word = string | { word: string; title?: true; with?: string[] };
+type Word = string | { word: string; title?: true; name?: true; with?: string[] };
 export type PaperKind = { id: string; a: string; why: string; words: Word[] };
 
 export const PAPER_KINDS: PaperKind[] = [
@@ -26,7 +32,7 @@ export const PAPER_KINDS: PaperKind[] = [
     id: 'will', a: 'a will',
     why: 'In many countries a will has to be signed by hand in front of witnesses, and one signed electronically may not count at all.',
     words: [
-      'last will', 'will and testament', 'living will', { word: 'my will', title: true }, { word: 'will of', title: true }, { word: 'testament', title: true }, 'codicil',
+      'last will', 'will and testament', 'living will', { word: 'my will', title: true }, { word: 'will of', title: true }, { word: 'testament', title: true }, { word: 'will', name: true }, 'codicil',
       'testamento', 'codicilo', 'letzter wille', 'mein testament', 'letztwillige verfügung', 'mon testament', 'codicille', 'dernières volontés',
     ],
   },
@@ -39,7 +45,7 @@ export const PAPER_KINDS: PaperKind[] = [
     id: 'attorney', a: 'a power of attorney',
     why: 'A power of attorney often has to be witnessed, notarised or registered, and in several countries it cannot be signed electronically at all.',
     words: [
-      'lasting power of attorney', 'enduring power of attorney', 'power of attorney',
+      'lasting power of attorney', 'enduring power of attorney', 'power of attorney', 'power of atty', { word: 'poa', title: true }, { word: 'lpa', title: true },
       'poder notarial', 'carta poder', 'procuração', 'vorsorgevollmacht', 'generalvollmacht', { word: 'vollmacht', title: true }, 'procuration',
     ],
   },
@@ -63,7 +69,7 @@ export const PAPER_KINDS: PaperKind[] = [
   {
     id: 'witness', a: 'a document that needs a witness or a notary',
     why: 'A witness usually has to be physically present when the document is signed, and so does a notary. Sign&Grow can add a witness who states that they were there, and it cannot check that they were. It has no notary step.',
-    words: ['executed as a deed', 'signed as a deed', 'in the presence of a witness', 'notary public', 'notarised', 'notarized', 'notariell*', 'ante notario', 'devant notaire'],
+    words: ['executed as a deed', 'signed as a deed', 'in the presence of a witness', 'notary public', 'notarised', 'notarized', 'notariell*', 'ante notario', 'devant notaire', 'affidavit', 'statutory declaration', { word: 'deed', title: true }],
   },
 ];
 
@@ -92,23 +98,31 @@ export type PaperWarning = {
 };
 
 // Text is compared the way the eye reads it: no accents, no capitals. "Kündigung" and "KUNDIGUNG" are one word.
-const flat = (s: unknown): string => String(s ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+const flat = (s: unknown): string => String(s ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/ß/g, 'ss');
+// Characters nobody sees, which would otherwise cut a word in two: soft hyphen, zero-width space and joiners, BOM.
+const INVISIBLE = /[­​-‍⁠﻿]/u;
 // The same, keeping for every flattened letter where it stands in the original, so that a warning can quote the
-// word exactly as the document has it ("Befristung", "LAST WILL") and not as the list spells it.
+// word exactly as the document has it ("Befristung", "LAST WILL") and not as the list spells it. File names are
+// read like words: "_" and "." are spaces, and "PowerOfAttorney" is three words.
 function flatWithPlaces(s: unknown): { text: string; src: string; at: number[] } {
   const src = String(s ?? '');
   const at: number[] = [];
   let text = '';
+  let before = '';
   for (let i = 0; i < src.length; ) {
     const code = src.codePointAt(i)!;
     const ch = String.fromCodePoint(code);
-    const f = code < 128 ? ch.toLowerCase() : flat(ch);
+    let f = INVISIBLE.test(ch) ? '' : ch === '_' || ch === '.' ? ' ' : code < 128 ? ch.toLowerCase() : flat(ch);
+    if (/\p{Lu}/u.test(ch) && /\p{Ll}/u.test(before)) f = ` ${f}`;
     for (let k = 0; k < f.length; k++) at.push(i);
     text += f;
+    if (f) before = ch;
     i += ch.length;
   }
   return { text, src, at };
 }
+// A letter of a list word as a pattern: an umlaut also matches its written-out form (ü is u or ue).
+const letter = (ch: string): string => (/[äöüÄÖÜ]/.test(ch) ? `${flat(ch)}e?` : esc(flat(ch)));
 const quote = (p: { src: string; at: number[] }, from: number, length: number): string => {
   const last = p.at[from + length - 1];
   return p.src.slice(p.at[from], last + String.fromCodePoint(p.src.codePointAt(last)!).length).replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -116,21 +130,21 @@ const quote = (p: { src: string; at: number[] }, from: number, length: number): 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const finder = (word: string): RegExp => {
   const open = word.endsWith('*');
-  const core = flat(open ? word.slice(0, -1) : word).split(/\s+/).map(esc).join('[\\s\\-\\u2010-\\u2015]+');
+  const core = (open ? word.slice(0, -1) : word).trim().split(/\s+/).map((part) => [...part].map(letter).join('')).join('[\\s\\-\\u2010-\\u2015]+');
   return new RegExp(`(?<![\\p{L}\\p{N}])${core}${open ? '[\\p{L}]*' : ''}(?![\\p{L}\\p{N}])`, 'u');
 };
 const COMPILED = PAPER_KINDS.map((k) => ({
   kind: k,
-  words: k.words.map((w) => (typeof w === 'string' ? { word: w } : w)).map((w) => ({ word: w.word.replace(/\*$/, ''), stem: w.word.endsWith('*'), re: finder(w.word), title: !!(w as any).title, need: ((w as any).with as string[] | undefined)?.map(flat) })),
+  words: k.words.map((w) => (typeof w === 'string' ? { word: w } : w)).map((w) => ({ word: w.word.replace(/\*$/, ''), stem: w.word.endsWith('*'), re: finder(w.word), title: !!(w as any).title || !!(w as any).name, name: !!(w as any).name, need: ((w as any).with as string[] | undefined)?.map(flat) })),
 }));
 
 /**
  * Every word the check looks for, by kind, for the help page: nobody should have to guess what sets it off. A word
  * that stands for every word beginning that way is printed with three dots after it ("befrist...").
  */
-export const paperWordList = (): { a: string; words: string[]; titleOnly: string[] }[] => {
+export const paperWordList = (): { a: string; words: string[]; titleOnly: string[]; namesOnly: string[] }[] => {
   const shown = (w: { word: string; stem: boolean }) => (w.stem ? `${w.word}...` : w.word);
-  return COMPILED.map(({ kind, words }) => ({ a: kind.a, words: words.filter((w) => !w.title).map(shown), titleOnly: words.filter((w) => w.title).map(shown) }));
+  return COMPILED.map(({ kind, words }) => ({ a: kind.a, words: words.filter((w) => !w.title).map(shown), titleOnly: words.filter((w) => w.title && !w.name).map(shown), namesOnly: words.filter((w) => w.name).map(shown) }));
 };
 
 const whereText = (w: Pick<PaperWarning, 'where' | 'document'>): string =>
@@ -157,6 +171,7 @@ export function paperWarnings(input: { subject?: string | null; documents?: { na
       if (!p.in.text) continue;
       for (const w of words) {
         if (w.title && p.where === 'document text') continue;
+        if (w.name && p.where !== 'document name') continue;
         const m = w.re.exec(p.in.text);
         if (!m) continue;
         if (w.need && !w.need.some((stem) => everything.includes(stem))) continue;

@@ -154,7 +154,7 @@ function callModel(p: ChatProvider, screen: ChatScreen, turns: ChatTurn[], tuned
  *   {done, sig, cut?}                           the end; `cut` when it stopped part way after CHAT_TIMING
  *   {fallback: {...built-in answer}}            instead of an answer, when the model said nothing in time
  */
-export async function answer(c: Cleaned, screen: ChatScreen, who: Who): Promise<Response | ReturnType<typeof builtIn>> {
+export async function answer(c: Cleaned, screen: ChatScreen, who: Who): Promise<Response | (ReturnType<typeof builtIn> & { limit?: { which: ChatLimit; until: string } })> {
   const p = chatProvider();
   if (!p || !(process.env[p.keyVar] || '').trim()) return builtIn(c, 'off');
   const ok = admit(who);

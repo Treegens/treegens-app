@@ -693,3 +693,31 @@ test('a time zone belongs to its person: a hand-over, a correction to another pe
   assert.equal((await new Client().post(`/sign/${mayaLink}/hand-back`, {})).status, 200);
   assert.equal(grow().tz, null);
 });
+
+test('a signing link that reports a new time zone again and again writes one line, and one more at Finish if the zone changed', async () => {
+  const c = await signUp('Flo Sender', 'flo-zones@example.com', ip());
+  const e = await sendTo(c, [{ name: 'Flood Signer', email: 'flood-tz@example.com', type: 'date_signed' }], { date_format: 'D MMM YYYY' });
+  const tok = tokenFor(e.id, 'flood-tz@example.com');
+  const lines = () => s.db.all("SELECT detail FROM audit WHERE envelope_id=? AND action='Time zone reported' ORDER BY seq", e.id).map((a: any) => a.detail);
+  const f = new Client();
+  for (let i = 0; i < 60; i++) assert.equal((await f.post(`/sign/${tok}/consent`, { tz: i % 2 ? 'Europe/Berlin' : 'Asia/Tokyo' })).status, 200);
+  const g = new Client();
+  g.ip = '203.0.113.78';
+  for (let i = 0; i < 20; i++) await g.post(`/sign/${tok}/consent`, { tz: i % 2 ? 'Europe/Berlin' : 'Asia/Tokyo' });
+  assert.equal(lines().length, 1, 'only the first report is written while the link is used');
+  assert.match(lines()[0], /^Flood Signer: Asia\/Tokyo \(/);
+  // The zone is still kept: the last one reported decides the day. It is Berlin now, so Finish says so once.
+  assert.equal(s.db.get('SELECT tz FROM recipients WHERE envelope_id=?', e.id).tz, 'Europe/Berlin');
+  const v = (await f.get(`/sign/${tok}`)).data;
+  const values = Object.fromEntries(v.fields.map((x: any) => [x.id, x.type === 'text' ? 'ok' : '1']));
+  // A Finish from a device that says nothing still puts the zone the date rests on into the record.
+  assert.equal((await f.post(`/sign/${tok}/complete`, { values, signature_png: PNG, initials_png: PNG })).status, 200);
+  assert.equal(lines().length, 2);
+  assert.match(lines()[1], /^Flood Signer: Europe\/Berlin \(UTC[+-]\d\d:\d\d at this moment\), as their device says when they finished\./);
+  const pages = await extractPages((await c.get(`/envelopes/${e.id}/download`)).data);
+  assert.ok(pages.length <= 3, `the certificate stays short: ${pages.length} pages`);
+  const done = s.db.get('SELECT completed_at FROM recipients WHERE envelope_id=?', e.id).completed_at;
+  assert.ok(pages[0].includes(formatDate(done, 'D MMM YYYY', 'Europe/Berlin')));
+  // Same zone at Finish as on record: no second line (the earlier test checks one consent and one Finish).
+  assert.equal((await c.get(`/envelopes/${e.id}`)).data.chain.ok, true);
+});

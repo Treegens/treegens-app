@@ -3,7 +3,7 @@
 // sends by hand in parts is settled once they add up, with one true email; no billing email is handed to the mail
 // server inside an account's queue; and the lows around cancelling, the stored price, the limits on new accounts,
 // public forms and who pays for a signature. Each test fails without its fix.
-import { test, before } from 'node:test';
+import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { readFileSync } from 'node:fs';
@@ -114,6 +114,12 @@ before(async () => {
   ({ db, billing, cron, env } = await boot());
   process.env.SUPPORT_EMAIL = 'ops8@eight.example';
 });
+// A provider failure armed by one test never reaches the next.
+afterEach(() => {
+  stripe.failing.length = 0;
+  stripe.losing.length = 0;
+  stripe.delayMs = 0;
+});
 
 // ---- Another product on a shared provider account (medium) -------------------------------------------------------
 
@@ -160,6 +166,7 @@ test('a stranger\'s dispute of another product is never conceded by us', async (
 test('an invoice of our customer that names neither our price, our mark nor a subscription of ours is not ours: a person is told', async () => {
   const p = await person('Bare');
   await subscribe(p);
+  stripe.sub(p.sub).status = 'canceled'; // subscribed to nothing live, so the invoice cannot be matched to the plan
   const was = (await bal(p)).balance;
   const mails = mailTo(p.email).length;
   const o = { id: 'in8_bare', customer: p.cus, amount_paid: 1500, currency: 'usd', status: 'paid', billing_reason: 'subscription_cycle', lines: { data: [{ period: { start: unix(0), end: unix(30) } }] } };
@@ -362,8 +369,8 @@ test('a price notice counts from when its email left, so a run that takes too lo
   assert.equal(subjects(p.email).filter((s) => s.startsWith('The price of your Sign&Grow plan changes on')).length, 1, 'nobody is emailed twice');
   // The operator page says what that means.
   const page = readFileSync(new URL('../src/app/app/operator/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /out\.too_late\.length > 0/);
-  assert.match(page, /out\.on_the_way\.length > 0/);
+  assert.match(page, /out\.too_late\??\.length > 0/);
+  assert.match(page, /out\.on_the_way\??\.length > 0/);
 });
 
 // ---- Cancelling (low) ---------------------------------------------------------------------------------------------
@@ -576,14 +583,15 @@ test('a visitor who was told and stays away does not keep the next one waiting f
 
 test('the refusal promises an email only to someone we may email', async () => {
   const p = await person('Promise');
-  adjust(p.id, -3, 'none'); // none free
+  adjust(p.id, -2, 'one'); // one free while they start
   const f = await form(p);
   const v = await visit(f.slug, 'Spam Visitor', 'spam-promise@eight.example');
+  const q = await visit(f.slug, 'Plain Visitor', 'plain-promise@eight.example');
+  adjust(p.id, -1, 'none'); // and none when they finish
   db.run('INSERT OR IGNORE INTO mail_complaints (account_id, email, at) VALUES (?,?,?)', p.id, 'spam-promise@eight.example', new Date().toISOString());
   const r = await finish(v.v, v.tok);
   assert.equal(r.status, 503);
   assert.doesNotMatch(r.data.error, /We email you at/);
-  const q = await visit(f.slug, 'Plain Visitor', 'plain-promise@eight.example');
   assert.match((await finish(q.v, q.tok)).data.error, /We email you at plain-promise@eight\.example once the form can take your signature/);
 });
 

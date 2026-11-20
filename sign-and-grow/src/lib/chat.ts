@@ -78,7 +78,9 @@ export const CHAT_STARTERS: Record<ChatScreen, string[]> = {
 /** Said at the top of the chat, always. */
 export const CHAT_DO_NOT_TYPE = 'Do not type passwords, card numbers, signing links or the codes from our emails. Anything that looks like one is taken out before your question is sent.';
 /** What is kept of a chat, said at the top and on /security. True of the code: see src/server/chat.ts. */
-export const CHAT_KEPT = 'We keep nothing of this chat. Only a count of questions is kept, under a fingerprint of your internet address (and of the signing link or the account, where there is one), for two days, to hold the limits. If you send the chat to a person, it becomes part of your help request.';
+export const CHAT_KEPT = 'We keep nothing of this chat. Only a count of questions is kept, under a fingerprint of your internet address (and of the signing link or the account, where there is one), for up to two days, to hold the limits. If you send the chat to a person, it becomes part of your help request.';
+/** The same, for /security and /security/processing. */
+export const CHAT_KEPT_PAGE = 'Nothing of what is asked or answered is stored or logged. Only a count of questions is kept, under a keyed fingerprint of the internet address (and of the signing link or the account, where there is one), for up to two days, to hold the limits. A chat that someone chooses to send with a help request becomes part of that request, and goes with it.';
 /** Under the title when a model answers. */
 export const CHAT_AI_NOTE = 'An AI helper answers here at once. It can be wrong: the rules on our pages are what count, and it gives no legal advice.';
 /** Under the title when no model is set up on this server, or none can answer now. */
@@ -235,11 +237,11 @@ export const CHAT_TOOLS: ChatTool[] = [
   { id: 'not-me', label: 'I did not sign this', href: '/help#not-me', what: 'what to do when you are named on a document you did not sign.', words: /\b(did ?n[o']?t sign|never signed|not me|forg\w+|dispute\w*)\b/ },
   { id: 'security', label: 'Security and trust', href: '/security', what: 'who can see documents, where the data is, what is deleted and what is kept.', words: /\b(who can see|privacy|private|data|stored|where.*(?:data|server)|encrypt\w*|delet\w*|gdpr)\b/ },
 ];
-/** The tools that fit a question, then those that fit the answer to it, at most three. */
+/** The tools that fit a question, then those the answer names, at most three. */
 export function toolsFor(question: string, answer = ''): { id: string; label: string; href: string }[] {
   const low = (s: string) => String(s || '').toLowerCase().replace(/[’‘]/g, "'");
   const q = low(question), a = low(answer);
-  const hit = [...CHAT_TOOLS.filter((x) => x.words.test(q)), ...CHAT_TOOLS.filter((x) => !x.words.test(q) && x.words.test(a))];
+  const hit = [...CHAT_TOOLS.filter((x) => x.words.test(q)), ...CHAT_TOOLS.filter((x) => !x.words.test(q) && a.includes(x.label.toLowerCase()))];
   return hit.slice(0, 3).map(({ id, label, href }) => ({ id, label, href }));
 }
 /** Only these addresses are ever made into links in an answer. Anything else a model writes stays plain text. */

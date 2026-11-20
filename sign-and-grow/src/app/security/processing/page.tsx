@@ -5,6 +5,7 @@ import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS, DELETED_WITH_A
 import { mailEventsOn, BOUNCE_WARN_DAYS } from '@/lib/policy';
 import { ProcessorTable, Stated } from '../DataPlace';
 import { PrintButton } from './PrintButton';
+import { CHAT_KEPT_PAGE } from '@/lib/chat';
 import { fileEncryptionOn, PROCESSING_ENCRYPTED, databaseText, processingNotDone } from '@/lib/storedfiles';
 
 export const metadata = { title: 'Data processing summary', description: 'What this Sign&Grow server processes, for whom, for how long, where, and how it is deleted. One page you can save as a PDF.' };
@@ -52,6 +53,7 @@ export default function ProcessingSummary() {
           <li><b>Emails:</b> a copy of every email this server sends, and whether the mail server took it.{mailEventsOn() && ' Afterwards, what the mail provider tells us about it: that it reached the recipient\'s mail server, came back, or was marked as spam, with the reason the mail server gave. That reason is seen only by the people who run this service; senders are told what it means in our own words.'}</li>
           <li><b>Payments, if you pay:</b> what was paid, refunded and bought, and the provider&apos;s reference for it. A full card number never reaches this server.</li>
           <li><b>Help requests:</b> what was written, by whom, and the answers.</li>
+          <li><b>The help chat:</b> {CHAT_KEPT_PAGE}{d.processors.some((p) => p.id === 'chat') ? ' What is typed into it goes to the help chat provider in the table below, to be answered.' : ' On this server it answers from the built-in help, so nothing typed into it leaves the server.'}</li>
         </ul>
 
         <h2>For how long</h2>
@@ -77,7 +79,7 @@ export default function ProcessingSummary() {
         <h2>Where it is, and who else handles it</h2>
         <ul className="pub-list">
           <li><b>The server and its files:</b> <Stated value={d.region} what="where it is hosted" /> {d.host ? <>Hosted by {d.host}.</> : notSaid('which company hosts it')} There is one region, and it cannot be chosen.</li>
-          <li><b>What leaves the server:</b> only what the table lists. There is no analytics service, no advertising and no AI service.</li>
+          <li><b>What leaves the server:</b> only what the table lists. There is no analytics service and no advertising{d.processors.some((p) => p.id === 'chat') ? '. The one AI service is the help chat\'s, and it gets only what people type into the chat.' : ', and no AI service.'}</li>
         </ul>
         <ProcessorTable d={d} />
         {d.off.length > 0 && <p style={{ marginTop: 12 }}><b>Not in use on this server:</b> {d.off.join(' ')}</p>}
