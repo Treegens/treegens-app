@@ -258,17 +258,14 @@ const same = (a: any, b: any) => String(a ?? '').trim().toLowerCase() === String
 // Counted for each sender apart: `owner` is the account whose email it was, or '' for our own emails to a login. The
 // days of one account never make another account's first "try later" count as an address that does not work.
 const softKey = (owner: string, email: string) => hmac(`soft-bounce:${owner}:${email.trim().toLowerCase()}`);
-/**
- * Notes that this address answered "try later" to this owner on the day of `at`. Answers on how many separate days
- * it has by now, and whether this day was a new one.
- */
-export function softBounceDays(owner: string, email: string, at: string): { days: number; fresh: boolean } {
+/** Notes that this address answered "try later" to this owner on the day of `at`, and answers on how many separate days it has by now. */
+export function softBounceDays(owner: string, email: string, at: string): number {
   const from = new Date(Date.now() - BOUNCE_WARN_DAYS * 864e5).toISOString().slice(0, 10);
   run('DELETE FROM soft_bounce_days WHERE day < ?', from);
   // A day the provider names is taken when it is believable: not in the future, not older than the days we count.
   const day = at.slice(0, 10) >= from && Date.parse(at) < Date.now() + 864e5 ? at.slice(0, 10) : now().slice(0, 10);
-  const fresh = !!run('INSERT OR IGNORE INTO soft_bounce_days (address_hash, day) VALUES (?,?)', softKey(owner, email), day).changes;
-  return { days: get('SELECT COUNT(*) n FROM soft_bounce_days WHERE address_hash=?', softKey(owner, email)).n, fresh };
+  run('INSERT OR IGNORE INTO soft_bounce_days (address_hash, day) VALUES (?,?)', softKey(owner, email), day);
+  return get('SELECT COUNT(*) n FROM soft_bounce_days WHERE address_hash=?', softKey(owner, email)).n;
 }
 /**
  * Called by the timer (cron.ts). The list of addresses that bounced and the "try later" days are kept for
@@ -310,11 +307,12 @@ export function goneMail(e: { mail_id?: string; message_id?: string; email: stri
  * it on every recipient of the account's envelopes at that address (recipients.complained_at), however they got there.
  */
 export const complainedAt = (accountId: string, email: any): string | null => get('SELECT at FROM mail_complaints WHERE account_id=? AND email=?', accountId, String(email || '').trim())?.at || null;
-/** Answers false when this account already had a complaint from that address. */
-export function noteComplaint(accountId: string, email: string, at: string): boolean {
-  const added = !!run('INSERT OR IGNORE INTO mail_complaints (account_id, email, at) VALUES (?,?,?)', accountId, email.trim().toLowerCase(), at).changes;
-  run("UPDATE recipients SET complained_at=? WHERE complained_at IS NULL AND email=? COLLATE NOCASE AND envelope_id IN (SELECT id FROM envelopes WHERE account_id=? AND kind='envelope')", complainedAt(accountId, email), email.trim(), accountId);
-  return added;
+/** Keeps the complaint for the account, and answers the recipients of its envelopes at that address that were marked now. */
+export function noteComplaint(accountId: string, email: string, at: string): any[] {
+  run('INSERT OR IGNORE INTO mail_complaints (account_id, email, at) VALUES (?,?,?)', accountId, email.trim().toLowerCase(), at);
+  const rows = all("SELECT r.id, r.name, r.email, r.envelope_id, e.status FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.account_id=? AND e.kind='envelope' AND r.email=? COLLATE NOCASE AND r.complained_at IS NULL", accountId, email.trim());
+  for (const r of rows) run('UPDATE recipients SET complained_at=? WHERE id=?', complainedAt(accountId, email), r.id);
+  return rows;
 }
 /** The person asked for our emails again. Answers the recipients of the account at that address whose mark went. */
 export function forgetComplaint(accountId: string, email: string): any[] {

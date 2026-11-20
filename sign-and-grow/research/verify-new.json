@@ -3014,5 +3014,270 @@
    "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-09-editor-witness.png",
    "/home/user/treegens-app/sign-and-grow/tests/out/verify-witness/phone-10-editor-signer-names.png"
   ]
+ },
+ "verify:clickwrap": {
+  "checks": [
+   {
+    "item": "Signed parameter: a forged, changed, expired, or other agreement's link cannot accept as somebody else, and never falls back to typed details",
+    "holds": true,
+    "evidence": "tests/out/verify-clickwrap/probe.ts section H. Link signed with agreement A's key opened on agreement B of the same account: 403 who_not_signed. Valid who with sig 'AAAA' plus name/email Mallory in the body: 403 who_not_signed, nothing recorded. who given as a JSON object: 403. A link with exp 2 s ahead, page loaded, press after 3.1 s: 403 who_expired. Two browsers pressing the same signed person at the same moment (Promise.all): 200/200, already false/true, 1 row. The author's own test covers wrong key, changed text, ms exp, far exp, no exp, nobody, bad email and a new key."
+   },
+   {
+    "item": "Replaying a signed link: only the person's own browser holds the receipt ('Keep it: only this browser has the link to it')",
+    "holds": false,
+    "evidence": "probe.ts H2: Cass accepts from 192.0.2.55 with her signed link. A second browser at 203.0.113.200 opens the same URL: GET /public/agree/:slug returns already.receipt. With it, GET /public/agree/receipt/<receipt>/certificate gives 200 and the PDF holds cass@inbox.example and 192.0.2.55. The same receipt also triggers 'Email me a copy'.",
+    "still_broken": "Anyone who gets the website's signed link (forwarded email, shared screen, history) for up to 30 days gets the person's certificate with their IP address and browser, and can make us email them.",
+    "suggested_fix": "Do not return the receipt in GET for a signed link. Give the receipt only in the accept answer and keep it in that browser (or a cookie). Change the page text and the openapi line 'kept nowhere but in that answer'."
+   },
+   {
+    "item": "The host page cannot click for the visitor inside the frame without it being recorded as such (covered button blocked in Chromium, frame recorded as frame)",
+    "holds": false,
+    "evidence": "tests/out/verify-clickwrap/look.cjs against next dev on 3591, host page served from 127.0.0.1:3998, signed link, clicks by page.mouse at the frame's coordinates over a decoy. V0 frame opacity 0: button disabled, 'Something on the page around these terms covers this button', nothing recorded (holds). V1 frame opacity 0 inside a wrapper 560px wide (frame 600px, so the button box is about 7 percent cropped): button enabled, accepted, via embed, button_uncovered null. V2 frame fully shown for 1.2 s, then wrapper cropped to 560px and frame opacity 0: accepted, button_uncovered TRUE, so the certificate says 'No: the browser said nothing covered the button.' Framed WITHOUT ?embed=1 (plain iframe of /agree/<slug>): record via 'hosted' ('Our page for these terms'), page_url http://127.0.0.1:3998/. Screenshots 03-jack-*.png.",
+    "still_broken": "src/app/agree/[slug]/page.tsx only takes a reading when intersectionRatio > 0.99, so any crop keeps the last value (null, or an earlier true). embed is read from the query string, and frame-ancestors * covers every /agree/* URL.",
+    "suggested_fix": "Treat 'not fully in view' as covered: set visible=false whenever ratio <= 0.99 or isVisible is false, and enable the button only on a reading with isVisible true taken in the last few hundred ms; record that reading at the press. Decide embed by window.self !== window.top and send it; or only allow framing with ?embed=1 (next.config headers with has: [{type:'query', key:'embed'}], frame-ancestors 'self' otherwise)."
+   },
+   {
+    "item": "An acceptance is never changed or deleted afterwards",
+    "holds": true,
+    "evidence": "The UPDATE triggers on clickwrap_acceptances and clickwrap_versions refuse changes (author's test plus code). The only deletes are the cascade from DELETE /clickwraps/:id, which refuses when any acceptance exists (count and delete run with no await between), and account deletion. No route updates account_id or rows of acceptances."
+   },
+   {
+    "item": "Terms changed after acceptance: the record and every view of it still point at what was accepted",
+    "holds": false,
+    "evidence": "probe.ts D: accept v1 of 'Newsletter consent', then PATCH the draft name to 'Consent to sell my data' (not published). GET /clickwrap-acceptances, GET /clickwrap-acceptances/:id and the CSV 'agreement' column all say 'Consent to sell my data'; the public page still shows 'Newsletter consent'. acceptanceView uses clickwraps.name, not the version title. certificatePdf 'Written by' and emailCopy read the account's current name. probe.ts M: person accepts v1 'You may not resell the trees.', team publishes v2 'You may resell the trees.' with ask_again false; the signed person's page returns already.version 1 with version.text of v2, and the page prints that text above 'You have accepted these terms.'",
+    "still_broken": "The export a team hands to a court names an agreement nobody accepted; the returning visitor is told they accepted text with the opposite meaning.",
+    "suggested_fix": "In acceptanceView and csvOf take the title from clickwrap_versions via version_id; store the account name on the version at publish and print that. On the page, when already.version differs from the current version, show the accepted version or say 'you accepted version N; the text above is version M, which changed: note'."
+   },
+   {
+    "item": "The fake-payment-notice filter covers what the hosted page shows for unpaid accounts",
+    "holds": false,
+    "evidence": "probe.ts A, unpaid account. POST /clickwraps {name:'Membership terms', text:'Be kind to each other.', checkbox:'PayPal invoice: your payment of $499.99 was charged. To cancel call +1 (888) 555-0142 now.', button:'Call +1 (888) 555-0142'} then publish: 200 version 1; GET /public/agree/:slug closed:false and returns both labels. Browser screenshot tests/out/verify-clickwrap/01-scam-checkbox-390.png shows the notice as the tick box and the phone number as the button under 'Powered by Sign&Grow'. A2: brand in checkbox, money on button, phone in text: published. A3: v2 note set to the notice: published, and every returning signed visitor gets it as 'What changed in version 2: ...'.",
+    "still_broken": "termsRefusal only reads title, terms text and account name; closedWhy re-checks the same three.",
+    "suggested_fix": "Pass v.checkbox, v.button and the note (all notes newer than any version shown) into termsRefusal at publish and in closedWhy, and posesAs on the two labels, as fakeNotice in envelopes.ts does for field labels."
+   },
+   {
+    "item": "Paused accounts' agreements are closed",
+    "holds": false,
+    "evidence": "probe.ts C: accept, then set accounts.suspended_at. GET page: closed true (holds). POST /public/agree/receipt/email with the receipt: 200, status outbox, one more email to the visitor carrying the account's name, brand and the terms in the attached certificate. GET /public/agree/receipt/<r>/certificate: 200.",
+    "still_broken": "/public/agree/receipt/email and the receipt certificate never ask closedWhy or suspended_at.",
+    "suggested_fix": "Refuse the copy email (and probably the attachment) while closedWhy(cw) is set for suspension, closing or the scam filter; keep the PDF download for the person but not the email."
+   },
+   {
+    "item": "Email copy: text a stranger wrote does not reach an inbox under our name; 'If that was not you ... nothing else will come of it'",
+    "holds": false,
+    "evidence": "probe.ts B: typed name 'PayPal: $499.99 charged to your card. Call +1 888 555 0142 to cancel', email victim@inbox.example, then POST /public/agree/receipt/email: 200; the stored email to victim@inbox.example, subject 'Your copy: Garden club terms', contains the lure verbatim. One address sent 5 such emails to 5 strangers in a burst. probe2.ts: the same receipt mailed again every hour (Date.now moved 3601 s each time, a fresh IP each hour): 6 of 6 sent, 6 emails in the victim's inbox, and the email says 'nothing else will come of it'.",
+    "still_broken": "No confirmation of a typed address, no filter on the typed name, not counted in any daily new-people limit, repeatable hourly without end.",
+    "suggested_fix": "Send copies only to addresses the website gave (identity website or api); for typed addresses send at most once per acceptance ever and only after a code typed on the page, leave the typed name out of the body, and count it in the account's daily reach limit."
+   },
+   {
+    "item": "Monthly limit: a clear answer, admins warned, two presses cannot both take the last place, strangers cannot use it up",
+    "holds": false,
+    "evidence": "Race holds: probe.ts G with CLICKWRAP_MONTHLY_LIMIT=1, two visitors pressing at once: 200 and 429, 1 row. Flood: probe.ts F with limit 20, 25 typed acceptances from 2001:db8:1:1::1 to ::19 (one IPv6 /64): 20 recorded. Afterwards the account's other agreement (signed_only) refuses its website's API call 429 monthly_limit and a signed visitor gets 'These terms cannot be accepted here right now'.",
+    "still_broken": "rateLimit keys on the full address string, so a /64 is unlimited, and typed acceptances from strangers share the account-wide bucket with the website's own API and signed acceptances.",
+    "suggested_fix": "Bucket IPv6 by /64 in the per-address limits. Give typed acceptances their own cap (per agreement or a share of the limit) so API and signed acceptances keep working; tell admins when typed ones spike."
+   },
+   {
+    "item": "Per-address rate limits do not lock out legitimate people",
+    "holds": false,
+    "evidence": "probe.ts E: 12 different employees, each with their own valid signed link, from one office address 198.51.100.20: [200 x10, 429, 429], message 'Too many attempts. Please wait a bit and try again.' E2: 10 refused presses (box not ticked) from 198.51.100.21, then the first real signed acceptance from that address: 429.",
+    "still_broken": "rateLimit(cwacc:...) is counted before any check and for failures, at 10 per hour per agreement and 30 over all; offices, schools, event wifi and carrier NAT share one address.",
+    "suggested_fix": "Count only recorded typed acceptances; exempt signed-link acceptances (the website vouches) or raise their limit a lot; on 429 say nothing was recorded and when to try again."
+   },
+   {
+    "item": "CSV export cannot carry a formula",
+    "holds": true,
+    "evidence": "probe.ts K: typed name '+SUM(1,1)', User-Agent '=HYPERLINK(...)', API person.id '@SUM(1)', name '-2+3', ip '=1+1', user_agent '\\t=1+1', id '\\n=1+1', name ' =1+1': no exported cell starts with = + - @ tab CR LF; each got a leading apostrophe. Values starting with U+200B or full-width U+FF1D pass unchanged (not tested in a spreadsheet)."
+   },
+   {
+    "item": "What the certificate claims",
+    "holds": false,
+    "evidence": "probe.ts J: browser A (192.0.2.10) loads the page; 1.5 s later curl-like client B (192.0.2.99, UA curl/8.0) posts that view with unobscured:true. Team certificate: 'How it was accepted: The box ... was ticked, then the button \"I agree\" was pressed.', 'Open before the press: 2 seconds, measured by this server from when it handed out the terms', 'Button covered? No: the browser said nothing covered the button.' None of these describe B. look.cjs V2 shows the same 'not covered' line for a fully transparent frame in Chromium.",
+    "still_broken": "The view token is not bound to the browser or single use, and unobscured is taken from any client, also for hosted acceptances.",
+    "suggested_fix": "Word these as what the page reported ('the page sent: box ticked, button pressed; it said nothing covered the button'), bind the view to the IP/UA it was given to (or note when they differ), and store unobscured only for framed presses."
+   },
+   {
+    "item": "Deleting the account removes the acceptances and everything personal",
+    "holds": false,
+    "evidence": "Rows go (author's test; probe.ts L: clickwraps 0, emails to the visitor 0). But probe.ts L with SMTP_URL=smtp://127.0.0.1:9: 'Email me a copy' writes the certificate PDF to DATA_DIR/blobs via saveBlob before delivery; after purgeUser the blob is still on disk and its text contains 'Dora Deleted' and 'dora@inbox.example' (and the IP).",
+    "still_broken": "forgetClickwraps deletes the email rows but nobody calls removeUnusedBlobs for attachment shas in their payload, also not the MAIL_COPY_DAYS timer, so these blobs stay for ever on any server with a mail server configured.",
+    "suggested_fix": "In forgetClickwraps collect the attachment sha256s from the payloads before deleting and pass them to removeUnusedBlobs after the transaction; do the same in the timer that deletes old email rows; or regenerate the certificate at retry instead of storing it."
+   },
+   {
+    "item": "Existing database from before this work",
+    "holds": true,
+    "evidence": "migrate1.ts builds the schema of commit 4bbe541 (the parent of the first clickwrap commit) with an old abuse report; migrate2.ts opens it with today's code: three clickwrap tables added, publish 200, accept 200, report 200, operator queue 200 listing the old report (clickwrap_id null) and the new one ('After migration')."
+   },
+   {
+    "item": "Screens at 390x844",
+    "holds": false,
+    "evidence": "look.cjs and look2.cjs: /agree/<slug> and ?embed=1 with long unbreakable text: scrollWidth 390, no sideways scroll (holds). /app/agreements/[id] at 390: the three tick boxes ('scrolled to the end', 'Everyone who accepted an earlier version has to accept again', 'Only people your website names') measure 4x13 px (13x13 at 1280); screenshot 08-tickbox-390.png shows only a dot. Tables sit in .tablewrap with overflow-x auto (acceptable).",
+    "still_broken": "label.check is flex and the input shrinks; clickwrap.css sets only min-height.",
+    "suggested_fix": "Add .cw-team label.check input { flex: none; width: 20px; height: 20px; } as abroad.css and witness.css already do."
+   },
+   {
+    "item": "No em dash in any new text",
+    "holds": true,
+    "evidence": "probe.ts O: zero U+2014 in src/lib/clickwrap.ts, src/server/clickwrap.ts, routes-clickwrap.ts, openapi-clickwrap.ts, the three pages, ClickwrapTerms.tsx, clickwrap.css, public/clickwrap.js, README.md, developers and operator pages, policy.ts, .env.example."
+   },
+   {
+    "item": "Another role in the team",
+    "holds": false,
+    "evidence": "probe.ts I: a non-admin member signed in to the app posts /clickwraps/:id/acceptances for {id:'ceo', email:'ceo@bigcustomer.example'}: 200, recorded_by 'Mem Member <...>, signed in to the app'. The same member calls /clickwraps/:id/status?email=vic@inbox.example and gets latest.ip 192.0.2.77 and the browser, while GET /clickwrap-acceptances answers them 403.",
+    "suggested_fix": "Leave ip, user_agent, page_url and given_* out of status for callers who are not admins (or admin-scope keys), and accept POST acceptances only from API keys, not browser sessions of members."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Scam filter ignores the tick-box words, the button words and version notes",
+    "severity": "high",
+    "where": "src/server/clickwrap.ts termsRefusal (lureIn([title, text, account.name])) and closedWhy",
+    "detail": "Unpaid account publishes checkbox 'PayPal invoice: your payment of $499.99 was charged. To cancel call +1 (888) 555-0142 now.' and button 'Call +1 (888) 555-0142' over harmless terms: 200, live page shows both (tests/out/verify-clickwrap/01-scam-checkbox-390.png). Splitting brand, money and phone over box, button and text also publishes. A v2 note with the notice is published and shown to every returning signed visitor. Fix: read checkbox, button and notes in termsRefusal and closedWhy, posesAs on the labels."
+   },
+   {
+    "title": "Covered-button check bypassed in Chromium by cropping the frame; record then says the button was not covered",
+    "severity": "high",
+    "where": "src/app/agree/[slug]/page.tsx IntersectionObserver effect (only readings with intersectionRatio > 0.99 count)",
+    "detail": "look.cjs: frame opacity 0 in a wrapper 40px narrower than the frame: button enabled, acceptance recorded, button_uncovered null. Frame shown 1.2 s, then cropped and set to opacity 0: recorded with button_uncovered true, certificate prints 'No: the browser said nothing covered the button.' Fix: any reading with ratio <= 0.99 or isVisible false must disable the button; require a fresh visible reading at the press."
+   },
+   {
+    "title": "Anyone can make us email any address with their own words, under a customer's name, every hour for ever",
+    "severity": "high",
+    "where": "src/server/routes-clickwrap.ts POST /public/agree/receipt/email, src/server/clickwrap.ts emailCopy",
+    "detail": "Typed name 'PayPal: $499.99 charged to your card. Call +1 888 555 0142 to cancel' with victim@inbox.example, then 'Email me a copy': the email 'Your copy: <terms>' from the customer's name contains the lure. Rate limit cwmail:<id> is 1 per hour, so probe2.ts sent the same acceptance 6 times in 6 simulated hours, while the email says 'nothing else will come of it'. Not counted in any daily reach limit. Fix: copies only for website-given addresses, or once ever after a code; no typed name in the body; count in reach limits."
+   },
+   {
+    "title": "Framing /agree/<slug> without ?embed=1 is recorded as 'Our page for these terms'",
+    "severity": "medium",
+    "where": "src/app/agree/[slug]/page.tsx (embed = !!q.get('embed')), next.config.mjs frame-ancestors * on /agree/:path*",
+    "detail": "look.cjs: host page on 127.0.0.1:3998 iframes /agree/<slug>?who&sig with no embed=1; acceptance stored with via 'hosted'. EMBED_CAN says 'The record says the acceptance came through a frame'. Fix: detect framing with window.self !== window.top, or allow framing only with ?embed=1."
+   },
+   {
+    "title": "Paused accounts still send copy emails and certificates",
+    "severity": "medium",
+    "where": "src/server/routes-clickwrap.ts /public/agree/receipt/email and /public/agree/receipt/:receipt/certificate",
+    "detail": "probe.ts C: after suspended_at is set the page is closed, but the copy email goes out (status outbox) with the account's brand and the terms in the attached PDF. Fix: check closedWhy before emailing."
+   },
+   {
+    "title": "Visitor's certificate PDF stays on disk after the account is deleted",
+    "severity": "medium",
+    "where": "src/server/mail.ts sendMail (saveBlob for attachments when SMTP_URL is set), src/server/clickwrap.ts forgetClickwraps, routes-trust.ts purgeUser",
+    "detail": "probe.ts L with SMTP_URL set: after purgeUser the blob from 'Email me a copy' remains in DATA_DIR/blobs, with the visitor's name, email and IP. No path ever removes email attachment blobs. Fix: collect payload attachment shas in forgetClickwraps and the mail-copy timer and pass them to removeUnusedBlobs."
+   },
+   {
+    "title": "Strangers can use up an account's monthly limit, which also stops its API and signed-only agreements",
+    "severity": "medium",
+    "where": "src/server/util.ts rateLimit (keyed on the full address), src/server/clickwrap.ts usage/recordAcceptance",
+    "detail": "probe.ts F (limit 20): 25 typed acceptances from one IPv6 /64 record 20; then the website's API on another, signed_only agreement gets 429 monthly_limit and signed visitors are refused. With the default 1000, about 100 IPv4 addresses do it in an hour. Fix: /64 buckets, a separate cap for typed acceptances."
+   },
+   {
+    "title": "Ten per hour per address locks out offices and shared networks, failures included",
+    "severity": "medium",
+    "where": "src/server/routes-clickwrap.ts POST /public/agree/:slug/accept (rateLimit before any check)",
+    "detail": "probe.ts E: 12 employees with valid signed links from one address: the 11th and 12th get 429 'Too many attempts'. 10 refused presses (box not ticked) use up the hour for the next real person. Fix: count only recorded typed acceptances; exempt or raise for signed links."
+   },
+   {
+    "title": "Lists, API and CSV name the agreement by its current draft name; certificate by the current account name",
+    "severity": "medium",
+    "where": "src/server/clickwrap.ts acceptanceView (cw.name), csvOf, certificatePdf 'Written by', emailCopy",
+    "detail": "probe.ts D: unpublished rename to 'Consent to sell my data' changes the 'agreement' of a v1 acceptance of 'Newsletter consent' in the list, the single view and the CSV. Fix: use clickwrap_versions.title via version_id; store the account name with the version."
+   },
+   {
+    "title": "Tick boxes on the team's agreement screen are 4 px wide on a phone",
+    "severity": "medium",
+    "where": "src/app/app/agreements/[id]/page.tsx label.check inputs; src/app/styles/clickwrap.css",
+    "detail": "At 390x844 the 'ask again', 'scroll to the end' and 'only people the website names' boxes measure 4x13 px and show as a dot (tests/out/verify-clickwrap/08-tickbox-390.png), so an admin on a phone cannot see whether publishing will ask everyone again. Fix: input { flex: none; width: 20px; height: 20px }."
+   },
+   {
+    "title": "Returning person sees the new text under 'You have accepted these terms'",
+    "severity": "low",
+    "where": "src/app/agree/[slug]/page.tsx done block with data.already",
+    "detail": "probe.ts M: accepted v1 'You may not resell the trees.', v2 'You may resell the trees.' published with ask_again false; the page shows the v2 text and 'You have accepted these terms. You accepted version 1'. Fix: show the accepted version, or say what changed."
+   },
+   {
+    "title": "A signed link hands out the person's receipt, certificate (IP, browser) and copy email to whoever holds it",
+    "severity": "low",
+    "where": "src/server/routes-clickwrap.ts GET /public/agree/:slug (already.receipt)",
+    "detail": "probe.ts H2. Page text 'Keep it: only this browser has the link to it' and the openapi 'kept nowhere but in that answer' are not true. Fix: do not return the receipt from GET."
+   },
+   {
+    "title": "Certificate states a tick, a press, time open and 'not covered' as facts for a scripted request",
+    "severity": "low",
+    "where": "src/server/clickwrap.ts certificatePdf, readView, routes-clickwrap.ts accept (unobscured from any client)",
+    "detail": "probe.ts J: a view fetched by one browser and posted 1.5 s later by curl from another IP with unobscured:true gives 'The box ... was ticked, then the button ... was pressed', 'Open before the press 2 seconds', 'No: the browser said nothing covered the button.' Fix: word as 'the page reported', bind the view to the browser, store unobscured only for frames."
+   },
+   {
+    "title": "Non-admin members read visitors' IP and browser through /status and record API acceptances from a browser session",
+    "severity": "low",
+    "where": "src/server/routes-clickwrap.ts GET /clickwraps/:id/status, POST /clickwraps/:id/acceptances (level user)",
+    "detail": "probe.ts I. The acceptance list is admin-only, but status returns latest.ip, user_agent and page_url to any member or send key. Fix: trim those fields for non-admins; take POST acceptances only from keys."
+   },
+   {
+    "title": "A reported page can be deleted before anyone reviews it",
+    "severity": "low",
+    "where": "src/server/routes-clickwrap.ts DELETE /clickwraps/:id",
+    "detail": "probe.ts N: report, then DELETE: 200, versions 0, report left pointing at nothing; the operator queue shows 'deleted since' with no terms to judge. Fix: refuse deleting while an open report exists, or keep the reported version for the operator."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "research/continue.json build:clickwrap item 2b, and EMBED_CANNOT in src/lib/clickwrap.ts",
+    "claim": "Where the browser can tell (IntersectionObserver v2), a button that something covers cannot be pressed, and the record says whether that was checked.",
+    "reality": "In Chromium a frame made transparent and cropped by a few pixels is pressable; if it was visible first, the record says the button was not covered (look.cjs V1, V2)."
+   },
+   {
+    "where": "EMBED_CAN in src/lib/clickwrap.ts",
+    "claim": "The record says the acceptance came through a frame, and on which page the browser said the frame was.",
+    "reality": "Framed without ?embed=1 the record says via 'hosted', 'Our page for these terms' (look.cjs step 2)."
+   },
+   {
+    "where": "build report item 6 and abuse_and_stuck",
+    "claim": "termsRefusal ... refuses at publish ... a page closes when trust is lost; scammer shows a fake payment notice under our name: refused at publish.",
+    "reality": "The tick-box words, button words and version notes are never read; a full fake notice is published and shown (probe.ts A, 01-scam-checkbox-390.png)."
+   },
+   {
+    "where": "build report item 6",
+    "claim": "Paused and closing accounts are closed everywhere.",
+    "reality": "Copy emails and receipt certificates still work for a paused account (probe.ts C)."
+   },
+   {
+    "where": "emailCopy text in src/server/clickwrap.ts",
+    "claim": "If that was not you, you can ignore this email: nothing else will come of it.",
+    "reality": "The same acceptance can be emailed to that address again every hour without end (probe2.ts: 6 of 6)."
+   },
+   {
+    "where": "src/app/agree/[slug]/page.tsx and openapi-clickwrap.ts accept description",
+    "claim": "Keep it: only this browser has the link to it. / it is kept nowhere but in that answer.",
+    "reality": "Anyone who opens the website's signed link gets the receipt again from GET /public/agree/:slug (probe.ts H2)."
+   },
+   {
+    "where": "build report item 7",
+    "claim": "The tables cascade from accounts. purgeUser ... removes our stored copy emails.",
+    "reality": "The certificate PDF attached to each copy email stays in the blob store after deletion when SMTP_URL is set (probe.ts L)."
+   },
+   {
+    "where": "certificatePdf in src/server/clickwrap.ts",
+    "claim": "How it was accepted: The box ... was ticked, then the button ... was pressed. Open before the press: N seconds, measured by this server.",
+    "reality": "Printed the same for a curl request from another IP reusing a view another browser fetched (probe.ts J)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/01-scam-checkbox-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/03-jack-V0-transparent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/03-jack-V1-transparent-cropped.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/03-jack-V2-shown-then-hidden.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/04-agree-long.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/05-team-list.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/06-team-one.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/07-embed-long.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/08-tickbox-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-clickwrap/08-tickbox-1280.png"
+  ],
+  "doubts_about_outside_services": [
+   "IntersectionObserver v2: tested only in Playwright's bundled headless Chromium. The bypass comes from the page's own ratio > 0.99 gate, so I am fairly sure (high confidence) it reproduces in desktop Chrome and Edge. I waited more than 1 s after moving the frame so Chrome's 'recently moved cross-origin frame' click intervention did not apply. Firefox and Safari have no IOv2, so they never block, as the builder documented.",
+   "Spreadsheets: Excel and LibreOffice treat a quoted cell that starts with an apostrophe as text, so the escaping should hold (medium-high confidence). I did not open the CSV in a real spreadsheet. Cells starting with U+200B or a full-width equals sign pass through unescaped; I believe they do not run as formulas, but I did not check.",
+   "Mail: the copy-email abuse would also hurt the sending domain's reputation with real mailbox providers. I cannot measure that. The blob leak needs SMTP_URL set (any real deployment); I proved it with an SMTP URL that refuses connections, because the attachment is saved before delivery is tried.",
+   "The IPv6 flood depends on the proxy putting the client's IPv6 address into X-Forwarded-For. rateLimit is in memory per process, so restarts and several instances also reset or split the per-address counts.",
+   "Real NAT and carrier NAT sizes vary; the lockout numbers (10 per hour per agreement, 30 over all) come from the code and the probe, not from field data."
+  ]
  }
 }
