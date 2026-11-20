@@ -43,8 +43,10 @@ route('POST', '/public/check', async (c) => {
     const old = get('SELECT * FROM retired_tokens WHERE check_code=? ORDER BY retired_at DESC LIMIT 1', code);
     // A code from an email about a document that was deleted since (by its sender, or with the sender's account).
     // The email was real, and that is all we still know: the document and everything about it are gone.
-    const gone = old ? null : get('SELECT at FROM forgotten_codes WHERE code_hash=?', sha256(code));
-    if (gone) return { genuine: true, deleted: true, deleted_at: gone.at };
+    const gone = old ? null : get('SELECT at, account_id FROM forgotten_codes WHERE code_hash=?', sha256(code));
+    // can_report: whether we still know which account sent it, so the page only offers a report we can file (the
+    // account was deleted too, or the code is from before that was kept: then only the contact form helps).
+    if (gone) return { genuine: true, deleted: true, deleted_at: gone.at, can_report: !!(gone.account_id && get('SELECT 1 x FROM accounts WHERE id=?', gone.account_id)) };
     if (!old) return { genuine: false };
     const oe = old.envelope_id ? get('SELECT subject, status, sender_id, account_id FROM envelopes WHERE id=?', old.envelope_id) : null;
     const account = oe ? get('SELECT name, suspended_at FROM accounts WHERE id=?', oe.account_id) : null;
@@ -81,12 +83,14 @@ route('POST', '/public/check/report', async (c) => {
     // The code of an email whose document was deleted since. Nothing says who it was sent to any more, but the
     // account it came from is known, so the report is filed against that account and counts like any other: voiding
     // and deleting what was sent does not put a sender out of reach of the people who still hold the email. One
-    // code is one person, counted once, also when they had reported the document before it was deleted.
+    // code is one person, counted once, also when they had reported the document before it was deleted. The code of
+    // a public form's visitor stays a visitor's (via_form): it never counts towards a pause, before or after the
+    // owner deleted the start, or anyone could pause an account by starting its form and waiting for the tidy-up.
     const account = gone.account_id ? get('SELECT id FROM accounts WHERE id=?', gone.account_id) : null;
     if (!account) throw bad('That code is from an email we really sent, but the document it was about has been deleted since, and nothing is left that says who sent it. So we cannot file a report against it here. If the email worries you, use the contact form on the help page and tell us what it says: a person will look into it.', 404);
     if (!gone.reported) {
       const holder = `the holder of an email about a deleted document (${sha256(code).slice(0, 10)})`;
-      await reportAbuse({ id: '', gone: true, account_id: account.id }, { name: `Someone, as ${holder}`, email: holder }, b, { name: 'Someone holding the email', ip: c.ip, ua: c.ua });
+      await reportAbuse({ id: '', gone: true, account_id: account.id, via_form: !!gone.via_form }, { name: `Someone, as ${holder}`, email: holder }, b, { name: 'Someone holding the email', ip: c.ip, ua: c.ua });
       run('UPDATE forgotten_codes SET reported=1 WHERE code_hash=?', gone.code_hash);
     }
     return { ok: true, deleted: true };
@@ -228,12 +232,15 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
     // counts against the sender. `reported` notes that this person had reported the document already, so their
     // report is not counted a second time under the code.
     const owner = account ? null : get('SELECT account_id a FROM envelopes WHERE id=?', eid)?.a;
-    for (const r of all(`SELECT check_code c, email to_email FROM recipients WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL
-        UNION SELECT t.check_code, (SELECT m.to_email FROM emails m WHERE m.envelope_id=? AND m.recipient_id=t.recipient_id AND m.at <= t.retired_at ORDER BY m.id DESC LIMIT 1)
+    // The visitor of a public form typed their own name and address. Their report never counts towards a pause
+    // (reportAbuse), and deleting the start must not change that: `via_form` keeps it, and nothing else about them.
+    const visitor = get('SELECT form_recipient_id v FROM envelopes WHERE id=? AND powerform_id IS NOT NULL', eid)?.v;
+    for (const r of all(`SELECT check_code c, email to_email, id rid FROM recipients WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL
+        UNION SELECT t.check_code, (SELECT m.to_email FROM emails m WHERE m.envelope_id=? AND m.recipient_id=t.recipient_id AND m.at <= t.retired_at ORDER BY m.id DESC LIMIT 1), t.recipient_id
           FROM retired_tokens t WHERE t.check_code IS NOT NULL AND (t.envelope_id=? OR t.recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?))
-        UNION SELECT check_code, email FROM recipient_members WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL`, eid, eid, eid, eid, eid)) // the last line: the emails to the members of a group (groups.ts)
-      run('INSERT OR IGNORE INTO forgotten_codes (code_hash, at, account_id, reported) VALUES (?,?,?,?)', sha256(r.c), now(), owner,
-        r.to_email && get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', eid, r.to_email) ? 1 : 0);
+        UNION SELECT check_code, email, recipient_id FROM recipient_members WHERE envelope_id=? AND check_code IS NOT NULL AND sent_at IS NOT NULL`, eid, eid, eid, eid, eid)) // the last line: the emails to the members of a group (groups.ts)
+      run('INSERT OR IGNORE INTO forgotten_codes (code_hash, at, account_id, reported, via_form) VALUES (?,?,?,?,?)', sha256(r.c), now(), owner,
+        r.to_email && get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND lower(reporter)=lower(?)', eid, r.to_email) ? 1 : 0, visitor && r.rid === visitor ? 1 : 0);
     run('DELETE FROM audit WHERE envelope_id=?', eid);
     // News from the mail provider about these emails (a spam complaint) still counts against the account (bounces.ts).
     if (owner) rememberGoneMail(eid, owner);

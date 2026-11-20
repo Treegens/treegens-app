@@ -682,3 +682,94 @@ test('a witness who pressed "I was not there" by mistake can be named again by t
   assert.equal(mailTo(willEmail).filter((m: any) => /witness the signature/.test(text(m.html))).length, 2);
   assert.equal((await witness(row(wit).token)).status, 200);
 });
+
+// ---- Repairs: what a skeptic proved broken (research/verify-new.json, "verify:witness") ---------------------------
+
+// The envelope as the sender's editor has it now, with `over` applied to each recipient.
+async function edited(s: Client, id: string, over: (r: any) => any, extra: any = {}) {
+  const cur = (await s.get(`/envelopes/${id}`)).data.envelope;
+  return s.put(`/envelopes/${id}`, { edit_version: cur.edit_version, documents: cur.documents, fields: cur.fields, recipients: cur.recipients.map((r: any) => over({ ...r })), ...extra });
+}
+
+test('a finished witness goes with the signature they saw: set aside when it is, on the record, and asked again', async () => {
+  const s = await person('Fern Finished', 'fern@deed.example');
+  // Ann's place goes to another person at another address, after Will witnessed Ann.
+  const e = await deed(s);
+  const { ann, wit, ben } = ids(e);
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await finish(row(ann).token)).status, 200);
+  assert.equal((await witness(row(wit).token)).status, 200);
+  const said = row(wit).witness_statement;
+  assert.match(said, /saw Ann Signer sign/);
+  const swap = (r: any) => (r.id === ann ? { ...r, name: 'Alice Other', email: `alice.${n}@deed.example` } : r);
+  const ask = await edited(s, e.id, swap);
+  assert.equal(ask.status, 409);
+  assert.deepEqual(ask.data.sign_again, ['Ann Signer', 'Will Witness'], 'the sender is told the witness has to witness again too');
+  assert.match(ask.data.error, /Will Witness witnessed their signature and is asked to witness again too\./);
+  assert.equal((await edited(s, e.id, swap, { resign: true })).status, 200);
+  assert.equal(row(wit).status, 'pending', 'what Will saw no longer counts');
+  assert.equal(row(wit).witness_statement, null);
+  assert.equal(row(wit).witness_said_at, null);
+  const line = auditOf(e.id).find((a: any) => a.action === 'Witness statement set aside');
+  assert.ok(line, 'written to the audit trail');
+  assert.ok(line.detail.includes(`"${said}"`), 'word for word');
+  assert.match(line.detail, /was about the signature Ann Signer made on .* which no longer counts after this change.*Will Witness is asked to witness again once Alice Other has signed\./);
+  assert.equal(mailTo(row(wit).email).length, 1, 'not asked before Alice has signed');
+  assert.equal((await finish(row(ann).token)).status, 200);
+  assert.equal(row(wit).status, 'sent', 'asked again straight after Alice');
+  const again = mailTo(row(wit).email).pop();
+  assert.match(again.subject, /Changed after you finished/);
+  assert.match(text(again.html), /named you as the witness for Alice Other/);
+  assert.equal((await finish(row(ben).token)).status, 200);
+  assert.equal(db.get('SELECT status FROM envelopes WHERE id=?', e.id).status, 'sent', 'it cannot complete on a witnessing nobody made');
+  const b = browser();
+  assert.match((await b.get(`/sign/${row(wit).token}`)).data.recipient.witness_of.statement, /saw Alice Other sign/);
+  assert.equal((await witness(row(wit).token, b)).status, 200);
+  assert.equal(db.get('SELECT status FROM envelopes WHERE id=?', e.id).status, 'completed');
+  const words = (await pdfText((await s.get(`/envelopes/${e.id}/download`)).data)).replace(/\s+/g, ' ');
+  assert.match(words, /Witness for Alice Other Their statement "I was physically present and saw Alice Other sign/);
+
+  // Another person at the same address takes Ann's place: the same.
+  const h = await deed(s);
+  const hi = ids(h);
+  assert.equal((await s.post(`/envelopes/${h.id}/send`)).status, 200);
+  assert.equal((await finish(row(hi.ann).token)).status, 200);
+  assert.equal((await witness(row(hi.wit).token)).status, 200);
+  assert.equal((await edited(s, h.id, (r: any) => (r.id === hi.ann ? { ...r, name: 'Hannah Household' } : r), { resign: true })).status, 200);
+  assert.equal(row(hi.wit).status, 'pending');
+  assert.equal(row(hi.wit).witness_statement, null);
+});
+
+test('a finished witness cannot be moved to witness someone else without the sign-again choice, and is then asked again', async () => {
+  const s = await person('Mo Mover', 'mo@deed.example');
+  const e = await deed(s);
+  const { ann, wit, ben } = ids(e);
+  assert.equal((await s.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await finish(row(ann).token)).status, 200);
+  assert.equal((await witness(row(wit).token)).status, 200);
+  const move = (r: any) => (r.id === wit ? { ...r, witness_for: ben } : r);
+  const no = await edited(s, e.id, move);
+  assert.equal(no.status, 409, JSON.stringify(no.data));
+  assert.equal(no.data.code, 'sign_again');
+  assert.ok(no.data.changes.some((c: string) => /now the witness for Ben Second, no longer for Ann Signer/.test(c)), JSON.stringify(no.data.changes));
+  assert.equal(row(wit).witness_for, ann, 'nothing was saved');
+  assert.equal((await edited(s, e.id, move, { resign: true })).status, 200);
+  assert.equal(row(wit).witness_for, ben);
+  assert.equal(row(wit).status, 'pending');
+  assert.equal(row(wit).witness_statement, null);
+  assert.equal(row(ann).status, 'completed', 'Ann did not sign anything else, so she stays signed');
+  assert.ok(auditOf(e.id).some((a: any) => a.action === 'Envelope corrected' && /now the witness for Ben Second, no longer for Ann Signer/.test(a.detail)));
+  assert.ok(auditOf(e.id).some((a: any) => a.action === 'Witness statement set aside' && /once Ben Second has signed\.$/.test(a.detail)));
+  assert.equal((await finish(row(ben).token)).status, 200);
+  assert.equal(row(wit).status, 'sent');
+  assert.equal((await witness(row(wit).token)).status, 200);
+  const words = (await pdfText((await s.get(`/envelopes/${e.id}/download`)).data)).replace(/\s+/g, ' ');
+  assert.match(words, /Witness for Ben Second Their statement "I was physically present and saw Ben Second sign/);
+  assert.equal(words.split('Witnessed by Will Witness').length - 1, 1, 'under Ben only');
+  // A witness who has not finished yet moves freely, and the record says so.
+  const p = await deed(s);
+  const pi = ids(p);
+  assert.equal((await s.post(`/envelopes/${p.id}/send`)).status, 200);
+  assert.equal((await edited(s, p.id, (r: any) => (r.id === pi.wit ? { ...r, witness_for: pi.ben } : r))).status, 200);
+  assert.ok(auditOf(p.id).some((a: any) => a.action === 'Envelope corrected' && /now the witness for Ben Second/.test(a.detail)));
+});

@@ -102,6 +102,44 @@ export function settleWitnesses(envelopeId: string) {
     run("UPDATE recipients SET status='pending', sent_at=NULL, unopened_alerted_at=NULL WHERE id=?", w.id);
 }
 
+const at = (s: any) => String(s ?? '').replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+
+/**
+ * correctEnvelope() in envelopes.ts: who has to sign again. A witness's statement belongs to one signature. When that
+ * signature is set aside (its signer is asked to sign again, or their place goes to another person), or the witness is
+ * moved to witness somebody else, the witness who finished goes with it: what they saw no longer stands, so the
+ * certificate cannot print it under a signature they never saw, and moving them needs the same "resign" choice.
+ */
+export function withWitnesses(done: any[], again: any[], nowById: Map<string, any>): any[] {
+  const ids = new Set(again.map((o) => o.id));
+  for (const w of done) if (isWitness(w) && (ids.has(w.witness_for) || nowById.get(w.id)?.witness_for !== w.witness_for)) ids.add(w.id);
+  return done.filter((o) => ids.has(o.id));
+}
+
+/** The witnesses who finished witnessing this person, by name: they are asked again with them (writeContent). */
+export const witnessedBy = (e: any, o: any): string[] => (e?.recipients || []).filter((w: any) => isWitness(w) && w.witness_for === o?.id && w.status === 'completed').map((w: any) => w.name);
+
+/** describeCorrection() in envelopes.ts: a witness who now witnesses another person, in words for the record. */
+export function witnessBits(o: any, r: any, before: Map<string, any>, after: Map<string, any>): string[] {
+  if (!isWitness(o) || !isWitness(r) || (o.witness_for || null) === (r.witness_for || null)) return [];
+  const was = o.witness_for ? before.get(o.witness_for)?.name : null, is = r.witness_for ? after.get(r.witness_for)?.name : null;
+  return [`now the witness for ${is || 'nobody yet'}${o.witness_for ? `, no longer for ${was || 'someone who is no longer on the document'}` : ''}`];
+}
+
+/**
+ * correctEnvelope(), right after the earlier signatures are set aside: each witness among them loses their statement
+ * too (it is written to the audit trail here, word for word), and is asked again once their signer has signed.
+ */
+export function witnessesSetAside(e: any, again: any[], nowById: Map<string, any>, actor: Actor) {
+  for (const w of again) {
+    const n = nowById.get(w.id);
+    if (!isWitness(w) || !n) continue;
+    const saw = signerOf(e, w), next = nowById.get(n.witness_for);
+    run('UPDATE recipients SET witness_said_at=NULL, witness_statement=NULL, witness_saw=NULL, witness_marks=NULL, device_hash=NULL WHERE id=?', w.id);
+    audit(e.id, actor, 'Witness statement set aside', `${labelOf(w)} had stated${w.witness_said_at ? ` on ${at(w.witness_said_at)}` : ''}: "${w.witness_statement || statementText(saw?.name || 'the signer', signedOn(e, saw))}" That was about the signature ${saw?.name || 'the signer'} made on ${at(saw?.completed_at)}, which no longer counts after this change, so the statement no longer counts either. It is kept on record here. ${n.name} is asked to witness again once ${next?.name || 'the person they witness'} has signed${next && saw && next.id === saw.id && next.name === saw.name ? ' again' : ''}.`);
+  }
+}
+
 /** After POST /envelopes/:id/correct: a witness who is now another person starts clean, and is asked if it is their turn. */
 export async function witnessCorrected(envelopeId: string, recipientId: string, before: any) {
   const w = get('SELECT * FROM recipients WHERE id=? AND envelope_id=?', recipientId, envelopeId);

@@ -792,6 +792,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['accounts', 'clickwrap_warned', 'TEXT'],
   ['accounts', 'clickwrap_full', 'TEXT'],
   ['abuse_reports', 'clickwrap_id', 'TEXT'],
+  // forgotten_codes.via_form: the code was the visitor's of a public form, who typed their own name and address. A
+  // report with it never counts towards pausing the account, also after the start was deleted (reportAbuse).
+  ['forgotten_codes', 'via_form', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

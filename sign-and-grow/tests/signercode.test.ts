@@ -532,7 +532,7 @@ test('an access code and a one-time code together: the access code comes first, 
 });
 
 test('"This is not my number" and "I do not get the code" tell the sender, and the wrong number is left alone', async () => {
-  const s = await one(ada, { verify: 'sms_code', phone: '+44 7700 900124' }, { subject: 'Wrong number lease' });
+  const s = await one(ada, { verify: 'sms_code', phone: '+44 7700 900190' }, { subject: 'Wrong number lease' });
   const c = visitor();
   await c.post(`/sign/${s.tok}/code`);
   const code = textCode(s.rid);
@@ -542,7 +542,7 @@ test('"This is not my number" and "I do not get the code" tell the sender, and t
   const told = toAda('Code did not arrive: Wrong number lease');
   assert.equal(told.length, before + 1);
   assert.match(told.pop()!.html, /does not arrive.*Check that the number is right.*choose Correct next to their name.*make sure you are dealing with the right person/s);
-  assert.match((await line(ada, s.id, 'One-time code: did not arrive')).detail, /said the code sent by text message to \+44 \*\*\* \*\*\* 0124 did not arrive/);
+  assert.match((await line(ada, s.id, 'One-time code: did not arrive')).detail, /said the code sent by text message to \+44 \*\*\* \*\*\* 0190 did not arrive/);
   // Not my number: no further code goes to it, also not the one that was on its way, until the sender corrects it.
   const mine = await c.post(`/sign/${s.tok}/code/problem`, { what: 'not_mine' });
   assert.deepEqual([mine.status, mine.data.stopped], [200, true]);
@@ -552,7 +552,7 @@ test('"This is not my number" and "I do not get the code" tell the sender, and t
   older(s.rid, 120);
   const refused = await c.post(`/sign/${s.tok}/code`);
   assert.deepEqual([refused.status, refused.data.code], [409, 'stopped']);
-  assert.match(refused.data.error, /No code is sent to \+44 \*\*\* \*\*\* 0124 any more, because someone using this link said it is not their number\. Ada Sender has been told and has to put in the right number/);
+  assert.match(refused.data.error, /No code is sent to \+44 \*\*\* \*\*\* 0190 any more, because someone using this link said it is not their number\. Ada Sender has been told and has to put in the right number/);
   assert.equal(texts(s.rid).length, 1);
   assert.equal((await full(ada, s.id)).envelope.recipients[0].check.stopped, true);
   // Only a few a day, so a link cannot be used to fill the sender's inbox.
@@ -758,9 +758,16 @@ test('a recipient who reports the document or declines gets no more texts, and a
   assert.equal((await bo.post(`/envelopes/${p.id}/remind`)).status, 403);
   await cron.tick();
   assert.equal(texts(p.rid).length, 1, 'a paused sender still texted');
-  // A code is something the signer asks for, for a document they already have: that still works while paused.
-  const coded = db.get('SELECT id FROM recipients WHERE id=?', p.rid);
-  db.run("UPDATE recipients SET verify='sms_code' WHERE id=?", coded.id);
+  // Not even a code goes out by text while paused: a paused sender could keep texting the numbers it typed by
+  // opening its own links. Whoever holds the link is told neutrally; the sender hears why and what they can do.
+  db.run("UPDATE recipients SET verify='sms_code' WHERE id=?", p.rid);
+  const held = await visitor().post(`/sign/${p.tok}/code`);
+  assert.deepEqual([held.status, held.data.code], [503, 'unavailable']);
+  assert.equal(held.data.error, 'We cannot send you a code by text message right now. That is nothing you did: texts for this document are on hold. Bo Sender has been told and can fix it or choose another check. You can reach Bo Sender: bo.sender@example.com. Nothing you filled in is lost.');
+  assert.equal(texts(p.rid).length, 1, 'a paused sender texted a code');
+  assert.match((await line(bo, p.id, 'One-time code could not be sent')).detail, /was asked for and not sent, because sending is paused on this account\.$/);
+  // A code by email still works while paused: it goes to the mailbox that already has the link.
+  db.run("UPDATE recipients SET verify='email_code' WHERE id=?", p.rid);
   assert.equal((await visitor().post(`/sign/${p.tok}/code`)).status, 200);
   db.run('UPDATE accounts SET suspended_at=NULL WHERE id=?', account);
 });
@@ -1102,7 +1109,7 @@ test('after "This is not my number" no text of any kind goes to it, and a sender
   assert.equal((await c.get(`/sign/${s.tok}`)).data.check.stopped, false);
   assert.equal((await full(ada, s.id)).envelope.recipients[0].check.stopped, false);
   const said = (await line(ada, s.id, 'Check corrected')).detail;
-  assert.match(said, /the sender confirmed that \+44 \*\*\* \*\*\* 0321 is their number, after someone using the link had said it was not, so codes go to it again\.$/);
+  assert.match(said, /the sender confirmed that \+44 \*\*\* \*\*\* 0321 is their number, after someone using a signing link had said it was not, so texts go to it again\.$/);
   assert.equal(said.includes('7700'), false);
   const again = await c.post(`/sign/${s.tok}/code`);
   assert.deepEqual([again.status, again.data.to], [200, '+44 *** *** 0321']);

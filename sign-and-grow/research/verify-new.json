@@ -3279,5 +3279,209 @@
    "The IPv6 flood depends on the proxy putting the client's IPv6 address into X-Forwarded-For. rateLimit is in memory per process, so restarts and several instances also reset or split the per-address counts.",
    "Real NAT and carrier NAT sizes vary; the lockout numbers (10 per hour per agreement, 30 over all) come from the code and the probe, not from field data."
   ]
+ },
+ "verify:mobile": {
+  "checks": [
+   {
+    "item": "mobile-sign A: legacy pdf.js build, words instead of a blank page, no account or app needed",
+    "holds": true,
+    "evidence": "public/pdfjs/pdf.min.mjs and pdf.worker.min.mjs are byte-identical to node_modules/pdfjs-dist/legacy/build. WebKit is NOT installed here (only /opt/pw-browsers/chromium-1243), so an older engine was imitated: tests/out/verify-mobile/a-older.cjs removes 38 newer functions (Promise.withResolvers, Promise.try, Object.groupBy, Set.union and friends, URL.parse, ReadableStream async iteration, Iterator helpers, ImageDecoder, ...) in the page AND in the worker (the worker script is rewritten through a route before it runs). Result on iPhone 13 profile: 2 pages drawn, no NoViewer notice, the document was filled, adopted and finished, zero page errors (a-older-done.png). The author's tests 1 to 4 also pass."
+   },
+   {
+    "item": "mobile-sign B: a tap is not a signature",
+    "holds": false,
+    "evidence": "A single finger tap is refused on iPhone 13 and Pixel 5 profiles: 'That looks like a tap, not a signature. Draw your signature again, or choose Type.' (b-tap-iPhone13.png). But a two-finger pinch on the pad is ADOPTED as a signature without any message: tests/out/verify-mobile/b-tap.cjs sends two touch points through CDP Input.dispatchTouchEvent that move apart in 12 steps, then taps Adopt and sign. The dialog closes, the field becomes 'Your signature. Change or clear it', autosave stores the picture on the server, and a fresh browser with the same link shows it in 'Check before you finish' as the person's signature (a diagonal line and a dot, x-dbg.png, b-pinch-iPhone13.png).",
+    "still_broken": "SignaturePad keeps one `live` stroke and appends move events from every pointer to it, so two fingers draw a long zigzag that passes drawnProblem.",
+    "suggested_fix": "Track pointerId: ignore a pointerdown while another pointer is drawing (or drop the stroke and say 'Draw with one finger'), and ignore pointermove events whose pointerId is not the live one. Add a test that feeds two interleaved pointers."
+   },
+   {
+    "item": "mobile-sign C: Finish or save without a connection says nothing was signed, keeps answers, retries, never marks signed early",
+    "holds": false,
+    "evidence": "What holds: offline at Finish (Pixel 5, context.setOffline) showed 'This device seems to be offline, so nothing was signed...', the server status stayed 'viewed', and on going online the page finished by itself with exactly 2 POST /complete (1 failed, 1 ok) and status 'completed' (c-offline.png, c-online-again.png). Saves blocked, then a reload while offline (net::ERR_INTERNET_DISCONNECTED), then online: the answer '77 mangroves' came back from sessionStorage. What breaks: (1) the answer is lost after the server signed (c-lost.cjs: route.fetch() reaches the server, then abort('connectionreset')): server status is already 'completed' while the review says 'Not sent yet. We could not reach Sign&Grow just now, so nothing was signed.' Fifteen seconds later the retry gets 409 and the done screen appears under a red toast 'You have already finished this document.' (c-lost-says-nothing-signed.png). (2) A public form whose owner has no free signature answers 503 with its own words; isConnectionError counts every 503 as 'no connection', so the visitor reads 'We could not reach Sign&Grow just now' and never sees 'we email you at ... once the form can take your signature'; the page sent Finish 4 times in 47 s, each 503 (c-form503.cjs, c-form503.png; probe-server.ts formFinish).",
+    "still_broken": "The promise 'nothing was signed' is made without knowing it; real 503 refusals from our own server are shown as a connection problem and retried every 15 s for as long as the review stays open.",
+    "suggested_fix": "When no answer arrived, say 'We did not hear back, so we cannot tell yet whether it went through. Nothing you typed is lost.' and treat a later 409 'already finished' as success with no red toast. Only classify as a connection error when there was no response or the body is not our JSON (no data.error); give the form-wait refusal a code (e.g. 'form_waits') and show the server's sentence without auto-retry."
+   },
+   {
+    "item": "mobile-sign D: 100 pages give memory back, Next lands on the field on page 51",
+    "holds": true,
+    "evidence": "tests/out/verify-mobile/e-long.cjs on a 100-page envelope (fields on page 51 and page 100). One tap on Next from the top put the page-51 field on screen at top 158 of 664 px (iPhone 13), 174/727 (Pixel 5), 136/568 (320x568), 82/390 (landscape 844x390); at 200 percent the same field landed at 151, 167, 130 and 66 px. After scrolling all 100 pages at 200 percent the drawn pictures were 3 pages / 18 MP / 68.6 MB on iPhone 13 (pixel ratio 3), 16 MP Pixel 5, 5.4 MP at 320x568, 6 MP landscape. Not measured: real process memory on a phone."
+   },
+   {
+    "item": "mobile-sign E: zoom 100/150/200 with bars staying put, pinch zoom not blocked",
+    "holds": true,
+    "evidence": "At 200 percent on all four sizes the document width stayed equal to the window (390, 393, 320, 844), top and bottom bars kept full width, Next stayed visible. The served viewport meta is 'width=device-width, initial-scale=1' (no maximum-scale), and touch-action:none exists only on .field.edit, .field .grip and .sigpad. Note: the buttons' accessible names are '100 percent' etc., not the visible '100%'."
+   },
+   {
+    "item": "mobile-sign F: stacked fields of one person refused at send; Finish and Decline reachable",
+    "holds": false,
+    "evidence": "tests/out/verify-mobile/probe-stacked.ts: a text field 'Allergies' with a tick box 'None' inside its right end (a paper-form layout) is refused at send (400 'Two fields for Pat Patient sit on top of each other...'). The same layout saved as a template through the API is accepted (200), POST /powerforms accepts it (200), and then every visitor gets 503 'This form cannot take new signatures right now. Please contact whoever gave you the link.' (owner told once). In the browser (f-zorder.cjs: an envelope already out, tick box moved into the text field in the database), elementFromPoint at the tick box centre is the tick box, the left of the text field is the text field, and one tap checked the box: both fields are reachable, so the refusal is wrong for this layout. Top bar buttons stayed 44 px; I did not separately measure Decline.",
+    "still_broken": "The rule refuses layouts a finger can reach (the smaller field is drawn on top when it comes later), and existing templates or public forms built that way stop working for every visitor.",
+    "suggested_fix": "Draw smaller fields above larger ones (sort the overlay by area, largest first) and refuse only when the covered field is the same size or larger, or fully hidden; run the same check when a template is saved through the API and at POST /powerforms, and warn the owner of forms already live instead of turning visitors away."
+   },
+   {
+    "item": "mobile-sign G: adopt dialog in landscape, at large text and 200 percent",
+    "holds": false,
+    "evidence": "Not proven by me. I saw the adopt dialog work in portrait (iPhone 13, Pixel 5) during the tap and pinch probes, and the bottom bar keep Next on screen with the root font at 200 percent at 390x844, 393x851, 320x568 and 844x390, but I did not open the adopt dialog in landscape or with the text doubled. Only the author's markup test and screenshots cover it.",
+    "suggested_fix": "Run g-adopt with the dialog open at 844x390 and root font 200 percent and assert Adopt and sign, Cancel and the alert are inside the viewport."
+   },
+   {
+    "item": "mobile-send A: photos upright in all eight orientations, several photos as one document in order, each shrunk",
+    "holds": false,
+    "evidence": "Upright holds: probe-photo.ts puts a camera-like note (Make, Model, Orientation, XResolution, Exif pointer) AFTER the JFIF header, the order many real files use and the author's test does not: values 1 to 8 parse in both byte orders, pages 1-4 come out on their side and 5-8 upright. In the browser (f-editor-photo.cjs, iPhone 13): a 4032x3024 JPEG with orientation 6 and a 480x320 JPEG with orientation 3, chosen together, 'Make one document': page 1 is stored 1500x2000 upright with blue TL, red TR, white BL, green BR (right for 6), page 2 is landscape with white TL, blue TR, green BL, red BR (right for 3), in the order chosen. What fails 'each shrunk to a sensible size': through the API nothing is shrunk. A JPEG whose header says 8160x6120 is accepted (200) and stored as 8160x6120 inside the PDF, so every signer's phone has to decode about 191 MB for that one page; the 6 MP drawing ceiling only limits the canvas.",
+    "still_broken": "API and integration uploads keep photos up to 50 MP as they are.",
+    "suggested_fix": "Shrink JPEGs over PHOTO_MAX_SIDE on the server too (or lower the per-document picture limit to about 12 MP), or say in openapi.ts and /developers that the server does not shrink photos and that large ones are slow or fail on phones."
+   },
+   {
+    "item": "mobile-send B: the session slides; a stolen cookie must not live for ever",
+    "holds": false,
+    "evidence": "probe-server.ts: one copied cookie, used once every 29 days with curl against GET /api/me for 38 rounds, was still signed in after 1102 days and still had 30 days left. Nothing about the device is checked, and nobody is told. The author's report says this is left open, but before this work the same cookie died 30 days after sign-in.",
+    "still_broken": "No maximum lifetime; a stolen or forgotten cookie renews itself as long as anything calls the API at least once a month.",
+    "suggested_fix": "Add SESSION_MAX_DAYS (for example 90 or 180) counted from created_at (rows from before the column: from the migration date) and refuse beyond it, or ask for the password again past that age; consider an email when a new browser signs in."
+   },
+   {
+    "item": "mobile-send B: 'Sign out everywhere else' really ends the others; Settings list at phone size",
+    "holds": true,
+    "evidence": "The author's test 8 shows other sessions get 401 at once; my reading of routes-account.ts confirms the rows are deleted, including locked (handed-over) ones. The Settings card at 390x844 and 320x568 with the root font at 200 percent has no element wider than the screen (s-settings.cjs). Caveat in new_bugs: two-step 'remembered devices' are not forgotten by this button."
+   },
+   {
+    "item": "mobile-send D: the in-person signer cannot reach the host's account",
+    "holds": false,
+    "evidence": "The lock itself holds in the browser (d-inperson.cjs, iPhone 13): the in-person signing page shows no sender menus; the done screen says 'Thank you, Pat Present. Please hand this device back to Demo Sender.' and its only link into the app is /app/envelopes/<id>; Back, typed /app, /app/contacts, /app/settings and /app/envelopes/<id>, and a second tab left on Settings (after visibilitychange) all show the lock screen; fetch /api/envelopes, /api/contacts, /api/me/sessions give 401 handed_over. What breaks: the five-tries limit. probe-server.ts sends 40 wrong passwords to POST /api/auth/unlock at the same moment from the locked browser: all 40 are checked (40 x 'wrong_password'), the counter ends at 1 and the session stays locked; waves of 4 then got 16 more guesses checked before sign-out. The handler reads the session (and its counter) before `await c.body()`, so parallel requests all start from the same count, and there is no rate limit on the route.",
+    "still_broken": "Someone holding a host's laptop or tablet can run a parallel guessing loop from the browser console and get unlimited password guesses against the host's account.",
+    "suggested_fix": "In /auth/unlock read the body first, then in one synchronous step re-read the row and count the try before checking the password (UPDATE ... SET wrong = wrong + 1 WHERE id=? AND wrong < HAND_OVER_TRIES; refuse when no row changed), and add rateLimit per session and per IP."
+   },
+   {
+    "item": "mobile-send E: 44 px touch areas for fields and the resize corner in the editor",
+    "holds": true,
+    "evidence": "e-editor.cjs, iPhone 13, step 2 of the editor: an 8.2 x 8.2 px tick box answers elementFromPoint 18 px to its right and 18 px below its centre; 25 px to the right is the page. Matches the CSS reasoning in the author's test."
+   },
+   {
+    "item": "mobile-send C, F, G: switch after sending, unlabelled-field list, upload hint and slow-on-phone warning",
+    "holds": false,
+    "evidence": "Not attacked by me beyond reading the author's tests (they pass: 18 of 18 in gaps-mobile-send.test.ts, 16 of 16 in gaps-mobile-sign.test.ts). No em dash found in any file of this work."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Hand-over lock: parallel password guesses bypass the five-tries limit",
+    "severity": "high",
+    "where": "src/server/handover.ts POST /auth/unlock (lockedSession read before await c.body(); no rateLimit)",
+    "detail": "Steps: host opens an in-person signing page (session locked), then 40 POST /api/auth/unlock with wrong passwords are sent at once with the locked cookie. Result: 40 answers 'wrong_password', locked_note.wrong = 1, session still there. Waves of 4 parallel requests: 16 guesses checked before sign-out. Probe: tests/out/verify-mobile/probe-server.ts. Fix: parse the body first, count the try atomically before checking the password (UPDATE ... WHERE wrong < 5), and rate-limit the route per session and IP."
+   },
+   {
+    "title": "A stolen session cookie never expires while it is used",
+    "severity": "medium",
+    "where": "src/server/auth.ts touch() / authenticate()",
+    "detail": "The end slides 30 days on each use and there is no maximum age. A copied cookie used once every 29 days from curl was still valid after 1102 days (probe-server.ts). Before this work it died 30 days after sign-in. Fix: absolute lifetime from created_at, or re-ask the password after it."
+   },
+   {
+    "title": "Finish whose answer was lost says 'nothing was signed' although it was signed",
+    "severity": "medium",
+    "where": "src/components/sign/offline.ts finishNotSent, src/app/sign/[token]/page.tsx complete()",
+    "detail": "Steps: Finish and send; the server signs, the response is cut (Playwright route.fetch then abort connectionreset). The review says 'Not sent yet. We could not reach Sign&Grow just now, so nothing was signed.' while GET /api/sign/<token> already says status 'completed'. After 15 s the retry gets 409 and the done screen comes up under a red toast 'You have already finished this document.' (c-lost.cjs, c-lost-says-nothing-signed.png). The same false 'Nothing was signed. Try again' is shown for a 500 that happens after the claim (completeRecipient awaits advance(), emails and webhooks after the transaction commits). Fix: say that we cannot tell yet, and treat a 409 'already finished' retry as plain success."
+   },
+   {
+    "title": "A public form's real 503 refusal is shown as 'could not reach Sign&Grow' and retried every 15 s",
+    "severity": "medium",
+    "where": "src/components/sign/offline.ts isConnectionError (any 503 counts)",
+    "detail": "Steps: owner with 1 signature, visitor starts the form, the last signature is used elsewhere, visitor presses Finish and send. Server: 503 'This form cannot take your signature at the moment... We email you at ... once the form can take your signature.' Page: 'Not sent yet. We could not reach Sign&Grow just now, so nothing was signed...'; 4 POST /complete, all 503, in 47 s (c-form503.cjs, c-form503.png). The visitor is never told they will be emailed. Fix: only no-response or non-JSON bodies are connection errors; give this refusal a code and show its sentence without automatic retry."
+   },
+   {
+    "title": "A two-finger pinch on the signature pad is adopted as a signature",
+    "severity": "medium",
+    "where": "src/components/SignaturePad.tsx pointer handlers (single `live` stroke for all pointers)",
+    "detail": "Steps on iPhone 13 and Pixel 5 profiles: open the pad, Draw tab, put two fingers down and spread them (CDP touch events), tap Adopt and sign. No refusal; the diagonal line and a dot go on the document, are autosaved, and come back as 'Your signature' in a new browser with the same link (b-tap.cjs, b-pinch-*.png, x-dbg.png). A single tap is correctly refused. Fix: one pointer at a time (by pointerId), or discard and say 'Draw with one finger' when a second pointer lands."
+   },
+   {
+    "title": "Stacked-field rule refuses a reachable tick box inside a text field and silently shuts public forms built that way",
+    "severity": "low",
+    "where": "src/lib/stacked.ts, assertSendable in src/server/envelopes.ts, POST /powerforms",
+    "detail": "A tick box (0.025 x 0.025) inside the right end of a text field is refused at send, yet on the signing page both are tappable (elementFromPoint and a real tap checked the box, f-zorder.cjs). A template with that layout saves through the API and POST /powerforms accepts it, after which every visitor gets 503 'This form cannot take new signatures right now' (probe-stacked.ts). Templates and forms made before the rule break the same way. Fix: draw small fields on top, refuse only true covers, check at template save and form creation, and warn instead of shutting live forms."
+   },
+   {
+    "title": "'Sign out everywhere else' leaves remembered two-step devices",
+    "severity": "low",
+    "where": "src/server/routes-account.ts POST /me/sessions/sign-out-others; copy in src/app/app/settings/SignedIn.tsx",
+    "detail": "The card says 'Lost a phone, or used a computer that is not yours? This signs out every browser except this one.' The handler deletes sessions only; two_step_devices rows stay, and rememberedDevice() in twostep.ts skips the second step for that phone for up to 30 days. A thief with the phone and its saved password signs in with no code. Found by reading code, not run. Fix: also delete two_step_devices other than this browser's, or say in the copy that remembered devices are under Two-step login."
+   },
+   {
+    "title": "Photos sent through the API are never shrunk: a 50 MP JPEG reaches every signer's phone as is",
+    "severity": "low",
+    "where": "src/server/pdf.ts imagesToPdf, JPEG_MAX_PIXELS in src/lib/policy.ts",
+    "detail": "POST /files with a JPEG whose header says 8160x6120: 200, and the PDF holds the 8160x6120 JPEG. pdf.js decodes image XObjects at full size (about 191 MB for this page) whatever the 6 MP canvas ceiling. Only the browser editor shrinks to 2000 px. Confidence that this fails or stalls on older iPhones: moderate (about 70 percent), from the arithmetic; not run on a phone."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "research/continue.json gaps:mobile-send abuse_and_stuck",
+    "claim": "Abuse, D: guessing the host's password on the lock screen. Five tries, then the browser is signed out (test 12).",
+    "reality": "Only for requests sent one after another. 40 parallel guesses were all checked and moved the counter by 1 (probe-server.ts)."
+   },
+   {
+    "where": "src/components/sign/offline.ts finishNotSent and the mobile-sign report item C",
+    "claim": "When Finish cannot reach the server the page says nothing was signed.",
+    "reality": "The page cannot know: when the response is lost after the server committed, it says 'nothing was signed' while the recipient is already completed (c-lost.cjs)."
+   },
+   {
+    "where": "src/components/sign/offline.ts isConnectionError comment",
+    "claim": "An answer from something in between (502/503/504) could not reach the server; any other answer came from the server.",
+    "reality": "Our own server answers 503 for a public form without a free signature (envelopes.ts:1877) and for closed forms; those are shown as 'We could not reach Sign&Grow'."
+   },
+   {
+    "where": "research/continue.json gaps:mobile-sign item C",
+    "claim": "A 500 says 'Nothing was signed. Try again'.",
+    "reality": "A 500 raised after the claim transaction (advance(), emails, webhooks run after it) leaves the recipient completed while the page says nothing was signed."
+   },
+   {
+    "where": "research/continue.json gaps:mobile-send item A / settings",
+    "claim": "Each picture shrunk to a sensible size; a JPEG up to 50 million pixels so a 50 megapixel phone photo fits.",
+    "reality": "Shrinking happens only in the browser editor. Through the API a 50 MP JPEG is stored and served unchanged to every signer."
+   },
+   {
+    "where": "tests/gaps-mobile-sign.test.ts test title for F",
+    "claim": "anything a finger can still reach is not [named]",
+    "reality": "A tick box inside the end of a text field is reachable by a finger (verified in the browser) and is still named and refused."
+   },
+   {
+    "where": "src/app/app/settings/SignedIn.tsx",
+    "claim": "Lost a phone, or used a computer that is not yours? This signs out every browser except this one.",
+    "reality": "Sessions end, but the phone stays a remembered two-step device and can sign in again with the password alone for up to 30 days."
+   },
+   {
+    "where": "research/continue.json gaps:mobile-sign item B",
+    "claim": "A tap is not a signature: refused in words.",
+    "reality": "A tap is refused, but a two-finger pinch on the pad is adopted and saved as the signature."
+   }
+  ],
+  "doubts_about_outside_services": [
+   "WebKit and Firefox are not installed here (only Chromium 1243 under /opt/pw-browsers). The older-engine check only imitates iOS 16.4 / Chrome 111 by deleting newer functions in Chromium's page and worker; real Safari layout, canvas limits and memory were not tried.",
+   "Pinch on the pad: I am highly confident real iOS Safari and Chrome on Android behave like the CDP touch events, because .sigpad has touch-action:none and both browsers fire one pointer stream per finger.",
+   "Lost response after commit: simulated with Playwright route.fetch then abort. Mobile networks do drop responses after the server has acted (cell handoff, captive portals), so I am confident the case occurs in real use.",
+   "Memory for a 50 MP JPEG on a phone is worked out from pixel counts, not measured on a device; moderate confidence (about 70 percent) that older iPhones stall or fail on such a page.",
+   "EXIF turning while shrinking relies on the browser honouring the camera note in drawImage; verified in Chromium only. Safari 13.4 and later is documented to do the same, but I did not test it."
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/c-lost-says-nothing-signed.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/c-lost-after-retry.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/c-form503.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/c-offline.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/c-online-again.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/b-tap-iPhone13.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/b-pinch-iPhone13.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/b-pinch-Pixel5.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/x-dbg.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/d-done.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/d-back.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/d-lock.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/e-iPhone13-zoom200-next.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/e-320x568-zoom200-next.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/e-landscape844x390-zoom200-next.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/e-iPhone13-text200.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/a-older-done.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/f-zorder.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/e-editor.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/s-settings-390x844.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-mobile/s-settings-320x568.png"
+  ]
  }
 }

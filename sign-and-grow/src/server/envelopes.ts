@@ -27,7 +27,7 @@ import { carryRules } from './tplroles.ts';
 // Around the certificate: the fingerprint in the completion email and the record of each completed copy (evidence.ts).
 import { fingerprintLines, noteCopyMailed } from './evidence.ts';
 // A witness for one signer: asked straight after that signer, never charged, a statement of their own (witness.ts).
-import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames } from './witness.ts';
+import { saveWitnesses, witnessProblem, witnessDue, settleWitnesses, copyWitnesses, forgetNamedWitness, witnessDone, witnessVerb, witnessMailLines, witnessCannot, openNames, withWitnesses, witnessBits, witnessesSetAside, witnessedBy } from './witness.ts';
 import { waitsForName } from '../lib/witness.ts';
 // Conditional fields and formulas: checked when saved, worked out again from what is stored (logic.ts).
 import { saveLogic, settleLogic, hiddenAfter, hiddenOf, copyLogic, logicChanges } from './logic.ts';
@@ -245,7 +245,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
       const o = oldRecs.get(rid);
       const same = o.role === role && o.name === vals[2] && sameEmail(o.email, email) && o.routing_order === vals[4];
       if (!same && !resign)
-        throw bad(`${o.name} has already finished, so their name, email address, role and place in the order can no longer be changed. Nothing was saved. If you did not mean to change them, load the envelope again: their details may be newer than your copy. To change them anyway, send the same request with "resign": true, and ${o.name} is asked to sign again.`, 409, { code: 'sign_again', sign_again: [o.name], changes: [`The name, email address, role or place in the order of ${o.name} <${o.email}>.`] });
+        throw bad(`${o.name} has already finished, so their name, email address, role and place in the order can no longer be changed. Nothing was saved. If you did not mean to change them, load the envelope again: their details may be newer than your copy. To change them anyway, send the same request with "resign": true, and ${o.name} is asked to sign again.${witnessedBy(e, o).length ? ` ${witnessedBy(e, o).join(', ')} witnessed their signature and is asked to witness again too.` : ''}`, 409, { code: 'sign_again', sign_again: [o.name, ...witnessedBy(e, o)], changes: [`The name, email address, role or place in the order of ${o.name} <${o.email}>.`] });
       if (same) {
         // The access code and the private note are not part of what they signed, so those are saved like anyone's.
         run('UPDATE recipients SET position=?, access_code=?, note=? WHERE id=?', i, vals[6], vals[7], rid);
@@ -557,7 +557,7 @@ function describeCorrection(a: any, b: any): { people: string[]; content: string
     if (o.routing_order !== r.routing_order && (a.ordered || b.ordered)) bits.push(`place in the signing order changed from ${o.routing_order} to ${r.routing_order}`);
     if ((o.access_code || '') !== (r.access_code || '')) bits.push(!r.access_code ? 'access code removed' : o.access_code ? 'access code changed' : 'access code added');
     if ((o.note || '') !== (r.note || '')) bits.push('private note changed');
-    bits.push(...checkBits(o, r));
+    bits.push(...checkBits(o, r), ...witnessBits(o, r, recA, recB));
     if (bits.length) people.push(`${who(r)}: ${bits.join(', ')}.`);
   }
   for (const o of a.recipients) if (!recB.has(o.id)) people.push(`${who(o)}, ${ROLE_WORDS[o.role]}, removed.`);
@@ -684,7 +684,8 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       const n = nowById.get(o.id);
       return !n || n.role !== o.role || n.name !== o.name || !sameEmail(n.email, o.email) || n.routing_order !== o.routing_order;
     };
-    const again: any[] = done.filter((o: any) => printed || touched(o));
+    // A witness who finished goes with the signature they saw, and is moved only with the same choice (witness.ts).
+    const again: any[] = withWitnesses(done, done.filter((o: any) => printed || touched(o)), nowById);
     if (again.length && body.resign !== true) {
       const names = listSome(again.map((o: any) => o.name), 8);
       const all = [...changes.content, ...changes.people.filter((p) => again.some((o: any) => p.includes(`<${o.email}>`)))];
@@ -800,7 +801,8 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       ...held.map((r: any) => `${r.name} had the document and now waits, because someone before them in the signing order has not finished.`)];
     if (said.length) audit(e.id, actor, 'Envelope corrected', said.join(' '));
     for (const o of again) setAside(e, o, actor, nowById.get(o.id));
-    asked = again.filter((o: any) => sameSigner(o, nowById.get(o.id)));
+    witnessesSetAside(e, again, nowById, actor);
+    asked =again.filter((o: any) => sameSigner(o, nowById.get(o.id)));
     after = loadEnvelope(e.id);
   });
   // Everyone who is asked to sign again keeps a copy of the document exactly as they signed it: it is made here,
@@ -2385,7 +2387,8 @@ export async function reportAbuse(e: any, r: any, body: any, actor: Actor) {
   if (get('SELECT 1 x FROM abuse_reports WHERE envelope_id=? AND account_id=? AND lower(reporter)=lower(?)', e.id, e.account_id, reporter)) return;
   // The visitor of a public form typed their own name and address, so three made-up visitors are not three
   // recipients. Their report is kept and shown to the people who review reports, and never counts towards a pause.
-  const viaForm = !!e.powerform_id && !!e.form_recipient_id && r.id === e.form_recipient_id;
+  // After the start was deleted, `e.via_form` says so (forgotten_codes.via_form): deleting must not make it count.
+  const viaForm = !!e.via_form || (!!e.powerform_id && !!e.form_recipient_id && r.id === e.form_recipient_id);
   run('INSERT INTO abuse_reports (id, envelope_id, account_id, reporter, reason, detail, ip, at, via_form) VALUES (?,?,?,?,?,?,?,?,?)', id('abr'), e.id, e.account_id, reporter, reason, str(body?.detail, 2000) || null, actor.ip || null, now(), viaForm ? 1 : 0);
   if (!e.gone) audit(e.id, actor, 'Reported as suspicious', `${r.name}: ${reason}`);
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);

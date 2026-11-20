@@ -39,6 +39,8 @@ const lastMail = (to: string, eid?: string) => db.get(`SELECT * FROM emails WHER
 const rec = (eid: string, email: string) => db.get('SELECT * FROM recipients WHERE envelope_id=? AND lower(email)=lower(?)', eid, email);
 const subjects = (to: string) => mailTo(to).map((m: any) => m.subject);
 const daysAgo = (d: number) => new Date(Date.now() - d * 864e5).toISOString();
+// The 6 digits of the newest "get our emails again" code sent to this address.
+const codeIn = (to: string) => /Your code: (\d{6})/.exec(mailTo(to).filter((m: any) => m.subject.startsWith('Your code: ')).pop()?.subject || '')?.[1] || '';
 
 // POST /mail/events as the mail provider does it: no cookie, the secret in the address unless told otherwise.
 async function events(body: any, o: { auth?: string | null; headers?: Record<string, string>; raw?: any } = {}) {
@@ -289,8 +291,8 @@ test('a hard bounce marks the recipient, tells the sender at once, stops reminde
     const row = rec(eid, to);
     assert.ok(row.bounced_at);
     assert.equal(row.bounce_reason, 'no such mailbox');
-    // The record, in words.
-    assert.match(auditLine(eid, 'Email could not be delivered').detail, /^Email to Sam Signer <no\.such\.person@example\.com> could not be delivered: no such mailbox\. Their mail server said: "smtp; 550 5\.1\.1/);
+    // The record, in our own words only: what the mail server wrote is for the people who run the server.
+    assert.equal(auditLine(eid, 'Email could not be delivered').detail, 'Email to Sam Signer <no.such.person@example.com> could not be delivered: no such mailbox. The email was "Simple agreement". Reminders to this address are stopped until the address is corrected or the sender chooses to try again.');
     // The sender, at once, with the ways to fix it.
     const told = mailTo(sender).filter((x: any) => x.subject === 'Could not be delivered: Simple agreement');
     assert.equal(told.length, 1);
@@ -415,7 +417,7 @@ test('a complaint stops every email about that envelope, tells the sender only t
   assert.match(text(told.html), /Only Sam Signer can undo that/);
   assert.match(text(told.html), /counts as one report against your account/);
   // Nothing more by email, whoever asks.
-  const before = mailTo(to).length;
+  let before = mailTo(to).length;
   const remind = await c.post(`/envelopes/${eid}/remind`, { recipient_id: rid });
   assert.equal(remind.status, 409);
   assert.equal(remind.data.code, 'marked_as_spam');
@@ -434,8 +436,13 @@ test('a complaint stops every email about that envelope, tells the sender only t
   assert.ok(rec(eid, to).complained_at);
   const signer = new Client();
   assert.equal((await signer.get(`/sign/${t}`)).data.recipient.mail_stopped, true);
-  assert.equal((await signer.post(`/sign/${t}/mail-again`)).data.changed, true);
+  // Holding the link is not enough: a code goes to their mailbox, and typing it undoes the complaint.
+  const asked = await signer.post(`/sign/${t}/mail-again`);
+  assert.deepEqual([asked.data.code_sent, asked.data.sent_to], [true, to]);
+  assert.ok(rec(eid, to).complained_at, 'nothing changes before the code is typed');
+  assert.equal((await signer.post(`/sign/${t}/mail-again`, { code: codeIn(to) })).data.changed, true);
   assert.equal(rec(eid, to).complained_at, null);
+  before += 1; // the email with the code
   assert.equal((await c.post(`/envelopes/${eid}/remind`, { recipient_id: rid })).status, 200);
   assert.equal(mailTo(to).length, before + 1);
 });
@@ -532,8 +539,11 @@ test('a login whose emails come back sees it on every page until the address cha
   const invite = db.get("SELECT token FROM invites WHERE email='adam.admin@bounce.example' AND accepted_at IS NULL").token;
   assert.equal((await adam.post('/auth/signup', { name: 'Adam Admin', email: 'adam.admin@bounce.example', password: PW, invite })).status, 200);
   assert.equal((await me(adam)).email_problem, null);
-  // Our last email to Adam (about his login) comes back.
+  // Our last email to Adam about his own login comes back. (His invitation is about Olga, who wrote it, and says
+  // nothing about his mailbox: a test below shows that its bounce leaves him alone.)
+  assert.equal((await new Client().post('/auth/forgot', { email: 'adam.admin@bounce.example' })).status, 200);
   const m = lastMail('adam.admin@bounce.example');
+  assert.match(m.subject, /password/i);
   assert.equal((await ok({ type: 'bounce', email: 'adam.admin@bounce.example', mail_id: String(m.id), reason: 'mailbox unavailable: account disabled' })).applied, 1);
   const p = (await me(adam)).email_problem;
   assert.deepEqual([p.address, p.reason], ['adam.admin@bounce.example', 'the mailbox is switched off']);

@@ -7,7 +7,8 @@ type Genuine = { genuine: true; replaced?: false; sender: { name: string; email:
 // An email we really sent whose link was replaced afterwards. It is genuine and is said to be, without a link to open.
 type Replaced = { genuine: true; replaced: true; why: string; replaced_at: string | null; for_name: string | null; sender: { name: string; email: string } | null; account?: string; paused: boolean; subject: string | null; status: string | null };
 // An email we really sent about a document that has been deleted since. Only that much is still known.
-type Deleted = { genuine: true; deleted: true; replaced?: false; deleted_at: string };
+// can_report is false when the sender's account was deleted too: then nobody is left to file a report against.
+type Deleted = { genuine: true; deleted: true; replaced?: false; deleted_at: string; can_report?: boolean };
 type Answer = Genuine | Replaced | Deleted | { genuine: false };
 
 // Why the link in a genuine email stopped working, said for the person who is holding that email.
@@ -198,12 +199,14 @@ export function CheckForm() {
           <p>Code {answer.code} belongs to an email that Sign&Grow really sent. It is not a fake.</p>
           <p>The document it was about was deleted on {fmtDate(answer.deleted_at, true)}, by its sender or together with the sender&apos;s account. When a document is deleted we delete what we knew about it too, so we can no longer tell you who sent it or what it was called. That is why the link in the email no longer opens anything.</p>
           <p><b>What to do.</b> There is nothing left to sign. If you were expecting this document, ask the person who sent it whether they will send it again. If you had already signed it, the copy that was emailed to you when it was completed is yours to keep.</p>
-          <p>If the email looked wrong to you, you can still report it below. We no longer know who it was sent to, but we do know which account sent it, and your report counts against that account like any other.</p>
+          {answer.can_report === false
+            ? <p>The account that sent it has been deleted as well, so there is nobody left to file a report against. If the email worries you, use &ldquo;Ask us about this email&rdquo; below and tell us what it says: a person will look into it.</p>
+            : <p>If the email looked wrong to you, you can still report it below. We no longer know who it was sent to, but we do know which account sent it, and your report is filed against that account, the same as a report about a document that still exists.</p>}
           <div className="pub-actions-row">
             <button type="button" className="btn primary" onClick={again}>Check another code</button>
             <Link href="/help?topic=signing#contact" className="btn">Ask us about this email</Link>
           </div>
-          <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} />
+          {answer.can_report !== false && <ReportEmail key={answer.code} code={answer.code} startOpen={wantReport} />}
         </div>
       )}
 

@@ -237,9 +237,10 @@ test('the code of a genuine email is still recognised after its document was del
   assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', e.id).n, 0);
   for (const code of [first, second]) {
     const a = await check(code);
-    assert.deepEqual(Object.keys(a).sort(), ['deleted', 'deleted_at', 'genuine'], 'real, deleted, when: nothing about who or what');
+    assert.deepEqual(Object.keys(a).sort(), ['can_report', 'deleted', 'deleted_at', 'genuine'], 'real, deleted, when, and whether a report can be filed: nothing about who or what');
     assert.equal(a.genuine, true);
     assert.equal(a.deleted, true);
+    assert.equal(a.can_report, true);
   }
   // What is kept is a fingerprint. The code itself, the names and the subject are nowhere.
   const kept = JSON.stringify(db.all('SELECT * FROM forgotten_codes'));
@@ -261,6 +262,8 @@ test('the code of a genuine email is still recognised after its document was del
   const orphan = await anon.post('/public/check/report', { code: second, reason: 'phishing' });
   assert.equal(orphan.status, 404);
   assert.match(orphan.data.error, /really sent, but the document it was about has been deleted since/);
+  // And the check page no longer offers a report it cannot file.
+  assert.equal((await check(second)).can_report, false);
   // A code we never issued is still not recognised.
   assert.equal((await check('AAAA-BBBB-CCCC')).genuine, false);
   // After a year the fingerprints go too.
