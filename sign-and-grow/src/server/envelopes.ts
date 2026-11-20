@@ -2261,6 +2261,11 @@ export async function requestAccessCode(e: any, r: any, actor: Actor) {
   // between them and the document or the copy of what they signed, and the sender can still set a new one
   // (lateAccessCode). So the frozen screen never tells anyone to ask for something that cannot be done.
   if (!r.access_code || e.kind !== 'envelope' || e.status === 'draft') throw bad('This document is not waiting for an access code.');
+  // Behind the code of a cancelled or declined document there is only a copy for someone who signed it. Anyone else
+  // would have the sender hand out a code that opens nothing, so they are told that instead. (An expired one can
+  // still be reopened by the sender, so asking there is kept.)
+  if ((e.status === 'voided' || e.status === 'declined') && !keepsCopy(e, r))
+    throw bad(`This document was ${e.status === 'voided' ? 'cancelled' : 'declined'} before you signed it, so there is nothing behind the access code for you any more. We did not ask ${senderOf(e)?.name || 'the sender'} for it.`);
   audit(e.id, actor, 'Access code requested', `${r.name} asked the sender for the access code`);
   await notifySender(e, 'always', `Access code needed: ${e.subject}`, `${r.name} cannot open your document`,
     r.code_frozen_at ? [`Their access code was entered wrongly ${ACCESS_CODE_TRIES} times and is frozen, and they asked you for a new one.`, newCodeHow(r)]

@@ -4,6 +4,7 @@ import { bad, str, rateLimit, parseCode, sha256 } from './util.ts';
 import { loadEnvelope } from './envelopes.ts';
 import { lookupEnvelope, disputeEnvelope, evidencePack } from './evidence.ts';
 import { find } from './routes-sign.ts';
+import { memberForCode } from './groups.ts';
 import { mine } from './routes-envelopes.ts';
 import { zipStream } from './zip.ts';
 
@@ -18,6 +19,14 @@ route('POST', '/public/check/dispute', async (c) => {
   const code = parseCode(b.code);
   if (code.length !== 12) throw bad('Security codes are 12 letters and numbers, like ABCD-EFGH-JKLM. Check the email and try again.');
   const row = get('SELECT id, envelope_id FROM recipients WHERE check_code=? AND token IS NOT NULL', code);
+  // A member of a group has a code of their own (groups.ts). Only the member who took the document on acted in a
+  // name; for the others nothing was signed in theirs, and they are told who did act.
+  const member = row ? null : memberForCode(code);
+  if (member) {
+    const e = loadEnvelope(member.envelope_id);
+    if (member.claimed_by && member.claimed_by !== member.member.id) throw bad(`${member.group_name} acted on this document through another member, ${e.recipients.find((x: any) => x.id === member.id)?.name || 'a colleague'}, so nothing was signed in your name. If you think that was wrong, write to us on the help page with the topic "I am named on a document I did not sign".`, 409, { code: 'nothing_signed' });
+    return disputeEnvelope(e, member, b, { name: `Someone holding the email to ${member.email}`, ip: c.ip, ua: c.ua }, 'check');
+  }
   if (!row) {
     // A real email whose link was replaced since, or whose document was deleted: there is no longer a place on a
     // document that this code speaks for, so the person is sent to someone who can look.

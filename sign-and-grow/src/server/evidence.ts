@@ -161,7 +161,11 @@ export async function disputeEnvelope(e: any, r: any, body: any, actor: Actor, v
     id('dsp'), e.id, r.id, r.name, r.email || null, via, detail, actor.ip || null, (actor.ua || '').slice(0, 300) || null, t).changes)
     return { ok: true, already: true, disputed_at: get('SELECT disputed_at FROM envelopes WHERE id=?', e.id)?.disputed_at || t };
   run('UPDATE envelopes SET disputed_at=COALESCE(disputed_at, ?) WHERE id=?', t, e.id);
-  const who = `${via === 'check' ? 'Someone holding the email we sent to' : 'Someone using the signing link of'} ${labelOf(r)}`;
+  // Who said it, as far as we know: whoever held that email or that link. The emails for an in-person signing went to
+  // the sender who hosted it, and the completed copy to the signer, so either can hold that code.
+  const who = via === 'sign' ? `Someone using the signing link of ${labelOf(r)}`
+    : r.role === 'inperson' ? `Someone holding the security code of ${labelOf(r)}, which is in our emails to the sender who hosted the signing and in the completed copy to ${r.name}`
+    : `Someone holding the email we sent to ${labelOf(r)}`;
   audit(e.id, actor, 'Disputed', `${who} said that ${r.name} did not sign this, or that it was not them. Nothing was changed or deleted: the document, the signatures and this record stay as they are.`);
   const sender = get('SELECT name, email FROM users WHERE id=?', e.sender_id);
   const ops = await tellOperatorsOfDispute(e, r, who, detail, sender);

@@ -343,3 +343,22 @@ test('the API describes groups, and the Contacts page lets admins manage them', 
   assert.match(ui, /\{admin && \(\s*<div className="sn-contact-actions">/);
   assert.match(read('src/app/layout.tsx'), /styles\/groups\.css/);
 });
+
+test('the editor offers a group as a recipient, saves it by its id, and counts a change of members as a change', async () => {
+  const { fingerprint } = await import('../src/components/editor/changes.ts');
+  const env = { subject: 'S' };
+  const base = { documents: [], fields: [], recipients: [{ id: 'g', role: 'signer', name: 'HR team', email: '', group_id: 'grp_1', members: [{ name: 'Maya Lopez', email: 'maya@hr.example' }, { name: 'Ben Ortiz', email: 'ben@hr.example' }] }] };
+  const more = { ...base, recipients: [{ ...base.recipients[0], members: [...base.recipients[0].members, { name: 'Cy Tan', email: 'cy@hr.example' }] }] };
+  const other = { ...base, recipients: [{ ...base.recipients[0], group_id: 'grp_2' }] };
+  assert.notEqual(fingerprint(env, base), fingerprint(env, more), 'a member added is something to save');
+  assert.notEqual(fingerprint(env, base), fingerprint(env, other), 'another group is something to save');
+  assert.equal(fingerprint(env, base), fingerprint(env, { ...base, recipients: [{ ...base.recipients[0], members: base.recipients[0].members.map((m) => ({ ...m, email: m.email.toUpperCase() })) }] }), 'the case of an address is no change');
+  // The editor sends the group's id, and its members only on an envelope that is out (a draft follows the saved group).
+  const editor = read('src/components/Editor.tsx');
+  assert.match(editor, /group_id: r\.group_id \|\| null, \.\.\.\(correcting && r\.group_id && r\.members \?/);
+  assert.match(editor, /isGroupRow\(r\)\) \{\s*\/\/[^\n]*\n\s*const no = groupProblem\(r\)/);
+  assert.match(read('src/components/editor/StepAdd.tsx'), /if \(isGroupRow\(r\)\) return <GroupRow /);
+  const row = read('src/components/editor/GroupRecipient.tsx');
+  assert.doesNotMatch(row.match(/const ROLES[^\n]*/)![0], /inperson/, 'a group is never offered signing in person');
+  assert.match(row, /if \(!groups\?\.length \|\| ed\.rcps\.length >= MAX_RECIPIENTS\) return null;/, 'no Add a group button without groups');
+});

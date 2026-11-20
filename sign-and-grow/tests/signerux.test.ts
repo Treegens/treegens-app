@@ -1019,6 +1019,13 @@ test('a frozen access code on a closed envelope can be replaced, so the signer r
   const toFe = (s: string) => mailTo('fe.code@example.com').filter((m) => m.subject === `${s}: Frozen after closing`);
   assert.equal(toFe('Access code needed').length, 1);
   assert.match(toFe('Access code frozen')[0].html, /choose Correct next to their name and type a new access code/);
+  // Someone who never signed it has nothing behind the code once it is cancelled: told so, and the sender is not
+  // asked to hand out a code that opens nothing.
+  db.run("UPDATE recipients SET access_code='777777' WHERE envelope_id=? AND email='ben.code@example.com'", e.id);
+  const ben = await visitor().post(`/sign/${tokenFor(e.id, 'ben.code@example.com')}/ask-code`);
+  assert.equal(ben.status, 400);
+  assert.match(ben.data.error, /This document was cancelled before you signed it, so there is nothing behind the access code for you any more\. We did not ask Fe Sender for it/);
+  assert.equal(toFe('Access code needed').length, 1);
   // ... the envelope page offers Correct for the code once the envelope is closed ...
   assert.match(fs.readFileSync(new URL('../src/components/sender/Recipients.tsx', import.meta.url), 'utf8'), /e\.status !== 'draft' && !!r\.access_code && \([\s\S]{0,200}onCorrect\(\{ \.\.\.r, code_only: true \}\)/);
   // ... and Correct takes a new code there. Only the code: who the person is cannot change once it is closed.

@@ -374,3 +374,18 @@ export const TWO_STEP_LOST: string[] = [
   'On a team: an owner or an admin of the team can switch your second step off under Settings, Team. You are emailed at once, and it is written down who did it. Then you sign in with your password and set it up again.',
   `The owner of an account (nobody else can reset it for you): ask for a reset by email on the sign-in screen, after your password. Open the link we email you, and your second step is switched off ${TWO_STEP_EMAIL_RESET_DAYS} days later. We email you when it starts and every day until then. Signing in with your code or a recovery code stops it, and so does Stop under Settings in a browser where you are still signed in. The wait is there so that someone who has only got into your mailbox cannot get into your login quietly.`,
 ];
+
+// Questions and comments on a document while it is out (src/server/comments.ts, src/server/routes-comments.ts). The
+// signing page, the envelope page, /help and the server quote these, and the server enforces them from here.
+
+/** The longest comment, in characters. */
+export const COMMENT_MAX_CHARS = 2000;
+/** How many comments one person can write on one envelope. Each person on the sender's side is counted apart. */
+export const COMMENTS_PER_PERSON = 50;
+/** How many comments one signing link can send in COMMENT_BURST_MINUTES. */
+export const COMMENT_BURST = 10;
+export const COMMENT_BURST_MINUTES = 10;
+/** At most one email about new comments every this many minutes, for each person and envelope. Newer ones wait for the next. */
+export const COMMENT_MAIL_MINUTES = 10;
+/** What a comment is not, in the words every screen and email about comments uses. */
+export const COMMENTS_NOT_SIGNED = 'Comments are not printed on the document and are not part of what is signed. The record of the document says that a comment was written, by whom and when, never what it says.';

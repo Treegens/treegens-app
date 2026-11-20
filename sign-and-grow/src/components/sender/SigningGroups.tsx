@@ -87,7 +87,7 @@ export function SigningGroups() {
       </div>
 
       {draft && (
-        <form className="sn-group-form" onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), close())} aria-label={draft.id ? `Change ${draft.name || 'the group'}` : 'New group'}>
+        <form className="sn-group-form" noValidate onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), close())} aria-label={draft.id ? `Change ${draft.name || 'the group'}` : 'New group'}>
           <label className="f"><span>Group name</span><input value={draft.name} maxLength={80} autoFocus autoComplete="off" placeholder="HR team" onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
           <fieldset className="sn-group-members">
             <legend>Members <span className="hint">({GROUP_MIN_MEMBERS} to {GROUP_MAX_MEMBERS} people, each with their own email address)</span></legend>

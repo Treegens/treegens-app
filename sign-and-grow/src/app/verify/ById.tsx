@@ -45,7 +45,8 @@ export function ById() {
   }, [res]);
 
   async function look(wanted: string) {
-    const clean = wanted.trim().replace(/^.*Envelope ID:?\s*/i, '');
+    // Copied from the page with what stands around it ("Sign&Grow Envelope ID: env_... ·"): only the ID is kept.
+    const clean = wanted.trim().replace(/^.*Envelope ID:?\s*/i, '').replace(/[\s.,;:·]+.*$/, '');
     if (!clean) return setError('Type the envelope ID first. It stands at the foot of every page, after "Envelope ID", and starts with env_.');
     setBusy(true);
     setError('');

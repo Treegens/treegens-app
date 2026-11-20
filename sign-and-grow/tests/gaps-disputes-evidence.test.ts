@@ -630,3 +630,32 @@ test('H: the public page explains every line the certificate prints, is dated, a
   assert.match(src('src/app/verify/page.tsx'), /href="\/security\/certificate"/);
   assert.match(src('src/app/help/NotMe.tsx'), /href="\/security\/certificate"/);
 });
+
+test('F: a group member\'s code disputes only what that member did, and an in-person signer\'s code is said to be in the sender\'s emails too', async () => {
+  const sender = await person('Group Dispute', 'gdsender@disputes.example');
+  const members = [{ name: 'Maya Lopez', email: 'maya@hr-disputes.example' }, { name: 'Ben Ortiz', email: 'ben@hr-disputes.example' }];
+  const group = (await sender.post('/groups', { name: 'HR team', members })).data.group;
+  const { upload, PNG } = await import('./helpers.ts');
+  const file = await upload(sender, 1);
+  const e = (await sender.post('/envelopes', { subject: 'Staff handbook', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'g', role: 'signer', group_id: group.id }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'g', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] })).data.envelope;
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const member = (email: string) => db.get('SELECT token, check_code FROM recipient_members WHERE envelope_id=? AND email=?', e.id, email);
+  const maya = from();
+  await maya.post(`/sign/${member('maya@hr-disputes.example').token}/consent`);
+  const v = (await maya.get(`/sign/${member('maya@hr-disputes.example').token}`)).data;
+  assert.equal((await maya.post(`/sign/${member('maya@hr-disputes.example').token}/complete`, { values: Object.fromEntries(v.fields.map((f: any) => [f.id, '1'])), signature_png: PNG })).status, 200);
+  const ben = await from().post('/public/check/dispute', { code: member('ben@hr-disputes.example').check_code });
+  assert.equal(ben.status, 409, JSON.stringify(ben.data));
+  assert.match(ben.data.error, /HR team acted on this document through another member, Maya Lopez, so nothing was signed in your name/);
+  const mine = await from().post('/public/check/dispute', { code: member('maya@hr-disputes.example').check_code });
+  assert.equal(mine.status, 200, JSON.stringify(mine.data));
+  assert.match(auditOf(e.id).find((a: any) => a.action === 'Disputed').detail, /Someone holding the email we sent to Maya Lopez <maya@hr-disputes\.example> said that Maya Lopez did not sign this/);
+
+  // In person: the code is in the host's emails as well as in the signer's completed copy, and the record says so.
+  const ip = await simple(sender, 'walkin@disputes.example', { recipients: [{ id: 'r', role: 'inperson', name: 'Walk In', email: 'walkin@disputes.example' }] });
+  assert.equal((await sender.post(`/envelopes/${ip.id}/send`)).status, 200);
+  assert.equal((await signAll(ip.id, 'walkin@disputes.example')).status, 200);
+  assert.equal((await from().post('/public/check/dispute', { code: codeOf(ip.id, 'walkin@disputes.example') })).status, 200);
+  assert.match(auditOf(ip.id).find((a: any) => a.action === 'Disputed').detail, /Someone holding the security code of Walk In <walkin@disputes\.example>, which is in our emails to the sender who hosted the signing/);
+});
