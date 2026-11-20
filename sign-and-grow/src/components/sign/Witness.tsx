@@ -99,7 +99,7 @@ export function WitnessFirst({ data, base, onDone }: { data: any; base: string; 
         <div className="wt-form">
           <p className="wt-note">Then do not sign as witness. We tell {w.name} and {sender.name} that you were not there, nothing is signed in your name, and {w.name} can name the person who was.</p>
           <label><span>Anything they should know <span className="muted">(optional)</span></span>
-            <textarea value={note} maxLength={500} rows={2} onChange={(e) => setNote(e.target.value)} /></label>
+            <textarea dir="auto" value={note} maxLength={500} rows={2} onChange={(e) => setNote(e.target.value)} /></label>
           <div className="wt-actions"><button type="button" className="btn lg" disabled={busy} onClick={notThere}>{busy ? 'Sending' : 'Tell them I was not there'}</button></div>
         </div>
       )}
@@ -162,7 +162,7 @@ export function WitnessName({ me, base, onNamed, after = false }: { me: any; bas
         <div className="wt-form">
           <p className="muted small wt-note" id={`${ids}-who`}>{WHO_MAY_WITNESS}</p>
           <div className="row">
-            <label><span>Witness&rsquo;s full name</span><input value={name} maxLength={120} autoComplete="off" aria-describedby={`${ids}-who`} onChange={(e) => (setName(e.target.value), setError(''))} /></label>
+            <label><span>Witness&rsquo;s full name</span><input dir="auto" value={name} maxLength={120} autoComplete="off" aria-describedby={`${ids}-who`} onChange={(e) => (setName(e.target.value), setError(''))} /></label>
             <label><span>Witness&rsquo;s email address</span><input type="email" inputMode="email" value={email} maxLength={254} autoComplete="off" onChange={(e) => (setEmail(e.target.value), setError(''))} /></label>
           </div>
           {error && <div className="notice err sg-problem" role="alert">{error}</div>}

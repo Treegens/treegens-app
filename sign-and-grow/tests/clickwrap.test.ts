@@ -668,7 +668,7 @@ test('"report this page" reaches the people who review reports, never pauses the
   assert.match(page, /Report this page/);
 });
 
-test('rate limits per address: accepting, reading and emailing copies from one machine', async () => {
+test('rate limits per address: ten acceptances an hour on one agreement from one machine', async () => {
   const { slug } = await published('Busy terms');
   const c = from();
   let last: any;
