@@ -6,7 +6,7 @@ import { sendMail } from './mail.ts';
 import { sameEmail } from './credits.ts';
 import { signInAs, createLogin, sendPasswordLink } from './routes-account.ts';
 import { provider, authorizeUrl, exchangeCode, verifyIdToken, identityOf, SignInRefused, type Provider, type Identity } from './oidc.ts';
-import { PROVIDER_IDS, PROVIDER_NAMES, SIGNIN_MINUTES, callbackPath, isProviderId, safeNext, signInProviders, type SignInError, type SignInNote } from '../lib/signin.ts';
+import { PROVIDER_IDS, PROVIDER_NAMES, SIGNIN_MINUTES, callbackPath, isProviderId, safeNext, signInProviders, SIGNIN_NOTE_COOKIE, type SignInError, type SignInNote } from '../lib/signin.ts';
 
 // Signing in and signing up with Google or Microsoft, next to email and password. The talking to the provider and
 // the checking of what it answers are in oidc.ts. This file decides who the person is, and that rule is short:
@@ -22,8 +22,11 @@ import { PROVIDER_IDS, PROVIDER_NAMES, SIGNIN_MINUTES, callbackPath, isProviderI
 //
 // With no provider configured every route here answers 404 and no page shows a button.
 
-const STATE_COOKIE = 'sg_signin';
-const NOTE_COOKIE = 'sg_signin_note';
+// Over https both cookies carry the "__Host-" prefix. A browser only takes such a cookie from this very host, so a
+// neighbouring site under the same domain cannot plant a state of its own (and with it its own sign-in) in
+// somebody's browser, or words of its own on the first screen.
+const stateCookie = (c: Ctx) => `${c.secure ? '__Host-' : ''}sg_signin`;
+const noteCookie = (c: Ctx) => `${c.secure ? '__Host-' : ''}${SIGNIN_NOTE_COOKIE}`;
 
 const on = (name: string): Provider => {
   const p = isProviderId(name) ? provider(name) : null;
@@ -44,7 +47,7 @@ function begin(c: Ctx, p: Provider, o: { mode: 'login' | 'signup' | 'connect'; i
   run('DELETE FROM signin_states WHERE expires_at < ?', now());
   run('INSERT INTO signin_states (id, provider, nonce, verifier, mode, invite, code, next, user_id, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
     sha256(state), p.id, nonce, verifier, o.mode, o.invite || null, o.code || null, o.next || null, o.userId || null, new Date(Date.now() + SIGNIN_MINUTES * 60_000).toISOString());
-  c.cookies.push(cookie(STATE_COOKIE, state, SIGNIN_MINUTES * 60, c.secure));
+  c.cookies.push(cookie(stateCookie(c), state, SIGNIN_MINUTES * 60, c.secure));
   // Someone who comes from an invitation is offered the account with the invited address first.
   const hint = o.invite ? get('SELECT email FROM invites WHERE token=? AND accepted_at IS NULL', o.invite)?.email : null;
   return authorizeUrl(p, { state, nonce, verifier, redirectUri: redirectUri(p), loginHint: hint || undefined });
@@ -112,7 +115,7 @@ function fail(row: any, p: Provider, code: SignInError, email = ''): Response {
 // What the sign-in did, for the first screen to say. A cookie this site sets and the landing page reads and clears:
 // it only ever holds what the server wrote, never something from an address bar.
 function done(c: Ctx, row: any, note: SignInNote): Response {
-  c.cookies.push(`${NOTE_COOKIE}=${encodeURIComponent(JSON.stringify(note))}; Path=/; SameSite=Lax; Max-Age=120${c.secure ? '; Secure' : ''}`);
+  c.cookies.push(`${noteCookie(c)}=${encodeURIComponent(JSON.stringify(note))}; Path=/; SameSite=Lax; Max-Age=120${c.secure ? '; Secure' : ''}`);
   return redirect(`/signin/done?next=${encodeURIComponent(safeNext(row.next))}`);
 }
 
@@ -121,8 +124,8 @@ route('GET', '/auth/:provider/callback', async (c) => {
   // The state works once and only in the browser that started: its line is deleted the moment anyone presents it,
   // and it has to match the cookie. A link that was used twice, took too long, was opened in another browser or was
   // made up by somebody else all end here.
-  const inBrowser = readCookie(c.req, STATE_COOKIE) || '';
-  c.cookies.push(cookie(STATE_COOKIE, '', 0, c.secure));
+  const inBrowser = readCookie(c.req, stateCookie(c)) || '';
+  c.cookies.push(cookie(stateCookie(c), '', 0, c.secure));
   const state = str(c.q.get('state'), 200);
   const row = state ? get('SELECT * FROM signin_states WHERE id=?', sha256(state)) : null;
   if (row) run('DELETE FROM signin_states WHERE id=?', row.id);

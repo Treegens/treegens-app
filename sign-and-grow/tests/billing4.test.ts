@@ -357,10 +357,45 @@ test('who pays, the corners: your own name, a changed role, and a public form th
     v.ip = `203.0.116.${i + 1}`;
     return v.post(`/public/powerforms/${slug}/start`, { name: `Visitor ${i}`, email: `form-visitor-${i}@example.com` });
   };
+  // Starting holds nothing and blocks nobody: three people can be filling the form in with one signature left.
   const starts = [await visit(0), await visit(1), await visit(2)];
-  assert.deepEqual(starts.map((x) => x.status), [200, 503, 503]);
+  assert.deepEqual(starts.map((x) => x.status), [200, 200, 200]);
   assert.equal(subjects(o.email).some((x) => /signatures? left|used all your signatures/.test(x)), false);
-  const started = db.get('SELECT id FROM envelopes WHERE powerform_id IS NOT NULL AND account_id=?', o.id).id;
-  assert.equal((await signAll(started, 'form-visitor-0@example.com')).status, 200);
+  const of = (i: number) => db.get('SELECT e.id FROM envelopes e JOIN recipients r ON r.envelope_id=e.id WHERE e.account_id=? AND r.email=?', o.id, `form-visitor-${i}@example.com`).id;
+  // The first to finish gets the signature. The next is told, politely and truthfully, at the moment it matters:
+  // nothing is signed, the balance never goes below zero, and the owner hears it once with the real numbers.
+  assert.equal((await signAll(of(0), 'form-visitor-0@example.com')).status, 200);
   assert.deepEqual(await bal(o), { balance: 0, held: 0, available: 0 });
+  const late = await signAll(of(1), 'form-visitor-1@example.com');
+  assert.equal(late.status, 503);
+  assert.match(late.data.error, /cannot take your signature at the moment\. That is nothing you did[\s\S]*Everything you filled in is saved/);
+  assert.equal(db.get("SELECT status FROM recipients WHERE email='form-visitor-1@example.com'").status !== 'completed', true);
+  assert.equal((await signAll(of(2), 'form-visitor-2@example.com')).status, 503);
+  assert.deepEqual(await bal(o), { balance: 0, held: 0, available: 0 });
+  const told = mailTo(o.email).filter((m) => m.subject.includes('has run out of signatures'));
+  assert.equal(told.length, 1, 'the owner is told once, not per visitor');
+  assert.match(told[0].html, /none is free right now: you have 0 signatures on your balance/);
+  // A new visitor is told before typing anything, and once the owner has topped up, the one who was turned away
+  // finishes with the same link.
+  assert.equal((await visit(3)).status, 503);
+  adjust(o.id, 1);
+  assert.equal((await signAll(of(1), 'form-visitor-1@example.com')).status, 200);
+  assert.deepEqual(await bal(o), { balance: 0, held: 0, available: 0 });
+
+  // The owner's own envelopes keep what is held for them: a form visitor cannot take a held signature.
+  const h = await person('Held');
+  adjust(h.id, -2);
+  const hf = await simple(h.c, '', { kind: 'template', subject: 'Waiver', recipients: [{ id: 'r', role: 'signer', role_name: 'Guest' }] });
+  await h.c.post('/powerforms', { template_id: hf.id, name: 'Waiver' });
+  const hslug = (await h.c.get('/powerforms')).data.powerforms[0].slug;
+  const guest = new Client();
+  guest.ip = '203.0.116.77';
+  assert.equal((await guest.post(`/public/powerforms/${hslug}/start`, { name: 'Guest One', email: 'guest-one@example.com' })).status, 200);
+  const ownOut = await simple(h.c, 'client-held@example.com');
+  assert.equal((await h.c.post(`/envelopes/${ownOut.id}/send`)).status, 200);
+  assert.deepEqual(await bal(h), { balance: 1, held: 1, available: 0 });
+  const ge = db.get("SELECT e.id FROM envelopes e JOIN recipients r ON r.envelope_id=e.id WHERE r.email='guest-one@example.com'").id;
+  assert.equal((await signAll(ge, 'guest-one@example.com')).status, 503);
+  assert.equal((await signAll(ownOut.id, 'client-held@example.com')).status, 200);
+  assert.deepEqual(await bal(h), { balance: 0, held: 0, available: 0 });
 });

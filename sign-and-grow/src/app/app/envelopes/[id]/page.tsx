@@ -64,6 +64,10 @@ export default function EnvelopeDetail() {
   const acting = e.recipients.filter((r: any) => r.role !== 'cc');
   const finished = acting.filter((r: any) => r.status === 'completed');
   const unfinished = acting.filter((r: any) => r.status !== 'completed');
+  // An envelope somebody has signed is not only the sender's: deleting it takes it out of the sender's account and
+  // leaves every recipient their link and their copy. That is every completed one, and a voided, declined or
+  // expired one on which someone had already finished.
+  const kept = !isTpl && e.status !== 'draft' && (done || e.recipients.some((r: any) => r.status === 'completed' && ['signer', 'inperson', 'approver'].includes(r.role)));
   const waiting = out ? waitingOn(e.recipients, me.user.email) : null;
   const unopened = out ? e.recipients.filter((r: any) => neverOpened(r)) : [];
   const bounced = out ? e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && lastEmailTo(deliveries, r.email, r.id)?.status === 'failed') : [];
@@ -260,16 +264,16 @@ export default function EnvelopeDetail() {
         </VoidDialog>
       )}
       {dialog === 'delete' && (
-        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this envelope'} confirmLabel={done ? 'Delete from my account' : 'Delete for good'} onClose={() => setDialog('')}
+        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this envelope'} confirmLabel={kept ? 'Delete from my account' : 'Delete for good'} onClose={() => setDialog('')}
           onConfirm={async () => {
             await api(`/envelopes/${e.id}`, { method: 'DELETE' });
-            toast(done ? 'Deleted from your account. Everyone who was on it keeps their copy.' : 'Deleted.');
+            toast(kept ? 'Deleted from your account. Everyone who was on it keeps their copy.' : 'Deleted.');
             router.push(isTpl ? '/app/templates' : '/app/envelopes');
           }}>
-          {done ? (
+          {kept ? (
             <>
-              <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back, so download the signed PDF first if you want to keep a copy.</p>
-              <p className="muted">It is a completed document, so it is not only yours. Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>
+              <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back, so download the PDF first if you want to keep a copy.</p>
+              <p className="muted">{done ? 'It is a completed document, so it is not only yours.' : 'Someone has already signed it, so it is not only yours.'} Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>
             </>
           ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its audit trail will be removed for good. This cannot be undone.</p>}
         </ConfirmDialog>

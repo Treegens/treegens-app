@@ -112,6 +112,7 @@ test('the whole life of a request, from both sides: asked, taken, a question bac
   assert.match(said, /within 8 hours of your message, counted in real hours: nights and weekends count too/);
   assert.match(said, /do not reply to this email: a reply does not reach your request/);
   assert.ok(!said.includes('PRIVATE-WORDS'), 'anyone can type any address, so her words are not mailed back');
+  assert.doesNotMatch(said, /every dollar plants/, 'and someone who may only have come to sign is sold nothing');
   const l = link('lena@cust.test', asked.reference);
   // The people who answer were told, with the time that was promised. No support address is set, so that is them.
   for (const op of ['maya@ops.test', 'ravi@ops.test']) assert.match(text(mails(op, asked.reference).at(-1)!.html), /Help request .* From Lena Locked <lena@cust\.test>, not logged in\. Urgent\. The customer was told a person will have answered by/);
@@ -618,15 +619,21 @@ test('the queue: mine, nobody\'s, waiting and all, taking and handing over, and 
   assert.equal(unknown.status, 400);
 });
 
-test('closing without an answer is only for a request nobody at the address wrote, and nothing is emailed for it', async () => {
+test('closing without an answer is only for a request nobody at the address wrote, and even then the address is told', async () => {
   const spam = await ask({ email: 'target@cust.test', message: 'You have won. Call +1 888 555 0199 to claim your prize.' });
   const id = row(spam.reference).id;
   const l = link('target@cust.test', spam.reference);
   const before = mailTo('target@cust.test').length;
   const r = await act(maya, id, { action: 'spam' });
   assert.deepEqual([r.data.request.status, r.data.request.closed_how], ['closed', 'spam']);
-  assert.equal(mailTo('target@cust.test').length, before, 'the person whose address was typed is not written to again');
-  assert.ok(r.data.request.thread.some((m: any) => m.by === 'Maya Okafor' && m.body === 'Closed as not written by the owner of the address. Nothing was emailed to them'));
+  // Not closed without a word: one short note says what happened and how to open it again, and repeats nothing typed.
+  assert.equal(mailTo('target@cust.test').length, before + 1);
+  const note = mailTo('target@cust.test').at(-1)!;
+  assert.equal(note.subject, `We closed request ${spam.reference} without an answer`);
+  assert.match(text(note.html), /thought someone else had typed your address, so it was closed without an answer\. If you did not write to us, there is nothing to do\. We will not write to you about it again\. If you did write it, we are sorry\. Use the button below and tell us: the request opens again/);
+  assert.ok(!note.html.includes('555') && !note.html.includes('prize'), 'the stranger\'s words reach nobody');
+  assert.ok(note.link.endsWith(`/help/request/${l.id}/${l.key}`));
+  assert.ok(r.data.request.thread.some((m: any) => m.by === 'Maya Okafor' && m.body === 'Closed as not written by the owner of the address. They were told so, without the text, and how to open it again'));
   // If the address owner did write it after all, they are told what happened and how to open it again.
   const v = await seen(l.api);
   assert.equal(standing(v, (iso) => whenText(iso)).title, 'Closed: this did not look like it came from you');

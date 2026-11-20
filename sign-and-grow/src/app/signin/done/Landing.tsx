@@ -1,17 +1,24 @@
 'use client';
-import { useEffect } from 'react';
-import { safeNext, signInNotice, type SignInNote } from '@/lib/signin';
+import { useEffect, useRef } from 'react';
+import { safeNext, signInNotice, SIGNIN_NOTE_COOKIE, type SignInNote } from '@/lib/signin';
 
 // Where the browser lands after signing in with Google or Microsoft. The server could not talk to this tab on the
 // way through the provider, so it left what the sign-in did in a short-lived cookie. This page hands that to the
 // app the same way the password form does (it is said on the first screen), clears the cookie, and moves on.
 export function Landing() {
+  const moved = useRef(false);
   useEffect(() => {
+    // Once: a second run would find the cookie gone and start the same move again.
+    if (moved.current) return;
+    moved.current = true;
     let note: SignInNote = {};
     try {
-      const raw = document.cookie.split('; ').find((c) => c.startsWith('sg_signin_note='));
-      if (raw) note = JSON.parse(decodeURIComponent(raw.slice('sg_signin_note='.length))) || {};
-      document.cookie = 'sg_signin_note=; Path=/; Max-Age=0; SameSite=Lax';
+      // Over https only the cookie with the "__Host-" prefix counts: no other site can have put that one there.
+      const https = window.location.protocol === 'https:';
+      const name = `${https ? '__Host-' : ''}${SIGNIN_NOTE_COOKIE}`;
+      const raw = document.cookie.split('; ').find((c) => c.startsWith(`${name}=`));
+      if (raw) note = JSON.parse(decodeURIComponent(raw.slice(name.length + 1))) || {};
+      document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax${https ? '; Secure' : ''}`;
     } catch {
       /* a cookie we cannot read says nothing */
     }

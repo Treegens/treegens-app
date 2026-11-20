@@ -4,7 +4,7 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { boot, Client, signUp, mailTo, type Server } from './helpers.ts';
+import { boot, Client, signUp, mailTo, draft, signAll, type Server } from './helpers.ts';
 import { stripe, unix } from './stripe-fake.ts';
 
 let db: Server['db'];
@@ -333,10 +333,81 @@ test('the price never goes up without thirty days of notice: a renewal above the
   s = await state(p);
   assert.deepEqual([s.plan_price, s.price_change], ['$12.00', null]);
 
-  // A lower price needs no notice. It applies when it is charged, with the full month.
+  // A smaller invoice that is a one-off says nothing about next month: part of a month after a change, or a
+  // discount. The account stays on its price, and the next ordinary renewal is not "more than they were on".
+  await event('invoice.paid', invoice(p, 'in5_price_part', { amount_paid: 200, billing_reason: 'subscription_update' }));
+  assert.equal(acct(p.id).price_cents, 1200);
+  await event('invoice.paid', renewal('in5_price_disc', 600));
+  assert.equal(acct(p.id).price_cents, 1200);
+  await event('invoice.paid', renewal('in5_price_7', 1200));
+  assert.equal(stripe.refunded('ch_in5_price_7'), 0, 'the ordinary price after a discount is not refunded');
+
+  // A lower price for the plan itself needs no notice. It applies when it is charged, with the full month.
   had = (await bal(p)).balance;
-  await event('invoice.paid', renewal('in5_price_6', 900));
+  const lower = renewal('in5_price_6', 900);
+  lower.lines.data[0].price = { id: 'price_grove', unit_amount: 900 };
+  await event('invoice.paid', lower);
   assert.equal(stripe.refunded('ch_in5_price_6'), 0);
   assert.equal((await bal(p)).balance, had + 9);
   assert.equal(acct(p.id).price_cents, 900);
+
+  // Someone who started with a discount is on the price the checkout showed, not on the discounted amount.
+  const d = await person('Coupon');
+  await event('checkout.session.completed', checkout(d));
+  await event('invoice.paid', invoice(d, 'in5_coupon_1', { amount_paid: 450 }));
+  assert.equal(acct(d.id).price_cents, 900);
+  await event('invoice.paid', invoice(d, 'in5_coupon_2', { amount_paid: 900, billing_reason: 'subscription_cycle' }));
+  assert.equal(stripe.refunded('ch_in5_coupon_2'), 0);
+});
+
+test('putting right the name of someone who was asked to sign again needs no signature, and pointing their request at somebody else still does', async () => {
+  const p = await person('Again');
+  const e = await draft(p.c, { ordered: false, subject: 'Name fix' });
+  assert.equal((await p.c.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, 'ada@example.com')).status, 200);
+  // One used by Ada, one held for Ben, and the third is taken away: nothing is free.
+  db.run('INSERT INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,?,?,?)', p.id, -1, 'adjust', crypto.randomUUID(), new Date().toISOString());
+  assert.deepEqual(await bal(p), { balance: 1, held: 1, available: 0 });
+
+  // The sender adds a line to the page and chooses to have Ada sign again. That is free.
+  const cur = (await p.c.get(`/envelopes/${e.id}`)).data.envelope;
+  const body = { subject: cur.subject, message: cur.message, ordered: cur.ordered, documents: cur.documents, recipients: cur.recipients, fields: [...cur.fields, { id: 'n1', document_id: cur.documents[0].id, type: 'note', value: 'Delivery in May', page: 0, x: 0.3, y: 0.3, w: 0.3, h: 0.03 }] };
+  assert.equal((await p.c.call('PUT', `/envelopes/${e.id}`, { ...body, resign: true })).status, 200);
+  const ada = db.get("SELECT id, status FROM recipients WHERE envelope_id=? AND email='ada@example.com'", e.id);
+  assert.equal(ada.status, 'sent');
+  assert.deepEqual(await bal(p), { balance: 1, held: 1, available: 0 });
+
+  // Her name was misspelled. Putting it right is not a new signature: it was refused with "you have 0 left" before.
+  const fix = await p.c.post(`/envelopes/${e.id}/correct`, { recipient_id: ada.id, name: 'Ada Signér' });
+  assert.equal(fix.status, 200, JSON.stringify(fix.data));
+  assert.deepEqual(await bal(p), { balance: 1, held: 1, available: 0 });
+  assert.equal((await signAll(e.id, 'ada@example.com')).status, 200);
+  assert.equal(db.get("SELECT COUNT(*) n FROM credits WHERE account_id=? AND reason='signature'", p.id).n, 1, 'Ada was paid for once');
+
+  // Asked again, and this time the request is pointed at a different person. That is a new signature, and none is free.
+  const cur2 = (await p.c.get(`/envelopes/${e.id}`)).data.envelope;
+  const body2 = { subject: cur2.subject, message: cur2.message, ordered: cur2.ordered, documents: cur2.documents, recipients: cur2.recipients, fields: [...cur2.fields, { id: 'n2', document_id: cur2.documents[0].id, type: 'note', value: 'And in June', page: 0, x: 0.3, y: 0.4, w: 0.3, h: 0.03 }] };
+  assert.equal((await p.c.call('PUT', `/envelopes/${e.id}`, { ...body2, resign: true })).status, 200);
+  const other = await p.c.post(`/envelopes/${e.id}/correct`, { recipient_id: ada.id, name: 'Somebody Else', email: 'else@example.com' });
+  assert.equal(other.status, 402);
+  assert.match(other.data.error, /needs 1 signature and you have 0 left/);
+});
+
+test('the payment page asks for a tax number and address only when the operator switched that on', async () => {
+  const p = await person('Vat');
+  const asked = () => stripe.calls.filter((c) => c[1] === 'checkout/sessions').at(-1)![2];
+  assert.equal((await p.c.post('/billing/checkout')).status, 200);
+  assert.equal(asked()['tax_id_collection[enabled]'], undefined);
+  process.env.STRIPE_COLLECT_TAX_ID = '1';
+  try {
+    // A new customer: the provider creates them from what they type.
+    assert.equal((await p.c.post('/billing/checkout')).status, 200);
+    assert.deepEqual([asked()['tax_id_collection[enabled]'], asked().billing_address_collection, asked()['customer_update[name]']], ['true', 'required', undefined]);
+    // A customer the provider already knows: it has to be allowed to update their name and address.
+    await subscribe(p);
+    assert.equal((await p.c.post('/billing/topup', { quantity: 5 })).status, 200);
+    assert.deepEqual([asked().customer, asked()['tax_id_collection[enabled]'], asked()['customer_update[name]'], asked()['customer_update[address]']], [p.cus, 'true', 'auto', 'auto']);
+  } finally {
+    delete process.env.STRIPE_COLLECT_TAX_ID;
+  }
 });

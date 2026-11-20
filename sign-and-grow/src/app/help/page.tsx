@@ -234,7 +234,7 @@ export default function Help() {
               <li><b>One person has it.</b> When someone on our team takes your request, it shows their first name.</li>
               <li><b>Every answer is emailed to you in full.</b> You never have to sign in to read one.</li>
               <li><b>Each email has a private link to your request.</b> It works without signing in. There you read everything written so far, reply, and mark it as solved. Whoever has the link can do that, so keep those emails to yourself. Replying to the email itself does not reach your request: use the link.</li>
-              <li><b>A request is never closed on you without a written answer.</b> If it was closed and is not solved, reply within {support.reopenDays} days and the same request opens again. After that, a reply starts a new request that is linked to the old one.</li>
+              <li><b>A request is never closed on you without a written answer.</b> If it was closed and is not solved, reply within {support.reopenDays} days and the same request opens again. After that, a reply starts a new request that is linked to the old one. The one exception is a message that does not look like it came from the owner of the address, such as an advert typed into the form: the address then gets a short note that says so and how to open it again.</li>
             </ul>
             {support.promised && <ReplyRecord />}
           </QA>

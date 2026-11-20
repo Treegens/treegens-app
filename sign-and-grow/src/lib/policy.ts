@@ -54,6 +54,13 @@ export const powerformSharedIdleMinutes = (): number => Number(process.env.POWER
 export const CLOSING_REMINDER_DAYS = 7;
 
 /**
+ * A closed help request opens again when its writer replies within this many days. Later, a reply starts a new
+ * request that names the old one. (The other rules for help requests are further down. This one stands here
+ * because the list below quotes it.)
+ */
+export const SUPPORT_REOPEN_DAYS = 30;
+
+/**
  * What deleting an account removes and what stays, in the words the pages use (Settings, /help and /security all
  * print these lists). The code that does it is purgeUser() in src/server/routes-trust.ts: change both together.
  * Plain constants, so a 'use client' file may import them.
@@ -63,11 +70,11 @@ export const DELETED_WITH_ACCOUNT: string[] = [
   'Every account you own: its envelopes, drafts and templates, the documents you uploaded, the signed PDFs, the files signers attached and every audit trail, with the names, email addresses and internet addresses in them.',
   'Its contacts, API keys, webhooks and their delivery logs, bulk send records, public forms and reports from recipients.',
   'Our stored copies of the emails about those envelopes, and of the emails we sent you about your account.',
-  'Messages you sent through the help form that have been answered.',
+  'Help requests of yours that have been answered or closed, each with everything written back and forth on it.',
 ];
 export const KEPT_AFTER_DELETION: string[] = [
   'The record of payments, refunds and of signatures bought and used, without your name or your email address, because accounts have to be kept. If you ever paid, the payment provider has its own record of that.',
-  'A message to the help form that nobody has answered yet. It is deleted once it has been answered.',
+  `A help request that nobody has answered yet, or on which we asked you something and wait for your reply. It is deleted once it has been answered. The answer is emailed to you first. An unanswered question of ours is kept for ${SUPPORT_REOPEN_DAYS} more days, then deleted.`,
   'Documents other people sent you, with what you did on them, such as your signature or a report you made. They belong to whoever sent them.',
   'What you sent as a member of a team you do not own. It belongs to that team and passes to its owner, and its audit trail says so. An API key you made there stays on the team\'s list as stopped, under your name.',
   'Signed PDFs your recipients downloaded or were emailed. Those are theirs. The links in our emails to them stop working.',
@@ -111,9 +118,6 @@ export const SUPPORT_TOPICS: string[] = ['signing', 'stuck', 'sending', 'billing
 
 /** The topics that make a request urgent: someone is locked out, money was taken wrongly, or a document or a deadline cannot wait. */
 export const SUPPORT_URGENT_TOPICS: string[] = ['cannot-log-in', 'charged-wrongly', 'stuck'];
-
-/** A closed request opens again when its writer replies within this many days. Later, a reply starts a new request that names the old one. */
-export const SUPPORT_REOPEN_DAYS = 30;
 
 /** The help page shows the real median time to a first answer over this many days, and only when it covers at least this many requests. */
 export const SUPPORT_MEDIAN_DAYS = 30;

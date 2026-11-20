@@ -44,7 +44,7 @@ export function signInErrorText(code: any, provider?: any): string {
     case 'cancelled':
       return `You stopped at ${p} before it was finished, so you are not signed in. Nothing was changed. You can try again, or use your email and password.`;
     case 'expired':
-      return `That sign-in was used already, or it took longer than ${SIGNIN_MINUTES} minutes, so we stopped it to be safe. Nothing was changed. Please start again from this page.`;
+      return `That sign-in was used already, or it took longer than ${SIGNIN_MINUTES} minutes, so we stopped it to be safe. Nothing was changed. Please start again from this page. If this keeps happening, your browser may be refusing cookies from this site: allow them, or use your email and password.`;
     case 'exists':
       return `You already have a Sign&Grow login with this address. Sign in with your password once, then connect ${p} under Settings. We did not sign you in with ${p} because it does not confirm to us that this address is yours. No password, or you do not remember it? Use "Forgot password" below and we email you a link to choose one.`;
     case 'no_email':
@@ -79,6 +79,12 @@ export type SignInNote = {
   reclaimed?: 'password' | 'login'; // that login had never been confirmed, and what was cut off (see cutEarlierAccess)
   code_unused?: boolean; // a code was carried along but the person already had a login
 };
+
+/**
+ * The cookie the server leaves what a sign-in did in, for the landing page to read once. Over https its name carries
+ * the "__Host-" prefix, which a browser only accepts from this very host, and the page reads no other.
+ */
+export const SIGNIN_NOTE_COOKIE = 'sg_signin_note';
 
 export function signInNotice(r: SignInNote): string {
   const said: string[] = [];

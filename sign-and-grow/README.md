@@ -42,6 +42,7 @@ What the test files cover:
 | `tests/abuse.test.ts` | Keeping scammers and strangers out: the filter for fake payment notices on every path and in every spelling, the daily limit on people newly emailed, what a paused account can and cannot do, reports that count, who may read a support message, access codes that freeze, public forms that never hand out someone else's document, and reporting an email with its security code. |
 | `tests/api.test.ts` | Calls that are repeated or cross each other: an `Idempotency-Key` that belongs to one person and goes with its envelope, a bulk send that is repeated while it runs or finished after the server stopped half way, one audit line a day for an embedded signing link, two Finish, Decline, Void or reassign requests at the same moment, a whole batch reminded or voided while someone in it signs, and signed PDFs made from fillable forms, whether the form was sent or attached by a signer. |
 | `tests/lifecycle.test.ts` | Accounts, teams and deleting: someone removed from a team can still sign in (a workspace of their own, the welcome signatures once) and be invited again, nobody removes themselves, a hand-over names a member who stays, takes bulk sends along and is written to each audit trail, a deleted account leaves no names, addresses, email copies or signer files behind and keeps the money records without names, a closing account takes on nothing new and its owner is emailed a week before the end, members use every template but change only their own and see only their own folders and batches, a completed envelope its sender deletes stays with its recipients, help references nobody can misread, a signer's help request that reaches the sender, and sign-in opening the workspace used last. |
+| `tests/support.test.ts` | Help requests as tickets: the whole life of a request from both sides, the published response times and the timer's escalation when one is late, reopening and the follow-up after 30 days, the link that works without a login (right secret, wrong secret, another request's secret), what a customer can never see (internal notes, another customer's request, an answer written to somebody else's mailbox), the operator queue and who may work it (nobody else, and no API key), the payment alerts in the same queue, the real median, the limits on the link and the form, and deleting an account with its threads. |
 | `tests/signerux.test.ts` | The person who signs, and the email that reaches them: a saved signature is confirmed before it goes on a page and never offered across two people at one address, "Finish later" carries the signature to another device, "Fix my name" cannot turn one signer into another, dead and replaced links tell the sender, "Email me the current link" and "Find my documents" say what they did, scans and pictures are flagged page by page and stay flagged, the sender's field count matches the signer's, emails the mail server refuses are tried again and the audit trail says so, and someone who signed keeps a copy when the envelope is closed. |
 | `tests/signin.test.ts` | Signing in and signing up with Google or Microsoft, against a stand-in for both (an RSA key made in the test, their key lists and token endpoints answered by a fetch stub, ID tokens signed and forged there): a new person, a returning one, a state that is missing, made up, from another browser, used twice or too old, every check on the ID token (signature, "none", HS256 keyed with the public key, issuer, Microsoft's organization rule, audience, expiry, nonce), keys cached and fetched again for an unknown key id, an address in a token never opening an existing login unless the provider vouches for it, a login someone else started in a person's name being cut off from them, invitations, free codes, a closing login coming back, a removed member's workspace, connecting and disconnecting under Settings, the last way in, a first password by emailed link, API keys kept out, no redirect off this site, and nothing answering when a provider is not configured. |
 
@@ -68,7 +69,8 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | The price went up and nobody said so. | One rule, written once (`priceRuleText` in `src/lib/policy.ts`) and enforced by the server: an account stays on the monthly price it has been paying until every owner and admin has been emailed the new price at least 30 days before the day it starts, with a link that stops the plan. A renewal that charges more without that notice has the difference refunded automatically, the customer still gets the full month, and the operator is told (a week ahead if the provider already shows the higher amount). The operator announces a price on `/app/operator`. |
 | "I updated my card and the plan is still on hold." | A plan the provider has stopped retrying says so, and offers "Pay the open payment", which opens the provider's page for exactly that invoice. If it was paid in the meantime the plan is read back instead of offering the payment again. |
 | Paying for a plan nobody uses. | A nudge after 60 quiet days. After `DORMANT_AUTO_STOP_DAYS` without a send, the renewal is stopped before the next charge and the owner is told. |
-| Support is a chatbot loop, and closed to anyone who cannot log in. | `/help` works without an account: self-service tools, then a contact form that returns a reference and goes to a queue people work from (`/app/operator`, and `SUPPORT_EMAIL` if set). No chatbot. The reference is eight characters nobody can misread, and someone who is signed in sees their requests and whether each was answered under the form. A message about signing that names an envelope the writer is on also reaches its sender, who can usually fix it at once. Help is one click away from the sign-in forms, the public form page and the editor. |
+| Support is a chatbot loop, and closed to anyone who cannot log in. | `/help` works without an account: self-service tools, then a contact form that returns a reference and goes to a queue people work from (`/app/operator`, and `SUPPORT_EMAIL` if set). No chatbot. The reference is eight characters nobody can misread. A message about signing that names an envelope the writer is on also reaches its sender, who can usually fix it at once. Help is one click away from the sign-in forms, the public form page and the editor. |
+| No answer, no reference, nobody owns the problem, and the ticket is closed without a word. | Every help request is a ticket (see "How support works" below): a reference, a state the customer can see, one operator who has it and whose first name the customer is shown, and a thread. A response time is published (`SUPPORT_FIRST_REPLY_HOURS`, `SUPPORT_URGENT_REPLY_HOURS`), and the confirmation says the actual time a person will have answered by. When that time passes the request says "We are late with this. Sorry.", everyone who answers is emailed, and so is the customer. Every answer is emailed in full, with a private link that opens the request without a login, because the people who need help most are locked out. Nobody closes a request without a written answer, and a reply opens it again. |
 | A typo after sending means void and start again. | An envelope that is out can be corrected in place: names, addresses, fields, people. Signatures already collected stay. Once someone has finished, the pages they signed only change if the sender chooses to ask them to sign again: they are told what changed, the first signature stays on record, and it costs no extra signature. A signer whose page is open during a correction cannot finish on the old version. The audit trail says what every correction changed. |
 | Signing links expire or stop after a few opens. | A link works for as long as the envelope is open, with no limit on opens. A replaced link offers to send the current one. `/help` emails anyone their documents again. An expired envelope is reopened, not rebuilt, and signers can ask for more time. |
 | Signers are pushed to create an account. | Signers never need an account or a password, and are never sent marketing. |
@@ -120,13 +122,60 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 **Help and trust (public pages, no login)**
 - `/help`: answers for people who sign and people who send, with the tool to fix each thing on the page: find
   my documents, find my subscription, stop billing with my card, and a contact form that reaches a person.
+  Someone who is signed in sees every request they sent under the form ("Your requests"): where it stands, who
+  has it, by when a person will have answered, everything written on it, and a box to reply.
+- `/help/request/...`: one help request, opened from the private link in our emails about it. No login. The
+  customer reads the whole thread there, replies and marks it as solved.
 - `/check`: type in the security code from a signing email to see whether it is genuine and who sent it, and
   report it from there without opening the document. Every signing email links to it with the code filled in.
 - `/billing/stop`: stop a renewal from the link in a billing email. One button.
 - `/security`: what the software does to protect signers, senders and documents, and what it does not do.
 - `/app/operator`: the queue of help requests, reports and paused accounts, for the people in `OPERATOR_EMAILS`.
   Each request and report shows the account it is about (plan, age, trusted or not), with "Trust this account" to
-  lift the daily limit and the fake-notice filter for it, and "Pause this sender".
+  lift the daily limit and the fake-notice filter for it, and "Pause this sender". Help requests are answered
+  right there, not by email (see "How support works").
+
+**How support works**
+- A help request is a ticket: the eight-character reference, a state (open: waiting for us; waiting: we asked the
+  customer something; answered; closed), an owner, a priority and a thread. The topic decides the priority:
+  cannot log in, charged wrongly, and a stuck document or a near deadline are urgent. Everything else is normal.
+- The response times are published on `/help` and counted in real hours, nights and weekends included:
+  `SUPPORT_FIRST_REPLY_HOURS` (24) and `SUPPORT_URGENT_REPLY_HOURS` (8). The form, the confirmation email and the
+  request itself give the actual time ("by Tuesday 24 November, 14:00"), in the writer's time zone when their
+  browser reported one, otherwise in UTC and said so. The clock stops while we wait for the customer's reply to a
+  question of ours, and a reply from the customer starts a full new time.
+- When a request passes its time, the timer (`POST /api/cron`) emails `SUPPORT_EMAIL` and every operator once,
+  emails the customer that we are late, and the request says so on every screen. The queue is sorted by due time,
+  so late ones lead. If it is answered, reopened and late again, that is told again.
+- With neither `SUPPORT_EMAIL` nor `OPERATOR_EMAILS` set nobody can be reached, so no time is promised anywhere:
+  the page, the form and the email say what they said before there were response times.
+- Every answer is emailed in full. Each email carries the same private link to the request
+  (`/help/request/<id>/<secret>`), which works without a login. The secret is derived from `APP_SECRET`, and only
+  its SHA-256 is stored on the request. The link is never given to whoever fills in the form, only to the mailbox: holding it is the proof of having
+  the mailbox. Email replies are not read into the thread, and every email says so.
+- Anyone can type any address into the form. So the words of a first message from someone who was not signed in
+  under that address are neither mailed back nor shown on the linked page until an operator has written back, and
+  the person at the address can say "I did not write to you" with one click.
+- A request is never closed by an operator without a written answer in its thread, and closing emails that
+  answer. The one exception is "Nobody at this address wrote this" for an advert or a scam typed into the form:
+  the address gets one short note that says it was closed and how to open it again, with nothing of what was
+  typed. It is refused once the request is known to come from the address's owner. A reply to an
+  answered or closed request opens it again. More than 30 days after closing, a reply starts a new request that
+  names the old one.
+- Operators (`/app/operator`) see the queue with late and urgent requests marked, filter it (waiting for us,
+  mine, nobody has it, waiting for the customer, all), take a request or hand it to another operator, answer,
+  ask the customer something, write a note only operators see, and close with an answer. Next to a request
+  stands the account it is about, read-only: plan, paused or not, last payment. Every action is kept in the
+  request's history with who and when. The alerts the payment code files by itself are in the same queue: they
+  have no customer, so they get a note and are closed with a note, and nobody is emailed.
+- `/help` shows the real median time to a first answer over the last 30 days, with how many requests it covers,
+  only when that is at least 10. Otherwise it shows the target only.
+- Limits: 10 messages a day on one request and 30 a day from one address (new requests and replies together),
+  counted in the database, so the link and the form cannot be used to bury the people who answer or to fill a
+  stranger's inbox. No API key can use the support routes or the operator routes: they are for people.
+- Deleting an account deletes its requests with their threads. One that is still waiting for an answer, or for
+  the customer's reply to a question of ours, is kept until it is answered (the answer is emailed, then the request
+  is deleted) or, for an unanswered question, for 30 more days.
 
 **Reuse and scale**
 - Templates with named roles, shared with the team: everyone can use them, and only the person a template belongs
@@ -190,8 +239,10 @@ e-signature product, not all of it. Not built:
   native mobile apps. Signing in with Google or Microsoft is in; a second step is then whatever that account has.
 - Ready-made integrations (Salesforce, Google Drive and so on). The API and webhooks are the way in for now.
 - A security certification, or encryption of stored files by the app itself. `/security` says so plainly.
-- Staffed support. The software gives everyone a way to reach a person and gives those people a queue. Someone
-  still has to read it and answer.
+- Staffed support. The software gives everyone a way to reach a person, gives those people a queue, publishes a
+  response time and says so when it is missed. Someone still has to read the queue and answer in time.
+- Replying to a support email. Answers are written and read on the request's own page (the link in every email),
+  not by replying to the email, and the emails say so.
 
 ## Configuration
 
@@ -205,14 +256,17 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `DATA_DIR` | Where the database and files live. Must be a persistent disk. | `./data` |
 | `APP_SECRET` | Secret for access-code cookies and stop links. | generated and kept in `DATA_DIR` |
 | `SMTP_URL`, `MAIL_FROM` | Mail server, for example `smtps://user:pass@smtp.example.com`. Without it nothing is delivered, and the audit trail of an envelope says "Not emailed" instead of "Sent to recipient". An email the mail server will not take is kept and tried again by the timer (see `CRON_SECRET`): after 5 minutes, 30 minutes, 2 hours, 6 hours and a day, six tries in all. The envelope page and the audit trail say how it goes, and after the last try the sender is told. | none |
-| `CRON_SECRET` | Lets a scheduler call `POST /api/cron`. Call it at least once an hour: it sends signer reminders and renewal reminders, tries emails again that the mail server would not take (so the gaps between tries are never shorter than the gap between calls), expires envelopes, retries refunds and cancellations the payment provider could not take the first time, and closes accounts. A renewal that is charged with no reminder on record raises an alert. | none |
+| `CRON_SECRET` | Lets a scheduler call `POST /api/cron`. Call it at least once an hour: it sends signer reminders and renewal reminders, tries emails again that the mail server would not take (so the gaps between tries are never shorter than the gap between calls), expires envelopes, retries refunds and cancellations the payment provider could not take the first time, closes accounts, and tells the operators and the customer when a help request has passed its response time. A renewal that is charged with no reminder on record raises an alert. | none |
 | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_GROVE`, `STRIPE_WEBHOOK_SECRET` | Turns on paying. Without them nothing is counted and there is nothing to buy. `STRIPE_PRICE_GROVE` is the monthly price. Point a Stripe webhook at `/api/stripe/webhook` and send it these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `invoice.paid`, `invoice.upcoming`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`, `charge.refunded`, `charge.dispute.created`. | none |
+| `STRIPE_COLLECT_TAX_ID` | Set to `1` and the payment page asks business buyers for their tax number (VAT, GST and the like) and billing address, and the provider prints both on the invoice. Put your own legal name, address and tax number on invoices in the provider's settings. Off by default: the provider refuses the request unless its settings allow it, so switch it on in test mode first and make one payment. Not tried against the real provider. | off |
 | `STRIPE_WEBHOOK_WAIT_MS` | How long a message from the payment provider is worked on before it is answered. The provider counts a late answer as a failure, so a message that takes longer (the provider or the mail server is slow) is answered "received", kept in an inbox table and finished in the background; the timer applies anything left over after a restart or a failure. | `5000` |
 | `STRIPE_API_VERSION` | Pins the version of the payment provider's API that calls are made with, for example the one shown in your Stripe dashboard when you tested. Set the webhook endpoint to the same version. Unset, the account's default version is used; both the older and the newer shapes of invoices and subscriptions are read. | account default |
 | `ACCEPT_DISPUTES_UP_TO_USD` | A card dispute always stops billing, takes the signatures the disputed payment bought off the balance (also ones held for envelopes that are out), switches new payments off until a person has looked (the operator page has the button to switch them back on), and tells the customer in writing. Disputes up to this amount are also accepted with the payment provider automatically instead of being fought; larger ones are left for a person to decide, and if the bank then lets the payment stand the signatures come back by themselves. `0` (or `ACCEPT_DISPUTES=0`) leaves every dispute to a person. | `25` |
-| `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, receives every help request with the sender as reply-to, and gets the alerts that need a person: a payment nobody could be matched to, a refund that keeps failing, a card dispute. Those alerts also go to `OPERATOR_EMAILS` and are kept in the operator queue. Set at least one of the two: with neither, nobody can open the queue and an alert is only a loud line in the server log. When set, the address is also printed in the footer of every public page and in the app's menu. A production server that starts without it logs a loud warning, because the pages promise that a person answers. | none |
+| `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, is told about every new help request and every late one (the answer is written in the operator queue, not by replying to that email; without this address those emails go to `OPERATOR_EMAILS`), and gets the alerts that need a person: a payment nobody could be matched to, a refund that keeps failing, a card dispute. Those alerts also go to `OPERATOR_EMAILS` and are kept in the operator queue. Set at least one of the two: with neither, nobody can open the queue and an alert is only a loud line in the server log. When set, the address is also printed in the footer of every public page and in the app's menu. A production server that starts without it logs a loud warning, because the pages promise that a person answers. | none |
 | `ABUSE_EMAIL` | Where reports of suspicious documents go. | `SUPPORT_EMAIL` |
-| `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, pausing or unpausing an account, and marking an account as trusted. | nobody |
+| `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, pausing or unpausing an account, and marking an account as trusted. They are the people a help request can be taken by or handed to, and they are emailed when one is late. | nobody |
+| `SUPPORT_FIRST_REPLY_HOURS` | The published response time: a person answers a help request within this many hours of the message, counted in real hours (nights and weekends included). `/help`, the confirmation email and the request itself quote the actual time. Promised only while `SUPPORT_EMAIL` or `OPERATOR_EMAILS` is set. | `24` |
+| `SUPPORT_URGENT_REPLY_HOURS` | The same for urgent requests: cannot log in, charged wrongly, a stuck document or a near deadline. Never longer than `SUPPORT_FIRST_REPLY_HOURS`. | `8` |
 | `FREE_PLAN_CODES` | Comma-separated codes that make the monthly plan free for whoever enters one. Set it to an empty value to have none. | `GROWalition` |
 | `REFUND_DAYS` | How long after a payment its unused signatures are refunded on request, with no approval. | `30` |
 | `NEW_ACCOUNT_DAILY_RECIPIENTS` | How many people an account that has not paid can send to per day during its first week. "Has not paid" is the free plan or a plan free through a code, with no payment that was kept, and not marked as trusted in the operator queue. Everyone newly emailed counts: a first send, a person added or an address changed on an envelope that is out, a bulk row, a visitor to a public form. | `50` |
@@ -287,10 +341,11 @@ names one), audience, expiry and the nonce of this sign-in.
   "keep it" is respected); a small card dispute is accepted rather than contested (`ACCEPT_DISPUTES_UP_TO_USD`);
   someone on a free code who was paying has their paid subscription ended the moment the code is applied; signing
   in person always uses a signature; signing your own document is free only under your own name and address;
-  being asked to sign again after a change is free; a public form holds none of its owner's signatures, stops
-  taking new people once those who have started would use up what is left, and uses one when a visitor actually
-  signs (so a stranger can use them up by really signing, 20 starts an hour per address); only US dollars are
-  accepted.
+  being asked to sign again after a change is free; a public form holds none of its owner's signatures and
+  takes one at the moment a visitor finishes: if none is free then, the visitor is told politely, what they filled
+  in is kept and the owner is emailed; a form never takes a signature held for an envelope that is out and never
+  takes the balance below zero (a stranger can still use signatures up by really signing, 20 starts an hour per
+  address); only US dollars are accepted.
 - **After someone has signed**, any change to what is printed on the pages asks everyone who finished to sign
   again (the sender has to choose that; nothing changes silently). That lock covers the whole envelope, including
   a new empty field for someone who has not signed yet. It is deliberately strict; loosen it in `printedView()`
@@ -308,8 +363,11 @@ names one), audience, expiry and the nonce of this sign-in.
   to stand behind publicly.
 - **The 100% promise and the trees per dollar** are business commitments. The app records what was paid and
   displays it. Actually moving that money to tree planting is something you do, and should be able to show.
-- **A person has to answer.** Set `SUPPORT_EMAIL` and `OPERATOR_EMAILS` and decide who reads the queue. The
-  public pages promise that a person replies, and deliberately promise no response time.
+- **A person has to answer, and in time.** Set `SUPPORT_EMAIL` and `OPERATOR_EMAILS` and decide who reads the
+  queue. The public pages promise that a person replies within `SUPPORT_FIRST_REPLY_HOURS` (urgent requests within
+  `SUPPORT_URGENT_REPLY_HOURS`), in real hours, nights and weekends included. Set numbers your team can keep: a
+  missed one is said out loud to the customer, and the help page shows the real median once there are 10 answers.
+  Make sure the timer runs (`CRON_SECRET`), because it is what notices a late request.
 - **Stripe** is implemented but has only been tested against a stand-in (`tests/stripe-fake.ts`), never a live
   account. Run through it once in Stripe's test mode before taking money: subscribe, renew with a test clock,
   cancel, refund, a failed payment, a dispute, a top-up (check its invoice shows on the Plan page once, not as a

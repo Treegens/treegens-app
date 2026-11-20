@@ -1,0 +1,447 @@
+{
+ "verify2:abuse": {
+  "checks": [
+   {
+    "item": "1a. Fake-payment-notice filter: the auditors' three bypasses (brand in the sender or account name, lure in the recipient note, lure put in by a correction) and the 30 day cut-off",
+    "holds": true,
+    "evidence": "Ran the auditors' own script again as tests/out/verify2-abuse/a1-rerun.ts. A (documented lure) 422. B (user 'PayPal Billing', account 'PayPal') 422, nobody emailed. C (lure in the note) 422. D (clean send, then PUT with lure subject, message and a new address) 422, victim got nothing. H (free account 31 days old) 422. New angles in p1-filter.ts: lure in a template sent by bulk is refused whole (422, no batch written, nobody emailed); a public form named as the lure answers the visitor 503 with the neutral sentence and leaves no draft; create-and-send, quick correct and reassign all go through the same guard. Both refusals say why and give the contact form address."
+   },
+   {
+    "item": "1b. The filter must read everything a recipient will read, on every path that emails them",
+    "holds": false,
+    "evidence": "tests/out/verify2-abuse/p1-filter.ts cases 5, 6, 7, 8 (results in p1-filter.json). Four ways deliver the complete lure from a new free account.",
+    "still_broken": "(1) Rename after sending. Sign up as 'Jo Plain'. Create an envelope in order: signer 1 is your own address, signer 2 the victim; subject 'Invoice #4471', message 'Amount $499.00 was charged. To cancel call +1 (888) 555-0142 now.' (no brand, so send is 200). PATCH /me {name:'PayPal Billing'} 200, PATCH /account {name:'PayPal'} 200. Sign as signer 1. Result: the victim is emailed, heading 'PayPal Billing sent you a document to sign: Invoice #4471', brand line 'PayPal', From header '\"PayPal Billing via Sign&Grow\"', phone number in the body. advance() never asks the guard. (2) Words on the page. Send a clean envelope, then PUT a correction that adds a note field with value 'PayPal: Your payment of $499.00 was charged. To cancel call +1 (888) 555-0142 now.' Result 200, and the victim gets 'Updated: ...' whose 'What changed:' line quotes the whole note. Field wording is not read by fakeNotice. (3) Recipient name. Two viewers at one address, the first named 'PayPal: payment of $499 charged, call +1 (888) 555-0142'. Send is 200 and the email heading is 'For PayPal: payment of $499 charged, call +1 (888) 555-0142: ... sent you a document to view'. (4) Void reason. Subject 'PayPal invoice #4471 - payment of $499.00 charged' (no phone, send 200). POST /void {reason:'To cancel this charge call +1 (888) 555-0142 now.'} is 200: the email is 'Voided: PayPal invoice #4471 - payment of $499.00 charged' with the phone number in the body. voidEnvelope reads the reason alone.",
+    "suggested_fix": "Ask the guard wherever an email to a recipient is written, not only where the sender clicks: in notifyRecipient/advance (hold the email, tell the sender why). Add to what fakeNotice reads: senderText() of every field, recipient names when they are printed (shared address, in-person), and for a void the subject together with the reason. Refuse a brand name at PATCH /me, PATCH /account and sign-up for accounts that have not paid, so the name can never change under an envelope that is out."
+   },
+   {
+    "item": "1c. Normalisation: look-alike letters, spaces and punctuation inside brand names, 'however it is spelled'",
+    "holds": false,
+    "evidence": "p1-filter.ts cases 1 to 4. Spaced, dotted, Cyrillic s and capital-I spellings are caught (422). The following all returned 200 and the victim got the email with brand, money and phone number.",
+    "still_broken": "Each on a new free account, message 'Your payment of $499.00 was charged. To cancel call +1 (888) 555-0142 now.' unless said. Glued words: user name 'PayPalBilling' 200; account name 'PayPalSupport' 200; subject 'PayPalInvoice #4471' 200; 'MyPayPal invoice #4471' 200 (the pattern wants no letter before or after the brand). Money word: 'Your PayPal invoices' + 'Two invoices are overdue. Call ...' 200 (plural is not matched); 'You were billed $499.00' 200; 'purchase' and 'receipt' 200; 'PayPal inv0ice #4471' 200; 'A charge of $499.00' 200. Phone: '888\u2013555\u20130142' (en dash, what a word processor types) 200; U+2010 hyphen 200; '888/555/0142' 200; bullets 200; '888 555 O142' 200; '555-0142' 200; underscores 200. Look-alikes: 'P\u0251yP\u0251l' (Latin alpha) 200; 'PayPa\u04cf' (palochka) 200; 'M\u0131crosoft' (dotless i) 200; 'Rnicrosoft' 200; 'Micr\u0585soft' (Armenian o) 200; small capitals 200.",
+    "suggested_fix": "For brands that are not everyday words (PayPal, Microsoft, McAfee as a company word, Coinbase, Venmo, Geek Squad, Best Buy) match anywhere after removing everything that is not a letter or digit. Money: match stems (invoic, bill, charg, pay, refund, receipt, purchas, renew, subscri, transact, debit) or any currency amount, after the same look-alike folding. Phone: fold every dash, dot, slash, bullet and underscore to one separator, read O as 0 between digits, and count digits (7 or more in a short window). Fold letters with the Unicode confusables table instead of a hand list."
+   },
+   {
+    "item": "1d. The filter must not refuse honest senders (a new mistake in the fix)",
+    "holds": false,
+    "evidence": "p1-filter.ts case 9 and p10-existing.ts. Control 'Subscription agreement / Any questions, ring 555 123 4567' is 200.",
+    "still_broken": "New free account named 'Sarah McAfee', subject 'Lease agreement', message 'Please sign the lease.': send 422 'The name \"Sarah McAfee\" reads like McAfee ... Use your own name'. McAfee is a common surname and is not on the EVERYDAY list. 'Invoice for the boiler repair. Questions? Call 231-135-5550.': 422, because the digits 2 3 1 1 3 match the look-alike pattern for 'Zelle' ([z2][e3][l1|][l1|][e3]). 'Payment due on completion: $2,311.30. Our office: 020 7946 0991.': 422, same reason. 'Lease renewal' + 'Renewal for the flat at 12 Apple Street. Call me on 555 123 4567 with questions.': 422. 'Subscription agreement' + 'The Microsoft Word original is attached. Any questions, ring 555 123 4567.': 422.",
+    "suggested_fix": "A brand match must contain at least 3 letters of the brand (never digits alone). Treat McAfee like Norton (refuse only when nothing but company words stands beside it). In the lure check, count an everyday brand word (Apple, Amazon, Norton, Zelle) only when it stands beside a company word, and do not count 'Microsoft Word/Excel/Teams/365 document' style product mentions. Say in the refusal which words triggered it."
+   },
+   {
+    "item": "1 left open: accounts on the paid plan are not checked at all",
+    "holds": false,
+    "evidence": "tests/out/verify2-abuse/p2g-paid.ts. This is the definition the fixer was given, but it costs a scammer nothing: see new bug 'Pay 9 dollars, send the lure to hundreds, take the 9 dollars back'.",
+    "still_broken": "New account, minutes old. Documented lure before paying: 422. Subscribe ($9), then 12 envelopes of 50 viewers each with subject 'PayPal invoice #4471' and the phone message: all 200, 600 people emailed, 0 signatures used. POST /billing/refund: 200 {refunded:'$9.00', signatures:9, plan_ended:true}.",
+    "suggested_fix": "See the new bug."
+   },
+   {
+    "item": "2a. Daily limit counts every person newly emailed (first send, editor correction, quick correct, reassign, bulk, public forms) and unpaid accounts keep a limit after the first week; the refusal says the number, when it resets and how to lift it",
+    "holds": true,
+    "evidence": "a1-rerun.ts E: 50 sent, 51st 429, three rounds of address changes all 429, 50 distinct addresses mailed. G (8 days old, paying on): stops at 200 with the text naming the Plan page and the contact form. p2-limit.ts: quick correct to a new person at the limit 429 with number, 'in about 24 hours' and how to lift; quick correct back to someone already reached today 200; void and delete of the big envelope gives nothing back (still 429, reached 50); sender sends to self and passes on from the signing screen: 403 three times with neutral words, nobody mailed; bulk of 50 rows plus a fixed copy recipient refused whole (429, 0 batches written), 49 plus the copy 200, one more 429. p9-misc.ts C: three create-and-send calls of 30 viewers at the same moment: 200,429,429, 30 reached, no draft left. Help, security and the Plan page (settings/page.tsx line 558, billing limits) now state both numbers. Left open and acceptable only with a note: writing again to someone already reached is unlimited (60 envelopes to one address in a minute all went, p2-limit.ts E)."
+   },
+   {
+    "item": "2b. Operators: 'Trust this account' / 'Remove trust', and plan, created date and trusted state next to each report and request",
+    "holds": true,
+    "evidence": "p2-limit.ts F: a plain user calling POST /operator/accounts/:id gets 404; operator {trusted:true} 200, then the send that was 429 is 200 and the documented lure is 200; {trusted:false} 200 and the next new person is 429 again; admins are emailed both times. Queue rows carry account_name, account_plan, account_created_at, account_trusted_at (p4-reports.ts A). Looked at /app/operator at 390x844 and 1280x900: 'Account Paula's workspace \u00b7 free plan \u00b7 created Nov 20, 2026 \u00b7 not trusted \u00b7 paused' under each request and report, 'Trust this account' in all three lists. Two small faults are listed under new bugs (empty body lifts a pause; the 'Remove trust' email states the wrong number in the first week)."
+   },
+   {
+    "item": "3a. A paused account emails nobody new by any path (one guard)",
+    "holds": false,
+    "evidence": "The direct paths hold. a1-rerun.ts F: new send 403, PUT with a changed and an added person 403, quick correct 403, reminder 403, nobody mailed. p3-pause.ts B through an API key: create-and-send, quick correct, remind, extend, PUT add person all 403 with the stored reason. Bulk and bulk remind go through the same calls. Timer (p3 G): no reminder and no 'expires soon' to recipients while paused, the sender still hears; both go out after the pause is lifted. Signer, download, name-only fix and export still work.",
+    "still_broken": "(1) p3-pause.ts A. Before the pause: envelope in order, signer 1 is the sender's own address, then two viewers who have not been emailed yet. Pause the account. The sender signs their own part: 200, and both viewers are emailed for the first time ('Your account statement'). The fixer left this open; it is a way to queue victims before a pause and release them after it. (2) p3-pause.ts C. Paused account (plan grove, so no filter): PUT a correction that adds a note field with lure wording, no person changed: 200, and the person who has the document gets 'Updated: Agreement' quoting the lure. POST /void with reason 'PayPal refund department: call +1 (888) 555-0142 about your payment.': 200, emailed to everyone on it. (3) p3-pause.ts E. Paused account sends 120 team invitations to 120 addresses, all 200 (see new bug). (4) Turning a copy recipient into a signer while paused (same address) sends them a new signing request (p3 D). That one is arguably within the brief.",
+    "suggested_fix": "In advance(): when the account is paused (or the guard refuses for another reason) do not email a person who has never been emailed on this envelope; leave them pending, write an audit line, tell the sender, and run advance() for the account's open envelopes when the pause is lifted. While paused, send no 'Updated' emails and read the void reason with the filter for every account, or send the void notice without the sender's free text."
+   },
+   {
+    "item": "3b. The refusal gives the real reason the account was paused",
+    "holds": true,
+    "evidence": "p3-pause.ts B: with suspended_reason 'A card dispute on your last payment.' every 403 reads 'Sending is paused on this account. Reason: A card dispute on your last payment. Until a person has looked at it ...'. Pause by reports stores '3 different recipients reported documents from this account' (p4-reports.ts A). Browser, phone and desktop: the red banner and the toast after 'Send reminder' on a paused account both show 'Reason: Three recipients said they never heard of you.' A signer passing on gets neutral words without the sender's business."
+   },
+   {
+    "item": "3c. Public form on a paused or unconfirmed account: neutral words for the visitor, nothing left behind",
+    "holds": true,
+    "evidence": "p3-pause.ts F: GET says closed:true, POST start 503 with exactly 'This form cannot take new signatures right now. Please contact whoever gave you the link.', nothing in the answer about a review or report, no envelope and no recipient row for the visitor, and a visitor who started before the pause can still finish (200). p9-misc.ts B: same for an owner who never confirmed their address. Current code also closes the form while the account is closing. Looked at /f/<slug> for a paused owner at 390x844 and 1280x900: the closed card is shown before any field."
+   },
+   {
+    "item": "4. Reports an operator confirmed as abuse keep counting towards the automatic pause",
+    "holds": true,
+    "evidence": "a7-rerun.ts (the auditors' script): two reports marked 'This was abuse', third report: pausedNow true. p4-reports.ts A: one upheld report from the signing screen plus two by security code pauses at the third different reporter; the same person reporting twice (by code and from the screen) counts once; a dismissed report does not count (B); reports older than 30 days do not count (E); after an operator lifts the pause the next two reports do not pause and the third does. The operator page says 'Reports you mark as abuse keep counting towards that. Reports you dismiss do not.' A hole next to this item is listed as a new bug: one stranger can produce three 'different recipients' through a public form."
+   },
+   {
+    "item": "5a. GET /support/mine: only requests filed while signed in, or from an address the user has confirmed",
+    "holds": true,
+    "evidence": "p5-support.ts A, the auditors' steps: logged-out request from victim@example.com, attacker signs up with that address and does not confirm: /support/mine returns []. Same through an API key of the unconfirmed account (0). A second sign-up as ' Victim@Example.COM ' is 409. The attacker's own request written while signed in is the only one they see. A confirmed attacker with their own address sees nothing of others (B). PATCH /me cannot change the address. One limit is listed under new bugs: confirming only proves that someone clicked the link in the mailbox."
+   },
+   {
+    "item": "5b. The contact form does not mail a stranger's words to a typed address",
+    "holds": true,
+    "evidence": "p5-support.ts C: POST /public/support with email target@example.org, name 'PayPal Billing: call +1 (888) 555-0142' and a lure message. The acknowledgement holds only the reference, 'Reply to this email if you want to add anything' and 'If you did not write to us, someone typed your address into our help form by mistake'; neither the name nor the message is in the HTML or the plain text. A signed-in confirmed sender typing someone else's address gets no copy sent there (B). Confirmed sender, own address (also in other capitals): copy included. Signed in but unconfirmed: no copy. The sender of a named envelope is told once a day without the stranger's words (E). Left open and acceptable with a note: the fixed acknowledgement can still be sent to any address, 8 an hour per caller and with no cap per target (39 arrived in one inbox from 31 callers). A cap per typed address per day would close it."
+   },
+   {
+    "item": "6a. Access codes: only wrong tries count, a stranger cannot lock the signer out for good, frozen after 10, at least 4 characters everywhere",
+    "holds": true,
+    "evidence": "p6-codes.ts. A: five wrong tries from one address give 401 then 429 'Wait 15 minutes' for that address only; the right code from another address opens the document; 100 right tries leave the count unchanged. B: ten wrong tries from three addresses: the tenth answers 423, code_frozen_at set, the right code is then 423 with 'frozen ... has been told and can set a new code', a signer who was already in stays in, the sender gets 'Access code frozen' (always) and 'Ask the sender' works twice a day. A new code by quick correct or by PUT unfreezes and resets the count; the old code is then wrong. C: 20 wrong tries at the same moment from 20 addresses: exactly 10 counted, 9 x 401 and 11 x 423, one freeze email. D: codes of 1, 3, '  ab  ' and the number 123 are refused (400 with the sentence) on create-and-send, send of a draft, PUT correction, quick correct, bulk (row error) and public form (503 neutral, owner told). E: a locked link shows only brand, envelope head and recipient; doc, save, complete, download, reassign, decline, name, ask all 401; a forged cookie stays locked. Screens at 390x844 and 1280x900: wrong code message, frozen screen with 'Ask the sender', the answer 'Done. We asked Nora Sender.', the envelope page and the Correct dialog both say the code is frozen. Left open notes are acceptable: a draft may hold a short code (refused at send), an old short code stays until changed, the per-address count is in memory. One small fault is under new bugs (saving the same code on a frozen code is answered ok)."
+   },
+   {
+    "item": "6b. Signing limit per link and address, with a generous ceiling per address",
+    "holds": true,
+    "evidence": "p6-codes.ts F: one link opened 640 times from one address: the first refusal is call 601. A colleague at the same address with another link: 200. The same link from another address: 200. Ceiling 20,000 per address per 10 minutes in find()."
+   },
+   {
+    "item": "7a. A public form never hands a visitor someone else's unfinished document",
+    "holds": true,
+    "evidence": "p7-forms.ts A, the auditors' P1 again: Vera starts, consents and saves a private answer. A stranger in another browser types 'Not Vera' with VERA@example.com: fresh document, not her link. The stranger types her exact name and address: fresh document, does not see her answer, consent not given. A forged cookie with her envelope id and a wrong seal: fresh document. Vera in the same browser: resumed with the same link (also with other capitals). B: a cookie from one form does not resume on another form of the same owner; after finishing, the same browser gets a fresh document; a second person in the same browser at the same address gets their own. Cookie is 'HttpOnly; SameSite=Lax; Path=/; Max-Age=86400'."
+   },
+   {
+    "item": "7b. Unfinished starts are cleared after a quiet day and one address may have at most 3 per form, so a stranger cannot tie up the owner through a form",
+    "holds": false,
+    "evidence": "What works: p7-forms.ts D: a start left alone for 25 hours is set to expired by cronTick with the audit line 'Started from a public form and left unfinished for 24 hours', the same browser then starts afresh; since commit 192f0d2 typing counts as activity (a start saved a minute ago is not cleared and can be finished). C: fourth and fifth start from one address 429 with a clear message, another address and another form are not affected, room again after one finishes, nothing kept of the refused visitor. Forms marked 'shared device' allow 30 and clear after 60 minutes. Since the last payment change a form start holds no signature (balance stays 3/0/3).",
+    "still_broken": "tests/out/verify2-abuse/p7b-forms-billing.ts with paying switched on. A: new account with 3 signatures and one form. One stranger at one address starts the form three times with made-up emails and leaves. A real visitor from another address then gets 503 'This form cannot take new signatures right now. Please try again a little later ...' and keeps getting it until the timer clears the starts a day later. The owner's balance is still 3 available, yet the owner is emailed 'Your form \"Gym waiver\" has run out of signatures ... your balance is empty ... Top up or start the monthly plan and the form works again at once.' C: a form marked shared device on an account with 20 signatures: 20 starts from one address in an hour (the per address rate limit) shut it for everyone for an hour. With TRUSTED_PROXY_HOPS=0 the cap of 3 is skipped altogether and only the 20 an hour limit remains.",
+    "suggested_fix": "Do not count other people's unfinished starts against a new visitor at start time (nothing is held any more); check the balance when the visitor presses Finish and tell them politely if it is empty. If the count is kept, count only starts whose visitor has consented or typed something, cap it per address across the whole count, and make the owner email say the truth ('N people have started and not finished; your balance is M')."
+   },
+   {
+    "item": "8. 'Report this email' in every signing email, and reporting by security code on /check without opening the link",
+    "holds": true,
+    "evidence": "mail.ts adds the line to the HTML box and the plain text of every email that carries a code (new, reminder, updated, reopened, expiring, resent, again, completed); the link is /check?code=XXXX-XXXX-XXXX&report=1 (p4-reports.ts A). POST /public/check/report: 200 with the code typed in lower case with spaces; the recipient stays 'sent' with viewed_at null (the document is not opened or marked); one audit line 'Reported as suspicious'; the abuse inbox gets it; it counts towards the pause exactly like a report from the signing screen. The code of an email whose link was replaced reports under the address that email went to (C). Unknown, empty and missing code: 404 with a sentence; 10 an hour per address, shared with the signing-screen report (B). Browser at 390x844 and 1280x900: the link opens the check page with the code looked up and the report form open ('What is wrong?', optional text, 'Send report'); after sending: 'Thank you. Your report is in. ...'; an unknown code shows 'We do not recognise this code' with 'Tell us about this email'. No horizontal scroll, no page errors. Left open (no acknowledgement email to the reporter) is fine: the page confirms it. A hole next to this item is under new bugs: once the sender voids and deletes the envelope, its emails can no longer be reported by code."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Team invitations carry any text to any address: no filter, no daily limit, no pause, no confirmed address needed",
+    "severity": "high",
+    "where": "src/server/routes-account.ts POST /account/invites",
+    "detail": "Steps (tests/out/verify2-abuse/p9-misc.ts A and p3-pause.ts E): sign up as 'PayPal Billing' and never confirm the address. PATCH /account {name:'PayPal: payment of $499.00 charged. Not you? Call +1 (888) 555-0142'} is 200. POST /account/invites {email} 60 times to 60 addresses: all 200. Each person gets an email from Sign&Grow with subject 'PayPal Billing invited you to PayPal: payment of $499.00 charged. Not you? Call +1 (888) 555-0142 on Sign&Grow' and heading 'Join PayPal: payment of $499.00 charged. ...'. The same account is refused when it tries to send an envelope (403, address not confirmed). A paused account sent 120 in a row the same way. Fix: require a confirmed address, refuse while paused, run the brand and lure check over the user and account name, count invited addresses in the `reached` table against the same daily limit, and add a small limit of open invitations per account."
+   },
+   {
+    "title": "One stranger can pause any sender who has a public form: three made-up addresses, three reports",
+    "severity": "high",
+    "where": "src/server/envelopes.ts reportAbuse(); src/server/routes-envelopes.ts POST /public/powerforms/:slug/start",
+    "detail": "Steps (p4-reports.ts D, run again on the current tree): an honest account has a public form. A stranger at one address, no account: POST start with name 'Nobody 1' and nobody1@made-up.example, take the signing link from the answer, POST /sign/<token>/report {reason:'phishing'}. Repeat with two more made-up addresses. After the third report the owner's account is paused with reason '3 different recipients reported documents from this account': the owner's own send is 403, the form answers real guests 503. After an operator lifts the pause the stranger does it again with three new addresses and it is paused again. The three unfinished starts allowed per address are exactly the three reporters needed. Fix: a report from a visitor of a public form (envelopes.powerform_id set and the reporter is form_recipient_id) goes to the operator queue but does not count towards the automatic pause, or counts only once the address is proven (the visitor opened the link from the email). Also count reporters per device address."
+   },
+   {
+    "title": "Pay 9 dollars, send the documented lure to hundreds of people, take the 9 dollars back",
+    "severity": "high",
+    "where": "src/server/envelopes.ts hasNotPaid() and emailRefusal(); refund rule in src/server/routes-billing.ts",
+    "detail": "Steps (p2g-paid.ts): new account. The documented lure is refused (422). Start the monthly plan ($9). In the next minutes send 12 envelopes of 50 viewers each with subject 'PayPal invoice #4471' and 'Your payment of $499.00 was charged. To cancel call +1 (888) 555-0142 now.': all 200, 600 people emailed, because a paid account skips the filter and both daily limits. Viewers use no signature, so all 9 signatures are unused: POST /billing/refund answers 200 {refunded:'$9.00', signatures:9, plan_ended:true}. Net cost nothing. The same works with a stolen card until the dispute arrives. Fix: keep the fake-notice and brand-name check for every account that a person has not marked trusted, whatever it paid; give paid accounts a higher daily limit in their first 30 days instead of none; and let a full refund of the only payment count the people reached since then against the unpaid limit (or hold the refund for review when more than the unpaid limit was reached)."
+   },
+   {
+    "title": "A stranger can use up an unpaid owner's daily limit through their public form",
+    "severity": "medium",
+    "where": "src/server/routes-envelopes.ts POST /public/powerforms/:slug/start; overDailyLimit() in src/server/envelopes.ts",
+    "detail": "Steps (p2-limit.ts C): a free account in its first week (50 a day) has a public form. One stranger at one address starts the form with fake0@nowhere.example, declines from the signing link, and repeats: 20 starts in an hour are all 200 (declining frees the cap of 3), the owner's count of people reached goes to 20 and the owner gets 20 'Declined' emails. With a few more addresses the count reaches 50. Then the owner's own send to a real customer is 429 'This account has sent to 50 in the last 24 hours' and a real guest on the form gets 503. Fix: count form visitors in their own allowance per form (and say so on the PowerForms page), not in the owner's limit for people the owner chose; or count a form visitor only when they finish."
+   },
+   {
+    "title": "Three walked-away starts shut a new owner's public form for a day, and the owner is told the balance is empty when it is not",
+    "severity": "medium",
+    "where": "src/server/routes-envelopes.ts POST /public/powerforms/:slug/start (available - startedForms < 1)",
+    "detail": "Steps and result are in check 7b (p7b-forms-billing.ts A). The email to the owner says 'your balance is empty' and 'Top up or start the monthly plan and the form works again at once' while GET /billing shows balance 3, held 0, available 3. Paying for one signature would not reopen it either while three ghost starts are counted. Fix as in check 7b."
+   },
+   {
+    "title": "A public form plus the owner's own sends use more signatures than the account has",
+    "severity": "medium",
+    "where": "src/server/credits.ts reserved() leaves form starts out; sendEnvelope() checks available() only",
+    "detail": "Steps (p7b-forms-billing.ts B, paying on, new account with 3 signatures): three guests start the form (200, 200, 200; nothing held). The owner sends three envelopes to three clients: all 200, balance 3, held 3, available 0. The three guests sign: 200 each, balance 0, held 3, available -3. The three clients sign: 200 each. Final: balance -3, six signatures used with three owned. The comment in routes-envelopes.ts says 'a form can never collect more signatures than its owner has'. Fix: at Finish on a form, check available() and tell the visitor politely when it is 0 (and email the owner), or let sendEnvelope subtract unfinished form starts the way the form start does."
+   },
+   {
+    "title": "Voiding and deleting an envelope makes its emails unreportable and hides earlier reports from the operator",
+    "severity": "medium",
+    "where": "src/server/routes-trust.ts POST /public/check/report and GET /operator/queue (JOIN envelopes)",
+    "detail": "Steps (p9-misc.ts D and E): send an envelope, void it, DELETE it. The recipient who still has the email clicks 'Report this email': 404 'the document it was about has been deleted since ... we cannot file a report against it here', and no report is stored, so it never counts towards a pause. Second case: two recipients report two envelopes; the sender voids and deletes both; a third recipient reports a third envelope. The account is paused (3 reporters, good) but GET /operator/queue shows 1 report instead of 3, because the query joins envelopes. A sender can send, void and delete at once and never be paused by reports. Fix: keep the account id with each forgotten code so a report by code still counts against the account (with reporter unknown), and LEFT JOIN envelopes in the queue so reports on deleted envelopes stay visible with account, reporter and reason."
+   },
+   {
+    "title": "Confirming an address proves a click, not who holds the password",
+    "severity": "medium",
+    "where": "src/server/routes-account.ts POST /auth/verify; relied on by GET /support/mine and the inbox",
+    "detail": "Steps (p5-support.ts A, last lines): the attacker signs up with victim@example.com and sets a password. The victim gets 'Confirm your email for Sign&Grow'. If the victim opens the link (POST /auth/verify with the token, no session needed), the attacker's login is confirmed: GET /support/mine in the attacker's session then returns the victim's earlier request as well (2 instead of 1), and the same login passes every other 'confirmed address' check. It needs the victim's click, so medium. Fix: the confirmation page says 'Someone created a Sign&Grow login with this address. If that was not you, press Not me' (which deletes the login), and a confirmation made from a browser that is not signed in to that login asks for its password or sends a set-password link."
+   },
+   {
+    "title": "Saving the same code on a frozen access code answers ok and changes nothing",
+    "severity": "low",
+    "where": "src/server/envelopes.ts correctRecipient(); src/components/sender/dialogs.tsx",
+    "detail": "Steps (p6-codes.ts B): code 4242 is frozen after 10 wrong tries. The sender calls POST /envelopes/:id/correct {recipient_id, access_code:'4242'}: 200 {ok:true}; in the app the toast is 'Updated. Their link still works.' The code is still frozen and the signer still gets 423. The dialog does show a warning to type a different code, the API says nothing. Fix: answer 400 'This code is frozen. Choose a different one.' when the code is frozen and unchanged."
+   },
+   {
+    "title": "POST /operator/accounts/:id with an empty body lifts a pause",
+    "severity": "low",
+    "where": "src/server/routes-trust.ts POST /operator/accounts/:id",
+    "detail": "Steps (p2-limit.ts F): pause an account with {paused:true, reason:'Looks like phishing'}. POST the same route with {}: 200, suspended_at is cleared, unpaused_at is set, every open report is dismissed and the owner is emailed 'Sending is back on for your Sign&Grow account'. Fix: require 'paused' or 'trusted' to be present as a boolean and answer 400 otherwise."
+   },
+   {
+    "title": "While paused, plain 'Give more time' is refused although it emails nobody",
+    "severity": "low",
+    "where": "src/server/envelopes.ts extendEnvelope()",
+    "detail": "Steps (p3-pause.ts B): paused account, envelope out, POST /envelopes/:id/extend {days:5}: 403. Extending (not reopening) sends no email; the timer already holds 'expires soon' warnings while paused. During a review that takes days, documents run past their deadline and the people who 'can still sign' no longer can. The fixer noted this as read literally. Fix: allow an extension of an envelope that is still open while paused; keep refusing reopening."
+   }
+  ],
+  "regressions": [
+   "Honest free accounts that existed before the fix lose reminders without a word. Steps (tests/out/verify2-abuse/p10-existing.ts): an account two years old on the free plan, user name 'Sarah McAfee', has an envelope out with reminders every day (sent before the rule; stood in for by sending while trusted and then clearing trusted_at). cronTick: reminded 0, the recipient gets nothing, the sender gets no email and the audit trail has no line saying why. POST /remind: 422 'The name \"Sarah McAfee\" reads like McAfee ...'. POST /extend: 422. The same for an account whose envelope says 'Lease renewal ... 12 Apple Street. Call me on 555 123 4567'. Before the fix the filter ran only at first send, only on subject and message, and only in the first 30 days. Suggested fix: fix the false matches (check 1d), and when the timer holds a reminder for this reason tell the sender once and write an audit line.",
+   "No other regression found: the auditors' scripts and my probes found nothing that worked before and fails now, tests/trust.test.ts 'public forms do not multiply envelopes' was changed on purpose (same browser), and the whole suite passes."
+  ],
+  "overclaims": [
+   {
+    "where": "README.md line 40, the row for tests/abuse.test.ts",
+    "claim": "'the filter for fake payment notices on every path and in every spelling'",
+    "reality": "Glued words (PayPalBilling), plural money words (invoices), an en dash in the phone number, Latin alpha or palochka in the brand, the void reason, a note field quoted in the 'Updated' email, recipient names and the next person in a signing order all get the lure through (p1-filter.json)."
+   },
+   {
+    "where": "src/app/security/page.tsx #scams lead, and the fixer's report 'It runs through one guard ... every path where a sender causes an email'",
+    "claim": "'These checks run whenever a sender causes an email to someone'",
+    "reality": "Not when the next person in a signing order is emailed (advance), not for the void notice as a whole, not for 'Updated' wording from fields, and not for team invitations."
+   },
+   {
+    "where": "pausedText() in src/server/envelopes.ts, the app banner, the pause emails, src/app/help/page.tsx lines 72 and 196, src/app/security/page.tsx line 64",
+    "claim": "'Until a person has looked at it, nothing new goes out: no new envelopes, no new or changed recipients ...' and 'everything it sends stops'",
+    "reality": "During a pause people who were never emailed still get their first email when someone before them in the order signs; 'Updated' and 'Voided' emails with new sender-written text still go out; invitations still go out (p3-pause.json A, C, E)."
+   },
+   {
+    "where": "fix:abuse report, item 1 left_open",
+    "claim": "'PATCH /me and PATCH /account still accept a brand name and the refusal comes at the next send'",
+    "reality": "No refusal comes for an envelope in order that is already out: the next signer is emailed under the new name 'PayPal Billing' (p1-filter.json case 7). Only a manual reminder is refused."
+   },
+   {
+    "where": "src/server/routes-envelopes.ts, email 'Your form \"...\" has run out of signatures'",
+    "claim": "'your balance is empty ... Top up or start the monthly plan and the form works again at once'",
+    "reality": "Sent when the balance is 3 and three unfinished starts are counted against it; one more signature would not reopen the form (p7b-forms-billing.ts A)."
+   },
+   {
+    "where": "src/server/routes-envelopes.ts comment above the start check, and src/server/credits.ts comment on reserved()",
+    "claim": "'a form can never collect more signatures than its owner has'",
+    "reality": "Six signatures were used on an account that owned three; the balance ended at -3 (p7b-forms-billing.ts B)."
+   },
+   {
+    "where": "src/server/routes-trust.ts, email 'The sending limits apply to your Sign&Grow account again'",
+    "claim": "'it can send to at most 200 people a day'",
+    "reality": "For an account in its first week the limit that applies is 50: the very next refusal says 'can send to 50 people a day' (p2-limit.json F)."
+   },
+   {
+    "where": "src/server/routes-sign.ts unlock, 429 text",
+    "claim": "'That was 5 wrong codes in a row from this device'",
+    "reality": "They need not be in a row (a right code in between does not reset the count) and 'device' is the internet address: a second phone on the same wifi waits too. Small wording point."
+   }
+  ],
+  "screens": [
+   "Looked at with Playwright on my own dev server (port 3462), each at 390x844 and 1280x900; script tests/out/verify2-abuse/ui1.cjs, pictures in tests/out/verify2-abuse/shots/, text in ui1.json. No horizontal scroll, no element past the right edge, no page error and no control under 32px on the phone on any of them: /check opened from 'Report this email' (code looked up, report form open), /check after sending a report, /check with an unknown code, /check with a typed code, the locked signing screen after a wrong code, the frozen-code screen before and after 'Ask the sender', a public form (open, closed for a paused owner, fourth start from one address), /app/operator, the paused sender's home and envelope page, the envelope page and the Correct dialog with a frozen code.",
+   "Paused sender, envelope page, both sizes: 'Send reminder', 'Give more time' and 'Edit envelope' still look available; pressing 'Send reminder' shows the full paused message with the reason as a red toast. It works, but nothing on the buttons says they are off, and the toast prints the help address as plain text (http://localhost:3462/help), not a link.",
+   "Correct dialog with a frozen code, both sizes: the warning 'This code is frozen ... Type a different code here' is shown, but Save with the same code is accepted and toasts 'Updated. Their link still works.' (see new bug).",
+   "Public form, fourth start from one address, both sizes: the message is readable and now ends 'If many people fill this form in at the same place, ask whoever gave you the link to mark it as used on a shared device.' It also says 'the link is in the email we sent each time', which is not true on a server with no mail server (dev only)."
+  ],
+  "suite": "npx tsc --noEmit -p . : exit 0, no errors. npm test: 181 tests, 181 pass, 0 fail (log in /home/user/treegens-app/sign-and-grow/tests/out/verify2-abuse/npm-test-1.log). Both were run near the end, while another engineer had uncommitted work in progress in src/server/auth.ts, router.ts, routes-account.ts, routes-trust.ts, db.ts and new files (sign-in, support); nothing of theirs failed. Two commits landed while I worked (fe3074f, 192f0d2: shared-device public forms, typing counts as activity on a form, /check knows deleted documents); I ran the affected probes (forms, reports, invitations, deleted documents) again on the current tree and the results above are from those runs. I changed no source file and no existing test. Probes are in /home/user/treegens-app/sign-and-grow/tests/out/verify2-abuse/ (lib.ts, a1-rerun.ts, a7-rerun.ts, p1-filter.ts, p2-limit.ts, p2g-paid.ts, p3-pause.ts, p4-reports.ts, p5-support.ts, p6-codes.ts, p7-forms.ts, p7b-forms-billing.ts, p9-misc.ts, p10-existing.ts, ui1.cjs, with their .json results). My dev server is stopped, .next-verify2-abuse and its data folder are deleted, and I took my two lines out of tsconfig.json again; the two '.next-verify2-integrity' lines still in it belong to another checker and I left them."
+ },
+ "verify2:integrity": {
+  "checks": [
+   {
+    "item": "1a. Every signer sees the sender's field wording (read-only values, notes, values a signer may still change) from the first look, in the Document view and the Text view",
+    "holds": true,
+    "evidence": "tests/out/verify2-integrity/p1-seen.ts A, B, F and ui3-screens.cjs. Re-ran the auditor's a8: Ada's GET /sign/:token now lists Ben's read-only sentence (from 'sender'), his changeable start value (from 'start'), a read-only dropdown value and a ticked read-only box with its label. Also true when Ben is second in an ordered envelope and still waiting (B). When Ben saves a private draft over the start value, Ada still gets the sender's words, and Ada's own download before completion prints the sender's words and not Ben's draft (F). In the browser at 1280x900 and 390x844 both views show all four pieces with who wrote them ('Written by Demo Sender, in the part for Ben Partner', 'Filled in by Demo Sender for Ben Partner, who can still change it'), no sideways scroll. Left open by the fixer and acceptable before launch: envelopes already out before the prefill column show a changeable start value only once its owner finishes; empty fields of others are not drawn; the sender's own 'document so far' download prints unfinished signers' drafts."
+   },
+   {
+    "item": "1b. Nothing the sender wrote is printed on the final PDF that a signer was never shown",
+    "holds": false,
+    "evidence": "p1-seen.ts C. The fix covers field values only. A recipient's name (and address) is also sender-written text, and it is printed through a full_name or email field. For a person who has not finished, GET /sign/:token shows nothing for such a field (fieldDisplayValue returns '' until completed).",
+    "still_broken": "Ordered envelope: Ada (1), Ben (2), copy recipient (3) named 'Ada also owes a fee of 5000 dollars', with a full_name field for the copy recipient on page 1. PUT 200, send 200. Ada's and Ben's signing data never contain the sentence (C_ada_sees_name_before_signing false, C_ben_sees_name_before_signing false). Both sign, the copy goes out, the envelope completes, and the document pages of the final PDF carry 'Ada also owes a fee of 5000 dollars' (C_final_pdf_pages_have_sentence true). No accomplice is needed: a copy recipient finishes by itself.",
+    "suggested_fix": "In GET /sign/:token show full_name and email fields of every other recipient from the first look with the name and address the sender typed (from 'sender' until that person finishes), and do the same in the viewer copy in pdf.ts. Treat a recipient's name and address as sender wording wherever that recipient has a full_name or email field (senderText, printedView, seenView, askView)."
+   },
+   {
+    "item": "2a. A correction that touches signed content is refused with 409 unless it carries \"resign\": true, and the sign-again flow does what was asked",
+    "holds": true,
+    "evidence": "p2-lock.ts A and C, p9-credits.ts, ui3-screens.cjs. Re-ran the auditor's a4: read-only sentence for Ben after Ada signed is 409, code 'sign_again', with the sentence quoted and 'Nothing was saved'. Also 409: moving Ada's signature, a note, ticking Ben's empty box, the date format, swapping the file, adding a document, an empty new field for Ben, resign given as the string 'true' or as 1. Allowed without it: renaming Ben, renaming a document, the subject. With resign true: Ada goes back to 'sent' on the same link, gets 'Changed after you finished: ...' quoting what changed, her signature marks are cleared and her typed answer kept, a Finish without a signature image is refused, earlier_signatures keeps the first signature and answers, the audit trail has 'Envelope corrected', 'Asked to sign again' (first time, address, answers, SHA-256 of the signature image) and 'Signed again', the hash chain is intact, and the certificate prints 'First completed' and 'Completed again'. Same result on an envelope from a public form, on a bulk row through an API key, and for an in-person signer. Another account gets 404. Deleting the envelope removes the earlier_signatures rows. Left open and acceptable: the lock is envelope-wide (stated in the README), consent is not asked again, no visual comparison."
+   },
+   {
+    "item": "2b. Once someone has finished, nothing printed on the pages they signed changes without their being asked again",
+    "holds": false,
+    "evidence": "p2-lock.ts B and p1-seen.ts D, E. Two routes still change a signed page with a plain 200 and no question to the signer.",
+    "still_broken": "Route 1 (p2-lock.ts B): the sender ticks a changeable box 'I waive all rights' and prefills a changeable line 'Non-compete for 10 years applies' for Ada. Ada unticks the box, empties the line and signs: both fields are empty and the PDF does not carry the line. The sender then PUTs the envelope with the original values (an editor opened before Ada signed sends exactly this): 200, no code, Ada stays 'completed', both fields hold '1' and the sentence again, the PDF prints the sentence, and no 'Envelope corrected' line is written at all. Cause: writeContent only keeps a signer's value when old.value is not null, so an answer of 'empty' is not seen as an answer, and printedView compares prefill only. Route 2 (p1-seen.ts D and E): a full_name field of a copy recipient or of unfinished Ben sits above Ada's signature. After Ada signed, PUT with the copy recipient renamed to 'The price is changed to 1 dollar' is 200 without resign, and POST /envelopes/:id/correct renaming Ben to 'Ada pays a penalty of 9000 dollars' is 200. Ada stays 'completed' and is told nothing, and the final PDF pages carry the sentence.",
+    "suggested_fix": "In writeContent never write to a field whose owner has finished (keep old.value and old.prefill for doneIds), and record that a signer touched a field (store '' instead of NULL, or an answered flag) so an emptied field counts as answered. Put the values of finished people's fields, and the names and addresses printed by full_name and email fields, into printedView. Make correctRecipient apply the same rule (refuse, or a resign choice) when the renamed person has a full_name or email field and someone has finished."
+   },
+   {
+    "item": "2c. Signing again never uses or holds a second signature",
+    "holds": true,
+    "evidence": "p9-credits.ts with credits on. Signer asked again: balance and held unchanged before and after, one ledger line. Public form visitor asked again: '2 left, 0 held' throughout, one line. Bulk row through an API key: unchanged. In-person signer asked again: '2 left, 1 held' before and after (the hold is for the other signer), one line, so the fixer's note that an in-person signer is held again is no longer true after the later payment change. Replacing a finished signer with a different person (resign) holds one and uses one when the new person signs (ledger: ada, zed), and is refused with 402 when none is available, which matches the stated rule. One wrong refusal found, see new bug 'A name fix for someone asked to sign again is refused for want of signatures'."
+   },
+   {
+    "item": "2d. The editor turns the 409 into a plain question",
+    "holds": true,
+    "evidence": "ui3-screens.cjs at 1280x900 and 390x844. Step 1 says 'Ada Sponsor already finished. If you add, replace, remove or reorder a document, they have to sign again. You are asked before anything is saved.' After 'Replace file' and 'Save changes' the dialog reads 'Ada Sponsor already signed. Saving this means Ada Sponsor has to sign again. They get an email that says what changed. What they signed the first time stays on record, and it is not counted as another signature. Go back / Ask Ada Sponsor to sign again'. 'Go back' leaves Ada completed, 'Ask Ada Sponsor to sign again' saves and Ada becomes 'sent'. Ada's page then shows the banner 'Demo Sender changed this document after you signed it on ...'. The dialog fits both sizes. The banner and the envelope page do not fit a phone: see screens."
+   },
+   {
+    "item": "3a. The server refuses a save or a Finish from an older content version",
+    "holds": true,
+    "evidence": "p3-version.ts A, B, C, E, F. Re-ran the auditor's c3 (file swapped and field moved while Ada had the page): Finish with the old version 409 code 'changed', Finish with no version 409, save with the old version 409, save with none 409. Consent from a stale page answers the new version but does not move seen_version, and a Finish afterwards is still 409. An approver and a viewer with a stale page are refused too and get 'Updated: ...'. Six runs of a correction and a Finish in the same moment: always exactly one wins, never a completed signer together with the new note. Left open and acceptable: a caller that sends no version is held to the last one the server gave that link, so a second tab or a preview that loads the link lets a version-less Finish through (C); a caller that never loaded the document at all can finish (G). The real page always sends its version."
+   },
+   {
+    "item": "3b. After the refusal the signing page shows the changed document before the person can finish",
+    "holds": false,
+    "evidence": "ui1-swap.cjs and ui2-swap-finish.cjs, screenshots ui1-desktop-2-banner.png, ui1-phone-2-banner.png, ui2-2-review.png. The page reloads the data but not the PDF.",
+    "still_broken": "Signer opens the link, agrees, sees 'ORIGINAL CONTRACT, The price is 100 dollars'. The sender replaces the file of the same document ('Replace file' in the editor keeps the document id; here PUT with a new file_id) with 'SWAPPED CONTRACT, The price is 999999 dollars': 200. The signer adopts a signature; autosave gets 409 and the banner 'Demo Sender changed this document while you had it open ... Look at the document again before you finish' appears. The page under the banner still shows ORIGINAL CONTRACT at both 1280x900 and 390x844, and no request to /api/sign/:token/doc/... is made after the swap (0 fetches). The signer clicks 'I have looked', Finish, 'Finish and send': 'All done', envelope completed, signed file is the swapped one, 0 PDF fetches between swap and finish. Cause: PdfDoc and the Text view load by URL, the URL is /doc/<document id>, and load() changes neither the URL nor the key. Switching to Text view and back happens to fetch the new file, which is how I noticed the difference.",
+    "suggested_fix": "Return the file fingerprint (or the content version) per document from GET /sign/:token and put it in the PdfDoc and DocText url and key, for example /doc/<id>?v=<version>, so a new version remounts and fetches again. Keep Finish disabled until the new pages have rendered."
+   },
+   {
+    "item": "4. The audit trail says what a correction changed, in words, and it shows on the certificate",
+    "holds": true,
+    "evidence": "p4-audit-inherit.ts 4A, 4B and p2-lock.ts. One correction with an address swap, a role change, an order change, a person added, a person removed, a replaced file, a field added, moved and removed, and a note gives one line naming each: 'Ada Signer <ada@example.com> was replaced by Ada Signer <ada.new@example.com>: the email address changed from ... to ...', 'role changed from signer to approver, place in the signing order changed from 2 to 1', 'The file of document \"Agreement\" was replaced. Before: 2 pages, SHA-256 ab77... Now: 3 pages, SHA-256 e5b6...', 'Fields for Ada Signer: added initials on page 2; moved or resized signature on page 1 to page 3', and the note quoted in full. The same body sent again writes no second line. Quick Correct writes old and new address and that the old link stopped and answers were cleared. The lines are in the certificate text and the chain verifies. Gaps: a change that is not seen at all leaves no line (the restored answers in 2b), the hand-over line does not say the first person's answers were cleared, and the fingerprints break the phone layout (see screens)."
+   },
+   {
+    "item": "5a. A replacement at a different address inherits nothing (hand-over, quick Correct, editor)",
+    "holds": true,
+    "evidence": "p4-audit-inherit.ts 5A, 5C. Jon saves a typed line, a tick, a dropdown choice, a changed start value, an uploaded file, a signature and initials, then assigns to Mary at another address: Mary's view has no signature or initials image, every field is empty except the sender's start value and the read-only line, and consent is hers to give. Quick Correct to another address and the editor path give the same. A name fix at the same address, and a change of capital letters only in the address, keep everything and the link. The uploaded file stays stored until the loose-upload cleanup removes it, which is fine."
+   },
+   {
+    "item": "5b. Hand-over to another person who shares the address",
+    "holds": false,
+    "evidence": "p4-audit-inherit.ts 5B. reassignRecipient only clears answers when the address differs.",
+    "still_broken": "Jon Family <family@example.com> types 'Jon private answer', saves a signature, then uses 'Assign to someone else' with name 'Mary Family' and the same address family@example.com: 200. The new link for Mary Family comes with signature_png set, the signature field marked signed and the text field holding 'Jon private answer'. A hand-over is by definition to another person, and two people at one address is a case the product handles elsewhere.",
+    "suggested_fix": "Call clearAnswers on every reassignment, whatever the address. A signer who only wants another spelling has 'Fix my name'."
+   },
+   {
+    "item": "6a. A save from an older copy made in the editor or with edit_version is refused with who saved and when",
+    "holds": true,
+    "evidence": "p6-stale-check.ts 6A and ui3-screens.cjs. The auditor's P11: the first save adds 5 fields, the older copy's save is 409 code 'stale', 'Ann Admin saved this template on 2026-11-20 16:24:28 UTC, after you opened it. Your changes were not saved, so nothing of theirs is lost...', and the 6 fields are still there. Two saves from the same copy at the same moment: 200 and 409. A missing or null edit_version is not checked, as documented; '', '0', 'abc', -1, 999 are refused, which is the safe side. In the browser at both sizes the dialog 'Demo Sender saved a newer version' offers Go back, Keep mine as a copy, Load their version; 'Keep mine as a copy' made 'Stale draft (my copy)' holding my change and 'Load their version' loaded the stored one. Left open and acceptable: no copy offered for an envelope that is out."
+   },
+   {
+    "item": "6b. Work done on an envelope outside the editor is also protected from a stale editor save",
+    "holds": false,
+    "evidence": "p6-stale-check.ts 6B, 6C. Quick Correct, a signer's hand-over and sending do not raise edit_version (and not updated_at), so the editor's copy still counts as current. By reading the code, 'Fix my name' is the same.",
+    "still_broken": "The sender opens the editor on an envelope that is out (edit_version 1). A colleague quick-corrects Ben's address to ben.right@example.com, and Ada hands over to Mary Deputy <mary@example.com>. edit_version is still 1. The editor saves a changed message with its old copy and edit_version 1: 200. Recipients are back to Ada Signer <ada@example.com> and Ben Signer <ben@example.com>, Mary is off the envelope and her link answers 410, and nobody was asked. Also: a draft is sent from one tab; a second tab with an older copy of the draft and another address for Ben saves with its edit_version: 200, and the live envelope now goes to someone.else@example.com.",
+    "suggested_fix": "Raise edit_version (with edited_by and edited_at) in correctRecipient, reassignRecipient, renameSelf and sendEnvelope, so the editor is told 'Ada Signer handed this to Mary Deputy at ...' and offered to load the current state."
+   },
+   {
+    "item": "7. /check recognises the code of a replaced link as genuine and says what to do",
+    "holds": true,
+    "evidence": "p6-stale-check.ts 7, p7b.ts, ui4-check.cjs, ui5-more.cjs. Old code after quick Correct: genuine true, replaced true, why 'address', no link. After hand-over: why 'handed'. After a role change in the editor: 'role'. After removal: 'removed'. Typed in small letters with spaces: same. Reporting with an old code: 200. After the envelope is voided the old code is still genuine and replaced. The fixer's left-open case is closed in the code as it is now: after the envelope is deleted both the old and the live code answer genuine true, deleted true (forgotten_codes), and an existing database gets that table on restart (seen on my dev server). The card at 1280x900 and 390x844: 'This email was real, but its link has been replaced ... It is not a fake ... What to do ...', no sideways scroll. An unknown code says 'treat the email as fake' and explains which codes stay on record. Harmless oddity: the unused code of a person who was still waiting when their address changed is also answered as genuine (B7), but no email ever carried it."
+   },
+   {
+    "item": "8. A changed signing order takes the turn back and is enforced",
+    "holds": true,
+    "evidence": "p8-order-api-alert.ts 8A, 8B, 8D and ui5-more.cjs. The auditor's c4: Ada (had it, consented, typed an answer) is moved behind Ben. Ada becomes 'pending', gets 'Not your turn yet: ...', her Finish is 400 'It is not your turn to sign yet.', her document is 403, Ben is invited. After Ben signs Ada is invited on the same link with her answer still there and finishes. Turning order on for an envelope that was everyone-at-once holds the second person; putting a new approver in front of the person who has the document holds that person. The audit line says who now waits and why. On the screen at both sizes a Finish from the open page lands on 'It is not your turn yet. Others need to finish first. We will email ...'. Small wording slip: a save, decline or hand-over from the held page answers 'This envelope is no longer open for signing.', which is not the case."
+   },
+   {
+    "item": "9a. An unknown field type, recipient, document or role answers 400 naming the field, and changing a finished person answers 409",
+    "holds": true,
+    "evidence": "p8-order-api-alert.ts 9. 'Field 2, a text field, is for the recipient \"r_typo\", who is not on this envelope...', 'Field 2 has the type \"signatur\", which does not exist...', unknown document and unknown role likewise, a null field too; no draft is left behind after a refused POST. On an envelope that is out: a finished person's address, name, role or removal is 409 code 'sign_again'; quick Correct of a finished person is 400; a body with only a subject is 409 and nothing is lost; a bad field is 400 and the envelope is intact."
+   },
+   {
+    "item": "9b. Nothing in the request is ignored or dropped without a word",
+    "holds": false,
+    "evidence": "p8-order-api-alert.ts 9 and 8C. The two named cases are fixed; the same class of silent 200 remains in several places, while the API description now says 'Nothing in it is ignored without a word'.",
+    "still_broken": "Each of these answers 200. Two recipients with the same id: the second person is dropped (1 of 2 kept). A finished person's access_code or note changed in a correction: nothing is stored (stored value stays null). 'ordered' left out of a PUT on an ordered envelope that is out: signing order is turned off and the second signer is emailed at once (subject and message left out are kept, so the body is not treated the same way). fields sent as an object instead of a list: every field is dropped. page 99 on a 1 page document: moved to page 1. An unknown date_format: ignored. kind 'templat': an envelope is made. A value on a signature field: dropped. A 6000 character value: cut to 4000.",
+    "suggested_fix": "Refuse with 400 and name the part: duplicate recipient ids, a page outside the document, an unknown date_format or kind, documents, recipients or fields that are not lists, a value on a field type that takes none or that is too long. Keep 'ordered' when it is left out, like subject and message. Answer 409 (or apply it) when a finished person's access code or note differs."
+   },
+   {
+    "item": "10. The 'not opened yet' clock starts from the new email after an address change, and the alert is not lost",
+    "holds": true,
+    "evidence": "p8-order-api-alert.ts 10. Quick Correct on a request 72 hours old: no alert at the next timer run, one alert once the new email is 49 hours old, none twice. Already alerted about the old address, then corrected in the editor: sent_at is fresh, the mark is cleared, no alert at once, one after 49 hours. A name-only fix keeps the mark. After a hand-over the mark is cleared, the clock is new, and the alert names the new person after 49 hours. A waiting person whose address changes has no clock until they are emailed. Left open and acceptable: no alert when the sender switched 'problems' emails off; a sender who signs their own envelope is still alerted about themselves ('Jo Sender has not opened your document'), which the auditor mentioned and nobody was asked to change."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "The signing page keeps showing the old PDF after the sender replaces the file, and lets the signer finish",
+    "severity": "high",
+    "where": "src/app/sign/[token]/page.tsx (PdfDoc url and key use only the document id), src/components/PdfDoc.tsx (loads on url change only), src/components/sign/TextView.tsx, src/server/routes-sign.ts GET /sign/:token (documents carry no fingerprint)",
+    "detail": "Steps (tests/out/verify2-integrity/ui2-swap-finish.cjs, screenshots ui2-1-banner.png, ui2-2-review.png, ui1-phone-2-banner.png): signer opens the link and agrees, the page shows 'ORIGINAL CONTRACT, The price is 100 dollars'. Sender replaces the file of that document (same document id, as 'Replace file' in the editor does). Signer adopts a signature. Result: the banner 'changed this document while you had it open ... Look at the document again before you finish' appears, the page still shows ORIGINAL CONTRACT, no /doc/ request is made, and 'I have looked', Finish, 'Finish and send' completes the envelope on 'SWAPPED CONTRACT, The price is 999999 dollars' with 0 PDF fetches between the swap and the signature. Same at 390x844. Fix: return a per-document fingerprint or the content version from GET /sign/:token and use it in the PdfDoc and DocText url and key so the pages are fetched and drawn again; keep Finish disabled until they are."
+   },
+   {
+    "title": "A finished signer's emptied field or unticked box is filled in again by a correction, with no question and no audit line",
+    "severity": "high",
+    "where": "src/server/envelopes.ts writeContent (answered needs old.value != null) and printedView (compares prefill only)",
+    "detail": "Steps (p2-lock.ts B): sender prefills a changeable box 'I waive all rights' (ticked) and a changeable line 'Non-compete for 10 years applies' for Ada. Ada unticks, empties the line and signs: fields are null, the PDF has no such line. Sender sends PUT /envelopes/:id with the values as they were before Ada signed (any editor opened earlier sends this). Result: 200, no 'sign_again', Ada stays completed, both fields hold the sender's values again, the PDF prints 'Non-compete for 10 years applies', and the audit trail gets no 'Envelope corrected' line. Fix: never write to a field whose owner has finished; remember that a signer touched a field (store '' or a flag) so 'empty' is an answer; include finished people's field values in printedView."
+   },
+   {
+    "title": "Names and addresses printed by full_name and email fields are not treated as sender wording",
+    "severity": "high",
+    "where": "src/server/routes-sign.ts GET /sign/:token (others), src/server/envelopes.ts printedView, seenView, correctRecipient, src/server/pdf.ts fieldDisplayValue",
+    "detail": "Three effects, one cause. (1) p1-seen.ts C: ordered envelope, a copy recipient placed last and named 'Ada also owes a fee of 5000 dollars' with a full_name field: neither signer is shown it, the final PDF pages print it. (2) p1-seen.ts D, E: after Ada signed, PUT renaming the copy recipient to 'The price is changed to 1 dollar' is 200 without resign, and POST /envelopes/:id/correct renaming unfinished Ben to 'Ada pays a penalty of 9000 dollars' is 200; Ada stays completed, is told nothing, and the final pages carry the sentence. (3) p3-version.ts D, D2: while Ada has the page open showing 'Ada Signer', the sender renames her to 'Ada Signer, guarantor for every debt of Jo' by quick Correct or PUT; content_version stays 1, her Finish from the old page is 200, and her own name field and the certificate carry the new name. Fix: show other people's full_name and email fields from the first look, count the name and address of anyone who has such a field in printedView and seenView, apply the sign-again rule and the version bump in correctRecipient too, and at least always bump the version and send 'Updated' when a signer's own name changes."
+   },
+   {
+    "title": "Quick Correct, a hand-over and sending do not count as a newer version, so an editor opened earlier undoes them",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts correctRecipient, reassignRecipient, renameSelf, sendEnvelope (none raises edit_version)",
+    "detail": "Steps (p6-stale-check.ts 6B): editor loads an envelope that is out (edit_version 1). Ben's address is quick-corrected to ben.right@example.com, Ada hands over to Mary Deputy. The editor saves a new message with edit_version 1. Result: 200; Ben is back at ben@example.com, Ada is back, Mary is removed and her link is 410. 6C: a draft is sent in one tab, an older copy in another tab saves with another address for Ben: 200 and the live envelope now emails someone.else@example.com. Fix: raise edit_version and record who and when in those four functions, so the 'stale' dialog appears."
+   },
+   {
+    "title": "Handing over to another person at the same address passes on the first person's answers and signature",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts reassignRecipient (clearAnswers only when the address differs)",
+    "detail": "Steps (p4-audit-inherit.ts 5B): Jon Family <family@example.com> types an answer and saves a signature, then 'Assign to someone else' to Mary Family at family@example.com: 200. Mary's page has Jon's signature image, the signature field marked signed and 'Jon private answer' filled in. Fix: clear answers on every reassignment."
+   },
+   {
+    "title": "A finished signer who is replaced through the sign-again choice is never told",
+    "severity": "low",
+    "where": "src/server/envelopes.ts correctEnvelope (only removed people are emailed)",
+    "detail": "Steps (p2-lock.ts C): Ada signs. PUT with Ada's row changed to Zed Other <zed@example.com> and resign true: 200. The audit trail says 'Earlier signature set aside ... Their place on the envelope went to Zed Other'. Ada receives no email (C_ada_told is empty), although someone who is taken off gets 'You are no longer on this document'. She believes she signed and will never get a completion email. Fix: send the same 'no longer on this document' email to the old address when a finished person is replaced."
+   },
+   {
+    "title": "After being asked to sign again, a signer loses the promised copy of what they signed if the envelope is then closed",
+    "severity": "low",
+    "where": "src/server/routes-sign.ts GET /sign/:token/download (keeps needs status completed)",
+    "detail": "Steps (p10-last.ts): Ada signs and can download (200). Sender adds a note with resign true, then voids. Ada's download answers 403 'This envelope is closed.' The consent text on the signing page says 'afterwards you can download what you signed from this same link, also if the document is later cancelled, declined or runs out of time'. A sender can remove that right with a correction followed by a void. Fix: treat a recipient with signed_before as someone who signed, and give them the copy with the 'not completed' notice saying their signature was set aside after a change."
+   },
+   {
+    "title": "A name fix for someone asked to sign again is refused for want of signatures",
+    "severity": "low",
+    "where": "src/server/envelopes.ts takeOverCost (reads free=1, set for the sign-again, as the sender's own free signature)",
+    "detail": "Steps (p9-credits.ts A): balance '1 left, 1 held'. Zed has signed and paid, is asked to sign again (free=1). POST /envelopes/:id/correct with only a new spelling of his name: 402 'This needs 1 signature and you have 0 left...'. The same change through PUT is 200. Signing again is free, so nothing should be needed. Fix: in takeOverCost skip the check when paidFor(account, r) is true or signed_before is set."
+   },
+   {
+    "title": "Long SHA-256 fingerprints push the signer's banners and the sender's envelope page off a phone screen",
+    "severity": "low",
+    "where": "src/app/sign/[token]/page.tsx (both warn banners quote data.changed), src/app/app/envelopes/[id]/page.tsx audit trail, src/server/envelopes.ts describeCorrection and setAside",
+    "detail": "Steps: replace a file in a correction, or ask someone to sign again, then open the pages at 390x844 (ui5-more.cjs, ui3-screens.cjs, ui6-wide.cjs). Result: the 'changed while you had it open' banner is 535 wide in a 366 box, the page becomes 547 wide and scrolls sideways (ui1-phone-2-banner.png); the 'changed after you signed' banner does the same (ui3-i2-phone-5-signer-again.png, 546 wide); the sender's envelope page is 539 wide because of the audit lines (ui3-i2-phone-4-after-yes.png), and goes back to 390 when the fingerprints are allowed to break. Fix: overflow-wrap: anywhere on those texts, and tell signers 'the file was replaced' without the two fingerprints (keep them in the audit trail)."
+   },
+   {
+    "title": "A correction that leaves out \"ordered\" turns signing order off and emails the next signer",
+    "severity": "low",
+    "where": "src/server/envelopes.ts writeContent (body.ordered ? 1 : 0)",
+    "detail": "Steps (p8-order-api-alert.ts 8C): ordered envelope out, Ada has it. PUT with documents, recipients and fields but no ordered, subject or message: 200. Subject and message are kept, ordered becomes 0, Ben is emailed at once. The audit line says 'Signing in order turned off', so it is recorded, but the caller did not ask for it. Fix: body.ordered ?? e.ordered."
+   }
+  ],
+  "regressions": [
+   "Sender's envelope page on a phone (390x844) now scrolls sideways after a correction that replaces a file or asks someone to sign again: the new audit lines carry unbroken 64-character fingerprints and the page becomes 539 wide. Steps: Ada signs, replace the file with 'Ask Ada to sign again', open /app/envelopes/<id> at 390x844 (tests/out/verify2-integrity/ui3-i2-phone-4-after-yes.png, ui6-wide.cjs). Before the fix the audit line was counts only.",
+   "No other regression found in what worked before. tests/integrity.test.ts, tests/billing2.test.ts ('sending to yourself is free...'), tests/trust.test.ts and tests/autoplace.test.ts pass together, 55 of 55."
+  ],
+  "overclaims": [
+   {
+    "where": "src/app/sign/[token]/page.tsx, banner after a 409 'changed'",
+    "claim": "'changed this document while you had it open. Nothing was signed. What you filled in is still here wherever its field still exists. Look at the document again before you finish.'",
+    "reality": "When the change is a replaced file, the page under the banner still shows the old pages, and Finish works. The signer cannot look at the new document without leaving the Document view or reloading."
+   },
+   {
+    "where": "src/server/openapi.ts PUT /envelopes/{id} description, README complaints table row 'A typo after sending', src/app/help/page.tsx 'I sent a document with a mistake'",
+    "claim": "'What is printed on the documents ... can only change if you choose to ask those people to sign again', 'A value that a signer typed into their own field is never changed by this call, whatever the body carries for it', 'a signer whose screen still shows an older version cannot finish until it has loaded the new one', 'Nothing in it is ignored without a word'.",
+    "reality": "A finished signer's emptied field or unticked box is refilled by a plain PUT. A name printed by a full_name field changes with a plain PUT or quick Correct. The screen loads the new data but not the new PDF. A duplicate recipient, a finished person's access code or note, a missing 'ordered', a page out of range, an unknown date format and a fields value that is not a list are all taken with 200."
+   },
+   {
+    "where": "src/app/sign/[token]/page.tsx consent text",
+    "claim": "'afterwards you can download what you signed from this same link, also if the document is later cancelled, declined or runs out of time'",
+    "reality": "After the sender asks for a new signature and then voids, the download answers 403 'This envelope is closed.' (p10-last.ts)."
+   },
+   {
+    "where": "research/fix-batch2.json fix:integrity item 3",
+    "claim": "'The page then reloads, keeps answers whose field still exists, shows a banner with what changed and lets the person finish after looking.' Status fixed, 'Checked in the browser.'",
+    "reality": "True for a moved field. With a replaced file the PDF on screen is not reloaded, so the person finishes without having been shown the new document. The server side of item 3 does hold."
+   },
+   {
+    "where": "research/fix-batch2.json fix:integrity item 2",
+    "claim": "'a correction that changes what is printed ... is refused with 409', status fixed; left open: 'In-person signers who are asked again are held (not charged) again'.",
+    "reality": "Two printed things are not covered (a finished signer's cleared answers, names in full_name fields). The in-person note is out of date: with the payment code as it is now an in-person signer asked again is neither held nor charged again."
+   },
+   {
+    "where": "research/fix-batch2.json fix:integrity items 5, 6 and 9",
+    "claim": "Item 5 'fixed': everything is cleared when a signer hands over. Item 6 'fixed': a save from an older copy is refused. Item 9 'fixed': a request that cannot be carried out in full is refused.",
+    "reality": "Item 5: not when the new person shares the address. Item 6: not when the newer state came from quick Correct, a hand-over, 'Fix my name' or sending. Item 9: the two named cases are fixed, several other silent drops remain."
+   },
+   {
+    "where": "research/fix-batch2.json fix:integrity item 7",
+    "claim": "Status 'partly': a deleted envelope's code is still answered 'treat as fake'.",
+    "reality": "No longer so. In the code as it is now a deleted envelope's codes answer genuine true, deleted true (forgotten_codes, added by someone else after the report)."
+   }
+  ],
+  "screens": [
+   "Signing page, state: sender replaced the file while the page was open, banner 'changed this document while you had it open' showing. 1280x900 and 390x844: the old pages are still displayed under the banner and Finish is active (ui1-desktop-2-banner.png, ui1-phone-2-banner.png, ui2-2-review.png).",
+   "Signing page, same state, 390x844: the banner text overflows its box (535 in 366) because of two 64-character fingerprints, and the page scrolls sideways to 547 (ui1-phone-2-banner.png, ui5-more.cjs).",
+   "Signing page, state: asked to sign again after a replaced file, 390x844: the banner 'changed this document after you signed it' overflows the same way, page 546 wide (ui3-i2-phone-5-signer-again.png). Fine at 1280x900.",
+   "Sender's envelope page, state: after 'Ask Ada Sponsor to sign again' on a replaced file, 390x844: page 539 wide, the Documents and Audit trail cards run past the right edge (ui3-i2-phone-4-after-yes.png). Goes back to 390 when the fingerprints may break (ui6-wide.cjs).",
+   "Looked at and fine at both sizes: Document view and Text view with another signer's sender text (ui3-i1-*.png), the editor question 'Ada Sponsor already signed' (ui3-i2-*-3-question.png), the 'saved a newer version' dialog (ui3-i6-*.png), the check page cards for a replaced code and an unknown code (ui4-*.png, ui5-*-unknown.png), and 'It is not your turn yet' after a turn is taken back (ui5-*-held.png).",
+   "Not a product problem, noted so nobody chases it: my dev server answered 500 on /api/public/check for an unknown code until I restarted it, because the forgotten_codes table was added to the schema while it was running; after a restart the existing database had the table. For a few minutes every public page reloaded in a loop while other people's dev servers were starting in the same folder and rewriting tsconfig.json."
+  ],
+  "suite": "npx tsc --noEmit -p .: 0 errors. npm test: 224 tests, 223 pass, 1 fail: tests/billing3.test.ts 'the plan nobody uses: stopped once, and \\\"keep it\\\" means keep it' (TypeError reading 'subject' at line 389). That file, src/server/routes-billing.ts, tests/helpers.ts and tests/stripe-fake.ts were being edited by someone else at that moment, so it looked like work in progress; two minutes later tests/billing3.test.ts alone passed 10 of 10. tests/integrity.test.ts, tests/billing2.test.ts, tests/trust.test.ts and tests/autoplace.test.ts run together: 55 of 55 pass. I changed no source file and no existing test. My dev server on port 3461 is stopped, .next-verify2-integrity and the throwaway data folder are deleted, and my two lines are out of tsconfig.json (the lines other people's dev servers added are theirs and still there). Probes, browser scripts, screenshots and the test log are in /home/user/treegens-app/sign-and-grow/tests/out/verify2-integrity/."
+ }
+}

@@ -12,8 +12,9 @@ import { TOPIC_LABEL, STATUS_FOR_CUSTOMER, standing, whenText, type CustomerRequ
 const when = (iso: string) => whenText(iso);
 const offline = 'We could not reach Sign&Grow. Check your connection and try again. What you wrote is still in the box.';
 
-export function RequestView({ r, reply, solved, linked = false }: {
+export function RequestView({ r, reply, solved, linked = false, head = true }: {
   r: CustomerRequest;
+  head?: boolean; // false where the reference and the topic already stand right above, as in the list under Help
   reply?: (message: string) => Promise<string | void>; // answers with a sentence to show, if there is more to say than "sent"
   solved?: (notMine: boolean) => Promise<void>;
   linked?: boolean; // opened through the private link, by someone we only know as the holder of that link
@@ -49,14 +50,16 @@ export function RequestView({ r, reply, solved, linked = false }: {
 
   return (
     <div className="rq">
-      <div className="rq-head">
-        <span className="pub-ref">{r.reference}</span>
-        <span className={`badge ${r.status === 'open' ? (r.late ? 'declined' : 'sent') : r.status === 'waiting' ? 'expired' : 'completed'}`}>{r.late ? 'Late' : STATUS_FOR_CUSTOMER[r.status] || r.status}</span>
-        <span className="rq-meta">{TOPIC_LABEL[r.topic] || r.topic} · sent {when(r.at)}</span>
-      </div>
+      {head && (
+        <div className="rq-head">
+          <span className="pub-ref">{r.reference}</span>
+          <span className={`badge ${r.status === 'open' ? (r.late ? 'declined' : 'sent') : r.status === 'waiting' ? 'expired' : 'completed'}`}>{r.late ? 'Late' : STATUS_FOR_CUSTOMER[r.status] || r.status}</span>
+          <span className="rq-meta">{TOPIC_LABEL[r.topic] || r.topic} · sent {when(r.at)}</span>
+        </div>
+      )}
       {r.follows && <p className="muted small rq-note">This continues your earlier request <span className="pub-ref">{r.follows}</span>. The person who answers sees both.</p>}
 
-      <div className={`notice rq-state ${s.tone === 'late' ? 'late' : s.tone}`} role="status">
+      <div className={`notice rq-state ${s.tone === 'late' ? 'late' : s.tone}`} role="status" style={head ? undefined : { marginTop: 0 }}>
         <b>{s.title}</b>
         {s.text}
       </div>
@@ -135,7 +138,7 @@ export function LinkedRequest() {
     return (
       <div className="card">
         <h1 className="pub-h1" style={{ fontSize: 26 }}>{view.kind === 'deleted' ? 'This request has been deleted' : 'This link does not open a request'}</h1>
-        <p className="pub-lead">{view.kind === 'deleted' ? 'It belonged to an account that was closed, and it was kept only until it was dealt with. Nothing more will be sent about it.' : view.message}</p>
+        <p className="pub-lead">{view.kind === 'deleted' ? 'It belonged to an account that was closed, and it was kept only until it was dealt with. Nothing more will be sent about it.' : view.message.replace(/^This link does not open a request\.\s*/, '')}</p>
         <p style={{ marginTop: 16 }}><Link className="btn primary" href="/help#contact">Write to us</Link></p>
       </div>
     );

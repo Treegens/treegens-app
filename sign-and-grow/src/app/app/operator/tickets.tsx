@@ -90,7 +90,7 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
         {t.forget && <div className="notice warn">This person has closed their account since. The request was kept so it can be answered. Your answer is emailed to them, and then the request is deleted.</div>}
         {t.follows && <div>Continues request <button type="button" className="linklike" onClick={() => openOther(t.follows.id)}>{t.follows.reference}</button>, which was closed more than 30 days before.</div>}
         {t.envelope_id && <div>About envelope <span className="mono">{t.envelope_id}</span></div>}
-        <div className="muted">Opened {whenText(t.at)}{t.first_reply_at ? ` · first written back to ${whenText(t.first_reply_at)}` : ''}{t.closed_at && closed ? ` · closed ${whenText(t.closed_at)}` : ''}</div>
+        <div className="muted">Opened {whenText(t.at)}{t.first_reply_at ? ` · we first wrote back ${whenText(t.first_reply_at)}` : ''}{t.closed_at && closed ? ` · closed ${whenText(t.closed_at)}` : ''}</div>
       </div>
 
       <ol className="tk-thread" aria-label="Everything on this request, oldest first">
@@ -117,7 +117,7 @@ function Detail({ id, operators, accountActions, changed, openOther }: { id: str
         {!t.alert && <button type="button" className="btn sm" disabled={busy} onClick={() => act({ action: 'priority', priority: t.priority === 'urgent' ? 'normal' : 'urgent' }, t.priority === 'urgent' ? 'Marked normal. The time already promised stays.' : 'Marked urgent.')}>{t.priority === 'urgent' ? 'Mark as not urgent' : 'Mark as urgent'}</button>}
         {closed && <button type="button" className="btn sm" disabled={busy} onClick={() => act({ action: 'reopen' }, 'Open again.')}>Open it again</button>}
         {!t.alert && !closed && t.written !== 'own' && !t.thread.slice(1).some((m: any) => m.kind === 'customer') && (
-          <button type="button" className="btn sm danger" disabled={busy} onClick={() => window.confirm('Close this without an answer? Do this only when nobody at this address can have written it, such as an advert or a scam typed into the form. Nothing is emailed to the address. If its owner did write it, the link in the confirmation tells them what happened and lets them open it again.') && act({ action: 'spam' }, 'Closed. Nothing was emailed.')}>Nobody at this address wrote this</button>
+          <button type="button" className="btn sm danger" disabled={busy} onClick={() => window.confirm('Close this without an answer? Do this only when nobody at this address can have written it, such as an advert or a scam typed into the form. The address gets one short email that says it was closed and how to open it again. The email repeats nothing of what was typed.') && act({ action: 'spam' }, 'Closed. The address was told, without the text.')}>Nobody at this address wrote this</button>
         )}
       </div>
 

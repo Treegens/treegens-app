@@ -69,6 +69,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     <MeCtx.Provider value={{ ...me, reload }}>
       <div className="mobilebar">
         <Link href="/app" className="row" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}><Leaf color="#9ed88f" /> Sign&Grow</Link>
+        {/* With more than one workspace, a phone shows which one this is without opening the menu. */}
+        {me.accounts?.length > 1 && <span className="truncate" style={{ flex: 1, minWidth: 0, margin: '0 10px', textAlign: 'right', fontSize: 12.5, opacity: 0.85 }} title="The workspace you are in">{me.account.name}</span>}
         <button className="btn sm" onClick={() => setOpen(!open)} aria-expanded={open}>Menu</button>
       </div>
       <div className="shell">

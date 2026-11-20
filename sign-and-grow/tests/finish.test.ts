@@ -284,3 +284,37 @@ test('copies of emails that name a deleted person go with them, and copies outsi
   assert.equal(db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id IS NULL AND at < ?', ago(90)).n, 0);
   assert.ok(db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id=?', e.id).n > 0);
 });
+
+// ---- A signer's copy outlives the sender's delete button -----------------------------------------------------
+
+test('deleting a voided envelope that someone had already signed takes it out of the sender\'s account and leaves the signer their copy', async () => {
+  const sender = await person('Vera Voider', 'vera@voided.example');
+  const two = { recipients: [{ id: 'a', role: 'signer', name: 'Ann First', email: 'ann@voided.example' }, { id: 'b', role: 'signer', name: 'Bob Second', email: 'bob@voided.example' }],
+    fields: [{ id: 'fa', document_id: 'd', recipient_id: 'a', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'fb', document_id: 'd', recipient_id: 'b', type: 'signature', page: 0, x: 0.5, y: 0.5, w: 0.3, h: 0.06 }] };
+  const e = await simple(sender, '', { subject: 'Half signed', ordered: false, ...two });
+  assert.equal((await sender.post(`/envelopes/${e.id}/send`)).status, 200);
+  const { signAll } = await import('./helpers.ts');
+  assert.equal((await signAll(e.id, 'ann@voided.example')).status, 200);
+  const annToken = db.get("SELECT token FROM recipients WHERE envelope_id=? AND email='ann@voided.example'", e.id).token;
+  assert.equal((await sender.post(`/envelopes/${e.id}/void`, { reason: 'Deal is off' })).status, 200);
+  const gone = await sender.call('DELETE', `/envelopes/${e.id}`);
+  assert.deepEqual(gone.data, { ok: true, kept_for_recipients: true });
+  assert.equal((await sender.get(`/envelopes/${e.id}`)).status, 404, 'gone from the sender\'s account');
+  assert.ok(!(await sender.get('/envelopes')).data.envelopes.some((x: any) => x.id === e.id));
+  // Ann signed it. Her link still opens, and what she signed can still be downloaded.
+  const ann = visitor();
+  const page = await ann.get(`/sign/${annToken}`);
+  assert.equal(page.status, 200);
+  assert.equal(page.data.envelope.status, 'voided');
+  const pdf = await ann.call('GET', `/sign/${annToken}/download`);
+  assert.equal(pdf.status, 200);
+
+  // One that nobody had signed is deleted for good, as before.
+  const none = await simple(sender, 'nobody@voided.example', { subject: 'Never signed' });
+  assert.equal((await sender.post(`/envelopes/${none.id}/send`)).status, 200);
+  assert.equal((await sender.post(`/envelopes/${none.id}/void`, { reason: 'Mistake' })).status, 200);
+  const del = await sender.call('DELETE', `/envelopes/${none.id}`);
+  assert.equal(del.status, 200);
+  assert.equal(del.data?.kept_for_recipients, undefined);
+  assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE id=?', none.id).n, 0);
+});

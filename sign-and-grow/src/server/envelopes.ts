@@ -4,7 +4,7 @@ import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { renderEnvelopePdf } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
-import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail } from './credits.ts';
+import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary } from './credits.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 
@@ -1028,12 +1028,30 @@ export async function remindEnvelope(e: any, actor: Actor, recipientId?: string)
   return reminded.length;
 }
 
+// The owner of a public form is told, once a day at most, that someone could not sign it for want of a signature,
+// with the numbers as they are.
+export async function formNeedsSignatures(accountId: string, powerformId: string): Promise<void> {
+  const p = get('SELECT * FROM powerforms WHERE id=?', powerformId);
+  if (!p || (p.alerted_at && Date.parse(p.alerted_at) > Date.now() - 864e5)) return;
+  run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
+  const owner = get('SELECT u.email FROM envelopes t JOIN users u ON u.id=t.sender_id WHERE t.id=?', p.template_id);
+  const s = creditSummary(accountId);
+  const n = (x: number) => `${x} signature${x === 1 ? '' : 's'}`;
+  if (owner) await sendMail({ to: owner.email, subject: `Your form "${p.name}" has run out of signatures`, heading: 'Someone tried to sign your form and could not',
+    lines: [`"${p.name}" uses one signature for each person who signs it, and none is free right now: you have ${n(Math.max(0, s.balance))} on your balance${s.held > 0 ? `, and ${s.held === 1 ? 'it is' : `${s.held} of them are`} held for envelopes you have out` : ''}.`,
+      'The person was told that it is nothing they did, and what they filled in is saved. Top up or start the monthly plan (or void an envelope you no longer need) and the form takes signatures again at once.'],
+    cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } });
+}
+
 // When a signer's address changes to a different person, is the new person's signature free (the sender signing
 // their own document) or paid for? Sending to yourself is free, so pointing that request at somebody else afterwards
 // has to need a signature like any other, or it would be a way round paying. Returns the new value of `free`.
 function takeOverCost(e: any, r: any, newEmail: string, newName: string): number {
   const sender = senderOf(e) || { email: '', name: '' };
   const free = isSelf({ role: r.role, email: newEmail, name: newName }, sender) ? 1 : 0;
+  // A signature that is already paid for under the new address (someone asked to sign again after a change, whose
+  // name is being put right) needs nothing more, and stays as it is.
+  if (paidFor(e.account_id, { id: r.id, email: newEmail })) return r.free ? 1 : free;
   if (creditsEnabled() && ACTS(r.role) && !isChargeable(r, sender) && !free) {
     const have = available(e.account_id);
     if (have < 1) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), 1, have), 402);
@@ -1152,6 +1170,17 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
     if (needsIni && !okImage(body.initials_png)) throw bad('Adopt your initials before finishing.');
     verb = 'Signed';
   } else if (r.role === 'approver') verb = 'Approved';
+  // A public form holds none of its owner's signatures while people fill it in, so this is the moment that decides:
+  // a visitor's signature needs one that is free right now. It never takes one that is held for an envelope the
+  // owner has out, and a form never takes the balance below zero. What the visitor filled in is kept, the owner is
+  // told (once a day at most), and the same link works again as soon as there is a signature.
+  if (e.powerform_id && creditsEnabled() && isChargeable(r, senderOf(e) || '') && !paidFor(e.account_id, r) && available(e.account_id) < 1) {
+    try {
+      applyValues(e, r, body.values || {}, false);
+    } catch {}
+    await formNeedsSignatures(e.account_id, e.powerform_id);
+    throw bad('This form cannot take your signature at the moment. That is nothing you did: the people who run it need to add signatures first, and we have just told them. Everything you filled in is saved. Please try again a little later with the same link.', 503);
+  }
   const t = now();
   // Finishing is claimed by one statement that only changes a row while this recipient and the envelope are both
   // still open. e and r were read before this and may be out of date: a second Finish, a decline or a void can have
@@ -1555,7 +1584,9 @@ export async function cronTick(): Promise<{ expired: number; reminded: number; w
     }
     // "I never got it": if a request sits unopened, tell the sender once so they can share the link another way.
     const quietMs = (Number(process.env.UNOPENED_ALERT_HOURS) || 48) * 3600_000;
-    const unopened = e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && !r.unopened_alerted_at && r.sent_at && Date.now() - Date.parse(r.sent_at) > quietMs);
+    // Not about the sender's own part: someone who has not opened their own document does not need telling.
+    const own = get('SELECT email FROM users WHERE id=?', e.sender_id)?.email || '';
+    const unopened = e.recipients.filter((r: any) => r.status === 'sent' && r.role !== 'inperson' && !r.unopened_alerted_at && r.sent_at && Date.now() - Date.parse(r.sent_at) > quietMs && !sameEmail(r.email, own));
     if (unopened.length) {
       for (const r of unopened) run('UPDATE recipients SET unopened_alerted_at=? WHERE id=?', t, r.id);
       await notifySender(e, 'problems', `Not opened yet: ${e.subject}`, `${unopened.map((r: any) => r.name).join(', ')} ${unopened.length === 1 ? 'has' : 'have'} not opened your document`,

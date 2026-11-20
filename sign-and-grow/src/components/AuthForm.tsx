@@ -43,6 +43,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
     e.preventDefault();
     setBusy(true);
     setError('');
+    setCameBack('');
     try {
       if (mode === 'login' || mode === 'signup') {
         const r = await api(`/auth/${mode}`, { body: { ...f, invite: q?.get('invite') || undefined } });

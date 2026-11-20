@@ -317,6 +317,46 @@ test('a sign-in whose state is missing, made up, from another browser, used twic
   assert.match(signInErrorText('expired', 'google'), /used already, or it took longer than 10 minutes.*start again/);
 });
 
+test('over https the cookies of a sign-in are ones only this host can have set, and a start on another host name moves to the right one', async () => {
+  const https = { 'x-forwarded-proto': 'https' };
+  // A neighbouring site under the same domain can plant an ordinary cookie in someone's browser, and with it the
+  // state of a sign-in of its own. Over https the state is read from a "__Host-" cookie, which it cannot plant.
+  const attacker = browser(), victim = browser();
+  const theirs = await go(attacker, '/auth/google/start', https);
+  const set = theirs.set.find((s: string) => s.startsWith('__Host-sg_signin='))!;
+  assert.match(set, /; Secure/);
+  assert.match(set, /Path=\/;/);
+  assert.doesNotMatch(set, /Domain=/i);
+  const state = new URL(theirs.location).searchParams.get('state')!;
+  victim.cookies.sg_signin = state; // planted under the plain name
+  const code = approve('google', theirs.location, google('planter@gmail.com'));
+  const opened = await go(victim, `/auth/google/callback?${new URLSearchParams({ code, state })}`, https);
+  assert.match(opened.location, /signin_error=expired/);
+  assert.equal(await whoIs(victim), null);
+  assert.equal(user('planter@gmail.com'), null);
+  // The honest flow over https, start to finish, with the note for the first screen under the same kind of name.
+  const c = browser();
+  const start = await go(c, '/auth/google/start', https);
+  const back = await go(c, `/auth/google/callback?${new URLSearchParams({ code: approve('google', start.location, google('hosty@gmail.com')), state: new URL(start.location).searchParams.get('state')! })}`, https);
+  assert.equal(back.location, 'http://test.local/signin/done?next=%2Fapp');
+  const note = back.set.find((s: string) => s.startsWith('__Host-sg_signin_note='))!;
+  assert.match(note, /; Secure/);
+  assert.doesNotMatch(note, /HttpOnly/, 'the landing page has to read it');
+  assert.match(back.set.find((s: string) => s.startsWith('ts_session='))!, /HttpOnly.*Secure/);
+  assert.equal((await whoIs(c)).email, 'hosty@gmail.com');
+
+  // Opened under another host name (www, say): the state cookie would never come back to the address the provider
+  // returns to, so the browser is moved to the configured address first. Once, so it can never go round in circles.
+  const www = { 'x-forwarded-host': 'www.test.local' };
+  const d = browser();
+  const moved = await go(d, '/auth/microsoft/start?mode=signup&code=GROWalition', www);
+  assert.equal(moved.status, 302);
+  assert.equal(moved.location, 'http://test.local/api/auth/microsoft/start?mode=signup&code=GROWalition&moved=1');
+  assert.equal(moved.set.length, 0, 'nothing was started on the wrong host');
+  const second = await go(d, '/auth/microsoft/start?mode=signup&code=GROWalition&moved=1', www);
+  assert.equal(new URL(second.location).host, 'login.microsoftonline.com');
+});
+
 test('cancelling at the provider is said in words, and nothing is made', async () => {
   const c = browser();
   const start = await go(c, '/auth/microsoft/start?mode=signup&code=GROWalition');
@@ -475,6 +515,20 @@ test('a token that only claims the address of an existing login does not get in 
     assert.equal(await whoIs(c), null, what);
   }
   assert.equal(identities('vic@corp.example').length, 0, 'nothing was connected');
+  // At a mailbox Google does run, only a plain "true" counts as Google confirming the address.
+  await signUp('Gem Mail', 'gem@gmail.com', browser().ip);
+  for (const email_verified of ['true', 1, 'yes', {}, null]) {
+    const c = browser();
+    refused(await signIn(c, 'google', google('gem@gmail.com', { sub: `g-loose-${String(email_verified)}`, email_verified })), 'exists');
+    assert.equal(await whoIs(c), null);
+  }
+  assert.equal(identities('gem@gmail.com').length, 0);
+  // The same object id in another organization is another person: it does not open the login of the first.
+  assert.equal(identities('mo@contoso.example')[0].subject, `${TENANT}/oid/oid-mo@contoso.example`);
+  const twin = browser();
+  refused(await signIn(twin, 'microsoft', microsoft('mo@contoso.example', { tid: OTHER_TENANT })), 'exists');
+  assert.equal(await whoIs(twin), null);
+  assert.equal(identities('mo@contoso.example').length, 1);
   assert.equal(db.get('SELECT COUNT(*) n FROM users WHERE email=?', 'vic@corp.example').n, 1);
   assert.equal(mailTo('vic@corp.example').length, mailBefore);
   assert.equal((await whoIs(victim)).email, 'vic@corp.example', 'and the real owner is still signed in');
@@ -699,9 +753,17 @@ test('after signing in the browser only ever goes to a path on this site', async
   assert.equal(safeNext('/%0d%0aLocation: https://evil.example').startsWith('/%0d%0aLocation'), true, 'an encoded line break stays a harmless path');
   assert.equal(safeNext('/app/envelopes/env_1?x=1#sign'), '/app/envelopes/env_1?x=1#sign');
   assert.equal(safeNext('/app/../../evil.example'), '/evil.example', 'dots are resolved, and it is still a path here');
-  // A refusal goes back to our own page too, whatever was asked for.
+  // A refusal goes back to our own page too, whatever was asked for, and does not hand the address on to it.
   const no = await signIn(browser(), 'google', google('nobody@gmail.com'), { query: { next: '//evil.example' }, state: 'wrong' });
   assert.equal(no.to.origin, 'http://test.local');
+  const stopped = browser();
+  const begun = await go(stopped, '/auth/google/start?next=//evil.example');
+  const stoppedAt = new URL((await go(stopped, `/auth/google/callback?${new URLSearchParams({ error: 'access_denied', state: new URL(begun.location).searchParams.get('state')! })}`)).location);
+  assert.equal(stoppedAt.origin + stoppedAt.pathname, 'http://test.local/login');
+  assert.equal(stoppedAt.searchParams.get('next'), null);
+  const kept = browser();
+  const begun2 = await go(kept, '/auth/google/start?next=/app/inbox');
+  assert.equal(new URL((await go(kept, `/auth/google/callback?${new URLSearchParams({ error: 'access_denied', state: new URL(begun2.location).searchParams.get('state')! })}`)).location).searchParams.get('next'), '/app/inbox', 'a page of ours is kept for the next try');
   // And the start itself only ever sends the browser to the provider.
   const start = await go(browser(), '/auth/google/start?next=//evil.example&redirect_uri=https://evil.example/cb');
   assert.equal(new URL(start.location).origin, 'https://accounts.google.com');
@@ -820,6 +882,9 @@ test('connecting under Settings ties the provider to the login that is signed in
   const bea = await signUp('Bea Other', 'bea@corp.example', browser().ip);
   // Connecting needs our own page and a person: it starts with a POST, never a link another site can open.
   assert.equal((await go(ann, '/me/signin/google/connect')).status, 404);
+  const crossSite = await ann.call('POST', '/me/signin/google/connect', {}, { origin: 'https://evil.example' });
+  assert.equal(crossSite.status, 403);
+  assert.equal(db.get('SELECT COUNT(*) n FROM signin_states WHERE user_id=?', (await whoIs(ann)).id).n, 0, 'and nothing was started');
   const ok = await connect(ann, 'google', google('ann.private@gmail.com'));
   assert.equal(ok.to.searchParams.get('signin'), 'connected');
   assert.equal(identities('ann@corp.example')[0].vouched, 0, 'Google vouches for another address than this login has');

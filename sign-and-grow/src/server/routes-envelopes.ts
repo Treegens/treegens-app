@@ -8,7 +8,7 @@ import { creditsEnabled, available, isChargeable } from './credits.ts';
 import {
   loadEnvelope, publicEnvelope, createEnvelope, saveDraft, copyEnvelope, sendEnvelope, voidEnvelope, remindEnvelope,
   correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl, outOfSignatures,
-  advance, assertMayEmail, type Actor,
+  advance, assertMayEmail, formNeedsSignatures, type Actor,
 } from './envelopes.ts';
 import { hmac, safeEqual } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
@@ -232,16 +232,19 @@ route('PATCH', '/envelopes/:id', async (c) => {
 });
 
 // Deleting removes a draft, a template or a closed envelope for good, with its audit trail, our copies of its
-// emails and the files signers attached. A completed envelope is different, because it is not only the sender's:
-// everyone on it was promised their copy for as long as the sender keeps the account. So deleting one takes it out
-// of the sender's lists, search, export and reports, and every recipient's link, download and "sent to me" list
-// keep working. It is removed for good when the account is.
+// emails and the files signers attached. An envelope somebody has signed is different, because it is not only the
+// sender's: whoever signed was promised a copy of what they signed for as long as the sender keeps the account.
+// That is every completed envelope, and also one that was voided, declined or ran out of time after someone had
+// already finished their part. Deleting one of those takes it out of the sender's lists, search, export and
+// reports, and every recipient's link, download and "sent to me" list keep working. It is removed for good when
+// the account is.
 route('DELETE', '/envelopes/:id', (c) => {
   const e = mine(c, c.params.id);
   assertMayChange(c, e);
   if (e.status === 'sent') throw bad('Void this envelope before deleting it.');
   if (e.kind === 'template' && get('SELECT 1 x FROM powerforms WHERE template_id=?', e.id)) throw bad('A PowerForm still uses this template. Delete the PowerForm first.');
-  if (e.kind === 'envelope' && e.status === 'completed') {
+  const signed = e.kind === 'envelope' && e.status !== 'draft' && e.recipients.some((r: any) => r.status === 'completed' && ['signer', 'inperson', 'approver'].includes(r.role));
+  if (e.kind === 'envelope' && (e.status === 'completed' || signed)) {
     run('UPDATE envelopes SET hidden_at=? WHERE id=?', now(), e.id);
     audit(e.id, c.actor, 'Removed from the sender\'s lists', 'The sender deleted this envelope from their account. Everyone on it keeps their link and their copy.');
     return { ok: true, kept_for_recipients: true };
@@ -542,10 +545,10 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     const again = get("SELECT r.token FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.id=? AND e.powerform_id=? AND e.status='sent' AND r.status IN ('sent','viewed') AND r.email=? AND lower(r.name)=lower(?)", started, p.id, email, name);
     if (again) return { url: `${baseUrl()}/sign/${again.token}`, resumed: true };
   }
-  // A form stops taking new people once those who have started would use up what its owner has left, so every
-  // unfinished start stands in someone's way until it is finished or cleared by the timer. One device address may
-  // therefore only have a few unfinished ones on a form at a time: more on a form its owner marked as filled in on
-  // a shared device, where they are also cleared much sooner. An address we cannot tell apart is not counted.
+  // Every start makes an envelope in the owner's account and sends an email to an address a stranger typed, so one
+  // device address may only have a few unfinished ones on a form at a time: more on a form its owner marked as
+  // filled in on a shared device, where they are also cleared much sooner. An address we cannot tell apart is not
+  // counted.
   if (c.ip !== 'unknown') {
     const unfinished = get("SELECT COUNT(*) n FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=? AND e.form_ip=? AND e.status='sent' AND r.status IN ('pending','sent','viewed')", p.id, c.ip).n;
     const most = p.shared_device ? POWERFORM_SHARED_OPEN_STARTS : POWERFORM_OPEN_STARTS;
@@ -553,17 +556,12 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     if (unfinished >= most)
       throw bad(`This form has been started ${most} times from your internet connection and not finished yet. Finish one of those first: the link is in the email we sent each time. Ones that stay unfinished are cleared after ${cleared}, and then you can start again here.${p.shared_device ? '' : ' If many people fill this form in at the same place, ask whoever gave you the link to mark it as used on a shared device.'}`, 429);
   }
-  // A public form uses one of its owner's signatures for each person who signs. When there are none left the form
-  // says so politely, and the owner is told (once a day at most) instead of finding out from a customer.
-  // Starting a form holds nothing, so the check is against what is left after everyone who has started one of this
-  // owner's forms and not finished yet: a form can never collect more signatures than its owner has.
-  const startedForms = get("SELECT COUNT(*) n FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.account_id=? AND e.powerform_id IS NOT NULL AND e.status='sent' AND r.status IN ('pending','sent','viewed')", p.account_id).n;
-  if (creditsEnabled() && isChargeable({ role: open.role, email, name }, get('SELECT email, name FROM users WHERE id=?', tpl.sender_id) || '') && available(p.account_id) - startedForms < 1) {
-    if (!p.alerted_at || Date.parse(p.alerted_at) < Date.now() - 864e5) {
-      run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
-      const owner = get('SELECT email FROM users WHERE id=?', tpl.sender_id);
-      if (owner) await sendMail({ to: owner.email, subject: `Your form "${p.name}" has run out of signatures`, heading: 'Someone tried to sign your form and could not', lines: [`"${p.name}" needs one signature for each person who signs it, and your balance is empty. They were asked to try again later.`, 'Top up or start the monthly plan and the form works again at once.'], cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } });
-    }
+  // A public form uses one of its owner's signatures for each person who signs, taken at the moment they finish
+  // (see completeRecipient). Starting holds nothing and other people's unfinished starts are not counted, so a
+  // stranger who starts and walks away stands in nobody's way. When the owner has none free the form says so
+  // before anyone fills it in, and the owner is told (once a day at most) instead of finding out from a customer.
+  if (creditsEnabled() && isChargeable({ role: open.role, email, name }, get('SELECT email, name FROM users WHERE id=?', tpl.sender_id) || '') && available(p.account_id) < 1) {
+    await formNeedsSignatures(p.account_id, p.id);
     throw bad('This form cannot take new signatures right now. Please try again a little later, or contact the people who sent you here.', 503);
   }
   const eid = copyEnvelope(tpl, { accountId: p.account_id, senderId: tpl.sender_id, kind: 'envelope', subject: p.name, fill: { [open.id]: { name, email } }, extra: { powerform_id: p.id } });

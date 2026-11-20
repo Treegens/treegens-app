@@ -633,13 +633,19 @@ route('POST', '/billing/topup', async (c) => {
 // The provider is always asked for the subscription's state now, unless the caller has just done so.
 // If the provider no longer knows this account's customer (someone deleted it there), forget it and carry on as a
 // new customer, instead of failing for ever.
+// A business outside the US often needs its tax number (VAT, GST) and address on the invoice to be able to book
+// it. With STRIPE_COLLECT_TAX_ID=1 the payment page asks for both and the provider prints them on the invoice. It
+// is off by default because the provider refuses the request unless its own settings allow it: switch it on in
+// test mode first and make one payment.
+const taxFields = (known: boolean): Record<string, string> => (process.env.STRIPE_COLLECT_TAX_ID === '1'
+  ? { 'tax_id_collection[enabled]': 'true', billing_address_collection: 'required', ...(known ? { 'customer_update[name]': 'auto', 'customer_update[address]': 'auto' } : {}) } : {});
 async function withCustomer<T>(a: any, email: string, call: (who: Record<string, string>) => Promise<T>): Promise<T> {
   try {
-    return await call(a.stripe_customer_id ? { customer: a.stripe_customer_id } : { customer_email: email });
+    return await call(a.stripe_customer_id ? { customer: a.stripe_customer_id, ...taxFields(true) } : { customer_email: email, ...taxFields(false) });
   } catch (e: any) {
     if (!a.stripe_customer_id || !/no such customer/i.test(e?.message || '')) throw e;
     run('UPDATE accounts SET stripe_customer_id=NULL WHERE id=?', a.id);
-    return call({ customer_email: email });
+    return call({ customer_email: email, ...taxFields(false) });
   }
 }
 
@@ -1180,9 +1186,16 @@ async function applyInvoice(o: any): Promise<void> {
     await tellOperators(`${a.name} was charged more than we told them`, [`Invoice ${o.id}: we said ${money(said, currency)}, the charge was ${money(cents, currency)}. The difference is being refunded automatically. ${unannounced ? `This account is on ${money(priceFor(a, null))} a month and has not had ${PRICE_NOTICE_DAYS} days' notice of a higher price. Announce a price change on the operator page before changing the price with the payment provider.` : 'Check the price configured with the payment provider.'}`], a.id);
   } else if (cents - taxOf(o) !== (cycle ? priceFor(a, paidFrom) : PLAN_CENTS()))
     await tellOperators(`A monthly payment from ${a.name} was not the plan price`, [`Invoice ${o.id} was ${money(cents, currency)}; this account's plan is ${money(cycle ? priceFor(a, paidFrom) : PLAN_CENTS())}. ${sigs(credits)} were added. Check the price configured with the payment provider.`], a.id);
-  // The price this account is on from here: what it was just held to, before tax. A notice that has now taken
-  // effect has done its job.
-  const nowOn = Math.max(1, Math.min(cents, said) - taxOf(o));
+  // The price this account is on from here. It starts as the price shown at checkout and only moves at a renewal:
+  // up when a higher price that was announced in time has now been charged, down when the provider's own price for
+  // the plan is lower. A smaller invoice that is a one-off (a discount, a credit, part of a month) says nothing
+  // about next month and changes nothing. A notice that has taken effect has done its job.
+  const base = cents - taxOf(o);
+  const line = o.lines?.data?.[0] || {};
+  const unit = Number(line.price?.unit_amount ?? line.pricing?.unit_amount_decimal ?? line.plan?.amount ?? NaN);
+  let nowOn = a.price_cents || PLAN_CENTS();
+  if (cycle && base > nowOn && base <= allowed - taxOf(o)) nowOn = base;
+  else if (cycle && base < nowOn && unit === base) nowOn = base;
   run('UPDATE accounts SET price_cents=? WHERE id=?', nowOn, a.id);
   if (a.price_notice_cents && nowOn >= a.price_notice_cents) run('UPDATE accounts SET price_notice_cents=NULL, price_notice_from=NULL, price_notice_at=NULL WHERE id=?', a.id);
   // A reminder only counts if an email for it actually left: one that the mail server never took is no reminder.

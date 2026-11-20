@@ -81,6 +81,10 @@ function byLink(c: Ctx): any {
 }
 
 const NO_REPLY = 'Please do not reply to this email: a reply does not reach your request.';
+// An email about a help request often goes to someone who only came to sign, and the pages promise those people no
+// marketing. mail.ts leaves the line that sells out of an email that carries a list of links, and an empty list is
+// one, so every email to the customer about a request ends with where it came from and nothing more.
+const PLAIN: { links: { label: string; url: string }[] } = { links: [] };
 const tzOf = (email: string): string | null => get('SELECT tz FROM users WHERE email=?', email)?.tz || null;
 const customerZone = (t: any): string | null => t.tz || tzOf(t.email);
 
@@ -207,7 +211,7 @@ async function acknowledge(t: any, extra: string[] = []) {
       ...(t.due_at ? [`A person will have answered by ${whenText(t.due_at, customerZone(t))}. That is within ${hours} hour${hours === 1 ? '' : 's'} of your message, counted in real hours: nights and weekends count too. If we are ever late, the request says so and the whole team is told.`] : []),
       ...(t.verified ? ['What you sent us:', t.message] : ['If you did not write to us, someone typed your address into our help form by mistake. You can ignore this email.']),
       `${NO_REPLY} To add something, to read our answer or to see where things stand, use the button below. It opens your request without signing in, so do not forward this email.`],
-    cta: { label: 'Open my request', url: linkFor(t) } });
+    cta: { label: 'Open my request', url: linkFor(t) }, ...PLAIN });
 }
 
 // Open to everyone: signers, free users, former customers, and people who cannot log in.
@@ -333,8 +337,7 @@ route('GET', '/support/mine', (c) => {
   const rows = all(`SELECT * FROM support_requests WHERE (user_id=?${c.user.email_verified ? ' OR lower(email)=lower(?)' : ''}) AND NOT (ref IS NULL AND user_id IS NULL AND COALESCE(name, '')=?) ORDER BY COALESCE(updated_at, at) DESC LIMIT 30`,
     ...(c.user.email_verified ? [c.user.id, c.user.email] : [c.user.id]), ALERT_NAME);
   return { requests: rows.map((t) => {
-    const mine = t.user_id === c.user.id;
-    const v = forCustomer(t, mine);
+    const v = forCustomer(t, t.user_id === c.user.id); // what they wrote themselves is always shown back to them
     const full = theirs(c, t);
     return { id: t.id, ...v, message: v.held ? '' : t.message, can_reply: full, thread: full ? v.thread : null };
   }) };
@@ -402,7 +405,7 @@ route('GET', '/operator/support/:id', (c) => {
 //   ask { text }          a question to the customer, emailed; the request waits for them and the clock stops
 //   note { text }         for operators only; the customer never sees it
 //   close { text }        the closing answer, emailed. Nobody closes a request without a written answer in its thread
-//   spam                  nobody at that address wrote it: closed, and nothing is emailed to them
+//   spam                  nobody at that address wrote it: closed with a short note to the address that repeats nothing typed
 //   reopen                open again, with a new time to answer by
 //   priority { priority } 'urgent' or 'normal'
 route('POST', '/operator/support/:id', async (c) => {
@@ -431,7 +434,7 @@ route('POST', '/operator/support/:id', async (c) => {
   const button = { label: 'Open my request', url: '' };
   const mail = async (subject: string, heading: string, lines: string[]) => {
     // Once a request is forgotten (see forgetNow) its link opens nothing, so the email carries none.
-    await sendMail({ to: t.email, subject, heading, lines, ...(t.forget && action !== 'ask' ? {} : { cta: { ...button, url: linkFor(t) } }) });
+    await sendMail({ to: t.email, subject, heading, lines, ...PLAIN, ...(t.forget && action !== 'ask' ? {} : { cta: { ...button, url: linkFor(t) } }) });
   };
   const FORGOTTEN = `You closed your Sign&Grow account while this request was open. Now that it is answered we have deleted it, as we said we would, and the link in our earlier email no longer opens it. Please do not reply to this email. If you need anything else, write to us at ${baseUrl()}/help.`;
   const first = firstName(c.user.name) || 'A person on our team';
@@ -513,13 +516,20 @@ route('POST', '/operator/support/:id', async (c) => {
     if (t.verified || get("SELECT 1 x FROM support_messages WHERE request_id=? AND kind='customer'", t.id))
       throw bad('This request is known to come from the owner of the address: they were signed in under it, or they wrote back through the link in our email. Close it with an answer instead.');
     tx(() => {
-      say(t, 'event', 'Closed as not written by the owner of the address. Nothing was emailed to them', me);
+      say(t, 'event', 'Closed as not written by the owner of the address. They were told so, without the text, and how to open it again', me);
       run("UPDATE support_requests SET status='closed', closed_at=?, closed_how='spam', due_at=NULL, updated_at=? WHERE id=?", now(), now(), t.id);
     });
     if (t.forget) {
       forgetNow(t);
       return { ok: true, deleted: true };
     }
+    // Even this is not closed without a word. If the operator is wrong and the owner of the address did write, a
+    // silent close is the very thing people complain about. So the address gets one short note: what happened and
+    // how to open it again. It repeats nothing of what was typed, so a stranger's words still reach nobody.
+    await mail(`We closed request ${ref} without an answer`, 'Closed, because it did not look like it came from you',
+      ['A message was sent to our help form under this email address. A person on our team read it and thought someone else had typed your address, so it was closed without an answer.',
+        'If you did not write to us, there is nothing to do. We will not write to you about it again.',
+        `If you did write it, we are sorry. Use the button below and tell us: the request opens again and a person answers it. ${NO_REPLY}`]);
   } else if (action === 'reopen') {
     if (t.status === 'open') return { request: forOperator(t, true) };
     tx(() => {
@@ -569,7 +579,7 @@ export async function supportTick(): Promise<{ late: number }> {
     await sendMail({ to: t.email, subject: `We are late with your request (${refOf(t)})`, heading: 'We are late. Sorry.',
       lines: [`We said a person would have answered by ${whenText(t.due_at, customerZone(t))}, and that has not happened. Your request has been passed to everyone on the support team and is at the top of their list${owner ? `. ${firstName(owner.name)} still has it` : ''}.`,
         `You do not need to write again, and you keep your place. ${NO_REPLY} To add something or to see where it stands, use the button below.`],
-      cta: { label: 'Open my request', url: linkFor(t) } });
+      cta: { label: 'Open my request', url: linkFor(t) }, ...PLAIN });
   }
   // Someone deleted their account while we were waiting for their reply to a question of ours. The request was kept
   // so the reply would not be lost. If none has come after SUPPORT_REOPEN_DAYS, it is deleted like the rest was.

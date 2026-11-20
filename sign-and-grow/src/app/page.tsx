@@ -60,7 +60,7 @@ export default function Landing() {
     { said: 'A refund is refused a day after a renewal.', title: 'Refunds without asking', text: `${refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself.`, href: '/help#refunds', link: 'The refund rule' },
     { said: 'A bill for extra documents arrives out of nowhere.', title: 'No overage charges, ever', text: 'When your signatures run out, sending pauses. It never turns into a bill. A signature is only used when someone actually signs, so an envelope nobody signed costs nothing.', href: '#pricing', link: 'See pricing' },
     { said: 'The account is locked with the signed contracts inside.', title: 'Your documents stay yours', text: 'Export everything as one ZIP file, free, on any plan, also after you cancel. Cancelling or a failed payment never deletes or locks a document.', href: '/security#your-documents', link: 'What we promise about your data' },
-    { said: 'Support is a chatbot going in circles.', title: 'A person answers', text: 'No chatbot. The contact form works without logging in, gives you a reference, and goes to a person.', href: '/help#contact', link: 'Write to us' },
+    { said: 'Support is a chatbot going in circles.', title: 'A person answers', text: 'No chatbot. The contact form works without logging in, gives you a reference, and goes to a person. Every answer is emailed in full, with a private link where you follow your request, reply and say when it is solved. Nobody closes your request without writing to you.', href: '/help#contact', link: 'Write to us' },
   ];
 
   return (

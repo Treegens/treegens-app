@@ -175,6 +175,12 @@ export function ContactForm() {
   const [info, setInfo] = useState<SupportInfo>({ email: null, topics: Object.keys(TOPIC_LABEL), urgent: [], reply: null, median: null });
   const a = useAction<{ reference: string; email: string; due_at: string | null; reply_hours: number | null }>();
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((s) => ({ ...s, [k]: e.target.value }));
+  // The current time, kept fresh, for the "answered by" time shown before sending.
+  const [minute, setMinute] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setMinute(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     api('/public/support').then((d) => setInfo({ email: d.email || null, topics: Array.isArray(d.topics) && d.topics.length ? d.topics : Object.keys(TOPIC_LABEL), urgent: d.urgent_topics || [], reply: d.reply || null, median: d.median || null })).catch(() => {});
@@ -196,6 +202,8 @@ export function ContactForm() {
 
   const topics = info.topics;
   const topic = topics.includes(f.topic) ? f.topic : topics[0];
+  // How many hours a person has for this topic, or nothing when no time is promised (see SupportInfo above).
+  const replyHours = info.reply ? (info.urgent.includes(topic) ? info.reply.urgent_hours : info.reply.hours) : 0;
   const direct = info.email && <p className="muted small pub-form-hint">Prefer email? Write to <a href={`mailto:${info.email}`}>{info.email}</a>. It reaches the same people.</p>;
 
   if (a.done)
@@ -230,11 +238,12 @@ export function ContactForm() {
         <label className="f"><span>Email address <span className="hint">(we reply here)</span></span><input type="email" value={f.email} onChange={set('email')} required autoComplete="email" placeholder="you@example.com" /></label>
       </div>
       <label className="f"><span>What is it about?</span>
-        <select value={topic} onChange={set('topic')}>
+        <select value={topic} onChange={set('topic')} aria-describedby={replyHours > 0 ? 'contact-reply-time' : undefined}>
           {topics.map((t) => <option key={t} value={t}>{TOPIC_LABEL[t] || t}</option>)}
         </select>
       </label>
-      {info.reply && <p className="muted small pub-form-hint" style={{ margin: '-6px 0 14px' }} aria-live="polite">{info.urgent.includes(topic) ? 'This is urgent for us. ' : ''}A person answers this within {hoursText(info.urgent.includes(topic) ? info.reply.urgent_hours : info.reply.hours)}, counted in real hours from the moment you send it. You are told the exact time.</p>}
+      {/* The actual time, not only a number of hours. It is worked out again every minute while the page is open. */}
+      {replyHours > 0 && <p id="contact-reply-time" className="muted small pub-form-hint" style={{ margin: '-6px 0 14px' }}>{info.urgent.includes(topic) ? 'This is urgent for us. ' : ''}Send it now and a person will have answered by <b>{whenText(new Date(minute + replyHours * 3600_000).toISOString())}</b>, your time. That is within {hoursText(replyHours)}, counted in real hours: nights and weekends count too.</p>}
       <label className="f"><span>What happened, and what do you need? <span className="hint">(a couple of sentences is enough)</span></span>
         <textarea value={f.message} onChange={set('message')} required minLength={10} maxLength={5000} rows={6} />
       </label>
@@ -289,6 +298,7 @@ export function YourRequests() {
               </summary>
               <RequestView
                 r={r}
+                head={false}
                 reply={r.can_reply ? async (message) => {
                   const d = await api(`/support/mine/${r.id}/reply`, { body: { message } });
                   load.current();

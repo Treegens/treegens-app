@@ -105,6 +105,6 @@ export function standing(t: CustomerRequest, when: (iso: string) => string): { t
     : t.reopen_until ? `Not solved after all? Reply before ${when(t.reopen_until)} and this same request opens again.` : 'Not solved after all? Reply and this request opens again.';
   if (t.closed_how === 'solved') return { tone: '', title: 'Solved', text: `You marked this as solved. ${again}` };
   if (t.closed_how === 'disowned') return { tone: '', title: 'Closed: you told us you did not write this', text: `Nothing more will be sent to you about it. Sorry for the bother. ${again}` };
-  if (t.closed_how === 'spam') return { tone: 'warn', title: 'Closed: this did not look like it came from you', text: `A person on our team looked at it and thought someone else had typed your address into our form, so no answer was sent. If you did write it, we are sorry: reply and it opens again.` };
+  if (t.closed_how === 'spam') return { tone: 'warn', title: 'Closed: this did not look like it came from you', text: 'A person on our team looked at it and thought someone else had typed your address into our form, so it was closed without an answer. If you did write it, we are sorry: reply and it opens again.' };
   return { tone: '', title: 'Closed with an answer', text: again };
 }
