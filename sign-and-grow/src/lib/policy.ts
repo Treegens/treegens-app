@@ -227,16 +227,39 @@ const CONSENT_WORDINGS: Record<string, Record<string, (sender: string, signs: bo
 /** Whether a version is one we have shown. A screen that was open across a change of wording sends its own. */
 export const isConsentVersion = (v: unknown): v is string => typeof v === 'string' && v !== UNVERSIONED_CONSENT && Object.hasOwn(CONSENT_WORDINGS, v);
 const keptVersion = (v: unknown): v is string => typeof v === 'string' && Object.hasOwn(CONSENT_WORDINGS, v);
-/** The words of one version, also the one from before versions (for the record). `signs` is false for someone who approves or only reads. */
-export const consentWording = (sender: string, signs: boolean, version: string = CONSENT_VERSION): ConsentWording =>
-  ({ version: keptVersion(version) ? version : CONSENT_VERSION, ...CONSENT_WORDINGS[keptVersion(version) ? version : CONSENT_VERSION](sender, signs) });
+/**
+ * The words of one version, also the one from before versions (for the record). `signs` is false for someone who
+ * approves or only reads. `locale` is the language of the person's screens: the words are in it when that language is
+ * switched on and its legal texts were checked by a person, otherwise in English with `note` saying why.
+ */
+export const consentWording = (sender: string, signs: boolean, version: string = CONSENT_VERSION, locale: unknown = SOURCE_LOCALE): ConsentWording => {
+  const v = keptVersion(version) ? version : CONSENT_VERSION;
+  const held = Object.keys(CONSENT_WORDINGS[v]);
+  const language = legalLocale(locale, held);
+  return { version: v, language, note: legalNote(locale, held), ...CONSENT_WORDINGS[v][language](sender, signs) };
+};
+/** Whether this version exists in this language (a screen that agreed says which one it showed). */
+export const isConsentLanguage = (version: unknown, language: unknown): boolean => {
+  const tag = normalizeLocale(language);
+  return keptVersion(version) && !!tag && Object.hasOwn(CONSENT_WORDINGS[version], tag);
+};
+/** The words as an audit line recorded them: that version in that language, whether or not the language is switched on today. */
+export const consentWordingAsRecorded = (sender: string, signs: boolean, version: string, language: unknown): ConsentWording => {
+  const w = consentWording(sender, signs, version);
+  const tag = normalizeLocale(language);
+  return tag && isConsentLanguage(w.version, tag) ? { ...w, language: tag, note: '', ...CONSENT_WORDINGS[w.version][tag](sender, signs) } : w;
+};
 /**
  * What the audit line says after the signer's name. The certificate prints it, so it says where the words can be
  * read. `stated` is false when the call that agreed did not say which wording its screen showed: the line then
- * names the wording in use at that moment and says that it is not the screen's own word.
+ * names the wording in use at that moment and says that it is not the screen's own word. `language` is the language
+ * of the words the screen showed (a screen that names none is one that only shows English). `named` is false when the
+ * screen named a language this wording does not exist in: the line says so.
  */
-export const consentAuditNote = (version: string, stated = true): string =>
-  `${stated ? `Wording ${version}` : `The screen did not say which wording it showed. The wording in use was ${version}`}, as printed on the help page under "What do I agree to before I sign?".`;
+export const consentAuditNote = (version: string, stated = true, language: string = SOURCE_LOCALE, named = true): string =>
+  `${stated ? `Wording ${version}` : `The screen did not say which wording it showed. The wording in use was ${version}`}, in ${languageWords(language)}, as printed on the help page under "What do I agree to before I sign?".${named ? '' : ' The screen named a language this wording does not exist in, so this names the English wording.'}`;
+/** The language an audit line written by consentAuditNote names, or English for a line from before languages were recorded. */
+export const consentLanguageOf = (detail: unknown): string => normalizeLocale(/, in [^(),]*\(([A-Za-z0-9-]{2,35})\), as printed/.exec(String(detail ?? ''))?.[1]) || SOURCE_LOCALE;
 /** The line under "Adopt and sign". It says what the mark is, not what a court will make of it. */
 export const adoptLine = (word: 'signature' | 'initials'): string => `I agree that this mark stands for my ${word}.`;
 

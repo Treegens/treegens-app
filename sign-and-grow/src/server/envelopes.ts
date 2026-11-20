@@ -2248,7 +2248,9 @@ export async function emailMyLinks(email: string): Promise<number> {
       ...(more > 0 ? [`${more} more did not fit in this email. To get them, ask again within a day: enter this address under "Find my documents" at ${baseUrl()}/help once more, and the next email carries on where this one stops.`] : []),
       ...(on && more <= 0 ? ['That was the last of them. Asking again starts at the newest.'] : [])],
     links: [...forGroups, ...rows.map((x) => ({ label: x.subject, url: `${baseUrl()}/sign/${x.token}`, note: `${names.size > 1 ? `for ${x.name} · ` : ''}from ${x.sender} · ${state(x)}` }))],
-    footnote: 'If you did not ask for this, you can ignore it. Nobody else received these links.',
+    // The line for someone whose network will not open our pages, as in every request to sign (cannotOpenLine). This
+    // email is ours and can list several senders, so a reply to it would not reach any of them: it says whose to use.
+    footnote: 'If you did not ask for this, you can ignore it. Nobody else received these links. Page will not open where you are? Reply to the email the sender sent you about that document and ask them to send it as a PDF. This list comes from Sign&Grow, not from them, so a reply to it does not reach them.',
   });
   return rows.length + forGroups.length;
 }

@@ -40,6 +40,7 @@ import { witnessFirst, WitnessFirst, WitnessNotice, WitnessName, WitnessAfter } 
 import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText } from '@/components/sign/GroupNotice';
 // A stamp field: the signer puts their own stamp on, printed like ink (src/components/stamps, src/server/stamps.ts).
 import { StampDialog } from '@/components/stamps/StampDialog';
+import { stampTurn, turnStyle } from '@/lib/stamps';
 import { layers } from '@/lib/stacked';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
@@ -73,6 +74,8 @@ export default function SignPage() {
   const [signedField, setSignedField] = useState<string | null>(null);
   // The stamp field whose dialog is open (StampDialog).
   const [stampFor, setStampFor] = useState<string | null>(null);
+  // How far the page turns each stamp put on in this visit (its natural tilt): from the answer that put it on.
+  const [turns, setTurns] = useState<Record<string, number>>({});
   const [sheet, setSheet] = useState<string | null>(null);
   // The date field whose picker is open. A date that was picked is otherwise shown the way it will be printed.
   const [dateOpen, setDateOpen] = useState<string | null>(null);
@@ -1064,11 +1067,12 @@ export default function SignPage() {
   // Stamps, printed like ink into the drawn page (the ink layer of PdfDoc): this person's own, the sender's, and those
   // of people who have finished. The same picture, place and blend as in the signed PDF (stamps.css, pdf.ts).
   const stampUrl = (f: any): string | null => (values[f.id] ? `/api${base}/stamp-image/${values[f.id]}` : null);
+  // Each is turned by its natural tilt about its middle, as the signed PDF turns it.
   const inkLayer = (docId: string) => (page: number) => {
-    const here = [...data.others.filter((f: any) => f.type === 'stamp' && f.image).map((f: any) => ({ f, src: f.image as string })),
-      ...fields.filter((f) => f.type === 'stamp' && stampUrl(f)).map((f) => ({ f, src: stampUrl(f)! }))].filter(({ f }) => f.document_id === docId && f.page === page);
+    const here = [...data.others.filter((f: any) => f.type === 'stamp' && f.image).map((f: any) => ({ f, src: f.image as string, turn: stampTurn(f.turn) })),
+      ...fields.filter((f) => f.type === 'stamp' && stampUrl(f)).map((f) => ({ f, src: stampUrl(f)!, turn: turns[f.id] ?? stampTurn(f.stamp_meta) }))].filter(({ f }) => f.document_id === docId && f.page === page);
     // eslint-disable-next-line @next/next/no-img-element
-    return here.length ? here.map(({ f, src }) => <span key={f.id} className="st-print" style={pos(f)}><img src={src} alt="" /></span>) : null;
+    return here.length ? here.map(({ f, src, turn }) => <span key={f.id} className="st-print" style={pos(f)}><img src={src} alt="" style={turnStyle(turn)} /></span>) : null;
   };
 
   const ctx: FieldCtx = { me, values, sig, ini, dateText, dateFormat: env.date_format, ordered, uploading, filled, set, pickRadio, clickSig, attach, clickStamp: (f: any) => setStampFor(f.id), stampUrl };
@@ -1187,6 +1191,7 @@ export default function SignPage() {
           onPut={(r) => {
             // Kept on the server at once, so "Finish later" and another device have it too.
             set(stampField.id, r.value);
+            setTurns((t) => ({ ...t, [stampField.id]: stampTurn(r.turn) }));
             const next = nextAfter(stampField.id);
             setStampFor(null);
             toast('Your stamp is on the page.');

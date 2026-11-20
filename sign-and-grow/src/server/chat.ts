@@ -194,7 +194,16 @@ function relay(upstream: Response, c: Cleaned, finish: () => void, late: () => b
   let text = '';
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const send = (o: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(o)}\n\n`));
+      // The page may have gone away meanwhile (cancel below): then there is nobody left to send to.
+      let gone = false;
+      const send = (o: object) => {
+        if (gone) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(o)}\n\n`));
+        } catch {
+          gone = true;
+        }
+      };
       const first = extrasFor(c);
       send({ open: true, mode: 'ai', ...first });
       let buffer = '', lastThink = 0, broke = false;
@@ -254,7 +263,9 @@ function relay(upstream: Response, c: Cleaned, finish: () => void, late: () => b
         const tools = toolsFor(c.question, text);
         send({ done: true, sig: signAnswer(text), tools, ...(late() || broke ? { cut: true } : {}) });
       }
-      controller.close();
+      try {
+        controller.close();
+      } catch {}
     },
     cancel() {
       // The page went away: stop the model too, so nothing more is paid for.
