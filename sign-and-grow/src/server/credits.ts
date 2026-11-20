@@ -13,7 +13,7 @@ import { PRICING } from '../lib/impact.ts';
 // Without a payment provider connected there is nothing to buy, so nothing is counted.
 export const creditsEnabled = () => !!process.env.STRIPE_SECRET_KEY;
 
-export type CreditReason = 'welcome' | 'plan' | 'code' | 'topup' | 'signature' | 'refund' | 'adjust';
+export type CreditReason = 'welcome' | 'plan' | 'code' | 'topup' | 'signature' | 'refund' | 'dispute' | 'adjust';
 
 // Codes that make the monthly plan free. Anyone who enters one gets the plan's signatures every month at no charge.
 // Set FREE_PLAN_CODES (comma separated) to change them; the spelling given there is the one shown to people.
@@ -58,7 +58,8 @@ export function reserved(accountId: string): number {
     `SELECT COUNT(*) n FROM recipients r JOIN envelopes e ON e.id=r.envelope_id JOIN users u ON u.id=e.sender_id
       WHERE e.account_id=? AND e.kind='envelope' AND e.status='sent' AND r.status IN ('pending','sent','viewed')
         AND e.powerform_id IS NULL
-        AND (r.role = 'inperson' OR (r.role = 'signer' AND (r.free = 0 OR (r.free IS NULL AND r.email != u.email))))`,
+        AND (r.role = 'inperson' OR (r.role = 'signer' AND (r.free = 0 OR (r.free IS NULL AND r.email != u.email))))
+        AND NOT EXISTS (SELECT 1 FROM credits c WHERE c.account_id = e.account_id AND c.reason = 'signature' AND c.ref = r.id || '|' || lower(r.email))`,
     accountId,
   ).n;
 }
@@ -71,15 +72,30 @@ export const sameEmail = (a: any, b: any) => String(a ?? '').trim().toLowerCase(
 // so handing an envelope to another sender, or the sender changing their own address, never turns a free signature
 // into a paid one. Before that, and for requests sent before the flag existed, it is the sender's own address that
 // decides.
+export const sameName = (a: any, b: any) => String(a ?? '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+// The sender, as far as paying goes: their address, and their name when it is known.
+export type Sender = string | { email: string; name?: string | null };
+// Is this recipient the sender signing their own document? Their own address AND their own name: a client entered
+// under the sender's address is somebody else, and their signature is paid for like any other.
+export const isSelf = (r: any, s: Sender) =>
+  r.role === 'signer' && sameEmail(r.email, typeof s === 'string' ? s : s.email) && (typeof s === 'string' || !s.name || sameName(r.name, s.name));
+
 // Signing in person is by definition somebody else signing on the sender's device, so it is never the sender's own
 // free signature, whatever address was typed for it.
-export const isChargeable = (r: any, senderEmail: string) =>
-  r.role === 'inperson' || (r.role === 'signer' && (r.free == null ? !sameEmail(r.email, senderEmail) : !r.free));
+export const isChargeable = (r: any, sender: Sender) =>
+  r.role === 'inperson' || (r.role === 'signer' && (r.free == null ? !isSelf(r, sender) : !r.free));
+
+// One person's signature on one envelope is paid for once. The ledger line is named after the recipient and their
+// address, so being asked to sign again after a change costs nothing more, and a different person put in their
+// place is a new signature.
+export const sigRef = (r: any) => `${r.id}|${String(r.email || '').toLowerCase()}`;
+export const paidFor = (accountId: string, r: any) => !!get("SELECT 1 x FROM credits WHERE account_id=? AND reason='signature' AND ref=?", accountId, sigRef(r));
 
 // How many signatures an envelope still needs: its signers who have not finished, not counting the sender signing
 // their own document.
-export function needed(e: any, senderEmail: string): number {
-  return e.recipients.filter((r: any) => isChargeable(r, senderEmail) && r.status !== 'completed' && r.status !== 'declined').length;
+export function needed(e: any, sender: Sender): number {
+  return e.recipients.filter((r: any) => isChargeable(r, sender) && r.status !== 'completed' && r.status !== 'declined' && !paidFor(e.account_id, r)).length;
 }
 
 export function creditSummary(accountId: string) {

@@ -24,7 +24,7 @@ const monthly = async (invoice: string, sub = 'sub_1', over: any = {}) => {
   await event('invoice.paid', { id: invoice, customer: 'cus_1', subscription: sub, amount_paid: 900, currency: 'usd', status: 'paid', hosted_invoice_url: `https://pay.example/${invoice}`, lines: { data: [{ period: { start: unix(0), end: unix(30) } }] }, ...over });
 };
 const topUp = (id: string, credits: number, cents = credits * 100, who = accountId) =>
-  event('checkout.session.completed', { id, mode: 'payment', client_reference_id: who, customer: 'cus_1', payment_status: 'paid', amount_total: cents, currency: 'usd', payment_intent: `pi_${id}`, metadata: { kind: 'topup', credits: String(credits) } });
+  event('checkout.session.completed', { id, mode: 'payment', client_reference_id: who, customer: 'cus_1', payment_status: 'paid', amount_total: cents, currency: 'usd', payment_intent: `pi_${id}`, metadata: { kind: 'sg_topup', credits: String(credits), sg_account: who } });
 
 before(async () => {
   ({ db, billing, cron } = await boot());
@@ -59,7 +59,7 @@ test('a new account has 3 signatures to try; one is held per signer and only use
   assert.equal((await sig()).available, 2);
 
   // Signing your own document is always free, and so are approvers, viewers and copies.
-  const own = await simple(owner, 'olive@example.com');
+  const own = await simple(owner, 'olive@example.com', { recipients: [{ id: 'r', role: 'signer', name: 'Olive Owner', email: 'olive@example.com' }] });
   assert.equal((await owner.post(`/envelopes/${own.id}/send`)).status, 200);
   const approve = await simple(owner, 'boss@example.com', { recipients: [{ id: 'r', role: 'approver', name: 'Boss', email: 'boss@example.com' }], fields: [] });
   assert.equal((await owner.post(`/envelopes/${approve.id}/send`)).status, 200);
@@ -145,7 +145,7 @@ test('top-ups: $1 a signature, only ever on purpose', async () => {
   assert.equal((await sig()).balance, before + 7);
 
   // Coming back from checkout applies it at once, without waiting for the provider's event.
-  stripe.sessions.cs_top3 = { id: 'cs_top3', mode: 'payment', client_reference_id: accountId, payment_status: 'paid', amount_total: 300, currency: 'usd', payment_intent: 'pi_cs_top3', metadata: { kind: 'topup', credits: '3' } };
+  stripe.sessions.cs_top3 = { id: 'cs_top3', mode: 'payment', client_reference_id: accountId, payment_status: 'paid', amount_total: 300, currency: 'usd', payment_intent: 'pi_cs_top3', metadata: { kind: 'sg_topup', credits: '3', sg_account: accountId } };
   assert.equal((await owner.post('/billing/sync', { session_id: 'cs_top3' })).data.signatures.balance, before + 10);
   assert.equal((await free.post('/billing/sync', { session_id: 'cs_top3' })).data.signatures.balance, 3, 'someone else cannot claim it');
 });

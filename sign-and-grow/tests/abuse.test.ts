@@ -475,8 +475,9 @@ test('unfinished starts on a public form are few per address, hold none of the o
     const one = visitor();
     const started = [await begin(one, 'one'), await begin(visitor(), 'two'), await begin(visitor(), 'three')];
     for (const s of started) assert.equal(s.status, 200);
-    assert.equal((await rae.get('/billing')).data.signatures.available, 3, 'three made-up starts hold nothing');
-    assert.equal((await begin(visitor(), 'four')).status, 200);
+    assert.equal((await rae.get('/billing')).data.signatures.available, 3, 'three made-up starts hold nothing of the owner\'s');
+    // But a form can never collect more signatures than its owner has: with three started and three left, it is full.
+    assert.equal((await begin(visitor(), 'four')).status, 503);
     // Nobody touches two of them for more than a day. The third was started just now.
     for (const s of started.slice(0, 2)) {
       db.run('UPDATE envelopes SET sent_at=? WHERE id=?', ago(1.1), envelopeOf(s.data.url));

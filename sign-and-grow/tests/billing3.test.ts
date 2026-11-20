@@ -31,7 +31,7 @@ async function person(name: string): Promise<Person> {
 function invoice(p: Person, inv: string, over: any = {}) {
   const o = {
     id: inv, customer: p.cus, subscription: p.sub, amount_paid: 900, currency: 'usd', status: 'paid', billing_reason: 'subscription_create', hosted_invoice_url: `https://pay.example/${inv}`,
-    lines: { data: [{ period: { start: unix(0), end: unix(30) }, metadata: { account_id: p.id }, price: { id: 'price_grove' } }] }, ...over,
+    lines: { data: [{ period: { start: unix(0), end: unix(30) }, metadata: { sg_account: p.id }, price: { id: 'price_grove' } }] }, ...over,
   };
   stripe.invoices[inv] = o;
   stripe.charges.unshift({ id: `ch_${inv}`, paid: true, refunded: false, amount: o.amount_paid, currency: o.currency, customer: o.customer, invoice: inv, last4: '4242', created: unix(0) });
@@ -44,7 +44,7 @@ async function subscribe(p: Person, inv = `in3_${p.k}_1`) {
 }
 const topUp = (p: Person, sid: string, credits: number, over: any = {}) => {
   stripe.charges.unshift({ id: `ch_${sid}`, payment_intent: `pi_${sid}`, paid: true, refunded: false, amount: credits * 100, currency: 'usd', customer: p.cus, last4: '4242', created: unix(0) });
-  return { id: sid, mode: 'payment', client_reference_id: p.id, customer: p.cus, payment_status: 'paid', amount_total: credits * 100, currency: 'usd', payment_intent: `pi_${sid}`, metadata: { kind: 'topup', credits: String(credits) }, ...over };
+  return { id: sid, mode: 'payment', client_reference_id: p.id, customer: p.cus, payment_status: 'paid', amount_total: credits * 100, currency: 'usd', payment_intent: `pi_${sid}`, metadata: { kind: 'sg_topup', credits: String(credits), sg_account: p.id }, ...over };
 };
 const bal = async (p: Person) => (await p.c.get('/billing')).data.signatures;
 const state = async (p: Person) => (await p.c.get('/billing')).data;
@@ -54,7 +54,7 @@ before(async () => {
 });
 
 test('provider messages handled at the same instant: the first payment is counted once and never sent back', async () => {
-  const subUpdated = (p: Person) => ({ id: p.sub, customer: p.cus, status: 'active', current_period_end: unix(30), metadata: { account_id: p.id } });
+  const subUpdated = (p: Person) => ({ id: p.sub, customer: p.cus, status: 'active', current_period_end: unix(30), metadata: { sg_account: p.id } });
   // Every pair and the three together, in each starting order, with the provider answering slowly enough to overlap.
   const orders: ((p: Person, inv: any) => Promise<any>[])[] = [
     (p, inv) => [event('invoice.paid', inv), event('customer.subscription.updated', subUpdated(p))],
@@ -174,7 +174,7 @@ test('signatures that come back later can still be refunded from the same paymen
   for (const id of out) await p.c.post(`/envelopes/${id}/void`, { reason: 'changed my mind' });
   const s = await state(p);
   assert.equal(s.refund.amount, '$2.00');
-  assert.match(s.refund.reason, /2 of the 9 signatures it bought are still on your balance/);
+  assert.match(s.refund.reason, /you have 2 unused signatures to hand back out of the 9 it bought/);
   assert.equal((await p.c.post('/billing/refund')).data.refunded, '$2.00');
   assert.equal(pay(`in3_${p.k}_1`).refunded_cents, 900);
   assert.equal(stripe.refunded(`ch_in3_${p.k}_1`), 900);
@@ -199,7 +199,10 @@ test('a dispute takes the unused signatures with it, bigger ones are left to a p
   assert.equal(s.payments.find((x: any) => x.id === 'cs3_disp_top').refundable, null);
   const mail = mailTo(p.email).find((m) => m.subject === 'A payment was disputed, so we stopped billing you')!;
   assert.match(mail.html, /A person here will look at it and write to you/);
-  assert.match(mail.html, /72 signatures that payment bought and that had not been used have left your balance/);
+  assert.match(mail.html, /72 signatures that payment bought are set aside until the bank decides\. If the payment stands, they come back/);
+  assert.equal(s.payments.find((x: any) => x.id === 'cs3_disp_top').refunded, null, 'nothing has gone back yet, so nothing is shown as refunded');
+  assert.equal(s.payments.find((x: any) => x.id === 'cs3_disp_top').disputed, 'open');
+  assert.equal(s.mangroves, 1090, 'and the money still counts until the bank decides');
   assert.doesNotMatch(mail.html, /stay yours|start the plan again/);
   assert.ok(alerts().some((m) => m.includes('Card dispute') && m.includes('NOT accepted automatically') && m.includes('28 signatures bought with that payment had already been used')));
   assert.equal((await p.c.post('/billing/topup', { quantity: 5 })).status, 403);
@@ -227,7 +230,7 @@ test('a dispute takes the unused signatures with it, bigger ones are left to a p
 test('the invoice the provider makes for a top-up is not a second payment, and invoices that are not ours count nowhere', async () => {
   const p = await person('Inv');
   await subscribe(p);
-  const topInvoice = { id: 'in3_top_inv', customer: p.cus, amount_paid: 1000, currency: 'usd', status: 'paid', billing_reason: 'manual', hosted_invoice_url: 'https://pay.example/in3_top_inv', metadata: { kind: 'topup', account_id: p.id } };
+  const topInvoice = { id: 'in3_top_inv', customer: p.cus, amount_paid: 1000, currency: 'usd', status: 'paid', billing_reason: 'manual', hosted_invoice_url: 'https://pay.example/in3_top_inv', metadata: { kind: 'sg_topup', sg_account: p.id } };
   stripe.invoices.in3_top_inv = topInvoice;
   await event('checkout.session.completed', topUp(p, 'cs3_inv_top', 10, { invoice: 'in3_top_inv' }));
   await event('invoice.paid', topInvoice);
@@ -331,7 +334,7 @@ test('cancelling: the cases where "you will not be charged again" used to be wro
   const u = await person('Quiet');
   await subscribe(u);
   await u.c.post('/billing/cancel');
-  db.run('UPDATE accounts SET cancel_at=? WHERE id=?', ago(0.2), u.id);
+  db.run('UPDATE accounts SET cancel_at=?, sub_event_at=? WHERE id=?', ago(0.2), unix(-1), u.id);
   stripe.sub(u.sub).status = 'canceled';
   await cron.tick();
   st = await state(u);
@@ -350,10 +353,13 @@ test('cancelling: the cases where "you will not be charged again" used to be wro
 
   // A weeks-old "active" message about a subscription that is long dead brings nothing back.
   await event('customer.subscription.updated', { id: v.sub, customer: v.cus, status: 'active' });
-  await event('customer.subscription.updated', { id: 'sub3_never_ours', customer: v.cus, status: 'active' });
-  stripe.sub('sub3_never_ours').status = 'canceled';
-  await event('customer.subscription.updated', { id: 'sub3_never_ours', customer: v.cus, status: 'active' }, { created: unix(-20) });
-  assert.equal(subjects(v.email).filter((x) => x === 'Welcome to Grove').length, 2, 'one from the real start, one from the subscription the provider did say was alive');
+  stripe.sub('sub3_old_ours').status = 'canceled';
+  await event('customer.subscription.updated', { id: 'sub3_old_ours', customer: v.cus, status: 'active', metadata: { sg_account: v.id } }, { created: unix(-20) });
+  // Nor does a live subscription of the same customer for something else sold on the same provider account.
+  await event('customer.subscription.updated', { id: 'sub3_other_product', customer: v.cus, status: 'active', items: { data: [{ price: { id: 'price_other_product' } }] } });
+  assert.equal(stripe.sub('sub3_other_product').status, 'active', 'and it is left alone');
+  assert.equal(acct(v.id).plan, 'seedling');
+  assert.equal(subjects(v.email).filter((x) => x === 'Welcome to Grove').length, 1);
 });
 
 test('the plan nobody uses: stopped once, and "keep it" means keep it', async () => {

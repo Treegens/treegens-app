@@ -317,7 +317,8 @@ test('new free accounts cannot send fake payment notices; signing your own docum
   process.env.STRIPE_SECRET_KEY = 'sk_test_x';
   const solo = await signUp('Solo Signer', 'solo@example.com');
   for (let i = 0; i < 7; i++) {
-    const x = await simple(solo, 'solo@example.com');
+    // Your own document: your own address and your own name.
+    const x = await simple(solo, 'solo@example.com', { recipients: [{ id: 'r', role: 'signer', name: 'Solo Signer', email: 'solo@example.com' }] });
     assert.equal((await solo.post(`/envelopes/${x.id}/send`)).status, 200, `self-signed document ${i + 1}`);
     assert.equal((await signAll(x.id, 'solo@example.com')).status, 200);
   }

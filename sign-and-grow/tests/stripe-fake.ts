@@ -37,6 +37,14 @@ export const stripe = {
   chargeFor(params: Record<string, string>) {
     return this.charges.find((c) => (params.charge && c.id === params.charge) || (params.payment_intent && c.payment_intent === params.payment_intent)) || null;
   },
+  // A person refunds a charge in the provider's dashboard: nothing of ours is involved.
+  refundByHand(chargeId: string, cents: number) {
+    const ch = this.charges.find((c) => c.id === chargeId)!;
+    ch.refunded_by_hand = (ch.refunded_by_hand || 0) + cents;
+    ch.amount_refunded = this.refunded(ch.id) + ch.refunded_by_hand;
+    ch.refunded = ch.amount_refunded >= ch.amount;
+    return { id: ch.id, payment_intent: ch.payment_intent, customer: ch.customer, amount: ch.amount, amount_refunded: ch.amount_refunded, invoice: ch.invoice };
+  },
   // How much has gone back on a charge, named either way.
   refunded(target: string) {
     const ch = this.charges.find((c) => c.id === target || c.payment_intent === target);
@@ -80,7 +88,7 @@ function answer(method: string, path: string, params: Record<string, string>, ke
     const amount = /amount:(\d+)/.exec(q)?.[1];
     return json({ data: stripe.charges.filter((c) => c.last4 === last4 && (!amount || String(c.amount) === amount)), has_more: false });
   }
-  if (path === 'charges') return json({ data: stripe.charges.filter((c) => !params.customer || c.customer === params.customer) });
+  if (path === 'charges') return json({ data: stripe.charges.filter((c) => (!params.customer || c.customer === params.customer) && (!params.payment_intent || c.payment_intent === params.payment_intent)) });
   if (part[0] === 'charges') return json(stripe.charges.find((c) => c.id === part[1]) || { id: part[1], customer: 'cus_1' });
   if (path === 'refunds' && method === 'GET') {
     const ch = stripe.chargeFor(params);
@@ -91,11 +99,13 @@ function answer(method: string, path: string, params: Record<string, string>, ke
     const again = key ? stripe.refunds.find((r) => r.key === key) : null;
     if (again) return json({ id: again.id });
     const ch = stripe.chargeFor(params);
-    if (ch && stripe.refunded(ch.id) + Number(params.amount) > ch.amount) return json({ error: { message: 'Refund amount is greater than what is left on the charge.' } }, 400);
+    if (ch && stripe.refunded(ch.id) + (ch.refunded_by_hand || 0) + Number(params.amount) > ch.amount)
+      return json({ error: { message: ch.refunded_by_hand >= ch.amount ? `Charge ${ch.id} has already been refunded.` : 'Refund amount is greater than what is left on the charge.' } }, 400);
     const metadata = Object.fromEntries(Object.entries(params).filter(([k]) => k.startsWith('metadata[')).map(([k, v]) => [k.slice(9, -1), v]));
     const r = { id: `re_${stripe.refunds.length + 1}`, params, key, charge: ch?.id || null, metadata };
     stripe.refunds.push(r);
-    if (ch && stripe.refunded(ch.id) >= ch.amount) ch.refunded = true;
+    if (ch) ch.amount_refunded = stripe.refunded(ch.id) + (ch.refunded_by_hand || 0);
+    if (ch && ch.amount_refunded >= ch.amount) ch.refunded = true;
     return json({ id: r.id });
   }
   if (part[0] === 'disputes' && part[2] === 'close') return stripe.disputesClosed.push(part[1]), json({ id: part[1], status: 'lost' });

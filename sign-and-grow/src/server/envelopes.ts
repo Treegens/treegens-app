@@ -4,7 +4,7 @@ import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { renderEnvelopePdf } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
-import { creditsEnabled, available, needed, isChargeable, grant, sameEmail } from './credits.ts';
+import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail } from './credits.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 
@@ -454,11 +454,11 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
     noteReached(after, reach);
     // A new access code starts clean: wrong tries at the old one are forgotten, and a frozen code opens again.
     for (const r of after.recipients) if (oldById.has(r.id) && (oldById.get(r.id).access_code || '') !== (r.access_code || '')) run('UPDATE recipients SET code_fails=0, code_frozen_at=NULL WHERE id=?', r.id);
-    const senderEmail = senderOf(e)?.email || '';
+    const sender = senderOf(e) || { email: '', name: '' };
     for (const r of after.recipients) {
       const old = oldById.get(r.id);
       // Whether a signature is paid for is settled when a person is added or their address changes, and kept otherwise.
-      if (!old || !sameEmail(old.email, r.email) || old.free == null) run('UPDATE recipients SET free=? WHERE id=?', sameEmail(r.email, senderEmail) ? 1 : 0, r.id);
+      if (!old || !sameEmail(old.email, r.email) || old.free == null || old.role !== r.role || old.name !== r.name) run('UPDATE recipients SET free=? WHERE id=?', isSelf(r, sender) ? 1 : 0, r.id);
       if (!old) {
         run('UPDATE recipients SET token=?, check_code=? WHERE id=?', token(), checkCode(), r.id);
         continue;
@@ -502,7 +502,7 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
     if (creditsEnabled()) {
       // Signers added by this correction need signatures like any others. A change that needs no more than before
       // (a name, a field, a date) is never refused, whatever the balance.
-      const more = needed(loadEnvelope(e.id), senderEmail) - needed(e, senderEmail);
+      const more = needed(loadEnvelope(e.id), sender) - needed(e, sender);
       const have = available(e.account_id);
       if (more > 0 && have < 0) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), more, have + more), 402);
     }
@@ -756,7 +756,7 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
   // A signature is held for every signer so nobody is stopped halfway. It is only used up when they actually sign,
   // and it comes back by itself if the envelope is voided, declined or expires.
   const before = creditsEnabled() ? available(account.id) : Infinity;
-  const need = creditsEnabled() ? needed(e, sender.email) : 0;
+  const need = creditsEnabled() ? needed(e, sender) : 0;
   // Signing your own documents, approvals and copies cost nothing, so they go out whatever the balance is.
   if (need > 0 && need > before) throw bad(outOfSignatures(account, need, before), 402);
 
@@ -767,7 +767,7 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
       t, t, new Date(Date.now() + e.expire_days * 864e5).toISOString(), sheetsSaved(pages, e.recipients.length),
       e.subject || `Please sign: ${e.documents[0].name}`, e.id);
     for (const r of e.recipients) {
-      run('UPDATE recipients SET token=?, check_code=?, free=? WHERE id=?', token(), checkCode(), r.role === 'signer' && sameEmail(r.email, sender.email) ? 1 : 0, r.id);
+      run('UPDATE recipients SET token=?, check_code=?, free=? WHERE id=?', token(), checkCode(), isSelf(r, sender) ? 1 : 0, r.id);
       run('INSERT INTO contacts (id, account_id, name, email, created_at) VALUES (?,?,?,?,?) ON CONFLICT(account_id, email) DO NOTHING', id('con'), e.account_id, r.name, r.email, t);
     }
     noteReached(e, reach);
@@ -776,7 +776,7 @@ export async function sendEnvelope(envelopeId: string, actor: Actor) {
   fireWebhooks(e.account_id, 'envelope.sent', e.id);
   await advance(e.id);
   // Running low never comes as a surprise: one email at two signatures left, one at none.
-  if (creditsEnabled() && need > 0) {
+  if (creditsEnabled() && need > 0 && !e.powerform_id) {
     const after = before - need;
     for (const mark of [2, 0])
       if (before > mark && after <= mark) {
@@ -1015,10 +1015,10 @@ export async function remindEnvelope(e: any, actor: Actor, recipientId?: string)
 // When a signer's address changes to a different person, is the new person's signature free (the sender signing
 // their own document) or paid for? Sending to yourself is free, so pointing that request at somebody else afterwards
 // has to need a signature like any other, or it would be a way round paying. Returns the new value of `free`.
-function takeOverCost(e: any, r: any, newEmail: string): number {
-  const senderEmail = senderOf(e)?.email || '';
-  const free = sameEmail(newEmail, senderEmail) ? 1 : 0;
-  if (creditsEnabled() && ACTS(r.role) && !isChargeable(r, senderEmail) && !free) {
+function takeOverCost(e: any, r: any, newEmail: string, newName: string): number {
+  const sender = senderOf(e) || { email: '', name: '' };
+  const free = isSelf({ role: r.role, email: newEmail, name: newName }, sender) ? 1 : 0;
+  if (creditsEnabled() && ACTS(r.role) && !isChargeable(r, sender) && !free) {
     const have = available(e.account_id);
     if (have < 1) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), 1, have), 402);
   }
@@ -1041,15 +1041,17 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   if (newCode) assertCodes([{ name, access_code: code }]);
   const fresh = 'code_fails=0, code_frozen_at=NULL';
   if (email.toLowerCase() === r.email.toLowerCase()) {
-    // Same person, same inbox: fixing a name or an access code never breaks the link they already have.
-    run(`UPDATE recipients SET name=?, access_code=?${newCode ? `, ${fresh}` : ''} WHERE id=?`, name, code, r.id);
+    // Same person, same inbox: fixing a name or an access code never breaks the link they already have. (Renaming
+    // your own free signature to somebody else's name makes it theirs, and then it needs a signature.)
+    const free = name !== r.name ? takeOverCost(e, r, email, name) : r.free;
+    run(`UPDATE recipients SET name=?, access_code=?, free=?${newCode ? `, ${fresh}` : ''} WHERE id=?`, name, code, free, r.id);
     audit(e.id, actor, 'Recipient corrected', `${r.name} is now ${name}${code !== r.access_code ? ', access code changed' : ''}`);
     return;
   }
   // A new address is a new person being emailed in the sender's name: not while paused, read by the fake-notice
   // filter, and counted towards the daily limit like a first send.
   assertMayEmail(e, [email]);
-  const free = takeOverCost(e, r, email);
+  const free = takeOverCost(e, r, email, name);
   retireToken(r, 'address');
   // A different address is a different person: nothing the first one typed, ticked, uploaded or drew goes with the
   // request, and the wait before "not opened yet" is counted from the email that goes to the new address now.
@@ -1158,7 +1160,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // Someone signing for the second time, after the sender changed the document, is recorded as exactly that.
   audit(e.id, actor, r.signed_before ? `${verb} again` : verb, `${r.name} <${r.email}>`);
   fireWebhooks(e.account_id, 'recipient.completed', e.id, { recipient_id: r.id });
-  if (creditsEnabled() && isChargeable(r, senderOf(e)?.email || '')) grant(e.account_id, -1, 'signature', r.id);
+  if (creditsEnabled() && isChargeable(r, senderOf(e) || '')) grant(e.account_id, -1, 'signature', sigRef(r));
   const left = e.recipients.filter((x: any) => x.id !== r.id && x.status !== 'completed' && x.role !== 'cc');
   if (left.length) await notifySender(e, 'signed', `${verb}: ${e.subject}`, `${r.name} has ${verb.toLowerCase()} your document`, [`Still waiting on ${left.map((x: any) => x.name).join(', ')}.`]);
   await advance(e.id);
@@ -1195,7 +1197,7 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   // Passing a request on emails a new person in the sender's name, so the sender's pause and daily limit hold here
   // too (or a sender could send to themselves and pass each one on). The signer is not told the sender's business.
   if (emailRefusal(e, [email])) throw bad(`This document cannot be passed on to someone else right now. Reply to the email you got and ask ${senderOf(e)?.name || 'the sender'} to send it to the right person.`, 403);
-  const free = takeOverCost(e, r, email);
+  const free = takeOverCost(e, r, email, name);
   retireToken(r, 'handed');
   // The new person starts with empty fields: nothing the first one typed, ticked, uploaded or drew is passed on.
   // The wait before the sender hears "not opened yet" starts again with the email that goes out now.
@@ -1221,7 +1223,7 @@ export async function extendEnvelope(e: any, days: any, actor: Actor) {
   const reopened = e.status === 'expired';
   if (reopened && creditsEnabled()) {
     // Signatures came back when it expired. Reopening holds them again for whoever still has to sign.
-    const need = needed(e, senderOf(e)?.email || '');
+    const need = needed(e, senderOf(e) || '');
     const have = available(e.account_id);
     // What is free (your own documents, approvals) is never refused, whatever the balance.
     if (need > 0 && need > have) throw bad(outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), need, have), 402);

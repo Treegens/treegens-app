@@ -149,6 +149,12 @@ CREATE TABLE IF NOT EXISTS billing_todo (
   tries INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, done_at TEXT, UNIQUE (kind, ref)
 );
 CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- Every account that was ever deleted. A payment that names one of these is known to be for an account that is
+-- gone (and goes straight back); a payment that names an id nobody has heard of is not.
+CREATE TABLE IF NOT EXISTS deleted_accounts (id TEXT PRIMARY KEY, at TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS accounts_deleted AFTER DELETE ON accounts BEGIN
+  INSERT OR IGNORE INTO deleted_accounts (id, at) VALUES (old.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+END;
 CREATE TABLE IF NOT EXISTS refunds (
   id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, account_id TEXT, cents INTEGER NOT NULL, signatures INTEGER NOT NULL DEFAULT 0,
   why TEXT NOT NULL DEFAULT '', auto INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', provider_id TEXT,
@@ -224,6 +230,11 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['accounts', 'dormant_kept_for', 'TEXT'],
   ['accounts', 'promo_missing_since', 'TEXT'],
   ['billing_todo', 'last_at', 'TEXT'],
+  ['payments', 'disputed', 'TEXT'],
+  ['payments', 'dispute_taken', 'INTEGER NOT NULL DEFAULT 0'],
+  ['accounts', 'renewal_tax_cents', 'INTEGER NOT NULL DEFAULT 0'],
+  ['accounts', 'invoice_checked_at', 'TEXT'],
+  ['refunds', 'refused', 'INTEGER NOT NULL DEFAULT 0'],
   // What a key may do: 'send' (everyday work, the default) or 'admin' (account settings too). See router.ts.
   ['api_keys', 'scope', "TEXT NOT NULL DEFAULT 'send'"],
   // Set when the key's owner left the account: an admin removed them, or their own login was deleted. The row

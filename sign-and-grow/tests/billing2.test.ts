@@ -28,7 +28,7 @@ async function person(name: string): Promise<Person> {
 function invoice(p: Person, inv: string, over: any = {}) {
   const o = {
     id: inv, customer: p.cus, subscription: p.sub, amount_paid: 900, currency: 'usd', status: 'paid', billing_reason: 'subscription_create', hosted_invoice_url: `https://pay.example/${inv}`,
-    lines: { data: [{ period: { start: unix(0), end: unix(30) }, metadata: { account_id: p.id } }] }, ...over,
+    lines: { data: [{ period: { start: unix(0), end: unix(30) }, metadata: { sg_account: p.id } }] }, ...over,
   };
   stripe.invoices[inv] = o;
   stripe.charges.unshift({ id: `ch_${inv}`, paid: true, refunded: false, amount: o.amount_paid, currency: 'usd', customer: o.customer, invoice: inv, last4: '4242', created: unix(0) });
@@ -41,7 +41,7 @@ async function subscribe(p: Person, inv = `in_${p.k}_1`) {
 }
 const topUp = (p: Person, sid: string, credits: number, over: any = {}) => {
   stripe.charges.unshift({ id: `ch_${sid}`, payment_intent: `pi_${sid}`, paid: true, refunded: false, amount: credits * 100, customer: p.cus, last4: '4242', created: unix(0) });
-  return { id: sid, mode: 'payment', client_reference_id: p.id, customer: p.cus, payment_status: 'paid', amount_total: credits * 100, currency: 'usd', payment_intent: `pi_${sid}`, metadata: { kind: 'topup', credits: String(credits) }, ...over };
+  return { id: sid, mode: 'payment', client_reference_id: p.id, customer: p.cus, payment_status: 'paid', amount_total: credits * 100, currency: 'usd', payment_intent: `pi_${sid}`, metadata: { kind: 'sg_topup', credits: String(credits), sg_account: p.id }, ...over };
 };
 const bal = async (p: Person) => (await p.c.get('/billing')).data.signatures;
 const state = async (p: Person) => (await p.c.get('/billing')).data;
@@ -307,7 +307,14 @@ test('slow payment methods are credited when the money arrives, not before and n
   assert.equal((await bal(p)).balance, 17);
   assert.ok(subjects(p.email).includes('Your payment did not go through'));
 
+  // A top-up that names an account nobody here has ever heard of is not ours to touch (it could be another
+  // server's, or another product's on the same provider account).
+  await event('checkout.session.completed', topUp({ ...p, id: 'acc_never_ours' }, 'cs_stranger', 3));
+  assert.equal(pay('cs_stranger'), null);
+  assert.equal(stripe.refunded('ch_cs_stranger'), 0);
   // A top-up for an account that has since been deleted goes straight back, and a person is told.
+  db.run("INSERT INTO accounts (id, name, created_at) VALUES ('acc_gone', 'Gone', ?)", new Date().toISOString());
+  db.run("DELETE FROM accounts WHERE id='acc_gone'");
   await event('checkout.session.completed', topUp({ ...p, id: 'acc_gone' }, 'cs_orphan', 3));
   assert.equal(pay('cs_orphan').refunded_cents, 300);
   assert.ok(alerts().some((m) => m.includes('cs_orphan')));
@@ -331,7 +338,7 @@ test('the free code: typos are said out loud, nobody on it is ever charged, and 
   assert.equal(stripe.sub(p.sub).status, 'canceled');
   const told = mailTo(p.email).find((m) => m.subject === 'Code GROWalition accepted: your plan is free')!;
   assert.match(told.html, /ended today and will not be charged again\. Cancellation reference: SG-/);
-  assert.match(told.html, /card you paid with before is still saved/);
+  assert.match(told.html, /If a card is still saved from an earlier payment, it stays saved for top-ups/);
   assert.ok((await state(p)).has_customer, 'so the page can offer to remove it');
 
   // The refund of what they had paid is still theirs, and taking it does not knock them off the free plan.
@@ -353,7 +360,7 @@ test('the free code: typos are said out loud, nobody on it is ever charged, and 
   assert.equal(pay('in_sneak').refunded_cents, 900);
   assert.equal((await state(p)).free_with, 'GROWalition');
   stripe.sub('sub_ivy_zombie');
-  await event('customer.subscription.updated', { id: 'sub_ivy_zombie', customer: p.cus, status: 'active' });
+  await event('customer.subscription.updated', { id: 'sub_ivy_zombie', customer: p.cus, status: 'active', metadata: { sg_account: p.id } });
   assert.equal(stripe.sub('sub_ivy_zombie').status, 'canceled', 'a paid subscription on a free plan is never left alive');
 
   // Months in which nobody opened the account are made up, not lost.
@@ -413,7 +420,7 @@ test('renewal reminders run on our own timer, a week before and the day before, 
 
   // If more is charged than the reminder said, the difference goes back by itself and a person is told.
   const renewal = Math.floor(Date.parse(inTwenty) / 1000);
-  await event('invoice.paid', invoice(p, 'in_jem_more', { amount_paid: 1200, billing_reason: 'subscription_cycle', lines: { data: [{ period: { start: renewal, end: renewal + 30 * 86400 }, metadata: { account_id: p.id } }] } }));
+  await event('invoice.paid', invoice(p, 'in_jem_more', { amount_paid: 1200, billing_reason: 'subscription_cycle', lines: { data: [{ period: { start: renewal, end: renewal + 30 * 86400 }, metadata: { sg_account: p.id } }] } }));
   assert.equal(pay('in_jem_more').refunded_cents, 300);
   assert.ok(subjects(p.email).includes('Refund sent: $3.00'));
   assert.ok(alerts().some((m) => m.includes('was charged more than we told them')));
@@ -435,7 +442,7 @@ test('every email about money carries the way out, and the link stops working wh
   const receipt = mailTo(p.email).find((m) => m.subject.startsWith('Receipt'))!;
   assert.match(receipt.html, /\/billing\/stop\?token=/, 'the monthly receipt has the stop link');
   assert.match(receipt.html, new RegExp(`reference ${p.id}`), 'and says which account it is for');
-  await event('invoice.payment_failed', { customer: p.cus });
+  await event('invoice.payment_failed', { customer: p.cus, subscription: p.sub });
   assert.match(mailTo(p.email).find((m) => m.subject === 'Your monthly payment did not go through')!.html, /\/billing\/stop\?token=/);
 
   // A second admin gets the same emails, with a link of their own.
@@ -517,7 +524,11 @@ test('sending to yourself is free, but pointing that request at someone else nee
   assert.equal((await bal(p)).available, 0);
 
   // Free to send to yourself at zero.
-  const own = await simple(p.c, p.email);
+  // "Yourself" means your own address and your own name. A client entered under your address is somebody else.
+  const me = { recipients: [{ id: 'r', role: 'signer', name: 'Pia Tester', email: p.email }] };
+  const client = await simple(p.c, p.email, { recipients: [{ id: 'r', role: 'signer', name: 'Walk-in Client', email: p.email }] });
+  assert.equal((await p.c.post(`/envelopes/${client.id}/send`)).status, 402, 'a client under your own address still needs a signature');
+  const own = await simple(p.c, p.email, me);
   assert.equal((await p.c.post(`/envelopes/${own.id}/send`)).status, 200);
   const rid = (await p.c.get(`/envelopes/${own.id}`)).data.envelope.recipients[0].id;
   // The quick fix cannot turn it into a free signature for somebody else.
@@ -542,22 +553,27 @@ test('sending to yourself is free, but pointing that request at someone else nee
   assert.deepEqual(await bal(p), { balance: 0, held: 0, available: 0 });
 
   // Being over-committed never blocks what is free: your own documents, and a name fix on something already out.
-  const out = await simple(p.c, p.email);
+  const out = await simple(p.c, p.email, me);
   await p.c.post(`/envelopes/${out.id}/send`);
   db.run("INSERT INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,?,?,?)", p.id, -1, 'adjust', 'test3', new Date().toISOString());
   assert.equal((await bal(p)).available, -1);
-  const again = await simple(p.c, p.email);
+  const again = await simple(p.c, p.email, me);
   assert.equal((await p.c.post(`/envelopes/${again.id}/send`)).status, 200, 'signing your own document stays free below zero');
   const fix = (await p.c.get(`/envelopes/${out.id}`)).data.envelope;
-  fix.recipients[0].name = 'Pia Renamed';
-  assert.equal((await p.c.put(`/envelopes/${out.id}`, fix)).status, 200, 'a name fix needs no signatures');
+  fix.subject = 'Renamed agreement';
+  assert.equal((await p.c.put(`/envelopes/${out.id}`, fix)).status, 200, 'a change that needs no signatures is never refused');
+  // Renaming your own free signature to somebody else's name makes it theirs, and then it needs one.
+  const rename = (await p.c.get(`/envelopes/${out.id}`)).data.envelope;
+  rename.recipients[0].name = 'Somebody Else';
+  assert.equal((await p.c.put(`/envelopes/${out.id}`, rename)).status, 402);
+  assert.equal((await p.c.post(`/envelopes/${out.id}/correct`, { recipient_id: rename.recipients[0].id, name: 'Somebody Else' })).status, 402);
 
   // Handing a departed member's own documents to someone else does not start charging for them.
   const t = await person('Tea');
   await t.c.post('/account/invites', { email: 'tea-member@example.com' });
   const mem = new Client();
   await mem.post('/auth/signup', { name: 'Tea Member', email: 'tea-member@example.com', password: 'correct horse battery', invite: db.get("SELECT token FROM invites WHERE email='tea-member@example.com'").token });
-  const theirs = await simple(mem, 'tea-member@example.com');
+  const theirs = await simple(mem, 'tea-member@example.com', { recipients: [{ id: 'r', role: 'signer', name: 'Tea Member', email: 'tea-member@example.com' }] });
   assert.equal((await mem.post(`/envelopes/${theirs.id}/send`)).status, 200);
   assert.deepEqual(await bal(t), { balance: 3, held: 0, available: 3 });
   const uid = db.get("SELECT id FROM users WHERE email='tea-member@example.com'").id;

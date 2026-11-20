@@ -400,7 +400,7 @@ route('POST', '/bulk', async (c) => {
   assertMayEmail({ ...tpl, sender_id: c.user.id }, [...tpl.recipients.map((r: any) => r.email), ...rows.flatMap((row) => open.map((r: any) => str(row[r.role_name || r.id].email).trim()))].filter(Boolean));
   // Check the whole batch against the balance first, so it never stops half way through.
   if (creditsEnabled()) {
-    const perRow = tpl.recipients.filter((r: any) => isChargeable({ role: r.role, email: r.email || 'someone-else' }, c.user.email)).length;
+    const perRow = tpl.recipients.filter((r: any) => isChargeable({ role: r.role, email: r.email || 'someone-else', name: r.name }, c.user)).length;
     const have = available(c.account.id);
     // A batch that needs none (approvals, viewers, copies) goes out whatever the balance.
     if (perRow > 0 && perRow * rows.length > have) throw bad(outOfSignatures(c.account, perRow * rows.length, have), 402);
@@ -538,7 +538,10 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   }
   // A public form uses one of its owner's signatures for each person who signs. When there are none left the form
   // says so politely, and the owner is told (once a day at most) instead of finding out from a customer.
-  if (creditsEnabled() && isChargeable({ role: open.role, email }, get('SELECT email FROM users WHERE id=?', tpl.sender_id)?.email || '') && available(p.account_id) < 1) {
+  // Starting a form holds nothing, so the check is against what is left after everyone who has started one of this
+  // owner's forms and not finished yet: a form can never collect more signatures than its owner has.
+  const startedForms = get("SELECT COUNT(*) n FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.account_id=? AND e.powerform_id IS NOT NULL AND e.status='sent' AND r.status IN ('pending','sent','viewed')", p.account_id).n;
+  if (creditsEnabled() && isChargeable({ role: open.role, email, name }, get('SELECT email, name FROM users WHERE id=?', tpl.sender_id) || '') && available(p.account_id) - startedForms < 1) {
     if (!p.alerted_at || Date.parse(p.alerted_at) < Date.now() - 864e5) {
       run('UPDATE powerforms SET alerted_at=? WHERE id=?', now(), p.id);
       const owner = get('SELECT email FROM users WHERE id=?', tpl.sender_id);
