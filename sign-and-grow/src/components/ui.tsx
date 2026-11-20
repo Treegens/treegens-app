@@ -10,10 +10,10 @@ function timeZone(): string {
   }
 }
 
-export async function api<T = any>(path: string, opts: { method?: string; body?: any; form?: FormData } = {}): Promise<T> {
+export async function api<T = any>(path: string, opts: { method?: string; body?: any; form?: FormData; headers?: Record<string, string> } = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method: opts.method || (opts.body || opts.form ? 'POST' : 'GET'),
-    headers: { ...(opts.body ? { 'content-type': 'application/json' } : {}), ...(path === '/me' && !opts.method ? { 'x-tz': timeZone() } : {}) },
+    headers: { ...(opts.body ? { 'content-type': 'application/json' } : {}), ...(path === '/me' && !opts.method ? { 'x-tz': timeZone() } : {}), ...(opts.headers || {}) },
     body: opts.form || (opts.body ? JSON.stringify(opts.body) : undefined),
     credentials: 'same-origin',
   });

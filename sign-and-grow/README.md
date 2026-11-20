@@ -31,6 +31,7 @@ What the test files cover:
 | `tests/flow.test.ts` | Signing order, access codes, the certificate, tamper checks, isolation between accounts. |
 | `tests/billing.test.ts` | Paying, against a simulated payment provider (`tests/stripe-fake.ts`): free signatures for a new account, the monthly plan, top-ups, roll-over, renewal reminders, cancelling in the app, from an email link and by card, a charge after cancelling, refunds of unused signatures, a card dispute, an unused plan, free codes. |
 | `tests/billing2.test.ts` | Paying when things go wrong: the provider's messages in any order, the provider failing half way, two refund requests at once, replayed checkouts and messages, cancelling while a payment is failing, slow payment methods, reminders on our own timer, a charge higher than the reminder said, the corners of the free code, and the ways round paying for a signature. |
+| `tests/billing3.test.ts` | What a second round of attacks found: provider messages handled in the same instant, a refund whose answer is lost on the way back, refunding again when signatures come back, card disputes, top-up invoices and invoices that are not ours, cancelling in the awkward moments, the unused-plan rule, who pays for which signature, and a free code that is switched off. |
 | `tests/integrity.test.ts` | What people sign is what they saw: every signer is shown everything the sender wrote, nothing printed changes after a signature unless the signer is asked to sign again, a signing page left open cannot finish on a document that was changed, the audit trail says what a correction changed, a replaced signer starts with empty fields, a save from an older copy of the editor is refused, a replaced email is still recognised as genuine, a changed signing order is enforced. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
 | `tests/autoplace.test.ts` | Placing fields automatically from the text of a document. |
@@ -52,7 +53,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | What people complain about | What Sign&Grow does |
 | --- | --- |
 | The plan renews with no warning, and the email does not say the amount. | Month to month only. A week before and again the day before every renewal an email states the exact amount and date, with a link that stops it. The reminders run on the app's own timer and are written to the plan history. If more is charged than the reminder said, the difference is refunded by the software. Every payment gets a receipt. |
-| "I cancelled and was charged anyway." | Cancelling tells the payment provider at once, says "cancelled" only when the provider has confirmed it, and returns a reference that stays on the Plan page. A charge on a plan that already ended, a second charge, or a charge on a free plan is refunded by the software itself; if the provider is down the refund is retried on the timer and a person is told when it keeps failing. Cancelling while a payment is failing ends the plan the same day. A card dispute stops all billing and is not contested. |
+| "I cancelled and was charged anyway." | Cancelling tells the payment provider at once, says "cancelled" only when the provider has confirmed it, and returns a reference that stays on the Plan page. A charge on a plan that already ended, a second charge for the plan, or a charge on a free plan is refunded by the software itself; if the provider is down the refund is retried on the timer for as long as it takes and a person is told when it keeps failing. Cancelling while a payment is failing, or in the hour before a new month's payment is taken, ends the plan the same day and withdraws that payment. Cancelling on the provider's own page gets the same reference and email. If one of the provider's messages is lost, the timer reads the real state back. A card dispute stops all billing, takes the unused signatures of that payment back with the money, and small ones are not contested. |
 | There is no cancel button. | One button on the Plan page. A stop link in every email about a payment while a plan renews, which works without logging in (`/billing/stop`) and dies when that admin leaves the team. On `/help`: find every paid plan by email, or stop billing with the card alone (last four digits plus the account email, or plus the date and amount of a charge). |
 | Refunds are refused or left to someone's discretion. | One rule, applied by the software and written once (`refundRuleText` in `src/lib/policy.ts`): within `REFUND_DAYS` of a payment, every signature from it that has not been used is refunded at the price paid, for any payment in the window, not only the latest. No form and no approval. Two requests at the same moment pay out once. |
 | "I paid and nothing happened." | The plan and its signatures are there the moment checkout finishes, whichever of the provider's messages arrives first, and the page only says thank you for a payment that really arrived. A payment that cannot be matched to an account is flagged to a person at once. |
@@ -186,7 +187,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SMTP_URL`, `MAIL_FROM` | Mail server, for example `smtps://user:pass@smtp.example.com`. Without it nothing is delivered. | none |
 | `CRON_SECRET` | Lets a scheduler call `POST /api/cron`. Call it at least once an hour: it sends signer reminders and renewal reminders, expires envelopes, retries refunds and cancellations the payment provider could not take the first time, and closes accounts. A renewal that is charged with no reminder on record raises an alert. | none |
 | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_GROVE`, `STRIPE_WEBHOOK_SECRET` | Turns on paying. Without them nothing is counted and there is nothing to buy. `STRIPE_PRICE_GROVE` is the monthly price. Point a Stripe webhook at `/api/stripe/webhook` and send it these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `invoice.paid`, `invoice.upcoming`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`, `charge.refunded`, `charge.dispute.created`. | none |
-| `ACCEPT_DISPUTES=0` | By default a card dispute is accepted with the payment provider automatically (the bank returns the money, billing stops, the customer is told in writing). Set this to `0` to stop billing but leave the decision about the dispute to a person. | accept |
+| `ACCEPT_DISPUTES_UP_TO_USD` | A card dispute always stops billing, takes back the unused signatures the disputed payment bought, switches new payments off until a person has looked (the operator page has the button to switch them back on), and tells the customer in writing. Disputes up to this amount are also accepted with the payment provider automatically instead of being fought; larger ones are left for a person to decide. `0` (or `ACCEPT_DISPUTES=0`) leaves every dispute to a person. | `25` |
 | `SUPPORT_EMAIL` | The address people can write to. It is shown on `/help`, receives every help request with the sender as reply-to, and gets the alerts that need a person: a payment nobody could be matched to, a refund that keeps failing, a card dispute. Those alerts also go to `OPERATOR_EMAILS` and always appear in the operator queue, so they are seen even when this is not set. | none |
 | `ABUSE_EMAIL` | Where reports of suspicious documents go. | `SUPPORT_EMAIL` |
 | `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, pausing or unpausing an account, and marking an account as trusted. | nobody |
@@ -212,9 +213,12 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 - **Choices made around those prices**, each one line to change in `PRICING` or the settings above: a signature is
   one person signing one envelope; signatures never expire and roll over; a new account gets 3 free ones; top-ups
   need the monthly plan; unused signatures are refunded within 30 days of the payment that bought them, and
-  refunding a monthly payment ends the plan; an unused plan stops renewing after 90 days; a card dispute is
-  accepted rather than contested (`ACCEPT_DISPUTES`); someone on a free code who was paying has their paid
-  subscription ended the moment the code is applied.
+  refunding a monthly payment ends the plan; an unused plan stops renewing after 90 days (once per renewal, and
+  "keep it" is respected); a small card dispute is accepted rather than contested (`ACCEPT_DISPUTES_UP_TO_USD`);
+  someone on a free code who was paying has their paid subscription ended the moment the code is applied; signing
+  in person always uses a signature; a public form holds none of its owner's signatures until a visitor actually
+  signs, which also means a stranger can use them up by really signing (20 starts an hour per address); only US
+  dollars are accepted.
 - **Raising the price** is not handled for you. Changing the price at the payment provider changes what existing
   subscribers pay at their next renewal. The reminder a week before will state the new amount, but nothing here
   asks for their agreement or gives 60 days of notice. Decide that policy before touching the price.
@@ -228,9 +232,12 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
   public pages promise that a person replies, and deliberately promise no response time.
 - **Stripe** is implemented but has only been tested against a stand-in (`tests/stripe-fake.ts`), never a live
   account. Run through it once in Stripe's test mode before taking money: subscribe, renew with a test clock,
-  cancel, refund, a failed payment, a dispute. Stopping billing by card and the operators' card lookup use
-  Stripe's charge search, which is the least certain part. Card statements show only your Stripe account's
-  statement descriptor; set one that people will recognise.
+  cancel, refund, a failed payment, a dispute, a top-up (check its invoice shows on the Plan page once, not as a
+  second payment). Stopping billing by card and the operators' card lookup use Stripe's charge search, which is
+  the least certain part. Finding the card charge behind a monthly payment asks Stripe for the invoice's payment,
+  whose shape changed between API versions; both shapes are read, but only test mode will prove it. Card
+  statements show only your Stripe account's statement descriptor; set one that people will recognise. If the
+  Stripe account is shared with something else, invoices and disputes that are not Sign&Grow's are left alone.
 - **Storage** is SQLite on one disk, which is fine for one server. Back the `DATA_DIR` folder up. Moving to
   Postgres and object storage is the step to take before running more than one instance.
 - **`/security`** lists only what the code does. If hosting adds something (disk encryption, backups, a

@@ -1359,6 +1359,12 @@ route('GET', '/operator/billing/lookup', async (c) => {
   return { accounts: rows.map((a) => ({ id: a.id, name: a.name, plan: a.plan, status: a.subscription_status, free_with: a.promo_code || null, renews_at: a.renews_at, ends_at: a.cancel_at, disputed: !!a.dispute_at, admins: admins(a.id).map((u) => ({ name: u.name, email: u.email })) })) };
 });
 
+// Accounts whose payments are switched off after a card dispute, for the operator page.
+route('GET', '/operator/billing/disputed', (c) => {
+  operator(c);
+  return { accounts: all('SELECT * FROM accounts WHERE dispute_at IS NOT NULL ORDER BY dispute_at DESC LIMIT 100').map((a) => ({ id: a.id, name: a.name, plan: a.plan, free_with: a.promo_code || null, dispute_at: a.dispute_at, signatures: available(a.id), admins: admins(a.id).map((u) => ({ name: u.name, email: u.email })) })) };
+});
+
 // After a card dispute payments stay off until a person has looked. This switches them back on.
 route('POST', '/operator/billing/accounts/:id/clear-dispute', (c) => {
   operator(c);

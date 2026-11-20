@@ -1,8 +1,57 @@
 'use client';
+import { useState, type FormEvent } from 'react';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 
 // The queue for the people who run the service: help requests, reports from recipients, and paused accounts.
 // Only visible to the addresses listed in OPERATOR_EMAILS.
+// Money questions only a person can settle: who is behind a charge on a card statement, and accounts whose payments
+// were switched off by a card dispute.
+function BillingTools() {
+  const [disputed, reload] = useLoad<any>(() => api('/operator/billing/disputed').catch(() => ({ accounts: [] })));
+  const [last4, setLast4] = useState('');
+  const [on, setOn] = useState('');
+  const [amount, setAmount] = useState('');
+  const [found, setFound] = useState<any[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const look = (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const q = new URLSearchParams({ last4, ...(on ? { charged_on: on } : {}), ...(amount ? { amount } : {}) });
+    api(`/operator/billing/lookup?${q}`).then((r) => setFound(r.accounts)).catch(oops).finally(() => setBusy(false));
+  };
+  const clear = (id: string, name: string) => {
+    if (window.confirm(`Switch payments back on for "${name}"? Do this once the dispute is settled and you are satisfied it was a mistake.`))
+      api(`/operator/billing/accounts/${id}/clear-dispute`, { method: 'POST' }).then(() => (toast('Payments are back on for that account.'), reload())).catch(oops);
+  };
+  const who = (a: any) => a.admins.map((u: any) => `${u.name} <${u.email}>`).join(', ') || 'no admins';
+  return (
+    <div className="card">
+      <h2>Billing</h2>
+      <p className="muted small" style={{ margin: '4px 0 12px' }}>Someone asks about a charge and does not know which account it is on: the last four digits of the card are enough to look, and a date and amount narrow it down.</p>
+      <form className="row wrap" onSubmit={look}>
+        <input value={last4} onChange={(e) => setLast4(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="Last 4 digits" aria-label="Last four digits of the card" inputMode="numeric" required pattern="[0-9]{4}" style={{ maxWidth: 140 }} />
+        <input type="date" value={on} onChange={(e) => setOn(e.target.value)} aria-label="Date of the charge" style={{ maxWidth: 170 }} />
+        <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount, for example 9.00" aria-label="Amount of the charge" inputMode="decimal" style={{ maxWidth: 190 }} />
+        <button className="btn" disabled={busy}>{busy ? 'Looking' : 'Find the account'}</button>
+      </form>
+      {found && (found.length === 0 ? <div className="notice" style={{ marginTop: 12 }}>No account was charged on a card ending in {last4} with those details. A charge from the last few minutes may not show up yet.</div> : (
+        <ul className="rules" style={{ marginTop: 12 }}>{found.map((a) => (
+          <li key={a.id}><b>{a.name}</b> ({a.id}) · {a.free_with ? `free with ${a.free_with}` : a.plan === 'grove' ? 'monthly plan' : 'no plan'}{a.status ? `, ${a.status}` : ''}{a.ends_at ? `, ends ${fmtDate(a.ends_at)}` : a.renews_at ? `, renews ${fmtDate(a.renews_at)}` : ''}{a.disputed ? ', payments off after a dispute' : ''}<div className="muted small">{who(a)}</div></li>
+        ))}</ul>
+      ))}
+      {disputed?.accounts?.length > 0 && (
+        <>
+          <h3 style={{ marginTop: 18 }}>Payments switched off after a card dispute ({disputed.accounts.length})</h3>
+          <ul className="rules" style={{ marginTop: 8 }}>{disputed.accounts.map((a: any) => (
+            <li key={a.id}><b>{a.name}</b> ({a.id}) · disputed {fmtDate(a.dispute_at)} · {a.signatures} signatures on the balance<div className="muted small">{who(a)}</div>
+              <button className="btn sm" style={{ marginTop: 6 }} onClick={() => clear(a.id, a.name)}>Switch payments back on</button></li>
+          ))}</ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Operator() {
   const [q, reload, error] = useLoad(() => api('/operator/queue'));
   if (error) return <div className="card center"><h2>Not available</h2><p className="muted">This page is for the team that runs Sign&Grow.</p></div>;
@@ -30,6 +79,8 @@ export default function Operator() {
   return (
     <div className="stack">
       <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Review queue</h1><div className="muted">Every item here is a person waiting. Reply by email, then close it.</div></div><button className="btn" onClick={reload}>Refresh</button></div>
+
+      <BillingTools />
 
       <div className="card pad0">
         <div style={{ padding: '14px 16px' }}><h2>Help requests <span className="muted" style={{ fontWeight: 400 }}>({q.support.length})</span></h2></div>

@@ -1,5 +1,5 @@
 'use client';
-import { Suspense, useMemo, useState } from 'react';
+import { Suspense, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api, useLoad, toast } from '@/components/ui';
@@ -76,12 +76,21 @@ function BulkSend({ preset }: { preset: string }) {
     setFileNote(`Loaded ${file.name}.`);
   }
 
+  // One key per batch as it stands. If the connection drops and Send is pressed again for the same batch, the server
+  // sees the same key and finishes that batch instead of sending everybody a second time.
+  const sendKey = useRef<{ sig: string; key: string } | null>(null);
   async function send(rows: BulkRow[]) {
-    const r = await api('/bulk', { body: { template_id: tid, name: name.trim() || undefined, rows: rows.map((x) => x.cells) } });
-    const failed = (r.results as any[]).map((x, i) => ({ row: rows[i], error: x.error as string, ok: x.ok })).filter((x) => !x.ok);
+    const body = { template_id: tid, name: name.trim() || undefined, rows: rows.map((x) => x.cells) };
+    const sig = JSON.stringify(body);
+    if (sendKey.current?.sig !== sig) sendKey.current = { sig, key: `bulk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` };
+    const r = await api('/bulk', { body, headers: { 'Idempotency-Key': sendKey.current.key } });
+    const all = (r.results as any[]).map((x, i) => ({ row: rows[i], error: x.error as string, ok: x.ok, pending: !!x.pending }));
+    const failed = all.filter((x) => !x.ok && !x.pending);
+    const waiting = all.filter((x) => x.pending).length;
+    if (!waiting) sendKey.current = null;
     setResult({ id: r.id, sent: r.sent, failed });
     setConfirming(null);
-    toast(r.sent ? `${plural(r.sent, 'envelope')} sent.` : 'Nothing was sent. See why below.', !r.sent);
+    toast(waiting ? `${plural(r.sent, 'envelope')} sent so far, ${waiting} still going out. Nobody is sent to twice.` : r.sent ? `${plural(r.sent, 'envelope')} sent.` : 'Nothing was sent. See why below.', !r.sent && !waiting);
     if (!failed.length) (setCsv(''), setName(''), setFileNote(''));
     reloadBatches();
     reloadAllowance();
