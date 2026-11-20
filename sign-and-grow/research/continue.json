@@ -4016,5 +4016,125 @@
   "settings": [
    "No new setting. Nothing was added to .env.example or the README configuration table: the feature works on every server and needs no provider."
   ]
+ },
+ "build:clickwrap": {
+  "found": "Nothing of this task had been started. No file, table, route, setting or test file mentioned clickwrap or click-to-agree. tests/clickwrap.test.ts did not exist and there was no tests/out/build-clickwrap folder. The only mention anywhere was the README line \"Contract lifecycle management, AI contract analysis, clickwrap, document generation\" under \"What is not in it\". None of the checkpoint's failures belonged to this task. So I built it all from scratch. While I worked, somebody's checkpoint committed my new files (git status now shows tests/clickwrap.test.ts as modified, not new).",
+  "done": [
+   {
+    "item": "1. Agreements, terms (text with simple formatting or a PDF), tick box and button, optional scroll to the end, versions with a note and who has to accept again",
+    "status": "done",
+    "how": "Three new tables in db.ts SCHEMA: clickwraps (the draft and settings), clickwrap_versions and clickwrap_acceptances. Triggers refuse any UPDATE of a version or an acceptance. Rules live in src/server/clickwrap.ts and routes in src/server/routes-clickwrap.ts (admin level). Publishing makes version N+1. A publish that changes nothing is refused with 409. From version 2 a note of what changed is required. ask_again (default true) decides whether earlier acceptances still count, through minVersion. The answer gives how many people have to accept again and says so in words. Text terms understand # headings, - lists, 1. lists, **bold** and blank-line paragraphs (src/lib/clickwrap.ts termBlocks). There is no HTML and no links. The text is drawn by src/components/ClickwrapTerms.tsx as React elements. Terms that someone accepted cannot be deleted, only closed.",
+    "test": "tests/clickwrap.test.ts: 'a team writes terms, publishes version 1...' and 'the draft is checked as it is written...'"
+   },
+   {
+    "item": "2a. Hosted page /agree/<slug>",
+    "status": "done",
+    "how": "src/app/agree/[slug]/page.tsx reads GET /public/agree/:slug and POST /public/agree/:slug/accept. The page hands out a signed 'view' token per version. A press is refused (409 terms_changed) when a new version was published while the page was open, and the page then reloads the new terms. A page open more than 24 hours is refused too. Without a signed link the visitor types a name and an email address. A double press is one record. The server measures how long the terms were open. I checked it in a browser at 390x844 and on a desktop: no sideways scroll, tap targets 44 px or more, and accepting works by keyboard alone (Tab into the terms box, End, Tab, type, Space, Enter).",
+    "test": "'our page shows the terms and what is recorded before the click...', 'a press always belongs to the version on the screen...'"
+   },
+   {
+    "item": "2b. Embed: script or iframe",
+    "status": "done",
+    "how": "public/clickwrap.js builds the frame, sizes it from postMessage (only our own origin and that one frame are listened to) and fires 'signgrow:accepted' with the acceptance id and version. The receipt is never posted out of the frame. next.config.mjs adds 'Content-Security-Policy: frame-ancestors *' for /agree/:path* only; the rest of the app stays SAMEORIGIN. Inside the frame the page records via=embed and the embedding page as the browser reports it. Where the browser can tell (IntersectionObserver v2), a button that something covers cannot be pressed, and the record says whether that was checked. I checked this in Chromium with a real local host page: accept, the host event, a covered frame refused with its message, and the frame shrinking after accepting. The snippets and what a frame can and cannot guarantee (EMBED_CAN / EMBED_CANNOT) are on the agreement screen.",
+    "test": "'inside a frame on the website: marked as such...'"
+   },
+   {
+    "item": "2c. API: record an acceptance, and has this person accepted the current version",
+    "status": "done",
+    "how": "POST /clickwraps/:id/acceptances is open to any key. It is recorded as identity=api, via=api, with recorded_by naming who made the call and any visitor IP or browser 'as given'. A version that does not match the live one is refused with 409. GET /clickwraps/:id/status takes person_id or email. It answers accepted, counts_from_version, latest (with how that acceptance came about) and versions_accepted. A typed acceptance can never match person_id.",
+    "test": "'the API: a website records an acceptance itself...'"
+   },
+   {
+    "item": "2. Signed parameter so a visitor cannot accept as somebody else",
+    "status": "done",
+    "how": "who = base64url JSON {id,name,email,exp}. sig = HMAC-SHA256 with the agreement's own key, in base64url or hex (hex is what PHP gives by default). The signature is checked before anything is parsed. Refused in words with a code: wrong key, changed text, expired, exp in milliseconds, exp missing, exp more than 30 days ahead, nobody named, a bad email. A bad link never falls back to typed details. 'Make a new key' stops old links at once. The setting 'Only people the website names' (signed_only) stops typed acceptances altogether.",
+    "test": "'the link a website signs: forged, changed, expired...' and '\"only people the website names\"...'"
+   },
+   {
+    "item": "3. The record: version and SHA-256 of the exact terms, who, when, IP, browser, page; never changed; copy by email; look up, filter, CSV; certificate PDF",
+    "status": "done",
+    "how": "Each row is sealed with an HMAC under the server secret, and every view reports 'intact'. The receipt is an HMAC of the acceptance id. Only the visitor's browser gets it, and only its hash is stored. POST /public/agree/receipt/email sends the copy, with the certificate attached, once an hour per acceptance; without an address the visitor is told to download instead. GET /public/agree/receipt/:receipt/certificate gives the visitor the PDF. For the team: GET /clickwrap-acceptances with filters q, version, via, identity, from and to, paged. /export gives CSV with a BOM, and a cell that starts with =, +, - or @ gets a quote mark in front. /:id/certificate gives the PDF, made by the new sheetPdf() in pdf.ts. For a PDF agreement the terms' pages follow the record.",
+    "test": "'an acceptance is never changed afterwards...', 'the person gets a copy...', 'terms in a PDF...', 'the team looks acceptances up...'"
+   },
+   {
+    "item": "4. Honesty before the click and on the certificate",
+    "status": "done",
+    "how": "recordedBefore(), recordShows() and CLICK_LAW in src/lib/clickwrap.ts are printed on the page above the button, in the copy email and on the certificate. They say: someone using this browser pressed the button with the details given; it does not show who that person really was; whether a click binds anyone depends on the country and the agreement, so check. An API acceptance says that we did not see a click. Nothing anywhere promises that a click is valid or binding.",
+    "test": "'the words say what is recorded before the click...'"
+   },
+   {
+    "item": "5. Not a signature; CLICKWRAP_MONTHLY_LIMIT (default 1000); clear answer; email to admins at 80 percent",
+    "status": "done",
+    "how": "Acceptances never touch credits. clickwrapMonthlyLimit() and CLICKWRAP_WARN_PERCENT are in policy.ts; 0 records none. The count and the write happen in one synchronous step. Owners and admins are emailed once a month at 80 percent and once when the limit is reached. A visitor is told only that the terms cannot be accepted right now and that nothing was recorded. The API answers 429 code monthly_limit with the numbers and the day the count starts again. The Things to decide entry is in the README.",
+    "test": "'an acceptance is not a signature and uses none; the monthly limit...'"
+   },
+   {
+    "item": "6. Abuse: scam filter for unpaid accounts, paused accounts closed, report link, the frame, rate limits",
+    "status": "done",
+    "how": "termsRefusal() reads the name, the terms and the account name with lureIn and posesAs while hasNotPaid applies. It refuses at publish with 422. It refuses a PDF that is only pictures for such an account. It is asked again on every view, so a page closes when trust is lost, and the closed page prints neither the terms nor the account. The team is told why once a day. Paused and closing accounts are closed everywhere and cannot publish. 'Report this page' files into abuse_reports (new column clickwrap_id, via_form=1 so it never counts towards the pause) and emails ABUSE_EMAIL. The operator queue names the page. Rate limits: 30 acceptances an hour per address, 10 per address on one agreement, 600 page views an hour, 5 copy emails an hour, 10 reports an hour. Slugs are random, so nobody can squat a brand name.",
+    "test": "'the fake payment notice filter...', 'a paused or closing account...', '\"report this page\"...', 'rate limits per address...'"
+   },
+   {
+    "item": "7. Deleting with the account; policy lists",
+    "status": "done",
+    "how": "The tables cascade from accounts. purgeUser in routes-trust.ts calls forgetClickwraps(a.id), which removes our stored copy emails (marked about_user='clickwrap:<id>'). Reports go with the existing account_id delete. DELETED_WITH_ACCOUNT in policy.ts has a new line, which Settings, /help and /security/processing print.",
+    "test": "'acceptances belong to the account and go when it is deleted...'"
+   },
+   {
+    "item": "8. Remove clickwrap from \"What is not in it\"; docs",
+    "status": "done",
+    "how": "The README line no longer lists clickwrap. Added: a 'What is in it' bullet, a CLICKWRAP_MONTHLY_LIMIT row in the config table, a 'Things to decide before launch' entry, .env.example, the API description (new src/server/openapi-clickwrap.ts, spread into openapi.ts), a Click-to-agree card on /developers, and a nav link for owners and admins. No page said clickwrap was missing.",
+    "test": "'every click-to-agree route is in the API description...'",
+    "left_open": "I did not add a row to 'What the bad reviews taught us': research/complaints.json has no complaint about clickwrap, and inventing one would break that table's rule."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/lib/clickwrap.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/server/clickwrap.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-clickwrap.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi-clickwrap.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/agree/[slug]/page.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/agreements/page.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/agreements/[id]/page.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/components/ClickwrapTerms.tsx (new)",
+   "/home/user/treegens-app/sign-and-grow/src/app/styles/clickwrap.css (new)",
+   "/home/user/treegens-app/sign-and-grow/public/clickwrap.js (new)",
+   "/home/user/treegens-app/sign-and-grow/tests/clickwrap.test.ts (new, 20 tests)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/build-clickwrap/ (look.cjs, screenshots, certificate.pdf)",
+   "/home/user/treegens-app/sign-and-grow/src/server/db.ts (SCHEMA: 3 tables, indexes and 2 triggers; COLUMNS: accounts.clickwrap_warned, accounts.clickwrap_full, abuse_reports.clickwrap_id)",
+   "/home/user/treegens-app/sign-and-grow/src/server/pdf.ts (export class Sheet; appended sheetPdf)",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts (import and forgetClickwraps in purgeUser; operator queue names the page of a report)",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/operator/page.tsx (report card for a click-to-agree page)",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts (import and ...clickwrapPaths())",
+   "/home/user/treegens-app/sign-and-grow/src/lib/policy.ts (clickwrapMonthlyLimit, CLICKWRAP_WARN_PERCENT, per-address limits; DELETED_WITH_ACCOUNT line)",
+   "/home/user/treegens-app/sign-and-grow/src/app/api/[...path]/route.ts and tests/helpers.ts (load routes-clickwrap)",
+   "/home/user/treegens-app/sign-and-grow/src/components/AppShell.tsx (nav link for owners and admins)",
+   "/home/user/treegens-app/sign-and-grow/src/app/layout.tsx (clickwrap.css)",
+   "/home/user/treegens-app/sign-and-grow/next.config.mjs (frame-ancestors * for /agree/:path*)",
+   "/home/user/treegens-app/sign-and-grow/src/app/developers/page.tsx (Click-to-agree card)",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/.env.example"
+  ],
+  "suite": "My file, tests/clickwrap.test.ts: 20 of 20 pass. Whole suite (npm test): 687 tests, 686 pass, 1 fails. The failure is tests/gaps-nonus-words.test.ts:830, 'the screens offer the choice, hand the sender the link, and never promise an email to someone without an address'. It expects /replyTo=\\{answerComesTo\\(me\\)\\}/ in src/app/sign/[token]/page.tsx, and that text is no longer in that file. Someone else is editing that page; I did not touch it. I re-ran the file after a few minutes and the failure is still there. The API description test in flow.test.ts and the twostep route sweep both pass with my routes loaded. npx tsc --noEmit -p . reports no errors and exits 0.",
+  "settings": [
+   "CLICKWRAP_MONTHLY_LIMIT: acceptances per account per calendar month (UTC), over all its terms. Default 1000. 0 records none. Admins are emailed at 80 percent and at the limit. Documented in .env.example, the README config table, 'Things to decide before launch', and the API description."
+  ],
+  "abuse_and_stuck": [
+   "Attacker sends a forged or changed signed link to accept as someone else: the signature is checked first, refused with 403 who_not_signed, and there is never a fallback to typed details (tested).",
+   "Attacker reuses a leaked signed link: it works only until exp, which is at most 30 days ahead, and 'Make a new key' stops it at once (tested). Within that window it is still usable: named in left_open.",
+   "Attacker fills an account's monthly limit or its records with typed acceptances: 10 an hour per address on one agreement and 30 over all (tested), admins warned at 80 percent (tested), and 'Only people the website names' blocks typed acceptances (tested). A spread-out botnet can still use up the month: left_open.",
+   "Scammer shows a fake payment notice under our name: refused at publish and the page closed for accounts without trust, also for a brand name or a scanned PDF (tested). Paused and closing accounts are closed (tested). 'Report this page' reaches the operators, and reports never pause an account by themselves (tested).",
+   "Typed name turned into a spreadsheet formula: CSV cells get a quote mark in front (tested). HTML or a script in the terms is only ever text (tested).",
+   "Someone edits a record in the database: triggers refuse UPDATE, and a changed row fails its seal, which the API and the certificate both say (tested).",
+   "The page around the frame scripts the click: it cannot reach into a frame from another site. Covering the button is caught where the browser can tell (checked in Chromium). Elsewhere it is recorded as unknown.",
+   "Honest website makes exp in milliseconds, or signs in hex (PHP): it gets a clear message, and hex is accepted (tested).",
+   "Honest visitor whose terms changed while the page was open: 409 that says so, and the page reloads the new version (tested on the server).",
+   "Honest visitor with no email address wants a copy: told to download it instead, and the download works (tested).",
+   "Honest team fixes a typo: can publish without asking everyone again (tested). Publishing with nothing changed says what to change (tested).",
+   "Honest team at the limit: emailed before and when it is reached, and the API answer gives the day the count starts again (tested).",
+   "Honest team tries to delete terms someone accepted: told to close them instead (tested)."
+  ],
+  "needs_from_billing": "Nothing. Acceptances never touch credits, routes-billing.ts or the Billing() component.",
+  "notes_for_integrator": "Behaviour others will notice:\n- /agree/* is the only path that may be framed by other sites (next.config.mjs). The signing page keeps X-Frame-Options SAMEORIGIN, as /developers says.\n- The Sheet class in pdf.ts is now exported, and sheetPdf() is appended at the end of the file.\n- abuse_reports rows can have envelope_id '' and a clickwrap_id. The operator queue query and page handle this.\n- Copy emails mark about_user with 'clickwrap:<agreement id>' so they go with the account. No login id ever starts with that, so purgeUser's existing about_user rule is unaffected.\n\nDecisions for the owner (also in the README under Things to decide):\n- whether to price acceptances or tie the limit to the plan;\n- whether any site may frame the terms, or only sites a team lists (today any site may);\n- a lawyer should read the words in src/lib/clickwrap.ts.\n\nNot done, or only partly:\n- No README 'What the bad reviews taught us' row: there is no sourced complaint to put in it.\n- The 'scrolled to the end' rule is checked by the visitor's browser only, and the record says it was asked for.\n- A program that loads our page and posts directly is recorded as a hosted-page acceptance. The server-measured time the terms were open is the only hint, and EMBED_CANNOT says this.\n- 'Email me a copy' sends to a typed address. That is limited to once per acceptance an hour and 5 an hour per address, but it is not counted in the daily limit on new people.\n- When the page is framed, the 'page it came from' is usually only the site's origin, because the browser gives no more (location.ancestorOrigins). The record says 'as the browser reported it'.\n\nTesting note: Chromium blocks a public page from framing localhost (local network access), and drops a click on a frame from another site that moved in the last half second. So tests/out/build-clickwrap/look.cjs serves its host pages from 127.0.0.1:3999 and waits before clicking.\n\nOut of scope and broken: tests/gaps-nonus-words.test.ts:830 fails against someone else's current edit of src/app/sign/[token]/page.tsx.\n\nThe rename was not done. All new copy says Sign&Grow."
  }
 }

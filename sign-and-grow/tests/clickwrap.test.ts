@@ -509,7 +509,7 @@ test('the words say what is recorded before the click, what a record shows and d
   for (const f of ['src/lib/clickwrap.ts', 'src/server/clickwrap.ts', 'src/server/routes-clickwrap.ts', 'src/app/agree/[slug]/page.tsx', 'src/app/app/agreements/page.tsx', 'src/app/app/agreements/[id]/page.tsx', 'public/clickwrap.js']) {
     const s = read(f);
     assert.equal(/legally binding|is valid|will hold up|enforceable/i.test(s), false, `${f} promises nothing about the law`);
-    assert.equal(s.includes('—'), false, `${f} has no em dash`);
+    assert.equal(s.includes('\u2014'), false, `${f} has no em dash`);
   }
   // The hosted page prints what is recorded and the line about the law before the button.
   const page = read('src/app/agree/[slug]/page.tsx');
