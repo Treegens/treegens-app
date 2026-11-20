@@ -463,6 +463,26 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 `/help`, `/` and `/security` quote the refund window and the unused-plan rule. They read them from
 `src/lib/policy.ts`, the same file the server enforces them from, so the pages and the code cannot disagree.
 
+### Knowing when an email did not arrive
+
+The mail server only says that it took an email. What happened next is told later by the mail provider, at
+`POST /api/mail/events`, once `MAIL_EVENTS_TOKEN` is set. Every email goes out with a Message-ID of ours and an
+`X-SG-Mail` header with its number, and the news is matched by those, or else by the address among the emails of
+the last 3 days. Code: `src/server/bounces.ts` (reading) and `src/server/routes-bounces.ts` (what is done).
+
+| Provider | What to set up |
+| --- | --- |
+| Postmark | A webhook for Bounce, Spam Complaint and Delivery to the address above. `SMTP_URL` on `smtp.postmarkapp.com` also sends our number as metadata. |
+| SendGrid | The Event Webhook (bounce, dropped, deferred, blocked, spam report, delivered) to the address above. `SMTP_URL` on `smtp.sendgrid.net` sends our number in `X-SMTPAPI`. |
+| Mailgun | Webhooks for permanent and temporary failure, complained and delivered. `SMTP_URL` on `smtp.mailgun.org` sends our number as a variable. |
+| Resend | A webhook for `email.bounced`, `email.complained`, `email.delivery_delayed` and `email.delivered`. Resend does not hand back our ids, so news is matched by the address. |
+| Amazon SES | Bounce, complaint and delivery notifications (or event publishing) to an SNS topic with an HTTPS subscription to the address above. The subscription is confirmed by itself, only when its link leads to `sns.<region>.amazonaws.com`. Switch on "include original headers" so our number comes back. |
+| Anything else | Post our own shape: `{"type": "bounce" \| "soft_bounce" \| "complaint" \| "delivered", "email": "...", "reason": "...", "message_id": "...", "mail_id": "..."}`, or a list of them. |
+
+The five provider adapters were written from each provider's documentation and tested with one sample each. None
+has been tried against the real service. A shape the server does not know is answered 202 and logged once. Try
+your provider's "send test webhook" button and look at the dev outbox or the log before relying on it.
+
 ### Checking who signs
 
 For each recipient the sender chooses what has to happen before the document opens (the editor, step 1, "More"
