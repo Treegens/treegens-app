@@ -1002,7 +1002,8 @@ test('every way a sign-in can fail has words that say what happened and what to 
     for (const p of ['google', 'microsoft', 'something-else', undefined]) {
       const words = signInErrorText(code, p);
       assert.ok(words.length > 40, code);
-      assert.doesNotMatch(words, /OAuth|OpenID|OIDC|token|nonce|state\b|JWT|claim|tenant|undefined|null|—/i, `${code}: ${words}`);
+      assert.doesNotMatch(words, /OAuth|OpenID|OIDC|token|nonce|state\b|JWT|claim|tenant|undefined|null/i, `${code}: ${words}`);
+      assert.ok(!words.includes(String.fromCharCode(0x2014)) && !words.includes(String.fromCharCode(0x2013)), 'no long dashes');
       if (p === 'something-else') assert.doesNotMatch(words, /something-else/, 'a provider name from the address bar is never printed');
     }
   assert.match(signInErrorText('made-up-code', 'google'), /Google did not confirm who you are/, 'an unknown code gets the general words');
