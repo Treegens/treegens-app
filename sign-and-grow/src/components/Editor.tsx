@@ -21,7 +21,7 @@ import { WordingBanner, type WordingLock } from './templates/WhoCanUse';
 import { witnessProblem } from '@/lib/witness';
 import { HelpChatButton } from './HelpChat';
 import { detailsRefused, wantsDetails } from './sender/DetailBoxes';
-import { STEP_NAMES, isBlankPerson, onlyMe } from '@/lib/editorux';
+import { STEP_NAMES, isBlankPerson, onlyMe, personLabel } from '@/lib/editorux';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -51,6 +51,8 @@ export function Editor({ id }: { id: string }) {
   const [photoAsk, setPhotoAsk] = useState<File[] | null>(null);
   // A field the review step wants shown in step 2 (a field without a label, see LabelCheck).
   const [jump, setJump] = useState<string | null>(null);
+  // What step 1 still needs, asked for when Next was pressed too early. Said in place and gone once it is there.
+  const [nudge, setNudge] = useState<'' | 'file' | 'person'>('');
   // Set when someone else saved this envelope after it was opened here, so saving now would wipe their work.
   // `how` says what the newer version was when it was not a save from an editor: a quick correction of one person, a
   // signer passing the document on or fixing their name, or sending ("passed this document on to Mary Deputy").
@@ -75,7 +77,7 @@ export function Editor({ id }: { id: string }) {
     api(`/envelopes/${id}`).then(({ envelope: e }) => {
       if (!on) return;
       if (e.status !== 'draft' && !(e.kind === 'envelope' && e.status === 'sent')) {
-        toast(`This envelope is ${e.status}, so it can no longer be edited. Clone it to send a new version.`);
+        toast(`This document is ${e.status}, so it can no longer be changed. Clone it to send a new version.`);
         return router.replace(`/app/envelopes/${id}`);
       }
       // A template can be changed by the person it belongs to, by admins and by whoever its rule lets change it (the
@@ -102,7 +104,7 @@ export function Editor({ id }: { id: string }) {
       if (wantsDetails() && e.documents.length && e.status === 'draft') setStep(3);
     }).catch((e) => {
       if (!on) return;
-      toast(e?.status === 404 ? 'We could not find that envelope. It may have been deleted.' : friendly(e), true);
+      toast(e?.status === 404 ? 'We could not find that document. It may have been deleted.' : friendly(e), true);
       router.replace('/app/envelopes');
     });
     api('/contacts').then((d) => on && setContacts(d.contacts)).catch(() => {});
@@ -236,7 +238,7 @@ export function Editor({ id }: { id: string }) {
       const name = group.length > 1 ? `${group[0].name} and ${plural(group.length - 1, 'more picture')}` : group[0].name;
       const sizeOf = (l: File[]) => l.reduce((n, f) => n + f.size, 0);
       // A picture is made smaller before it leaves, so whether it is too large is only known after that.
-      const problem = precheck(group[0], isPicture(group[0]), !!me.converts) || (room <= 0 ? `An envelope can hold up to ${MAX_DOCS} documents. Remove one to add this file.` : '');
+      const problem = precheck(group[0], isPicture(group[0]), !!me.converts) || (room <= 0 ? `One document can hold up to ${MAX_DOCS} files. Remove one to add this file.` : '');
       if (problem) {
         setUploads((u) => [...u, { key, name, size: sizeOf(group), progress: 0, state: 'error', error: problem }]);
         continue;
@@ -250,7 +252,7 @@ export function Editor({ id }: { id: string }) {
           if (group.some(isPicture)) patch({ state: 'preparing' });
           const ready: File[] = [];
           for (const one of group) ready.push(await shrinkPhoto(one));
-          if (sizeOf(ready) > MAX_BYTES) throw new Error(ready.length > 1 ? `Together these pictures are ${fmtSize(sizeOf(ready))}, and one document can be up to 25 MB. Choose fewer pictures at a time and add the rest as a second document.` : precheck(ready[0]));
+          if (sizeOf(ready) > MAX_BYTES) throw new Error(ready.length > 1 ? `Together these pictures are ${fmtSize(sizeOf(ready))}, and one file can be up to 25 MB. Choose fewer pictures at a time and add the rest as a second file.` : precheck(ready[0]));
           patch({ state: 'uploading', size: sizeOf(ready) });
           const f = await uploadFile(ready.length > 1 ? ready : ready[0], (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }));
           setUploads((u) => u.filter((x) => x.key !== key));
@@ -294,7 +296,7 @@ export function Editor({ id }: { id: string }) {
     const d = docs.find((x) => x.id === did);
     const n = fields.current().filter((f) => f.document_id === did).length;
     const go = () => (setDocs((l) => l.filter((x) => x.id !== did)), fields.set((l) => l.filter((f) => f.document_id !== did), { record: false }), dirty());
-    if (n) confirm({ title: 'Remove this document?', body: `${d?.name || 'This document'} has ${plural(n, 'field')} on it. They are removed together with it.`, yes: 'Remove document', no: 'Keep it', danger: true, onYes: go });
+    if (n) confirm({ title: 'Remove this file?', body: `${d?.name || 'This file'} has ${plural(n, 'field')} on it. ${n === 1 ? 'It is' : 'They are'} removed together with it.`, yes: 'Remove file', no: 'Keep it', danger: true, onYes: go });
     else go();
   }
 
@@ -322,7 +324,7 @@ export function Editor({ id }: { id: string }) {
     const r = rcps.find((x) => x.id === rid);
     const n = fields.current().filter((f) => f.recipient_id === rid).length;
     const go = () => (setRcps((l) => l.filter((x) => x.id !== rid)), dropFieldsOf(rid), dirty());
-    if (n) confirm({ title: `Remove ${who(r)}?`, body: `${who(r)} has ${plural(n, 'field')}. ${n === 1 ? 'It is' : 'They are'} removed too.`, yes: `Remove ${isTpl ? 'role' : 'recipient'}`, no: 'Keep them', danger: true, onYes: go });
+    if (n) confirm({ title: `Remove ${who(r)}?`, body: `${who(r)} has ${plural(n, 'field')}. ${n === 1 ? 'It is' : 'They are'} removed too.`, yes: `Remove ${isTpl ? 'role' : 'person'}`, no: r?.name ? `Keep ${r.name}` : 'Keep them', danger: true, onYes: go });
     else go();
   }
 
@@ -335,7 +337,7 @@ export function Editor({ id }: { id: string }) {
     if (!docs.length) p.push('Add at least one file.');
     if (!people.length) p.push(isTpl ? 'Add at least one role.' : 'Add at least one person: a name and an email address in step 1.');
     for (const r of people) {
-      const name = r.name || r.role_name || (r.email ? r.email : 'A person without a name');
+      const name = personLabel(r, rcps.indexOf(r));
       // Someone whose link the sender sends themselves needs a name and no address (editor/SendMyself.tsx).
       if (!isTpl && r.link_by_sender) {
         const no = sendMyselfTrouble(r, name, fields.value);
@@ -346,11 +348,11 @@ export function Editor({ id }: { id: string }) {
         if (no) p.push(no);
       } else if (r.role === 'witness' && r.named_by_signer) {
         // A witness the signer names has no name or address of the sender's (editor/WitnessChoice.tsx).
-      } else if (!isTpl && (!r.name.trim() || !validEmail(r.email))) p.push(`${name} needs a name and a valid email.`);
+      } else if (!isTpl && (!r.name.trim() || !validEmail(r.email))) p.push(!r.name.trim() && !String(r.email || '').trim() ? `${name} has no name or email yet. Add them in step 1.` : !r.name.trim() ? `${name} needs a name. Add it in step 1.` : `${name} needs a valid email address. ${String(r.email || '').trim() ? 'Check it' : 'Add it'} in step 1.`);
       // Whose signature a witness witnesses, and what cannot work: one rule with the server (src/lib/witness.ts).
       const wit = witnessProblem(r, { recipients: rcps, fields: fields.value });
       if (wit) p.push(wit);
-      if (isTpl && !r.role_name?.trim() && !r.email) p.push('Give every open recipient a role name, such as "Client".');
+      if (isTpl && !r.role_name?.trim() && !r.email) p.push('Give every open role a name, such as "Client".');
       if (isTpl && r.email && !validEmail(r.email)) p.push(`${name} needs a valid email, or leave it empty to fill in later.`);
       if (SIGNS(r) && !fields.value.some((f) => f.recipient_id === r.id)) p.push(`${name} has no fields to sign yet.`);
       // An access code that is set or changed needs a few characters, or it is guessed in a minute. The server
@@ -394,7 +396,20 @@ export function Editor({ id }: { id: string }) {
   const home = correcting ? `/app/envelopes/${id}` : isTpl ? '/app/templates' : '/app/envelopes';
 
   async function go(n: number) {
-    if (n > 1 && !docs.length) return toast(uploads.some((u) => u.state !== 'error') ? 'Your file is still uploading. Give it a moment.' : 'Add a file first. Choose one in step 1.', true);
+    if (n > 1 && !docs.length) {
+      if (uploads.some((u) => u.state !== 'error')) return toast('Your file is still uploading. Give it a moment.', true);
+      // Said once, where the file goes, and gone as soon as there is one. The cursor goes to the file chooser.
+      setNudge('file');
+      setStep(1);
+      return void setTimeout(() => document.querySelector<HTMLElement>('.ed-drop input[type="file"]')?.focus(), 0);
+    }
+    // A new document with a file and nobody typed in: stay, say so where people are added, and put the cursor in
+    // the first empty name box. A template's roles and a document that is already out are not asked this.
+    if (step === 1 && n > 1 && !isTpl && !correcting && !wording && rcps.every((r) => isIdle(r))) {
+      setNudge('person');
+      return void setTimeout(() => (document.querySelector<HTMLInputElement>('input[data-ed-name]') || document.querySelector<HTMLElement>('.ed-narrow .card:nth-of-type(2) button'))?.focus(), 0);
+    }
+    setNudge('');
     setError('');
     if (correcting) return setStep(n);
     try {
@@ -417,7 +432,7 @@ export function Editor({ id }: { id: string }) {
 
   function discard() {
     if (!changed) return leave(home);
-    confirm({ title: 'Leave without saving?', body: 'Your changes have not been saved. If you leave now, the envelope stays exactly as it was and nobody is told anything.', yes: 'Discard changes', no: 'Keep editing', danger: true, onYes: () => leave(home) });
+    confirm({ title: 'Leave without saving?', body: 'Your changes have not been saved. If you leave now, the document stays exactly as it was and nobody is told anything.', yes: 'Discard changes', no: 'Keep editing', danger: true, onYes: () => leave(home) });
   }
 
   // `anyway` is true only when the sender answered "Send anyway" below. A click hands in its event, which is not true.
@@ -526,7 +541,7 @@ export function Editor({ id }: { id: string }) {
     setEnv((e: any) => ({ ...e, date_format: serverCopy.current.date_format }));
     setConflict([]);
     setError('');
-    toast('The documents and fields are back as they were signed.');
+    toast('The files and fields are back as they were signed.');
   }
 
   // Someone else saved a newer version. Either take theirs, or keep this one as a separate copy. Nothing is lost.
@@ -552,7 +567,7 @@ export function Editor({ id }: { id: string }) {
 
   const ed: Ed = {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, wording, docs, rcps, fields, contacts, uploads, color,
-    patchEnv, isIdle, addMe, signNow, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
+    patchEnv, isIdle, addMe, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
     setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
     showField: (fid) => (setJump(fid), void go(2)), jump, clearJump: () => setJump(null),
   };
@@ -589,8 +604,8 @@ export function Editor({ id }: { id: string }) {
       {wording && <WordingBanner lock={wording} />}
       {correcting && (
         <div className="ed-banner" role="note">
-          <b>This envelope is already out.</b> Change what you need to. Nobody has to start again, and nothing changes until you save.
-          {anyLocked && <> {lockedNames} already finished. If you change a document, a note or a field now, they have to sign again, and you are asked before anything is saved.</>}
+          <b>This document is already out.</b> Change what you need to. Nobody has to start again, and nothing changes until you save.
+          {anyLocked && <> {lockedNames} already finished. If you change a file, a note or a field now, they have to sign again, and you are asked before anything is saved.</>}
         </div>
       )}
       {!correcting && state === 'stuck' && stuck && (
@@ -600,18 +615,20 @@ export function Editor({ id }: { id: string }) {
         </div>
       )}
 
+      {/* On the narrowest phones the top bar has room for the numbers only, so the step is named here (editor.css). */}
+      <p className="ed-stepname muted small" aria-hidden="true">Step {step} of 3: {steps[step - 1]}</p>
       {step === 1 && <StepAdd ed={ed} />}
       {step === 2 && <StepFields ed={ed} />}
       {step === 3 && <StepReview ed={ed} problems={problems} busy={busy} changed={changed} error={error} conflict={conflict} closed={closed} result={result} onSubmit={submit} onRestore={restore} onSignAgain={() => saveCorrection(true)} onDiscard={discard} />}
 
       {stale && (
-        <Modal title={stale.how ? `This ${isTpl ? 'template' : 'envelope'} changed after you opened it` : `${stale.by} saved a newer version`} onClose={() => setStale(null)}>
+        <Modal title={stale.how ? `This ${isTpl ? 'template' : 'document'} changed after you opened it` : `${stale.by} saved a newer version`} onClose={() => setStale(null)}>
           {/* The newer version is not always a save from an editor. When it was something else (a quick correction,
               a signer passing the document on or fixing their name, sending), the dialog says what it was. */}
           <p className="muted">
             {stale.how
               ? <>{stale.by} {stale.how}{stale.at ? ` on ${fmtDate(stale.at, true)}` : ''}, after you opened it here. Your changes were not saved, so that is not undone and nothing is lost.</>
-              : <>{stale.by} saved this {isTpl ? 'template' : correcting ? 'envelope' : 'draft'}{stale.at ? ` on ${fmtDate(stale.at, true)}` : ''}, after you opened it here. That may have been you, in another tab or window.
+              : <>{stale.by} saved this {isTpl ? 'template' : correcting ? 'document' : 'draft'}{stale.at ? ` on ${fmtDate(stale.at, true)}` : ''}, after you opened it here. That may have been you, in another tab or window.
                 Your changes were not saved over theirs, so nothing is lost.</>}
           </p>
           <p className="muted">

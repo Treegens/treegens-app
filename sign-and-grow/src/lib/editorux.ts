@@ -35,13 +35,17 @@ const CHECK_WORDS: Record<string, string> = { email_code: 'Code by email', sms_c
 /**
  * The lines inside one person's More, each with what it is set to now. A line whose choice has only one possible
  * answer for this person is left out, so nobody opens a picker with nothing to pick.
- * `languages` is how many languages this server offers, `isTpl` whether this is a template.
+ * `languages` is how many languages this server offers, `isTpl` whether this is a template, `texts` whether this
+ * server sends text messages.
  */
-export function moreLines(r: any, o: { isTpl?: boolean; languages?: number } = {}): MoreLine[] {
+export function moreLines(r: any, o: { isTpl?: boolean; languages?: number; texts?: boolean } = {}): MoreLine[] {
   const lines: MoreLine[] = [];
   lines.push({ key: 'role', label: 'Role', value: ROLE_WORDS[r.role] || ROLE_WORDS.signer });
   if ((o.languages || 1) >= 2) lines.push({ key: 'language', label: 'Language', value: r.locale ? String(r.locale) : 'Their browser decides' });
-  if (canSendMyself(r, !!o.isTpl) || r.link_by_sender) lines.push({ key: 'deliver', label: 'How they get it', value: r.link_by_sender ? 'I send the link myself' : r.text_link ? 'Email and a text message' : 'Email' });
+  // Listed when there is something to choose: sending the link yourself, or (where this server sends texts, `texts`)
+  // the link by text message as well. Something set earlier keeps its line, so it can be taken off.
+  const canText = (!!o.texts && r.role !== 'inperson') || !!r.text_link;
+  if (canSendMyself(r, !!o.isTpl) || r.link_by_sender || canText) lines.push({ key: 'deliver', label: 'How they get it', value: r.link_by_sender ? 'I will send the link myself' : r.text_link ? 'Email and a text message' : 'Email' });
   const checks = [String(r.access_code || '').trim() ? 'Access code' : '', CHECK_WORDS[r.verify] || ''].filter(Boolean);
   lines.push({ key: 'check', label: 'Check who signs', value: checks.length ? checks.join(' and ').replace(' and Code', ' and a code') : 'None' });
   // On screen, or on the sender's own device with the sender next to them. Not for someone the sender only sends a link.
@@ -102,4 +106,118 @@ export function savingLine(pages: number, people: number): { sheets: number; lin
     line: `This saves ${n} ${sheets === 1 ? 'page' : 'pages'} of paper from a tree.`,
     how: `An estimate: ${Math.max(0, Math.round(pages)).toLocaleString('en')} ${Math.round(pages) === 1 ? 'page' : 'pages'} for ${copies === 1 ? '1 person' : `each of ${copies} people`}, one paper copy each. Making that paper would take about ${water} litres of water and ${co2} kg of CO2e. Printing, couriers and filing are not counted.`,
   };
+}
+
+// ---- Words for a person who has no name yet -------------------------------------------------------------------------
+
+const has = (v: unknown) => !!String(v || '').trim();
+
+/**
+ * What a person is called on steps 2 and 3. Someone nothing was typed for is "Person 2 (no name yet)", counted the
+ * way the rows of step 1 are, never "Unnamed".
+ */
+export function personLabel(r: any, index: number): string {
+  return String(r?.name || '').trim() || String(r?.role_name || '').trim() || String(r?.email || '').trim() || `Person ${Math.max(0, index) + 1} (no name yet)`;
+}
+
+/** The same person inside a sentence for a screen reader: "More options for this person". */
+export const personInSentence = (r: any): string => String(r?.name || '').trim() || String(r?.role_name || '').trim() || String(r?.email || '').trim() || 'this person';
+
+/** Under a person on step 3 who has no address. Only a template says it is filled in later. */
+export function noAddressWords(r: any, isTpl: boolean): string {
+  if (r?.link_by_sender) return 'No email from us. You send them the link yourself after sending.';
+  return isTpl ? 'Filled in when the template is used' : 'No email address yet. Add it in step 1.';
+}
+
+/** What step 1 says when Next is pressed with nothing to go on. Shown in place, and gone once it is put right. */
+export const NUDGE = {
+  file: 'Add a file first. Choose one here.',
+  person: 'Add at least one person: a name and an email address.',
+} as const;
+
+// ---- Step 1: "Check who signs" is one choice -----------------------------------------------------------------------
+
+export type CheckChoice = { value: string; label: string; code: boolean; verify: 'none' | 'email_code' | 'sms_code' };
+
+const CHECK_LIST: CheckChoice[] = [
+  { value: 'none', label: 'None', code: false, verify: 'none' },
+  { value: 'code', label: 'Access code (a code you tell them)', code: true, verify: 'none' },
+  { value: 'email_code', label: 'Code by email', code: false, verify: 'email_code' },
+  { value: 'code+email_code', label: 'Access code and a code by email', code: true, verify: 'email_code' },
+  { value: 'sms_code', label: 'Code by text', code: false, verify: 'sms_code' },
+  { value: 'code+sms_code', label: 'Access code and a code by text', code: true, verify: 'sms_code' },
+];
+
+const verifyOf = (v: unknown): CheckChoice['verify'] => (v === 'email_code' || v === 'sms_code' ? v : 'none');
+
+/** Which of the choices is set for this person now. `wantsCode`: the sender picked an access code and has not typed it yet. */
+export function checkValue(r: any, wantsCode = false): string {
+  const code = wantsCode || has(r?.access_code);
+  const v = verifyOf(r?.verify);
+  return v === 'none' ? (code ? 'code' : 'none') : code ? `code+${v}` : v;
+}
+
+/**
+ * The choices offered for one person: one list, nothing to combine by hand. A code by text only where this server
+ * sends texts, or where it is already set (so it can be taken off). What a locked template asks for cannot be taken
+ * off: `keepVerify` leaves out the choices without a one-time code, `keepCode` the ones without an access code.
+ */
+export function checkChoices(o: { textsOn?: boolean; current?: string; keepVerify?: boolean; keepCode?: boolean } = {}): CheckChoice[] {
+  return CHECK_LIST.filter((c) => {
+    if (c.value === o.current) return true;
+    if (c.verify === 'sms_code' && !o.textsOn) return false;
+    if (o.keepVerify && c.verify === 'none') return false;
+    if (o.keepCode && !c.code) return false;
+    return true;
+  });
+}
+
+/** What picking a choice changes on the person. Leaving the access code out empties it; picking it keeps what is typed. */
+export function checkPatch(value: string): { verify: string; access_code?: string } {
+  const c = CHECK_LIST.find((x) => x.value === value) || CHECK_LIST[0];
+  return c.code ? { verify: c.verify } : { verify: c.verify, access_code: '' };
+}
+export const checkHasCode = (value: string) => !!CHECK_LIST.find((x) => x.value === value)?.code;
+
+/** Said under the list when there is no check at all. */
+export const NO_CHECK_SAYS = 'With no check, the document opens for whoever has the link.';
+
+// ---- Step 3: what is said next to More options ---------------------------------------------------------------------
+
+/**
+ * The line next to step 3's closed More options. Reminders are always said, because a new account has them on without
+ * anyone having chosen that. The deadline and the date format are said only when they differ from the account's own
+ * defaults, and a payment link only when signers will see one. When the sender signs alone ("Sign now") nobody is
+ * invited or reminded, so reminders are left out.
+ */
+export function reviewSummary(o: {
+  reminderDays: number; expireDays?: number | null; closesOn?: string; dateFormat?: string | null;
+  defaults: { expireDays?: number | null; dateFormat?: string | null };
+  dateExample?: string; signNow?: boolean; payLink?: boolean;
+}): string {
+  const days = (n: number) => `${n} ${n === 1 ? 'day' : 'days'}`;
+  const said: string[] = [];
+  if (!o.signNow) said.push(o.reminderDays > 0 ? `Reminder every ${days(Math.round(o.reminderDays))}` : 'No automatic reminders');
+  if (o.closesOn) said.push(`closes on ${o.closesOn}`);
+  else if (o.expireDays != null && o.defaults.expireDays != null && Number(o.expireDays) !== Number(o.defaults.expireDays)) said.push(`closes after ${days(Number(o.expireDays))}`);
+  if (o.dateFormat && o.dateFormat !== o.defaults.dateFormat && o.dateExample) said.push(`dates written like ${o.dateExample}`);
+  if (o.payLink) said.push('payment link shown after signing');
+  const line = said.join(' · ');
+  return line ? line[0].toUpperCase() + line.slice(1) : '';
+}
+
+/**
+ * The day used to show how each date format looks. Today, unless the day of the month could be taken for a month
+ * (1 to 12): then the 25th, so "25/05/2026" and "05/25/2026" can be told apart.
+ */
+export function dateExampleDay(today: Date): Date {
+  const d = new Date(today.getTime());
+  if (d.getDate() <= 12) d.setDate(25);
+  return d;
+}
+
+/** The kinds of field step 2 shows without "More fields": the six common ones, the one being placed, and every kind already on the document. */
+export function paletteKinds(all: string[], o: { open?: boolean; tool?: string | null; used?: Iterable<string> } = {}): string[] {
+  const used = new Set(o.used || []);
+  return all.filter((t) => o.open || isCommonField(t) || t === o.tool || used.has(t));
 }

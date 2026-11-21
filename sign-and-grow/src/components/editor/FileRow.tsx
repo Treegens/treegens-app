@@ -30,7 +30,7 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
   return (
     <div data-item="file">
       <div className="row ed-doc">
-        <input value={d.name} aria-label="Document name" maxLength={200} readOnly={!!ed.wording} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
+        <input value={d.name} aria-label="File name" maxLength={200} readOnly={!!ed.wording} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
         <span className="muted small" style={{ whiteSpace: 'nowrap' }}>{plural(d.pages, 'page')}</span>
         {!ed.wording && <button type="button" className="btn sm ghost" data-more="item" aria-expanded={more} aria-controls={panel} aria-label={`More options for ${name}`} onClick={() => setMore(!more)}>More</button>}
       </div>

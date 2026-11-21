@@ -36,7 +36,7 @@ const ROLES: [string, string][] = [['signer', 'Needs to sign'], ['approver', 'Ne
 /** One line about who can act for a group recipient. */
 export function groupLine(r: any): string {
   const l: Member[] = r.members || [];
-  if (r.group_missing) return 'This group was deleted. Choose another group, or remove this recipient and name a person.';
+  if (r.group_missing) return 'This group was deleted. Choose another group, or remove this row and name a person.';
   if (!l.length) return 'A group';
   if (r.role === 'cc') return `Each of ${names(l)} gets the copy, with their own link.`;
   return `Any one of ${names(l)} (${plural(l.length, 'person', 'people')}) can ${groupDoes(r.role)} for the group. Each gets their own email and link.`;
@@ -46,7 +46,7 @@ export function groupLine(r: any): string {
 export function groupProblem(r: any): string {
   if (!isGroupRow(r)) return '';
   const name = r.group_name || r.name || 'A group';
-  if (r.group_missing) return `The group "${name}" was deleted. Choose another group for that recipient, or name a person.`;
+  if (r.group_missing) return `The group "${name}" was deleted. Choose another group for that row, or name a person.`;
   const n = (r.members || []).filter((m: Member) => m.name.trim() && m.email.trim()).length;
   if (n < GROUP_MIN_MEMBERS || n > GROUP_MAX_MEMBERS) return `${name} needs from ${GROUP_MIN_MEMBERS} to ${GROUP_MAX_MEMBERS} members, each with a name and an email address.`;
   return '';
@@ -79,7 +79,7 @@ export function GroupRow({ ed, r, groups, old }: { ed: Ed; r: any; groups: Group
   const list = groups || [];
   const known = list.some((g) => g.id === r.group_id);
   return (
-    <div className="rcpt ed-group" data-item="person" style={{ ['--fc' as any]: ed.color(r.id) }} role="group" aria-label={`Recipient: the group ${r.group_name || r.name}`}>
+    <div className="rcpt ed-group" data-item="person" style={{ ['--fc' as any]: ed.color(r.id) }} role="group" aria-label={`The group ${r.group_name || r.name}`}>
       <div className="row wrap">
         {!!env.ordered && <input type="number" min={1} max={99} value={r.routing_order} aria-label="Signing order" style={{ width: 64 }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { routing_order: Number(e.target.value) || 1 })} />}
         {isTpl && <input placeholder="Role, e.g. HR" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
@@ -92,7 +92,7 @@ export function GroupRow({ ed, r, groups, old }: { ed: Ed; r: any; groups: Group
       </div>
       <p className="ed-group-members">{r.role !== 'signer' && <b>{ROLES.find(([k]) => k === r.role)?.[1]}. </b>}{groupLine(r)}{r.role !== 'cc' && ' The first who agrees takes it on, and the others then see who has it.'}</p>
       {correcting && old?.claimed_by && old.group_id === r.group_id && (
-        <p className="ed-group-members"><b>{old.name} has taken this on for {old.group_name}.</b> To let the whole group have it again, use Give back to the group on the envelope page.</p>
+        <p className="ed-group-members"><b>{old.name} has taken this on for {old.group_name}.</b> To let the whole group have it again, use Give back to the group on the document's page.</p>
       )}
       {more && (
         <div id={`ed-more-${r.id}`} className="grid g2" style={{ marginTop: 10 }}>
@@ -119,13 +119,13 @@ function MembersEditor({ members, onChange, done }: { members: Member[]; onChang
   const patch = (i: number, p: Partial<Member>) => onChange(members.map((m, j) => (j === i ? { ...m, ...p } : m)));
   return (
     <fieldset className="sn-group-members ed-group-edit">
-      <legend>Who can act for the group on this envelope <span className="hint">(changes this envelope only)</span></legend>
+      <legend>Who can act for the group on this document <span className="hint">(changes this document only)</span></legend>
       <ol role="list">
         {members.map((m, i) => (
           <li key={m.id || `new-${i}`}>
             <label className="f"><span>Name of member {i + 1}</span><input value={m.name} maxLength={120} autoComplete="off" onChange={(e) => patch(i, { name: e.target.value })} /></label>
             <label className="f"><span>Email of member {i + 1}</span><input type="email" value={m.email} autoComplete="off" readOnly={!!m.id} title={m.id ? 'To change an address, take this member out and add the new address.' : undefined} onChange={(e) => patch(i, { email: e.target.value })} /></label>
-            <button type="button" className="btn ghost danger" disabled={members.length <= 1} onClick={() => onChange(members.filter((_, j) => j !== i))} aria-label={`Take ${m.name || `member ${i + 1}`} out of the group on this envelope`}>Take out</button>
+            <button type="button" className="btn ghost danger" disabled={members.length <= 1} onClick={() => onChange(members.filter((_, j) => j !== i))} aria-label={`Take ${m.name || `member ${i + 1}`} out of the group on this document`}>Take out</button>
           </li>
         ))}
       </ol>

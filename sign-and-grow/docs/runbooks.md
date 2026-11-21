@@ -30,6 +30,7 @@ The server keeps running.
 
 ```bash
 node scripts/backup.mjs /path/to/backups        # with the server's settings in the environment or in .env
+mkdir -p backups && sudo chown 1000:1000 backups # once: the container runs as uid 1000
 docker compose run --rm backup                   # the same, with docker-compose.example.yml
 ```
 
@@ -184,7 +185,7 @@ that the compiled application under `.next` and the image layers come out byte f
 compared two builds. So an escrow agent can rebuild a working image from the same inputs; this document does not
 say the two images have the same digest.
 
-Without Docker: Node 22.13 or newer, `npm ci`, `npm run build`, `npm start`.
+Without Docker: Node 22.13 or newer, `npm ci`, `npm run build`, `npm start`. (`npm run build` switches the framework's usage statistics off; `npx next build` on its own does not, unless `NEXT_TELEMETRY_DISABLED=1` is set.)
 
 ## Running with no network
 

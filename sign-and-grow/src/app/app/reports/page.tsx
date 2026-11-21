@@ -1,6 +1,6 @@
 'use client';
 import { api, useLoad } from '@/components/ui';
-import { fmtNum } from '@/lib/impact';
+import { fmtNum, totalWorthShowing } from '@/lib/impact';
 
 export default function Reports() {
   const [r] = useLoad(() => api('/reports/summary'));
@@ -14,7 +14,8 @@ export default function Reports() {
         <div className="stat"><div className="k">Envelopes sent</div><div className="v num">{fmtNum(r.sent)}</div></div>
         <div className="stat"><div className="k">Completed</div><div className="v num">{fmtNum(r.completed)}</div><div className="s">{r.completionRate == null ? 'No sends yet' : `${Math.round(r.completionRate * 100)}% completion rate`}</div></div>
         <div className="stat"><div className="k">Average time to complete</div><div className="v num">{hours == null ? '–' : hours < 1 ? `${Math.max(1, Math.round(hours * 60))} min` : hours < 48 ? `${hours.toFixed(1)} h` : `${(hours / 24).toFixed(1)} d`}</div></div>
-        <div className="stat green"><div className="k">Sheets of paper saved</div><div className="v num">{fmtNum(r.impact.sheets)}</div><div className="s">{fmtNum(r.impact.litresWater)} L of water</div></div>
+        {/* A total of paper only once it is large enough to mean something (src/lib/impact.ts). */}
+        {totalWorthShowing(r.impact.sheets) && <div className="stat green"><div className="k">Sheets of paper not used, estimated</div><div className="v num">{fmtNum(r.impact.sheets)}</div><div className="s">{fmtNum(r.impact.litresWater)} L of water</div></div>}
       </div>
 
       <div className="card">

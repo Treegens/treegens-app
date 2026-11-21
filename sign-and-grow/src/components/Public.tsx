@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, useLoad } from './ui';
 import { Logo } from './Brand';
-import { fmtNum, fmtTrees, IMPACT, usd } from '@/lib/impact';
+import { fmtNum, usd, TOTALS_FROM, totalWorthShowing } from '@/lib/impact';
 import { HelpChatButton } from './HelpChat';
 
 // Shared frame of the public pages: the top navigation, the footer and the live impact numbers.
@@ -106,24 +106,27 @@ export function PublicFooter() {
   );
 }
 
-// The live totals on the landing page. Numbers come from this service, the factors from src/lib/impact.ts.
+// The totals on the landing page. A total is shown only once it is large enough to mean something (TOTALS_FROM in
+// src/lib/impact.ts): until then, and while it loads, the band is simply absent. No share of a tree, and every
+// figure about paper is called an estimate. Numbers come from this service, the factors from src/lib/impact.ts.
 export function ImpactBand() {
-  const [imp] = useLoad(() => api('/public/impact'));
-  const v = (f: (i: any) => string) => (imp ? f(imp) : '…');
+  const [i] = useLoad(() => api('/public/impact'));
+  const paper = totalWorthShowing(i?.sheets);
+  const planted = Number(i?.treesFunded) >= TOTALS_FROM.treesPlanted;
+  if (!i || (!paper && !planted)) return null;
   return (
     <section className="band" aria-labelledby="impact-h">
       <div className="wrap">
-        <h2 id="impact-h">Paper has a cost. So we count it.</h2>
+        <h2 id="impact-h">What signing here has done so far</h2>
         <p className="pub-band-lead">
-          One tree makes roughly {fmtNum(IMPACT.sheetsPerTree)} sheets of office paper, and each sheet takes about {IMPACT.litresWaterPerSheet} litres of water to produce. Everyone using GrowSigning has so far kept this much out of the printer:
+          Everything customers pay goes to Treegens to plant mangroves, and a document signed on screen is not printed.
         </p>
-        <div className="grid g4 keep2" aria-live="polite" aria-busy={!imp}>
-          <div className="stat"><div className="k">Sheets of paper saved</div><div className="v num">{v((i) => fmtNum(i.sheets))}</div></div>
-          <div className="stat"><div className="k">Trees left standing</div><div className="v num">{v((i) => fmtTrees(i.trees))}</div></div>
-          <div className="stat"><div className="k">Litres of water not used</div><div className="v num">{v((i) => fmtNum(i.litresWater))}</div></div>
-          <div className="stat"><div className="k">Sent to tree planting</div><div className="v num">{v((i) => usd(fmtNum(i.donatedUsd)))}</div><div className="s">{imp?.treesFunded != null ? `${fmtNum(imp.treesFunded)} mangrove trees funded` : 'everything customers pay'}</div></div>
+        <div className="grid g4 keep2">
+          {planted && <div className="stat"><div className="k">Mangroves funded</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">from {usd(fmtNum(i.donatedUsd))} paid by customers</div></div>}
+          {paper && <div className="stat"><div className="k">Sheets of paper not used, estimated</div><div className="v num">{fmtNum(i.sheets)}</div></div>}
+          {paper && <div className="stat"><div className="k">Litres of water not used, estimated</div><div className="v num">{fmtNum(i.litresWater)}</div></div>}
         </div>
-        <p className="small pub-band-foot">Live numbers from this service. <Link href="/impact">See exactly how we count</Link>.</p>
+        <p className="small pub-band-foot">Numbers from this service. <Link href="/impact">See exactly how we count</Link>.</p>
       </div>
     </section>
   );

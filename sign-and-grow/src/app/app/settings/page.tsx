@@ -20,6 +20,7 @@ import { EmailAddressCard } from '@/components/EmailProblem';
 import { StampSettings } from '@/components/stamps/StampSettings';
 import { RetentionSettings } from '@/components/settings/RetentionSettings';
 import { SealStatus } from '@/components/settings/SealStatus';
+import { TreesOnRecord } from '@/components/settings/TreesOnRecord';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
 import { LanguageSettings } from '@/components/settings/LanguageSettings';
 // The account's own custom fields, such as a case number (src/components/settings/CustomFieldSettings.tsx).
@@ -226,6 +227,8 @@ function Account() {
       <p className="muted small" id="set-reminders"><b>New envelopes start like this.</b> {reminderText(f.default_reminder_days)} A new account starts at {DEFAULT_REMINDER_DAYS} days. Whoever sends sees the setting on the last step before sending and can change it for that envelope. Envelopes that are already out keep what they were sent with.</p>
       <p className="muted small">Emails to your recipients come from "{me.user.name} via GrowSigning" and replies go straight to you.</p>
       <button className="btn primary" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (toast('Saved'), me.reload())).catch(oops)}>Save</button>
+      {/* Saves by itself, so it stands below the Save button of the boxes above (settings/TreesOnRecord.tsx). */}
+      <TreesOnRecord />
     </div>
   );
 }

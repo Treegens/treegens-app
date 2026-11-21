@@ -207,3 +207,10 @@
 @media (max-width: 350px) {
   .ed-top .steps button span:not(.n) { display: none; }
 }
+/* A link inside a folded note is as tall as any other thing a finger presses. */
+.ed-tap-link { display: inline-flex; align-items: center; min-height: 44px; }
+.ed-textlink { margin-top: 10px; }
+.ed-checkpick .ed-check-says { margin: 8px 0 0; }
+/* The name of the step, on screens too narrow for it in the top bar. */
+.ed-stepname { display: none; margin: 10px 16px 0; font-weight: 600; }
+@media (max-width: 350px) { .ed-stepname { display: block; } }

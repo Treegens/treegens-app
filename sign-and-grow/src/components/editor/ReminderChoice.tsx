@@ -19,7 +19,7 @@ export function ReminderChoice({ days, onChange, isTpl, bySender }: { days: numb
         </select>
       </label>
       <div id="ed-reminder-says" className="muted small" aria-live="polite">
-        {reminderText(n)}{isTpl ? ' Every envelope made from this template starts with this setting.' : ''}
+        {reminderText(n)}{isTpl ? ' Every document made from this template starts with this setting.' : ''}
         {n > 0 && bySender ? ' For someone whose link you send yourself, the reminder comes to you instead.' : ''}
       </div>
     </div>

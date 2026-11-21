@@ -206,7 +206,7 @@ export function LogicCheck({ ed }: { ed: Ed }) {
       try {
         parseFormula(f.formula);
         const missing = namesIn(f.formula).filter((n) => !list.some((x) => x.id === n && x.type === 'number'));
-        if (missing.length) out.unshift(`The formula of '${logicName(f)}' uses ${missing.map((n) => `"${n}"`).join(', ')}, which is not a number field of this envelope. Open it under "Calculate from" and choose its fields again.`);
+        if (missing.length) out.unshift(`The formula of '${logicName(f)}' uses ${missing.map((n) => `"${n}"`).join(', ')}, which is not a number field of this document. Open it under "Calculate from" and choose its fields again.`);
       } catch (e: any) {
         out.unshift(`The formula of '${logicName(f)}' cannot be read: ${e.message}`);
       }

@@ -23,7 +23,7 @@ export function WhatItConnectsTo() {
     ? 'Off. Nothing inside the software stops a connection to a host that is not listed here. Only the network around the server can.'
     : mode === 'listed'
       ? `On. The software refuses to connect to any host that is not in this list${p.extra.length ? ` or one the operator added (${p.extra.join(', ')})` : ''}, before anything is sent.`
-      : `On, for a closed network. The software connects only to the mail relay${p.extra.length ? ` and to hosts the operator added (${p.extra.join(', ')})` : ''}. Every service below that would need another host is switched off.`;
+      : `On, for a closed network. The software refuses to connect to anything but the mail relay${p.extra.length ? ` and the hosts the operator added (${p.extra.join(', ')})` : ''}, and does not look up other names. Every service in the table above that would need another host is switched off.`;
   return (
     <section className="card pub-trust" id="outside" aria-labelledby="outside-h">
       <h2 id="outside-h">What this server connects to</h2>
@@ -37,7 +37,7 @@ export function WhatItConnectsTo() {
             return (
               <tr key={s.id}>
                 <th scope="row">{s.name}</th>
-                <td data-label="On this server">{s.on ? 'On' : why ? 'Switched off: this server makes no outside calls' : 'Off'}</td>
+                <td data-label="On this server">{s.on ? 'On' : why ? 'Switched off: this server is set up for a closed network' : 'Off'}</td>
                 <td data-label="Connects to">{s.on ? (s.hosts.length ? s.hosts.join(', ') : s.hostWords || 'Not known before a call') : 'Nothing'}</td>
                 <td data-label="What for">{s.purpose}</td>
               </tr>
@@ -46,7 +46,7 @@ export function WhatItConnectsTo() {
         </tbody>
       </table>
       <ul className="pub-points" style={{ marginTop: 14 }}>
-        <li><b>The software&apos;s own guard.</b><span>{guard} It is a second line of defence: it checks connections the server opens itself, not what a program it starts does (such as LibreOffice for office files).</span></li>
+        <li><b>The software&apos;s own guard.</b><span>{guard} It is a second line of defence, not a firewall. It sees what the software does through its own runtime: web requests, TCP and TLS connections (mail, webhooks) and UDP. It does not see what a program the server starts does (such as LibreOffice for office files), or anything that goes around the runtime. Only the network can stop those.</span></li>
         <li><b>Allowed by the network.</b><span>That is decided outside the software, by a firewall or a network policy of whoever runs this server, and this page cannot see it. Ask them what the network lets this server reach.</span></li>
         <li><b>Not in the software, so never called.</b><span>{NOT_BUILT.map((x) => x[0].toUpperCase() + x.slice(1)).join('. ')}.</span></li>
         {sbom && <li><b>What it is built from.</b><span>Every package this server was built with, with its version and licence, as a <a href="/security/sbom.json">software bill of materials</a> (CycloneDX, made by npm when the server was built) and as a <a href="/security/third-party-licences.txt">plain list of licences</a>.</span></li>}

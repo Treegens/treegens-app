@@ -36,6 +36,9 @@ FROM ${NODE_IMAGE}
 # LibreOffice turns Word, Excel and PowerPoint files into PDF on this machine (CONVERTER=soffice). It is large
 # (about 500 MB), so it is only put in when asked for. Without it, set no CONVERTER and office files are simply not
 # taken: the upload says that it needs a PDF.
+# The server takes the network away from LibreOffice with "unshare -rn". In a container run with every capability
+# dropped and no new privileges (the compose example, the Helm chart) that is not permitted, so LibreOffice has the
+# network the container has and the server log says so. Deny egress in the network around the container.
 ARG WITH_LIBREOFFICE=0
 RUN if [ "$WITH_LIBREOFFICE" = "1" ]; then \
       apt-get update \

@@ -19,17 +19,24 @@ export function sendMyselfTrouble(r: any, name: string, fields: any[]): string |
 export function SendMyself({ r, isTpl, onChange }: { r: any; isTpl: boolean; onChange: (p: any) => void }) {
   if (!canSendMyself(r, isTpl) && !r.link_by_sender) return null;
   const hint = `ed-myself-${r.id}`;
+  const group = `ed-deliver-${r.id}`;
   return (
-    <div className="ed-myself">
+    <fieldset className="ed-myself" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      <legend className="ed-sr">How they get it</legend>
+      {/* Two choices, in the words of the line that opened them. Choosing the second takes the address away, and
+          going back to Email gives back the one that was typed (kept on screen only). Nothing else the sender chose
+          is changed: what cannot go with it (a code by email, a texted link) is said in the list above Send, in
+          the server's words, so nobody's choice vanishes unseen. */}
       <label className="check">
-        {/* The tick takes the address away, and unticking gives back the one that was typed (kept on screen only).
-            Nothing else the sender chose is changed: what cannot go with it (a code by email, a texted link) is said
-            in the list above Send, in the server's words, so nobody's choice vanishes unseen. */}
-        <input type="checkbox" checked={!!r.link_by_sender} aria-describedby={r.link_by_sender ? hint : undefined}
-          onChange={(e) => onChange(e.target.checked ? { link_by_sender: true, email: '', email_before_tick: r.email || '' } : { link_by_sender: false, email: r.email_before_tick || '' })} />
+        <input type="radio" name={group} checked={!r.link_by_sender} onChange={() => r.link_by_sender && onChange({ link_by_sender: false, email: r.email_before_tick || '' })} />
+        <span>Email</span>
+      </label>
+      <label className="check">
+        <input type="radio" name={group} checked={!!r.link_by_sender} aria-describedby={r.link_by_sender ? hint : undefined}
+          onChange={() => !r.link_by_sender && onChange({ link_by_sender: true, email: '', email_before_tick: r.email || '' })} />
         <span>{BY_SENDER_TICK}<span className="muted"> (no email address needed)</span></span>
       </label>
       {!!r.link_by_sender && <p id={hint} className="muted small">{BY_SENDER_HOW}</p>}
-    </div>
+    </fieldset>
   );
 }

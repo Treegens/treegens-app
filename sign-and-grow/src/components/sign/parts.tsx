@@ -1,7 +1,6 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Logo, Mark, SentWith } from '@/components/Brand';
-import { fmtTrees } from '@/lib/impact';
 import { savedLine } from '@/components/sign/actions';
 import { jumpRatherThanGlide } from '@/components/pdfMemory';
 
@@ -139,7 +138,7 @@ export function Impact({ impact }: { impact: any }) {
         <b>Signed without paper</b>
         <p>
           {/* A figure that rounds to nothing is left out, and one sheet is "1 sheet" (savedLine in sign/actions.ts). */}
-          About <b>{saved.sheets}</b>{saved.rest} {saved.verb} not used.{saved.trees ? ` That is ${fmtTrees(impact.trees)} of a tree.` : ''}
+          About <b>{saved.sheets}</b>{saved.rest} {saved.verb} not used, by our estimate.
         </p>
         {/* Opens in a new tab: the page it leads to is for everyone, with buttons to sign up, and someone who has
             just signed is not carried off to it. Nothing here asks a signer to buy or join anything. */}

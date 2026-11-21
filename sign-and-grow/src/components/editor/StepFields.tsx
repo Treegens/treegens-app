@@ -5,7 +5,7 @@ import { PdfDoc } from '../PdfDoc';
 import { findFields, overlap, scanPdf, type Found } from '@/lib/autoplace';
 import { snapBox, type Guide } from './snap';
 import { Lock, UndoRedo, Wand } from './parts';
-import { MAX_FIELDS, MIN_H, MIN_W, PREFILL, SIGNS, TLABEL, TYPES, clamp, makeField, plural, who, type Ed } from './shared';
+import { MAX_FIELDS, MIN_H, MIN_W, PREFILL, SIGNS, TLABEL, TYPES, clamp, makeField, plural, type Ed } from './shared';
 import { SENDER_MARK } from './shared';
 import { strikeClass, STRIKE_HELP } from '@/lib/strike';
 import { WordingField } from '../templates/WhoCanUse';
@@ -15,7 +15,7 @@ import { WitnessBlockButton } from './WitnessChoice';
 import { StampChoice, useStamps, editorStampSrc, editorStampTurn } from './StampChoice';
 import { stampBox, STAMP_DEFAULT_MM, turnStyle } from '@/lib/stamps';
 import { ConvertNotes } from './ConvertNotes';
-import { isCommonField } from '@/lib/editorux';
+import { paletteKinds, personLabel } from '@/lib/editorux';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
@@ -37,6 +37,7 @@ export function StepFields({ ed }: { ed: Ed }) {
   // "More fields": every kind beyond the six most documents need. And the selected field's More options.
   const [allTypes, setAllTypes] = useState(false);
   const [fieldMore, setFieldMore] = useState(false);
+  const list0 = fields.value;
   // The team's stamps, for the sender's own stamp fields and their pictures on the page.
   const stamps = useStamps();
   const canvas = useRef<HTMLDivElement>(null);
@@ -46,16 +47,23 @@ export function StepFields({ ed }: { ed: Ed }) {
 
   // Signers in the order they sign, which is also what {{signature2}} counts by.
   // A witness takes no place in the order, so {{signature2}} never means a witness (editor/WitnessChoice.tsx).
+  // The empty row of step 1 that nobody typed into is not a person: no fields can be placed for it (Editor.tsx isIdle).
   const signers = useMemo(() => {
-    const l = rcps.filter((r) => SIGNS(r) && r.role !== 'witness');
+    const l = rcps.filter((r) => SIGNS(r) && r.role !== 'witness' && !ed.isIdle(r));
     return env.ordered ? [...l].sort((a, b) => a.routing_order - b.routing_order) : l;
-  }, [rcps, env.ordered]);
+  }, [rcps, env.ordered, list0]); // eslint-disable-line react-hooks/exhaustive-deps
   // Fields can be placed for anyone who signs. For someone who has finished that means they sign again, which is
   // asked before the change is saved, so the people who have not signed yet come first when nothing is picked.
   const open = useMemo(() => [...signers, ...rcps.filter((r) => r.role === 'witness')], [signers, rcps]);
   const active = open.some((r) => r.id === activeId) ? activeId : (open.find((r) => !lockedIds.has(r.id)) || open[0])?.id || '';
   const list = fields.value;
+  // Someone without a name yet is "Person 2 (no name yet)", counted as the rows of step 1 are.
+  const label = (r: any) => (r ? personLabel(r, rcps.indexOf(r)) : 'Someone');
   const selected = list.find((f) => f.id === sel);
+  // A field's More options is closed every time another field is selected.
+  useEffect(() => setFieldMore(false), [sel]);
+  // The kinds of field already on this document stay in the short list (src/lib/editorux.ts paletteKinds).
+  const kinds = paletteKinds(TYPES.map((t) => t[0]), { open: allTypes, tool, used: list.map((f) => f.type) });
   const selLocked = !!selected && isLockedField(selected);
   const patchField = (fid: string, p: any, key = Object.keys(p).join()) => setFields((l) => l.map((f) => (f.id === fid ? { ...f, ...p } : f)), { tag: `prop:${fid}:${key}` });
   // Fields that depended on the deleted one are put right in the same step, and the sender is told (withoutField).
@@ -66,7 +74,7 @@ export function StepFields({ ed }: { ed: Ed }) {
     setSel(null);
     setSheet(false);
   };
-  const full = () => (fields.current().length >= MAX_FIELDS ? (toast('An envelope can hold up to 2,000 fields. Remove one to add another.', true), true) : false);
+  const full = () => (fields.current().length >= MAX_FIELDS ? (toast('One document can hold up to 2,000 fields. Remove one to add another.', true), true) : false);
 
   // After a field is added from the keyboard or found automatically, bring it into view.
   useEffect(() => {
@@ -283,7 +291,7 @@ export function StepFields({ ed }: { ed: Ed }) {
       if (p === f.page || cur.some((o) => o.document_id === f.document_id && o.page === p && o.type === f.type && overlap(f, o) > 0.6)) continue;
       copies.push({ ...f, id: newId('fld'), page: p });
     }
-    if (cur.length + copies.length > MAX_FIELDS) return void toast('That would be more than 2,000 fields in one envelope. Remove some fields first.', true);
+    if (cur.length + copies.length > MAX_FIELDS) return void toast('That would be more than 2,000 fields in one document. Remove some fields first.', true);
     if (!copies.length) return void toast('Every other page already has this field in the same spot.');
     setFields((l) => [...l, ...copies]); // one step, so one undo takes all the copies away again
     toast(`Copied to ${plural(copies.length, 'other page')}`);
@@ -340,14 +348,14 @@ export function StepFields({ ed }: { ed: Ed }) {
         reveal.current = { id: fresh[0].id, focus: false };
       }
       const people = new Set(fresh.map((f) => f.recipient_id));
-      const forWhom = people.size === 1 ? ` for ${who(rcps.find((r) => r.id === [...people][0]))}` : '';
+      const forWhom = people.size === 1 ? ` for ${label(rcps.find((r) => r.id === [...people][0]))}` : '';
       const parts = [`Found ${plural(all.length, 'place')}.`];
       if (fresh.length) parts.push(`Added ${plural(fresh.length, 'field')}${forWhom}. Undo takes them away again.`);
       if (taken) parts.push(fresh.length ? `${taken} already had a field.` : taken === all.length ? 'Each one already has a field, so nothing was added.' : `${taken} already had a field.`);
-      if (missing.size) parts.push(`${[...missing].sort((a, b) => a - b).map((n) => `Signer ${n}`).join(' and ')} ${missing.size === 1 ? 'is' : 'are'} not on this envelope yet. Add them in step 1, then look again.`);
+      if (missing.size) parts.push(`${[...missing].sort((a, b) => a - b).map((n) => `Signer ${n}`).join(' and ')} ${missing.size === 1 ? 'is' : 'are'} not on this document yet. Add them in step 1, then look again.`);
       if (lockedOut) parts.push(active ? `${lockedOut} belong to someone who already finished, so they were left alone.` : 'Add a signer in step 1, then look again.');
+      // Said once, in the line under the button (a status a screen reader hears too), not in a second message.
       setFound(parts.join(' '));
-      if (fresh.length) toast(`Added ${plural(fresh.length, 'field')}${forWhom}`);
     } catch (e: any) {
       setFound(e?.message?.startsWith('The document') ? e.message : 'We could not read this document. You can still place fields by hand.');
     } finally {
@@ -407,7 +415,7 @@ export function StepFields({ ed }: { ed: Ed }) {
                 return (
                   <button key={r.id} type="button" className={`btn sm${active === r.id ? ' on' : ''}`} style={{ ['--fc' as any]: color(r.id) }}
                     onClick={() => setActiveId(r.id)} aria-pressed={active === r.id} title={locked ? 'Already finished. The fields they signed stay where they are. A new field for them means they sign again.' : undefined}>
-                    <span className="dot" style={{ background: color(r.id) }} /> <span className="truncate">{who(r)}</span>{locked && <><Lock /><span className="ed-sr">, already finished</span></>}
+                    <span className="dot" style={{ background: color(r.id) }} /> <span className="truncate">{label(r)}</span>{locked && <><Lock /><span className="ed-sr">, already finished</span></>}
                   </button>
                 );
               })}
@@ -428,7 +436,7 @@ export function StepFields({ ed }: { ed: Ed }) {
           <div className="ed-group ed-palbox">
             <h3 id="ed-add">Add a field</h3>
             <div className="palette" role="group" aria-labelledby="ed-add">
-              {TYPES.filter(([t]) => isCommonField(t) || allTypes || tool === t).map(([t, label]) => {
+              {TYPES.filter(([t]) => kinds.includes(t)).map(([t, label]) => {
                 // Nothing is switched off once someone has finished. A new field or note then means they sign again,
                 // which is asked before the change is saved.
                 const again = anyLocked ? `${ed.lockedNames} already finished. Adding this means they have to sign again. You are asked before anything is saved.` : undefined;
@@ -480,7 +488,7 @@ export function StepFields({ ed }: { ed: Ed }) {
                         return (
                           <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${f.type === 'stamp' ? ' stamp' : ''}${strikeClass(f)}${locked ? ' locked' : ''}`}
                             style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, ['--fc' as any]: color(f.recipient_id), borderRadius: f.type === 'radio' ? '50%' : undefined }}
-                            tabIndex={0} role="button" aria-label={`${TLABEL[f.type]} field${owner ? ` for ${who(owner)}` : senderStamp(f) ? ', your own stamp' : ''}, page ${page + 1}${locked ? ', locked' : ''}`}
+                            tabIndex={0} role="button" aria-label={`${TLABEL[f.type]} field${owner ? ` for ${label(owner)}` : senderStamp(f) ? ', your own stamp' : ''}, page ${page + 1}${locked ? ', locked' : ''}`}
                             onClick={(e) => e.stopPropagation()} onFocus={() => setSel(f.id)} onPointerDown={(e) => drag(e, f, 'move')}>
                             {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || TLABEL[f.type]}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
                             {sel === f.id && !locked && <span className="grip" onPointerDown={(e) => drag(e, f, 'resize')} />}
@@ -531,7 +539,7 @@ export function StepFields({ ed }: { ed: Ed }) {
               <div className="ed-sheetbody always">
                 <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{TLABEL[selected.type]}</h3>
                 {ed.wording && !lockedIds.has(selected.recipient_id) ? <WordingField field={selected} lock={ed.wording} onValue={(v) => patchField(selected.id, { value: v })} />
-                  : <div className="notice ed-lockline small"><Lock size={16} /><span>{who(rcps.find((r) => r.id === selected.recipient_id))} already finished, so this field stays where it is.</span></div>}
+                  : <div className="notice ed-lockline small"><Lock size={16} /><span>{label(rcps.find((r) => r.id === selected.recipient_id))} already finished, so this field stays where it is.</span></div>}
               </div>
             ) : (
               <div className="ed-sheetbody" data-item="field">
@@ -543,7 +551,7 @@ export function StepFields({ ed }: { ed: Ed }) {
                 ) : !SENDER_MARK(selected.type) && (
                   <label className="f"><span>Assigned to</span>
                     <select value={selected.recipient_id || ''} onChange={(e) => patchField(selected.id, { recipient_id: e.target.value })}>
-                      {open.map((r) => <option key={r.id} value={r.id}>{who(r)}</option>)}
+                      {open.map((r) => <option key={r.id} value={r.id}>{label(r)}</option>)}
                     </select>
                   </label>
                 )}

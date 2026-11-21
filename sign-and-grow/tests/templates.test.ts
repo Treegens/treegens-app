@@ -526,7 +526,7 @@ test('the screens show the rule and the lock before anyone types, and the pages 
     /\{!wording && <button type="button" className="btn sm ghost danger" onClick=\{\(\) => ed\.removeRcp/, /\{!wording && <div className="row wrap"/, /\{isTpl && <WhoCanUse templateId=\{env\.id\}/])
     assert.match(add, part);
   // (simplify-editor: the file's name, the role and the message are drawn by FileRow.tsx, PersonMore.tsx and ReviewParts.tsx.)
-  assert.match(read('src/components/editor/FileRow.tsx'), /aria-label="Document name" maxLength=\{200\} readOnly=\{!!ed\.wording\}/);
+  assert.match(read('src/components/editor/FileRow.tsx'), /aria-label="File name" maxLength=\{200\} readOnly=\{!!ed\.wording\}/);
   assert.match(read('src/components/editor/PersonMore.tsx'), /aria-label="Role" disabled=\{!!wording\}/);
   assert.match(read('src/components/editor/ReviewParts.tsx'), /maxLength=\{5000\} readOnly=\{!!wording\}/);
   const fieldsStep = read('src/components/editor/StepFields.tsx');

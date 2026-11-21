@@ -15,7 +15,9 @@ const quiet = new Set<string>();
 
 /**
  * The one recipient a "sign_now" send is for, or null when it is an ordinary send. `callerEmail` is the address of
- * the signed-in person who pressed the button: an API key, or a colleague sending someone else's draft, gets null.
+ * whoever asked: the signed-in person who pressed the button, or the owner of the API key that was used. The
+ * sender's own sign-in and the sender's own API key are both honoured (the owner can read their signing link
+ * anyway); a colleague, or a colleague's key, sending someone else's draft gets null.
  */
 export function signNowFor(e: any, sender: { email?: string } | null | undefined, callerEmail: string | null | undefined, asked: unknown): any | null {
   if (asked !== true || !sender?.email || !callerEmail) return null;

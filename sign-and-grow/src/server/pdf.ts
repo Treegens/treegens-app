@@ -4,8 +4,10 @@ import { PDFDocument, PDFPage, PDFFont, PDFName, PDFDict, PDFRef, PDFArray, PDFN
 import { jpegOrientation, markUpright, uprightMatrix, liesOnItsSide, pictureLimit } from './exif.ts';
 import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
-import { bad } from './util.ts';
-import { impactOf, fmtTrees, fmtNum, PRICING } from '../lib/impact.ts';
+import { bad, baseUrl } from './util.ts';
+import { impactOf } from '../lib/impact.ts';
+import { recordShowsTrees, treesOnEnvelope } from './impact.ts';
+import { recordLines } from '../lib/impactwords.ts';
 import { formatDate, formatDateValue, localStamp, validZone, zoneLabel } from '../lib/dates.ts';
 import { typesetterFor } from './pdftext.ts';
 import { isolate, hasRtl } from './bidi.ts';
@@ -469,19 +471,18 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     s.text(`The fonts of this PDF do not have ${n === 1 ? 'one character' : `${n} different characters`} used in this envelope. Wherever ${n === 1 ? 'it' : 'one of them'} stood, the pages and this certificate show the mark ${PRINT_MARK} instead. By Unicode number, in the order they first appear: ${codePoints(gone)}. On screen and in emails they show as they were typed.`, { size: 8, gap: 4 });
   }
 
+  // 'Trees on the signing record' (Settings, Account): on unless the account's admins switched it off, as a
+  // government tenant will have. Estimates are called estimates, and trees are claimed only for signatures that
+  // were paid for (src/server/impact.ts, src/lib/impactwords.ts).
+  if (!recordShowsTrees(e.account_id)) return;
   const i = impactOf(e.sheets || 0);
-  s.need(90);
+  const lines = recordLines({ ...i, trees: treesOnEnvelope(e.id), site: baseUrl() });
+  const high = 36 + lines.length * 13;
+  s.need(high + 28);
   s.y -= 10;
-  s.page.drawRectangle({ x: s.L, y: s.y - 62, width: s.W - 2 * s.L, height: 62, color: rgb(0.93, 0.97, 0.93) });
+  s.page.drawRectangle({ x: s.L, y: s.y - high, width: s.W - 2 * s.L, height: high, color: rgb(0.93, 0.97, 0.93) });
   s.page.drawText('Signed without paper', { x: s.L + 14, y: s.y - 20, size: 11, font: ctx.bold, color: GREEN });
-  s.page.drawText(
-    clean(`About ${fmtNum(i.sheets)} sheets of paper, ${fmtNum(i.litresWater)} litres of water and ${fmtNum(i.kgCo2, 2)} kg of CO2e were not used`),
-    { x: s.L + 14, y: s.y - 36, size: 8.5, font: ctx.font, color: INK },
-  );
-  s.page.drawText(
-    clean(`(${fmtTrees(i.trees)} of a tree, estimated). Every dollar paid to GrowSigning plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`),
-    { x: s.L + 14, y: s.y - 49, size: 8.5, font: ctx.font, color: INK },
-  );
+  lines.forEach((line, k) => s.page.drawText(clean(line), { x: s.L + 14, y: s.y - 36 - k * 13, size: 8.5, font: ctx.font, color: INK }));
 }
 
 // ---- Fillable forms in uploaded documents ---------------------------------------------------

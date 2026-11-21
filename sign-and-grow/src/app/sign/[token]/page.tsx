@@ -8,7 +8,8 @@ import { AdoptSignature, type SavedMark } from '@/components/SignaturePad';
 import { formatDate, formatDateValue, deviceZone } from '@/lib/dates';
 import { consentWording } from '@/lib/policy';
 import { NUMBER_HINT } from '@/lib/numbers';
-import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
+import { Shell, StateCard, Sender, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
+import { TreeLine, SignerDone } from '@/components/impact/SignerTrees';
 import { PurgedLink } from '@/components/sign/PurgedLink';
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
 import { CodeCheck } from '@/components/sign/CodeCheck';
@@ -838,12 +839,13 @@ export default function SignPage() {
               <a className="btn lg" href={downloadUrl}><Icon name="download" /> Download PDF</a>
             </div>
           </StateCard>
+          {/* Trees and paper: the picture the first time someone signs, one small card after that (impact/SignerTrees.tsx). */}
+          <SignerDone base={base} impact={finished?.impact || env.impact} />
           {/* The sender's own payment page, when they set one and may: only after Finish (src/components/sign/PayLink.tsx). */}
           {/* A signer with a witness: what became of them, and another one after "I was not there" (sign/Witness.tsx). */}
           <WitnessAfter me={me} base={base} onNamed={load} />
           {acts && <PayLink base={base} />}
           {env.next_person && <NextPerson slug={env.next_person} email={myEmail} />}
-          <Impact impact={finished?.impact || env.impact} />
         </div>
         {dialogs}
       </Shell>
@@ -1015,6 +1017,8 @@ export default function SignPage() {
       )}
       <span className="sg-wide"><MoreButton open={open === 'more'} onOpen={go('more')} /></span>
       {other}
+      {/* One tree line next to Finish, for someone who signs with a paid signature (impact/SignerTrees.tsx). */}
+      <span className="sg-wide"><TreeLine base={base} show={acts && !hasNext} /></span>
       <span className="sg-wide">{mainButton(false)}</span>
     </>
   );
@@ -1022,6 +1026,7 @@ export default function SignPage() {
     <>
       {acts && <div className="sg-bottom-info"><b>{count}</b><span aria-hidden="true">{SAVE_TEXT[save]}</span></div>}
       <MoreButton open={open === 'more'} onOpen={go('more')} className="btn sg-morebtn" />
+      <TreeLine base={base} show={acts && !hasNext} />
       {mainButton(true)}
     </>
   );

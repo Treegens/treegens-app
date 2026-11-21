@@ -61,12 +61,10 @@
     ".next-build-brand-wire/dev/types/**/*.ts",
     ".next-build-simplify-start/types/**/*.ts",
     ".next-build-simplify-start/dev/types/**/*.ts",
-    ".next-verify-simplify-editor/types/**/*.ts",
-    ".next-verify-simplify-editor/dev/types/**/*.ts",
-    ".next-uxse/types/**/*.ts",
-    ".next-uxse/dev/types/**/*.ts",
     ".next-dragdrop/types/**/*.ts",
-    ".next-dragdrop/dev/types/**/*.ts"
+    ".next-dragdrop/dev/types/**/*.ts",
+    ".next-verify-simplify-start/types/**/*.ts",
+    ".next-verify-simplify-start/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

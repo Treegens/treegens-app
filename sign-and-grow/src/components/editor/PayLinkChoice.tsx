@@ -10,7 +10,8 @@ type State = { pay_link: Link; may: boolean; why: string | null; host_why?: stri
 // stands on the step with the Send button and is saved by itself, straight away, with its own button: it changes
 // nothing on the pages and emails nobody. An account that may not show one yet is not offered it here at all (the
 // help page says when it is). One that has a link and lost the right to show it sees why, and can take it off.
-export function PayLinkChoice({ envelopeId, isTpl }: { envelopeId?: string; isTpl?: boolean }) {
+// `onChange` tells the step what is saved now, for the line next to its closed More options (ReviewParts.tsx).
+export function PayLinkChoice({ envelopeId, isTpl, onChange }: { envelopeId?: string; isTpl?: boolean; onChange?: (p: { pay_link: Link; host_why: null }) => void }) {
   const [st, setSt] = useState<State | null>(null);
   const [url, setUrl] = useState('');
   const [kind, setKind] = useState('deposit');
@@ -37,6 +38,7 @@ export function PayLinkChoice({ envelopeId, isTpl }: { envelopeId?: string; isTp
     try {
       const r = await api<{ pay_link: Link }>(`/envelopes/${envelopeId}/pay-link`, { method: 'PUT', body: { url: to, kind } });
       setSt({ ...st, pay_link: r.pay_link, host_why: null, gone: r.pay_link ? null : st.gone });
+      onChange?.({ pay_link: r.pay_link, host_why: null });
       setUrl(r.pay_link?.url || '');
       toast(r.pay_link ? 'Payment link saved. Nobody was emailed.' : 'Payment link removed.');
     } catch (e: any) {
@@ -48,7 +50,7 @@ export function PayLinkChoice({ envelopeId, isTpl }: { envelopeId?: string; isTp
   return (
     <div className="card ed-paylink">
       <h3 style={{ margin: '0 0 4px' }}>Payment at signing <span className="muted small">(optional)</span></h3>
-      <p className="muted small" id="ed-pay-says" style={{ marginTop: 0 }}>{PAY_FOR_SENDER}{isTpl ? ' Every envelope made from this template starts with this link.' : ''}</p>
+      <p className="muted small" id="ed-pay-says" style={{ marginTop: 0 }}>{PAY_FOR_SENDER}{isTpl ? ' Every document made from this template starts with this link.' : ''}</p>
       {!st.may && <div className="notice warn" role="status"><b>Not shown to anyone right now.</b> {st.why}</div>}
       {st.may && link && st.host_why && <div className="notice warn" role="status"><b>Not shown to anyone right now.</b> {st.host_why}</div>}
       {!link && st.gone && <div className="notice" role="status">{st.gone.note}</div>}

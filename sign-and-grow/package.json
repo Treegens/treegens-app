@@ -5,9 +5,9 @@
   "description": "E-signatures without paper. 100% of subscription revenue funds Treegens tree planting.",
   "scripts": {
     "postinstall": "node scripts/copy-assets.mjs",
-    "dev": "next dev",
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev",
     "prebuild": "node scripts/sbom.mjs",
-    "build": "next build",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
     "sbom": "node scripts/sbom.mjs",
     "backup": "node scripts/backup.mjs",
     "start": "next start",

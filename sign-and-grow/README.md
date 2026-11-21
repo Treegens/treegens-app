@@ -73,6 +73,7 @@ What the test files cover:
 | `tests/clickwrap.test.ts` | Click-to-agree terms: drafts and versions, our page, the frame (only `?embed=1`) and the API, the signed link a website makes, the record that never changes and its seal, what the certificate says the browser reported, the receipt and one copy by email only for the browser that accepted and an address the website gave, the scam filter on every word the page shows, the two monthly counts and the limits per address (offices, IPv6 blocks), paused accounts, reports, members and keys, and deleting with the files. |
 | `tests/seal.test.ts` | The digital seal of a completed PDF, checked by poppler's `pdfsig`, `openssl cms -verify` and `openssl ts -verify` where they are installed (each test that needs one is skipped otherwise) and by pdf.js: no settings leave the file byte for byte as it was and write nothing down; a sealed file is covered to its last byte and the stored SHA-256 is of it; one changed byte breaks the seal and a byte added after it is told apart; keys from a .p12 (as OpenSSL 3 writes it, and the old triple DES and RC2 kind) and from PEM, RSA-PSS and ECDSA P-256; an expired, not yet valid, wrong-purpose, mismatched, too small or unchained key refused with the file made as before and the operators told once; a time-stamp service made in the test (B-T, its token verified by OpenSSL), and every way a time-stamp can fail falling back to B-B at once, with the certificate saying so; several services in order and a 3-second timeout (4 in all); `/verify` on the sealed file, an added-to file, a changed file, a file sealed by someone else and one sealed with an earlier key; envelopes completed before the seal never sealed afterwards; a voided copy unsealed and saying so; an uploaded PDF that already carries signatures. The screens: one history line "Sealed by" and the certificate's name without technical names, `seal` on the page of the document, the admins' status line from `GET /seal` (admins only, never the reason a key is refused, never the time-stamp service's address), and none of it without settings. Repairs: a file put together around a real seal (the seal moved with other pages in its place, bytes hidden after it, a seal lifted into another file) is never said to hold; a time stamp a stranger adds afterwards is never shown or called trusted; a service that lies about the time is not used; without `TSA_TRUST` nothing says "trusted"; the user name and password never go over plain http; `certificate.pdf` in an evidence pack carries no seal field; the public pages say nothing about a seal without a seal key. |
 | `tests/seclog.test.ts` | The security record: each kind of event written once, to the right accounts, with the right person and address (the team, sign-ins and their failures to every account of the person, logins, two-step login, keys and their new addresses, settings, webhooks, deletions, template rules, the export, the owner handed over, the GrowSigning team), a wrong password and a wrong code written the same way for a login with two-step login, nothing secret in any line (the test's passwords, keys, tokens, codes and addresses looked for), members and send keys refused, an admin key paging in order, filters and the CSV, names only when shared, lines that cannot be changed or deleted, a forged line found by the chain, the purge after `SECURITY_LOG_DAYS` and with the account, the alerts once an hour and switched off by a person only, and the opt-in webhook. |
+| `tests/impact.test.ts` | Trees: "10 mangroves" said only for a signature that was paid for (next to Finish, in the email that asks someone to sign, on the finished screen, on the signing record) and never for a free one (the trial, a free code, a sender's own signature, a server that takes no payments), nothing said to an approver, a viewer or a copy, the first time a person signs and an account sends (once, remembered by the server, by address also after an envelope is deleted), "10 more" and the count afterwards, a payment that went back no longer counting, what a link gives away before its access code, the forecast at the review step, the switch "Trees on the signing record" (admins only, in the security record, the box left off), totals hidden until 1,000 sheets or 10 trees, no share of a tree anywhere, and the green claims rules read from the source (no generic words, no carbon claim for the mangroves, estimates called estimates with their sources). The payment provider is the stand-in of the billing tests. |
 | `tests/retention.test.ts` | Keeping closed envelopes for a set time: the rule off by default, only admins change it, 30 to 9,999 days, a level, a template's own period and a dry run that counts; the due date for each way of closing (completed, voided, declined, expired) and none while out; one email 14 days before to the sender and the admins, not twice, and nothing purged sooner; a rule switched off or a level raised after the email; Keep it with its reason in the audit trail; legal holds on an envelope and a folder (members refused, a reason needed, the sender's delete, Purge now, the timer and the purge itself refused and recorded, a folder hold that follows an envelope out of it), lifting with a reason, closing the account and the timer refused with the list of holds (recorded once a day), the two-person lift by the people who run the server; what each level removes and nothing more (pages, signed PDF and attachments off the disk, a template's file kept, values and signature pictures, names, addresses, internet addresses, browsers, the subject's names, our email copies); `/verify` by file and by ID, the signing link, the email's security code, downloads, the evidence pack and copies after a purge; a redacted trail said as redacted, while any other change still shows; Purge now and calling it off within the 14 days; an open dispute; the retention record never changed and without names after the account goes; the export; and today's delete and restore as they were. |
 | `tests/customfields.test.ts` | The account's own details on envelopes (custom fields): up to 20, text or a list of choices, only admins change them and the change is in the security record; names told apart in any script and letter case; values of one line and up to 100 characters; characters nobody can see (zero-width and format characters, blank fillers, lone variation selectors, text-turning marks) refused in names and values, except a joiner between letters or in an emoji, and a value with nothing to read counting as no value; a required one checked at send with a code and the missing names for the screens, on bulk rows and for public forms; a template's values as the start and a bulk column that fills them; `documents[].fields`; never in what a signing link answers; a value put right on an envelope that is out with a line in its audit trail and fixed once completed; the list filter (start of a text value, whole choice of a list) and column, the export's columns with formulas defused in cells and header; webhook payloads; the certificate block with only the fields marked for it; the fake-notice filter over the printed ones; changing or deleting a field leaving sent envelopes as they were; a purge of personal details taking the values; the API description; what the "Use" dialog of a template asks for; the plain refusal for a value of a deleted detail; a short answer to a request naming thousands of details; a note when a printed detail holds letters the certificate cannot print. |
 | `tests/convert.test.ts` | Office files turned into PDF: every kind recognised from bytes built in the test (Word, Excel, PowerPoint, OpenDocument, the old binary formats, RTF, HTML, text, TIFF) and never from the name, the unknown kinds and what each is told, passwords, ZIPs that unpack to more than 100 MB or 20 times their size (also when they lie about it, and one entry listed eighteen times), the test converter through a whole send, sign and evidence pack (the audit line with both fingerprints, the original kept encrypted, in `originals/`, kept while another account has it and deleted with the account), a correction that puts a converted file on, the notes (tracked changes, comments, sheets, outside content but not web links, macros), a name that reads like a payment notice left out of the record, no converter set up, a signer's attachment, several files at once, a TIFF that would lose pages, a stand-in for LibreOffice that hangs (killed with what it started, its folder gone), shows its environment (no secrets) and its network (none), the queue and the limit per account, and the real LibreOffice when it is installed. |
@@ -85,13 +86,18 @@ What the test files cover:
 ## Running it yourself
 
 For a public body or a company that wants its own copy, in its own country, on its own servers. One container, one
-volume, nothing that calls home. Nothing here is audited or certified by anyone: `docs/controls.md` is a
+volume, nothing that calls home (the framework's own usage statistics are switched off in the image and by
+`npm run build` and `npm run dev`; if you call `npx next build` or `npx next dev` yourself, set
+`NEXT_TELEMETRY_DISABLED=1`, or the framework sends its statistics to telemetry.nextjs.org). Nothing here is audited or certified by anyone: `docs/controls.md` is a
 self-assessment by the authors and says so in its first line.
 
 **One container.** `Dockerfile` builds it on Node 24 (the long-term-support line; Node 22 leaves support on 30 April
 2027). It runs as a user without privileges, and `docker-compose.example.yml` and the Helm chart in
 `deploy/helm/growsigning` give it a read-only root file system, no capabilities and two small in-memory folders for
-temporary files. `--build-arg WITH_LIBREOFFICE=1` puts LibreOffice in, for `CONVERTER=soffice`. The base image is a
+temporary files. `--build-arg WITH_LIBREOFFICE=1` puts LibreOffice in, for `CONVERTER=soffice`; in this container
+LibreOffice then has whatever network the container has, because `unshare -rn`, which takes the network away from
+it, is not permitted with the capabilities dropped (run here: "Operation not permitted"), so deny egress in the
+network before you switch it on. The base image is a
 build argument so that you can pin it to a digest you checked; the Dockerfile says how.
 
 ```bash
@@ -138,9 +144,14 @@ software, so nothing calls them.
   absent exactly as on a server where it was never set up, and `/security` shows it as switched off.
 - Any other value is read as `none`, and the log says so.
 
-This is a second line of defence, not a firewall. It covers `fetch` and the sockets Node opens (`net`, `tls`, the
-`http` agent), which is how the mail relay and webhooks connect. It cannot see what a program the server starts
-does (LibreOffice), and code that reached for a lower level could pass it. **Deny egress in the network as well:**
+This is a second line of defence, not a firewall. It covers `fetch`, every TCP and TLS connection Node opens (it
+stands at `net.Socket.prototype.connect`, where `net`, `tls`, `http`, `https` and `http2` all end, which is how the
+mail relay and webhooks connect) and UDP (`dgram`). An address with no name passes only when it came from looking
+up an allowed name or is listed itself; an allowed TLS server name does not make an address allowed. In mode `none`
+a name that is not allowed is not looked up either, so a payment link can only be checked, and so shown, when its
+host is in `OUTBOUND_ALLOW`; in mode `listed` names are still looked up, because that is how a payment link is
+checked. It cannot see what a program the server starts does (LibreOffice), or native code, and code written to
+get around it (a saved copy of the original functions, a worker started before it) could pass it. **Deny egress in the network as well:**
 the chart's NetworkPolicy denies all of it by default, with a list to allow. `/security` keeps the two facts apart:
 what the software is configured to connect to, and what the network allows, which the page cannot see.
 
@@ -154,7 +165,9 @@ LibreOffice layer. One thing a closed network must have: **a mail relay inside i
 its address by email before it can send. (The smoke test reads that email from the outbox with `DEV_OUTBOX=1`,
 which must never be set on a real server.)
 
-**Backups.** `node scripts/backup.mjs <folder>` (or `docker compose run --rm backup`) makes a consistent copy while
+**Backups.** `node scripts/backup.mjs <folder>` (or `docker compose run --rm backup`, after
+`mkdir -p backups && sudo chown 1000:1000 backups`, because the container runs as uid 1000 and Docker would make
+the folder as root) makes a consistent copy while
 the server runs: every stored file, then the database in one step with SQLite's own online backup (`VACUUM INTO` on
 a Node without it), then the files that arrived meanwhile, then a manifest with the SHA-256 of each. The folder
 only gets its dated name when it is whole. **The keys are never in a backup:** `FILE_ENCRYPTION_KEY` and
@@ -292,6 +305,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | A field hidden by a rule still blocked Finish as "required", and a total the browser added up could not be trusted. | "Only show when..." and "Calculate from..." on any field, each said back as a sentence ("Shown when 'Has a co-signer' is ticked"). The server works out what is shown and every total again from what is stored, on every save and at Finish: a hidden field is not required, keeps no answer and prints nothing, and a calculated value the browser sends is not taken. A loop is refused with the fields named, empty fields count as 0, dividing by 0 says so on screen, the result keeps the way its numbers are written (1.234,50) and is kept as a plain number too, so a total of 1,233 is never read back as 1233, and a changed rule needs the sign-again choice once someone has finished (`src/lib/logic.ts`, `src/server/logic.ts`). |
 | A signer saw one total and another was signed under their name, because a co-signer finished in between. | Finish carries a key for the other people's answers the screen counted. If someone finished since, nothing is signed: the page says who finished, shows the new total and any field that comes with it, and the person finishes after looking (`formulaInputs` in `src/server/logic.ts`). |
 | Sending one document means wading through options most people never need, and the same question asked twice. | The editor has three steps and each asks only what a first send needs (research/ux-charter.md, measured by `tests/ux/flows.cjs`). Step 1, "Files and people", opens with one empty person row: a name and an email. The role, how they get it, the check, how they sign and a private note are one line each in that person's More, each showing what it is set to. Step 2 shows six kinds of field, with every other kind behind "More fields", and a field's panel shows who it is for, Required and Label. Step 3 has the subject and message, and one More options with reminders (asked once), the deadline and the date format. A first send went from 19 actions over 10 screens and 193 choices on the way to 18 actions over 8 screens and about 125. Nothing was taken away: it moved behind a More. |
+| "Plants a tree with every signature" turned out to mean nothing I could check, and the same line was shown for documents nobody paid for. | "10 mangroves" is said only where a signature was paid for: next to Finish, in the email that asks someone to sign, on the finished screen and on the signing record. A person who signs with a free signature is told nothing about planting; the sender and the signing record are then told only that GrowSigning gives what it earns from its plans to planting mangroves with Treegens. Paper, water and CO2e are called estimates, with their sources and the working on `/impact`, which also says what is not claimed: no offset, no carbon figure for the trees. Totals are hidden until they mean something, and no share of a tree is shown. |
 | Our security team asked where the data goes, what the server talks to, how we back it up and who to report a hole to, and the vendor sent a brochure. | You can run it yourself: one container, one volume, in your own country. `/security` lists every outside service with the hosts, from the settings the server runs on, and `OUTSIDE_CALLS=none` switches all but your mail relay off. `/api/health` for your monitor, a backup and restore pair that checks every file and every audit chain and never holds a key, `/.well-known/security.txt` from your own contact, a bill of materials at `/security/sbom.json`, and two documents for the security team that say "a self-assessment by the authors, not audited, not certified" at the top. |
 
 ## What is in it
@@ -956,9 +970,31 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   was written (until the envelope is deleted: then the log keeps the delivery without the words and the name).
 
 **Environment**
-- Paper, water and CO2e saved shown on every envelope, on the certificate, in emails, in the dashboard, in
-  reports, and as live public totals on `/impact`.
-- Every number comes from `src/lib/impact.ts`, and the method is published on `/impact`.
+- What one document saves is said where a person sends or finishes it: "This saves 15 pages of paper from a
+  tree" at the review step, on the envelope page and on the signer's finished screen, with water and CO2e behind
+  "How we work this out", as estimates. No share of a tree anywhere.
+- Trees are said only where they are true. A signature that was paid for funds 10 mangroves: the person who signs
+  reads "10 mangroves will be planted when you finish." next to Finish and in the email that asks them, and nothing
+  on the consent screen. A free signature (the 3 a new account starts with, a free code, a sender signing their
+  own document, a server that takes no payments) is told nothing about planting. An approver, a viewer, a copy and
+  a witness are told nothing either. The server decides all of it (`src/server/impact.ts`, with
+  `paidSignatureFor` in `credits.ts`); the pages only draw, and the words are in `src/lib/impactwords.ts`.
+- The first time: when a person signs for the first time on this server (no earlier finished signature from
+  their address), and when an account sends its first envelope, a picture plays once in the page: a shoreline
+  and ten mangrove seedlings rising, about 2.5 seconds, SVG and CSS. It covers nothing and delays nothing, has a
+  Close button, closes on Escape or a tap, is one sentence to a screen reader and a still picture with "reduce
+  motion". For a free signature no seedlings are drawn and nothing is said to be planted. The server remembers it
+  was shown (a keyed hash of the address, never the address). Later times get one small card: "10 more mangroves"
+  and the count of what that address has planted, from finished paid signatures only; a payment that went back
+  stops counting.
+- Totals (the sidebar, Reports, the landing page, `/impact`, Trees planted) are shown only from 1,000 sheets or
+  10 trees. Until then nothing stands in their place.
+- "Trees on the signing record" (Settings, Account; admins; on by default): off leaves the box "Signed without
+  paper" off the signing record of documents completed from then on, for organisations that want nothing but
+  the record there. Screens and emails are not changed by it (`GET` and `PUT /api/account/impact-record`).
+- Every number comes from `src/lib/impact.ts`, and `/impact` says how each is worked out, where the factors come
+  from, that the planting is Treegens' own work, and what is not claimed (no offset, no CO2 figure for the
+  mangroves, nothing that says a signature undoes harm).
 - Payment ledger (from the payment provider's invoices) shown publicly as money sent to tree planting.
 
 **Brand**
@@ -1026,9 +1062,15 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 Being straight about this: the market-leading e-signature products are large suites, and this covers the core
 e-signature product, not all of it. Not built:
 
-- **Trees planted, said before sending.** The review step says how many pages of paper this document saves. It
-  does not say that mangroves are planted for it, because whether a paid signature will be used is only known once
-  one is held for the signer. Nor does the editor have a preview of what each person will see, or fold several
+- **Trees planted, promised before sending.** The review step says how many pages of paper this document saves,
+  and adds "Plus: 10 mangroves are planted for each person who signs" only when every signature of the draft
+  would come out of a payment as the account stands. That is a forecast from the draft as saved; what is true is
+  asked again once a signature is held for each signer. A mixed case (some paid, some free) says nothing there.
+- **Proof of each planting.** GrowSigning counts what was paid and says what that funds. It does not show which
+  trees were planted for which signature, and it has not checked Treegens' plantings itself: `/impact` links to
+  Treegens for that. A payment disputed long after a signature stops counting only while that envelope still
+  exists. The first-time picture for a person with no address (a link the sender passed on) is per document.
+- Nor does the editor have a preview of what each person will see, or fold several
   warnings on the review step into one line: each warning is shown in full.
 
 - **Certificate-based signatures of the people who sign.** A completed PDF can carry a digital seal of the server

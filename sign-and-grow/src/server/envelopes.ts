@@ -5,6 +5,8 @@ import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
+import { treesInInvite } from './impact.ts';
+import { mailLine } from '../lib/impactwords.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
 import { STANDING_PAYMENT, personGen, lastExpiry, swapRefusal, reholdEnvelope, pastDateText, renewalPending } from './credits.ts';
 import { DATE_FORMATS, momentText, momentForEmail, momentForReader, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
@@ -1406,6 +1408,8 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
       ...groupLine(r), // to a member of a group: that it went to the group, and how that works
       ...(r.note ? [`Note for you: ${r.note}`] : []),
       ...(r.access_code ? [`You will need an access code to open it. ${sender.name} will give it to you separately. It is not in this email.`] : []),
+      // To someone who signs with a paid signature, and nobody else: what finishing plants (impact.ts).
+      ...(kind === 'new' && mailLine(treesInInvite(r)) ? [mailLine(treesInInvite(r))] : []),
       `Reply to this email to reach ${sender.name} (${sender.email}).`,
     ],
     cta: { label: done ? (e.status === 'completed' ? 'View completed document' : 'View document') : r.role === 'cc' ? 'View document' : r.role === 'viewer' ? 'View document' : `${r.role === 'approver' ? 'Review and approve' : r.role === 'witness' ? 'Open and witness' : 'Review and sign'}${kind === 'again' ? ' again' : ''}`, url: signUrl(r) },
@@ -1587,7 +1591,7 @@ async function completeEnvelope(e: any) {
   const i = impactOf(fresh.sheets);
   const lines = [
     pdf ? 'Everyone has finished. The signed document and its certificate of completion are ready.' : 'Everyone has finished. The signed document and its certificate of completion are being prepared and will be at the link below shortly.',
-    `Because this was signed digitally, about ${fmtNum(i.sheets)} sheets of paper and ${fmtNum(i.litresWater)} litres of water were not used.`,
+    `Because this was signed on screen, about ${fmtNum(i.sheets)} ${i.sheets === 1 ? 'sheet' : 'sheets'} of paper and ${fmtNum(i.litresWater)} litres of water were not used. That is an estimate: ${baseUrl()}/impact shows how it is worked out.`,
   ];
   const attachments = pdf && pdf.length < 8_000_000 ? [{ filename: `${(fresh.subject || 'signed').replace(/[^\w .-]+/g, '_').slice(0, 80)}.pdf`, content: Buffer.from(pdf) }] : undefined;
   // The fingerprint of the signed PDF, so every person holds a reference of their own outside this service, and

@@ -41,6 +41,11 @@ export function uploadLimits(converts: boolean, phoneSeconds: number): string {
   return `${what} Up to 25 MB and 500 pages each. A signer on a phone waits about ${Math.round(phoneSeconds)} seconds for each MB on a slow connection.`;
 }
 
+/** The same limits in one short line, for the drop area of the editor's first step. */
+export function uploadLimitsShort(converts: boolean): string {
+  return converts ? `PDF, PNG or JPEG, or ${CONVERT_KINDS_TEXT}, which we turn into a PDF. Up to 25 MB and 500 pages each.` : 'PDF, PNG or JPEG. Up to 25 MB and 500 pages each.';
+}
+
 /** What the browser says before sending a file it can already tell will not be taken. */
 export function notTaken(converts: boolean): string {
   return converts

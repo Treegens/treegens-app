@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { api, useLoad, Status, fmtDate, toast } from '@/components/ui';
 import { Mark } from '@/components/Brand';
 import { useMe } from '@/components/AppShell';
-import { fmtNum, fmtTrees, impactOf } from '@/lib/impact';
+import { SenderTrees } from '@/components/impact/SenderTrees';
 import { reminderText } from '@/lib/policy';
 import { Recipients, lastEmailTo, type Delivery } from '@/components/sender/Recipients';
 import { BackNews, MailStopLines, deliveredLine, remindedText } from '@/components/sender/MailNews';
@@ -79,7 +79,6 @@ export default function EnvelopeDetail() {
   // it, download it and put it back, and nothing else until it is back.
   const removed: string | null = data.removed_at || null;
   const isAdmin = me.role !== 'member';
-  const impact = impactOf(e.sheets);
   const pages = e.documents.reduce((n: number, d: any) => n + d.pages, 0);
   const out = e.status === 'sent';
   const acting = e.recipients.filter((r: any) => r.role !== 'cc');
@@ -258,9 +257,11 @@ export default function EnvelopeDetail() {
       {e.status === 'completed' && (
         <div className="card row" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>
           <Mark size={26} label="" />
-          <div><b>Everyone finished{e.completed_at ? ` on ${longDate(e.completed_at)}` : ''}. Completed without paper.</b> About {fmtNum(impact.sheets)} sheets, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e not used ({fmtTrees(impact.trees)} of a tree).</div>
+          <div><b>Everyone finished{e.completed_at ? ` on ${longDate(e.completed_at)}` : ''}. Completed without paper.</b><SenderTrees envelopeId={e.id} status={e.status} bare /></div>
         </div>
       )}
+      {/* Out for signature: what this one saves and what its signatures plant; the first send ever gets the picture (impact/SenderTrees.tsx). */}
+      {out && <SenderTrees envelopeId={e.id} status={e.status} />}
 
       <section className="card pad0" aria-labelledby="sn-rcpt-h">
         <div className="sn-cardhead">

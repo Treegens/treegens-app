@@ -1,12 +1,15 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Mark } from '../Brand';
 import { DATE_FORMATS, DATE_FORMAT_CHOICES, formatDate, deviceZone, momentText } from '@/lib/dates';
-import { savingLine } from '@/lib/editorux';
+import { savingLine, reviewSummary, dateExampleDay } from '@/lib/editorux';
+import { api } from '../ui';
+import { useMe } from '../AppShell';
 import { ReminderChoice } from './ReminderChoice';
 import { PayLinkChoice } from './PayLinkChoice';
-import { plural, type Ed } from './shared';
+import { ReviewPlus } from '../impact/SenderTrees';
+import { type Ed } from './shared';
 
 // The parts of step 3 that came over from step 1 (research/ux-charter.md, 2.3): the subject and the message stand
 // where the Send button is, and what changes from one send to the next (reminders, the deadline, how dates are
@@ -15,10 +18,13 @@ import { plural, type Ed } from './shared';
 /** The email's subject and message. For a template the subject is its name as well. */
 export function SendWords({ ed }: { ed: Ed }) {
   const { env, isTpl, wording } = ed;
+  // "Sign now": the only person is the sender, so no invitation is written. The box is the document's title, and
+  // there is nobody to write a message to. A message typed earlier is kept and comes back when someone is added.
+  const alone = ed.signNow;
   return (
     <div className="card ed-words">
-      <label className="f"><span>{isTpl ? 'Template name and email subject' : 'Email subject'}</span><input value={env.subject} maxLength={200} onChange={(e) => ed.patchEnv({ subject: e.target.value })} /></label>
-      <label className="f" style={{ marginBottom: 0 }}><span>Message <span className="hint">{wording ? '(from the template, locked)' : '(optional)'}</span></span><textarea value={env.message} maxLength={5000} readOnly={!!wording} onChange={(e) => ed.patchEnv({ message: e.target.value })} /></label>
+      <label className="f" style={alone ? { marginBottom: 0 } : undefined}><span>{isTpl ? 'Template name and email subject' : alone ? 'Document title' : 'Email subject'}</span><input value={env.subject} maxLength={200} onChange={(e) => ed.patchEnv({ subject: e.target.value })} /></label>
+      {!alone && <label className="f" style={{ marginBottom: 0 }}><span>Message <span className="hint">{wording ? '(from the template, locked)' : '(optional)'}</span></span><textarea value={env.message} maxLength={5000} readOnly={!!wording} onChange={(e) => ed.patchEnv({ message: e.target.value })} /></label>}
     </div>
   );
 }
@@ -26,18 +32,37 @@ export function SendWords({ ed }: { ed: Ed }) {
 /** Step 3's More options: closed every time the step opens, and the only place reminders are asked. */
 export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
   const { env, isTpl, correcting, anyLocked, lockedNames, rcps } = ed;
+  const me = useMe();
   const [open, setOpen] = useState(false);
   const zone = deviceZone();
-  const today = new Date();
+  // The day the formats are shown with: one whose day cannot be taken for a month (src/lib/editorux.ts).
+  const today = dateExampleDay(new Date());
   const format = env.date_format || DATE_FORMATS[0];
+  // A payment link that is already on the document (it can come with a template): said next to the closed More
+  // options, and when it is not shown to anyone right now, said outside it, so nobody has to open More to find out.
+  const [pay, setPay] = useState<{ pay_link: any; may: boolean; why: string | null; host_why?: string | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    api(`/envelopes/${env.id}/pay-link`).then((r: any) => live && setPay(r)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [env.id]);
   if (closed) return null;
+  const payShown = !!pay?.pay_link && pay.may && !pay.host_why;
+  const payHidden = !!pay?.pay_link && !payShown;
+  const said = reviewSummary({
+    reminderDays: env.reminder_days, expireDays: correcting ? null : env.expire_days, closesOn: correcting && env.expires_at ? momentText(env.expires_at, zone) : '',
+    dateFormat: format, defaults: { expireDays: me.account?.default_expire_days ?? null, dateFormat: me.account?.default_date_format || DATE_FORMATS[0] },
+    dateExample: formatDate(today, env.date_format, zone), signNow: ed.signNow, payLink: payShown,
+  });
   return (
     <div className="ed-review-more">
+      {payHidden && !open && <div className="notice warn" role="status" style={{ marginBottom: 10 }}><b>The payment link on this document is not shown to anyone right now.</b> {pay!.may ? pay!.host_why : pay!.why}{ed.wording ? '' : ' You can take it off under More options.'}</div>}
       <div className="row wrap" style={{ gap: '4px 12px' }}>
         <button type="button" className="btn ghost" data-more="screen" aria-expanded={open} aria-controls="ed-step3-more" onClick={() => setOpen(!open)}>More options</button>
         {/* What is set now, so nobody has to open it to find out. */}
-        {!open && <span className="muted small">{env.reminder_days ? `Reminder every ${plural(env.reminder_days, 'day')}` : 'No automatic reminders'}
-          {correcting ? (env.expires_at ? ` · closes on ${momentText(env.expires_at, zone)}` : '') : ` · closes after ${plural(env.expire_days, 'day')}`} · dates written like {formatDate(today, env.date_format, zone)}</span>}
+        {!open && said && <span className="muted small">{said}</span>}
       </div>
       {open && (
         <div id="ed-step3-more" className="stack" role="group" aria-label="More options for this document">
@@ -48,7 +73,7 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
               : <label className="f"><span>Deadline <span className="hint">(days from sending, then it closes)</span></span><input type="number" inputMode="numeric" min={1} max={365} value={env.expire_days} style={{ maxWidth: 140 }} onChange={(e) => ed.patchEnv({ expire_days: Number(e.target.value) })} /></label>}
             <label className="f" style={{ marginBottom: 6 }}><span>Dates on the document are written like</span>
               <select value={format} disabled={anyLocked} aria-describedby="ed-date-example" onChange={(e) => ed.patchEnv({ date_format: e.target.value })}>
-                {DATE_FORMAT_CHOICES.map((f) => <option key={f} value={f}>{formatDate(today, f, zone)} ({f})</option>)}
+                {DATE_FORMAT_CHOICES.map((f) => <option key={f} value={f}>{formatDate(today, f, zone)}</option>)}
               </select>
             </label>
             <div id="ed-date-example" className="muted small" aria-live="polite">
@@ -57,7 +82,7 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
           </div>
           {/* A link to the sender's own payment page, shown to signers after Finish. Absent for an account that may not show one. */}
           {/* The payment link comes with a template's wording, so it is not offered where that wording is locked (tplroles.ts). */}
-          {!ed.wording && <PayLinkChoice envelopeId={env.id} isTpl={isTpl} />}
+          {!ed.wording && <PayLinkChoice envelopeId={env.id} isTpl={isTpl} onChange={(p) => setPay((was) => (was ? { ...was, ...p } : was))} />}
         </div>
       )}
     </div>
@@ -68,17 +93,17 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
  * What sending this one document on screen saves, in the owner's words. No fraction of a tree; water and CO2e are
  * estimates and stand behind "How we work this out", with the link to where the numbers come from.
  */
-export function SavingBox({ pages, people }: { pages: number; people: number }) {
+export function SavingBox({ pages, people, envelopeId }: { pages: number; people: number; envelopeId?: string }) {
   const s = savingLine(pages, people);
   if (s.sheets < 1) return null;
   return (
     <div className="card row ed-saving" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>
       <Mark size={26} label="" />
       <div>
-        <b>{s.line}</b>
+        <b>{s.line}</b>{envelopeId && <ReviewPlus envelopeId={envelopeId} people={people} />}
         <details data-fold className="ed-fold small">
           <summary>How we work this out</summary>
-          <p style={{ margin: '4px 0 0' }}>{s.how} <Link href="/impact" target="_blank" rel="noopener">Where these numbers come from</Link></p>
+          <p style={{ margin: '4px 0 0' }}>{s.how} <Link href="/impact" target="_blank" rel="noopener" className="ed-tap-link">Where these numbers come from</Link></p>
         </details>
       </div>
     </div>

@@ -42,6 +42,7 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-archive.ts');
   await import('../src/server/routes-customfields.ts');
   await import('../src/server/routes-seal.ts');
+  await import('../src/server/routes-impact.ts');
   await import('../src/server/openapi.ts');
   const billing = await import('../src/server/routes-billing.ts');
   handle = (await import('../src/server/router.ts')).handle;

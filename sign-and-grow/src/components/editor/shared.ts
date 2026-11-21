@@ -77,6 +77,8 @@ export type Ed = {
   addMe: () => void;
   /** An empty row nobody typed into: on screen in step 1, and neither saved, sent nor listed (Editor.tsx). */
   isIdle: (r: any) => boolean;
+  /** What step 1 was asked for when Next was pressed too early: a file or a person. Said in place (StepAdd.tsx). */
+  nudge?: '' | 'file' | 'person';
   /** The only person on a new document is the sender, so the main button reads "Sign now" (src/lib/editorux.ts). */
   signNow: boolean;
   patchRcp: (id: string, p: any) => void;

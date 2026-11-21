@@ -4,8 +4,8 @@ import { ROLE_LABEL, Status, fmtDate } from '../ui';
 import { useMe } from '../AppShell';
 import { Lock } from './parts';
 import { PAPER_HINT, fmtSize } from './upload';
-import { PHONE_SECONDS_PER_MB } from '@/lib/policy';
-import { acceptList, uploadLimits, checkingLabel } from '@/lib/convert';
+import { acceptList, uploadLimitsShort, checkingLabel } from '@/lib/convert';
+import { NUDGE, personInSentence } from '@/lib/editorux';
 import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, type Ed } from './shared';
 import { LockedLine, WhoCanUse } from '../templates/WhoCanUse';
 import { GroupRow, AddGroup, useGroups, isGroupRow } from './GroupRecipient';
@@ -45,10 +45,13 @@ export function StepAdd({ ed }: { ed: Ed }) {
             <input type="file" className="ed-sr" multiple accept={acceptList(!!me.converts)} onChange={(e) => (ed.addFiles(e.target.files), (e.target.value = ''))} />
             {/* A phone can neither drop nor click, so a touch screen is told what it can do: tap, and the phone offers
                 its files, its photos and its camera. Only one of the two lines is shown (editor.css). */}
-            <b>{uploading ? 'Uploading. You can add more.' : <><span className="ed-fine">Drop files here or click to choose them</span><span className="ed-touch">Tap to choose files or take a photo</span></>}</b>
-            <div className="muted small">{uploadLimits(!!me.converts, PHONE_SECONDS_PER_MB)}</div>
+            <b>{uploading ? 'Uploading. You can add more.' : <><span className="ed-fine">Choose a file or drop it here</span><span className="ed-touch">Tap to choose files or take a photo</span></>}</b>
+            {/* How long a large file takes on a phone is said on the row of a file that is large (FileRow.tsx). */}
+            <div className="muted small">{uploadLimitsShort(!!me.converts)}</div>
           </label>
         )}
+        {/* Next was pressed with no file: said here, where the file goes, and gone once one is added (Editor.tsx go). */}
+        {ed.nudge === 'file' && !docs.length && !uploading && <p className="notice warn small" role="alert" style={{ margin: '10px 0 0' }}>{NUDGE.file}</p>}
         <p className="muted small ed-touch" style={{ margin: '8px 0 0' }}>{PAPER_HINT}</p>
 
         {uploads.length > 0 && (
@@ -104,18 +107,18 @@ export function StepAdd({ ed }: { ed: Ed }) {
                   {isTpl && <input placeholder="Role, e.g. Client" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
                   {/* No name or address of the sender's for a witness the signer names (WitnessChoice.tsx, below). */}
                   {!signerNames(r) && <>
-                  <input placeholder="Full name" value={r.name} aria-label="Recipient name" autoComplete="off" style={{ flex: '1 1 150px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
+                  <input placeholder="Full name" value={r.name} aria-label="Name" data-ed-name autoComplete="off" style={{ flex: '1 1 150px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
                   {/* No address for someone whose link the sender sends themselves (SendMyself.tsx, in More). The box
                       is wide enough to show a whole address. */}
-                  {!(r.link_by_sender && !isTpl) && <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Recipient email" autoComplete="off" className="ed-email" style={{ flex: '2 1 260px' }}
+                  {!(r.link_by_sender && !isTpl) && <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Email" autoComplete="off" className="ed-email" style={{ flex: '2 1 260px' }}
                     onChange={(e) => {
                       const c = contacts.find((x) => x.email.toLowerCase() === e.target.value.toLowerCase());
                       ed.patchRcp(r.id, { email: e.target.value, ...(c && !r.name ? { name: c.name } : {}) });
                     }} />}
                   </>}
                   {/* What this person does, how they get it, the check and their note: one More, closed until asked for. */}
-                  <button type="button" className="btn sm ghost" data-more="item" onClick={() => setMore(more === r.id ? null : r.id)} aria-expanded={more === r.id} aria-controls={morePanelId(r.id)} aria-label={`More options for ${who(r)}`}>More</button>
-                  {!wording && <button type="button" className="btn sm ghost danger" onClick={() => ed.removeRcp(r.id)} aria-label={`Remove ${who(r)}`}>✕</button>}
+                  <button type="button" className="btn sm ghost" data-more="item" onClick={() => setMore(more === r.id ? null : r.id)} aria-expanded={more === r.id} aria-controls={morePanelId(r.id)} aria-label={`More options for ${personInSentence(r)}`}>More</button>
+                  {!wording && <button type="button" className="btn sm ghost danger" onClick={() => ed.removeRcp(r.id)} aria-label={`Remove ${personInSentence(r)}`}>✕</button>}
                 </div>
                 {more !== r.id && <PersonSummary r={r} />}
                 {more === r.id && <PersonMore ed={ed} r={r} />}
@@ -133,6 +136,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
             );
           })}
         </div>
+        {/* Next was pressed with nobody typed in: said here, and gone once somebody is (Editor.tsx go). */}
+        {ed.nudge === 'person' && !isTpl && rcps.every((r) => ed.isIdle(r)) && <p className="notice warn small" role="alert" style={{ margin: '10px 0 0' }}>{NUDGE.person}</p>}
         {!wording && <div className="row wrap" style={{ marginTop: 12 }}>
           <button type="button" className="btn" disabled={rcps.length >= MAX_RECIPIENTS} onClick={() => ed.addRcp()}>Add another {isTpl ? 'role' : 'person'}</button>
           {!isTpl && rcps.length < MAX_RECIPIENTS && !rcps.some((r) => r.email.toLowerCase() === me.user.email.toLowerCase()) && <button type="button" className="btn ghost" onClick={() => ed.addMe()}>Add me</button>}

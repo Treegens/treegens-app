@@ -3,12 +3,14 @@ import { PublicNav, PublicFooter } from '@/components/Public';
 import { securityContacts, contactWords, replyDays } from '@/lib/selfhost';
 import { dataPlace, notSaid } from '@/lib/dataplace';
 import { PRODUCT } from '@/lib/site';
+import { supportReachable } from '@/lib/policy';
 
 export const metadata = { title: 'Reporting a security weakness', description: 'How to tell the people who run this server about a security weakness, and what they have said they will do. Nothing more is promised.' };
 
 // The contact and the reply time are settings (SECURITY_CONTACT, SECURITY_REPLY_DAYS, src/lib/selfhost.ts). This page
 // promises only what the operator set there. Without a contact it says who to ask instead, and there is no
-// /.well-known/security.txt at all.
+// /.well-known/security.txt at all. When nobody reads help requests either (supportReachable in src/lib/policy.ts is
+// false: no SUPPORT_EMAIL and no OPERATOR_EMAILS), it says that plainly and sends nobody to a form no person reads.
 export const dynamic = 'force-dynamic';
 
 export default function Disclosure() {
@@ -16,6 +18,7 @@ export default function Disclosure() {
   const days = replyDays();
   const { operator } = dataPlace();
   const support = (process.env.SUPPORT_EMAIL || '').trim();
+  const reachable = supportReachable();
   return (
     <div className="pub">
       <PublicNav />
@@ -39,7 +42,9 @@ export default function Disclosure() {
         ) : (
           <p>The people who run this server have not set up a contact for security reports. {support
             ? <>Write to <a href={`mailto:${support}`}>{support}</a>, the help address of this server, and start with the words &quot;Security report&quot;.</>
-            : <>Use the <Link href="/help?topic=other#contact">help form</Link> and start with the words &quot;Security report&quot;. It reaches the people who run this server.</>}</p>
+            : reachable
+              ? <>Use the <Link href="/help?topic=other#contact">help form</Link> and start with the words &quot;Security report&quot;. It reaches the people who run this server.</>
+              : <>Nobody has been set up to read the help form on this server either, so a report sent from here would reach no person. If you know who runs this server, tell them directly, and tell them that this page has no contact.</>}</p>
         )}
 
         <h2>What helps</h2>

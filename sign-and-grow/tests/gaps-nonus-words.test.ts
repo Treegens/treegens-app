@@ -197,7 +197,9 @@ test('every price on a public page is written as US$, with one line about curren
   assert.match(src('app/billing/stop/StopView.tsx'), /US\$\{info\.price\} a month/);
   assert.match(src('app/billing/stop/StopView.tsx'), /<dt>Next charge<\/dt><dd>US\$\{info\.price\} on/);
   assert.match(src('components/Public.tsx'), /usd\(fmtNum\(i\.donatedUsd\)\)/);
-  assert.match(src('app/impact/page.tsx'), /\{usd\(d \? fmtNum\(d\.donatedUsd, 2\) : '…'\)\}/);
+  // /impact shows no amount of money any more (totals are hidden until they mean something, tests/impact.test.ts),
+  // so there is no price on it to write wrongly.
+  assert.doesNotMatch(src('app/impact/page.tsx'), /\$\{?\d|donatedUsd/);
 });
 
 // ---- C. Documents that often need paper, and the notes by country ----------------------------------------------
@@ -844,7 +846,8 @@ test('the screens offer the choice, hand the sender the link, and never promise 
   assert.match(tick, /return bySenderProblem\(r, \{ fields \}\);/);
   const add = src('components/editor/StepAdd.tsx');
   assert.match(add, /\{!\(r\.link_by_sender && !isTpl\) && <input placeholder="Email"/);
-  assert.match(src('components/editor/PersonMore.tsx'), /if \(key === 'deliver'\) return <SendMyself r=\{r\} isTpl=\{isTpl\} onChange=\{patch\} \/>;/);
+  // (repair-simplify-editor: the same picker also holds "Also text the signing link" where this server sends texts.)
+  assert.match(src('components/editor/PersonMore.tsx'), /if \(key === 'deliver'\) return <><SendMyself r=\{r\} isTpl=\{isTpl\} onChange=\{patch\} \/>/);
   assert.match(add, /\{more === r\.id && <PersonMore ed=\{ed\} r=\{r\} \/>\}/);
   const editor = src('components/Editor.tsx');
   assert.match(editor, /link_by_sender: !isTpl && !!r\.link_by_sender/);

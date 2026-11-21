@@ -18,6 +18,9 @@ services:
       context: .
       args:
         # 1 puts LibreOffice in the image, for CONVERTER=soffice (office files turned into PDF on this machine).
+        # In this container LibreOffice then has whatever network the container has: "unshare -rn", which the server
+        # uses to take the network away from it, is not permitted here (cap_drop ALL, no-new-privileges). Deny
+        # egress in the network around the container before you switch it on (README, "Running it yourself").
         WITH_LIBREOFFICE: "0"
     image: growsigning:local
     restart: unless-stopped
@@ -52,7 +55,9 @@ services:
       start_period: 40s
       retries: 3
 
-  # A backup, run by hand or from the host's scheduler (not started by "up"):
+  # A backup, run by hand or from the host's scheduler (not started by "up"). Make the folder first and give it to
+  # the user the container runs as (uid 1000), or Docker makes it as root and the backup cannot write to it:
+  #   mkdir -p backups && sudo chown 1000:1000 backups && chmod 700 backups
   #   docker compose run --rm backup
   # It writes a dated folder into ./backups on the host. The keys are never in it: keep FILE_ENCRYPTION_KEY and
   # APP_SECRET in a secret store of your own, apart from the backups.

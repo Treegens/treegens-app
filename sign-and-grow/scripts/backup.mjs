@@ -65,6 +65,14 @@ function writeSynced(file, data) {
   }
 }
 
+/** A folder this user may not write to, said so that the person knows what to do next. Any other error is passed on. */
+export function cannotWrite(e, dest) {
+  if (e?.code !== 'EACCES' && e?.code !== 'EPERM' && e?.code !== 'EROFS') return e;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const who = uid === null ? 'the user this runs as' : `the user this runs as (uid ${uid})`;
+  return new Error(`The folder ${dest} cannot be written to by ${who}. Make it writable for that user (on the host, for the container: mkdir -p backups && sudo chown 1000:1000 backups) and run this again.`);
+}
+
 const stamp = (d) => d.toISOString().replace(/\.\d+Z$/, 'Z').replace(/:/g, '-');
 
 /**
@@ -75,12 +83,23 @@ export async function backup({ dataDir, dest, env = process.env, now = new Date(
   const src = path.resolve(dataDir);
   const dbFile = path.join(src, 'sign.db');
   if (!fs.existsSync(dbFile)) throw new Error(`There is no database at ${dbFile}. Is DATA_DIR right?`);
-  fs.mkdirSync(dest, { recursive: true });
+  // A folder this run makes is for this user only: the database in a backup is not encrypted. A folder that was there
+  // already keeps the rights its owner gave it.
+  try {
+    fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
+    fs.accessSync(dest, fs.constants.W_OK | fs.constants.X_OK);
+  } catch (e) {
+    throw cannotWrite(e, dest);
+  }
   const name = `backup-${stamp(now)}`;
   const final = path.join(dest, name);
   const work = `${final}.partial`;
   if (fs.existsSync(final) || fs.existsSync(work)) throw new Error(`${final} is there already. Wait a second and run it again.`);
-  fs.mkdirSync(path.join(work, 'blobs'), { recursive: true, mode: 0o700 });
+  try {
+    fs.mkdirSync(path.join(work, 'blobs'), { recursive: true, mode: 0o700 });
+  } catch (e) {
+    throw cannotWrite(e, dest);
+  }
 
   const files = new Map();
   const keyIds = new Set();
@@ -140,6 +159,8 @@ export async function backup({ dataDir, dest, env = process.env, now = new Date(
   const ok = check && Object.values(check)[0] === 'ok';
   if (!ok) throw new Error(`The copy of the database failed SQLite's own check (${JSON.stringify(check)}). Nothing was kept as a backup; the folder ${work} is left for a look.`);
   for (const extra of ['sign.db-wal', 'sign.db-shm']) fs.rmSync(path.join(work, extra), { force: true });
+  // SQLite makes its file readable by everyone on the machine; every other file here is for this user only.
+  fs.chmodSync(out, 0o600);
   await onStep('database');
   copyFiles();
   await onStep('late-files');

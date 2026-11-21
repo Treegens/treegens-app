@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import { boot, Client, signUp, simple, mailTo, tokenFor } from './helpers.ts';
 import {
   STEP_NAMES, COMMON_FIELDS, isCommonField, ROLE_CHOICES, ROLE_WORDS, ROLE_CAP, MORE_CAP, STEP3_MORE_CAP, canSendMyself, moreLines, personSummary,
-  isBlankPerson, onlyMe, savingLine,
+  isBlankPerson, onlyMe, savingLine, paletteKinds, personLabel, personInSentence, noAddressWords, NUDGE, checkChoices, checkValue, checkPatch, checkHasCode, NO_CHECK_SAYS,
+  reviewSummary, dateExampleDay,
 } from '../src/lib/editorux.ts';
 import { signNowFor, holdInvite, inviteHeld, dropHold, signNowNote } from '../src/server/signnow.ts';
 
@@ -55,7 +56,7 @@ test('a person row is a name, a wide email box, More and remove; the role, the l
   assert.match(add, /data-item="person"/);
   assert.equal(add.match(/data-more="item"/g)?.length, 1, 'one More for a person');
   assert.equal(add.match(/data-more="screen"/g)?.length, 1, 'one More options for the step');
-  assert.match(add, /aria-label="Recipient email" autoComplete="off" className="ed-email" style=\{\{ flex: '2 1 260px' \}\}/, 'the address box is twice as wide as the name');
+  assert.match(add, /aria-label="Email" autoComplete="off" className="ed-email" style=\{\{ flex: '2 1 260px' \}\}/, 'the address box is twice as wide as the name');
   // Not on the row any more.
   assert.doesNotMatch(add, /aria-label="Role"|<SendMyself|<CheckFields|Access code|Private note|Remind every|Expires after|Date format|Email subject|<textarea/);
   assert.match(add, />Add another \{isTpl \? 'role' : 'person'\}<\/button>/);
@@ -102,7 +103,7 @@ test("a person's More lists each choice as one line with its value, never one wi
   assert.equal(set.find((l) => l.key === 'check')!.value, 'Access code and a code by email');
   assert.equal(set.find((l) => l.key === 'deliver')!.value, 'Email and a text message');
   assert.equal(set.find((l) => l.key === 'note')!.value, 'Added');
-  assert.equal(moreLines({ role: 'signer', link_by_sender: true }).find((l) => l.key === 'deliver')!.value, 'I send the link myself');
+  assert.equal(moreLines({ role: 'signer', link_by_sender: true }).find((l) => l.key === 'deliver')!.value, 'I will send the link myself');
   // The caps: 6 lines with nothing set up, 8 with everything, for every role.
   assert.deepEqual(MORE_CAP, { zero: 6, everything: 8 });
   for (const role of [...ROLE_CHOICES, 'inperson']) {
@@ -111,7 +112,7 @@ test("a person's More lists each choice as one line with its value, never one wi
   }
   // The screen draws exactly these lines, one picker open at a time, each a real button that says whether it is open.
   const more = read('src/components/editor/PersonMore.tsx');
-  assert.match(more, /const lines = moreLines\(r, \{ isTpl, languages: shippedLocales\(\)\.length \}\);/);
+  assert.match(more, /const lines = moreLines\(r, \{ isTpl, languages: shippedLocales\(\)\.length, texts: !!me\.text_messages \}\);/);
   assert.match(more, /<button type="button" className="ed-line-btn" aria-expanded=\{pick === l\.key\} onClick=\{\(\) => setPick\(pick === l\.key \? null : l\.key\)\}>/);
   assert.match(more, /\{pick === l\.key && <div className="ed-pick">\{picker\(l\.key\)\}<\/div>\}/);
 });
@@ -144,7 +145,7 @@ test('reminders, the deadline, the date format and the message are on step 3, re
   const review = read('src/components/editor/StepReview.tsx');
   const parts = read('src/components/editor/ReviewParts.tsx');
   assert.match(review, /\{!closed && <SendWords ed=\{ed\} \/>\}/);
-  assert.match(parts, /'Template name and email subject' : 'Email subject'/);
+  assert.match(parts, /isTpl \? 'Template name and email subject' : alone \? 'Document title' : 'Email subject'/);
   assert.equal(review.match(/<ReviewMore /g)?.length, 1);
   assert.equal(parts.match(/data-more="screen"/g)?.length, 1, 'one More options on the step');
   assert.equal((review + parts).match(/<ReminderChoice /g)?.length, 1, 'reminders are asked once');
@@ -158,7 +159,7 @@ test('reminders, the deadline, the date format and the message are on step 3, re
   assert.ok(note.split(/\s+/).length <= 20);
   assert.doesNotMatch(parts, /UTC/);
   // What is set stands next to the button, so nobody has to open it to find out.
-  assert.match(parts, /\{!open && <span className="muted small">/);
+  assert.match(parts, /\{!open && said && <span className="muted small">\{said\}<\/span>\}/);
   // The deadline of an envelope that is out is said, not asked, as before.
   assert.match(parts, /To give people more time, use the document&rsquo;s page after you save\./);
   // Only what changes from one send to the next: reminders, the deadline, the date format, a payment link. Under the cap.
@@ -198,8 +199,10 @@ test('the saving of this one document, in the owner\'s words: pages from a tree,
   const parts = read('src/components/editor/ReviewParts.tsx');
   assert.match(parts, /if \(s\.sheets < 1\) return null;/);
   assert.match(parts, /<details data-fold className="ed-fold small">\s*<summary>How we work this out<\/summary>/);
-  assert.match(parts, /<Link href="\/impact" target="_blank" rel="noopener">Where these numbers come from<\/Link>/);
-  // Nothing is said about planting here: whether a paid signature will be used is only known once it is held.
+  assert.match(parts, /<Link href="\/impact" target="_blank" rel="noopener" className="ed-tap-link">Where these numbers come from<\/Link>/);
+  assert.match(read('src/app/styles/editor.css'), /\.ed-tap-link \{ display: inline-flex; align-items: center; min-height: 44px; \}/);
+  // The sentence about planting is not written here: it comes from src/lib/impactwords.ts (reviewPlus), and only when
+  // the server says every signature of this draft would be a paid one (ReviewPlus in impact/SenderTrees.tsx).
   assert.doesNotMatch(parts, /mangrove|planted/i);
   assert.doesNotMatch(read('src/components/editor/StepReview.tsx'), /fmtTrees|of a tree/);
 });
@@ -214,8 +217,12 @@ test('step 2 shows six kinds of field and keeps every other kind behind "More fi
   for (const t of COMMON_FIELDS) assert.ok(types.includes(t), t);
   assert.equal(types.filter(isCommonField).length, 6);
   const step = read('src/components/editor/StepFields.tsx');
-  // A kind that is in use as the tool stays in view when the list is folded again.
-  assert.match(step, /\{TYPES\.filter\(\(\[t\]\) => isCommonField\(t\) \|\| allTypes \|\| tool === t\)\.map\(/);
+  // The kind being placed, and every kind already on the document, stay in view when the list is folded.
+  assert.match(step, /const kinds = paletteKinds\(TYPES\.map\(\(t\) => t\[0\]\), \{ open: allTypes, tool, used: list\.map\(\(f\) => f\.type\) \}\);/);
+  assert.match(step, /\{TYPES\.filter\(\(\[t\]\) => kinds\.includes\(t\)\)\.map\(/);
+  assert.deepEqual(paletteKinds(types), COMMON_FIELDS);
+  assert.deepEqual(paletteKinds(types, { tool: 'stamp', used: ['number', 'dropdown', 'signature'] }).filter((t) => !isCommonField(t)), ['number', 'dropdown', 'stamp']);
+  assert.equal(paletteKinds(types, { open: true }).length, types.length);
   assert.match(step, /<button type="button" className="ed-morefields" data-fold aria-expanded=\{allTypes\} onClick=\{\(\) => setAllTypes\(!allTypes\)\}>\{allTypes \? 'Fewer fields' : 'More fields'\}<\/button>/);
   assert.match(step, /const \[allTypes, setAllTypes\] = useState\(false\);/);
   assert.match(step, /<Wand \/> \{finding \? 'Looking' : 'Place fields for me'\}/);
@@ -372,7 +379,7 @@ test('a send that fails leaves nothing behind, and a held invitation is used onc
 test('nothing a sender could do before is gone, the pages say where things are now, and there are no em dashes', () => {
   // Every control the three steps had is still in one of the editor's files.
   const all = fs.readdirSync('src/components/editor').filter((f) => /\.tsx?$/.test(f)).map((f) => read(`src/components/editor/${f}`)).join('\n') + read('src/components/Editor.tsx') + read('src/components/sender/CheckFields.tsx');
-  for (const w of ['Set signing order', 'Replace file', 'aria-label="Signing order"', 'aria-label="Role name"', 'Access code', 'Private note', 'BY_SENDER_TICK', 'Check before the document opens', 'Also text the signing link',
+  for (const w of ['Set signing order', 'Replace file', 'aria-label="Signing order"', 'aria-label="Role name"', 'Access code', 'Private note', 'BY_SENDER_TICK', 'aria-label="Check who signs"', 'Also text the signing link',
     '<WitnessChoice', '<AddGroup', 'Remind people who have not finished', 'Deadline', 'DATE_FORMAT_CHOICES', '<PayLinkChoice', '<CustomFieldsStep', 'Prefilled value', 'Read only', 'Copy to every page', 'Duplicate', '<StampChoice', '<FieldLogic', 'Save and close', 'HelpChatButton'])
     assert.ok(all.includes(w), w);
   // The API description and the README say what Sign now does and does not do.

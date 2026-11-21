@@ -33,9 +33,11 @@ export function securityContacts(env: Env = process.env): string[] {
   const out: string[] = [];
   for (const raw of String(env.SECURITY_CONTACT || '').split(',').map((s) => s.trim()).filter(Boolean)) {
     if (/[\s<>"]/.test(raw)) continue;
-    if (/^mailto:/i.test(raw)) {
-      if (EMAIL.test(raw.slice(7)) && raw.length < 255) out.push(`mailto:${raw.slice(7)}`);
-    } else if (EMAIL.test(raw) && !raw.includes(':') && raw.length < 255) out.push(`mailto:${raw}`);
+    // "mailto:" written once, twice or not at all is the same address. An address with a colon left in it is no address.
+    const addr = raw.replace(/^(mailto:)+/i, '');
+    if (addr !== raw || !/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+      if (EMAIL.test(addr) && !addr.includes(':') && addr.length < 248) out.push(`mailto:${addr}`);
+    }
     else if (/^https:\/\/[^/\s]+/i.test(raw)) {
       try {
         out.push(new URL(raw).toString());

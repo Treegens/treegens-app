@@ -1,14 +1,14 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMe } from '../AppShell';
-import { CheckFields } from '../sender/CheckFields';
+import { CheckPick, TextLink } from './CheckPick';
 import { LockedLine } from '../templates/WhoCanUse';
 import { keptLine } from '@/lib/tplroles';
 import { shippedLocales } from '@/lib/i18n';
-import { ROLE_CHOICES, ROLE_WORDS, moreLines, personSummary, type MoreLine } from '@/lib/editorux';
+import { ROLE_CHOICES, ROLE_WORDS, moreLines, personInSentence, personSummary, type MoreLine } from '@/lib/editorux';
 import { SendMyself } from './SendMyself';
 import { RecipientLanguage } from './RecipientLanguage';
-import { who, type Ed } from './shared';
+import { type Ed } from './shared';
 
 // One person's More in step 1 (research/ux-charter.md, 2.3). Everything about a person that is not their name and
 // address lives here, one line for each choice with what it is set to now ("How they get it: Email"). A line opens
@@ -30,8 +30,14 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
   const { isTpl, wording } = ed;
   const kept = wording?.people?.[r.id];
   const patch = (p: any) => ed.patchRcp(r.id, p);
-  const lines = moreLines(r, { isTpl, languages: shippedLocales().length });
-  const name = who(r);
+  const lines = moreLines(r, { isTpl, languages: shippedLocales().length, texts: !!me.text_messages });
+  const name = personInSentence(r);
+  // Opened from the keyboard or by a tap, the first line takes the focus: the next Tab stop is inside this More,
+  // not the Remove button that stands after More on the row.
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panel.current?.querySelector<HTMLElement>('.ed-line-btn')?.focus({ preventScroll: true });
+  }, []);
 
   const picker = (key: MoreLine['key']) => {
     if (key === 'role')
@@ -42,17 +48,10 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
           </select>
         </label>
       );
-    if (key === 'deliver') return <SendMyself r={r} isTpl={isTpl} onChange={patch} />;
-    if (key === 'check')
-      return (
-        <>
-          {/* What a locked template gave this person stays (wording.people, tplroles.ts): shown as such. */}
-          <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">{kept?.code ? '(from the template: you can change it, not take it off)' : '(at least 4 characters, a code you tell them yourself)'}</span></span><input value={r.access_code || ''} maxLength={50} required={!!kept?.code} onChange={(e) => patch({ access_code: e.target.value })} /></label>
-          {/* A one-time code before the document opens, and the signing link by text message: only what this
-              server can do is offered (me.text_messages says whether its operator switched texts on). */}
-          <CheckFields value={r} role={r.role} textsOn={!!me.text_messages} open={isTpl && !r.email} keepCode={!!kept?.verify} onChange={patch} />
-        </>
-      );
+    // Email or "I will send the link myself", and where this server sends texts the link by text message as well.
+    if (key === 'deliver') return <><SendMyself r={r} isTpl={isTpl} onChange={patch} /><TextLink r={r} textsOn={!!me.text_messages} open={isTpl && !r.email} onChange={patch} /></>;
+    // One list: none, an access code, a one-time code, or both (CheckPick.tsx).
+    if (key === 'check') return <CheckPick r={r} name={name} kept={kept} textsOn={!!me.text_messages} open={isTpl && !r.email} onChange={patch} />;
     if (key === 'sign')
       return (
         <>
@@ -70,7 +69,7 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
   };
 
   return (
-    <div id={morePanelId(r.id)} className="ed-more" role="group" aria-label={`More options for ${name}`}>
+    <div id={morePanelId(r.id)} ref={panel} className="ed-more" role="group" aria-label={`More options for ${name}`}>
       {lines.map((l) => (
         <div key={l.key} className="ed-line">
           <button type="button" className="ed-line-btn" aria-expanded={pick === l.key} onClick={() => setPick(pick === l.key ? null : l.key)}>

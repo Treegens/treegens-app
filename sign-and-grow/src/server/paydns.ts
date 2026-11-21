@@ -64,7 +64,7 @@ export function specialAddress(ip: string): boolean {
   return g[0] === 0x2002 || (g[0] === 0x3fff && g[1] < 0x1000);
 }
 
-export type HostCheck = { ok: true } | { ok: false; why: 'none' | 'private' | 'later'; address?: string };
+export type HostCheck = { ok: true } | { ok: false; why: 'none' | 'private' | 'later'; address?: string; closed?: boolean };
 
 /**
  * Asks where a host name leads. "none": the name does not exist (a typo, or a site that is gone). "private": at least
@@ -80,6 +80,8 @@ export async function lookHost(host: string): Promise<HostCheck> {
     const odd = answers.find((x) => specialAddress(x.address));
     return odd ? { ok: false, why: 'private', address: odd.address } : { ok: true };
   } catch (err: any) {
+    // OUTSIDE_CALLS=none (src/server/outside.ts): this server asks nobody about a name it is not allowed to reach.
+    if (err?.code === 'EOUTSIDE') return { ok: false, why: 'later', closed: true };
     return { ok: false, why: err?.code === 'ENOTFOUND' || err?.code === 'ENODATA' ? 'none' : 'later' };
   } finally {
     clearTimeout(timer);
@@ -95,5 +97,6 @@ export function hostRefusal(check: HostCheck, host: string): string {
   const at = host ? `"${host}"` : 'its address';
   if (check.why === 'none') return `No site answers at ${at} right now, so a signer could not open it. Check the address with your payment provider.`;
   if (check.why === 'private') return `${host ? at : 'Its address'} leads to ${check.address}, which is an address inside a private network or kept for special uses, not a site on the public internet. A payment link has to lead to a public site.`;
+  if (check.closed) return `This server is set up for a closed network and does not look up ${at}, so it cannot check where a payment link leads and cannot show one. The people who run this server can allow the host (the setting OUTBOUND_ALLOW).`;
   return `We could not check where ${at} leads just now. Try again in a minute.`;
 }

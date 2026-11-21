@@ -797,7 +797,7 @@ test('a document large enough to be slow on a phone is pointed out with the time
   assert.equal(LIMITS, `PDF, PNG or JPEG. Up to 25 MB and 500 pages each. A signer on a phone waits about ${Math.round(PHONE_SECONDS_PER_MB)} seconds for each MB on a slow connection.`);
   // On a touch screen the box does not say "drop" or "click": a phone can do neither.
   const add = read('src/components/editor/StepAdd.tsx');
-  assert.match(add, /<span className="ed-fine">Drop files here or click to choose them<\/span><span className="ed-touch">Tap to choose files or take a photo<\/span>/);
+  assert.match(add, /<span className="ed-fine">Choose a file or drop it here<\/span><span className="ed-touch">Tap to choose files or take a photo<\/span>/);
   assert.match(read('src/app/styles/editor.css'), /@media \(pointer: coarse\) \{ \.ed-fine \{ display: none; \} \.ed-touch \{ display: revert; \} \}/);
   // The API says the same about the size it returns.
   assert.match(read('src/server/openapi.ts'), /size: \{ type: 'integer', description: `Bytes of the stored PDF\. Every signer downloads all of it\. From \$\{PHONE_SLOW_BYTES \/ 1e6\} MB the app's editor tells the sender that it is slow to open on a phone\.` \}/);

@@ -584,6 +584,18 @@ CREATE TABLE IF NOT EXISTS archive_refused (
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, email TEXT NOT NULL COLLATE NOCASE, at TEXT NOT NULL, until TEXT NOT NULL,
   token_hash TEXT, added_by TEXT, added_by_name TEXT, added_at TEXT, PRIMARY KEY (account_id, email)
 );
+-- Trees (src/server/impact.ts). One row for each finished signature of a person who signs: how many mangroves its
+-- payment funds (10 when the signature was paid for, 0 when it was free). "who" is a keyed hash of the address, never
+-- the address, so a row can outlive its envelope without keeping anybody's name or email.
+CREATE TABLE IF NOT EXISTS impact_signed (
+  recipient_id TEXT NOT NULL, gen INTEGER NOT NULL DEFAULT 0, envelope_id TEXT, account_id TEXT, who TEXT,
+  trees INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL, PRIMARY KEY (recipient_id, gen)
+);
+CREATE INDEX IF NOT EXISTS impact_signed_who ON impact_signed(who);
+CREATE INDEX IF NOT EXISTS impact_signed_account ON impact_signed(account_id);
+CREATE INDEX IF NOT EXISTS impact_signed_envelope ON impact_signed(envelope_id);
+-- The first-time picture is shown once: who has seen it (a keyed hash for a person who signs, the account for a sender).
+CREATE TABLE IF NOT EXISTS impact_seen (key TEXT PRIMARY KEY, at TEXT NOT NULL);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1099,6 +1111,8 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['accounts', 'retention_level', 'TEXT'],
   ['accounts', 'retention_name', 'TEXT'],
   ['accounts', 'retention_code', 'TEXT'],
+  // 'Trees on the signing record' switched off: the tree and paper lines are left off the certificate (impact.ts).
+  ['accounts', 'cert_impact_off', 'INTEGER NOT NULL DEFAULT 0'],
   ['envelopes', 'retention_days', 'INTEGER'],
   ['envelopes', 'purged_at', 'TEXT'],
   ['envelopes', 'purged_level', 'TEXT'],

@@ -24,7 +24,7 @@ const FEATURES: [string, string][] = [
   ['Teams and branding', 'Invite colleagues, share templates, set roles, and put your own logo and colour on emails and the signing screen.'],
   ['API and webhooks', 'Create envelopes, embed signing in your own product and get notified of every event. Included on every plan.'],
   ['Checking who signs', 'Protect a document with an access code you share with the signer yourself, or have us send them a one-time code by email at the moment they open it. Where the operator of the server has switched text messages on, the code can go to a mobile number you type instead, and the signing link can be texted as well. The certificate says for every signer which check was passed.'],
-  ['Reports', 'See what is waiting, how long signing takes and how much paper your team has kept out of the printer.'],
+  ['Reports', 'See what is waiting, how long signing takes and how many documents were completed.'],
 ];
 
 // What people say goes wrong with e-signature tools, and what we do instead. Each card links to where the promise is kept.
@@ -46,7 +46,7 @@ const COMPARE: [string, string, string][] = [
   ['API, webhooks, bulk send, public forms', 'On both plans. Each person who signs uses one signature, as on any envelope', 'Often a separate, pricier plan'],
   ['Check a signed PDF', 'Public page, no account needed', 'Usually needs an account or the sender'],
   ['Audit trail', 'Hash chained, tampering is detectable', 'Event log'],
-  ['Environmental impact', 'Shown on every envelope, with the maths published', 'Rarely shown'],
+  ['Paper and trees', 'The paper each document saves, as an estimate, with the working published', 'Rarely shown'],
 ];
 
 const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
