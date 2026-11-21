@@ -13,7 +13,7 @@ export default function PublicImpact() {
       <main id="main" className="wrap stack" style={{ paddingTop: 20 }}>
         <div>
           <h1 className="pub-h1">Fewer printers. More trees.</h1>
-          <p className="pub-lead">A document signed on screen is not printed. And everything customers pay GrowSigning goes to Treegens to plant mangroves: {PRICING.treesPerUsd} for every dollar. This page says exactly what is counted, and how.</p>
+          <p className="pub-lead">A document signed on screen is not printed. And what customers pay GrowSigning, less card fees, goes to Treegens to plant mangroves: {PRICING.treesPerUsd} for every dollar. This page says exactly what is counted, and how.</p>
         </div>
         {/* Totals appear once they are large enough to mean something. Until then nothing stands in their place. */}
         {d && <ImpactStats i={d} />}

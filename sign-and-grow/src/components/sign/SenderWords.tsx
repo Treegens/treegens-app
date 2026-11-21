@@ -8,18 +8,21 @@ import { CONSENT_WORDS, wordsIn } from '@/components/sign/actions';
 // cap. Otherwise they wait behind one line, "Read the message", one tap away, and nothing of them is lost.
 // The count is taken from the screen itself, the way tests/ux/flows.cjs takes it: every word from the top of the
 // screen down to the tick, whatever else is on it (a group's note, the in-person notice, a long subject).
-export function SenderWords({ sender, message, note }: { sender: string; message?: string | null; note?: string | null }) {
+// With `fold` given, the screen around it has already decided (ConsentTop.tsx) and nothing is measured here.
+export function SenderWords({ sender, message, note, fold: told }: { sender: string; message?: string | null; note?: string | null; fold?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
-  const [fold, setFold] = useState(false);
+  const [measured, setFold] = useState(false);
+  const fold = told ?? measured;
   const [open, setOpen] = useState(false);
   useLayoutEffect(() => {
+    if (told !== undefined) return;
     const tick = box.current?.closest('.sg-shell')?.querySelector('input[type=checkbox]');
     if (!tick) return;
     const range = document.createRange();
     range.setStart(document.body, 0);
     range.setEndBefore(tick.closest('label') || tick);
     if (wordsIn(range.toString()) > CONSENT_WORDS) setFold(true);
-  }, [message, note]);
+  }, [message, note, told]);
   if (!message && !note) return null;
   const words = (
     <>

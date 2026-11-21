@@ -1,0 +1,37 @@
+/* Reports (src/app/app/reports/page.tsx, src/components/reports/ReportParts.tsx), the monthly report switch in
+   Settings (src/components/reports/MonthlyReport.tsx) and saved lists (src/components/reports/SavedLists.tsx).
+   Shared tokens live in ../globals.css. */
+.rp-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rp-head .btn, .rp-more { min-height: 44px; display: inline-flex; align-items: center; }
+.rp-filters { display: grid; gap: 8px; }
+.rp-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.rp-row label.f { margin: 0; flex: 1 1 150px; min-width: 0; }
+.rp-row label.f input, .rp-row label.f select { width: 100%; min-height: 44px; }
+.rp-table tbody th.rp-name { font-weight: 600; text-align: left; overflow-wrap: anywhere; font-size: inherit; color: inherit; text-transform: none; letter-spacing: normal; }
+.rp-cap { display: inline-block; }
+.rp-cap::first-letter { text-transform: uppercase; }
+.rp-status { max-width: 520px; }
+
+/* On a phone each row of a table is a small card: the name first, then each number with its label. */
+@media (max-width: 560px) {
+  .rp-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .rp-table, .rp-table tbody, .rp-table tr, .rp-table th, .rp-table td { display: block; width: 100%; }
+  .rp-table tr { padding: 10px 14px; border-top: 1px solid var(--line); }
+  .rp-table th.rp-name { padding: 0 0 4px; border: 0; }
+  .rp-table td { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; border: 0; text-align: right; }
+  .rp-table td::before { content: attr(data-label); color: var(--muted, #667); text-align: left; }
+}
+
+/* Saved lists: the picker and the save line in Send to many, and the section in Contacts. */
+.sl-use { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 0 0 10px; }
+.sl-use label.f { margin: 0; flex: 1 1 220px; min-width: 0; }
+.sl-use select, .sl-save input { width: 100%; min-height: 44px; }
+.sl-save { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-top: 10px; }
+.sl-save label.f { margin: 0; flex: 1 1 220px; min-width: 0; }
+.sl-use .btn, .sl-save .btn, .sl-item .btn { min-height: 44px; }
+.sl-list { list-style: none; padding: 0; margin: 8px 0 0; }
+.sl-item { padding: 10px 0; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.sl-item > div { min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+.sl-days { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-top: 10px; }
+.sl-days input { width: 110px; min-height: 44px; }
+.sl-days .btn { min-height: 44px; }

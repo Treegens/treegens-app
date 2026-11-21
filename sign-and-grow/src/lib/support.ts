@@ -12,6 +12,7 @@ export const TOPIC_LABEL: Record<string, string> = {
   'cannot-log-in': 'I cannot log in',
   suspicious: 'Something looks suspicious',
   'not-me': 'I am named on a document I did not sign',
+  accessibility: 'Accessibility: something is hard to read or use',
   other: 'Something else',
 };
 

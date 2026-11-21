@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { api, useLoad, fmtDate } from '@/components/ui';
 import { sessionWords } from '@/lib/policy';
 import { sessionShort } from '@/lib/settingsnav';
+import { teamSessionWords } from '@/lib/signinrules';
+import { useMe } from '@/components/AppShell';
 
 // Where a person is signed in: every browser that holds a session of theirs, as GET /me/sessions lists them. A
 // browser stays signed in while it is used (src/server/auth.ts), so this is also where one that should not be
@@ -10,6 +12,7 @@ import { sessionShort } from '@/lib/settingsnav';
 type Row = { id: string; device: string; browser: string; signed_in_at: string | null; last_used_at: string | null; signs_out_at: string; current: boolean; handed_over: boolean };
 
 export function SignedIn() {
+  const me: any = useMe();
   const [d, reload, failed] = useLoad<{ sessions: Row[]; days: number; max_days: number; noted_every_minutes: number }>(() => api('/me/sessions'));
   const [busy, setBusy] = useState(false);
   // What the last thing done here led to. It stays on screen, and a screen reader is told.
@@ -22,16 +25,19 @@ export function SignedIn() {
   if (failed) return <section className="card"><h2 style={{ marginBottom: 4 }}>Where you are signed in</h2><p className="notice err" role="alert">We could not load this list just now. Reload the page to try again.</p></section>;
   if (!d) return null;
   const others = d.sessions.filter((s) => !s.current);
+  // The team's sign-in rules shorten this, and say so here (src/server/secpolicy.ts).
+  const teamRule = teamSessionWords(me?.rules, me?.account?.name || 'Your team');
   const name = (s: Row) => (s.browser === 'unknown browser' && s.device === 'Unknown device' ? 'A browser we could not recognise' : `${s.device}, ${s.browser}`);
   return (
     <section className="card" aria-labelledby="where-h">
       <h2 id="where-h" style={{ marginBottom: 4 }}>Where you are signed in</h2>
+      {teamRule && <p className="muted small" style={{ marginBottom: 4 }}>{teamRule}</p>}
       <p className="muted small">{sessionShort(d.days, d.max_days)}</p>
       <details data-fold="">
         <summary className="set-fold">How this works</summary>
         <p className="muted small">
           {sessionWords(d.days, d.max_days)}{' '}
-          Signing in on another device does not sign this one out. The device and browser are what the browser told us, and &ldquo;last used&rdquo; is noted at most once every {d.noted_every_minutes} minutes.
+          {me?.rules?.one_session ? '' : 'Signing in on another device does not sign this one out. '}The device and browser are what the browser told us, and &ldquo;last used&rdquo; is noted at most once every {d.noted_every_minutes} minutes.
         </p>
       </details>
       {said && <div className={`notice${said.err ? ' err' : ''}`} role={said.err ? 'alert' : 'status'} style={{ margin: '10px 0' }}>{said.text}</div>}

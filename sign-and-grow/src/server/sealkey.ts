@@ -15,6 +15,7 @@ import { sealSet } from '../lib/seal.ts';
 import { get, run } from './db.ts';
 import { id, now, isEmail, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
+import { dayText } from '../lib/dates.ts';
 
 export type SealKey = { signer: SealSigner; cert: CertInfo; chain: CertInfo[]; hash: string };
 export type SealState = { on: true; key: SealKey } | { on: false; configured: boolean; why?: string };
@@ -120,8 +121,8 @@ function check(at = new Date()): SealKey {
 function checkDates(chain: CertInfo[], at: Date) {
   for (const c of chain) {
     const which = c === chain[0] ? 'The seal certificate' : `The certificate ${c.name}, which issued it,`;
-    if (at < c.notBefore) throw new Refused(`${which} is not valid yet: it starts on ${c.notBefore.toISOString().slice(0, 10)}.`);
-    if (at > c.notAfter) throw new Refused(`${which} expired on ${c.notAfter.toISOString().slice(0, 10)}. Renew it with the authority that issued it and set the new one.`);
+    if (at < c.notBefore) throw new Refused(`${which} is not valid yet: it starts on ${dayText(c.notBefore)}.`);
+    if (at > c.notAfter) throw new Refused(`${which} expired on ${dayText(c.notAfter)}. Renew it with the authority that issued it and set the new one.`);
   }
 }
 

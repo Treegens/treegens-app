@@ -12,8 +12,12 @@ import { HelpChatButton } from './HelpChat';
 import { ConfirmBanner } from './ConfirmEmail';
 import { SideNav, TabBar } from './AppNav';
 import { navOn, pageTitle } from '@/lib/nav';
+// The account's sign-in rules (src/server/secpolicy.ts): a longer password first, and the warning before an idle sign-out.
+import { PasswordRequired } from './PasswordRequired';
+import { IdleWarning } from './IdleWarning';
+import { signedOutPath, QUIET_HEADER } from '@/lib/signinrules';
 
-type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; /** This server turns Word files and the like into PDF on upload (src/server/convert.ts). */ converts?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
+type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; /** What the account switched on or off for itself (src/server/tenantpolicy.ts). */ policy?: { impact_display: 'on' | 'off'; ai_helper: 'on' | 'off'; white_label: boolean };outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; /** WhatsApp and calls with a code are set up (src/lib/channels.ts). */ whatsapp?: boolean; phone_calls?: boolean; /** This server turns Word files and the like into PDF on upload (src/server/convert.ts). */ converts?: boolean; admins: number; members: number; operator: boolean; /** An admin of an organisation above accounts (src/server/orgs.ts). */ org_admin?: boolean; support_email: string | null; reload: (quiet?: boolean) => void };
 const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx)!;
 
@@ -29,11 +33,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   // the account is drawn, only the screen that asks for the owner's password (HandedOver).
   const [locked, setLocked] = useState<Locked | null>(null);
 
-  const reload = useCallback(() => {
-    api('/me').then((m) => {
+  // quiet: a look of the page's own (waiting for the email to be confirmed) that is not use of the app, so the sign-in
+  // rule "Sign out after" still counts the browser as idle (QUIET_HEADER, src/server/secpolicy.ts).
+  const reload = useCallback((quiet?: boolean) => {
+    api('/me', quiet === true ? { headers: { [QUIET_HEADER]: '1' } } : {}).then((m) => {
       if (m.handed_over) return setLocked(m.handed_over);
       setLocked(null);
-      if (!m.user) router.replace(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+      // A browser that a sign-in rule signed out is told why on the sign-in page (signed_out comes once).
+      if (!m.user) router.replace(signedOutPath(m.signed_out, window.location.pathname));
       else setMe(m);
     }).catch(oops);
   }, [router]);
@@ -44,7 +51,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     const handed = (e: Event) => setLocked((l) => l || { name: me?.user?.name || 'the owner of this account', has_password: me?.user?.has_password !== false, signer: (e as CustomEvent).detail?.signer || null, envelope_id: (e as CustomEvent).detail?.envelope_id || null });
     // A page of the account that was open in another tab, or comes back from the browser's history, asks whether
     // it may still show what it shows as soon as it is looked at again.
-    const look = () => document.visibilityState === 'visible' && api('/me').then((m) => (m.handed_over ? setLocked(m.handed_over) : m.user && setLocked(null))).catch(() => {});
+    // One that was signed out meanwhile (a sign-in rule, or signing out in another tab) goes to the sign-in page.
+    const look = () => document.visibilityState === 'visible' && api('/me').then((m) => (m.handed_over ? setLocked(m.handed_over) : m.user ? setLocked(null) : me && window.location.assign(signedOutPath(m.signed_out, window.location.pathname)))).catch(() => {});
     window.addEventListener('sg-handed-over', handed);
     window.addEventListener('pageshow', look);
     document.addEventListener('visibilitychange', look);
@@ -106,11 +114,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   // This account asks everyone for two-step login and this person has none: nothing of it is drawn until they have
   // set it up (the server refuses the rest with "two_step_setup", src/server/twostep.ts).
   if (me.two_step?.setup_required) return <MeCtx.Provider value={{ ...me, reload }}><TwoStepRequired me={me} /></MeCtx.Provider>;
+  // The same for a member whose password is shorter than the account asks (the server refuses the rest).
+  if (me.rules?.password_needed) return <MeCtx.Provider value={{ ...me, reload }}><PasswordRequired me={me} /></MeCtx.Provider>;
+  // Only in an account with "Sign out after N minutes of no use": the line that warns two minutes before.
+  const idle = me.rules?.idle_minutes ? <IdleWarning minutes={me.rules.idle_minutes} account={me.account.name} /> : null;
   const full = /^\/app\/(envelopes|templates)\/[^/]+\/edit/.test(path);
-  if (full) return <MeCtx.Provider value={{ ...me, reload }}>{me.two_step?.reset_at && <div className="full-ts-reset"><TwoStepResetBanner me={{ ...me, reload }} /></div>}{children}</MeCtx.Provider>;
+  if (full) return <MeCtx.Provider value={{ ...me, reload }}>{idle}{me.two_step?.reset_at && <div className="full-ts-reset"><TwoStepResetBanner me={{ ...me, reload }} /></div>}{children}</MeCtx.Provider>;
 
   return (
     <MeCtx.Provider value={{ ...me, reload }}>
+      {idle}
       {/* The first stop for a keyboard: past the menu, straight to the page. Its words are drawn by start.css when
           it has the focus, so a screen without a keyboard in use has nothing more on it. */}
       <a href="#app-main" className="app-skip" aria-label="Skip to content" />
@@ -156,6 +169,13 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="banner paused" role="alert">
               <span><b>Sending is paused on this account.</b> Reason: {String(me.account.paused).replace(/[.\s]+$/, '')}. A person reviews every pause. Until then nothing you start is emailed to anyone: no new envelopes, no new or changed recipients, no reminders, no reopening, no team invitations and no email about a change, and people further down a signing order are asked only once the pause is lifted. You can still open, download and export everything, give an open document more time or void it, and people who already have a document can still sign it.</span>
               <Link href="/help" className="btn sm">Contact us</Link>
+            </div>
+          )}
+          {/* An organisation above this workspace switched its sending off (src/server/orgs.ts): said on every page,
+              so nobody prepares a whole document to learn it at Send. Absent for every other workspace. */}
+          {me.org?.sending_off && !me.account.paused && (
+            <div className="banner paused" role="status" data-feature="gov-G13">
+              <span>{me.org.sending_off}</span>
             </div>
           )}
           {/* Our last email to this login came back for good: said on every page until it is dealt with. */}

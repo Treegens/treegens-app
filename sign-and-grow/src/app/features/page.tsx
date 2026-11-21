@@ -5,26 +5,25 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { publicFacts } from '@/app/help/facts';
 import { BULK_COST_NOTE, DEFAULT_REMINDER_DAYS, IN_PERSON_ONLINE } from '@/lib/policy';
-import { IN_PERSON_SHORT } from '@/lib/phone';
-import { SIGNING_BROWSERS_SHORT, SIGNING_ONLINE } from '@/lib/mobile';
+import { SIGNING_ONLINE } from '@/lib/mobile';
 
 export const metadata = { title: "What it does", description: "Everything GrowSigning does, on every plan: send for signature, sign anywhere, templates, Send to many, forms, proof you can check, teams and the API." };
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
 export const dynamic = "force-dynamic";
 
 const FEATURES: [string, string, [string, string]?][] = [
-  ['Send for signature', 'Upload PDFs or images, add signers, approvers, viewers and people who get a copy. Sign in order or all at once.'],
-  ['Drag and drop fields', 'Signatures, initials, dates, text, checkboxes, radio buttons, dropdowns, attachments and notes. Required or optional, prefilled or validated.'],
-  ['Sign anywhere', `Recipients sign in the browser of their phone or computer, with no account and no app. ${SIGNING_BROWSERS_SHORT} Type, draw or upload a signature. Finish later, decline or pass it to someone else. ${SIGNING_ONLINE} ${LANGUAGE_NOTE}`],
-  ['Templates and Send to many', `Set a document up once and reuse it. Send one template to hundreds of people from a spreadsheet. ${BULK_COST_NOTE} The page shows the count and the price before you send.`],
-  ['Forms', 'A public link that lets anyone fill in and sign a form on their own. Put it on your website or in an email, or print the QR code the app makes for it on a sheet for a poster or a front desk. Good for waivers, sign-ups and permission slips. Not for patient forms: there is no HIPAA agreement to sign with us.', ['/pricing#not-for-patients', 'Why not for patient forms']],
-  ['In-person signing', `Host a signing on your own phone, tablet or laptop when the signer is standing next to you. ${IN_PERSON_SHORT} ${IN_PERSON_ONLINE}`],
-  ['Reminders and deadlines', `A new account reminds whoever has not finished by email every ${DEFAULT_REMINDER_DAYS} days. You see that setting before every send and can change it or switch it off. A warning before a deadline, and more time in one click. An expired document can be reopened, and nobody signs twice.`],
-  ['Proof you can check', 'Every completed document gets a signing record (its certificate of completion), and every document a hash-chained history. Anyone can check on our public page that a signed PDF is unchanged since signing finished.'],
-  ['Teams and branding', 'Invite colleagues, share templates, set roles, and put your own logo and colour on emails and the signing screen.'],
-  ['API and webhooks', 'Create documents, embed signing in your own product and get notified of every event. Included on every plan.'],
-  ['Checking who signs', 'Protect a document with an access code you share with the signer yourself, or have us send them a one-time code by email at the moment they open it. Where the operator of the server has switched text messages on, the code can go to a mobile number you type instead, and the signing link can be texted as well. The certificate says for every signer which check was passed.'],
-  ['Reports', 'See what is waiting, how long signing takes and how many documents were completed.'],
+  ['Send for signature', 'Upload PDFs or pictures and add the people who sign, approve, view or get a copy, in order or all at once.'],
+  ['Drag and drop fields', 'Signatures, initials, dates, text, tick boxes, choices and attachments, each one required or not.'],
+  ['Sign anywhere', `People sign in the browser of their phone or computer, with no account and no app. ${SIGNING_ONLINE} ${LANGUAGE_NOTE}`],
+  ['Templates and Send to many', `Set a document up once and reuse it. Send one template to hundreds of people from a spreadsheet. ${BULK_COST_NOTE}`],
+  ['Forms', 'A public link anyone can fill in and sign on their own. Put it on your website, or print the QR code the app makes for it. Not for patient forms.', ['/pricing#not-for-patients', 'Why not for patient forms']],
+  ['In-person signing', `Hand your own phone, tablet or laptop to a signer standing next to you. ${IN_PERSON_ONLINE}`],
+  ['Reminders and deadlines', `A new account reminds whoever has not finished by email every ${DEFAULT_REMINDER_DAYS} days. You can change that before each send.`],
+  ['Proof you can check', 'Every completed document gets a signing record, and anyone can check on our site that a signed PDF is unchanged since it was finished.', ['/verify', 'Check a signed document']],
+  ['Teams and branding', 'Invite colleagues, share templates, and put your own logo and colour on emails and the signing page.'],
+  ['Signing inside your own site', 'Developers can send documents and show signing inside their own product, on every plan.', ['/developers', 'See the API']],
+  ['Checking who signs', 'An access code you tell them, or a code we email them. The signing record says which check each person passed.'],
+  ['Reports', 'What is waiting, how long signing takes, and what was completed.'],
 ];
 
 // What people say goes wrong with e-signature tools, and what we do instead. Each card links to where the promise is kept.
@@ -57,9 +56,10 @@ export default function Features() {
 
 
         <section className="wrap section" aria-labelledby="promises-h">
-          <p className="pub-kicker">Built from the one-star reviews</p>
-          <h2 id="promises-h">Nine things that go wrong elsewhere, and what we do instead</h2>
-          <p className="pub-sub">We read what people say when e-signature tools let them down. Then we built the opposite into the product. Each promise links to the place where it is kept.</p>
+          {/* Closed until asked for, so the page is the list of what it does and one button. */}
+          <details className="pub-fold" data-fold="">
+          <summary id="promises-h">Nine things that go wrong elsewhere, and what we do instead</summary>
+          <p className="pub-sub">Built from the one-star reviews of other e-signature tools. Each promise links to the place where it is kept.</p>
           <div className="grid g3">
             {PROMISES.map((p) => (
               <article key={p.title} className="pub-promise">
@@ -70,6 +70,7 @@ export default function Features() {
               </article>
             ))}
           </div>
+          </details>
         </section>
 
         <section className="wrap section">

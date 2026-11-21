@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/components/ui';
 import { Icon, Sender } from './parts';
+import { CALL_ME } from '@/lib/channels';
 
 // The screen that asks for a one-time code before a document opens. The sender chose it: a code by email, or by
 // text message to a number they typed. Whoever holds the link sees this, and they may not be the person the
@@ -18,6 +19,7 @@ export type CodeState = {
   tries_left: number;
   stopped: boolean;
   shared?: boolean; // the sender passed this link on themselves: we never emailed this person
+  call?: boolean; // this server can call the number and read the code out instead (src/server/voice.ts)
 };
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -28,8 +30,9 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
   const byText = check.kind === 'sms_code';
   const what = byText ? 'text message' : 'email';
   const [sent, setSent] = useState(check.sent);
+  const [heard, setHeard] = useState(false); // the newest code was read out on a call
   const [code, setCode] = useState('');
-  const [busy, setBusy] = useState<'' | 'send' | 'check' | 'no_code' | 'not_mine'>('');
+  const [busy, setBusy] = useState<'' | 'send' | 'call' | 'check' | 'no_code' | 'not_mine'>('');
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [stopped, setStopped] = useState(check.stopped);
@@ -63,18 +66,20 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
     if (Number.isFinite(s) && s > 0) setUntil(Date.now() + s * 1000);
   };
 
-  async function send() {
-    setBusy('send');
+  // "Call me with the code": the same code rules, read out on a call to the same number (a landline, or for someone who cannot read a text).
+  async function send(by: 'text' | 'call' = 'text') {
+    setBusy(by === 'call' ? 'call' : 'send');
     setError('');
     setNote('');
     try {
-      const r = await api(`${base}/code`, { method: 'POST' });
+      const r = await api(by === 'call' ? `${base}/code/call` : `${base}/code`, { method: 'POST' });
       // This browser passed already (another tab did it): simply open the document.
       if (r?.passed) return void (await onOpen());
       setUntil(Date.now() + (r.resend_in || 60) * 1000);
       setCode('');
-      setNote(`${sent ? 'A new code' : 'A code'} is on its way to ${check.to}. ${sent ? 'Only the new one works now.' : ''}${r.delivery === 'outbox' ? ' This is a development server: it was not really sent, and you can read it in the outbox at /dev/outbox.' : ''}`);
+      setNote(`${by === 'call' ? `We are calling ${check.to} now, and the call reads the code out twice.` : `${sent ? 'A new code' : 'A code'} is on its way to ${check.to}.`} ${sent ? 'Only the new one works now.' : ''}${r.delivery === 'outbox' ? ' This is a development server: it was not really sent, and you can read it in the outbox at /dev/outbox.' : ''}`);
       setSent(true);
+      setHeard(by === 'call');
       window.setTimeout(() => input.current?.focus(), 50);
     } catch (e: any) {
       waitFrom(e);
@@ -153,14 +158,14 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
       <div className="sg-state-icon lock"><Icon name={byText ? 'lock' : 'mail'} size={26} /></div>
       <h1 className="serif" id="sg-h1" tabIndex={-1}>{sent ? 'Type the code we sent you' : 'First, a quick check that it is you'}</h1>
       {sent ? (
-        <p>We sent a {check.digits}-digit code by {what} to <b className="sg-code-to">{check.to}</b>. It works for {check.minutes} minutes.</p>
+        <p>{heard ? 'We called' : `We sent a ${check.digits}-digit code by ${what} to`} <b className="sg-code-to">{check.to}</b>{heard ? ` to read out a ${check.digits}-digit code` : ''}. It works for {check.minutes} minutes.</p>
       ) : (
         <p>{sender.name} asked us to check who opens this document. We send a {check.digits}-digit code by {what} to <b className="sg-code-to">{check.to}</b>, and you type it in here.</p>
       )}
 
       {sent && (
         <label className="f sg-code-box">
-          <span>Code from the {what}</span>
+          <span>{heard ? 'Code from the call' : `Code from the ${what}`}</span>
           <input ref={input} className="sg-code-input" value={code} onChange={(e) => (setCode(e.target.value.replace(/[^\d ]/g, '').slice(0, check.digits + 2)), setError(''))}
             inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]*" enterKeyHint="go" autoCapitalize="off" autoCorrect="off" spellCheck={false}
             autoFocus aria-invalid={!!error} aria-describedby="sg-code-says" />
@@ -174,12 +179,14 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
       {sent ? (
         <>
           <button className="btn primary lg" disabled={!!busy}>{busy === 'check' ? 'Checking' : 'Open document'}</button>
-          <button type="button" className="btn lg sg-code-again" disabled={!!busy || left > 0} onClick={send}>{busy === 'send' ? 'Sending' : 'Send a new code'}</button>
+          <button type="button" className="btn lg sg-code-again" disabled={!!busy || left > 0} onClick={() => send()}>{busy === 'send' ? 'Sending' : 'Send a new code'}</button>
+          {byText && check.call && <button type="button" className="btn lg sg-code-again" disabled={!!busy || left > 0} onClick={() => send('call')}>{busy === 'call' ? 'Calling' : CALL_ME}</button>}
           {again}
         </>
       ) : (
         <>
           <button className="btn primary lg" disabled={!!busy || left > 0}>{busy === 'send' ? 'Sending' : 'Send me the code'}</button>
+          {byText && check.call && <button type="button" className="btn lg sg-code-again" disabled={!!busy || left > 0} onClick={() => send('call')}>{busy === 'call' ? 'Calling' : CALL_ME}</button>}
           {again}
         </>
       )}

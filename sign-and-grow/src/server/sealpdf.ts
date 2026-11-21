@@ -39,7 +39,7 @@ export function pdfDate(d: Date): string {
   return `D:${d.getUTCFullYear()}${two(d.getUTCMonth() + 1)}${two(d.getUTCDate())}${two(d.getUTCHours())}${two(d.getUTCMinutes())}${two(d.getUTCSeconds())}Z`;
 }
 
-function lastStartXref(buf: Buffer): number {
+export function lastStartXref(buf: Buffer): number {
   const tail = buf.subarray(Math.max(0, buf.length - 2048)).toString('latin1');
   const m = /startxref\s+(\d+)\s+%%EOF\s*$/.exec(tail);
   if (!m) throw new Error('the PDF has no cross-reference position at its end');
@@ -47,7 +47,7 @@ function lastStartXref(buf: Buffer): number {
 }
 
 // What the file's last cross-reference section says: its kind, the number of objects and its trailer entries.
-function lastSection(buf: Buffer, at: number): { stream: boolean; size: number } {
+export function lastSection(buf: Buffer, at: number): { stream: boolean; size: number } {
   const head = buf.subarray(at, Math.min(buf.length, at + 64)).toString('latin1');
   const stream = !/^\s*xref\b/.test(head);
   let from = at;
@@ -66,9 +66,11 @@ const obj = (n: number, body: string) => `${n} 0 obj\n${body}\nendobj\n`;
 
 /**
  * Appends an empty seal to `pdf`: the field, the signature dictionary with a zeroed /Contents, and the new
- * cross-reference section. `pdf` must be a PDF this server rendered (not encrypted).
+ * cross-reference section. `pdf` must be a PDF this server rendered (not encrypted). `kind` 'timestamp': a document
+ * time stamp instead (ETSI EN 319 142-1 clause 5.5: /Type /DocTimeStamp, /SubFilter /ETSI.RFC3161, no /M), in a
+ * field of its own, for the long-term step in ltv.ts.
  */
-export async function prepareSeal(pdf: Uint8Array, when: Date, contentsBytes = CONTENTS_BYTES): Promise<Prepared> {
+export async function prepareSeal(pdf: Uint8Array, when: Date, contentsBytes = CONTENTS_BYTES, kind: 'seal' | 'timestamp' = 'seal'): Promise<Prepared> {
   const prefix = Buffer.from(pdf);
   const doc = await PDFDocument.load(prefix, { updateMetadata: false });
   if (doc.isEncrypted) throw new Error('an encrypted PDF cannot be sealed here');
@@ -107,8 +109,10 @@ export async function prepareSeal(pdf: Uint8Array, when: Date, contentsBytes = C
   }
 
   const placeholderHex = '0'.repeat(contentsBytes * 2);
-  const sigBody = `<<\n/Type /Sig\n/Filter /Adobe.PPKLite\n/SubFilter /ETSI.CAdES.detached\n/M (${pdfDate(when)})\n/Reason (${SEAL_REASON})\n/ByteRange ${' '.repeat(BYTE_RANGE_SLOT)}\n/Contents <${placeholderHex}>\n>>`;
-  const widgetBody = `<<\n/Type /Annot\n/Subtype /Widget\n/FT /Sig\n/T (${SEAL_FIELD})\n/F 132\n/Rect [0 0 0 0]\n/P ${page.ref.toString()}\n/V ${sigNum} 0 R\n>>`;
+  const sigBody = kind === 'timestamp'
+    ? `<<\n/Type /DocTimeStamp\n/Filter /Adobe.PPKLite\n/SubFilter /ETSI.RFC3161\n/ByteRange ${' '.repeat(BYTE_RANGE_SLOT)}\n/Contents <${placeholderHex}>\n>>`
+    : `<<\n/Type /Sig\n/Filter /Adobe.PPKLite\n/SubFilter /ETSI.CAdES.detached\n/M (${pdfDate(when)})\n/Reason (${SEAL_REASON})\n/ByteRange ${' '.repeat(BYTE_RANGE_SLOT)}\n/Contents <${placeholderHex}>\n>>`;
+  const widgetBody = `<<\n/Type /Annot\n/Subtype /Widget\n/FT /Sig\n/T (${kind === 'timestamp' ? 'Time stamp' : SEAL_FIELD})\n/F 132\n/Rect [0 0 0 0]\n/P ${page.ref.toString()}\n/V ${sigNum} 0 R\n>>`;
 
   const parts: Buffer[] = [prefix];
   let length = prefix.length;

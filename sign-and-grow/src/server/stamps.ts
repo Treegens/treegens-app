@@ -6,6 +6,7 @@ import { readPng, cleanPng, decodePng, looksLikePng } from './png.ts';
 import { STAMP_IS, STAMP_FROM, STAMP_PNG_MAX_BYTES, STAMP_OUT_MAX_SIDE, STAMP_OUT_MIN_SIDE, STAMPS_PER_ACCOUNT, STAMP_DEFAULT_MM, STAMP_MIN_MM, STAMP_MAX_MM, STAMP_NAME_MAX, STAMP_TURN_MAX, stampTurn } from '../lib/stamps.ts';
 import { isInk, validSeed, TILT_MAX, INK_WORD, type Ink } from '../lib/stampink.ts';
 import { whoIs } from '../lib/groups.ts';
+import { stampText } from '../lib/dates.ts';
 
 // Stamps: a company stamp or seal put on the page next to a signature, printed like ink (multiply, slightly less
 // than full opacity) on the signing screen and in the signed PDF. The picture is turned into an impression in the
@@ -45,7 +46,7 @@ function pngBytes(v: any, what: string): Buffer {
   const m = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/.exec(s);
   if (!m) {
     const kind = KIND_OF.find(([re]) => re.test(s))?.[1];
-    throw bad(`${what} is ${kind || 'not a PNG picture'}. A stamp is kept as a PNG whose paper is see-through, made from a photo or a design by the stamp screen in the app (Settings, Stamps, or Add a stamp on the signing page). Through the API, send that PNG as a data URL. Nothing was saved.`);
+    throw bad(`${what} is ${kind || 'not a PNG picture'}. A stamp is kept as a PNG whose paper is see-through, made from a photo or a design by the stamp screen in the app (Settings, Stamps and seals, or Add a stamp on the signing page). Through the API, send that PNG as a data URL. Nothing was saved.`);
   }
   const b64 = m[1].replace(/\s+/g, '');
   if (b64.length > Math.ceil((STAMP_PNG_MAX_BYTES * 4) / 3) + 8) throw bad(`${what} is larger than ${STAMP_PNG_MAX_BYTES / 1e6} MB, the most a stamp can be. At most ${STAMP_OUT_MAX_SIDE} pixels on its longer side is plenty for a sharp print. Nothing was saved.`, 413);
@@ -61,7 +62,7 @@ export function saveStampImage(v: any, what = 'The stamp'): { sha: string; width
   const raw = pngBytes(v, what);
   if (raw.length > STAMP_PNG_MAX_BYTES) throw bad(`${what} is ${(raw.length / 1e6).toFixed(1)} MB, and a stamp can be up to ${STAMP_PNG_MAX_BYTES / 1e6} MB. Make it smaller: at most ${STAMP_OUT_MAX_SIDE} pixels on its longer side is plenty. Nothing was saved.`, 413);
   const info = readPng(raw);
-  if (!info && !looksLikePng(raw)) throw bad(`${what} is not a PNG picture: the file holds something else (an SVG, a web page or another kind of picture, whatever its name says). Send the impression as a PNG. The stamp screen in the app (Settings, Stamps) makes one from a photo or a design. Nothing was saved.`);
+  if (!info && !looksLikePng(raw)) throw bad(`${what} is not a PNG picture: the file holds something else (an SVG, a web page or another kind of picture, whatever its name says). Send the impression as a PNG. The stamp screen in the app (Settings, Stamps and seals) makes one from a photo or a design. Nothing was saved.`);
   if (!info) throw bad(`${what} is not a whole PNG picture. It may have been cut short on the way. Make it again and send it once more. Nothing was saved.`);
   const { width: w, height: h } = info;
   if (Math.max(w, h) < STAMP_OUT_MIN_SIDE) throw bad(`${what} is only ${w} by ${h} pixels, too small to print as a stamp. Use a picture at least ${STAMP_OUT_MIN_SIDE} pixels across. Nothing was saved.`);
@@ -75,7 +76,7 @@ export function saveStampImage(v: any, what = 'The stamp'): { sha: string; width
     if (px.data[i] < 64) clear++;
     else if (px.data[i] > 128) ink++;
   }
-  if (clear < w * h * 0.05) throw bad(`${what} has no see-through background, so it would print as a box with its paper around it, not like ink. Send the impression: a PNG where everything that is not ink is see-through. The stamp screen in the app (Settings, Stamps) makes one from a photo or a design. Nothing was saved.`);
+  if (clear < w * h * 0.05) throw bad(`${what} has no see-through background, so it would print as a box with its paper around it, not like ink. Send the impression: a PNG where everything that is not ink is see-through. The stamp screen in the app (Settings, Stamps and seals) makes one from a photo or a design. Nothing was saved.`);
   if (ink < Math.max(20, w * h * 0.003)) throw bad(`${what} is see-through almost everywhere: there is no ink in it to print. Nothing was saved.`);
   // Stored written again from its pixel data alone: no other chunk of the file and no byte after its pixels is kept.
   const png = cleanPng(info, STAMP_OUT_MAX_SIDE * STAMP_OUT_MAX_SIDE);
@@ -168,7 +169,7 @@ function nameOf(b: any, account: any, stampId: string | null, was?: string): str
 export function createStamp(account: any, user: any, b: any) {
   return tx(() => {
     const n = get('SELECT COUNT(*) n FROM stamps WHERE account_id=?', account.id).n;
-    if (n >= STAMPS_PER_ACCOUNT) throw bad(`Your team has ${n} stamps, which is as many as an account can keep. Delete one you no longer use under Settings, Stamps, and add this one then. Nothing was saved.`, 409);
+    if (n >= STAMPS_PER_ACCOUNT) throw bad(`Your team has ${n} stamps, which is as many as an account can keep. Delete one you no longer use under Settings, Stamps and seals, and add this one then. Nothing was saved.`, 409);
     const name = nameOf(b, account, null);
     const look = lookOf(b, `The stamp "${name}"`);
     const size = sizeMm(b?.size_mm, STAMP_DEFAULT_MM, `The stamp "${name}"`);
@@ -265,7 +266,7 @@ export function copyStamps(src: any, fmap: Map<string, string>) {
 const docName = (e: any, f: any) => (e.documents.length > 1 ? e.documents.find((d: any) => d.id === f.document_id)?.name : '');
 /** Where a field is, in words: "page 2" or "page 2 of "Lease"". */
 export const stampWhere = (e: any, f: any) => `page ${Number(f.page) + 1}${docName(e, f) ? ` of "${docName(e, f)}"` : ''}`;
-const ts = (s: any) => String(s ?? '').replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+const ts = (s: any) => stampText(s);
 /** The stamp in words: its name, where it came from, its ink. */
 export function stampSaid(m: StampMeta | null): string {
   if (!m) return 'a stamp';

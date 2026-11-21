@@ -2,6 +2,7 @@
 import { useState, type FormEvent } from 'react';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 import { Tickets } from './tickets';
+import { LeakCheckLine } from './leakcheck';
 import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS, priceChangeDay } from '@/lib/policy';
 
 // The queue for the people who run the service: help requests, reports from recipients, and paused accounts.
@@ -118,6 +119,8 @@ export default function Operator() {
   return (
     <div className="stack">
       <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Review queue</h1><div className="muted">Every item here is a person waiting. Answer a help request right here: the answer is emailed to them and kept with the request.</div></div><button className="btn" onClick={reload}>Refresh</button></div>
+
+      <LeakCheckLine />
 
       <BillingTools />
 

@@ -6,10 +6,11 @@ import { PublicNav, PublicFooter } from '@/components/Public';
 import { MATCH_MEANS, NO_MATCH_CAUSES } from '@/lib/evidence';
 import { ById } from './ById';
 import { SealResult } from './SealResult';
+import { screenLocale } from '@/lib/dates';
 
 // A day as people say it, in the reader's own calendar: "20 November 2026".
 // What is kept after a deletion is a day (2026-11-20), which is a day in UTC: shown as that day wherever the reader is.
-const longDay = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric', ...(/^\d{4}-\d\d-\d\d$/.test(iso) ? { timeZone: 'UTC' } : {}) }) : 'a day we no longer know');
+const longDay = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric', ...(/^\d{4}-\d\d-\d\d$/.test(iso) ? { timeZone: 'UTC' } : {}) }) : 'a day we no longer know');
 
 export default function Verify() {
   const [res, setRes] = useState<any>(null);
@@ -69,25 +70,25 @@ export default function Verify() {
                 {res.signers.map((s: any, i: number) => <tr key={i}><td style={{ paddingLeft: 0 }}><b>{s.name}</b> <span className="muted small">{s.email}</span></td><td className="muted small" style={{ textAlign: 'right', paddingRight: 0 }}>{s.completed_at ? fmtDate(s.completed_at, true) : ''}</td></tr>)}
               </tbody>
             </table>
-            <div className="small" style={{ marginTop: 10 }}>Audit trail: {res.chain.ok ? `intact, ${res.chain.events} events` : 'broken. The recorded history of this envelope was changed after the fact, so do not rely on it.'}</div>
-            <div className="mono muted" style={{ marginTop: 6 }}>Envelope {res.envelope.id}<br />SHA-256 {res.hash}</div>
+            <div className="small" style={{ marginTop: 10 }}>Audit trail: {res.chain.ok ? `intact, ${res.chain.events} events` : 'broken. The recorded history of this document was changed after the fact, so do not rely on it.'}</div>
+            <div className="mono muted" style={{ marginTop: 6 }}>Envelope ID {res.envelope.id}<br />SHA-256 {res.hash}</div>
           </div>
         )}
         {res && !res.match && res.deleted && (
           <div ref={result} tabIndex={-1} role="status" className="card pub-verdict good pub-focus" style={{ marginTop: 18 }}>
             <span className="badge completed">Completed here, deleted since</span>
             <h2>This file was completed with GrowSigning on {longDay(res.deleted.completed_at)}</h2>
-            <p>Its fingerprint matches the signed PDF of envelope <span className="mono">{res.deleted.envelope_id}</span>, which everyone had finished on that day. So the file is unchanged since then.</p>
+            <p>Its fingerprint matches the signed PDF with the envelope ID <span className="mono">{res.deleted.envelope_id}</span>, which everyone had finished on that day. So the file is unchanged since then.</p>
             {res.deleted.disputed_on && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {longDay(res.deleted.disputed_on)}, a person named on this document told us they did not sign it, or that it was not them{res.deleted.dispute_in_error_on ? `. On ${longDay(res.deleted.dispute_in_error_on)} a person at GrowSigning looked into it and found that it was filed in error` : res.deleted.dispute_open ? ', and a person at GrowSigning has not closed that yet' : ''}. This page cannot tell you who is right.</div>}
             {/* Purged under its account's retention rule or at its sender's request (src/server/records.ts): the record is still here. */}
             {res.deleted.purged ? (
               <>
                 <p>Its files were deleted on {longDay(res.deleted.deleted_at)}, by its account&apos;s deletion schedule or at the request of its sender or an admin. The signed file is no longer kept here, so this page cannot show you who signed it. The certificate inside the file is what you have: read it with <Link href="/security/certificate">How to read a certificate</Link>.</p>
-                <p className="muted small">We keep this fingerprint, the envelope ID and the day it was completed with the record of the envelope, for as long as its account keeps that record, and for one year after the account is deleted.</p>
+                <p className="muted small">We keep this fingerprint, the envelope ID and the day it was completed with the record of the document, for as long as its account keeps that record, and for one year after the account is deleted.</p>
               </>
             ) : (
               <>
-            <p>Its sender has since deleted it, together with their account, on {longDay(res.deleted.deleted_at)}. We deleted what we knew about it too: the document, the names on it and its audit trail{res.deleted.disputed_on ? ', apart from the alert our team works from while the dispute is open' : ''}. So we cannot tell you anything about who signed it. The certificate inside the file is what is left: read it with <Link href="/security/certificate">How to read a GrowSigning certificate</Link>.</p>
+            <p>Its sender has since deleted it, together with their account, on {longDay(res.deleted.deleted_at)}. We deleted what we knew about it too: the document, the names on it and its audit trail{res.deleted.disputed_on ? ', apart from the alert our team works from while the dispute is open' : ''}. So we cannot tell you anything about who signed it. The certificate inside the file is what is left: read it with <Link href="/security/certificate">How to read a GrowSigning signing record</Link>.</p>
             <SealResult seal={res.seal} />
             <p className="muted small">We keep only this fingerprint, the envelope ID and the day it was completed, until {longDay(res.deleted.kept_until)}{res.deleted.disputed_on ? ', and that it is disputed and since when, until the dispute is closed' : ''}. After that this check answers &ldquo;no match&rdquo; for this file.</p>
               </>

@@ -1,0 +1,42 @@
+import type { Starter } from './types.ts';
+
+export const parental: Starter = {
+  id: 'parental',
+  title: "Parental consent for a child's participation",
+  purpose: 'Asks a parent or guardian for permission for a child to take part in an activity.',
+  written: '2026-11-21',
+  place: 'No particular country',
+  reviewedBy: '',
+  asks: [{ key: 'activity', label: 'The activity, with its dates', max: 150, example: 'the tree nursery visit on 3 May' }],
+  roles: [{ key: 'parent', name: 'Parent or guardian', order: 1 }],
+  blocks: [
+    { id: 'intro', kind: 'p', text: 'This form asks a parent or guardian for permission for a child to take part in {activity}, organised by {organisation}.' },
+    { id: 'child-h', kind: 'h', text: 'The child' },
+    { id: 'child', kind: 'p', text: 'The name and date of birth of the child taking part:' },
+    { id: 'care-h', kind: 'h', text: 'Care and safety' },
+    { id: 'care', kind: 'list', items: [
+      'The adults who look after the children are chosen by us and know our rules for working with children.',
+      'We tell you in advance about any change to the plan, and what the child should bring.',
+      'We call you straight away if the child is hurt or unwell.',
+      'If we cannot reach you in an emergency, we may get the child medical help.',
+    ] },
+    { id: 'contact-h', kind: 'h', text: 'Reaching you' },
+    { id: 'contact', kind: 'p', text: 'How we reach you during the activity, and what we need to know to keep the child safe:' },
+    { id: 'photos-h', kind: 'h', text: 'Photos' },
+    { id: 'photos', kind: 'p', text: 'We take no photos of the child for our own use unless you tick this box.' },
+    { id: 'withdraw-h', kind: 'h', text: 'Changing your mind' },
+    { id: 'withdraw', kind: 'p', text: 'You can withdraw this permission, or the permission for photos, at any time by telling {organisation}.' },
+    { id: 'sign-h', kind: 'h', text: 'Signature' },
+  ],
+  fields: [
+    { type: 'text', role: 'parent', label: "The child's full name", required: true, after: 'child' },
+    { type: 'date', role: 'parent', label: "The child's date of birth", required: true, after: 'child' },
+    { type: 'text', role: 'parent', label: 'A phone number we can reach you on', required: true, after: 'contact' },
+    { type: 'text', role: 'parent', label: 'Health conditions, allergies or medicines (optional)', required: false, after: 'contact' },
+    { type: 'checkbox', role: 'parent', label: 'Photos of the child may be used in our reports and on our website', required: false, after: 'photos' },
+    { type: 'checkbox', role: 'parent', label: 'I am the parent or guardian of this child, and I give permission for them to take part', required: true, after: 'sign-h' },
+    { type: 'full_name', role: 'parent', label: 'Full name', required: true, after: 'sign-h' },
+    { type: 'signature', role: 'parent', label: 'Signature', required: true, after: 'sign-h' },
+    { type: 'date_signed', role: 'parent', label: 'Date', required: true, after: 'sign-h' },
+  ],
+};

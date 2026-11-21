@@ -72,6 +72,8 @@ export type Ed = {
   removeDoc: (id: string) => void;
   replaceDoc: (id: string, file: File | null | undefined) => void;
   moveDoc: (index: number, by: number) => void;
+  /** Pages removed, turned or moved (PageTools.tsx): the document takes the new file and its fields go with their pages. */
+  pagesChanged: (id: string, file: any, plan: { from: number; turn: number }[]) => void;
   addRcp: (p?: any) => void;
   /** "Add me": the sender as someone who signs. */
   addMe: () => void;
@@ -83,6 +85,9 @@ export type Ed = {
   signNow: boolean;
   patchRcp: (id: string, p: any) => void;
   removeRcp: (id: string) => void;
+  /** The person just removed with the cross, and where they stood, until Undo or the next removal (RemovedLine.tsx). */
+  removed?: { r: any; at: number } | null;
+  undoRemove?: () => void;
   /** Changes the fields and remembers the step so it can be undone. */
   setFields: History<any[]>['set'];
   undo: () => void;

@@ -5,6 +5,8 @@ import { api } from './ui';
 import { Logo } from './Brand';
 // Plain functions and constants only: the rest of that file reads the environment and is for the server.
 import { safeNext, signInErrorText, signInNotice, removedText } from '@/lib/signin';
+// Why a sign-in rule of the team signed this browser out: only its two known reasons are ever said.
+import { signedOutNotice } from '@/lib/signinrules';
 
 type Mode = 'login' | 'signup' | 'forgot' | 'reset';
 type Provider = { id: string; name: string };
@@ -22,6 +24,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
   // What a sign-in at Google or Microsoft ended with when it did not sign anyone in. It comes back as a code in the
   // address and is said here in words.
   const [cameBack, setCameBack] = useState('');
+  // "You were signed out because ...", when a rule of the team did it (src/server/secpolicy.ts).
+  const [out, setOut] = useState('');
   // The address of the login this browser is signed in to already, if any. Continuing with Google or Microsoft here
   // would make that person a second login (the server refuses it and sends them to Settings), so the page says where
   // connecting is done instead.
@@ -34,7 +38,11 @@ export function AuthForm({ mode }: { mode: Mode }) {
     if (p.get('signin_error')) setCameBack(signInErrorText(p.get('signin_error'), p.get('provider')));
     if (mode === 'login' || mode === 'signup') {
       api('/auth/providers').then((r) => setProviders(r.providers || [])).catch(() => {});
-      api('/me').then((r) => setSignedInAs(r?.user?.email || '')).catch(() => {});
+      api('/me').then((r) => {
+        setSignedInAs(r?.user?.email || '');
+        // "You were signed out" only when the server says a rule signed this browser out, not because an address says so.
+        if (mode === 'login') setOut(signedOutNotice(p.get('out'), r));
+      }).catch(() => {});
     }
   }, [mode]);
   const signOut = () => api('/auth/logout', { method: 'POST' }).then(() => setSignedInAs('')).catch((e) => setError(e.message));
@@ -103,6 +111,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         {mode === 'forgot' && q?.get('invite') && <p className="muted small">Your invitation stays valid while you do this. After you have chosen a new password, open the invitation email again and sign in from its button.</p>}
         {mode === 'login' && q?.get('closing') && <div className="notice" style={{ marginTop: 10 }}>Your account is closed and will be deleted in 30 days. Any subscription has been stopped. Changed your mind? Sign in and it comes straight back.</div>}
         {cameBack && <div className="notice err" style={{ marginTop: 10 }} role="alert">{cameBack}</div>}
+        {out && <div className="notice" style={{ marginTop: 10 }} role="status">{out}</div>}
         {done ? <div className="notice" style={{ margin: '12px 0' }}>{done} <Link href="/login">Sign in</Link></div> : (
           <div style={{ marginTop: 14 }}>
             {mode === 'signup' && <label className="f"><span>Your name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>}

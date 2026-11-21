@@ -7,6 +7,7 @@ import { keptLine } from '@/lib/tplroles';
 import { shippedLocales } from '@/lib/i18n';
 import { ROLE_CHOICES, ROLE_WORDS, moreLines, personInSentence, personSummary, type MoreLine } from '@/lib/editorux';
 import { SendMyself } from './SendMyself';
+import { WaLink } from './WaLink';
 import { RecipientLanguage } from './RecipientLanguage';
 import { type Ed } from './shared';
 
@@ -30,7 +31,7 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
   const { isTpl, wording } = ed;
   const kept = wording?.people?.[r.id];
   const patch = (p: any) => ed.patchRcp(r.id, p);
-  const lines = moreLines(r, { isTpl, languages: shippedLocales().length, texts: !!me.text_messages });
+  const lines = moreLines(r, { isTpl, languages: shippedLocales().length, texts: !!me.text_messages, whatsapp: !!me.whatsapp });
   const name = personInSentence(r);
   // Opened from the keyboard or by a tap, the first line takes the focus: the next Tab stop is inside this More,
   // not the Remove button that stands after More on the row.
@@ -49,7 +50,7 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
         </label>
       );
     // Email or "I will send the link myself", and where this server sends texts the link by text message as well.
-    if (key === 'deliver') return <><SendMyself r={r} isTpl={isTpl} onChange={patch} /><TextLink r={r} textsOn={!!me.text_messages} open={isTpl && !r.email} onChange={patch} /></>;
+    if (key === 'deliver') return <><SendMyself r={r} isTpl={isTpl} onChange={patch} /><TextLink r={r} textsOn={!!me.text_messages} open={isTpl && !r.email} onChange={patch} /><WaLink r={r} isTpl={isTpl} waOn={!!me.whatsapp} onChange={patch} /></>;
     // One list: none, an access code, a one-time code, or both (CheckPick.tsx).
     if (key === 'check') return <CheckPick r={r} name={name} kept={kept} textsOn={!!me.text_messages} open={isTpl && !r.email} onChange={patch} />;
     if (key === 'sign')

@@ -23,11 +23,12 @@ import { forgetCommentHooks } from './commentrules.ts';
 import { attachedFiles, forgetClickwraps } from './clickwrap.ts';
 import { rememberGoneMail } from './bounces.ts';
 import { forgetArchiveCopies } from './archivemail.ts';
+import { listExport } from './bulklists.ts';
 import { stampExport, pruneStampImages } from './stamps.ts';
 import { record, securityExport, securityWords } from './seclog.ts';
 import { originalShas, originalsExport } from './converted.ts';
 import { ORIGINALS_EXPORT_README } from '../lib/convert.ts';
-import { assertMayClose, forgetRetentionLog } from './records.ts';
+import { assertMayClose, forgetRetentionLog, retentionCsv } from './records.ts';
 import { customCsv } from './customfields.ts';
 import { dayText } from '../lib/dates.ts';
 
@@ -187,7 +188,7 @@ route('GET', '/export', (c) => {
           (err.data?.code === 'file_locked' ? locked : unreadable).push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
           failed = true;
         }
-      } else if (e.purged_at) purged.push(`${e.subject || 'Untitled'} (envelope ${e.id}), on ${String(e.purged_at).slice(0, 10)}`);
+      } else if (e.purged_at) purged.push(`${e.subject || 'Untitled'} (envelope ${e.id}), on ${dayText(e.purged_at)}`);
       else if (e.status === 'completed' && !e.final_sha256) notMade.push(`${e.subject || 'Untitled'} (envelope ${e.id})`);
       if (data) {
         file = `signed/${base}.pdf`;
@@ -212,19 +213,28 @@ route('GET', '/export', (c) => {
       index.push(csv([e.id, e.subject, e.status, e.sent_at, e.completed_at, people.map((p) => `${p.name} <${p.email}> (${p.role}: ${p.status})`).join('; '), e.final_sha256 || e.purged_sha256, file, ...custom.cells(e.id)]));
     }
     yield { name: 'envelopes.csv', data: Buffer.from('﻿' + index.join('\r\n')) };
-    // The team's own stamps (Settings, Stamps), each picture with its name and settings (stamps.ts).
+    // The team's own stamps (Settings, Stamps and seals), each picture with its name and settings (stamps.ts).
     const stamps = stampExport(c.account.id);
     for (const s of stamps) yield s;
+    // The team's saved lists for Send to many, as they were saved, with lists/index.csv (bulklists.ts).
+    const lists = listExport(c.account.id);
+    for (const l of lists) yield l;
     // The account's security record, for its admins only (seclog.ts).
     if (c.admin) yield* securityExport(c.account.id);
+    // The deletion record (records.ts), for its admins: once the account is closed its lines lose their names and
+    // words, so this copy is the one that keeps them. Only when there is a line.
+    const deletions = c.admin && !!get('SELECT 1 x FROM retention_log WHERE account_id=? LIMIT 1', c.account.id);
+    if (deletions) yield { name: 'deletion-record.csv', data: Buffer.from(retentionCsv(c.account.id)) };
     yield { name: 'README.txt', data: Buffer.from([
       `GrowSigning export for ${c.account.name}, made ${now()}.`, '',
       'signed/        completed documents, each with its certificate of completion',
       'audit/         the full audit trail of every envelope, as JSON',
       'comments/      the questions and comments on an envelope, in full, where anyone wrote any. They are not part of what was signed.',
       ...(originals ? [ORIGINALS_EXPORT_README] : []),
-      ...(stamps.length ? ['stamps/        the stamps your team keeps under Settings, Stamps, as pictures, with their names and settings in stamps/index.csv'] : []),
+      ...(lists.length ? ['lists/         the lists your team saved for Send to many, each as it was saved, with who saved it and when in lists/index.csv. They hold personal data.'] : []),
+      ...(stamps.length ? ['stamps/        the stamps your team keeps under Settings, Stamps and seals, as pictures, with their names and settings in stamps/index.csv'] : []),
       ...(c.admin ? [`security/      the security record of the account as it stands now (Settings, Security), oldest first. ${securityWords()}`] : []),
+      ...(deletions ? ['deletion-record.csv  every change to the deletion schedule, every keep, hold and deletion of files, and every attempt the software refused, with the fingerprint of each deleted signed PDF (Settings, Records and data). Once the account is closed, the copy we keep loses its names and words.'] : []),
       `envelopes.csv  one row per envelope${custom.head.length ? ', with a column for each detail your account keeps on envelopes' : ''}`,
       '', `Check any signed PDF at ${baseUrl()}/verify. It must be the exact file from this export.`,
       ...(skipped ? ['', `${skipped} signed document(s) did not fit in one ZIP file. Export again with fewer envelopes selected to get them.`] : []),
@@ -466,6 +476,8 @@ export function purgeUser(userId: string): any[] {
     // copy outside a document's record after MAIL_COPY_DAYS.
     run(`DELETE FROM emails WHERE about_user=? AND envelope_id IS NULL AND ${NOT_WAITING}`, userId);
     run('DELETE FROM password_resets WHERE user_id=?', userId);
+    // Lists they saved for a team they belonged to stay with the team, without their name (bulklists.ts).
+    run("UPDATE bulk_lists SET created_by=NULL, created_by_name='A former team member' WHERE created_by=?", userId);
     // A sign-in at Google or Microsoft this login started to connect one: it names the login, and goes with it.
     run('DELETE FROM signin_states WHERE user_id=?', userId);
     // Which contacts of a team they had in their own list. The contacts themselves are the team's and stay.
@@ -497,7 +509,7 @@ export async function purgeClosedAccounts(): Promise<number> {
   const soon = new Date(Date.now() + CLOSING_REMINDER_DAYS * 864e5).toISOString();
   for (const u of all('SELECT id, name, email, closing_at FROM users WHERE closing_at IS NOT NULL AND closing_at > ? AND closing_at <= ? AND (closing_reminded IS NULL OR closing_reminded != closing_at)', now(), soon)) {
     run('UPDATE users SET closing_reminded=? WHERE id=?', u.closing_at, u.id);
-    const day = u.closing_at.slice(0, 10);
+    const day = dayText(u.closing_at);
     const left = Math.max(1, Math.ceil((Date.parse(u.closing_at) - Date.now()) / 864e5));
     const owns = get("SELECT COUNT(*) n FROM memberships WHERE user_id=? AND role='owner'", u.id).n;
     await sendMail({ to: u.email, subject: `Your GrowSigning account will be deleted on ${day}`, heading: `${left === 1 ? 'One day' : `${left} days`} left: your account is deleted on ${day}`,

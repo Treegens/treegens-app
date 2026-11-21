@@ -22,9 +22,10 @@ import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { ownLink } from '@/components/sender/OwnLink';
 import { Disputed } from '@/components/sender/Disputed';
 import { EnvelopeComments } from '@/components/sender/Comments';
-import { RetentionCard, RetentionLine, DeleteNotes, deleteOffers, scheduleOn, askAllowed, deletedToast, copiesLine, type RetentionAsk } from '@/components/sender/Retention';
+import { RetentionCard, RetentionLine, DeleteNotes, keepInstead, keepInsteadLabel, deleteOffers, scheduleOn, askAllowed, deletedToast, copiesLine, type RetentionAsk } from '@/components/sender/Retention';
 import { CustomDetails } from '@/components/sender/CustomDetails';
 import { FileChecks } from '@/components/sender/FileChecks';
+import { askedPaper } from '@/lib/disclosure';
 import { closingSoon, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened } from '@/components/sender/lib';
 
 export default function EnvelopeDetail() {
@@ -122,6 +123,7 @@ export default function EnvelopeDetail() {
   const canRemind = out && e.recipients.some((r: any) => hasTurn(r) && !r.muted && !stopped.includes(r) && !ownLink(r));
   const allMuted = out && !canRemind && e.recipients.some((r: any) => hasTurn(r) && r.muted);
   const decliner = e.recipients.find((r: any) => r.status === 'declined');
+  const paperAsk = askedPaper(decliner);
   // Only worth a banner while people can still act on it. Each recipient's own line says it in every state.
   const noMailServer = out && deliveries.some((d) => d.status === 'outbox');
   const editHref = `/app/${isTpl ? 'templates' : 'envelopes'}/${e.id}/edit`;
@@ -157,9 +159,12 @@ export default function EnvelopeDetail() {
     noMail: noMail(r),
   }));
   const main = mainButton({ status: e.status, isTemplate: isTpl, removed: !!removed, purged: !!e.purged_at, people });
+  // Asked for paper: Copy and fix would send it on screen again, which is what they asked not to do, so there is no
+  // main button and Copy stays in More.
+  const noMain = paperAsk && main?.kind === 'copy_fix';
   const mainPerson = main?.personId ? e.recipients.find((r: any) => r.id === main.personId) : null;
   const whyNot = paused ? 'Sending is paused on this account, so this has to wait.' : undefined;
-  const mainEl = !main ? null
+  const mainEl = !main || noMain ? null
     : main.kind === 'restore' ? <button className="btn primary" disabled={busy} onClick={() => act(() => api(`/envelopes/${e.id}/restore`, { method: 'POST' }), 'Put back. It is in the lists, the search, the export and the reports again.')}>{main.label}</button>
     : main.kind === 'continue' ? <Link href={editHref} className="btn primary">{main.label}</Link>
     : main.kind === 'sign' || main.kind === 'host' ? <button className="btn primary" disabled={busy} onClick={() => (setBusy(true), openToSign(e.id, mainPerson).catch((err) => (fail(err), setBusy(false))))}>{main.label}</button>
@@ -173,7 +178,7 @@ export default function EnvelopeDetail() {
   const schedule = scheduleOn(ret);
   const more: MenuLine[] = pageMore({
     status: e.status, isTemplate: isTpl, removed: !!removed, purged: !!e.purged_at, hasFiles: e.documents.length > 0, mayChange, mayDelete: !isTpl || e.access?.may_delete !== false,
-    main: isTpl && (tplLocked || tplHeld) ? 'copy' : main?.kind || null, schedule, mayKeep: deleteOffers(ret).keep,
+    main: isTpl && (tplLocked || tplHeld) ? 'copy' : noMain ? null : main?.kind || null, schedule, mayKeep: deleteOffers(ret).keep,
     mayHold: !!ret?.may_hold, held: !!ret?.held, heldHere: !!ret?.holds?.some((h: any) => h.envelope_id === e.id), mayPurge: deleteOffers(ret).purge,
   }).map((l): MenuLine => ({
     ...l,
@@ -275,9 +280,15 @@ export default function EnvelopeDetail() {
         <section className="card sn-now closed" aria-label="Where this stands">
           <div className="sn-now-main">
             <div>
-              <p className="sn-now-line">{decliner ? <><b>{decliner.name}</b> declined{decliner.completed_at ? ` on ${longDate(decliner.completed_at)}` : ''}.</> : 'This was declined.'}</p>
-              {decliner?.decline_reason && <p className="sn-now-sub">They wrote: &ldquo;{decliner.decline_reason}&rdquo;</p>}
-              <p className="sn-now-sub">Nobody can sign this one any more. Copy it, change what needs changing and send it again.</p>
+              {/* "Sign on paper instead": the software wrote the reason, so it is not quoted as theirs (src/lib/disclosure.ts). */}
+              {paperAsk ? <>
+                <p className="sn-now-line"><b>{decliner.name}</b> asked for this document on paper on {longDate(decliner.paper_at)}.</p>
+                <p className="sn-now-sub">Send it to them on paper, the way your consent text says. GrowSigning does not print or post anything. Nobody can sign this one on screen any more.</p>
+              </> : <>
+                <p className="sn-now-line">{decliner ? <><b>{decliner.name}</b> declined{decliner.completed_at ? ` on ${longDate(decliner.completed_at)}` : ''}.</> : 'This was declined.'}</p>
+                {decliner?.decline_reason && <p className="sn-now-sub">They wrote: &ldquo;{decliner.decline_reason}&rdquo;</p>}
+                <p className="sn-now-sub">Nobody can sign this one any more. Copy it, change what needs changing and send it again.</p>
+              </>}
             </div>
             {!removed && mainEl && <div className="sn-now-actions">{mainEl}</div>}
           </div>
@@ -335,7 +346,7 @@ export default function EnvelopeDetail() {
       {/* Folded, and closed every time the page opens: comments, history, files, details, checks. */}
       {/* Questions and comments: the threads, who waits for an answer, answer and settle (components/sender/Comments.tsx). */}
       {!isTpl && <EnvelopeComments envelope={e} />}
-      {!isTpl && e.status !== 'draft' && <History audit={data.audit} deliveries={deliveries} chain={data.chain} fullRecordHref={e.purged_at ? null : `/api/envelopes/${e.id}/evidence`} />}
+      {!isTpl && e.status !== 'draft' && <History audit={data.audit} deliveries={deliveries} chain={data.chain} fullRecordHref={e.purged_at ? null : `/api/envelopes/${e.id}/evidence`} record={data.record_stamp} />}
       <Fold title="Files" count={nFiles}>
         {nFiles === 0 && <p className="muted small">{e.purged_at ? `Its files were deleted on ${longDate(e.purged_at)}.` : 'No file has been added yet.'}</p>}
         {e.documents.map((d: any) => <div key={d.id} className="row between" style={{ padding: '5px 0' }}><span className="truncate">{d.name}</span><span className="muted small" style={{ whiteSpace: 'nowrap' }}>{d.pages} page{d.pages === 1 ? '' : 's'}</span></div>)}
@@ -350,7 +361,7 @@ export default function EnvelopeDetail() {
       {/* The account's own details on this envelope, such as a case number, folded (src/components/sender/CustomDetails.tsx). */}
       <CustomDetails envelope={e} editHref={mayChange ? editHref : null} onSaved={reload} />
       {/* What can be checked about the signed PDF, folded: today its digital seal, when it carries one (FileChecks.tsx). */}
-      <FileChecks seal={data.seal} />
+      <FileChecks seal={data.seal} archive={data.archive_format} />
 
       {dialog === 'extend' && <ExtendDialog envelope={e} onClose={() => setDialog('')} onDone={() => (setDialog(''), reload())} />}
       {dialog === 'void' && (
@@ -369,6 +380,8 @@ export default function EnvelopeDetail() {
         <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this document'} confirmLabel={kept ? 'Delete from my account' : 'Delete for good'}
           // "Keep it" only ever means stopping a scheduled deletion, so the button that closes this dialog says Cancel.
           keepLabel="Cancel" onClose={() => setDialog('')}
+          // A deletion schedule reaches it: the third way out stops that schedule instead (Retention.tsx, keepInstead).
+          other={!isTpl && keepInstead(ret) ? { label: keepInsteadLabel(ret!), onClick: () => (setDialog(''), setKeeping('keep')) } : null}
           onConfirm={async () => {
             await api(`/envelopes/${e.id}`, { method: 'DELETE' });
             toast(kept ? (keptForDispute ? 'Deleted from your account. It is kept while the dispute about it is open.' : deletedToast(ret)) : 'Deleted.');
@@ -386,7 +399,7 @@ export default function EnvelopeDetail() {
             </>
           ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its history will be removed for good. This cannot be undone.</p>}
           {/* One Delete: what the deletion schedule will do by itself, and the way to remove the files for good, are said here. */}
-          {!isTpl && <DeleteNotes r={ret} onKeep={() => (setDialog(''), setKeeping('keep'))} onPurge={() => (setDialog(''), setKeeping('purge'))} />}
+          {!isTpl && <DeleteNotes r={ret} onPurge={() => (setDialog(''), setKeeping('purge'))} />}
         </ConfirmDialog>
       )}
       {fix && <CorrectDialog envelopeId={e.id} recipient={fix} onClose={() => setFix(null)} onDone={() => (setFix(null), reload())} />}

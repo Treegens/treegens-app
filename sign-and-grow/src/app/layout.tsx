@@ -18,12 +18,16 @@ import './styles/witness.css';
 import './styles/stamps.css';
 import './styles/chat.css';
 import './styles/seclog.css';
+import './styles/secpolicy.css';
 import './styles/retention.css';
 import './styles/customfields.css';
 import './styles/simplesign.css';
 import './styles/start.css';
 import './styles/impact.css';
 import './styles/envelope.css';
+import './styles/consent.css';
+import './styles/pagetools.css';
+import './styles/starters.css';
 // After globals.css, so its --serif (Lora first) wins. Keep it the last style import.
 import './styles/brand.css';
 import type { Metadata, Viewport } from 'next';

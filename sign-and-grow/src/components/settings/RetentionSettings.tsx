@@ -10,8 +10,9 @@ import { api, useLoad, toast } from '@/components/ui';
 import { useSaved } from './Frame';
 import { HoldDialog, ReasonDialog, HoldRules } from '@/components/sender/Retention';
 import { LEVEL_NAME, LEVEL_DOES, KEPT_AT, removesAt, RETENTION_MIN_DAYS, RETENTION_MAX_DAYS, RETENTION_NOTICE_DAYS, RETENTION_CLOSED, SCREEN_LEVELS, daysText, daysProblem, type PurgeLevel } from '@/lib/retention';
+import { screenLocale } from '@/lib/dates';
 
-const day = (s?: string | null) => (s ? new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '');
+const day = (s?: string | null) => (s ? new Date(s).toLocaleDateString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric' }) : '');
 const FEATURE = { 'data-feature': 'ds-retention' };
 
 /** Find one document by its name: type, then pick. `children` draws what can be done with each one found. */
@@ -196,7 +197,13 @@ export function RetentionSettings() {
         <>
           <h3 style={{ marginTop: 22 }}>Deletion record</h3>
           <p className="muted small">Every change to the schedule, every keep, hold and deletion, and every attempt the software refused, with the fingerprint of each signed PDF that was deleted. Lines are never changed.</p>
-          <a className="btn" href="/api/account/retention/log?format=csv">Download the deletion record</a>
+          {/* Two downloads of the same kind, each saying its format (the simplicity reviewer: one button and one link
+              left the person guessing what the button gives). */}
+          <p className="row wrap" style={{ alignItems: 'center', gap: 12 }}>
+            <span>Download the deletion record:</span>
+            <a className="btn" href="/api/account/retention/log?format=csv">As a spreadsheet</a>
+            <a className="btn" href="/api/account/retention/log?format=pdf">As a PDF to print</a>
+          </p>
         </>
       )}
 

@@ -3,6 +3,7 @@ import { all, get, run } from './db.ts';
 import { sha256, token, now, HttpError } from './util.ts';
 import { SESSION_DAYS, SESSION_MAX_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
 import { sessionRule, endedWhy, endedWords } from './secpolicy.ts';
+import { dayText } from '../lib/dates.ts';
 
 export const SESSION_COOKIE = 'ts_session';
 const DAYS = SESSION_DAYS;
@@ -114,13 +115,13 @@ export function authenticate(req: Request, required = false): Auth | null {
     const k = get('SELECT * FROM api_keys WHERE key_hash=?', sha256(bearer));
     if (!k) return refuse(401, `This API key is not known here. It was revoked, or it was not copied in full. Create a new key under ${KEYS_PAGE}.`);
     const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', k.account_id, k.user_id);
-    if (k.stopped_at || !m) return refuse(401, `This API key stopped working${k.stopped_at ? ` on ${k.stopped_at.slice(0, 10)}` : ''} because the person who created it is no longer in the account. An admin of the account can create a new key under ${KEYS_PAGE}.`);
+    if (k.stopped_at || !m) return refuse(401, `This API key stopped working${k.stopped_at ? ` on ${dayText(k.stopped_at)}` : ''} because the person who created it is no longer in the account. An admin of the account can create a new key under ${KEYS_PAGE}.`);
     const user = get('SELECT * FROM users WHERE id=?', k.user_id);
     const account = get('SELECT * FROM accounts WHERE id=?', k.account_id);
     // Closing an account signs every browser out. A key must not keep sending for it in the meantime: whatever it
     // sent would be deleted with the account when the grace period ends.
     const closing = account.closing_at || user.closing_at;
-    if (closing) return refuse(403, `${account.closing_at ? 'This account is being closed' : 'The person who created this API key is closing their login'}, so the key is switched off. Nothing is deleted before ${closing.slice(0, 10)}. Signing in to the app before then restores everything, and this key works again.`);
+    if (closing) return refuse(403, `${account.closing_at ? 'This account is being closed' : 'The person who created this API key is closing their login'}, so the key is switched off. Nothing is deleted before ${dayText(closing)}. Signing in to the app before then restores everything, and this key works again.`);
     run('UPDATE api_keys SET last_used_at=? WHERE id=?', now(), k.id);
     return { user, account, role: m.role, via: 'api_key', scope: k.scope === 'admin' ? 'admin' : 'send', keyId: k.id };
   }

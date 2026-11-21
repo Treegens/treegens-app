@@ -29,5 +29,14 @@ export function localePaths() {
         responses: { 200: { description: 'OK', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' } } } } } }, default: err },
       },
     },
+    '/sign/{token}/locale': {
+      post: {
+        summary: 'The signer chooses the language of the signing page',
+        description: `For the signing page's header menu, which is there only once two or more languages are available. Authorised by the signing link, after the access code and the one-time code when the sender set them (401 until then, and nothing is saved). "locale" is one of the available languages, or null to go back to "as their browser asks". ${AVAILABLE()} A language that is not available answers 400 and changes nothing. It is saved on the person, so their emails and their next visit use it, and a change is written to the audit trail ("Chose the language of the page"). Nothing is saved or written to the audit trail ("saved": false, with "why") for the member of a signing group ("group": the choice is theirs alone), for a person who has finished ("finished": the certificate keeps the language they read when they signed), or on a document that is no longer out for signing ("closed"). At most 20 changes an hour from one connection and 40 a person in all (429); a request that changes nothing is not counted.`,
+        parameters: [{ name: 'token', in: 'path', required: true, schema: s }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { locale: { ...s, nullable: true } } } } } },
+        responses: { 200: { description: 'OK', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, saved: { type: 'boolean' }, why: { type: 'string', enum: ['group', 'finished', 'closed'] }, language: { type: 'object', properties: { locale: s, dir: s, set_by: s } } } } } } }, default: err },
+      },
+    },
   };
 }

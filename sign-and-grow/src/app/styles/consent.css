@@ -1,0 +1,36 @@
+/* The account's own consent text: Settings, Sending, More options, "Your consent text"
+   (src/components/settings/Disclosure.tsx), the consent screen (src/components/sign/OwnTerms.tsx) and "Sign on paper
+   instead" (src/components/sign/Withdraw.tsx). Shared tokens live in ../globals.css. */
+
+/* The words, as a signer reads them: our short headings, the account's words under them. */
+.own-words { display: grid; gap: 10px; }
+.own-part > b { display: block; font-size: 14.5px; }
+.own-part > p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* On the consent screen, under our own sentence. */
+.sg-own { margin: 8px 0 0; }
+.sg-own-body { margin-top: 4px; padding: 12px 14px; border-left: 4px solid var(--leaf); background: #fbfaf6; border-radius: 0 10px 10px 0; text-align: left; font-size: 15px; }
+.sg-own-note { margin: 0 0 8px; }
+.sg-own-out { margin: 10px 0 0; }
+@media (max-width: 640px) {
+  .sg-own-body { font-size: 14px; padding: 10px 12px; }
+}
+
+/* "Sign on paper instead": the one choice wraps rather than shrinking below a thumb. */
+.sg-paper-actions { flex-wrap: wrap; }
+.sg-paper-actions .btn { min-height: 48px; }
+.sg-paper-go { flex: 1 1 auto; white-space: normal; text-align: center; justify-content: center; }
+
+/* Settings. */
+.own-text .own-state { margin: 0 0 12px; overflow-wrap: anywhere; }
+.own-text .own-reach { border: 0; padding: 0; margin: 0 0 4px; min-width: 0; }
+.own-text .own-reach legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
+.own-text label.f input, .own-text label.f select, .own-text label.f textarea { width: 100%; max-width: 100%; box-sizing: border-box; }
+.own-text label.f input, .own-text label.f select { min-height: 44px; }
+.own-text .own-actions { gap: 10px; align-items: center; margin: 4px 0 12px; }
+.own-text .own-actions .btn { min-height: 44px; }
+.own-text .own-often { max-width: 26em; }
+.own-text .own-versions { list-style: none; padding: 0; margin: 6px 0 0; }
+.own-text .own-versions > li { border-top: 1px solid var(--line); padding: 2px 0 8px; }
+.own-text .own-version { font-weight: 500; overflow-wrap: anywhere; }
+.own-text details .own-words { margin: 4px 0 10px; padding: 10px 12px; background: #fbfaf6; border-radius: 8px; }

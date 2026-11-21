@@ -13,6 +13,7 @@ import { PaperCheck, EnoughLink } from './PaperCheck';
 import { SendWords, ReviewMore, SavingBox } from './ReviewParts';
 import { PrintCheck } from './PrintCheck';
 import { LabelCheck } from './LabelCheck';
+import { ChecksCheck } from './ChecksCheck';
 import { LogicCheck } from './FieldLogic';
 import { CustomFieldsStep } from './CustomFieldsStep';
 import { phoneWeight } from '@/lib/phone';
@@ -151,6 +152,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {/* Fields a screen reader can only name by their type, each with a way to the box where the label is typed. */}
       {!closed && <LabelCheck ed={ed} />}
       {!closed && <LogicCheck ed={ed} />}
+      {!closed && <ChecksCheck ed={ed} />}
       {/* The check before sending: a word that often means paper, a witness or a notary. It warns and never blocks. */}
       {!closed && <PrintCheck subject={env.subject || ''} docs={docs} rcps={rcps} fields={fields} />}
       {!closed && <PaperCheck envelopeId={env.id} subject={env.subject || ''} docs={docs} sending={!isTpl && !correcting} />}
@@ -197,7 +199,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
                   <div className="grow">
                     <b className="ed-break">{personLabel(r, ed.rcps.indexOf(r))}</b>
                     <div className="muted small ed-break">{isGroupRow(r) && !r.claimed_by ? groupLine(r) : r.email || noAddressWords(r, isTpl)}</div>
-                    <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{r.verify === 'sms_code' ? ' · code by text message' : r.verify === 'email_code' ? ' · code by email' : ''}{r.text_link ? ' · link also by text' : ''}{n ? ` · ${plural(n, 'field')}` : ''}</div>
+                    <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{r.verify === 'sms_code' ? ' · code by text message' : r.verify === 'email_code' ? ' · code by email' : ''}{r.text_link ? ' · link also by text' : ''}{r.whatsapp ? ' · link also by WhatsApp' : ''}{n ? ` · ${plural(n, 'field')}` : ''}</div>
                   </div>
                 </li>
               );

@@ -89,8 +89,8 @@ export const SOFT_BOUNCE_DAYS = 3;
 export const BOUNCE_MATCH_DAYS = 3;
 /** What "Could not be delivered" means and does, in one sentence each, for the help page and the emails that say it. */
 export const BOUNCE_MEANS = 'The mail server of the address answered that it cannot take the email for good: the mailbox or the domain does not exist, or it refuses.';
-export const BOUNCE_STOPS = `Reminders to that address stop until you correct it or choose "Try again", and for ${BOUNCE_WARN_DAYS} days a new envelope to the same address warns you before it goes out.`;
-export const COMPLAINT_MEANS = 'The person marked one of our emails for your account as spam in their mail program. Nothing more is emailed to them about your account\'s documents, that one and any later one, unless they ask for it themselves on a signing page with a code we email them. Correcting the address, trying again or sending a new envelope does not change that. It also counts as one report against your account.';
+export const BOUNCE_STOPS = `Reminders to that address stop until you correct it or choose "Try again", and for ${BOUNCE_WARN_DAYS} days a new document to the same address warns you before it goes out.`;
+export const COMPLAINT_MEANS = 'The person marked one of our emails for your account as spam in their mail program. Nothing more is emailed to them about your account\'s documents, that one and any later one, unless they ask for it themselves on a signing page with a code we email them. Correcting the address, trying again or sending a new document does not change that. It also counts as one report against your account.';
 
 /** How many different recipients must report an account before its sending is paused for review. */
 export const abuseSuspendAfter = (): number => Number(process.env.ABUSE_SUSPEND_AFTER) || 3;
@@ -154,10 +154,10 @@ export const SUPPORT_REOPEN_DAYS = 30;
  */
 export const DELETED_WITH_ACCOUNT: string[] = [
   'Your login, your profile and your saved signature.',
-  'Every account you own: its envelopes, drafts and templates, the documents you uploaded, the signed PDFs, the files signers attached and every audit trail, with the names, email addresses and internet addresses in them.',
-  'Its contacts, API keys, webhooks and their delivery logs, bulk send records, public forms and reports from recipients.',
+  'Every account you own: its documents, drafts and templates, the documents you uploaded, the signed PDFs, the files signers attached and every audit trail, with the names, email addresses and internet addresses in them.',
+  'Its contacts, API keys, webhooks and their delivery logs, Send to many records, public forms and reports from the people documents were sent to.',
   'Its click-to-agree terms with every version, every acceptance recorded for them (with the names, email addresses, customer numbers, internet addresses, browsers and pages in them), reports about their pages, and our stored copies of the emails that sent people a copy of what they accepted, with the certificate files attached to them.',
-  'Our stored copies of the emails about those envelopes, and of the emails we sent you about your account.',
+  'Our stored copies of the emails about those documents, and of the emails we sent you about your account.',
   'Help requests of yours that have been answered or closed, each with everything written back and forth on it.',
 ];
 export const KEPT_AFTER_DELETION: string[] = [
@@ -210,7 +210,7 @@ export const supportReachable = (env: Record<string, string | undefined> = proce
 
 /** What a help request can be about, in the order the form lists them. Plain constants, so a 'use client' file may import them. */
 // 'not-me' ("I am named on a document I did not sign") is never passed to the document's sender: only 'signing' is.
-export const SUPPORT_TOPICS: string[] = ['signing', 'stuck', 'sending', 'billing', 'charged-wrongly', 'cannot-log-in', 'suspicious', 'not-me', 'other'];
+export const SUPPORT_TOPICS: string[] = ['signing', 'stuck', 'sending', 'billing', 'charged-wrongly', 'cannot-log-in', 'suspicious', 'not-me', 'accessibility', 'other'];
 
 /** The topics that make a request urgent: someone is locked out, money was taken wrongly, or a document or a deadline cannot wait. */
 export const SUPPORT_URGENT_TOPICS: string[] = ['cannot-log-in', 'charged-wrongly', 'stuck'];
@@ -464,11 +464,11 @@ export const WHO_CARRIES = 'The companies that carry it.';
 export const WHO_CARRIES_TEXTS = ' This server also sends text messages: when a sender chose one for a signer, the text message provider carries it too. That is a one-time code, or a message with the signing link in it, which opens the document for whoever holds it, like the email does.';
 export const WHO_CAN_SEE: { who: string; what: string }[] = [
   { who: 'The people it was sent to, and anyone they pass their link to.',
-    what: 'A signing link opens the document for whoever holds it. There is no login behind it, so forwarding the email, or sharing an inbox, shares the document. That is why a sender can put an access code on a document, which they give to the signer themselves and which is never in our email, or ask for a one-time code that is sent to the signer when they open the link. A recipient cannot open a document before their turn in a signing order. After it has been voided, declined or left to expire, only someone who already signed can still open the copy of what they signed.' },
+    what: 'A signing link opens the document for whoever holds it. There is no login behind it, so forwarding the email, or sharing an inbox, shares the document. That is why a sender can put an access code on a document, which they give to the signer themselves and which is never in our email, or ask for a one-time code that is sent to the signer when they open the link. A person cannot open a document before their turn in a signing order. After it has been cancelled, declined or left to expire, only someone who already signed can still open the copy of what they signed.' },
   { who: 'The person who sent it.',
     what: 'They see the document, what each person filled in, the signatures, the audit trail, and whether each email left and each person opened it.' },
   { who: 'The owner and the admins of the sender\'s account.',
-    what: 'On a team, the owner and every admin can open every envelope, template and bulk send of every member. A member sees only what they sent themselves, and every template. If you send from a team, its admins can read what you send.' },
+    what: 'On a team, the owner and every admin can open every document, template and Send to many of every member. A member sees only what they sent themselves, and every template. If you send from a team, its admins can read what you send.' },
   // Archive addresses: src/server/archivemail.ts takes the links and codes out of each copy, routes-archive.ts confirms each address first.
   { who: 'Addresses the sender\'s account sends copies of its emails to.',
     what: 'The admins of an account can name up to 5 email addresses, a records office say, that get a copy of every email the account sends about its documents, with the completed PDF attached where the email had it. Each address is confirmed from its own inbox before it gets anything. Every copy has the signing link and the codes taken out, so nobody can open or sign a document from one. Signers are not told about these addresses. Most accounts have none.' },

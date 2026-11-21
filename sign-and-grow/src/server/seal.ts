@@ -20,13 +20,16 @@ import { prepareSeal, coveredBytes, fillSeal } from './sealpdf.ts';
 import { buildSignedData, signatureTimeStampAttribute, parseSignedData, checkSigner, attrValue, OID } from './sealcms.ts';
 import { read, whole } from './der.ts';
 import { certHash } from './x509.ts';
+import { ltvTail, type LongTerm } from './ltv.ts';
 import { get, run } from './db.ts';
 import { now } from './util.ts';
 import { sealCertificateLine, type SealLevel } from '../lib/seal.ts';
 
 /** `tsaTrusted`: TSA_TRUST is set, so a time stamp is only taken from a service whose certificate leads to it. */
-export type SealPlan = { key: SealKey; level: SealLevel; tsa: string[]; tsaTrusted?: boolean; tsaFailed?: string };
-export type SealDone = { level: SealLevel; certHash: string; name: string; issuer: string; at: string; tsaHost?: string; tsaTime?: string; tsaTrusted?: boolean; tsaFailed?: string };
+/** `until`: when the time for time-stamps of this Finish ends (shared with the record's time stamp, finalpipe.ts). */
+export type SealPlan = { key: SealKey; level: SealLevel; tsa: string[]; tsaTrusted?: boolean; tsaFailed?: string; until?: number };
+/** `tsaToken`: the seal's time-stamp token, for the long-term step (ltv.ts); `ltv`: what that step did. */
+export type SealDone = { level: SealLevel; certHash: string; name: string; issuer: string; at: string; tsaHost?: string; tsaTime?: string; tsaTrusted?: boolean; tsaFailed?: string; tsaToken?: Buffer; ltv?: LongTerm | null };
 
 /** What the next seal is, from the settings. `noTsa` (why) seals at B-B even with a time-stamp service set. */
 export function sealPlan(noTsa?: string): SealPlan | null {
@@ -53,7 +56,7 @@ export async function sealPdf(pdf: Uint8Array, plan: SealPlan, when = new Date()
   let stamp: Awaited<ReturnType<typeof timeStamp>> | null = null;
   const { der } = await buildSignedData(digest, plan.key.signer, plan.tsa.length ? async (signature) => {
     try {
-      stamp = await timeStamp(signature, plan.tsa);
+      stamp = await timeStamp(signature, plan.tsa, plan.until);
       // The certificate was drawn saying whether the service is checked against TSA_TRUST: never seal with less.
       if (plan.tsaTrusted && !stamp.trusted) throw new TsaError('the setting TSA_TRUST was taken away while the file was being sealed');
     } catch (e) {
@@ -74,7 +77,7 @@ export async function sealPdf(pdf: Uint8Array, plan: SealPlan, when = new Date()
     bytes,
     done: {
       level: st ? 'B-T' : 'B-B', certHash: plan.key.hash, name: plan.key.cert.name, issuer: plan.key.cert.issuerName, at: when.toISOString(),
-      ...(st ? { tsaHost: st.host, tsaTime: st.time.toISOString(), tsaTrusted: st.trusted } : {}), ...(plan.tsaFailed ? { tsaFailed: plan.tsaFailed } : {}),
+      ...(st ? { tsaHost: st.host, tsaTime: st.time.toISOString(), tsaTrusted: st.trusted, tsaToken: st.token } : {}), ...(plan.tsaFailed ? { tsaFailed: plan.tsaFailed } : {}),
     },
   };
 }
@@ -118,6 +121,16 @@ export type SealCheck = {
   timestamp_unchecked: boolean;
   /** Why it does not hold, in words, when it does not. */
   why: string | null;
+  /**
+   * B-LT when the file carries what is needed to check the seal after its certificate has expired, added after the
+   * seal and nothing else (ltvTail in ltv.ts); B-LTA when a document time stamp over the whole file follows it.
+   */
+  long_term: 'B-LT' | 'B-LTA' | null;
+  /** The time of that document time stamp, and the service's certificate name: only when it leads to one in TSA_TRUST. */
+  doc_timestamp_at: string | null;
+  doc_timestamp_by: string | null;
+  /** A document time stamp that holds over the file but whose service this server has no way to check. */
+  doc_timestamp_unchecked: boolean;
   /** SHA-256 of the part of the file the seal covers, when that is not the whole file (it is the file as sealed). */
   sealed_part_sha256: string | null;
 };
@@ -186,7 +199,9 @@ export async function checkSeal(input: Uint8Array): Promise<SealCheck | null> {
   const found = findSeals(bytes)[0];
   if (!found) return null;
   const r = found.range;
-  const base: SealCheck = { intact: false, whole_file: !found.broken && r[2] + r[3] === bytes.length, ours: false, name: null, issuer: null, level: null, sealed_at: found.broken ? null : fromPdfDate(found.m), timestamp_at: null, timestamp_unchecked: false, why: null, sealed_part_sha256: null };
+  // Only check data added after the seal (ltv.ts) counts as nothing saved into the file: anything else does not.
+  const tail = !found.broken && r[2] + r[3] < bytes.length ? await ltvTail(bytes, r[2] + r[3]) : null;
+  const base: SealCheck = { intact: false, whole_file: !found.broken && (r[2] + r[3] === bytes.length || !!tail), ours: false, name: null, issuer: null, level: null, sealed_at: found.broken ? null : fromPdfDate(found.m), timestamp_at: null, timestamp_unchecked: false, why: null, sealed_part_sha256: null, long_term: tail?.level || null, doc_timestamp_at: tail?.doc_timestamp_at || null, doc_timestamp_by: tail?.doc_timestamp_by || null, doc_timestamp_unchecked: !!tail?.doc_timestamp_unchecked };
   if (found.broken) return { ...base, why: found.broken };
   try {
     const der = Buffer.from(bytes.subarray(r[1] + 1, r[2] - 1).toString('latin1'), 'hex');
@@ -204,6 +219,9 @@ export async function checkSeal(input: Uint8Array): Promise<SealCheck | null> {
     if (!c.ok) return out;
     if (out.whole_file && !(await readerFinds(bytes, r))) return { ...out, intact: false, why: 'a PDF reader would not find this seal in the file, so the file is not the one that was sealed' };
     if (!out.whole_file) out.sealed_part_sha256 = crypto.createHash('sha256').update(bytes.subarray(0, r[2] + r[3])).digest('hex');
+    // Check data is only of use to a seal with a time stamp (PAdES B-LT builds on B-T).
+    const ltvOk = (): SealCheck => (out.level === 'B-T' || !out.long_term ? out
+      : { ...out, whole_file: false, long_term: null, doc_timestamp_at: null, doc_timestamp_by: null, doc_timestamp_unchecked: false, sealed_part_sha256: crypto.createHash('sha256').update(bytes.subarray(0, r[2] + r[3])).digest('hex') });
     out.level = 'B-B';
     const ts = attrValue(s.unsignedAttrs, OID.signatureTimeStamp);
     if (ts) {
@@ -211,7 +229,7 @@ export async function checkSeal(input: Uint8Array): Promise<SealCheck | null> {
       if (t) (out.level = 'B-T'), (out.timestamp_at = t.trusted ? t.time : null), (out.timestamp_unchecked = !t.trusted);
       else out.timestamp_unchecked = true;
     }
-    return out;
+    return ltvOk();
   } catch {
     return { ...base, why: 'the seal is damaged and cannot be read' };
   }
@@ -295,12 +313,19 @@ export async function sealForVerify(bytes: Uint8Array): Promise<(SealCheck & { s
 
 // ---- What the screens say (the envelope page, Settings) ---------------------------------------
 
-/** The seal of a completed envelope's stored file, for the envelope page. Null for a file without one. */
-export function sealFacts(e: any): { by: string; issuer: string | null; time_stamp: boolean; time_stamp_trusted: boolean } | null {
+/**
+ * The seal of a completed envelope's stored file, for the envelope page. Null for a file without one. `long_term`:
+ * the file carries what is needed to check the seal after its certificate expired (ltv.ts); `long_term_missing`:
+ * that was tried and could not be fetched, and why.
+ */
+export function sealFacts(e: any): { by: string; issuer: string | null; time_stamp: boolean; time_stamp_trusted: boolean; long_term: 'B-LT' | 'B-LTA' | null; long_term_missing: string | null } | null {
   if (!e?.seal_level || !e.seal_cert || !e.final_sha256) return null;
   const c = get('SELECT name, issuer FROM seal_certs WHERE sha256=?', e.seal_cert);
   if (!c?.name) return null;
-  return { by: c.name, issuer: c.issuer || null, time_stamp: e.seal_level === 'B-T', time_stamp_trusted: e.seal_level === 'B-T' && e.seal_tsa === 'trusted' };
+  return {
+    by: c.name, issuer: c.issuer || null, time_stamp: e.seal_level === 'B-T', time_stamp_trusted: e.seal_level === 'B-T' && e.seal_tsa === 'trusted',
+    long_term: e.seal_ltv === 'B-LT' || e.seal_ltv === 'B-LTA' ? e.seal_ltv : null, long_term_missing: e.seal_ltv === 'missing' ? e.seal_ltv_note || 'the services that answer for the certificates did not answer' : null,
+  };
 }
 
 /**

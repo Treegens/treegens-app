@@ -118,4 +118,18 @@ export const possessive = (name: string): string => (/s$/i.test(name.trim()) ? `
 export const WITHDREW_REASON = 'Withdrew consent to electronic records';
 /** The reason on record for someone who never agreed and asks for paper from the consent screen. */
 export const NEVER_AGREED_REASON = 'Did not agree to electronic records';
-export const isPaperReason = (reason: unknown): boolean => reason === WITHDREW_REASON || reason === NEVER_AGREED_REASON;
+/**
+ * Whether this person closed their part with "Sign on paper instead". Told by recipients.paper_at, which only that
+ * action sets, and never by the words of the reason: a person who declines and types the same words has declined.
+ */
+export const askedPaper = (r: { status?: string; paper_at?: string | null } | null | undefined): boolean => r?.status === 'declined' && !!r.paper_at;
+
+/**
+ * "E-record consent" on the certificate for one person: when they agreed, and for someone who asked for paper
+ * instead, that they took it back (or never gave it) and when. `ts` writes a moment the way the certificate does.
+ */
+export function consentCertValue(r: { status?: string; paper_at?: string | null; consent_at?: string | null; completed_at?: string | null }, ts: (at: string | null | undefined) => string): string {
+  if (!askedPaper(r)) return ts(r.consent_at);
+  if (r.consent_at) return `${ts(r.consent_at)}, withdrawn ${ts(r.paper_at)}: asked for paper instead`;
+  return `Not given. Asked for paper instead ${ts(r.paper_at)}`;
+}

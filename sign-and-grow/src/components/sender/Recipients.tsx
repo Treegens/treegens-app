@@ -13,6 +13,7 @@ import { actingName } from '@/lib/groups';
 import { MorePanel } from './More';
 import { dayText } from '@/lib/dates';
 import { removedDay } from '@/lib/retention';
+import { askedPaper } from '@/lib/disclosure';
 
 export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent', witness: 'Witnessed' };
 const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view', witness: 'witness a signature on' };
@@ -33,6 +34,8 @@ export const lastEmailTo = (deliveries: Delivery[], email: string, recipientId?:
 function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: string; label?: string } {
   const open = envelopeStatus === 'sent';
   if (r.status === 'completed') return { s: 'completed', label: DONE[r.role] };
+  // "Sign on paper instead" (src/server/disclosure.ts): a request, not a refusal, so it is not called Declined.
+  if (askedPaper(r)) return { s: 'declined', label: 'Asked for paper' };
   if (r.status === 'declined') return { s: 'declined', label: 'Declined' };
   // A witness who said they were not there is not waiting for anything (WitnessFacts.tsx).
   if (r.witness_absent_at && r.status === 'pending') return { s: 'declined', label: 'Was not there' };
@@ -267,6 +270,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
         // One status line: the latest thing that is true about this person. The rest is in their More.
         const line = e.status === 'draft' ? null
           : r.status === 'completed' && r.role !== 'cc' ? <>{DONE[r.role]} on {dayTime(r.completed_at)}.</>
+          : askedPaper(r) ? <>Asked for this document on paper on {dayTime(r.paper_at)}.</>
           : r.status === 'declined' ? <>Declined on {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</>
           : r.status === 'viewed' ? openedFact
           // No mail server: the notice above the list says it once, and their badge says it for them.
@@ -277,7 +281,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
           : emailFact;
         // A More is worth its button only when it holds something to do, or facts the card has no room for.
         const acts = turn || (out && r.status === 'pending') || (e.status !== 'draft' && !!r.access_code);
-        const hasMore = e.status !== 'draft' && (acts || r.role === 'witness' || texts.some((t) => t.recipient_id === r.id));
+        const hasMore = e.status !== 'draft' && (acts || r.role === 'witness' || texts.some((t) => t.recipient_id === r.id) || !!r.whatsapp_status);
         const settled = (r.status === 'completed' && r.role !== 'cc') || r.status === 'declined';
         const signHere = turn && (isMe || r.role === 'inperson') && r.id !== mainPersonId;
         return (
@@ -300,6 +304,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                   {r.verify === 'sms_code' || r.verify === 'email_code' ? <> · Checked with a one-time code by {r.verify === 'sms_code' ? <>text message to <b className="sn-code">{r.phone}</b></> : 'email'}{r.check?.passed_at ? <>, passed on {dayTime(r.check.passed_at)}</> : ', not typed in yet'}</> : null}
                   {r.check?.stopped ? <> · <b>Someone using one of your signing links said this is not their number</b>, so no more texts are sent to it. Choose Change person, in their More, and put in the right number, or confirm it with them if it is right after all, to let them in.</> : null}
                   {r.text_link && r.role !== 'inperson' ? <> · Link also sent by text message{r.verify === 'sms_code' ? '' : <> to <b className="sn-code">{r.phone}</b></>}</> : null}
+                  {r.whatsapp ? <> · Link also goes by WhatsApp to <b className="sn-code">{r.phone}</b></> : null}
                 </div>
               </div>
               <div className="sn-person-badges">
@@ -345,11 +350,14 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               <div><dt>Email</dt><dd>{emailFact}</dd></div>
               {/* The latest text message to this person, when there was one: what really became of it. */}
               {texts.find((t) => t.recipient_id === r.id) && <div><dt>Text message</dt><dd><TextFact t={texts.find((t) => t.recipient_id === r.id)!} /></dd></div>}
+              {/* The latest WhatsApp message (src/server/whatsapp.ts): Sent, Delivered to the phone, or why not. Never "read". */}
+              {r.whatsapp_status && <div><dt>WhatsApp</dt><dd>{r.whatsapp_status.to}: <b className={r.whatsapp_status.status === 'failed' || r.whatsapp_status.stopped ? 'sn-bad' : undefined}>{r.whatsapp_status.said}</b>{r.whatsapp_status.error ? <> ({r.whatsapp_status.error})</> : null}{r.whatsapp_status.stopped ? <>. They replied STOP, so nothing more goes to them by WhatsApp from your account. Email is not affected.</> : '.'}</dd></div>}
               {r.status !== 'pending' && r.role !== 'cc' && <div><dt>Opened</dt><dd>{openedFact}</dd></div>}
               {r.status === 'completed' && r.role !== 'cc' && <div><dt>{DONE[r.role]}</dt><dd>On {dayTime(r.completed_at)}.</dd></div>}
               {/* A witness: whose signature, their statement, "not there", and what a challenge would look at (WitnessFacts.tsx). */}
               {r.role === 'witness' && <WitnessFact r={r} e={e} />}
-              {r.status === 'declined' && <div><dt>Declined</dt><dd>On {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</dd></div>}
+              {askedPaper(r) && <div><dt>Asked for paper</dt><dd>On {dayTime(r.paper_at)}. Send it to them on paper yourself: GrowSigning does not print or post anything.</dd></div>}
+              {r.status === 'declined' && !askedPaper(r) && <div><dt>Declined</dt><dd>On {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</dd></div>}
             </dl>
 
             {(turn || (out && r.status === 'pending')) && (

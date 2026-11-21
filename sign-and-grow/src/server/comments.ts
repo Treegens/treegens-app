@@ -12,6 +12,7 @@ import { all, run } from './db.ts';
 import { id, now } from './util.ts';
 import { pinWords, type Pin } from '../lib/comments.ts';
 import { COMMENTS_NOT_SIGNED } from '../lib/policy.ts';
+import { stampText } from '../lib/dates.ts';
 
 // Which person on a recipient row someone is. A private thread is with a person, not with a row: a row can pass to
 // someone else (a hand-over, a correction to another address, another member of a group), and the next person must
@@ -22,7 +23,7 @@ export const partyOf = (r: any): string => (r?.member ? `m:${r.member.id}` : r?.
 export type Viewer = { side: 'sender' } | { side: 'recipient'; rid: string; party: string };
 export const sees = (t: any, v: Viewer): boolean => v.side === 'sender' || !t.private || (t.recipient_id === v.rid && t.party === v.party);
 const isMine = (c: any, v: Viewer) => v.side === 'recipient' && !c.by_sender && c.recipient_id === v.rid && c.party === v.party;
-const at = (s: any) => String(s ?? '').replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+const at = (s: any) => stampText(s);
 
 function pinOf(docs: any[], t: any): Pin | null {
   if (!t.document_id) return null;

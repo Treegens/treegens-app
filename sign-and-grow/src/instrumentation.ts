@@ -15,6 +15,15 @@ export async function register() {
   const { securityContactWarning } = await import('./lib/selfhost');
   const contact = securityContactWarning();
   if (contact) console.error(contact);
+  // A DEPLOYMENT_PROFILE nobody knows (a typo of "government") runs as the ordinary profile; the operator hears it.
+  const { deploymentProfileWarning, governmentChatWarning } = await import('./lib/deployment');
+  const profile = deploymentProfileWarning();
+  if (profile) console.error(profile);
+  // And a government server with a hosted AI service in its settings, which the help chat never uses there.
+  const { chatProvider, chatModelOn, ownModel } = await import('./lib/chatprovider');
+  const chatAt = chatProvider();
+  const chatOff = governmentChatWarning(chatAt && !ownModel(chatAt) ? chatAt.keyVar : null, chatModelOn());
+  if (chatOff) console.error(chatOff);
   // Said once, loudly, when a production server starts with nobody set up to receive help requests.
   const { supportWarning } = await import('./lib/policy');
   const warning = supportWarning();
@@ -33,6 +42,10 @@ export async function register() {
   const { smsWarning } = await import('./lib/checks');
   const sms = smsWarning();
   if (sms) console.error(sms);
+  // And when WhatsApp or calls with a code were half set up (src/lib/channels.ts).
+  const { channelsWarning } = await import('./lib/channels');
+  const channels = channelsWarning();
+  if (channels) console.error(channels);
   // And when the stored files need a key the server was not given, or FILE_ENCRYPTION_KEY is not a key: it stores no
   // new file until that is put right (src/server/filestore.ts), and the operator hears why before anyone uploads.
   const { fileStoreWarning } = await import('./server/filestore');

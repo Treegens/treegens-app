@@ -21,6 +21,7 @@ import { bad, sha256, token, now, HttpError, safeEqual, baseUrl, str } from './u
 import { cookie, readCookie, SESSION_COOKIE, type Auth } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { record } from './seclog.ts';
+import { floorForAccount } from './orgs.ts';
 import type { Ctx } from './router.ts';
 import { TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES, TWO_STEP_REMEMBER_DAYS, TWO_STEP_RECOVERY_CODES, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_SIGNIN_MINUTES, TWO_STEP_RESET_BLOCK_DAYS } from '../lib/policy.ts';
 
@@ -361,7 +362,9 @@ const OPEN_WHILE_REQUIRED = [/^[A-Z]+ \/me\/two-step/, /^POST \/auth\/switch$/, 
 export function twoStepGate(auth: Auth | null, what: string) {
   if (auth?.via !== 'session' || !auth.account?.two_step_required_at || twoStepOn(auth.user)) return;
   if (OPEN_WHILE_REQUIRED.some((re) => re.test(what))) return;
-  throw new HttpError(403, `${auth.account.name} asks everyone on the team to sign in with two-step login, and yours is not set up yet. Set it up first: it takes a minute with an authenticator app on your phone. Until then nothing else in ${auth.account.name} opens for you. Your other workspaces are not affected.`, { code: 'two_step_setup' });
+  // An organisation above the account may be the one asking (src/server/orgs.ts): it is named, never the agency.
+  const by = auth.account.org_id ? floorForAccount(auth.account.id).from.two_step_required : undefined;
+  throw new HttpError(403, `${by ? `${by} asks everyone in ${auth.account.name}` : `${auth.account.name} asks everyone on the team`} to sign in with two-step login, and yours is not set up yet. Set it up first: it takes a minute with an authenticator app on your phone. Until then nothing else in ${auth.account.name} opens for you. Your other workspaces are not affected.`, { code: 'two_step_setup' });
 }
 // The part of GET /me about the second step: null for an API key, which reads nothing of it. reset_at is what every
 // page of the app shows while a reset by email is under way (AppShell).

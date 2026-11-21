@@ -1053,8 +1053,11 @@ test('every control the helper names is on the screen it names it for, read from
   assert.match(fs.readFileSync('src/components/sign/actions.ts', 'utf8'), /WITNESS_ACTIONS = \['absent', 'ask', 'help'\]/, 'a witness has no Finish later, and the helper says what to do then');
   assert.match(kb.systemPrompt('signing'), /A witness who stops for now closes the page; the same link works again\./);
   assert.equal(A.paper, null);
-  assert.match(fs.readFileSync('src/components/sign/actions.ts', 'utf8'), /not built yet: always false/);
-  assert.ok(!kb.systemPrompt('signing').includes('Sign on paper instead'));
+  // "Sign on paper instead" is there only when the account has its own consent text, so the helper does not name it.
+  assert.match(fs.readFileSync('src/components/sign/actions.ts', 'utf8'), /for now when the account has its own\s+\* consent text/);
+  // The helper reads the README, which names it only together with when it is there.
+  for (const at of [...kb.systemPrompt('signing').matchAll(/Sign on paper instead/g)].map((m) => m.index!))
+    assert.match(kb.systemPrompt('signing').slice(at - 200, at + 200), /only when the account has its own\s+consent text/);
   for (const label of [L.menu, L.report, L.textView, L.download, L.stopReminders, L.fixName, L.check]) assert.ok(sign.includes(label), label);
   assert.ok(sign.includes(`>${L.more}</button>`), 'More');
   // The view and the download are in More, not in Other actions, and the helper says so.

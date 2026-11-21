@@ -1,6 +1,7 @@
 // What a signer's fields mean, shared by the document view, the text view and the phone sheet.
 import { NUMBER_RULE, NUMBER_PROBLEM } from '../../lib/numbers.ts';
 import { isDateValue, DATE_PROBLEM } from '../../lib/dates.ts';
+import { valueProblem, fieldChecks, currencySign, patternProblem, limitOf, groupProblem, groupRuleOf } from '../../lib/fieldrules.ts';
 
 export const AUTO = ['date_signed', 'full_name', 'email'];
 /** Fields that are typed into. On a phone these open a sheet with a large input. */
@@ -43,15 +44,21 @@ export function buildItems(ordered: any[], filled: (f: any) => boolean): Item[] 
 
 // The same checks the server makes when finishing, so a mistake is caught while the person is still at the field.
 // The number rule is the server's own (src/lib/numbers.ts): numbers as people write them anywhere, not only in the US.
+// Formats, limits and ranges the sender set are the shared rules of src/lib/fieldrules.ts. `dateFormat` is the
+// envelope's, for a text field that takes a date.
 const RULES: Record<string, RegExp> = { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, number: NUMBER_RULE, phone: /^[+()\d][\d\s().-]{5,}$/ };
-export function problemWith(f: any, value: string): string {
+export function problemWith(f: any, value: string, dateFormat?: string | null): string {
   if (!value || isSig(f) || isBox(f) || f.type === 'dropdown' || f.type === 'attachment') return '';
   // The same rule the server holds a date to at Finish (isDateValue in src/lib/dates.ts).
   if (f.type === 'date') return isDateValue(value) ? '' : DATE_PROBLEM;
-  const rule = f.type === 'number' ? 'number' : f.validation;
+  // Checks set in the editor's Format and limits (an object, or one kept as JSON).
+  if ((f.validation && typeof f.validation === 'object') || String(f.validation || '').trim().startsWith('{')) return valueProblem(f, value, dateFormat);
+  const rule = f.type === 'number' ? 'number' : typeof f.validation === 'string' ? f.validation : '';
   if (!rule) return '';
   let re: RegExp | null = RULES[rule] || null;
   if (!re) {
+    // A pattern that could keep the browser busy is not run (patternProblem); the server does not run it either.
+    if (patternProblem(rule)) return '';
     try {
       re = new RegExp(`^(?:${rule})$`);
     } catch {
@@ -63,6 +70,64 @@ export function problemWith(f: any, value: string): string {
   if (rule === 'email') return 'Enter an email address, like name@example.org.';
   if (rule === 'phone') return 'Enter a phone number with its area code.';
   return 'This is not in the format the sender asked for. Check it and try again.';
+}
+
+/**
+ * What a number field the sender set a currency or a range for says before anything is wrong: "An amount in EUR
+ * (€), from 0 to 1,000, with at most 2 decimal places." Empty for a number field with none of those.
+ */
+export function amountHint(f: any): string {
+  if (f?.type !== 'number') return '';
+  const c = fieldChecks(f);
+  const parts: string[] = [];
+  const n = (x: number) => x.toLocaleString('en', { maximumFractionDigits: 10 });
+  if (c.min != null && c.max != null) parts.push(`from ${n(c.min)} to ${n(c.max)}`);
+  else if (c.min != null) parts.push(`${n(c.min)} or more`);
+  else if (c.max != null) parts.push(`${n(c.max)} or less`);
+  if (c.decimals != null) parts.push(c.decimals ? `with at most ${c.decimals} decimal place${c.decimals === 1 ? '' : 's'}` : 'a whole number');
+  if (!c.currency && !parts.length) return '';
+  const sign = c.currency ? currencySign(c.currency) : '';
+  return `${c.currency ? `An amount in ${c.currency}${sign && sign !== c.currency ? ` (${sign})` : ''}` : 'A number'}${parts.length ? `, ${parts.join(', ')}` : ''}.${c.currency ? ' Type only the number.' : ''}`;
+}
+
+/**
+ * For a field with a character limit, how much of it is used, so typing that stops is never a mystery: "12 of 40
+ * characters." Shown always for a limit the sender set (a character limit, a box of fixed size); for the quiet limit of
+ * a field with a pattern only once the person is within 20 characters of it.
+ */
+export function lengthHint(f: any, value: string): string {
+  const limit = limitOf(f);
+  if (limit == null) return '';
+  const c = fieldChecks(f);
+  const used = [...String(value || '')].length;
+  if (!c.max_length && !c.fixed && used < limit - 20) return '';
+  return used >= limit ? `${used} of ${limit} characters. That is all this field takes. If you pasted something longer, check what was kept.` : `${used} of ${limit} characters.`;
+}
+
+/**
+ * The rule of the tick-box group `f` belongs to, said where the box is, or ''. `short` is for the pointer on the page
+ * ("Tick at least 2"); otherwise the group's name and the rule ("Drinks: tick at least 2 boxes of these.").
+ */
+export function boxRuleHint(f: any, fields: any[], short = false): string {
+  if (f?.type !== 'checkbox' || !f.group_name) return '';
+  const r = groupRuleOf(fields.filter((g) => g.type === 'checkbox' && g.group_name === f.group_name));
+  if (!r) return '';
+  if (short) return `Tick ${r.rule === 'at_least' ? 'at least' : r.rule === 'at_most' ? 'at most' : 'exactly'} ${r.count}`;
+  return `${f.group_name}: ${r.message[0].toLowerCase()}${r.message.slice(1)}`;
+}
+
+/** The most characters a field takes, for the input's own limit, or undefined for none. */
+export const inputLimit = (f: any): number | undefined => limitOf(f) ?? undefined;
+
+/**
+ * What stops Finish: the first field whose answer needs another look, or the first group of tick boxes whose rule is
+ * not met, with what to say. Null when nothing does.
+ */
+export function finishProblem(ordered: any[], values: Record<string, string>, dateFormat?: string | null): { field: any; text: string } | null {
+  const wrong = ordered.find((f) => problemWith(f, values[f.id] || '', dateFormat));
+  if (wrong) return { field: wrong, text: problemWith(wrong, values[wrong.id] || '', dateFormat) };
+  const g = groupProblem(ordered, values);
+  return g ? { field: g.field, text: g.text } : null;
 }
 
 export const pos = (f: any) => ({ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` });

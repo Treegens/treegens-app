@@ -1,0 +1,14 @@
+/* Pages of one file in the editor (src/components/editor/PageTools.tsx). */
+.pt-grid { list-style: none; margin: 12px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; max-height: 60vh; overflow: auto; padding: 4px; }
+.pt-page { border: 1px solid var(--line); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; background: var(--surface, #fff); cursor: grab; }
+.pt-page:focus-visible { outline: 3px solid var(--green, #1f6f43); outline-offset: 2px; }
+.pt-page.dragging { opacity: 0.5; }
+.pt-pic { width: 120px; height: 120px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.pt-pic img { max-width: 100%; max-height: 100%; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2); transition: transform 0.15s; }
+.pt-num { font-size: 14px; }
+.pt-row { display: flex; gap: 6px; width: 100%; }
+.pt-row .btn { flex: 1; min-height: 44px; min-width: 44px; padding: 6px 8px; }
+@media (max-width: 400px) { .pt-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } .pt-pic { width: 100%; height: 110px; } }
+[data-feature="ds-page-tools"] .actions .btn { min-height: 44px; }
+/* The file row's small buttons (Pages, More) are 44 px tall at every width, as every target is (charter P11). */
+.ed-doc > .btn.sm.ghost { min-height: 44px; }

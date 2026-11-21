@@ -150,6 +150,18 @@ export function daysProblem(typed: string): string {
 }
 
 /** The moment a document that ended at `closedAt` reaches the end of a period of `days`, as an ISO time. */
+/**
+ * "Keep it" starts the period again from today (keepIt in src/server/records.ts). The day that gives, when it is at
+ * least a day later than the day the schedule already deletes the document (goes_at, else due_at); null when keeping
+ * would change nothing a person can see, such as on a document completed today.
+ */
+export function keepMovesTo(r: { period: { days: number } | null; goes_at: string | null; due_at: string | null }, now = Date.now()): string | null {
+  if (!r.period) return null;
+  const until = now + r.period.days * 864e5;
+  const goes = Date.parse(r.goes_at || r.due_at || '');
+  return Number.isFinite(goes) && until - goes >= 864e5 ? new Date(until).toISOString() : null;
+}
+
 export const dueAt = (closedAt: string, days: number): string => new Date(Date.parse(closedAt) + days * 864e5).toISOString();
 
 /** "30 days", "1 day". */

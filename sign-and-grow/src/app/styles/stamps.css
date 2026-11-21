@@ -78,7 +78,7 @@
 .st-honest { margin: 0; }
 .st-other { justify-self: start; }
 
-/* Settings, Stamps: the team's stamps as cards. */
+/* Settings, Stamps and seals: the team's stamps as cards. */
 .st-how > p { margin: 0 0 6px; }
 .st-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-top: 12px; }
 .st-item { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; background: var(--surface); display: grid; gap: 8px; }

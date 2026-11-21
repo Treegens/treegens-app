@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { docUrl, allOnScreen } from '../src/components/sign/fields.ts';
 import { touchesLocked } from '../src/components/editor/changes.ts';
+import { stampText } from '../src/lib/dates.ts'; // times in sentences read 21 Nov 2026 05:40:12 UTC (finish-open-public)
 
 let db: Server['db'];
 let env: Server['env'];
@@ -189,7 +190,7 @@ test('once someone has signed, nothing printed on the pages changes unless the s
   assert.match(corrected, /New wording from the sender on page 1, in the part for Benjamin Signer: "The price is changed to 1 dollar"/);
   assert.match(corrected, /Ada Signer had already signed and is asked to sign again/);
   const aside = (await audits(e0.id, 'Asked to sign again'))[0];
-  assert.ok(aside.includes(`Ada Signer <ada@example.com> signed on ${firstSigned.replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}`), aside);
+  assert.ok(aside.includes(`Ada Signer <ada@example.com> signed on ${stampText(firstSigned)}`), aside);
   assert.match(aside, /Trees pledged on page 1: "filled in"/, 'with what she had entered');
   assert.match(aside, /signature image whose SHA-256 is [0-9a-f]{64}/);
   const kept = db.get('SELECT * FROM earlier_signatures WHERE envelope_id=?', e0.id);
@@ -211,7 +212,7 @@ test('once someone has signed, nothing printed on the pages changes unless the s
   const text = await pdfText(e0.id);
   assert.match(text, /First completed/);
   assert.match(text, /Completed again/);
-  assert.ok(text.includes(firstSigned.slice(0, 10)));
+  assert.ok(text.includes((await import('../src/lib/dates.ts')).dayText(firstSigned)), 'the first time, day first');
   assert.match(text, /The price is changed to 1 dollar/);
   assert.equal((await full(jo, e0.id)).chain.ok, true);
 });
@@ -492,7 +493,7 @@ test('a save from an older copy is refused with who saved and when, and nothing 
   const refused = await bob.put(`/envelopes/${tpl.id}`, b);
   assert.equal(refused.status, 409);
   assert.equal(refused.data.code, 'stale');
-  assert.match(refused.data.error, /^Ann Admin saved this template on \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC, after you opened it\./);
+  assert.match(refused.data.error, /^Ann Admin saved this template on \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d:\d\d UTC, after you opened it\./);
   assert.match(refused.data.error, /nothing of theirs is lost/);
   assert.equal(refused.data.edited_by, 'Ann Admin');
   const now = await load(ann);
@@ -831,7 +832,7 @@ test('once someone has signed, a name printed on their pages only changes if the
   // The quick correction of one person: a name, then an address.
   const quick = await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, name: 'Ada pays a penalty of 9000 dollars' });
   assert.equal([quick.status, quick.data.code].join(), '409,sign_again');
-  assert.match(quick.data.error, /^The name of Ben Signer is printed on the document, and Ada Signer has already finished\. Nothing was changed\. To change it, edit the envelope itself/);
+  assert.match(quick.data.error, /^The name of Ben Signer is printed on the document, and Ada Signer has already finished\. Nothing was changed\. To change it, edit the document itself \(Edit on its page in the app/);
   const address = await jo.post(`/envelopes/${e.id}/correct`, { recipient_id: benId, email: 'penalty.of.9000@example.com' });
   assert.equal(address.status, 409);
   assert.match(address.data.error, /^The email address of Ben Signer is printed on the document/);
@@ -1056,7 +1057,7 @@ test('every way an envelope changes counts as a newer version: a save from a cop
   person(lateDraft, 'ben@example.com').email = 'someone.else@example.com';
   const sent = await jo.put(`/envelopes/${e.id}`, lateDraft);
   assert.equal([sent.status, sent.data.code, sent.data.edited_how].join(), '409,stale,sent this envelope');
-  assert.match(sent.data.error, /^Jo Sender sent this envelope on \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC, after you opened it\. Your changes were not saved, so that is not undone\. Load the envelope as it is now and make your changes again\.$/);
+  assert.match(sent.data.error, /^Jo Sender sent this envelope on \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d:\d\d UTC, after you opened it\. Your changes were not saved, so that is not undone\. Load the envelope as it is now and make your changes again\.$/);
   assert.equal(statusOf(e.id, 'someone.else@example.com'), undefined, 'the envelope that went out still goes to Ben');
 
   // The editor is opened on the envelope that is out. Each of these then happens without it, and each time the
@@ -1182,7 +1183,7 @@ test('a finished signer whose place is given to someone else is told', async () 
   assert.equal((await jo.put(`/envelopes/${e.id}`, { ...body, resign: true })).status, 200);
   const told = mailTo('ada@example.com').at(-1)!;
   assert.equal(told.subject, 'No longer needed: Place given away');
-  assert.match(plain(told.html), /Jo Sender changed the document and gave your place on it to someone else\. What you signed on [\d: -]+ UTC is no longer part of it, and it is kept on record\. There is nothing more for you to do\./);
+  assert.match(plain(told.html), /Jo Sender changed the document and gave your place on it to someone else\. What you signed on \d{1,2} [A-Z][a-z]{2} \d{4} [\d:]+ UTC is no longer part of it, and it is kept on record\. There is nothing more for you to do\./);
   assert.match(mailTo('zed.other@example.com').at(-1)!.subject, /Place given away/);
 });
 

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { api, fmtDate } from '@/components/ui';
 import { StateCard, Sender } from './parts';
 import { Dialog } from './Dialog';
-import { groupInvite, groupTakeOn, groupDeclineNote, groupTakenTitle, groupDid, groupDoes } from '@/lib/groups';
+import { groupTakeOn, groupDeclineNote, groupTakenTitle, groupDid, groupDoes } from '@/lib/groups';
 
 // The signing page of a document that was sent to a signing group ("HR team"): every member has a link of their own,
 // and the first who agrees takes it on (src/server/groups.ts). The server sends "recipient.group" with what this
@@ -62,16 +62,29 @@ export function GroupAway({ data, base }: { data: any; base: string }) {
 }
 
 /** On the consent screen of a member, right above the box they tick: what agreeing means for the group. */
+// On the consent screen the group costs as few words as it can before the tick, which holds 120 words or fewer
+// (research/ux-charter.md P7): the "For" line names the group (groupFor), and what agreeing does for the group is
+// said after the tick, right above Continue, the button that does it. The email carries the longer groupInvite.
 export function GroupConsentNote({ data }: { data: any }) {
   const g = data.recipient.group;
-  if (!g || g.state !== 'open') return null;
+  if (!groupNoteId(data)) return null;
   return (
-    <div className="notice sg-gap sg-group" role="note">
-      <p style={{ margin: 0 }}>{groupInvite(g.name, g.size, data.recipient.role)}</p>
-      <p><b>{groupTakeOn(g.name, data.recipient.role)}</b></p>
-    </div>
+    <p className="notice sg-gap sg-group" role="note" id={GROUP_NOTE_ID}><b>{groupTakeOn(g.name, data.recipient.role)}</b></p>
   );
 }
+
+const GROUP_NOTE_ID = 'sg-group-note';
+/**
+ * The id of that note while it is on the screen, else undefined. Continue is described by it, so someone who tabs
+ * from the tick box straight to Continue still hears that continuing takes the document on for the whole group.
+ */
+export const groupNoteId = (data: any): string | undefined => (data?.recipient?.group?.state === 'open' ? GROUP_NOTE_ID : undefined);
+
+/** The consent screen's "For" line for a member of a group that nobody has taken on yet: "For HR team.". */
+export const groupFor = (data: any): string | null => {
+  const g = data?.recipient?.group;
+  return g && g.state === 'open' && g.name ? `For ${g.name}.` : null;
+};
 
 /** Said in the decline dialog of a group's document: one member declining declines for everyone. */
 export const groupDeclineText = (data: any): string | undefined => (data?.recipient?.group?.name ? groupDeclineNote(data.recipient.group.name) : undefined);

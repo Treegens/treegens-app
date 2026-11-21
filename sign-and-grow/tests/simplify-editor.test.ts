@@ -112,7 +112,7 @@ test("a person's More lists each choice as one line with its value, never one wi
   }
   // The screen draws exactly these lines, one picker open at a time, each a real button that says whether it is open.
   const more = read('src/components/editor/PersonMore.tsx');
-  assert.match(more, /const lines = moreLines\(r, \{ isTpl, languages: shippedLocales\(\)\.length, texts: !!me\.text_messages \}\);/);
+  assert.match(more, /const lines = moreLines\(r, \{ isTpl, languages: shippedLocales\(\)\.length, texts: !!me\.text_messages, whatsapp: !!me\.whatsapp \}\);/);
   assert.match(more, /<button type="button" className="ed-line-btn" aria-expanded=\{pick === l\.key\} onClick=\{\(\) => setPick\(pick === l\.key \? null : l\.key\)\}>/);
   assert.match(more, /\{pick === l\.key && <div className="ed-pick">\{picker\(l\.key\)\}<\/div>\}/);
 });
@@ -236,7 +236,8 @@ test('a field shows Assigned to, Required and Label; the rest is under its More 
   for (const w of ['<span>Assigned to</span>', '/> Required</label>', '<span>Label ']) assert.ok(shown.includes(w), w);
   // What a note says, a list's options and a choice's group are the field itself, so they stay in view.
   for (const w of ['<span>Text</span>', 'Options <span', 'Group <span']) assert.ok(shown.includes(w), w);
-  for (const w of ['Prefilled value', 'Read only', '<span>Format</span>', '<FieldLogic', 'Width <span', 'Height <span', '>Duplicate<', '>Copy to every page<']) {
+  // Format and limits live in FieldChecks.tsx (ds-fields-checks), placed under More options like the rest.
+  for (const w of ['Prefilled value', 'Read only', '<FieldChecks', '<FieldLogic', 'Width <span', 'Height <span', '>Duplicate<', '>Copy to every page<']) {
     assert.ok(folded.includes(w), `${w} is under More options`);
     assert.ok(!shown.includes(w), `${w} is not in view before`);
   }
@@ -516,7 +517,13 @@ test('"How they get it" holds what its line names: Email or the link sent by the
   const more = read('src/components/editor/PersonMore.tsx');
   assert.match(more, /<TextLink r=\{r\} textsOn=\{!!me\.text_messages\} open=\{isTpl && !r\.email\} onChange=\{patch\} \/>/);
   const pick = read('src/components/editor/CheckPick.tsx');
-  assert.match(pick, /if \(!on && \(!textsOn \|\| r\.role === 'inperson' \|\| r\.link_by_sender\)\) return null;/);
+  assert.match(pick, /if \(!on && \(!textsOn \|\| r\.role === 'inperson' \|\| r\.link_by_sender \|\| r\.whatsapp\)\) return null;/);
+  // WhatsApp where the operator set it up (ds-channels): the line is there for one person on an envelope, never on a template or for a copy.
+  assert.ok(keys({ role: 'witness' }, { whatsapp: true }).includes('deliver'));
+  assert.ok(!keys({ role: 'witness' }).includes('deliver'), 'zero setup: as before');
+  assert.ok(!keys({ role: 'cc' }, { whatsapp: true }).includes('deliver'));
+  assert.ok(!keys({ role: 'signer' }, { isTpl: true, whatsapp: true }).includes('deliver'));
+  assert.equal(moreLines({ role: 'signer', whatsapp: true }).find((l) => l.key === 'deliver')?.value, 'Email and WhatsApp');
   // Two choices in the words of the line, and going back to Email returns the address that was typed.
   const mine = read('src/components/editor/SendMyself.tsx');
   assert.equal(mine.match(/type="radio"/g)?.length, 2);

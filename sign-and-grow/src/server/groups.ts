@@ -6,6 +6,7 @@ import type { Ctx } from './router.ts';
 import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUPS_PER_ACCOUNT, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { actingName, whoIs, groupInvite, groupDoes, groupDid } from '../lib/groups.ts';
 import { isSelf } from './credits.ts';
+import { stampText } from '../lib/dates.ts';
 
 // Signing groups: a recipient that is a group of people, any one of whom can act ("HR team", "Accounts payable").
 //
@@ -36,7 +37,7 @@ const brandOf = (accountId: string) => {
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', accountId);
   return { name: a?.name, color: a?.brand_color, logo: a?.brand_logo };
 };
-const ts = (s: any) => String(s ?? '').replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+const ts = (s: any) => stampText(s);
 
 // The members of a group recipient who are on it now, in their order, with their links.
 const active = (recipientId: string): any[] => all('SELECT * FROM recipient_members WHERE recipient_id=? AND removed_at IS NULL ORDER BY position, id', recipientId);
@@ -845,7 +846,7 @@ export function memberLinks(email: string): { label: string; url: string; note: 
 export function bouncedMember(envelopeId: string, email: string): { name: string; line: string } | null {
   const m = get(`SELECT m.name, r.group_name FROM recipient_members m JOIN recipients r ON r.id=m.recipient_id
     WHERE m.envelope_id=? AND m.email=? COLLATE NOCASE AND m.removed_at IS NULL AND r.group_name IS NOT NULL ORDER BY m.position LIMIT 1`, envelopeId, email);
-  return m ? { name: m.name, line: `This address belongs to ${m.name}, a member of ${m.group_name}. The other members of ${m.group_name} were emailed separately and are not affected, and any of them can still act. No reminders go to this address. To fix it, open the envelope, choose Edit envelope, take ${m.name} out of the group and add them again with the right address: they are emailed a new link when you save. Or copy their link from the envelope page and send it to them yourself.` } : null;
+  return m ? { name: m.name, line: `This address belongs to ${m.name}, a member of ${m.group_name}. The other members of ${m.group_name} were emailed separately and are not affected, and any of them can still act. No reminders go to this address. To fix it, open the document, choose Edit, take ${m.name} out of the group and add them again with the right address: they are emailed a new link when you save. Or copy their link from the document's page and send it to them yourself.` } : null;
 }
 
 /**
@@ -855,7 +856,7 @@ export function bouncedMember(envelopeId: string, email: string): { name: string
  */
 export function holderBounceLine(r: any): string | null {
   if (!r?.group_name || !r.claimed_by) return null;
-  return `${r.name} took this on for ${r.group_name}, and no reminders go to this address now. If the address is wrong, open the envelope and choose "Give back to the group", so that another member of ${r.group_name} can act; or choose Edit envelope, take ${r.name} out of ${r.group_name} and add them again with the right address, and they are emailed a new link when you save. If the address is right and the mailbox works again, choose "Try again" next to ${r.name}.`;
+  return `${r.name} took this on for ${r.group_name}, and no reminders go to this address now. If the address is wrong, open the document and choose "Give back to the group", so that another member of ${r.group_name} can act; or choose Edit, take ${r.name} out of ${r.group_name} and add them again with the right address, and they are emailed a new link when you save. If the address is right and the mailbox works again, choose "Try again" next to ${r.name}.`;
 }
 
 /** The same for the list of documents sent to someone who is signed in (GET /inbox). */
@@ -920,5 +921,5 @@ export function assertGroupCorrection(r: any, patch: { name?: string; email?: st
   if (!r?.group_name) return;
   const name = patch.name === undefined ? r.name : str(patch.name, 500).trim(), email = patch.email === undefined ? r.email : str(patch.email, 500).trim();
   if (name !== r.name || lower(email) !== lower(r.email))
-    throw bad(`${r.claimed_by ? `${r.name} acts for ${r.group_name}, which is a group` : `${r.group_name} is a group`}, so there is no single name or address to correct here. Nothing was changed. To change who is in the group, edit the envelope itself (Edit envelope in the app, or PUT /envelopes/{id} with "members"). To take the document back from the person who has it, choose "Give back to the group". The access code can be changed here: it needs at least ${ACCESS_CODE_MIN} characters.`);
+    throw bad(`${r.claimed_by ? `${r.name} acts for ${r.group_name}, which is a group` : `${r.group_name} is a group`}, so there is no single name or address to correct here. Nothing was changed. To change who is in the group, edit the document itself (Edit on its page in the app, or PUT /envelopes/{id} with "members"). To take the document back from the person who has it, choose "Give back to the group". The access code can be changed here: it needs at least ${ACCESS_CODE_MIN} characters.`);
 }

@@ -1088,7 +1088,7 @@ async function setUp(browser, sender) {
   const missing = [];
   if (PROFILE === 'government') {
     missing.push('Nothing on the server says its deployment profile yet: start it with DEPLOYMENT_PROFILE=government (node tests/ux/flows.cjs --env government).');
-    rule('warning', 'P8 government profile', 'nothing in the app reads DEPLOYMENT_PROFILE yet (gov-G01, gov-G02 are not built), so this run can only differ from the default profile once they are');
+    rule('warning', 'P8 government profile', 'this script cannot tell from outside whether the server runs with DEPLOYMENT_PROFILE=government; what that profile changes (gov-G01: the signing record never carries trees, and Settings shows no switch for it) is not on any counted step, so the counts should match the default profile');
     report.profile_setup = { done, missing };
     return;
   }

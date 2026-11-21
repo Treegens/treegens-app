@@ -5,6 +5,7 @@ import { route, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, readBlob } from './db.ts';
 import { bad, baseUrl, id, isEmail, now, rateLimit, rateWait, sha256, str, token } from './util.ts';
 import { sendMail } from './mail.ts';
+import { showsTrees } from './tenantpolicy.ts';
 import { ABUSE_REASONS } from './envelopes.ts';
 import {
   acceptanceView, addressKey, certificatePdf, cleanUrl, closedWhy, CLOSED_TEXT, copyClaim, csvOf, emailCopy, linkWhy, loadAgreement, mayHaveReceipt, minVersion, pageUrl, publish, readView, readWho,
@@ -283,7 +284,7 @@ route('GET', '/public/agree/:slug', async (c) => {
   const identity = person ? 'website' : 'typed';
   const words = recordShows(identity, c.q.get('embed') ? 'embed' : 'hosted');
   return {
-    closed: false, slug: cw.slug, account: { name: a.name, color: a.brand_color, logo: a.brand_logo },
+    closed: false, slug: cw.slug, account: { name: a.name, color: a.brand_color, logo: a.brand_logo }, trees: showsTrees(cw.account_id),
     version: { number: v.number, title: v.title, format: v.format, text: v.format === 'text' ? v.body : null, pages: v.pages, checkbox: v.checkbox, button: v.button, scroll: !!v.scroll, sha256: v.terms_sha256, published_at: v.published_at, pdf: v.format === 'pdf' ? `/api/public/agree/${cw.slug}/terms?v=${v.number}` : null },
     identity, person, already, earlier, recorded: recordedBefore(identity, a.name), shows: words.shows, not: words.not, law: CLICK_LAW,
     view: viewToken(v.id, Date.now(), c.ip, c.ua),

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
-import { prepare, impression, lookFor, tiltFor, INKS, INK_WORD, INK_RGB, TILT_MAX, type Look, type Prepared, type InkFound, type Ink, type Rgba } from '@/lib/stampink';
+import { prepare, impression, lookFor, tiltFor, INKS, INK_WORD, INK_RGB, TILT_MAX, FINE_WARN_SHARE, FINE_WARN_TEXTURE, type Look, type Prepared, type InkFound, type Ink, type Rgba } from '@/lib/stampink';
 import { stampFileProblem, tooManyPixels, turnStyle, STAMP_WORK_SIDE, STAMP_UPLOAD_MAX_PIXELS } from '@/lib/stamps';
 
 // Turns a picture of a stamp into an impression that looks like ink, in this browser, on a canvas: the steps are in
@@ -76,10 +76,15 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
   const [look, setLook] = useState<Look | null>(null);
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(true);
-  const [result, setResult] = useState<{ png: string; empty: boolean; w: number; h: number; found: InkFound; oval: boolean } | null>(null);
+  const [result, setResult] = useState<{ png: string; empty: boolean; w: number; h: number; found: InkFound; oval: boolean; fine: number } | null>(null);
   const [before, setBefore] = useState('');
   // The fold with every adjustment but the ink: closed each time a picture is read.
   const [adjust, setAdjust] = useState(false);
+  // A design with thin lines at its size is printed with even ink from the start, once for each picture, and the
+  // person is told so (the simplicity reviewer: a good default rather than a setting to fix). 'pending' until the first
+  // impression of a picture is measured.
+  const evenFirst = useRef<'pending' | 'done'>('pending');
+  const [evened, setEvened] = useState(false);
   const made = useRef(onMade);
   made.current = onMade;
 
@@ -91,6 +96,8 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
     setProblem('');
     setBusy(true);
     setAdjust(false);
+    evenFirst.current = 'pending';
+    setEvened(false);
     made.current(null);
     const said = stampFileProblem(file, true);
     if (said) return (setProblem(said), setBusy(false));
@@ -118,8 +125,16 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
       const r = impression(prepared, look, undefined, mm && mm > 0 ? mm : undefined);
       const png = r.empty ? '' : toPng(r.image);
       const oval = !!r.oval && Math.abs(Math.log(r.oval.ratio)) > 0.025 && Math.abs(Math.log(r.oval.ratio)) < 0.35;
-      setResult({ png, empty: r.empty || prepared.found.empty, w: r.image.width, h: r.image.height, found: r.found, oval });
+      setResult({ png, empty: r.empty || prepared.found.empty, w: r.image.width, h: r.image.height, found: r.found, oval, fine: r.fine || 0 });
       setBusy(false);
+      if (evenFirst.current === 'pending') {
+        evenFirst.current = 'done';
+        if (!r.empty && (r.fine || 0) >= FINE_WARN_SHARE && look.texture > FINE_WARN_TEXTURE) {
+          setEvened(true);
+          setLook((l) => (l ? { ...l, texture: FINE_WARN_TEXTURE } : l));
+          return;
+        }
+      }
       // Nothing left at these settings: the controls that bring it back are shown.
       if (r.empty && !prepared.found.empty) setAdjust(true);
       made.current(r.empty || prepared.found.empty ? null : { png, look, found: r.found, width: r.image.width, height: r.image.height, from });
@@ -158,6 +173,13 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
       </div>
       <p className="muted small" role="status" aria-live="polite">{busy ? 'Making the stamp' : result?.empty ? '' : `Ready. ${sizeLabel || ''}`}</p>
       {f.empty && <div className="notice warn" role="alert">We could not find a stamp in this picture: it looks like blank paper. Choose a picture where the stamp is darker than the paper around it.</div>}
+      {/* Small type and hairline rings at this size: the rubber texture breaks them into specks (fineShare in stampink.ts). */}
+      {!busy && result && !result.empty && evened && look.texture <= FINE_WARN_TEXTURE && (
+        <p className="notice small st-fine">This stamp has very thin lines at this size, so we printed it with even ink to keep them whole. You can change this under &ldquo;Adjust the look&rdquo;.</p>
+      )}
+      {!busy && result && !result.empty && result.fine >= FINE_WARN_SHARE && look.texture > FINE_WARN_TEXTURE && (
+        <p className="notice small st-fine">Some lines and letters are very thin at this size, and the rubber texture can break them up when printed. To keep them clean, open &ldquo;Adjust the look&rdquo; and move &ldquo;Rubber texture&rdquo; towards &ldquo;Even ink&rdquo;.</p>
+      )}
       {!f.empty && result?.empty && <div className="notice warn" role="alert">Nothing is left at these settings. Under &ldquo;Adjust the look&rdquo;, move &ldquo;What counts as paper&rdquo; towards &ldquo;Keep faint marks&rdquo;, or cut less off the edges.</div>}
       {f.several && (
         <p className="notice small">
@@ -181,13 +203,13 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
       <summary>Adjust the look</summary>
       <div className="st-controls">
         <label className="f st-range">
-          <span>What counts as paper</span>
-          <input type="range" min={0} max={100} value={Math.round(look.paper * 100)} onChange={(e) => set({ paper: Number(e.target.value) / 100 })} aria-describedby={`${id}-paper`} />
+          <span id={`${id}-paper-l`}>What counts as paper</span>
+          <input type="range" min={0} max={100} value={Math.round(look.paper * 100)} onChange={(e) => set({ paper: Number(e.target.value) / 100 })} aria-labelledby={`${id}-paper-l`} aria-describedby={`${id}-paper`} />
           <span id={`${id}-paper`} className="st-ends muted small"><span>Keep faint marks</span><span>Take more away</span></span>
         </label>
         <label className="f st-range">
-          <span>Rubber texture</span>
-          <input type="range" min={0} max={100} value={Math.round(look.texture * 100)} onChange={(e) => set({ texture: Number(e.target.value) / 100 })} aria-describedby={`${id}-tex`} />
+          <span id={`${id}-tex-l`}>Rubber texture</span>
+          <input type="range" min={0} max={100} value={Math.round(look.texture * 100)} onChange={(e) => set({ texture: Number(e.target.value) / 100 })} aria-labelledby={`${id}-tex-l`} aria-describedby={`${id}-tex`} />
           <span id={`${id}-tex`} className="st-ends muted small"><span>Even ink</span><span>A well-worn stamp</span></span>
         </label>
         <div className="f st-range">

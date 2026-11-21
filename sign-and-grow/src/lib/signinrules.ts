@@ -23,6 +23,13 @@ export const PWNED_TIMEOUT_MS = 3000;
 /** Where the list is asked, unless HIBP_RANGE_URL names another copy of it. */
 export const PWNED_DEFAULT_URL = 'https://api.pwnedpasswords.com/range/';
 
+/** Where "Two-step login on this team" is under Settings, Team: the Sign-in rules card links to it. */
+export const TEAM_TWO_STEP_ID = 'team-two-step';
+export const TEAM_TWO_STEP_HREF = `/app/settings?tab=team#${TEAM_TWO_STEP_ID}`;
+
+/** The choices of "Sign out after", in minutes. Any whole number inside the limits is kept, these are offered. */
+export const IDLE_CHOICES = [15, 30, 60, 120, 240, 480];
+
 /** A request with this header does not count as use: the page's own look at how long is left. */
 export const QUIET_HEADER = 'x-quiet';
 
@@ -53,6 +60,27 @@ export function signedOutWords(why: string | null | undefined, locale: unknown =
   return why === 'idle' || why === 'elsewhere' ? t(locale, `rules.out.${why}`) : '';
 }
 
+/**
+ * What the sign-in page says about a sign-out, from what the address asks (`out=`) and what GET /me answered: only
+ * when the server says a rule signed this very browser out for that reason. A link that someone sent, or a browser
+ * that is signed in, hears nothing.
+ */
+export function signedOutNotice(asked: string | null | undefined, me: { user?: unknown; signed_out?: string } | null | undefined, locale: unknown = SOURCE_LOCALE): string {
+  return asked && me && !me.user && me.signed_out === asked ? signedOutWords(asked, locale) : '';
+}
+
+/**
+ * The sign-in page for a browser that was signed out, saying why when a rule did it ('idle', 'elsewhere'), and with
+ * the page to come back to. Only those two reasons travel: the sign-in page never prints what an address says.
+ */
+export function signedOutPath(why: unknown, here: string): string {
+  const p = new URLSearchParams();
+  if (why === 'idle' || why === 'elsewhere') p.set('out', why);
+  if (here.startsWith('/') && !here.startsWith('//')) p.set('next', here);
+  const q = p.toString();
+  return `/login${q ? `?${q}` : ''}`;
+}
+
 /** "12 minutes", "1 minute", "less than a minute": how long is left, for the line that warns. */
 export function leftWords(seconds: number, locale: unknown = SOURCE_LOCALE): string {
   const m = Math.ceil(Math.max(0, seconds) / 60);
@@ -80,4 +108,16 @@ export function pwnedUrl(env: Record<string, string | undefined>): string | null
   const raw = String(env.HIBP_RANGE_URL || '').trim() || PWNED_DEFAULT_URL;
   if (!/^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/i.test(raw)) return null;
   return raw.endsWith('/') ? raw : `${raw}/`;
+}
+
+/**
+ * For "Where you are signed in": what the sign-in rules of the team this browser is in add to the usual sign-out,
+ * or '' when it has none. Without it, that card would promise that signing in elsewhere signs nothing out.
+ */
+export function teamSessionWords(rules: { idle_minutes?: number | null; one_session?: boolean } | null | undefined, account: string): string {
+  const idle = rules?.idle_minutes || 0;
+  const one = !!rules?.one_session;
+  if (!idle && !one) return '';
+  const parts = [idle ? `signs a browser out after ${idle} minutes of no use` : '', one ? 'allows one session at a time, so signing in on another browser signs this one out' : ''].filter(Boolean);
+  return `${account} ${parts.join(', and ')}. That is a sign-in rule of the team.`;
 }

@@ -43,6 +43,9 @@
 .sn-history li:last-child { border-bottom: 0; }
 .ret-in-delete { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .ret-in-delete .btn { min-height: 44px; margin-top: 6px; }
+/* The row of buttons at the foot of every dialog of the sender's screens: 44 px to press with a mouse too, so a third
+   way out ("Keep it instead" in the Delete dialog) is no smaller than it was inside the text. */
+.sn-dialog .actions .btn { min-height: 44px; }
 
 /* Templates: Use on each row, the rest in the row's More, which opens as a line under the row. */
 .sn-rowactions .mo-btn { margin-left: 6px; }

@@ -16,7 +16,7 @@ let serial = 1000;
  * A certificate for `key`'s public half, signed by `issuer` (or itself). `ku` the key usage bits as a byte
  * (0x80 digitalSignature, 0x40 nonRepudiation, 0x04 keyCertSign, 0x02 cRLSign); `eku` extended key usages.
  */
-export function makeCert(o: { cn: string; key?: crypto.KeyObject; issuer?: Made; ca?: boolean; ku?: number | null; eku?: string[]; ekuCritical?: boolean; from?: Date; to?: Date; ec?: boolean }): Made {
+export function makeCert(o: { cn: string; key?: crypto.KeyObject; issuer?: Made; ca?: boolean; ku?: number | null; eku?: string[]; ekuCritical?: boolean; from?: Date; to?: Date; ec?: boolean; more?: Buffer[] }): Made {
   const key = o.key || (o.ec ? crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey : crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey);
   const pub = crypto.createPublicKey(key).export({ type: 'spki', format: 'der' }) as Buffer;
   const signKey = o.issuer ? o.issuer.key : key;
@@ -29,6 +29,8 @@ export function makeCert(o: { cn: string; key?: crypto.KeyObject; issuer?: Made;
   if (ku !== null) exts.push(ext('2.5.29.15', true, bitString(Buffer.from([ku]), 1)));
   if (o.eku) exts.push(ext('2.5.29.37', !!o.ekuCritical, seq(...o.eku.map(oid))));
   exts.push(ext('2.5.29.14', false, octets(crypto.createHash('sha1').update(pub).digest())));
+  // More extensions as made by ext() (tests/seal-ltv.test.ts: where to ask about the certificate).
+  if (o.more) exts.push(...o.more);
   const from = o.from || new Date(Date.now() - 3600_000);
   const to = o.to || new Date(Date.now() + 365 * 864e5);
   const tbs = seq(tagged(0, integer(2)), integer(serial++), sigAlg, issuerName, seq(certTime(from), certTime(to)), name(o.cn), pub, tagged(3, seq(...exts)));
@@ -92,4 +94,4 @@ export function stubTsa(answer: (req: Buffer, url: string) => Buffer | number | 
   return { calls, restore: () => void (globalThis.fetch = real) };
 }
 
-export { pem };
+export { pem, ext, name };

@@ -82,7 +82,7 @@ export function checkPayUrl(raw: any, ownHost = ''): { href: string; host: strin
  * but lines written before that held the address, and the certificate is emailed: there the address is left out.
  */
 export const payLineForPrint = (action: string, detail: string): string =>
-  /payment link/i.test(action) ? String(detail).replace(/https?:\/\/[^\s"()]+?(?=[\s"()]|[.,](?:\s|$)|$)/gi, '[the address, kept on the envelope page]') : detail;
+  /payment link/i.test(action) ? String(detail).replace(/https?:\/\/[^\s"()]+?(?=[\s"()]|[.,](?:\s|$)|$)/gi, '[the address, kept on the document page]') : detail;
 
 /** What a signer reads above the button. The sender's name comes from their account, never from the link. */
 export const payForSigner = (sender: string): string =>

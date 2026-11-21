@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 // A dialog that behaves the way assistive technology expects: focus moves in, stays in, Escape closes it,
 // and focus goes back to whatever opened it. On a phone it slides up from the bottom, within reach of a thumb.
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE = 'a[href], button:not([disabled]), details > summary, input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const stack: string[] = [];
 let locks = 0;
 

@@ -1,6 +1,7 @@
 import { all, get, run } from './db.ts';
 import { sendMail } from './mail.ts';
 import { baseUrl } from './util.ts';
+import { applyFloor } from './orgs.ts';
 import { removedText, type Removed } from '../lib/signin.ts';
 
 // A login whose address was never confirmed may have been made by a stranger in its owner's name, set up to keep
@@ -57,6 +58,8 @@ export function forgetEarlierSetup(userId: string, name: string): Removed {
     // Asking everyone for two-step login is a rule for a team, set by nobody we know.
     if (a.two_step_required_at) workspace.add('two-step rule');
     run('UPDATE accounts SET name=?, brand_color=NULL, brand_logo=NULL, two_step_required_at=NULL WHERE id=?', fresh, a.id);
+    // A rule an organisation above the account asks (src/server/orgs.ts) is not the stranger's: it is put back at once.
+    if (a.org_id) applyFloor(a.id);
     kept.drafts += get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind!='template'", a.id).n;
     kept.templates += get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='template'", a.id).n;
     kept.contacts += get('SELECT COUNT(*) n FROM contacts WHERE account_id=?', a.id).n;

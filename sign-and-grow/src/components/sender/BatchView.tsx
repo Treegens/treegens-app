@@ -20,7 +20,7 @@ function personStatus(r: any, envelopeStatus: string): { s: string; label: strin
   if (r.status === 'completed') return { s: 'completed', label: DONE[r.role] || 'Done' };
   if (r.status === 'declined') return { s: 'declined', label: 'Declined' };
   if (envelopeStatus === 'draft') return { s: 'pending', label: 'Not sent' };
-  if (CLOSED.includes(envelopeStatus)) return { s: envelopeStatus, label: envelopeStatus === 'voided' ? 'Voided' : envelopeStatus === 'expired' ? 'Expired' : 'Closed' };
+  if (CLOSED.includes(envelopeStatus)) return { s: envelopeStatus, label: envelopeStatus === 'voided' ? 'Cancelled' : envelopeStatus === 'expired' ? 'Expired' : 'Closed' };
   if (r.status === 'viewed') return { s: 'viewed', label: 'Opened' };
   if (r.status === 'sent') return { s: 'sent', label: 'Sent, not opened' };
   return { s: 'pending', label: 'Waiting for their turn' };
@@ -52,7 +52,7 @@ export function BatchView({ id }: { id: string }) {
     .filter((e) => filter === 'all' || group(e.status) === filter)
     .filter((e) => !words.length || words.every((w) => e.recipients.some((r: any) => `${r.name} ${r.email}`.toLowerCase().includes(w))));
 
-  if (error) return <div className="sn card center"><h1 className="serif" style={{ fontSize: 22 }}>We could not open this batch</h1><p className="muted" style={{ marginTop: 8 }}>It may belong to someone else on your team. Go back to see the batches you sent.</p><Link href="/app/bulk" className="btn">Back to bulk send</Link></div>;
+  if (error) return <div className="sn card center"><h1 className="serif" style={{ fontSize: 22 }}>We could not open this batch</h1><p className="muted" style={{ marginTop: 8 }}>It may belong to someone else on your team. Go back to see the batches you sent.</p><Link href="/app/bulk" className="btn">Back to Send to many</Link></div>;
   if (!data) return <div className="muted" role="status">Loading…</div>;
   const b = data.batch;
 
@@ -61,7 +61,7 @@ export function BatchView({ id }: { id: string }) {
     try {
       const { reminded } = await api(`/bulk/${id}/remind`, { method: 'POST' });
       if (reminded) toast(`Reminder emailed to ${reminded} ${reminded === 1 ? 'person' : 'people'}.`);
-      else toast('No reminder went out. Everyone still waiting has turned reminders off. Open their envelope to share the link another way.', true);
+      else toast('No reminder went out. Everyone still waiting has turned reminders off. Open their document to share the link another way.', true);
     } catch (e) {
       fail(e);
     } finally {
@@ -73,16 +73,16 @@ export function BatchView({ id }: { id: string }) {
     <div className="sn stack">
       <div className="pagehead" style={{ marginBottom: 0 }}>
         <div className="grow">
-          <Link href="/app/bulk" className="small sn-back">← Bulk send</Link>
+          <Link href="/app/bulk" className="small sn-back">← Send to many</Link>
           <h1 className="serif sn-title">{b.name}</h1>
-          <div className="muted small" style={{ marginTop: 6 }}>Sent {dayTime(b.created_at)} · {plural(envelopes.length, 'envelope')}{b.total > envelopes.length ? ` of ${b.total} rows` : ''}{data.removed > 0 ? `. ${data.removed} more ${data.removed === 1 ? 'was' : 'were'} removed from the lists by ${data.removed === 1 ? 'its' : 'their'} sender after somebody had signed, and ${data.removed === 1 ? 'is' : 'are'} not counted here${me.role !== 'member' ? ': as an admin you find them under Envelopes, in the tab Removed by its sender' : ''}` : ''}</div>
+          <div className="muted small" style={{ marginTop: 6 }}>Sent {dayTime(b.created_at)} · {plural(envelopes.length, 'document')}{b.total > envelopes.length ? ` of ${b.total} rows` : ''}{data.removed > 0 ? `. ${data.removed} more ${data.removed === 1 ? 'was' : 'were'} removed from the lists by ${data.removed === 1 ? 'its' : 'their'} sender after somebody had signed, and ${data.removed === 1 ? 'is' : 'are'} not counted here${me.role !== 'member' ? ': as an admin you find them under Documents, in the tab Removed by its sender' : ''}` : ''}</div>
         </div>
       </div>
 
       <div className="grid g4 keep2" role="group" aria-label="Where this batch stands">
         <div className="stat"><div className="k">Completed</div><div className="v num">{count.completed}</div><div className="s">of {envelopes.length}</div></div>
         <div className="stat"><div className="k">Not finished</div><div className="v num">{count.open}</div><div className="s">{count.open ? `${count.opened} opened so far` : 'nobody is waiting'}</div></div>
-        <div className="stat"><div className="k">Closed</div><div className="v num">{count.closed}</div><div className="s">voided, declined or expired</div></div>
+        <div className="stat"><div className="k">Closed</div><div className="v num">{count.closed}</div><div className="s">cancelled, declined or expired</div></div>
         <div className="stat"><div className="k">Not sent</div><div className="v num">{count.unsent}</div><div className="s">{count.unsent ? 'saved as drafts' : 'everything went out'}</div></div>
       </div>
 
@@ -92,10 +92,10 @@ export function BatchView({ id }: { id: string }) {
           {zips.length <= 1
             ? (completedIds.length ? <a className="btn" href={exportUrl(completedIds)}>Download completed (ZIP)</a> : <button className="btn" disabled>Download completed (ZIP)</button>)
             : zips.map((ids, i) => <a key={i} className="btn" href={exportUrl(ids)}>Download completed, part {i + 1} of {zips.length} (ZIP)</a>)}
-          <button className="btn danger" disabled={count.open === 0} onClick={() => setVoiding(true)}>Void everything still open</button>
+          <button className="btn danger" disabled={count.open === 0} onClick={() => setVoiding(true)}>Cancel everything still open</button>
         </div>
         <p className="muted small">
-          {count.open === 0 ? 'Nothing is open any more, so there is nobody to remind and nothing to void. ' : ''}
+          {count.open === 0 ? 'Nothing is open any more, so there is nobody to remind and nothing to cancel. ' : ''}
           {completedIds.length === 0 ? 'The ZIP is ready as soon as the first one is completed. ' : ''}
           To fix one person&rsquo;s name, email or document, open their row. The rest of the batch is not touched.
         </p>
@@ -115,10 +115,10 @@ export function BatchView({ id }: { id: string }) {
           </div>
         </div>
         {shown.length === 0 ? (
-          <div className="empty"><h3>Nobody here</h3>{envelopes.length === 0 ? 'Nothing in this batch could be created.' : 'No envelope in this batch fits that filter.'}{envelopes.length > 0 && <div style={{ marginTop: 14 }}><button className="btn" onClick={() => (setFilter('all'), setQ(''))}>Show everyone</button></div>}</div>
+          <div className="empty"><h3>Nobody here</h3>{envelopes.length === 0 ? 'Nothing in this batch could be created.' : 'No document in this batch fits that filter.'}{envelopes.length > 0 && <div style={{ marginTop: 14 }}><button className="btn" onClick={() => (setFilter('all'), setQ(''))}>Show everyone</button></div>}</div>
         ) : (
           <div className="tablewrap"><table className="t sn-list sn-batch">
-            <thead><tr><th>Recipient</th><th className="hide-sm">Status</th><th className="hide-sm">Opened</th><th className="hide-sm">Completed</th><th><span className="sn-vh">Envelope</span></th></tr></thead>
+            <thead><tr><th>Person</th><th className="hide-sm">Status</th><th className="hide-sm">Opened</th><th className="hide-sm">Completed</th><th><span className="sn-vh">Document</span></th></tr></thead>
             <tbody>
               {shown.map((e) => e.recipients.map((r: any, i: number) => {
                 const st = personStatus(r, e.status);
@@ -137,7 +137,7 @@ export function BatchView({ id }: { id: string }) {
                     <td className="hide-sm"><Status s={st.s} label={st.label} /></td>
                     <td className="hide-sm small">{r.viewed_at ? dayTime(r.viewed_at) : <span className="muted">Not yet</span>}</td>
                     <td className="hide-sm small">{done || <span className="muted">{r.role === 'cc' ? '' : 'Not yet'}</span>}</td>
-                    <td className="sn-fit">{i === 0 && <Link className="btn sm" href={e.status === 'draft' ? `/app/envelopes/${e.id}/edit` : `/app/envelopes/${e.id}`} aria-label={`${e.status === 'draft' ? 'Finish and send the envelope for' : 'Open the envelope for'} ${r.name}`}>{e.status === 'draft' ? 'Finish' : 'Open'}</Link>}</td>
+                    <td className="sn-fit">{i === 0 && <Link className="btn sm" href={e.status === 'draft' ? `/app/envelopes/${e.id}/edit` : `/app/envelopes/${e.id}`} aria-label={`${e.status === 'draft' ? 'Finish and send the document for' : 'Open the document for'} ${r.name}`}>{e.status === 'draft' ? 'Finish' : 'Open'}</Link>}</td>
                   </tr>
                 );
               }))}
@@ -147,16 +147,16 @@ export function BatchView({ id }: { id: string }) {
       </section>
 
       {voiding && (
-        <VoidDialog title="Void everything still open" confirmLabel={`Void ${plural(count.open, 'envelope')}`} onClose={() => setVoiding(false)}
+        <VoidDialog title="Cancel everything still open" confirmLabel={`Cancel ${plural(count.open, 'document')}`} onClose={() => setVoiding(false)}
           onVoid={async (reason) => {
             const { voided, skipped } = await api(`/bulk/${id}/void`, { body: { reason } });
             // An envelope that someone finished or declined while the others were being voided is left alone. Say so.
-            const left = skipped ? ` ${plural(skipped, 'envelope')} ${skipped === 1 ? 'was' : 'were'} finished or closed in the meantime and ${skipped === 1 ? 'stays as it is' : 'stay as they are'}.` : '';
-            toast(voided ? `${plural(voided, 'envelope')} voided. Everyone who had one has been told.${left}` : `Nothing was voided.${left || ' No envelope in this batch is still out for signature.'}`);
+            const left = skipped ? ` ${plural(skipped, 'document')} ${skipped === 1 ? 'was' : 'were'} finished or closed in the meantime and ${skipped === 1 ? 'stays as it is' : 'stay as they are'}.` : '';
+            toast(voided ? `${plural(voided, 'document')} cancelled. Everyone who had one has been told.${left}` : `Nothing was cancelled.${left || ' No document in this batch is still out for signature.'}`);
             setVoiding(false);
             reload();
           }}>
-          <p>This voids the <b>{plural(count.open, 'envelope')}</b> still waiting for signatures. Nobody will be able to sign them, and everyone who has one is told why.</p>
+          <p>This cancels the <b>{plural(count.open, 'document')}</b> still waiting for signatures. Nobody will be able to sign them, and everyone who has one is told why.</p>
           <p className="muted">{count.completed ? `The ${count.completed} completed ${count.completed === 1 ? 'one stays' : 'ones stay'} exactly as ${count.completed === 1 ? 'it is' : 'they are'}. ` : ''}{voidCostLine(readAllowance(null, me))}</p>
         </VoidDialog>
       )}

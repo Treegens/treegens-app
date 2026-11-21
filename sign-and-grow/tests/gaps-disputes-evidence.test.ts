@@ -61,7 +61,8 @@ test('A: the pages say what a match shows and what it does not, list the causes 
   assert.match(CHAIN_TRUTH, /whoever can write to that database/);
   assert.match(CHAIN_TRUTH, /chain head printed on the certificate/);
   assert.match(CHAIN_TRUTH, /browser description stored with a line is not part of its fingerprint/);
-  assert.match(src('src/app/features/page.tsx'), /Every completed document gets a signing record \(its certificate of completion\)/);
+  assert.match(src('src/app/features/page.tsx'), /Every completed document gets a signing record, and anyone can check on our site that a signed PDF is unchanged/);
+  assert.doesNotMatch(src('src/app/features/page.tsx'), /certificate of completion|a later change shows/, 'repair-open-public: /features says signing record, and no longer says a later change always shows');
   assert.doesNotMatch(src('README.md'), /Editing any past event breaks the chain, and the app shows it\./);
 });
 
@@ -783,7 +784,7 @@ test('Repair 3: the sender gets the person\'s words and the time, never their in
     // The sender's email: the words and the time, and nothing of where it came from.
     const told = text(mailTo('words@disputes.example').filter((m: any) => m.subject === 'Disputed: Loan').pop().html);
     assert.match(told, /He signed for me\./);
-    assert.match(told, /told us on \d{4}-\d\d-\d\d \d\d:\d\d UTC/);
+    assert.match(told, /told us on \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d UTC/);
     assert.ok(!told.includes('198.51.100.77') && !/Chrome|Windows/.test(told));
     // The operators: the address and the browser, said to be theirs alone.
     const ops = text(mailTo('ops-r3@disputes.example').pop().html);
@@ -832,7 +833,7 @@ test('Repair 5: on a database from before first opens were written, the first op
   await from().call('GET', `/sign/${tok}/download`, undefined, { 'user-agent': UA });
   const line = auditOf(e.id).filter((a: any) => a.action === 'Completed copy opened');
   assert.equal(line.length, 1);
-  assert.match(line[0].detail, /^Sam Signer downloaded the completed document, in Safari on an iPhone\. That is the first time since we began writing this down on \d{4}-\d\d-\d\d; they may have opened it before that\.$/);
+  assert.match(line[0].detail, /^Sam Signer downloaded the completed document, in Safari on an iPhone\. That is the first time since we began writing this down on \d{1,2} [A-Z][a-z]{2} \d{4}; they may have opened it before that\.$/);
   assert.doesNotMatch(line[0].detail, /for the first time/);
   // An envelope completed after the upgrade is written as before.
   const fresh = await completed(sender, 'new-opener@disputes.example');

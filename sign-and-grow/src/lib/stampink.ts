@@ -1863,7 +1863,60 @@ export type Impression = {
   found: InkFound;
   /** The outline is an oval (a round seal photographed at a slant): how much wider than tall. Null otherwise. */
   oval: { ratio: number } | null;
+  /** The share of the stamp's lines, by length, thinner than FINE_LINE_MM at the size it prints at (fineShare). */
+  fine?: number;
 };
+
+/** A line thinner than this, in mm on the page, can break up under the rubber texture. */
+export const FINE_LINE_MM = 0.15;
+/** From this share of thin lines on, the stamp maker says so and how to keep them whole (StampMaker.tsx). */
+export const FINE_WARN_SHARE = 0.3;
+/** The texture from which that is said: below it the ink is even enough to keep thin lines whole. */
+export const FINE_WARN_TEXTURE = 0.25;
+
+/**
+ * How much of a stamp's line work is thin: along the middle of every line (where the distance to the paper is
+ * greatest), the share of points where the line is narrower than `under` mm. `pxmm`: pixels to a millimetre at the
+ * size it prints at. 0 when there is no ink. A design with small type and hairline rings scores high; a bold seal low.
+ */
+export function fineShare(pl: Plane, pxmm: number, under = FINE_LINE_MM): number {
+  const { width: w, height: h, v } = pl;
+  if (w < 3 || h < 3 || !(pxmm > 0)) return 0;
+  // Distance from each ink pixel to the nearest paper, in pixels (two passes, steps of 1 and the square root of 2).
+  const d = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) d[i] = v[i] > 0.45 ? 1e9 : 0;
+  const R2 = Math.SQRT2;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!d[i]) continue;
+      let m = x > 0 ? Math.min(d[i], d[i - 1] + 1) : 1;
+      if (y > 0) m = Math.min(m, d[i - w] + 1, x > 0 ? d[i - w - 1] + R2 : 1, x < w - 1 ? d[i - w + 1] + R2 : 1);
+      else m = 1;
+      d[i] = m;
+    }
+  for (let y = h - 1; y >= 0; y--)
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x;
+      if (!d[i]) continue;
+      let m = x < w - 1 ? Math.min(d[i], d[i + 1] + 1) : 1;
+      if (y < h - 1) m = Math.min(m, d[i + w] + 1, x < w - 1 ? d[i + w + 1] + R2 : 1, x > 0 ? d[i + w - 1] + R2 : 1);
+      else m = 1;
+      d[i] = m;
+    }
+  // The middle of a line: no neighbour is further from the paper. Its width there is about twice that distance.
+  let all = 0, thin = 0;
+  const limit = under * pxmm;
+  for (let y = 1; y < h - 1; y++)
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x, here = d[i];
+      if (!here) continue;
+      if (d[i - 1] > here || d[i + 1] > here || d[i - w] > here || d[i + w] > here || d[i - w - 1] > here || d[i - w + 1] > here || d[i + w - 1] > here || d[i + w + 1] > here) continue;
+      all++;
+      if (2 * here - 1 < limit) thin++;
+    }
+  return all ? thin / all : 0;
+}
 
 /**
  * The finished impression for these settings. The same picture and the same settings give the same pixels. `mm`: the
@@ -1915,7 +1968,9 @@ export function impression(p: Prepared, look: Look, maxSide = STAMP_OUT_MAX_SIDE
   pl = cropPlane(pl, box.x + Math.round((off() * 2 - 1) * 0.014 * side), box.y + Math.round((off() * 2 - 1) * 0.014 * side), box.w, box.h);
   const oval = ovalOf(pl);
   if (look.round && oval && Math.abs(Math.log(oval.ratio)) > 0.025 && Math.abs(Math.log(oval.ratio)) < 0.35) pl = makeRound(pl, oval.ratio);
+  // How much of it is hairline at the size it prints at, measured before the texture (fineShare).
+  const fine = fineShare(pl, Math.max(pl.width, pl.height) / mm);
   pl = shrinkPlane(pl, maxSide);
   const inked = rubber(pl, look.seed, look.texture, { mm, photo: p.photo, faint });
-  return { image: colourise(inked, look.ink, look.seed), empty: false, found, oval };
+  return { image: colourise(inked, look.ink, look.seed), empty: false, found, oval, fine };
 }

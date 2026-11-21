@@ -10,6 +10,8 @@ import { SENDER_MARK } from './shared';
 import { strikeClass, STRIKE_HELP } from '@/lib/strike';
 import { WordingField } from '../templates/WhoCanUse';
 import { FieldLogic, withoutField } from './FieldLogic';
+import { FieldChecks } from './FieldChecks';
+import { checksSendProblem } from '@/lib/fieldrules';
 import { WitnessBlockButton } from './WitnessChoice';
 // A stamp field: who puts it on, which of the team's stamps, its real size (StampChoice.tsx, src/server/stamps.ts).
 import { StampChoice, useStamps, editorStampSrc, editorStampTurn } from './StampChoice';
@@ -106,6 +108,13 @@ export function StepFields({ ed }: { ed: Ed }) {
       if (el && panel && window.matchMedia('(max-width: 900px)').matches) {
         const top = panel.getBoundingClientRect().top, r = el.getBoundingClientRect();
         if (r.bottom > top - 12) window.scrollBy({ top: r.bottom - top + 24 });
+      }
+      // From the review step's list of unfinished formats (ChecksCheck.tsx): its More options opens on Format and limits.
+      const jf = fields.value.find((f) => f.id === id);
+      if (jf && checksSendProblem(jf, fields.value)) {
+        setFieldMore(true);
+        setTimeout(() => document.querySelector<HTMLElement>('#ed-field-more .ed-checks-fold > summary')?.focus({ preventScroll: true }), 50);
+        return;
       }
       document.getElementById('ed-label')?.focus({ preventScroll: true });
     }, 100);
@@ -473,7 +482,7 @@ export function StepFields({ ed }: { ed: Ed }) {
           <div className="stack">
             {docs.map((d) => (
               <div key={d.id} data-doc={d.id}>
-                <div className="muted small" style={{ fontWeight: 600, marginBottom: 6, textAlign: 'center' }}>{d.name}</div>
+                <div className="small" style={{ fontWeight: 600, marginBottom: 6, textAlign: 'center' }}>{d.name}</div>
                 {/* Pages made from a Word file or the like: check them before placing fields (ConvertNotes.tsx). */}
                 <ConvertNotes d={d} />
                 <PdfDoc url={`/api/files/${d.file_id}/content`} zoom={zoom} onPageClick={(p, x, y) => place(d, p, x, y)} onDocument={(pdf) => setPdfs((m) => ({ ...m, [d.id]: pdf }))}
@@ -575,13 +584,9 @@ export function StepFields({ ed }: { ed: Ed }) {
                     <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.readonly} onChange={(e) => patchField(selected.id, { readonly: e.target.checked })} /> Read only</label>
                   </>
                 )}
-                {selected.type === 'text' && (
-                  <label className="f"><span>Format</span>
-                    <select value={selected.validation || ''} onChange={(e) => patchField(selected.id, { validation: e.target.value })}>
-                      <option value="">Any text</option><option value="email">Email</option><option value="number">Number</option><option value="phone">Phone</option>
-                    </select>
-                  </label>
-                )}
+                {/* Format and limits: formats, character limit, fixed size, hiding, number range and currency, tick-box group rules (FieldChecks.tsx). */}
+                <FieldChecks key={`checks-${selected.id}`} field={selected} fields={list} dateFormat={env.date_format} pageSize={docs.find((d) => d.id === selected.document_id)?.page_sizes?.[selected.page] || null}
+                  patch={(p) => patchField(selected.id, p)} patchMany={(ids, p) => setFields((l) => l.map((f) => (ids.includes(f.id) ? { ...f, ...p } : f)), { tag: `prop:group:${ids.join()}` })} />
                 {/* "Only show when..." and "Calculate from...", each said back as a sentence (FieldLogic.tsx). */}
                 <FieldLogic key={selected.id} field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />
                 <div className="grid ed-size">

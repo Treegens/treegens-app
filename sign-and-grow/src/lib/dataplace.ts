@@ -75,7 +75,7 @@ export function dataPlace(env: Env = process.env): DataPlace {
   processors.push({
     id: 'host', name: host, country: region,
     purpose: 'Runs the server and stores the database and every file.',
-    data: 'Everything: documents, signed PDFs, signatures, names, email addresses, internet addresses, audit trails and our copies of emails.',
+    data: 'Everything: documents, signed PDFs, signatures, names, email addresses, internet addresses, the history of each document and our copies of emails.',
     who: 'Everyone who sends or signs here.',
     missing: [...need(host, 'which company hosts it'), ...need(region, 'where it is hosted')],
   });

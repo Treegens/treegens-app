@@ -13,6 +13,7 @@ import { WitnessChoice, signerNames } from './WitnessChoice';
 // A file's row and a person's More: everything that is not a name or an address (FileRow.tsx, PersonMore.tsx).
 import { FileRow } from './FileRow';
 import { PersonMore, PersonSummary, morePanelId } from './PersonMore';
+import { RemovedLine } from './RemovedLine';
 
 const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Has a copy', witness: 'Witnessed' };
 
@@ -136,6 +137,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
             );
           })}
         </div>
+        <RemovedLine ed={ed} />
         {/* Next was pressed with nobody typed in: said here, and gone once somebody is (Editor.tsx go). */}
         {ed.nudge === 'person' && !isTpl && rcps.every((r) => ed.isIdle(r)) && <p className="notice warn small" role="alert" style={{ margin: '10px 0 0' }}>{NUDGE.person}</p>}
         {!wording && <div className="row wrap" style={{ marginTop: 12 }}>

@@ -1,0 +1,47 @@
+import type { Starter } from './types.ts';
+
+export const volunteer: Starter = {
+  id: 'volunteer',
+  title: 'Volunteer agreement',
+  purpose: 'What a volunteer and your organisation can expect from each other.',
+  written: '2026-11-21',
+  place: 'No particular country',
+  reviewedBy: '',
+  roles: [{ key: 'volunteer', name: 'Volunteer', order: 1 }, { key: 'org', name: 'For the organisation', order: 2 }],
+  blocks: [
+    { id: 'about-h', kind: 'h', text: 'About this agreement' },
+    { id: 'about', kind: 'p', text: 'This agreement is between {organisation} ("we") and the volunteer who signs below ("you"). It describes what we each expect while you volunteer with us. It is not a job contract: you are not paid for your time, and either of us can end it at any time.' },
+    { id: 'role-h', kind: 'h', text: 'What you will do' },
+    { id: 'role', kind: 'p', text: 'Your role, and the days or hours you usually expect to give, as we agreed them together:' },
+    { id: 'we-h', kind: 'h', text: 'What we will do' },
+    { id: 'we', kind: 'list', items: [
+      'Explain your role, and give you the training and equipment you need to do it safely.',
+      'Tell you who to ask when you have a question or a problem.',
+      'Pay back the out-of-pocket costs we agreed with you in advance, when you show us proof of them.',
+      'Treat you with respect, and listen when you raise a concern.',
+    ] },
+    { id: 'you-h', kind: 'h', text: 'What we ask of you' },
+    { id: 'you', kind: 'list', items: [
+      'Follow the safety instructions you are given, and tell us about any accident or near miss.',
+      'Keep private what you learn about the people we work with.',
+      'Tell us as early as you can when you cannot come.',
+      'Treat everyone you meet through us with respect.',
+    ] },
+    { id: 'privacy-h', kind: 'h', text: 'Your personal details' },
+    { id: 'privacy', kind: 'p', text: 'We keep your name, your contact details and the emergency contact you give us, to organise your volunteering and to reach someone if you are hurt. We do not use them for anything else, or share them, without asking you first. You can ask to see them, or to have them corrected, at any time.' },
+    { id: 'end-h', kind: 'h', text: 'Ending it' },
+    { id: 'end', kind: 'p', text: 'You can stop volunteering at any time by telling us. We can end it too, and we will tell you why. Either way, please give back anything we lent you.' },
+    { id: 'sign-h', kind: 'h', text: 'Signatures' },
+    { id: 'sign', kind: 'p', text: 'By signing, you and we agree to what is written above.' },
+  ],
+  fields: [
+    { type: 'text', role: 'volunteer', label: 'Your role, days or hours', required: true, after: 'role' },
+    { type: 'text', role: 'volunteer', label: 'Emergency contact: name and phone number', required: false, after: 'privacy' },
+    { type: 'full_name', role: 'volunteer', label: 'Volunteer: full name', required: true, after: 'sign' },
+    { type: 'signature', role: 'volunteer', label: 'Volunteer: signature', required: true, after: 'sign' },
+    { type: 'date_signed', role: 'volunteer', label: 'Date', required: true, after: 'sign' },
+    { type: 'full_name', role: 'org', label: 'For the organisation: full name', required: true, after: 'sign' },
+    { type: 'signature', role: 'org', label: 'For the organisation: signature', required: true, after: 'sign' },
+    { type: 'date_signed', role: 'org', label: 'Date', required: true, after: 'sign' },
+  ],
+};

@@ -1,7 +1,7 @@
 # GrowSigning
 
 E-signatures without paper: send, sign, track and store agreements on screen.
-100% of what customers pay goes to Treegens tree planting.
+What customers pay, less card fees, goes to Treegens tree planting.
 
 This is a standalone project. It shares no code with anything else in Treegens.
 
@@ -40,6 +40,7 @@ What the test files cover:
 | `tests/billing9.test.ts` | Signatures expire (decided 2026-11-20), with a fake clock: a month's 9 at the end of their billing period (also after cancelling, and a free code's at the end of the calendar month), top-ups 12 months after their payment, the trial's 30 days after the account was made; the soonest to expire is used first; a held one does not expire while held and is gone if let go after its date; the timer writes an "expired" history line; the ledger sums add up; an expired signature is not refunded, and a refund or dispute takes its own payment's first; the Plan page and the API show the reset date and each top-up's date; reminders say how many will expire; top-ups are emailed 30 and 3 days before, only when some are unused; trees count the money, not the signatures; `paidSignatureFor`; no page promises that signatures never expire; a held one whose date has passed does not pass to another person or to other documents (parking), and that is refused through every door when there is none of today's; the history tells "held and let go" from "expired unused"; the gap before a renewal payment arrives is said; and whoever sees 0 reads how many expired and when. |
 | `tests/billing8.test.ts` | What a fourth review found: another product's invoice, refund or dispute on a shared provider account never mails, ends, takes or concedes anything of ours (also for a stranger), one that cannot be told apart goes to a person, and our own refund never goes to a charge found by its amount; a refund reported before its payment waits for it; a refund we owe that a person sends by hand in parts settles once they add up, with one email that says each part (also with a person after three refusals, and when we send the rest ourselves), and a closing account is told of one with a person; a mail server that stalls never holds Cancel (the emails follow from the outbox, and the timer sends one left behind); a price notice counts from when its email left; Cancel pressed and not confirmed survives the pay page being opened, a fresh read that is not set to end ends nothing, a second Cancel after a resume elsewhere asks the provider, and a second press after the plan ended says the same cancellation again; the stored price of an old row is a full-price month before its own tax; the Plan page reads an unwritten price like the money does; a small refund of our own leaves the limits lifted; two form visitors at once never take the balance below zero; "you can finish now" keeps the rules of every email and does not wait for ever behind a visitor who stays away; and a signer renamed away and back pays once. |
 | `tests/groups.test.ts` | Signing groups: who may keep and use them, a group on a draft, one email and one link per member, the first who agrees takes it on and two at once, handing back and giving back, asking to take over, declining for the group, reminders, the not-opened alert, the access code, Find my documents and the security code, a member's email that comes back, one signature per group, the group as it was sent, corrections to its members, templates, bulk sends, public forms, and the screens; and the repairs after a skeptic's check: a member's spam mark or report stops every email to that member, hand-back notes stay with the sender, a member who cannot act freezes only their own link, the sender signing for their own group is free, and what the sender is told always matches what was emailed. |
+| `tests/ds-reports.test.ts` | Reports: numbers per template and sender on a seeded account (deleted finished documents and drafts counted nowhere, a member sees only their own), every filter, words for days and statuses that cannot be read, the CSV with formula cells quoted; the monthly email once, only on the first days, only to owners and admins who asked, not offered to a person working alone, never naming the people documents went to, the footnote naming where the switch is; saved lists saved, opened, refused in words (a header row alone too), people counted by the server, direction marks dropped from names, deleted by their maker or an admin, deleted after the account's days, a smaller number refused until confirmed, in the export, gone with the account. |
 | `tests/finish.test.ts` | What was still open at the end: a member leaves a team by themselves, public forms on a shared device and on a closing account, the email check recognising codes of deleted documents from a fingerprint, and stored copies of emails going with a deleted person and after 90 days. |
 | `tests/integrity.test.ts` | What people sign is what they saw: every signer is shown everything the sender wrote, nothing printed changes after a signature unless the signer is asked to sign again, a signing page left open cannot finish on a document that was changed, the audit trail says what a correction changed, a replaced signer starts with empty fields, a save from an older copy of the editor is refused, a replaced email is still recognised as genuine, a changed signing order is enforced. A second round covers what a second look found: names and addresses that a field prints are wording too, what a finished signer left empty stays empty, the page loads a replaced file again before Finish works, a hand-over inside one inbox passes on nothing, changes made outside the editor count as a newer version, nothing in a request is dropped or cut short without a word, and whoever signed keeps the document as they signed it. |
 | `tests/trust.test.ts` | Everything built in answer to complaints: correcting a sent envelope, lost links, deadlines, checking an email is genuine, reports and pauses, export, team hand-over, the help form, closing an account. |
@@ -59,6 +60,8 @@ What the test files cover:
 | `tests/gaps-mobile-send.test.ts` | Sending from a phone: the camera's orientation note read in both byte orders, a photo upright in the stored and in the signed PDF for all eight values of the note (drawn with pdf.js and checked corner by corner), several pictures joined in the order chosen, a session that slides while it is used and the list of where someone is signed in, the switch after sending, the lock on a device handed to someone who signs in person (the password, five tries, who is and who is not locked), the 44 pixel tap areas in the editor, the list of fields without a label, and the warning for a document that is slow to open on a phone. |
 | `tests/gaps-mobile-sign.test.ts` | Signing on a phone: the legacy build of the PDF viewer opening a document with `Promise.withResolvers` taken away, a browser that cannot show the document told so in words with three ways on, the browsers on `/help`, the email link opening the page with no account and no cookie, a tap or a speck refused as a signature and a blank or solid picture refused as an upload, Finish without a connection (nothing signed, answers kept in the tab, sent again by itself, a lost answer not signing twice), long documents giving their memory back and Next jumping to a far field, the page sizes and pinch zoom, two fields of one person on top of each other refused in the editor and by the server, and the adopt dialog keeping its buttons on screen. |
 | `tests/twostep-repair.test.ts` | Repairs to two-step login after a skeptic's probes: switching it on needs a confirmed address, and a password reset or Google never takes it away or gives a session without the code; Google connects nothing before the code; the reset by email needs the password (also after Google), waits 7 days, emails a stop link every day that works signed out, is on every signed-in browser's `GET /me`, stops on a sign-in with a code or a remembered device and on a password change, makes a new one wait 7 days after any other stop, is one at a time and three emails a day at most, signs every browser out when it takes effect, and can be switched off with a code; a stranger without the password cannot pause the owner and gets the same words and count, the owner on the same network still gets in, wrong codes sent at once get five tries, a pause from signing in never blocks Settings; an admin resets only a member who owns no workspace and is an admin of no other; waiting sign-ins end on a password change, a reset or signing out others; no key changes the password or reads two-step login; withdrawing a device signs it out; a required team still opens sessions and closing the login. |
+| `tests/ds-templates-lib.test.ts` | Ready-made templates: every starter file has its title, purpose, date, place and reviewer, its fields after real paragraphs and on real roles and nothing a will, deed, power of attorney or tax form would need; each renders on one or two pages as searchable text with its fields inside the page and apart; each makes a template owned by the person and usable by the team, that is sent and (one of them) signed by both people, with no paper warning; a name like "Power of Attorney Helpers" is caught by the check before sending; the note in the list and on the template; refusals for an unknown starter, missing, too long or non-text words, a brand name and our own name (said with what to do), with nothing made; a preview prints a brand-like word as its label; a copy of such a template keeps its note; line breaks cleaned; other accounts see nothing. |
+| `tests/ds-a11y.test.ts` | Accessibility: text read from scanned pages with a stub reader (in the background, in the account's language, a PNG or JPEG of the page handed over without a shell, cleaned, found by search, on the signing page only with the warning and only when the documents may be read, a reader that hangs stopped and given up after 3 tries, the service variant with a stubbed fetch, gone with its file, nothing at all with zero setup); the statement at `/accessibility` dated and in the footer, the draft report's lines; with `A11Y_URL` set, axe-core on 26 states, keyboard-only signing at 3 widths and the editor without dragging in Chromium (`tests/a11y/`). |
 | `tests/mobile-repair.test.ts` | Repairs to the phone work after a skeptic's probes: forty unlock tries sent at once get five password checks and the fifth wrong one signs the browser out, a session ending 90 days after sign-in however often it is used, or after 30 days without use (also one that slid past that before), "Sign out everywhere else" ending remembered two-step devices, Finish that only says nothing was signed when that is known and treats a second Finish as done, a public form's own 503 shown in its own words and not retried, two fingers on the signature pad making no signature, overlapping fields drawn smaller on top with templates and public forms checked, and all eight camera orientations upright in three real file layouts and both byte orders, on the page and in the signed PDF. |
 | `tests/gaps-nonus-text.test.ts` | Text, dates, numbers and names outside the US and outside the Latin alphabet: a signed PDF with Chinese, Japanese, Korean, Thai, Hindi, Arabic, Khmer and Cyrillic names read back out of it, a script with no font (flagged to sender and signer, marked on the page, listed in the certificate) and a font file that is missing, right-to-left text with digits and Latin words in it (order, alignment, the typed text kept in the PDF, every box a signer types words into taking its direction from what is typed), one date format for typed dates and the date of signing, the account's default format, the date of signing by the signer's own calendar with local time and zone on the certificate, deadlines with time and zone in emails (the warning three days before too) and in the Give more time dialog, reminders that wait for a signer's morning, numbers as they are written outside the US, and a signer fixing the spacing of their name or offering it in another script. |
 | `tests/encrypt.test.ts` | Encryption of stored files by the app itself: writing and reading with and without a key, old plain files beside new encrypted ones, a wrong key, a changed byte, a cut-short file, a file copied under another name, an upload that only looks encrypted, the server that stores nothing new when it finds files it has no key for (and says so at start), a key that is not a key, changing the key with the old one listed, the script on a folder with every kind of file (run twice, stopped half way, a leftover half-written copy, a file the server deleted meanwhile), and a whole send, sign, download, export and delete with the key set, with the files on the disk unreadable without it and the pages saying what is and is not encrypted. |
@@ -69,23 +72,33 @@ What the test files cover:
 | `tests/comments-repair.test.ts` | Repairs to comments after a skeptic's probes: two people signing in person one after the other on one device (Back to the earlier page, after they finished, a tablet that is not signed in, a forged cookie), the fake payment notice filter across a day of comments and the names beside them (one writer to several people, several writers to one reader, an admin's name, a form visitor's name, a recipient writing for everyone, and an honest office it lets through), an answer turned down at sending dropped with a note and the next one sent, settling limited with one audit line an hour, the webhook log after deleting and sending again, refused requests not using up the burst, the same comment twice, who is really emailed, and an admin reading a removed envelope. |
 | `tests/templates.test.ts` | Who can use and change each template, and the lock on its wording: every route that lists, reads, uses, sends in bulk, copies, publishes as a public form, changes or deletes a template, for the owner of the account, an admin, the template's owner, a chosen member and another member, each by browser and by API key; the lock through the editor's whole save and through the plain API (what can be filled in, everything else refused with who to ask, nothing saved), once out too, unlocking and deleting the template; copies of templates and of locked envelopes; bulk sends and public forms; leaving and being removed; a database from before this. |
 | `tests/witness.test.ts` | A witness for one signer: tied to one person who signs and every way that cannot work, asked straight after that signer whatever the order and holding nobody up, no signature held or used, the block and what prints when, the signer naming the witness before Finish (themselves, a party, a pause, the cap, the daily count), the statement as the witness's own words and a stale one refused, no decline and no hand-over for a witness, "I was not there" and naming the person who was, the certificate (the witness under the signer, the statement, its time, the note), the marks for the same address, the same browser and the same internet address and browser, reminders, the not-opened alert, Find my documents, the completed copy, declining, passing on, corrections, signing again, templates, bulk sends, public forms and the API description. The repairs: a finished witness set aside and asked again with the signature they saw, moving one needs the sign-again choice, no device fingerprint to any sender and none that links envelopes, no self-witness or party through Correct, an API key or a hand-over, the sender's choice kept after "I was not there" and in a copy, who was told said as it is, the witness's note to the sender only, the witness name read by the fake-notice filter, the deadline warning, the "same name" mark, and no fields of a party for a witness. |
+| `tests/ds-fields-checks.test.ts` | Field checks: patterns of the sender's own read first (long, unreadable, back-references, repeats inside repeats and repeated choices that start alike refused with why, an old slow pattern never run, on the page or the server), every format on the page and on the server (email, phone, letters of every language, a date in the envelope's format, my own pattern with my own message, the old words), numbers with smallest, largest, decimals and a currency with its sign, kept as typed and as a number, the character limit at every save and at Finish (a count shown only for a limit the sender set), number fields with only a currency or only decimals, an impossible tick-box rule refused at send, fixed size worked out from the box, tick-box groups (at least, at most, exactly, boxes not shown), hidden values (dots for the next signer on screen and in their copy, the sender sees it, the completed copy as typed or "(hidden by the sender)" with the certificate line), a half-typed pattern kept on a draft and refused at send, templates and bulk sends that carry every check, and the API's old and new forms. |
 | `tests/logic.test.ts` | Conditional fields and formulas: the formula reader (order of operations, brackets, sum and round, what it refuses in words, nothing run as code), numbers as people write them and the result written the same way, empty inputs, dividing by 0, numbers too big or too small, rules that chain and loops (refused when saved, naming the fields), what the review step warns about, a browser that lies about a hidden required field or a calculated value, a signature field that an answer hides, the signed PDF, someone else's answer counting once they have finished and a signed result never changing, sign-again after a rule or a formula changes (predicted the same way in the editor), templates, copies, public forms, bulk send rows that fill a field, and the lock on a template's wording. After the skeptic's review: a result with three decimals read back as the same number (PDF pictures and words, the sender's counts, the next person's formula), no Finish as signed without a picture, nothing learned about an unfinished answer from Finish errors, a total that changed under an open page, two radio buttons chosen at once, number rule values written two ways, a very long line of fields, long numbers in a formula, and digits of every script. |
 | `tests/stamps.test.ts` | Company stamps: the processing steps as pure functions on pixels made in the test (paper removed under light that falls off by half and on grey, yellow, kraft and canary paper, a desk round the sheet, a hard shadow, ruled lines and a noisy faint stamp, one ink in every pixel with a little variation, a thin line kept thin, a design's tint printed solid, faint small print kept in a photo, black print left out and the stroke it crossed filled in, the ink chosen after cutting off the edges, a logo's colours kept apart, an oval made round, the texture sized in millimetres with full-ink cores, lost coverage with hard edges and no pale wash, words that keep their ink in every millimetre, a heavier side, voids and darker rims, no stroke gone at screen, phone and print size, a small seal kept dense, a solid printed dense, a stroke on a ruled line kept whole, a crease, a glare and paper fibres, the ink found and other colours left out, a logo said to have several colours, the same impression for the same seed and another for another, trimmed with a small margin, a tilt from -4 to 4 turned by the page and not drawn in, a texture that keeps the ink readable, a see-through design, a seal that fills the picture, a dark table at the edge of a photo), which files can be a stamp, the account's stamps (up to ten, admins only, names checked for an unpaid account, anything but a see-through PNG refused in words, text, camera notes, a palette and anything packed after the pixels taken out of the file, a damaged file and a file that is not a PNG each told what is wrong with it), a margin that is never cut flat for 24 seeds, a second stamp field that takes the same stamp without a second upload, a field sized by the stamp chosen for it, the adjustments behind one fold with no greyed-out button, a signer's stamp (Finish later keeps it, the answers never set it, required before Finish, the audit line with its fingerprint), the signed PDF (multiplied in at 97 percent and turned by its tilt, the words under it still in the file, the certificate lines and the honest sentence), changing and deleting a stamp, saved stamps from the signer's own account and who may not use them, the limits and who may see a picture, money, signing again after a change, templates, bulk sends, public forms, signing groups, the evidence pack, the export, deleting, and the API description. |
 | `tests/clickwrap.test.ts` | Click-to-agree terms: drafts and versions, our page, the frame (only `?embed=1`) and the API, the signed link a website makes, the record that never changes and its seal, what the certificate says the browser reported, the receipt and one copy by email only for the browser that accepted and an address the website gave, the scam filter on every word the page shows, the two monthly counts and the limits per address (offices, IPv6 blocks), paused accounts, reports, members and keys, and deleting with the files. |
 | `tests/seal.test.ts` | The digital seal of a completed PDF, checked by poppler's `pdfsig`, `openssl cms -verify` and `openssl ts -verify` where they are installed (each test that needs one is skipped otherwise) and by pdf.js: no settings leave the file byte for byte as it was and write nothing down; a sealed file is covered to its last byte and the stored SHA-256 is of it; one changed byte breaks the seal and a byte added after it is told apart; keys from a .p12 (as OpenSSL 3 writes it, and the old triple DES and RC2 kind) and from PEM, RSA-PSS and ECDSA P-256; an expired, not yet valid, wrong-purpose, mismatched, too small or unchained key refused with the file made as before and the operators told once; a time-stamp service made in the test (B-T, its token verified by OpenSSL), and every way a time-stamp can fail falling back to B-B at once, with the certificate saying so; several services in order and a 3-second timeout (4 in all); `/verify` on the sealed file, an added-to file, a changed file, a file sealed by someone else and one sealed with an earlier key; envelopes completed before the seal never sealed afterwards; a voided copy unsealed and saying so; an uploaded PDF that already carries signatures. The screens: one history line "Sealed by" and the certificate's name without technical names, `seal` on the page of the document, the admins' status line from `GET /seal` (admins only, never the reason a key is refused, never the time-stamp service's address), and none of it without settings. Repairs: a file put together around a real seal (the seal moved with other pages in its place, bytes hidden after it, a seal lifted into another file) is never said to hold; a time stamp a stranger adds afterwards is never shown or called trusted; a service that lies about the time is not used; without `TSA_TRUST` nothing says "trusted"; the user name and password never go over plain http; `certificate.pdf` in an evidence pack carries no seal field; the public pages say nothing about a seal without a seal key. |
+| `tests/ds-seal-ltv.test.ts` | Long-term checking of the seal and the record's time stamp, with a stub OCSP responder, a stub revocation list and a stub time-stamp service made in the test: B-LTA (a `/DSS` with an OCSP answer for the seal certificate and its issuer and the revocation list of the time-stamp unit, then a document time stamp over the whole file that `openssl ts -verify` accepts), `pdfsig` still saying the seal is valid, `/verify` matching and calling it whole; B-LT when the document time stamp fails, said in the history; a responder that hangs past `LTV_WAIT_MS` leaving B-T with nothing half written and the page saying so; revoked, a stranger's signature, an old nonce, a refusal, an old answer, a listed serial and a list signed by someone else all refused; nothing tried for certificates that name no address, and nothing asked without a time-stamp service; a turned page, a changed byte and a document time stamp over other bytes after the seal never accepted as check data. Repairs: an empty `/DSS`, one holding other bytes or about other certificates, and a time stamp field carrying an action are "saved after the seal" on `checkSeal` and `/verify`; a document time stamp from a service nobody listed holds but its name and time are not given; addresses such as `localhost.`, `*.internal.` and names the DNS says lead inside are never asked; the document time stamp shares `LTV_WAIT_MS`; `LTV_WAIT_MS=0` turns the step off; a host refused by the outside-connections guard is named with `OUTBOUND_ALLOW`; a time-stamp unit with no address does not block the seal's own checks. The record: the chain head time-stamped with one certificate line, the token verified by `openssl ts -verify` over the head and refused for another, the evidence pack with the token, the head and the command; a rewrite of the record with every hash recomputed shown against the time stamp; a swapped-in token from a service of one's own named from the token, said unchecked, and not holding with `TSA_TRUST`; no line and the reason kept when the service fails; no technical text on the page and the record line in History. |
+| `tests/ds-pdfa.test.ts` | Archive format (PDF/A): `toPdfA` writing the PDF/A-2b XMP (part 2, conformance B, the title escaped and the same as the information dictionary, the dates agreeing), the sRGB output intent with the profile from `assets/icc` and its licence beside it, a document ID, no JavaScript open action, no page actions, hidden annotations taken away and the rest printable, a link that ran JavaScript running nothing and a web link kept; every font in the signed PDF this server renders embedded, other scripts included; an uploaded file with a font that is not inside it (also one named only in a filled-in form's appearance), printing-press colours, or a movie found; with no `VERAPDF_CMD` the switch not offered, refused with 409 and nothing changed; with the switch off nothing changed and veraPDF never run; only an admin signed in may switch it (not an API key), and the security record says who did; with veraPDF (a stand-in that answers in veraPDF's report format) passing, the stored file PDF/A and the certificate, the page of the document and the history saying "PDF/A-2b, checked with veraPDF"; failing, a font missing, a checker that cannot start and one that takes longer than `VERAPDF_TIMEOUT_MS`, each made as a normal PDF that says why, and the document always completing; the seal still valid for `pdfsig` and `checkSeal` after the PDF/A step, with the metadata and output intent kept; the real veraPDF when installed (`VERAPDF_TEST_CMD`), skipped otherwise. |
 | `tests/seclog.test.ts` | The security record: each kind of event written once, to the right accounts, with the right person and address (the team, sign-ins and their failures to every account of the person, logins, two-step login, keys and their new addresses, settings, webhooks, deletions, template rules, the export, the owner handed over, the GrowSigning team), a wrong password and a wrong code written the same way for a login with two-step login, nothing secret in any line (the test's passwords, keys, tokens, codes and addresses looked for), members and send keys refused, an admin key paging in order, filters and the CSV, names only when shared, lines that cannot be changed or deleted, a forged line found by the chain, the purge after `SECURITY_LOG_DAYS` and with the account, the alerts once an hour and switched off by a person only, and the opt-in webhook. After the reviews: `INSERT OR REPLACE` over a line refused; a record re-chained without the server's secret, the newest lines removed and a changed note of the newest line all shown as changed; a key in the browser name left out; someone who left the team not named by the API, the download or the screen; fifteen switch-offs one email; a second key within the hour named when the hour is over; lines for a withdrawn invitation, new recovery codes, withdrawn devices, signing up and Google connected, used and removed; the search box; names in a signed-in admin's download and ids for a key; the export in files of a set size; and the words of the screen (no envelope, recipient, purge or events, details as sentences, never an id). |
 | `tests/impact.test.ts` | Trees: "10 mangroves" said only for a signature that was paid for (next to Finish, in the email that asks someone to sign, on the finished screen, on the signing record) and never for a free one (the trial, a free code, a sender's own signature, a server that takes no payments), nothing said to an approver, a viewer or a copy, the first time a person signs and an account sends (once, remembered by the server, by address also after an envelope is deleted), "10 more" and the count afterwards, a payment that went back no longer counting, what a link gives away before its access code, the forecast at the review step, the switch "Trees on the signing record" (admins only, in the security record, the box left off), totals hidden until 1,000 sheets or 10 trees, no share of a tree anywhere, and the green claims rules read from the source (no generic words, no carbon claim for the mangroves, estimates called estimates with their sources). The payment provider is the stand-in of the billing tests. |
+| `tests/gov-g01.test.ts` | The honesty guard and the account's switches: the registry of certifications in `src/lib/claims.ts` (all not held; held only with a registry link, number, scope, dates not run out and who checked; in progress only with a signed engagement), `/security/certifications` built from it alone, and a scan (`tests/claims-scan.ts`) of every page, email, PDF text, README, `.env.example`, `docs/` and `public/` for certification names and words such as certified, compliant or qualified signature, each hit on the reviewed list `tests/claims-allow.json` with its reason or failing, printed with file and line; "Trees on screens and emails" and "AI answers in the help chat" (defaults under both profiles, owners and admins only, never an API key, each change in the security record, what disappears from screens, emails, the finished screen and the review step, the count going on); `DEPLOYMENT_PROFILE=government` (no trees on the signing record, read from the PDF with pdf.js, an earlier record never rebuilt, no hosted AI service ever asked). The AI model is a stub and the payment provider the stand-in of the billing tests. |
+| `tests/gov-g03.test.ts` | The procurement documents: each one listed on `/procurement` exists, is dated and starts with "What this is not"; every file any of them cites exists; the honesty scan finds nothing in them and no em dash; the crypto inventory of the whitepaper names exactly the files under `src/server` and `scripts` that call each `node:crypto` primitive (scrypt, AES-GCM, HKDF, PBKDF2, HMAC, hashes, sign and verify, random values, timing-safe compare), so a new use fails until it is written down, and every file that imports `node:crypto` is named; the data processing terms carry a note on every clause, name the help chat's provider and promise no hours; the alerts and export folders the documents name match the code; `/procurement/<document>` serves only the listed files, refuses `../` and broken escapes, and says so when a server has no docs folder; `/security/subprocessors` lists only what is switched on, the AI host with its country; the bill of materials lists pdf-lib. |
 | `tests/retention.test.ts` | Keeping closed envelopes for a set time: the rule off by default, only admins change it, 30 to 9,999 days, a level, a template's own period and a dry run that counts; the due date for each way of closing (completed, voided, declined, expired) and none while out; one email 14 days before to the sender and the admins, not twice, and nothing purged sooner; a rule switched off or a level raised after the email; Keep it with its reason in the audit trail; legal holds on an envelope and a folder (members refused, a reason needed, the sender's delete, Purge now, the timer and the purge itself refused and recorded, a folder hold that follows an envelope out of it), lifting with a reason, closing the account and the timer refused with the list of holds (recorded once a day), the two-person lift by the people who run the server; what each level removes and nothing more (pages, signed PDF and attachments off the disk, a template's file kept, values and signature pictures, names, addresses, internet addresses, browsers, the subject's names, our email copies); `/verify` by file and by ID, the signing link, the email's security code, downloads, the evidence pack and copies after a purge; a redacted trail said as redacted, while any other change still shows; Purge now and calling it off within the 14 days; an open dispute; the retention record never changed and without names after the account goes; the export; and today's delete and restore as they were. After the repair: the two lines (completed, and cancelled, declined and expired) each with their own days; the email at most once a week for an account, listing what is due in the next 21 days, with a Keep link on each row and no word of the first vocabulary; the disputed mark still on `/verify` by file and by number after a deletion; decline and cancel reasons gone from our stored emails at the "answers" level while who got which email stays; a held draft frozen and a held document refused by Delete even when deleting would only take it out of the lists; nothing of keep and delete on the page with no schedule, one Delete with one; every shared sentence and every refusal in plain words that say what to do; what recipients keep said with the day their link stops; and `?ask=` opening only what applies. |
 | `tests/archivemail.test.ts` | Copies of every email for an account's archive addresses: an address gets nothing until someone with its inbox confirms it, and opening the link confirms nothing; only admins who are signed in add or remove one (no API key); five at most; "No, do not send copies" or a spam mark on the asking email stops the asking for 30 days, for the address with or without a "+tag"; a login with an unconfirmed address and an address that is not plain are refused; every kind of email about an envelope is copied to each confirmed address as an email of its own (no Bcc), with the same attachments; no signing link, security code or one-time code in the html, text or subject of any copy; nothing copied for other accounts and no account emails; copies not counted towards the daily limit; three copies that come back pause the address and never mark a recipient; copies wait while sending is paused; our stored copies and the signed PDF they carried go when the envelope is deleted or purged at any level, and a copy still waiting then is not sent; `SMTP_REQUIRE_TLS` reaches the mail library and nothing in `SMTP_URL` switches it off; the pages and the card say only what the code does. |
 | `tests/customfields.test.ts` | The account's own details on envelopes (custom fields): up to 20, text or a list of choices, only admins change them and the change is in the security record; names told apart in any script and letter case; values of one line and up to 100 characters; characters nobody can see (zero-width and format characters, blank fillers, lone variation selectors, text-turning marks) refused in names and values, except a joiner between letters or in an emoji, and a value with nothing to read counting as no value; a required one checked at send with a code and the missing names for the screens, on bulk rows and for public forms; a template's values as the start and a bulk column that fills them; `documents[].fields`; never in what a signing link answers; a value put right on an envelope that is out with a line in its audit trail and fixed once completed; the list filter (start of a text value, whole choice of a list) and column, the export's columns with formulas defused in cells and header; webhook payloads; the certificate block with only the fields marked for it; the fake-notice filter over the printed ones; changing or deleting a field leaving sent envelopes as they were; a purge of personal details taking the values; the API description; what the "Use" dialog of a template asks for; the plain refusal for a value of a deleted detail; a short answer to a request naming thousands of details; a note when a printed detail holds letters the certificate cannot print. |
+| `tests/ds-page-tools.test.ts` | Pages removed, turned and moved: each operation and its refusals, fields that follow their page and stay on the same words on a turned page, a page already turned in the upload, removal refused with the list of fields unless they go too, drafts and templates, someone else's envelope, a completed one, an envelope that is out (a correction, and the sign-again choice once someone finished), the audit line, the signing record's fingerprint of the new file, the editor's way (only the file, then the normal save, two rounds in a row, never a file not made from the document) and a replaced file not called a page change; a converted file keeping its original, the sign-again words naming the pages, the hourly limit counting only stored changes, page numbers sent as text, and a file made from a held-back template refused. |
 | `tests/convert.test.ts` | Office files turned into PDF: every kind recognised from bytes built in the test (Word, Excel, PowerPoint, OpenDocument, the old binary formats, RTF, HTML, text, TIFF) and never from the name, the unknown kinds and what each is told, passwords, ZIPs that unpack to more than 100 MB or 20 times their size (also when they lie about it, and one entry listed eighteen times), the test converter through a whole send, sign and evidence pack (the audit line with both fingerprints, the original kept encrypted, in `originals/`, kept while another account has it and deleted with the account), a correction that puts a converted file on, the notes (tracked changes, comments, sheets, outside content but not web links, macros), a name that reads like a payment notice left out of the record, no converter set up, a signer's attachment, several files at once, a TIFF that would lose pages, a stand-in for LibreOffice that hangs (killed with what it started, its folder gone), shows its environment (no secrets) and its network (none), the queue and the limit per account, the real LibreOffice when it is installed, and the repairs: a web page cleaned of everything it names outside itself however it is spelled (and a picture on the server's disk that does not reach the PDF, with the box and without it), the box itself (what a job can see: LibreOffice, its folder, nothing else), a 1 KB sheet of a thousand million cells stopped by the memory limit, a text file with no words, the original downloaded again by its account only, one note line with the rest folded, and the refusal without a converter in one plain sentence. |
 | `tests/i18n.test.ts` | Languages: the catalogue parser and its placeholders, plural rules for English, French, Arabic and Russian, the fallback from pt-BR to pt to English, a missing or broken text shown in English and never as its key, right to left, the statuses of each language, the choice of language (the sender's, the browser's, English), legal texts in English with one sentence until a person has checked them, the language recorded in the audit line and read back by the evidence pack, `recipients[].locale` and `default_locale` refused in words when a language is not available, templates, copies, bulk rows and public forms, the bulk list's language column, `<html lang>` and `dir` (read from the request only once a second language ships), dates and numbers by language with the Gregorian calendar and the signed PDF unchanged, `npm run i18n:check` failing on a catalogue that does not match (repeated keys, hidden direction characters, web addresses, dropped plurals), a person a document is passed or corrected to starting without the first person's language, `language` read like `locale`, and the evidence pack reading the wording from the end of the audit line whatever the person's name says. |
+| `tests/ds-lang-mail.test.ts` | Emails and texts in the recipient's language: every `mail.*` text reads and has no em dash, an English email word for word as before with `lang` and `dir`, the footer from a test catalogue with its html parts escaped once, a request and a reminder in a test French with every line of ours translated and the sender's subject and message untouched, `emails.locale` kept, a catalogue that says the same as English giving the English email word for word, senders and English recipients in English, a language that is not switched on never used, text parts (GSM 160/153, UCS-2 70/67, the extension signs, emojis), an Arabic text counted in parts on the row and against the daily limit, the one-time code by email in French with our copy still losing the code, and the fake-notice filter refusing the same envelope for a French recipient. |
+| `tests/ds-lang-signing.test.ts` | The signing page in the signer's language: every refusal the signing routes say with a code has its text in `en.json` and the English answer is that text, the page says it from the code in the signer's language and in the server's own words when there is no text, the header menu absent with one language and listing each language in its own name with two, `POST /sign/:token/locale` saving on the person with one audit line (refused for a language not switched on, behind an access code, and past 20 an hour), consent in a language without checked legal text shown in English with the note and recorded as English, the certificate's language line, logical CSS with the document, the pad and the zoom never mirrored, the test languages en-XA and ar-XB keeping every placeholder and plural, and the files that are done showing no English written into the code. |
 | `tests/brand.test.ts` | The GrowSigning brand: brand.css loaded last, no leftover data URI icon, the four icon files and the link preview picture the same as the brand kit with its alt text, `metadataBase` from `APP_URL` (a broken one falls back instead of taking pages down), one web app manifest whose icons are the sizes it says, the drawn logo in every place that showed the leaf beside the typed name and never the mark beside the typed name, the email logo picture (a sender's own logo or name still first, escaped), the logo above the card on the pages reached from an email and our own page for an address that does not exist, a page title that does not say signing plants trees, the email logo on a tile of the email's ground colour, the stamp with the envelope ID line beside it in the lowest 17 points of every page of a signed copy turned 0, 90, 180 and 270 degrees (nothing at the top, the line made smaller on a narrow page) and at the foot of the certificate with its deep green band and logo (drawn with poppler, pixels counted), no old name and no old web address (growsigner) anywhere, and a browser signed out after 30 idle days or 90 days from signing in. |
-| `tests/open-public.test.ts` | What earlier reports left open, finished: the stamp and the envelope ID line never on a document's own text, pictures or filled-in fields (left when the foot is clear, right or in a gap when it is not, on a margin added under the page when the foot is in use from side to side or the page could not be read; pictures found inside forms and inline, on turned pages; the signed copy drawn with poppler and compared pixel by pixel with the document as uploaded), a narrow page, and the stamp on pages a signer attached. |
+| `tests/open-platform.test.ts` | What earlier reports on the help chat, stamps, self-hosting, email archive copies, the security record, deleting and languages left open, finished: Help as one button in the signing page's top bar; a stamp design of hairlines printed with even ink from the start, and said so; Settings sections named "Stamps and seals" and "Records and data" everywhere; 44 px footer and palette targets; "A person replies" only where someone reads the requests, on /help and in the email that confirms a request too; the compose example's converter on a network with no way out; one Gmail inbox however dotted; asking stopped after three strangers mark it as spam, also when the address was removed first, until the day it names; no link or code in the copies of bulk sends, corrections, reminders and disputes; a security-record webhook said as such under API and webhooks; the security record downloaded in pages and noted outside the database once a day; a held draft frozen through every door; "Keep it until <day>" in the Delete dialog's own row, only when it keeps the document longer; the deletion record as a spreadsheet or a PDF and in an admin's export; a fold at the end of a dialog reached with Tab; days written out in history; the language of a place that goes to another person; digits 0 to 9; and every text key built at run time present. |
+| `tests/open-public.test.ts` | What earlier reports left open, finished: the stamp and the envelope ID line never on a document's own text, pictures, drawn lines and shapes (a ruled line, a frame, words drawn as outlines; white and the sheet behind everything do not count) or filled-in fields (left when the foot is clear, right or in a gap when it is not, on a margin added under the page when the foot is in use from side to side or the page could not be read; pictures found inside forms and inline, on turned pages; the signed copy drawn with poppler and compared pixel by pixel with the document as uploaded), a narrow page, and the stamp on pages a signer attached; an install made with `--ignore-scripts` still gets its fonts and viewer at build; tab titles of the email landing pages; Details explained on /help; Undo after removing a person in the editor; a Microsoft sign-up confirmed with the 6-digit code; Send to many, Documents, Reports, /help and /verify saying document and cancelled; every moment in a message, email or record written "21 Nov 2026 05:40:12 UTC" and every screen date day first in an English browser; /pricing and /features short (two plans, three rules, the comparison and the nine promises folded). |
 | `tests/selfhost.test.ts` | Running it yourself: `/api/health` when everything works (and nothing about any account in the answer) and with each failure on its own (a full disk, a folder that cannot be written to, a database that does not open, a stopped file store, a timer that never ran, hangs, failed or is late); a backup made while a document is uploaded, with its manifest and no key anywhere in it; a restore that gives back the database byte for byte and every stored file, checks every chain, and says which key is missing or wrong; every way a backup is not whole (stopped half way, no manifest, a changed byte, a missing file, a cut database, a manifest that names a file outside it) and a folder that is not empty; the hosts the settings imply for several configurations; what `all`, `listed` and `none` allow and what a typo does; `none` switching each service off; a stubbed outside call refused before it is made and a listed one allowed, logged once an hour; `net`, `tls`, `http` and `https` held too, and nodemailer reaching a relay by its looked-up address through a mail server on this machine; webhooks at saving and at delivery; every file in `src/server` that opens a connection being on the list; security.txt and the disclosure page; the bill of materials and the licence gate; the words of `docs/controls.md` and `docs/runbooks.md` (no claim of a scheme, every cited file exists); the Dockerfile, the compose example and the chart read as text (not root, a health check, one replica, egress denied). With `SBOM_BUILD_CHECK=1` after a build, the served bill of materials. No network. |
 | `tests/simplify-start.test.ts` | The way in, Home and the menu made simpler: the confirmation email has a 6-digit code and at most 50 words, the code confirms only in a browser signed in to that login, a new code replaces the old one, a code runs out after 24 hours, 10 wrong codes in all close codes for a login for good and leave the button in the email, and something that is not 6 digits costs no guess; Home has no start button of its own and lists what was completed with a Download for each; the menu has nine entries with the five that moved inside More, a member does not get Website terms (and the server refuses them too), no total of paper under 1,000 sheets; a document is named after its file in words ("planting-partnership.pdf" becomes "Planting partnership") and a name the sender typed is kept. After the skeptic's and the simplicity reviewer's rounds: Send from an unconfirmed address is refused in words the review step turns into the code box; wrong codes count per address across a deleted login; a pause after 5 tries in a minute says how long; digits in other scripts; no API key before confirming; sign-up limit in plain words; lists and downloads without "Please sign:"; the phone menu, the skip link, tab titles and the words on the pages inside More. |
 | `tests/simplify-editor.test.ts` | The editor made simpler: step 1 opens with one empty person row that is never saved, sent or counted while nobody typed into it; a person row is a name, a wide email box and one More; the lines of that More for every role (never one with a single answer, at most 6 with nothing set up and 8 with everything), five roles with signing in person as a way of signing; the subject, the message, reminders (asked once), the deadline and the date format on step 3 under one More options; six kinds of field with the rest behind More fields; a field's Assigned to, Required and Label with the rest under its More options; keyboard help behind a fold and no tag jargon; the saving of one document in pages with no fraction of a tree; and Sign now: offered only when the one person is the sender, no invitation email, the record says so, and it cannot skip anybody else's email, hand a colleague someone's link or skip an access code (the sender's own API key gets the link, a colleague's does not). After the review: nobody is called "Unnamed" and only a template says an address is filled in later; Next with no file or nobody typed in stays on step 1 and says so in place; the editor's words say document, file and person; "Check who signs" is one list and what a locked template asks for cannot be picked away; the text-message tick is under "How they get it"; the line next to step 3's More options (reminders always, the rest only when it differs, a payment link when signers will see one, nothing about reminders for Sign now); a field's More options closes for every other field. |
 | `tests/simplify-envelope.test.ts` | The document page, completed documents and Templates made simpler: one main button by state (Continue, Remind with the person's name, Sign now, Download, Reopen, Copy and fix) and never two filled buttons; everything else in the page's one More in a fixed order, at most nine lines in any state, one Delete, Keep it and Hold only when a deletion schedule applies; a second Remind for one person only when two or more wait; each person one line and one More, with the ways to share their link under "Share the link yourself"; comments, History (the emails in the same list), Files, Details and checks folded and closed; no internet address or fingerprint among the lines the page draws while the API and the full record keep them; one Download on a completed document; Templates with Use on the row and the other five in its More; the Sent banner and the way back to Templates after sending from one; a toast lifted off anything that can be pressed; and that every call the old page made still answers, and none of them for a stranger. |
+| `tests/ds-consent-own.test.ts` | The account's own consent text: refusals in words with nothing saved, a version for each save that changes a word and none for the same words, versions that a trigger keeps from being changed and that are never deleted while a document refers to them, admins only, stopping keeps the versions, a text per language numbered on its own, the payment-notice filter at saving and at showing; on the signing page nothing changes with zero setup, the screen must name the version it showed (409 otherwise, also for a screen left open while a new one was saved), the audit line names version, language and SHA-256 next to our wording and none of the account's words, English with the "not yet checked" sentence for a language without a text, once for each document or every time (never twice in a minute, at most 50); "Sign on paper instead" closes the part with the right reason before or after agreeing, emails the sender even with problem emails off, refuses a copy-only person and a second tap, works for a member of a group, and the certificate line says withdrawn; the evidence pack prints the exact words of each version with the fingerprint the trail names; closing an account takes the versions along; the API description; and the screens (Other actions only with a text and only for someone with a part to stop, the fold at 120 words, Settings behind More options). |
 
 ## Running it yourself
 
@@ -104,7 +117,12 @@ LibreOffice then has whatever network the container has and can read whatever fi
 builds the box it otherwise sees only its own job folder in, is not permitted with the capabilities dropped (run
 here: "Operation not permitted"). So deny egress in the network before you switch it on, and know that in this
 container an uploaded office file is kept from the server's files only by LibreOffice's own setting that blocks
-links from untrusted documents, and a web page by our cleaning of it ("Turning office files into PDF" below). The base image is a
+links from untrusted documents, and a web page by our cleaning of it ("Turning office files into PDF" below). The
+safer way in Docker is the other one the compose example carries: leave LibreOffice out of this image and start its
+`gotenberg` service (`docker compose --profile office up -d`, with `CONVERTER_URL=http://gotenberg:3000` in `.env`).
+It runs in a container of its own on a network marked `internal`, which has no route out: only this app reaches it,
+and it cannot see this app's files. That file is checked with `docker compose config`; we have not run the office
+profile in Docker ourselves. The base image is a
 build argument so that you can pin it to a digest you checked; the Dockerfile says how.
 
 ```bash
@@ -134,11 +152,11 @@ readiness probe use it.
 
 **Every outside service is optional, and listed.** `/security` has "What this server connects to": the mail relay,
 the payment provider, Google and Microsoft sign-in, the text message provider, the time-stamp service, the AI model
-of the help chat, the document converter, Amazon SNS confirmations and webhooks, each on or off from the settings
-this server runs on, with the hosts. The server logs the same list when it starts. The list is in one file,
-`src/lib/outside.ts`, and a test fails when code in `src/server` opens a connection that is not on it. WhatsApp, a
-check of passwords against leaked lists, certificate revocation checks and any kind of analytics are not in the
-software, so nothing calls them.
+of the help chat, the document converter, the list of leaked passwords, Amazon SNS confirmations and webhooks, each
+on or off from the settings this server runs on, with the hosts. The server logs the same list when it starts. The
+list is in one file, `src/lib/outside.ts`, and a test fails when code in `src/server` opens a connection that is not
+on it. WhatsApp, certificate revocation checks and any kind of analytics are not in the software, so nothing calls
+them.
 
 **`OUTSIDE_CALLS`** holds the server to that list from the inside:
 
@@ -205,6 +223,10 @@ nobody has read against EUPL-1.2 (the list is in the script; it makes a person l
 `docs/runbooks.md`: making and restoring a backup, rotating `FILE_ENCRYPTION_KEY` and `APP_SECRET` (and what
 rotating `APP_SECRET` breaks, which is a lot), a leaked key, a breach, rebuilding the same image, running with no
 network.
+The procurement documents (a security whitepaper, data processing terms as a template for a lawyer, an impact
+assessment pack, a transfer assessment template, an exit plan and an incident response document) are in
+`docs/procurement/`, and `/procurement` serves every one with its date. `/security/subprocessors` lists who else
+handles data on this server, from its settings.
 
 ## What the bad reviews taught us
 
@@ -219,8 +241,9 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 
 | What people complain about | What GrowSigning does |
 | --- | --- |
-| Too many screens and too much to read before I can sign, and the invitation email is a wall of text. | The consent screen names the sender once, has at most 120 words before its one tick and fits one phone screen (390 by 664 measured). Next goes to the field and opens it, the "Sign here" pointer keeps clear of printed labels, and the view, the page size and the download are behind one More. The dialog is called "Your signature" and its button "Sign". Finish signs without a second confirmation unless something needs a look. The invitation has one short footer for the security code, Report this email and the copy of the link, and a deadline is said in the reader's own time once their device has told us the zone (in UTC, and marked as UTC, until then). Measured with `tests/ux/flows.cjs`; ceilings in `tests/ux/ceilings.json`. |
+| Too many screens and too much to read before I can sign, and the invitation email is a wall of text. | The consent screen names the sender once, has at most 120 words before its one tick and fits one phone screen (390 by 664 measured). Next goes to the field and opens it, the "Sign here" pointer keeps clear of printed labels, and the view, the page size and the download are behind one More. The dialog is called "Your signature" and its button "Sign". Finish signs without a second confirmation unless something needs a look. The invitation has one short footer for the security code, Report this email and the copy of the link, and a deadline is said in the reader's own time once their device has told us the zone (in UTC, and marked as UTC, until then, unless the same address told the same sender its zone on an earlier document). Measured with `tests/ux/flows.cjs`; ceilings in `tests/ux/ceilings.json`. |
 | The app greets me with a wall of buttons and a menu full of words I do not know, and I had to leave the page to confirm my address. | One start button, "Send a document": at the top of the menu, and on a phone as Send in a bar at the bottom next to Home, Documents, To sign and Menu. The menu has nine entries in plain words; Send to many, Forms, Website terms, Reports and Trees planted sit in More, which opens by itself on those pages and stays open for someone who opened it. Home shows what waits for you, what waits for others and what was completed lately, each with Download. A new address is confirmed with a 6-digit code typed in the same tab (the email has at most 50 words and still carries the button), and the banner goes by itself when the address is confirmed anywhere. Whoever presses Send first finds the code box on the review step, next to Send. A document is named after its file in words, so the subject reads "Please sign: Planting partnership" and the lists and the downloaded file read "Planting partnership", not "planting-partnership". A total of paper saved is shown only from 1,000 sheets (`TOTALS_FROM` in `src/lib/impact.ts`). Signing your own document starts from the same button: "Add me", and the review step's button reads "Sign now". |
+| My manager cannot see which forms stall, and the team retypes the same list of people for every bulk send. | Reports shows, for the days you choose, what was sent, what is finished and how long that took, by template and by sender, with Download CSV of exactly that. Owners and admins can get last month's numbers by email on the first of the month. A list pasted into Send to many can be saved for the team and used again, checked against the template each time; it says it holds personal data, and one nobody uses is deleted after 180 days. |
 | The plan renews with no warning, and the email does not say the amount. | Month to month only. A week before and again the day before every renewal an email states the exact amount and date, with a link that stops it. The reminders run on the app's own timer and are written to the plan history. If more is charged than the reminder said, the difference is refunded by the software. Every payment gets a receipt. |
 | "I cancelled and was charged anyway." | Cancelling tells the payment provider at once, says "cancelled" only when the provider has confirmed it, and returns a reference that stays on the Plan page. A charge on a plan that already ended, a second charge for the plan, or a charge on a free plan is refunded by the software itself; if the provider is down the refund is retried on the timer for as long as it takes and a person is told when it keeps failing. Cancelling while a payment is failing, or in the hour before a new month's payment is taken, ends the plan the same day and withdraws that payment. Cancelling on the provider's own page gets the same reference and email. If one of the provider's messages is lost, the timer reads the real state back. A card dispute stops all billing, takes the unused signatures of that payment back with the money, and small ones are not contested. |
 | There is no cancel button. | One button on the Plan page. A stop link in every email about a payment while a plan renews, which works without logging in (`/billing/stop`) and dies when that admin leaves the team. On `/help`: find every paid plan by email, or stop billing with the card alone (last four digits plus the account email, or plus the date and amount of a charge). |
@@ -265,7 +288,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | I cannot find out where my documents are stored or who else handles them. | `/security` has a block "Where your data is", filled from settings (`OPERATOR_NAME`, `DATA_REGION`, `DATA_HOST`, `DATA_BACKUPS` and the provider settings): where the server is, who else handles data, in which country and what for. A provider is listed only when its switch is on, and whatever the operator has not stated is printed as "has not said ... Ask them." instead of being left out. `/security/processing` is a plain data processing summary to save as a PDF, and says that a signed agreement is between the customer and whoever runs the server. |
 | My signer cannot open the page where they are, and nobody says what to do. | Every email that asks someone to sign ends with one line: reply and ask the sender for the document as a PDF. `/help` tells the sender what to do then, and that a signature collected that way is outside the certificate. No claim is made about any country, because none was tested. |
 | My signers live in WhatsApp, not email, and a recipient cannot exist without an address. | Tick "I will send the link myself": a name and no address. We never write to that person, the envelope page hands the sender the link and the ways to share it, the sender gets the turn, the reminders and the copy in their place, and the certificate says "Link shared by the sender" instead of claiming an email went out. They count towards the limits like anyone. Their own page never promises them an email: asking for more time says the sender will reach them the way they sent the link, and the sender's email says there is no address to reply to. |
-| My signers do not read English and nobody told me. | `/features`, `/help`, `/security` and this file say it in one sentence (`LANGUAGE_NOTE`): the signing screen and the emails are in English for now, and the document can be in any language. `/help` prints the consent text so a sender can translate it. The foundation for other languages is built (catalogues, a language per recipient, legal texts in English until a person has checked a translation, the language each person agreed in on the audit line), and no screen is translated yet. |
+| My signers do not read English and nobody told me. | `/features`, `/help`, `/security` and this file say it in one sentence (`LANGUAGE_NOTE`): the signing screen and the emails are in English for now, and the document can be in any language. `/help` prints the consent text so a sender can translate it. The foundation for other languages is built (catalogues, a language per recipient, legal texts in English until a person has checked a translation, the language each person agreed in on the audit line), and no screen is translated yet. The signing page is being moved into the catalogue: it sets its language and direction, mirrors for right-to-left languages without turning the document around, gets a language menu once a second language is switched on, and the certificate names the language of each person's page and consent. The request, its reminders, the one-time code and the texts can follow the same language, with the sender's own words untouched and set apart as theirs, and a text in another script is counted in the parts a provider bills. Recipients' emails switch language only once every one of them, and the pages they link to, is translated (`mail: true`), which none is yet, so a signer never gets the request in one language and the completed copy in another. |
 | A name in Chinese, Thai or Hindi comes out as empty boxes on the signed document. | The signed PDF and its certificate print Latin (with accents), Greek, Cyrillic, Arabic, Hebrew, Armenian, Georgian, Chinese, Japanese, Korean, Thai, Devanagari (Hindi, Marathi, Nepali) and Khmer, with the letters joined and stacked as the script needs, and only the font files a document uses are embedded in it. For any other script (Tamil or Bengali, say) nothing is printed as an empty box: the sender is told on the envelope page and before sending, the signer in the check before finishing, each such character is printed as the mark �, and the certificate lists them by Unicode number. A font file that is missing after a broken install counts the same way instead of failing the PDF. A typed signature shows four handwriting styles only when the handwriting fonts can write the name, and one plain style otherwise. |
 | Hebrew or Arabic typed into a field is reversed, and house number 42 becomes 24. | Right-to-left text is put in reading order on the signed PDF and the certificate, with digits and Latin words inside it left to right, and it starts at the right edge of its box. The fields on the signing page take their direction from what is typed. The words as typed are also written into the PDF next to the glyphs, for programs that copy or search. |
 | The dates on my document are in American order, and one page shows two formats. | One format for every date on an envelope: the date each person signs on, and any date they pick in a date field, on the signing page, in what other signers are shown and on the PDF. A new envelope starts with 20 Nov 2026 (D MMM YYYY), and an account can set another format for its new envelopes (Settings, Sending); the formats with the month as a word are listed first. Nothing is ever converted to month-first unless the sender chose that. |
@@ -284,21 +307,23 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | My name was cut at the first space, and I could not fix how it is written. | One name as written, everywhere: no screen or share text greets anyone by a guessed first name, and a new workspace is named after the whole name. A signer can fix a letter, the spacing, a hyphen or a dot of their own name ("山田 太郎" to "山田太郎"). A name offered in another script (Cyrillic to Latin, kanji to Latin) goes to the sender to confirm, and the signer is told that it may well be the same name, not that it is a different one. |
 | My phone photo of a paper page came out sideways in the signed PDF, and the fields were off. | A phone camera writes a note into a JPEG that says which way up it is. The server reads it (`src/server/exif.ts`, no library), puts the picture on a page that suits it the way the note says, and sets the note to "upright", so the page is the same way up in the editor, on the signing page and in the signed PDF, and a field is where it was placed. The test draws the signed PDF with pdf.js and checks the corners for all eight values of the note. |
 | I photographed five pages and got five documents, each of them huge. | When several pictures are chosen at once the editor asks whether they are one document, shows them in the order chosen with a way to change it, and joins them into one PDF, a page for each (up to 50). A picture larger than a page needs is made smaller in the browser before it is uploaded (2,000 pixels on the long side). |
-| My phone keeps asking me to sign in. | Signing in on another device signs nothing out, and Settings, Security lists every browser that is signed in, with the device, the browser, the last use and the day it is signed out by itself, and has "Sign out everywhere else" (which also ends the other devices' skipping of two-step login). Two rules sign a browser out, whichever comes first: 30 days without use (`SESSION_DAYS`), or 90 days after it signed in, however often it is used (`SESSION_MAX_DAYS`). A phone used every week stays signed in for 12 weeks and then asks once; a copied sign-in that kept being used once a month used to stay alive for ever, and now dies 90 days after the sign-in at the latest. |
+| My phone keeps asking me to sign in. | Signing in on another device signs nothing out (unless a team switched on its "One session at a time" rule), and Settings, Security lists every browser that is signed in, with the device, the browser, the last use and the day it is signed out by itself, and has "Sign out everywhere else" (which also ends the other devices' skipping of two-step login). Two rules sign a browser out, whichever comes first: 30 days without use (`SESSION_DAYS`), or 90 days after it signed in, however often it is used (`SESSION_MAX_DAYS`). A phone used every week stays signed in for 12 weeks and then asks once; a copied sign-in that kept being used once a month used to stay alive for ever, and now dies 90 days after the sign-in at the latest. |
 | A client of mine was locked out, and was told only their admin could help. | Two-step login (an authenticator app, `src/server/twostep.ts`) comes with ten recovery codes, shown once. Without phone and codes, an owner or admin of the team switches it off under Settings, Team: the person is emailed at once, and their record says who did it. Someone who owns a workspace (whom nobody else may reset) or anyone else resets it by email, after the right password: it takes effect after 7 days, with an email every day that can stop it without signing in and a notice on every page, and a sign-in with a code or a remembered device stops it. A password reset or Google never takes it away, and a stranger who does not know the password cannot pause it. The screen where it is switched on, the sign-in screen and `/help` say all of this before anyone is stuck. |
 | I handed my tablet to a client to sign, and my whole account was a tap away. | Opening the signing page of someone who signs in person locks the host's account in that browser until the host types their password, and the signer's last screen asks them to hand the device back. Five wrong passwords sign that browser out, counted on the server before each password is checked, in one statement, so forty guesses sent at once from the browser's console get five checks, not forty; one address can try 30 times in 15 minutes. What the lock does not cover (the rest of the device, a password the browser offers to fill in, a Google or Microsoft session) is said next to "Host signing now" and on `/security`. |
 | I ended up with two accounts and nobody could merge them. | Pressing "Continue with Google" or "Continue with Microsoft" while already signed in never makes a second login on the way. The person is sent to Settings, which says to connect that account to the login they are in, or to sign out first for a separate one, and the sign-in page says who is signed in instead of offering the buttons. A Connect that took too long, or was replaced in another tab, goes back to Settings too. |
 | On my phone I never hear that someone signed. | The page after sending has one switch, "Email me each time someone signs". It sets the same preference as the switches under Settings, Profile. |
 | The home page says "all you need" and then gives a long list. | The home page says one thing: a signature that is paid for plants 10 mangroves with Treegens. One button (Start free), three short points, and the video of Treegens' AI counting planted seedlings. The top bar has four entries (Pricing, Help, Sign in, Start free). Prices, their rules and the comparison are on `/pricing`, what the product does on `/features`, and checking an email or a signed document, security and the API are in the footer. No total of paper or trees is shown anywhere until it means something (1,000 sheets, 10 trees), so a new server never says 0. |
-| I could not find where to change my password. Settings was eight tabs of everything. | Settings has sections named for what they hold: Profile (name, email address, signature, which emails you get), Security (password, ways to sign in, two-step login, where you are signed in, and for admins the security record), Account, Sending (what new documents start with: reminders, deadline, date format, details), Team, Stamps, Plan, Records and data, API and webhooks. An owner or admin sees these nine; a member sees four (Profile, Security, Team, API and webhooks), and a member who follows a link to a section of the admins is told in words whose it is. "Saved" appears next to the button or switch that saved. The long lists (what is kept when an account closes, the plan rules) are closed until someone opens them. Old links to what moved still land on it (`src/lib/settingsnav.ts`). |
+| I could not find where to change my password. Settings was eight tabs of everything. | Settings has sections named for what they hold: Profile (name, email address, signature, which emails you get), Security (password, ways to sign in, two-step login, where you are signed in, and for admins the security record), Account, Sending (what new documents start with: reminders, deadline, date format, details), Team, Stamps and seals, Plan, Records and data, API and webhooks. An owner or admin sees these nine; a member sees four (Profile, Security, Team, API and webhooks), and a member who follows a link to a section of the admins is told in words whose it is. "Saved" appears next to the button or switch that saved. The long lists (what is kept when an account closes, the plan rules) are closed until someone opens them. Old links to what moved still land on it (`src/lib/settingsnav.ts`). |
 | The date on my contract was 2026-03-04. Is that March or April? | A new document writes dates as 20 Nov 2026, with the month as a word, unless the account chose another format under Settings, Sending (year-month-day is still one of the five). Days in sentences on screens and in emails, and the moments on the signing record, are written the same way, with the time in UTC next to them on the record. File names, the API and CSV exports keep 2026-11-20, which sorts. A document made before 21 November 2026 that never chose a format keeps the one it was stamped with. |
 | Fields in the editor are too small to grab with a finger. | On a touch screen every field answers a tap over at least 44 by 44 pixels (a tick box is drawn about 9 pixels wide at phone width), so does the resize corner, and every button of the editor on a phone is at least 44 pixels tall. |
 | A blind signer hears "Text, required" and cannot know what to type. | The last step before sending lists every field a signer fills in that has no label, says why that matters to someone who uses a screen reader, and opens each one with the cursor in its Label box. It warns and never blocks. |
+| A blind signer's screen reader only announced pages, the readable version was behind a hidden link, and a scanned contract had nothing to read at all. | The first thing the keyboard reaches on the document is "Read the document as text instead"; every field says its name, required or optional and its page; a whole document was signed with the keyboard alone. With `OCR_CMD` or `OCRMYPDF_URL`, scanned pages get text read by a machine, always under a warning that it may contain mistakes and that the page is what is signed. `/accessibility` says what works and what does not, dated, "Checked by the authors with axe-core and by hand; not audited.", with a draft report (`tests/ds-a11y.test.ts`). |
 | The upload said 25 MB was fine, and my signers' phones sat on a blank page. | A signer's phone downloads the whole file, and we measured how long that takes on a slow mobile connection: about 5.7 seconds a megabyte (`PHONE_SECONDS_PER_MB` in `src/lib/policy.ts`, Chromium at phone size with Chrome's "Slow 4G", not a real phone). The upload box says so next to the limits, and a document of 5 MB or more gets a warning under it and again before sending, with the wait for its size and what to do. On a phone the box says "Tap to choose files or take a photo", not "drop" or "click". |
 | The signing page stayed blank on my older iPhone. | The PDF viewer is the legacy build of pdf.js, which runs wherever the app itself runs (iOS 16.4, Chrome 111); the modern build needed iOS 17.4. A browser that still cannot show the document gets a notice in words with three ways on: copy the link into another browser, download the PDF, ask the sender. `/help` lists the browsers and says what was tested. |
 | A tap on the screen went onto the contract as my signature. | A drawing whose lines add up to less than a quarter of the width of the box, that fits in 40 by 12 pixels, or that covers nearly half the box is refused in words, with Type offered instead; so is an uploaded picture with no ink or almost nothing but ink (`src/lib/ink.ts`). It judges the size of a mark only, never whether it looks like anyone's signature, and only in the browser. |
 | "Failed to fetch. Go back, put it right." I had no signal, and nothing to put right. | Finish without a connection says that nothing was signed only when that is known (the device was offline before it was sent, or the server says so); when the answer was lost on the way it asks the server, shows the done screen if it went through, and otherwise says plainly that we cannot tell yet and that nothing typed is lost. A Finish sent again after one that went through is simply done, with no error. A public form that has no signature free says so in its own words (we email the visitor when it can take their signature) instead of "could not reach GrowSigning", and is not sent again every 15 seconds. It says that the answers are safe on the page, keeps the last step open and sends it again by itself when the device is back online (and every 15 seconds while it says it is online). Answers not saved yet are kept in the browser tab too, so a reload does not lose them. Nothing is shown as signed before the server has said so. The landing page, `/help` and the in-person notice say that signing needs a connection to open the document and to finish. |
 | A 100 page contract crashed my phone, and Next stopped past the field. | Pages more than three screens away give their picture back and are drawn again when they come near. Measured on 100 pages at 390 by 844 (Chromium, not a real phone): 277 MB of page pictures after scrolling to the end before, 19 MB after. Next jumps to a far field instead of gliding, and checks where it landed when the scrolling stops: from page 1 to a field on page 51 it now lands on screen at the first tap. |
+| My scan came out sideways with a blank page in the middle, and the only fix was to edit the PDF somewhere else and start again. | Pages on the file's row in step 1: Turn, Remove and move with the arrows (or the arrow keys, or by dragging with a mouse), with Undo until saved; Escape or a tap outside never drops changes that are not saved. The fields go with their pages and stay on the same words on a turned page. A page with fields is only removed after saying which fields go with it, and the audit trail, and the email to anyone asked to sign again, say what was removed or turned (`tests/ds-page-tools.test.ts`). |
 | The print is tiny on a phone, and there is no zoom. | 100, 150 and 200 percent under More on the signing page, drawn again at that size at the phone's own density (up to 3, within 6 million points a page), sliding sideways in a strip of their own so the bars stay put. Pinch zoom is never switched off. |
 | Two signature boxes on top of each other, and the signer could never finish. | The signing page draws the smaller of two overlapping fields on top, so a tick box inside the end of a text field, as paper forms have it, can be tapped and so can the text field. Sending, correcting, saving a template and making a public form refuse a field of one person that more than 60 percent of is hidden under that person's fields drawn over it, naming the person and the page, in the review step of the editor and on the server (`src/lib/stacked.ts`). A public form made before this rule keeps taking visitors (Text view reaches every field) and its owner is emailed what to move, instead of every visitor being told the form cannot take signatures. On an envelope that was out before, Next that keeps coming back to the same field points to Text view. |
 | I put two fingers on the signature box to zoom, and that zigzag became my signature. | The pad draws with one finger at a time. A second finger that lands while one is drawing takes that line away and says "That was two fingers at once, so it was not kept", and nothing draws until every finger is off. A palm resting next to a pen is ignored (`onePen` in `src/lib/ink.ts`). |
@@ -318,7 +343,9 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | A signer saw one total and another was signed under their name, because a co-signer finished in between. | Finish carries a key for the other people's answers the screen counted. If someone finished since, nothing is signed: the page says who finished, shows the new total and any field that comes with it, and the person finishes after looking (`formulaInputs` in `src/server/logic.ts`). |
 | Sending one document means wading through options most people never need, and the same question asked twice. | The editor has three steps and each asks only what a first send needs (research/ux-charter.md, measured by `tests/ux/flows.cjs`). Step 1, "Files and people", opens with one empty person row: a name and an email. The role, how they get it, the check, how they sign and a private note are one line each in that person's More, each showing what it is set to. Step 2 shows six kinds of field, with every other kind behind "More fields", and a field's panel shows who it is for, Required and Label. Step 3 has the subject and message, and one More options with reminders (asked once), the deadline and the date format. A first send went from 19 actions over 10 screens and 193 choices on the way to 18 actions over 8 screens and about 125. Nothing was taken away: it moved behind a More. |
 | "Plants a tree with every signature" turned out to mean nothing I could check, and the same line was shown for documents nobody paid for. | "10 mangroves" is said only where a signature was paid for: next to Finish, in the email that asks someone to sign, on the finished screen and on the signing record. A person who signs with a free signature is told nothing about planting; the signing record then says only that GrowSigning gives what it earns from its plans to planting mangroves with Treegens, and a server that takes no payments does not say even that. Nothing says trees are planted already: a signature "plants", mangroves "are being planted". Paper, water and CO2e are called estimates, with their sources and the working on `/impact`, which also says which figure is our own assumption, that no receipts for the money sent to Treegens are published yet, and what is not claimed: no offset, no carbon figure for the trees. Totals are hidden until they mean something, and no share of a tree is shown. |
-| Our security team asked where the data goes, what the server talks to, how we back it up and who to report a hole to, and the vendor sent a brochure. | You can run it yourself: one container, one volume, in your own country. `/security` lists every outside service with the hosts, from the settings the server runs on, and `OUTSIDE_CALLS=none` switches all but your mail relay off. `/api/health` for your monitor, a backup and restore pair that checks every file and every audit chain and never holds a key, `/.well-known/security.txt` from your own contact, a bill of materials at `/security/sbom.json`, and two documents for the security team that say "a self-assessment by the authors, not audited, not certified" at the top. |
+| Our security team asked where the data goes, what the server talks to, how we back it up and who to report a hole to, and the vendor sent a brochure. | You can run it yourself: one container, one volume, in your own country. `/security` lists every outside service with the hosts, from the settings the server runs on, and `OUTSIDE_CALLS=none` switches all but your mail relay off. `/api/health` for your monitor, a backup and restore pair that checks every file and every audit chain and never holds a key, `/.well-known/security.txt` from your own contact, a bill of materials at `/security/sbom.json`, and two documents for the security team that say "a self-assessment by the authors, not audited, not certified" at the top. For procurement, `/procurement` has a dated whitepaper, data processing terms as a template for a lawyer with the code behind each clause, an exit plan and an incident response document, each saying first what it is not, and `/security/subprocessors` lists only the providers this server has switched on. |
+| Years later the PDF reader says the signature on our contract cannot be checked, because its certificate expired. | On a server with a time-stamp service, the signed PDF also carries, from the moment it is completed, what a reader needs to check the server's seal after its certificate has expired: the answers of the places each certificate names to check it, and a time stamp over the whole file. When one of those places does not answer within 20 seconds, the file goes out without them, and the page of the document says so. The record's last value at completion is time-stamped too, so a rewrite of the history up to completion shows against a value the service signed, not us, when that time stamp is checked with OpenSSL against the service's own root (the page's own check can be fooled by whoever runs the database unless `TSA_TRUST` is set). Not yet tried in Acrobat or the EU DSS validator (`src/server/ltv.ts`, `src/server/auditstamp.ts`). We do not call either qualified. |
+| My clients live in WhatsApp and never open email, and my grandmother cannot read a text with a code. | Where the operator set it up, a sender can also send the link by WhatsApp, only after ticking that the person agreed (in the audit trail), never together with the text link and never for a group, a copy or a public form. Every message names the sender and says to reply STOP, and STOP stops that account's WhatsApp to that number. The sender reads "Sent" and "Delivered to the phone", never "read". The finished document goes as a link, never as a file. "Call me with the code" reads a code by text message out on a call instead, slowly and twice, with the same tries and limits (`tests/ds-channels.test.ts`). |
 
 ## What is in it
 
@@ -330,6 +357,14 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   the language when there are two or more, and a private note. A choice with one possible answer is not listed.
   Check who signs is one list (none, an access code, a code by email, or both). Next with no file, or with a file
   and nobody typed in, stays on step 1 and says what is missing where it goes.
+  A file's row has Pages: the pages as small pictures, each with Turn and Remove, moved by dragging, the arrow keys
+  or the arrow buttons, with Undo until "Save pages" (`src/components/editor/PageTools.tsx`); Escape or a tap
+  outside the dialog says the changes are not saved instead of dropping them, and Cancel leaves them. Saving makes a new
+  file and leaves the old one as it was; fields go with their pages, and on a turned page a field stays on the same
+  words, upright and the same size (`src/lib/pages.ts`). Removing a page with fields asks first, with the list.
+  The audit trail says "Page 3 removed from "Contract"" with the new page count and fingerprint, and the signing
+  record fingerprints the new file. On a document that is out it is a correction like any other, with the same
+  sign-again question; the API is POST /envelopes/:id/documents/:doc/pages (`src/server/routes-pages.ts`).
   A file's More has Replace, Move and Remove. The step's More options has Set signing order and groups. Step 2
   offers six kinds of field (Signature, Initials, Date signed, Name, Text, Checkbox) and the rest under "More
   fields" (a kind already on the document stays in view); a field shows Assigned to, Required and Label, and the
@@ -445,6 +480,26 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   kept as shown (1,233) and as a plain number (1.233), and everything after reads the number. Someone else's answer
   counts in a formula once they have finished, and a result never changes after its signer has finished; if that
   person finishes while your page is open, Finish signs nothing, says who finished, and shows the new result first.
+- Field checks, under a field's More options, "Format and limits" (`src/lib/fieldrules.ts`, shared by the editor,
+  the signing page and the server). A text field's Format: None, Email address, Number, Phone number, Letters only,
+  Date (in the envelope's date format) or My own pattern, with the words people see when it does not match (the
+  pattern itself is never shown on screen, though the signer's browser receives it to check as they type). A pattern
+  is read by our own reader before it is saved: at most 200 characters, no back-references, no repeat inside a
+  repeat such as (a+)+, no repeated choice whose parts can start alike such as (a|a)+, at most 3 open-ended repeats,
+  and a field with a pattern takes at most 100 characters; a refused one is explained. On the server every pattern
+  check also has a time limit of a quarter of a second, so a pattern that slipped past the reader cannot hold up
+  the server. A character limit from 1 to 4,000; Fixed size (text shrinks to fit its box, below 7 point for wide
+  capitals, so it is never cut off or printed past the box, and no more can be typed than fits at 7 point; the
+  signer sees "12 of 40 characters" under the box while typing, on a phone and on a computer); Hide what they type (dots for every other person while the document is out,
+  the sender's own copy shows it; with "Also hide it in the completed copy" the completed copy prints "(hidden by the
+  sender)", the certificate says a value was hidden by the sender's choice, and the value stays with the document
+  and in the API; it is a screen mask, not encryption). A number field: smallest, largest, decimal places and a
+  currency (an ISO code, printed with its sign; the value is kept as typed and as a plain number, `typed_num`). Tick
+  boxes with the same group name: tick at least, at most or exactly N, with an optional message, said to the signer
+  beside the boxes before they finish; a rule never asks for more boxes than are shown, and one nobody could meet
+  (at most or exactly fewer boxes than are required) is refused at send and listed on the review step. The server checks the limits at every save and everything at Finish; templates,
+  bulk sends and the API carry it (`fields[].validation` as an object, the old word or pattern still works). It
+  only checks the format of what is typed: "checked the format", never "verified".
   Templates, copies, public forms, bulk send (a column named
   like a field fills it) and the API (`fields[].show_when`, `fields[].formula`) all carry them.
 - Access codes (at least 4 characters, frozen after 10 wrong tries until the sender sets a new one), private notes
@@ -465,6 +520,20 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   the answer to sending, and `GET /api/envelopes/:id/warnings` before it.
 - Sign a document yourself, clone an envelope, save any envelope as a template, folders, search that also
   looks inside documents.
+- Ten ready-made templates (Templates, "Start from a ready-made one", in the empty list and when a search finds no
+  template of your own, so the way to Use a template is no longer; also from Help, which links `/app/templates?ready=1`):
+  a volunteer agreement; consent to photos, video and stories (with how to withdraw it); consent to share personal
+  data with a named partner; a donation or gift declaration; consent to plant trees on community or private land;
+  event participation and risks; parental consent for a child's participation; a simple confidentiality agreement;
+  acknowledgement of grant terms; an equipment loan. One file each in `src/lib/starters/`, with its purpose, the date
+  it was written, the place it is written for ("No particular country") and who reviewed it (nobody yet). Picking one
+  asks for the organisation's name (and for three of them a partner, an event or an activity), shows it as a PDF if
+  wanted ("See it first"), and makes a normal template of one or two A4 pages with roles and fields placed under the
+  paragraphs they belong to (`src/server/starters.ts`), owned by the person, for everyone on the team, opened in the
+  editor. The list (once, at its top) and the editor say "A starting point written by GrowSigning, not legal advice.
+  Not reviewed by a lawyer."; the wording of the PDF stays as written, its fields can be changed; the editor's note is kept as it read the day the template was made. The check before sending reads them
+  like any document. A name that reads like a well-known company, or like GrowSigning, is refused. API: `GET /api/starters`,
+  `GET /api/starters/:id/preview`, `POST /api/starters/:id/use`.
 - A "Strike out" field: a line through printed wording (a cross over a box taller than a line), on the signing
   screen and in the signed PDF, written to the audit trail, and counted as wording by the sign-again rule.
 - The sender sees who filled in everything but has not pressed Finish, and the reminder to that person says so.
@@ -494,11 +563,19 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   get through. When the check of the characters itself could not be made, the step opens and says so. Its button is
   Finish, the same word as on the page.
 - The consent screen holds 120 words or fewer before its tick, counted on the screen itself. A sender's message or
-  private note that would take it over waits behind "Read the message", one tap away. Not held to that number: a
-  very long subject or very long names, and a document sent to a signing group, whose note is shown in full. At
-  320 px wide the screen is about one and a half screenfuls.
+  private note that would take it over waits behind "Read the message", one tap away. A member of a signing group
+  reads "For HR team." where the others read their own name, and what agreeing does for the group ("If you
+  continue, you take this on for HR team...") stands between the tick and Continue; the full explanation of how a
+  group works is in the email. Who it is for when it is not a signature takes three words ("Asked to approve",
+  "Asked to read", "Asked to witness"). Measured at 390 px: 99 to 119 words for a signer, an approver, a reader, a
+  witness, a group's member, someone checked by a one-time code and someone signing in person, with and without a
+  message. Not held to that number: a very long subject or very long names. At 320 px wide the screen is about one
+  and a half screenfuls.
 - The first invitation gives the deadline in UTC, says so, and says that the signing page shows it in the reader's
-  own time. Once the person's device has told us its zone, emails give their own time. The security code in the
+  own time. When the same address told the same sender its zone on an earlier document, the invitation gives the
+  deadline in that zone, named, and still points to the signing page (`src/server/zonememo.ts`; never from another
+  sender or account, and never in an email to the host of an in-person signing). Once the person's device has told
+  this document its zone, emails give their own time. The security code in the
   footer of a signing email is drawn again when it would spell a rude word.
 - Sees what earlier signers already filled in.
 - Questions and comments while the envelope is out (`src/server/comments.ts`, `src/server/routes-comments.ts`): from
@@ -556,13 +633,16 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   with, so a design cropped right at its outer ring is not cut flat at the edge. A before and after on a page of text
   shows it with the ink found and chosen; every other adjustment (what counts as paper, texture, tilt, cutting off
   the edges) is behind one closed fold, "Adjust the look", and the button that finishes stays in view at the bottom
-  of the dialog. Someone with a second stamp field on the same document is offered the stamp they just put on
+  of the dialog. When much of a design is hairline at the size it prints at (small type, thin rings: lines under
+  0.15 mm along 30 percent or more of its line work, `fineShare` in `src/lib/stampink.ts`), one line under the
+  pictures says the rubber texture can break them up and to move "Rubber texture" towards "Even ink"; it goes once
+  the texture is low enough, and it never stops anyone finishing. Someone with a second stamp field on the same document is offered the stamp they just put on
   ("Use the same stamp"), so it is made once. It is stored as a transparent PNG, written again by the server from
   its pixel data alone (no text, camera notes, palette or other chunk of the file is kept, and nothing after its
   pixels), and on the signing page and in
   the signed PDF it is multiplied into the page at 97 percent, so the words under it show through and there is
   never a box around it. Admins keep up to 10 stamps under
-  Settings, Stamps (a name, the picture, the ink, the seed and the real size, 40 mm across to start with); a
+  Settings, Stamps and seals (a name, the picture, the ink, the seed and the real size, 40 mm across to start with); a
   stamp name typed by an account the checks apply to is checked like any other name. In the editor a Stamp field
   is either the sender's own stamp, part of the document from the start (a change after someone has signed needs
   the sign-again choice), or a signer's, who puts their own on when they sign from a picture, a photo or a saved
@@ -575,6 +655,32 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   one, and a link can put on 20 an hour. A stamp uses no signature. What it is, said wherever one is offered: a
   picture of a stamp that a person put on the document; GrowSigning does not check that they may use it, it is not a
   certified electronic seal, and it pays no stamp duty.
+- **The account's own consent text.** Admins write it under Settings, Sending, More options, "Your consent text",
+  one per language that is switched on: the organisation's name, how to reach it (email, phone or postal address,
+  at least one), how to ask for a paper copy and what it costs, how to stop agreeing to electronic documents and what
+  follows, what a person needs to read the documents (our own sentence when left empty) and anything else. Each save
+  that changes a word is a new version, numbered per language; a saved version is never changed (a database trigger
+  refuses it) and never deleted while a document refers to it. Settings lists the earlier versions with the number
+  of documents next to each, and says: "If you deal with consumers in the United States, the ESIGN Act section
+  101(c) lists what this text must say. Ask your lawyer." GrowSigning shows the words as written and does not check
+  them against any law. On the consent screen the text sits under our own sentence on what kind of signature this
+  is, which always stays: in full while the screen stays at 120 words before the tick, otherwise behind "Read
+  <Org>'s terms". A person whose language has no text reads the English one with the sentence that it is in English;
+  with no English one they see only our words. Under the text, "Ask people to agree" chooses once for each document (the
+  default) or every time the link is opened ("Agreed again" in the audit trail, at most once a minute and 50 times
+  for one person on one document). The screen sends back which version it showed; a screen left open while an admin
+  saved a new one is shown the new one first. The consent line of the audit trail names that version, its language
+  and its SHA-256 next to our own wording, and the evidence pack holds the exact words each person was shown
+  (`consent-own-text.txt`). With a text, Other actions has "Sign on paper instead", whose one choice "Ask <sender> to
+  send it by post (stops signing electronically)" closes that person's part like a decline, with the reason
+  "Withdrew consent to electronic records" (or "Did not agree to electronic records" before they agreed), emails the
+  sender whatever their notification choices, and puts "withdrawn" and the time on the certificate's E-record
+  consent line. Only that action marks a person as asking for paper (`paper_at`), never the words of a reason, so a
+  decline that types the same words stays a decline. The sender's document page then says "asked for this document
+  on paper" with no Copy and fix button, and the line pointing to Other actions is shown only to someone who has
+  that entry (not a viewer, a copy or a witness). An account that has not paid yet cannot save a text that reads like a payment notice from a
+  well-known company. API: `GET` and `PUT /api/account/disclosure`, `GET /api/account/disclosure/versions`,
+  `POST /api/sign/:token/decline/paper`. With no text saved nothing on any screen, line or file changes.
 
 **After signing**
 - Final PDF with every value stamped in, signer attachments appended, and a certificate of completion:
@@ -609,8 +715,16 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   and OpenSSL; not yet opened in Acrobat), a "Digital seal" line on the certificate saying what it is and is not,
   and `/verify` checking the seal of a dropped file next to the byte-for-byte answer, including a file someone saved
   more into after the seal, and never vouching for a file put together around a seal taken from another. See "The digital seal of a
-  completed PDF". An uploaded PDF that already carries signatures is said to lose them: the signed copy is made from
+  completed PDF". With a time-stamp service, the seal also carries what is needed to check it after its certificate
+  has expired (B-LT, B-LTA), and the record's chain head at completion is time-stamped, printed in one certificate
+  line and put in the evidence pack with the OpenSSL command that checks it (see "Long-term checking and the
+  record's time stamp"). An uploaded PDF that already carries signatures is said to lose them: the signed copy is made from
   the pages as they look.
+- Completed files as PDF/A-2b, an archive format some archives require, when the operator installed veraPDF and an
+  admin switched on "Archive format (PDF/A)" (Settings, Records and data; off by default). The file is called PDF/A
+  only when veraPDF passed the stored file itself: "Archive format: PDF/A-2b, checked with veraPDF <version>" on the
+  certificate and under "Checks on the file". Otherwise it is made as a normal PDF that says why in a few words. See
+  "Archive format (PDF/A)".
 - A copy of an envelope that was voided, declined or ran out of time, whether the sender or a signer downloads it,
   opens with a page that says why and is marked across every page ("VOIDED, NOT A SIGNED DOCUMENT"): large in the
   middle, in small dark rows over the whole page so a corner cut off or a black-and-white copy keeps it, at the top
@@ -628,7 +742,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   alone, the audit trail as text and as JSON with every chain value and how to recompute them, every stored email
   about it with its hand-off result (signing links and security codes taken out), the consent wording each person
   agreed to, the disputes with what each person wrote, and a README that says whether a person or an API key made it.
-- `/security/certificate`: "How to read a GrowSigning certificate", every line it prints, where it comes from, what it
+- `/security/certificate`: "How to read a GrowSigning signing record", every line it prints, where it comes from, what it
   shows and does not, dated (`CERTIFICATE_PAGE_VERSION` in `src/lib/evidence.ts`). A test fails when the certificate
   prints a line the page does not explain.
 - Keep and delete (`src/server/records.ts`, the words in `src/lib/retention.ts`; on screen the words are Delete
@@ -652,7 +766,8 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   is announced), that someone asked for it (with "Call it off"), that it is on hold, or that its files were
   deleted; with nothing set up the page shows none of it. With a schedule on, the page's More lists "Keep it"
   (sender or admin, a reason in the history, one more period) and, for admins, "Hold", and the one Delete dialog
-  says the day the links of the people on it stop, offers "Keep it instead" and links to "Delete its files for
+  says the day the links of the people on it stop, offers "Keep it until <day>" when keeping gives it longer than the
+  schedule already does (not on a document completed today), and links to "Delete its files for
   good" (sender or admin, 14 days, called off until then, then for good; the people on it are not told). With no
   schedule the Delete dialog is as it was, and an admin holds a document or deletes one document's files from
   Settings. Holds (Settings, "Hold a document" by its name or "Hold a folder", with a reason and an optional case
@@ -666,12 +781,16 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   its files deleted, and a closed one stays marked: `/verify` by file and by number still says it is disputed
   after the files are gone. After a deletion the document keeps its record: the history with its chain values,
   the changed lines marked, so the page says "Some details were removed on <day>. The record can no longer be
-  recomputed for those lines." instead of "Record was altered" (any other change still shows); the fingerprint of
+  recomputed for those lines." instead of "Record was altered" (any other change still shows; a mark counts only
+  with the time of that deletion, and like the rest of the chain it does not stop someone who can write to the
+  database, who could mark more lines or rewrite them all); the fingerprint of
   its signed PDF, so `/verify` says completed here and deleted since; recipients' links say the sender deleted it;
   downloads, the full record and copies say why they are not there; the export lists it. What stays is listed in
   full, including the address book (Contacts keeps the people you sent to). Every schedule change, keep, hold,
   lift, deletion and refused attempt is in the account's deletion record (never changed; "Download the deletion
-  record" in Settings once it has a line, a CSV with the fingerprint of each deleted PDF), and in the security
+  record" in Settings once it has a line, a CSV with the fingerprint of each deleted PDF, and the same record as a PDF to
+  print or file, `src/server/deletionpdf.ts`; an admin's export carries it as `deletion-record.csv`, so closing the account
+  does not take the only readable copy), and in the security
   record. API: `GET`/`PUT /api/account/retention`, `POST`/`DELETE /api/envelopes/:id/hold`, `POST`/`DELETE
   /api/envelopes/:id/purge`, `POST /api/envelopes/:id/keep`, `GET /api/envelopes/:id/retention`, `POST
   /api/account/retention/holds`, `DELETE /api/account/retention/holds/:id`,
@@ -688,7 +807,9 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   alias, a second address that forwards). A name of the account or the person that reads like a well-known brand
   or a payment notice is refused while the account's checks apply, and left out of that email for any other
   account. An address that marked an earlier email from the account as spam
-  cannot be added. From then on every email the
+  cannot be added. Once 3 different inboxes have marked the asking email as spam within 30 days, the account asks
+  no address at all until the oldest of those marks is 30 days old (confirmed addresses keep their copies); the
+  marks do not pause the account's sending. From then on every email the
   account sends about one of its envelopes (requests, reminders, deadline warnings, the completed copy with its
   PDF, declined, voided, corrected, comments, and the emails to witnesses and group members) also goes to each
   confirmed address, as an email of its own and never as a Bcc header, once the email it copies has left. The copy
@@ -985,8 +1106,29 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 
 **Team and admin**
 - A browser is signed out after 30 days without use (`SESSION_DAYS`), or 90 days after it signed in however often it
-  is used (`SESSION_MAX_DAYS`, both in `src/lib/policy.ts`), whichever comes first, and signing in on another device signs nothing out. Settings, Security lists where you are signed in and signs out one browser
+  is used (`SESSION_MAX_DAYS`, both in `src/lib/policy.ts`), whichever comes first, and signing in on another device signs nothing out unless the team's sign-in rules below say otherwise. Settings, Security lists where you are signed in and signs out one browser
   or all the others. Hosting a signing in person locks your account in that browser until you type your password.
+- Sign-in rules for a team (Settings, Security, "Sign-in rules", owner and admins; `src/server/secpolicy.ts`), all
+  off until someone sets them. Shortest password, 8 to 64 characters: it applies when someone joins and whenever a
+  password is chosen, and a member whose password is shorter is asked for a longer one the next time they sign in
+  with it, on a screen that has the form, "Forgot password", their other workspaces and Sign out; nothing else of
+  that team opens for them until then (lowering the rule holds such a member until their password is next typed,
+  because we never keep its length). Sign out after (Never, or 15 minutes to 8 hours of no use): two minutes before, a line at the
+  top of every page says so with "Stay signed in" (any key or tap also counts as use), and the sign-in page says
+  why it happened. One session at a time: arriving in the team in another browser signs the earlier one out, and
+  that browser's sign-in page says why. A rule applies to a browser while it works in that team; for someone on
+  several teams, the one their browser is in decides. API keys are not affected. The owner is never held by the
+  password rule (the card tells them instead) and can always sign in again. The card also says whether everyone
+  must use two-step login (changed under Team) and why there is no forced password change or rule about capitals
+  and digits (NIST SP 800-63B advises against both). Each change, and every browser a rule signs out, is a line of
+  the security record. With "Sign out after" set, the team's signing pages check their link again on the first
+  action after a break that long, keep every answer, and say "You were away for a while, so we checked the link
+  again."; nothing covers the page and nothing pops up on a timer.
+- Every new password, for everyone (sign-up, the emailed link, Settings), is looked up in the Pwned Passwords list of
+  passwords from data leaks and refused with "This password has appeared in a data leak. Choose another one." Only
+  the first 5 characters of its SHA-1 fingerprint leave the server; the rest is compared here. When the list does not
+  answer in 3 seconds, the password is allowed and nothing says it was checked (`PWNED_CHECK`, `HIBP_RANGE_URL`).
+  When `OUTSIDE_CALLS=none` or `PWNED_CHECK` switches it off, /app/operator says so in one line.
 - Accounts with owner, admin and member roles, email invitations (from a confirmed address, 20 people a day, none
   while sending is paused), multiple accounts per user.
 - Sign in and sign up with Google or Microsoft next to email and password, once the operator has set them up
@@ -997,7 +1139,36 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   their own envelopes, folders and bulk sends, admins see all of them. Signing in opens the workspace used last.
 - Branding: logo and colour on emails and the signing screen.
 - Contacts saved automatically and suggested while typing.
-- Reports: status counts, completion rate, average time to complete, monthly activity, per team member.
+- Reports (More, Reports): for the last 30 days unless you choose other days, how many documents were sent, how
+  many are finished and the median time to finish, a table by template (sent, finished, time to finish, declined;
+  "Sent without a template" and "A template that was deleted" are rows of their own) and, for owners and admins, a
+  table by sender. Dates and status in one row; sender, template, folder and a custom field behind More options.
+  Download CSV gives the same numbers as the tables, with a few more columns (cancelled, ran out of time, waiting,
+  finished %); not the month chart or By status. Counted by the day each document was sent, in world time (UTC). A
+  member sees their own sending only; By sender shows once there are two senders to compare. With nothing sent in the
+  period the page says so once, under the filters. A link with a day that cannot be read, or too long a period,
+  shows why, the filters to fix it and "Show the last 30 days". A filter set under More options keeps the panel open
+  and the button reads "Clear these filters", so closing it never changes the numbers by itself. A finished document
+  its sender deleted from their lists is counted nowhere, as in the lists, the export and `GET /reports/summary`
+  (`src/server/reports.ts`, `routes-reports.ts`).
+- The monthly report (Settings, Profile, "Emails about your documents"; owners and admins of a team of two or more
+  that has sent something; off by default): early on the 1st of each month (or the 2nd or 3rd, if the timer did not
+  run before; a month the timer misses on all three days is skipped), last month's totals and the five templates sent
+  most, with templates where fewer than half were finished. It names templates, never team members or the people
+  documents went to, and a month with nothing sent sends nothing. Someone in more than one account is told which
+  account to switch to before opening Reports.
+- Lists for Send to many: the link "Save this list for next time" under the list box opens a name field and keeps a
+  pasted or uploaded list under a name; "Choose a list from Contacts, or paste one below" puts it back in the box,
+  where it is checked against the chosen template like any list (the existing check). A group from Contacts can be
+  picked there too when the template has one role to fill and sends no text messages. A list saved shows in that
+  picker at once. Contacts shows the lists, once there is one, next to the groups, with how many people, who saved
+  each and when, and "Send to this list". Everyone on the team can use a list; the person who saved it or an admin
+  can delete it. The server counts the people in a list itself, and refuses a header row alone. A list nobody opened
+  for 180 days is deleted by the timer; an admin sets 30 to 730 in Settings, Records and data (shown once a list
+  exists), and a smaller number that would delete lists says how many and asks first (409 for the API without
+  `confirm`). Lists are in the export (`lists/`), go with the account, and lose the name of a login that is deleted.
+  Screens say that a list holds personal data and that the team can see it (`src/server/bulklists.ts`,
+  `/bulk-lists`).
 - Confirming a new address with a 6-digit code typed in the tab you signed up in (`POST /api/auth/verify-code`,
   `src/server/confirmcode.ts`, the rules in `src/lib/confirm.ts`): the code works for 24 hours and only in a browser
   signed in to that login, a new code replaces the one before, and after 10 wrong codes in all no code works for that
@@ -1125,11 +1296,22 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 - "Trees on the signing record" (Settings, Account; admins; on by default): off leaves the box "Signed without
   paper" off the signing record of documents completed from then on, for organisations that want nothing but
   the record there. Screens and emails are not changed by it (`GET` and `PUT /api/account/impact-record`).
+- "Trees on screens and emails" and, where a model answers the help chat, "AI answers in the help chat"
+  (Settings, Account; owners and admins, signed in; on by default under every profile; `GET` and
+  `PUT /api/account/policy`, never with an API key, each change in the security record). Trees off: the line by
+  Finish, the finished screen, the invitation and completion emails, the review step, the envelope page and the
+  footer of the account's public forms and terms pages say nothing about trees or paper; what was planted is
+  still counted. AI off: the account's people and the people
+  who sign its documents get the built-in answers and Talk to a person, and nothing they type goes to the model.
+  `GET /api/me` and `GET /api/sign/:token` carry `policy: { impact_display, ai_helper, white_label }`
+  (`src/server/tenantpolicy.ts`, the one reader), where `ai_helper` is `on` only when a model really answers. `DEPLOYMENT_PROFILE=government` takes trees off every signing
+  record and never uses a hosted AI service; it does not change the screens.
 - Every number comes from `src/lib/impact.ts`, and `/impact` says how each is worked out, where the factors come
   from (and which is an assumption of ours: the CO2e figure, and a water figure toward the upper end of the
   published range), what Treegens itself says about checking a planting and about its average cost of ten
   cents a tree (attributed to its two public pages with the day they were read, 21 November 2026, and said to be
-  Treegens' own account that nobody checked for us), what a reader cannot check yet (no receipts for the money
+  Treegens' own account that nobody checked for us; the words each sentence rests on are quoted in a note in
+  `src/components/ImpactView.tsx`, with the water report and the Conservatree page, which were opened that day too), what a reader cannot check yet (no receipts for the money
   sent to Treegens are published), and what is not claimed (no offset, no CO2 figure for
   the mangroves, nothing that says a signature undoes harm). A server that takes no payments says nothing about
   giving or planting, on any screen or signing record.
@@ -1147,7 +1329,8 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   certificate has a small "Signed with growsigning" stamp at its foot, drawn as shapes, so no words are added to the
   PDF's text. On a page of a signed copy the envelope ID line stands beside the stamp, both in one strip 17 points
   deep at the foot; nothing of ours is printed at the top. Before printing, the server looks at the foot of each
-  page: the page's own text, its pictures and the fields filled in on it (`src/server/footplace.ts`). The strip goes
+  page: the page's own text, its pictures, its drawn lines and shapes, and the fields filled in on it
+  (`src/server/footplace.ts`). The strip goes
   on the left when that is clear, else on the right or in a clear stretch between, and on a page whose foot is in
   use from side to side (a scan that is one picture to its edges, a footer the whole width) the page is made 17
   points taller and the strip is printed on that new margin. So the stamp and the ID never stand on the document's
@@ -1203,6 +1386,48 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   there (the Ethiopian one is `ethiopic`). No screen calls these yet: screens still use `fmtDate` in
   `src/components/ui.tsx` and their own `Intl` calls, and move over as each is translated. The signed PDF prints
   what it printed.
+- The signing page in the signer's language (`src/lib/signlang.ts`, `src/components/sign/lang.tsx`): the page's
+  root, and while the page is open the whole document with its dialogs and toasts, carries `lang` and `dir`. The
+  Shell, the consent screen, the hand-back card and the in-person lock screen ask `useT()` for their words; the
+  rest of the page does not yet (see "What is not in it"). Refusals from the signing routes (`routes-sign`,
+  `routes-signercode`, `routes-stamps`, `routes-comments`, apart from the comment held back as a fake payment
+  notice) carry a stable `code` and the facts in them; the English `error` is made from the same
+  `sign.error.<code>` text in `en.json`, so the API reads as before. The consent screen says them in the signer's
+  language (`shownError`), or in the server's words when no text has that code; the other screens still show the
+  server's English. A language menu in the header lists the languages switched on, each in its own name, and is
+  not there at all while English is the only one. The choice is saved on the person (`POST /sign/:token/locale`,
+  after the access code and one-time code, at most 20 changes an hour from one connection and 40 in all), so their
+  next visit follows it, and a change is one audit line ("Sam Signer chose to read the page in French (fr).").
+  A group member's choice, a choice made after the person finished, and one on a document no longer out for
+  signing change only the page in that tab: nothing is saved or written to the record, and the page says so. The consent shows the wording of the page's language where a person has checked it, else English with the
+  one sentence, and says which language it showed. The certificate has a line per person: "Signing page in English
+  (en); consent wording in English (en)" (`recipients.page_locale`, set when they agree or choose, and kept as it
+  was when they finished: nothing said afterwards changes it). Right to left:
+  `src/app/styles/sign.css` uses start and end, so Arabic or Hebrew mirror the screens, and the document pages, the
+  signature pad and the zoom never turn around. On a development server, `?lang=en-XA` (accented, 40 percent
+  longer, in brackets) and `?lang=ar-XB` (written right to left) show every word that did not go through the
+  catalogue and every button that overflows; a production build never offers them and the server never saves them.
+- Emails and texts in the recipient's language (`src/server/maillang.ts`, `requestmail.ts`, `textlang.ts`): the
+  language of an email to a recipient is the one set for them, else the one they read the signing page in, else
+  English, and only ever one that is switched on. The footer of every email (how to check it, report it, get help,
+  the button's link, "Page will not open where you are?", where it came from), the text part, our subjects, the
+  request and every reminder, "expires soon", "updated", "reopened", "changed after you finished" and a fresh link,
+  the one-time code by email and the texts (the signing link, the reminder, the one-time code) come from `mail.*`
+  and `text.*` in `en.json`. The email's `<html>` carries `lang` and `dir`, and `emails.locale` keeps the language
+  (NULL for English). The sender's subject, message and notes are never translated, and the message is set apart
+  as a quote with a line down its left side, under one line in the reader's language, "Ada's message:", in English
+  too. An email is in one language: a request to a witness, to the host of an in-person signing, to a member of a
+  group, or one that carries what changed in our English words, is written in English as a whole. Emails to senders
+  stay English. The completed copy, declined, voided, witness, group, comment-answer, Find my documents and
+  mail-again emails, and the pages the emails link to (`/check`, `/verify`, signer help), have no keys yet, so a
+  language reaches recipients' emails only when its entry in `SUPPORTED_LOCALES` says `mail: true`, and none does:
+  until those are translated, every recipient reads every email in English, rather than a request in one language
+  and the completed copy in another.
+  A text with one character outside the GSM alphabet (Arabic, Amharic, most accented letters) is sent as UCS-2, 70
+  characters a part, and `SMS_DAILY_PER_ACCOUNT` counts parts, as a provider bills them (`src/lib/smsparts.ts`,
+  `texts.parts`, `sms_usage.parts`): a text goes only when all its parts fit in what is left, and curly quotes and
+  long dashes are sent as plain ones first. With only English switched on every email and text reads as before,
+  apart from the quoted message.
 - For translators: `npm run i18n:check` checks every catalogue against `en.json`. Every English key has to be in
   each catalogue, translated or marked missing with `""` (shown in English); no key may be left over; the
   placeholders must be the ones in English, and a plural stays a plural with every branch its language needs; no
@@ -1219,35 +1444,124 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   every outside service on `/security` with `OUTSIDE_CALLS` to hold the server to it, `/.well-known/security.txt`
   and `/security/disclosure` from `SECURITY_CONTACT`, a bill of materials at `/security/sbom.json`, and
   `docs/controls.md` and `docs/runbooks.md`. No screen in the app changed for it.
+- **Procurement documents** (`/procurement`, linked from `/security` and the footer): the papers a buyer's
+  procurement and security people ask for on day one, each dated and each starting with what it is not. A security
+  whitepaper (architecture, data flows, a data inventory, every use of cryptography with its files, sessions, rate
+  limits, logging, backups, what is not done), the control self-assessment, data processing terms as a template for
+  a lawyer (each clause noted with the code that makes it true, or "a promise only"; the help chat's AI provider
+  named as a sub-processor), a pack for an impact assessment, a transfer assessment template, an exit plan and an
+  incident response document, all under `docs/procurement/`, plus the runbooks. `/security/subprocessors` lists who
+  else handles data on this server, from the same settings as `/security`: only what is switched on, with its
+  country. `tests/gov-g03.test.ts` fails when a document cites a file that is gone, or when a file uses a
+  cryptographic call the whitepaper does not list for it. No screen in the app changed for it.
+- **Accessibility** (`/accessibility`, in the footer): a statement in the order public bodies publish theirs: what
+  works, what does not yet, how to report a problem (a help request with the topic "Accessibility"), and the date
+  and method of the last check ("Checked by the authors with axe-core and by hand; not audited."). Its words are in
+  `src/lib/a11y.ts`. Behind it: `docs/a11y-checks.md` (the steps and what they found: axe-core on 26 states of the
+  signing page, the editor and the envelope page at 320 and 1280 pixels; signing with the keyboard alone; the editor
+  without dragging; scripts in `tests/a11y/`) and `docs/acr.md`, a draft report on the VPAT 2.5 INT template, headed
+  "Self-assessed, not audited", both also under `/procurement`. Fixed on the way: two colours below 4.5 to 1, the
+  editor's missing main landmark and heading, each field's page now said to a screen reader (a group per page), and
+  small tick boxes on a large screen take a 24 pixel click. No separate accessible mode and no claim of conformance.
+- **Text for scanned pages** (`OCR_CMD` or `OCRMYPDF_URL`; off without them): pages without text (a scan, a photo,
+  a PNG or JPEG upload) are read by a machine in the background (`src/server/ocr.ts`), in the language of a person on
+  an envelope that uses the file or the account's language, else English. `OCR_CMD` is handed the page's own picture
+  (the JPEG as it is, other pictures as PNG; a page that is not one picture is skipped) and is run without a shell;
+  `OCRMYPDF_URL` is sent the PDF and answers with a text layer. Each page has `OCR_TIMEOUT_MS`; a failed file is tried
+  3 times, then left as it was. The text is added to the file's kept text for search (encrypted with
+  `FILE_ENCRYPTION_KEY` like the rest), shown in the signing page's text view under "Text read by a machine from a
+  picture of the page. It may contain mistakes. What you sign is the page." (`GET /sign/{token}/ocr`), and deleted
+  with its file. The page that is signed is never changed, and nothing is written into the PDF. The editor's note on
+  a scan says when the text is being read or was read.
+- **Organisations above accounts** (Settings, Organisation, only for an admin of one; `src/server/orgs.ts`): one
+  server for a whole government. Whoever runs it makes the top organisation and names its first admin
+  (`POST /api/operator/orgs`). Its admins make ministries and departments below it and agencies (each its own
+  account), invite each agency's first owner by email (they join by accepting, so a login someone made with an
+  official's address and never confirmed gets nothing), and set rules that every account below gets at once and can
+  tighten but never loosen: two-step login for everyone, shortest password, sign out when not used, one browser at a
+  time, no tree lines (on screens, in emails and on the signing record), no AI answers (shown only where a model
+  answers the chat). Each Settings card, and the two-step screen, says who set a value. A rule that can lock people
+  out is asked once with how many agencies and people it reaches, and taking a rule away gives each agency back what
+  it had before, unless it changed that setting itself. They see each agency's people, change admins, reset a
+  member's two-step login under the usual rules, switch an agency's sending off (asked once; every page of the
+  agency then says so), and read counts per agency (sent, completed, days to complete) with no titles or names.
+  They never see an agency's documents: an organisation admin is never an owner or admin of an agency below it, by
+  any route (the organisation's own, an invitation, accepting one, a role change, handing the account over, moving
+  an agency), and the router treats one that slipped through as a member, who sees only what they send themselves.
+  Emergency access to one document exists only where the operator allowed it for that organisation: it asks for a
+  reason, emails the agency's owners at once and stays in its security record, with the title in the agency's
+  record only. Only the operator moves an agency to another organisation. Every action is in the record.
+  `tests/gov-g13.test.ts` asks every document route of the router as an organisation admin, and every reading route
+  as an organisation admin who is also on the agency's team, and finds no title.
+- **Certifications, said once** (`/security/certifications`, linked from `/security` and the footer): every
+  certification, authorization, listing and legal status a public buyer asks about (ISO/IEC 27001 and its
+  family, SOC 2, FedRAMP, GovRAMP, BSI C5, ENS, SecNumCloud, IRAP, eIDAS trust services, FIPS 140-3, an
+  accessibility audit, a HIPAA agreement and more), one sentence each from one registry, `src/lib/claims.ts`.
+  All read "not held". An entry reads as held only with the official registry link, the number, the scope, dates
+  that have not run out and who checked, and only the owner may mark one so; the day after it expires it reads
+  as not held again. A test fails when a page, an email, the PDF text or the docs name one of them in a sentence
+  nobody reviewed.
+- **WhatsApp and codes by phone call** (off until the operator sets them up; `src/server/whatsapp.ts`,
+  `src/server/voice.ts`, `src/lib/channels.ts`): the signing link also by WhatsApp for one person who agreed, and
+  "Call me with the code" on the code screen. See "WhatsApp and codes by phone call" under Configuration.
 
 ## What is not in it
 
 Being straight about this: the market-leading e-signature products are large suites, and this covers the core
 e-signature product, not all of it. Not built:
 
+- **Shared libraries across agencies, and some rules from above.** An organisation has no template library,
+  group directory or directory of staff addresses that its agencies share yet: each agency keeps its own. The rules
+  an organisation passes down are the six in Settings, Organisation; single sign-on, signature levels, keeping
+  periods, outside services and where the security record goes are still set by each account or by whoever runs the
+  server. Billing across agencies is not here either.
+- **Field checks against anything outside the document, and formats for one country.** A format is checked as
+  written, never looked up: an email address is not tried, a number is not matched to an account, and there are no
+  postcode or ID formats per country (write your own pattern for those). The words a signer is shown when a check
+  is not met are in English only for now, also on a signing page in another language.
+- **Ready-made templates checked by a lawyer, for a country, or in another language.** The ten starters are plain
+  starting points in English, reviewed by nobody, with no wording for any one country; no will, deed or power of
+  attorney is among them. Their wording is fixed in the PDF: to change it, edit the PDF elsewhere and add it to the
+  template instead.
+- **Reports you design yourself, or that arrive on a schedule you choose.** Reports has fixed tables (by template, by
+  sender), the filters and a CSV; the only email is the monthly one. No new charts were added, and none are on Home.
 - **Trees planted, promised before sending.** The review step says how many pages of paper this document saves,
   and adds "Plus: 10 mangroves are planted for each person who signs" only when every signature of the draft
   would come out of a payment as the account stands. That is a forecast from the draft as saved; what is true is
   asked again once a signature is held for each signer. A mixed case (some paid, some free) says nothing there.
 - **Proof of each planting.** GrowSigning counts what was paid and says what that funds. It does not show which
   trees were planted for which signature, and it has not checked Treegens' plantings itself: `/impact` links to
-  Treegens for that, and repeats only what Treegens' own pages say about how it checks them (filmed in its
-  app with a GPS fix, voted on by verifiers in its DAO), as Treegens' account and not ours. No receipts for the money sent to Treegens
+  Treegens for that, and repeats only what Treegens' own pages say about how it checks them (filmed in the
+  Treegens app with the place recorded, voted on by verifiers who stake its token; treegens.app and treegens.org,
+  read again on 21 November 2026), as Treegens' account and not ours. No receipts for the money sent to Treegens
   are published yet, and `/impact` says so; the CO2e factor has no single published source. A payment disputed
   long after a signature stops counting only while that envelope still exists. The first-time picture for a
   person with no address of their own (a link the sender passed on, a signing in person) is per document.
 - Nor does the editor have a preview of what each person will see, or fold several
   warnings on the review step into one line: each warning is shown in full.
 
+- **Consent texts per template, and signing on paper.** The account's own consent text is one per language for the
+  whole account, not per template. "Sign on paper instead", which is in Other actions only when the account has its own
+  consent text, only asks the sender to post the document and closes the person's part; printing it, signing by hand and sending a photo back is not built, and GrowSigning prints and
+  posts nothing. A person who agreed once is not asked again when an admin saves a new version later, unless the
+  account asks every time the link is opened, and that choice is kept by the signing page, not enforced by the
+  server for programs that call the signing API themselves (they must send the version they showed, or are refused).
 - **Certificate-based signatures of the people who sign.** A completed PDF can carry a digital seal of the server
   (see "The digital seal of a completed PDF"), but the people who sign do not sign with certificates of their own.
   Without a seal set up, integrity comes from the stored SHA-256 fingerprint, the hash-chained audit trail and
   `/verify` alone. These are standard electronic signatures with an audit trail, not "advanced" or "qualified"
   signatures under eIDAS. Have a lawyer confirm they fit your use and jurisdiction before relying on them for
-  high-stakes documents. Not built around the seal: long-term validation (B-LT and B-LTA: revocation data and a
-  document time-stamp so the seal can be checked after its certificate expires), PDF/A, an organisation's own seal,
+  high-stakes documents. Not built around the seal: renewing the archive time stamp over the years (the long-term
+  data and one document time stamp are added once, at completion; renewing them would change the file people hold),
+  long-term data for a seal without a time stamp, an organisation's own seal,
   keys in an HSM or a cloud KMS, an outbound allowlist for the time-stamp request (its address is an operator
   setting, never a user's), and keeping signatures that an uploaded PDF already carries.
+- **PDF/A beyond PDF/A-2b, and for documents completed before.** The archive format makes PDF/A-2b only: not
+  PDF/A-1, not PDF/A-3, not the "accessible" levels (2a, 2u). Documents completed before the switch was turned on are
+  not converted afterwards. An uploaded file with a font that is not inside it, colours for a printing press, or
+  sound, video, 3D or an attached file is not re-made through the office converter to fix that, because that would
+  change how the pages people signed look: the document is made as a normal PDF and says why. Without veraPDF on the
+  server there is no PDF/A at all.
 - **A security monitoring service.** The security record (Settings, Security) is a record and five email alerts.
   Nobody watches it, there is no detection of unusual behaviour beyond those five counts, and nothing is pushed to
   syslog or a log platform by us: a security system pulls it with an admin key or takes the `security.event`
@@ -1279,7 +1593,8 @@ e-signature product, not all of it. Not built:
 - **Records management beyond the deletion schedule.** There is one schedule per account (two lines: completed, and
   cancelled, declined and expired) and one period per template, not per document type, folder or tag; the end of a
   period deletes (no "review" queue and no "transfer to archive"); there is no archive export in BagIt layout, no
-  records officer role, and the certificate of destruction is the CSV of the deletion record, not a PDF. Holds are
+  records officer role, and the deletion record (CSV, or a PDF of at most 5,000 lines) is written by the software
+  itself: nobody outside has checked or signed it. Holds are
   placed on one document or one folder, not by search, person or dates. The people on a document are not told when
   its files are deleted: their link then says the sender deleted it. A member who is not an admin can delete the
   files of one of their own documents from its Delete dialog only while a schedule is on; with none, an admin does
@@ -1292,10 +1607,16 @@ e-signature product, not all of it. Not built:
   behind the self-hosting papers: `docs/controls.md` is the authors' own reading of their code. There is no
   Postgres and no second replica (SQLite has one writer), no hardware security module, no signed release bundle
   for carrying an image into a closed network (build the image inside, or carry it with `docker save` and your
-  own checksum), no procurement pack beyond the two documents (no data processing agreement template, no impact
-  assessment template, no exit plan), and the NIST SP 800-53 controls are not mapped. The software's own hold on
+  own checksum), the procurement documents are written by the authors and checked by nobody else (the data
+  processing terms are a template for a lawyer, not a contract, and leave the hours for a breach notice blank until
+  someone is on call), the accessibility report is a draft the authors wrote about their own screens (`docs/acr.md`, not audited), and the NIST SP 800-53 controls are not mapped. The software's own hold on
   outside connections (`OUTSIDE_CALLS`) is not a firewall. A closed network still needs a mail relay inside it,
   because a new login confirms its address by email.
+- **Chatting with signers, files by WhatsApp, WhatsApp instead of email.** WhatsApp carries only the four
+  messages below, each with a link; replies other than STOP and START are not read, documents are never sent as
+  attachments, and a person still needs an email address (or the sender sends the link themselves). WhatsApp is
+  not offered on templates, bulk sends or public forms, and not in the quick Change person dialog (the editor's
+  correction takes it). A call with a code is never tried again, and not offered for a check by email.
 - **Electronic seals.** A company stamp here is a picture of a stamp that a person puts on the page (see
   "Signing"). Nothing checks that they may use it, and it is not an electronic seal backed by a certificate (an
   "advanced" or "qualified" seal under eIDAS). It pays no stamp duty and is not an e-stamp certificate or an
@@ -1303,8 +1624,17 @@ e-signature product, not all of it. Not built:
 - Languages other than English. The signing screen and our emails are in English for now. Your document can be in
   any language. (The sentence the pages print is `LANGUAGE_NOTE` in `src/lib/policy.ts`.) The foundation is built
   (see "Languages" above). Only the Settings security record and the few words of the language choice itself read
-  their words from the catalogue; no other screen and no email has been moved into it, and nothing is translated.
-  A signer's browser language is not stored, a signer cannot switch language on the page, the adopt line, witness
+  their words from the catalogue, and nothing is translated. Of the emails to recipients, the footer, the request
+  and its reminders, the one-time code and the texts go through the catalogue; the completed copy, declined,
+  voided and corrected notices, the witness request, group emails, comment answers, Find my documents and the
+  code to get emails again still have their English written into the code, and so do `/check`, `/verify` and the
+  signer parts of `/help`, which follow the browser for `<html lang>` only. Until they are translated no language is
+  marked `mail: true`, so every email to a recipient stays English, even for one whose signing page is in another
+  language.
+  On the signing page, the Shell, the consent screen, the hand-back card, the in-person lock screen and the refusals of
+  the signing routes go through the catalogue; the rest of the page and its dialogs (the document screen, the adopt
+  dialog, review, done, comments, witness, stamps, codes) still have their English written into the code, and
+  refusals made in `envelopes.ts`, `signercode.ts`, `groups.ts` and `witness.ts` have no code yet. The adopt line, witness
   statements, `STAMP_IS` and `CHECK_PROVES` are not yet kept by language, a name in another script on an English
   page has no `lang` of its own,
   the certificate is English only, and there is no `LANGUAGES_ENABLED` setting: a language is switched on in
@@ -1312,6 +1642,8 @@ e-signature product, not all of it. Not built:
 - ID verification (government ID, knowledge-based checks) and checks by phone call. A one-time code by email or by
   text message is in (see "Checking who signs"); it shows that someone can read a mailbox or holds a phone, not who
   they are. Text messages only exist on a server whose operator has set a provider up.
+- Merging documents into one, cropping pages, and turning a page by less than a quarter. Pages can be removed,
+  turned by quarters and moved within one document (see "Pages" in the editor above).
 - Remote online notarisation. Payments are not collected: a trusted account can
   show a link to its own payment page after Finish (see "Reuse and scale"), and the money never passes through here.
 - A HIPAA business associate agreement, at any price. US healthcare providers must not put patient information
@@ -1328,6 +1660,10 @@ e-signature product, not all of it. Not built:
 - Single sign-on for a whole organization (SAML, or making a team sign in one way), native mobile apps. Signing in
   with Google or Microsoft is in, and so is two-step login with an authenticator app (see "Two-step login"). Codes by
   text message, passkeys and security keys for signing in are not.
+- Passwords that expire after some weeks, rules about capitals, digits and signs, security questions, and locking a
+  login after wrong passwords. NIST SP 800-63B advises against the first three; sign-in tries are limited instead,
+  30 in 15 minutes from one internet address and 10 for one email address. A separate idle time for signing pages or for phones is not there either: the team's one "Sign
+  out after" is used for both.
 - Signing without a connection. Opening the document and Finish need one; a connection that drops in between is
   fine, and Finish goes again by itself when it is back.
 - Ready-made integrations (Salesforce, Google Drive and so on). The API and webhooks are the way in for now.
@@ -1339,15 +1675,20 @@ e-signature product, not all of it. Not built:
   response time and says so when it is missed. Someone still has to read the queue and answer in time.
 - Replying to a support email. Answers are written and read on the request's own page (the link in every email),
   not by replying to the email, and the emails say so.
+- Day-first dates in the plan emails and on the Plan page. Everywhere else a person reads a date it is written day
+  first with the month as a word ("21 Nov 2026", "21 Nov 2026 05:40:12 UTC" in messages, emails and records), but the
+  days in plan emails (`src/server/routes-billing.ts`) and the start day of a new price (`priceChangeDay` in
+  `src/lib/policy.ts`) still read "March 7, 2031" until the payment code is changed. CSV files, file names and the
+  API keep 2026-11-21.
 - A dark-mode email. Every email is drawn light, and `public/brand/email-logo-dark.png` is not used. The logo picture
   carries a tile of the email's own light ground, so a mail program that darkens a light email by itself (Gmail on a
   phone does) shows the logo on a small light tile. This was checked in a browser, not in those mail programs.
-- Keeping the stamp and the envelope ID line clear of ruled lines and coloured shapes. The server keeps them off a
-  page's text, its pictures and the filled-in fields (see the brand notes under "What is in it"), but it does not look at drawn lines and
-  filled shapes, because nearly every page starts with a white rectangle over the whole sheet. A page border or a
-  ruled line in the lowest 17 points of a page can have the strip printed across it. A page whose foot is in use
-  from side to side comes out 17 points taller than it went in (an A4 page of 842 points becomes 859), so a signed
-  copy can have pages of slightly different heights.
+- Keeping the stamp and the envelope ID line clear of colour gradients and of comments a PDF reader draws on top of
+  a page. The server keeps them off a page's text, its pictures, its drawn lines and shapes (a ruled line, a page
+  border, words drawn as outlines) and the filled-in fields (see the brand notes under "What is in it"). It counts
+  neither white nor a shape filled over most of the page, which is the sheet behind everything. A page whose foot is
+  in use from side to side comes out 17 points taller than it went in (an A4 page of 842 points becomes 859), so a
+  signed copy can have pages of slightly different heights.
 - A helper that acts. The help chat answers and points to the tools that do things (see "The help chat"); it cannot
   see or change a document, an account or a payment, never says whether a signature is enough or valid, and can be
   wrong: the rules on the pages are what count. It answers in the person's language, while the screens stay English.
@@ -1362,6 +1703,8 @@ has to carry its fonts with it, so what the signed PDF can print is decided here
   Chinese, Japanese, Korean, Thai, Devanagari and Khmer from Noto Sans (packages `@fontsource-variable/noto-sans-sc`,
   `-jp`, `-kr` and `@fontsource/noto-sans-thai`, `-devanagari`, `-khmer`, all under the SIL Open Font License 1.1).
 - **How the fonts get there:** `npm install` runs `scripts/copy-assets.mjs`, which calls `scripts/build-fonts.mjs`.
+  `npm run build` and `npm run dev` run it again first, so an install made with `--ignore-scripts` still gets the
+  PDF fonts, the heading font (Lora), the signature fonts and the PDF viewer before anything is built or served.
   The Noto packages ship web fonts, which the PDF library cannot embed, so each is written out once as a plain
   TrueType file into `assets/fonts/noto` (340 small files, about 16 MB, about ten seconds the first time). The
   Chinese, Japanese and Korean packages are "variable" fonts whose built-in weight is Thin: they are written out at
@@ -1412,8 +1755,11 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SEAL_P12`, `SEAL_P12_PASSWORD` | Seals every PDF completed from then on with an invisible PAdES signature of whoever runs the server (see "The digital seal of a completed PDF"): the path to a .p12 or .pfx file holding the seal key and its certificates, and its password. RSA of 2048 bits or more, or ECDSA P-256. | none: no seal, files as before |
 | `SEAL_KEY_PEM`, `SEAL_CERT_PEM`, `SEAL_CHAIN_PEM` | The same key as PEM: the private key (not encrypted), the seal certificate, and the certificates that issued it. Each a path or the PEM text itself. Set these or `SEAL_P12`, not both. | none |
 | `TSA_URL` | An RFC 3161 time-stamp service, so the seal carries its time (PAdES B-T) and not only the server's clock (B-B). Several, separated by commas, are tried in order, 3 seconds each and 4 in all. A time more than 5 minutes from the server's clock is not used. `TSA_URLS` is read the same way. | none: B-B |
+| `LTV_WAIT_MS` | With `TSA_URL`: how long, in milliseconds, all the answers about the seal's and the time-stamp service's certificates (OCSP, else revocation lists) may take together at completion, because the last signer's Finish waits for the stored file. When one does not answer in time the file stays at B-T and the page of the document says so. The document time stamp after them shares the same time. At most 120000. 0 turns long-term checking off (nothing is asked, the file stays at B-T and nothing is said). With `OUTSIDE_CALLS` listed or none, the hosts the certificates name must be added to `OUTBOUND_ALLOW`. | 20000 |
 | `TSA_USER`, `TSA_PASSWORD` | HTTP Basic credentials for the time-stamp service, when it asks for them. They go to every address in `TSA_URL`, and only over https: with them set, a plain http address is not asked. | none |
 | `TSA_TRUST` | A PEM file of the certificates the time-stamp service's own certificate must lead to. A time-stamp that does not is not used. Only with this set do the record, the certificate and the screens call a time stamp "trusted", and only then does `/verify` show a time stamp's time. | none: the time-stamp's signature, purpose and time are checked, not who issued its certificate, and nothing calls it trusted |
+| `VERAPDF_CMD` | The veraPDF command line program (it needs Java), with any arguments, split at spaces. With it set, account admins see "Archive format (PDF/A)" in Settings, Records and data, and with that on, documents completed from then on are made as PDF/A-2b and checked by veraPDF (see "Archive format (PDF/A)"). It runs with only `PATH`, `JAVA_HOME` and a language set. | none: no PDF/A, the switch is not shown |
+| `VERAPDF_TIMEOUT_MS` | How long one veraPDF check may take before it is stopped and the document is made as a normal PDF. The last signer's Finish waits for it. Between 5000 and 600000. | 60000 |
 | `SMTP_URL`, `MAIL_FROM` | Mail server, for example `smtps://user:pass@smtp.example.com`. Without it nothing is delivered, and the audit trail of an envelope says "Not emailed" instead of "Sent to recipient". An email the mail server will not take is kept and tried again by the timer (see `CRON_SECRET`): after 5 minutes, 30 minutes, 2 hours, 6 hours and a day, six tries in all. The envelope page and the audit trail say how it goes, and after the last try the sender is told. A mail server that stops answering is given up on after 10 seconds to connect, 10 for its greeting and 20 of silence (that try counts as failed); add `?connectionTimeout=&greetingTimeout=&socketTimeout=` in milliseconds to the address to change it. Emails about money are written down inside the account's billing step and handed to the mail server after it, a few at a time, so a slow mail server never holds up Cancel, a refund or a message from the payment provider; one that was never handed over (the server stopped) is sent by the timer. | none |
 | `SMTP_REQUIRE_TLS` | `1` hands no email to the mail server in `SMTP_URL` without encryption: an `smtp://` address must offer STARTTLS, or the email is not handed over, is kept and is tried again (an `smtps://` address is encrypted from the first byte either way). Nothing in `SMTP_URL` switches the rule off. `/security` says whether it is on. It covers the one step from this server to your mail provider. How the provider carries the email on is decided there and on the recipient's side (MTA-STS, or REQUIRETLS at the provider). It is not end to end encryption. Off by default: the connection is then encrypted when the mail server offers it. |
 | `MAIL_EVENTS_TOKEN` | A secret of at least 16 characters (`openssl rand -hex 24`; one with `+` in it also works pasted into the address as it is) that lets your mail provider tell this server what became of an email after it took it: delivered, bounced, marked as spam. Give the provider the address `https://<your domain>/api/mail/events?token=<the secret>` (or the secret as HTTP Basic password or `Authorization: Bearer`). See "Knowing when an email did not arrive". Without it the address answers 404 and nothing in the product mentions bounces. | none |
@@ -1427,7 +1773,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `HOME_VIDEO_URL` | The video on the home page: Treegens' AI counting freshly planted mangroves in a planter's video. An mp4 or webm, as an `https://` address or as a file under `public/videos/` written `/videos/name.mp4`. `none` leaves the block out. Anything else (a page on a video site, another kind of file, an address with a password in it, a file name under `public/videos/` that is not there, an `http://` address when `APP_URL` is https) also gives no block, never an empty player. A file at another address is not fetched to check it: if it stops answering, the poster shows and the video does not play. It has controls, starts muted, never plays by itself and has a one-line caption that says what it shows, so set only a video that shows that (`src/lib/homevideo.ts`). | the video that ships, `public/videos/tree-count.mp4` (3 MB, with its poster, so nothing is fetched before someone presses play) |
 | `HOME_VIDEO_POSTER` | The still picture shown before a video of your own plays: webp, jpg, png or avif, at the same two kinds of address. Without one the browser fetches the start of the video to show its first frame. | none (the shipped video has its own) |
 | `ABUSE_EMAIL` | Where reports of suspicious documents go, and disputes ("I did not sign this"), which also go to `OPERATOR_EMAILS` and into the operator queue. | `SUPPORT_EMAIL` |
-| `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, pausing or unpausing an account, and marking an account as trusted. They are the people a help request can be taken by or handed to, and they are emailed when one is late. They get every dispute with the internet address and browser it came from, and close it (closing its alert in the queue, or `POST /api/operator/disputes/:id`); until then its envelope cannot be deleted for good. | nobody |
+| `OPERATOR_EMAILS` | Comma-separated addresses of the people who run the service. Once their email is confirmed they can open `/app/operator`: help requests, reports, pausing or unpausing an account, and marking an account as trusted. They also make the top organisations above accounts, allow emergency access to documents for one, and move an agency between organisations (`/api/operator/orgs`, Settings, Organisation). They are the people a help request can be taken by or handed to, and they are emailed when one is late. They get every dispute with the internet address and browser it came from, and close it (closing its alert in the queue, or `POST /api/operator/disputes/:id`); until then its envelope cannot be deleted for good. | nobody |
 | `SUPPORT_FIRST_REPLY_HOURS` | The published response time: a person answers a help request within this many hours of the message, counted in real hours (nights and weekends included). `/help`, the confirmation email and the request itself quote the actual time. Promised only while `SUPPORT_EMAIL` or `OPERATOR_EMAILS` is set. | `24` |
 | `SUPPORT_URGENT_REPLY_HOURS` | The same for urgent requests: cannot log in, charged wrongly, a stuck document or a near deadline. Never longer than `SUPPORT_FIRST_REPLY_HOURS`. | `8` |
 | `SUPPORT_CHAT_API_KEY`, `SUPPORT_CHAT_BASE_URL`, `SUPPORT_CHAT_MODEL` | Switches on an AI model for the help chat, through any host that speaks the OpenAI chat API: the key, the address of the API (https only; plain http only to this machine itself, for a model run locally) and the model. First of the three ways to set a model up; see "The help chat". What people type into the chat then goes to that host, and `/security` lists it under "Where your data is". Without any key the chat answers from the built-in answers and nothing leaves the server. | none; `https://openrouter.ai/api/v1` and `moonshotai/kimi-k3-20260715` when only the key is set |
@@ -1445,6 +1791,8 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `CLICKWRAP_MONTHLY_LIMIT` | How many click-to-agree acceptances one account can record in a calendar month (UTC), over all its terms, counted apart for visitors who type their own details and for the people the website vouches for (a signed link or the API): each may reach it, so strangers typing on a page cannot use up what the website needs. An acceptance costs nothing, so this keeps a page anyone can open from filling the records. The owner and admins are emailed at 80 percent and when it is reached; after that a visitor is told that the terms cannot be accepted right now (nothing about the account), the API answers 429 with the day it starts again, and nothing is recorded until the 1st. `0` records none. | `1000` |
 | `DORMANT_AUTO_STOP_DAYS` | A paid plan that has sent nothing for this long is not renewed. `0` only warns. | `90` |
 | `SECURITY_LOG_DAYS` | How many days a line of an account's security record (Settings, Security) is kept, a whole number from 1 to 3650. The same for every account on the server, so an admin cannot shorten it to wipe what they did. The timer deletes older lines; until then database triggers refuse an UPDATE, a DELETE and an INSERT over an existing line, unless its account is deleted. That stops the app and careless hands, not someone who can change the database's own rules: see the security record under "What is in it" for what the keyed fingerprints show and do not show. Settings, Security, the API and the export quote the number. | `400` |
+| `PWNED_CHECK` | The check of every new password (sign-up, the emailed link, Settings) against the Pwned Passwords list of passwords from data leaks. Only the first 5 characters of the password's SHA-1 leave the server; the comparison happens here. With no answer in 3 seconds, or an answer that is not the list, the password is allowed and nothing says it was checked. `0` (or `off`) switches it off; so does `OUTSIDE_CALLS=none`, unless the list's host is in `OUTBOUND_ALLOW`. | on |
+| `HIBP_RANGE_URL` | Another copy of that list, for example a mirror inside a closed network: an `http(s)` address answering `GET <address><5 characters>` as the Pwned Passwords range API does. Anything else switches the check off. | `https://api.pwnedpasswords.com/range/` |
 | `SECURITY_HEADS_DIR` | A folder outside the database. When set, the timer writes one file a day there (`security-heads-YYYY-MM-DD.jsonl`): one line per account with its id, the number, fingerprint and time of the newest line of its security record, and nothing else. Settings, Security then also holds the record against the newest 7 files and reads as changed when a noted line has another fingerprint or is gone before its days are over: that shows an older database put back, or a record rewritten by someone with the database and `APP_SECRET`. It shows nothing to someone who can rewrite the folder too, so copy it away or make it write-once, apart from the database and its backups. A file is never written over. | not set: nothing written or compared |
 | `APP_SECRET_RETIRED` | Only after `APP_SECRET` was changed: the secret before (several separated by commas), so that lines of the security record that were fingerprinted with it still check when an admin opens Settings, Security. Used for nothing else: new lines, links and seals use `APP_SECRET`. Without it, admins are told that a line of their record does not match until the old lines have gone. | empty |
 | `UNOPENED_ALERT_HOURS` | How long a request sits unopened before the sender is told. | `48` |
@@ -1457,6 +1805,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `OUTSIDE_CALLS` | Which other machines the server itself may connect to: `all`, `listed` (only the hosts the settings imply, plus `OUTBOUND_ALLOW`; webhooks only to `WEBHOOK_ALLOW_HOSTS`) or `none` (only the mail relay and `OUTBOUND_ALLOW`; every service that needs another host is switched off at start and shown as off). Any other value is read as `none`. A second line of defence inside the software, not a firewall. See "Running it yourself". | `all` |
 | `OUTBOUND_ALLOW` | More hosts the server may connect to in `listed` and `none`, separated by commas. `*.example.org` is any name under it. An entry that is not a host name is left out whole. | none |
 | `WEBHOOK_ALLOW_HOSTS` | In `listed` and `none`, the only hosts a webhook may go to. Empty there: no webhooks, and Settings says so instead of showing the form. A name listed exactly may be inside your own network; a name matched by `*.` may not. | none |
+| `DEPLOYMENT_PROFILE` | `government` for a public body that runs its own copy. It changes two things: the signing record of every account carries no trees or paper estimate (and Settings shows no switch for it), and the help chat never goes to OpenRouter or Moonshot AI, only to a model you run yourself (`SUPPORT_CHAT_API_KEY` with `SUPPORT_CHAT_BASE_URL`). Screens are the same as anywhere: "Trees on screens and emails" and "AI answers in the help chat" start on, and an admin can switch either off under Settings, Account. It claims no certification (see `/security/certifications`). Any other value runs as unset, and the server says so in its log as it starts. | unset |
 | `SECURITY_CONTACT` | Where to report a security weakness: an email address or an https address, several separated by commas. Served at `/.well-known/security.txt` and shown on `/security/disclosure`. Empty: no security.txt, and the page sends people to the help address. | none |
 | `SECURITY_REPLY_DAYS` | The days (1 to 90) within which you answer such a report. `/security/disclosure` promises exactly that, in your name, only when this and a contact are set. | none |
 | `MAIL_PROVIDER_NAME`, `MAIL_PROVIDER_COUNTRY` | The company behind `SMTP_URL` and the country it handles email in. Listed among "who else handles data" only when `SMTP_URL` is set. | not stated |
@@ -1464,14 +1813,24 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SMS_PROVIDER_NAME`, `SMS_PROVIDER_COUNTRY` | The text message provider and where it handles messages. Listed only when text messages are switched on. The name is known without this setting when the provider is Twilio. | not stated |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM` or `TWILIO_MESSAGING_SERVICE_SID` | Switches text messages on, sent through Twilio with `fetch` (no SDK). The account id and the token are both needed, and one of a sending number in international form or a messaging service (which wins when both are set). With one of them missing text messages stay off and the server log says which. See "Checking who signs". | none |
 | `SMS_WEBHOOK_URL`, `SMS_WEBHOOK_TOKEN` | Switches text messages on through any other provider: every text is one `POST` to the address with the JSON body `{"to", "text"}` and `Authorization: Bearer <token>`. Answer 2xx when the text was taken. Answer 400 or 422 when the number can never be texted, which is final (so is any other 4xx except 401, 403, 404, 408, 409, 425 and 429). Anything else, and no answer within 15 seconds, is tried again by the timer like an email. Twilio wins when both are set up. | none |
-| `SMS_DAILY_PER_ACCOUNT` | The most text messages one account can cause in 24 hours: one-time codes, signing links and reminders, every new one counted, also a code that is asked for again. A hard stop, because a text costs the operator money and customers are not charged for it. The refusal says when there is room again. `0` lets none through. | `200` |
+| `SMS_DAILY_PER_ACCOUNT` | The most text message parts one account can cause in 24 hours: one-time codes, signing links and reminders, every new one counted, also a code that is asked for again. A text longer than one part, or with one character outside the GSM alphabet (then 70 characters a part), counts once for each part, as a provider bills it. A text goes only when all of its parts fit in what is left, and a send to several people adds up the parts of every text it would send, so the number is never passed. Curly quotes, long dashes and "..." as one sign are sent as plain ones, so they do not turn a text into UCS-2. A hard stop, because a text costs the operator money and customers are not charged for it. The refusal counts in parts and says when there is room again. `0` lets none through. | `200` |
 | `SMS_DEV_OUTBOX=1` | Development only: text messages are switched on without a provider and are only written to `/dev/outbox`. Ignored on a production server unless `DEV_OUTBOX=1` is set too, because nobody receives anything. | off |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_TEMPLATE_INVITE` | Switches the signing link by WhatsApp on, through the Meta WhatsApp Business Platform (`src/server/whatsapp.ts`): an approved template (named here) with three blanks, sender, document and link. Off until all three are set: then nothing offers WhatsApp and the API refuses it. | off |
+| `WHATSAPP_TEMPLATE_REMIND`, `WHATSAPP_TEMPLATE_DONE`, `WHATSAPP_TEMPLATE_DEADLINE`, `WHATSAPP_TEMPLATE_LANGUAGE` | The approved templates for a reminder, the link to the completed document and "closes soon" (falls back to the reminder), and their language code. A kind with no template is not sent, and the record says so. | none, `en` |
+| `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` | Meta signs replies and delivery reports to `APP_URL/api/whatsapp/webhook` with the app secret; without it they are refused, so nobody could stop messages by replying STOP. The verify token answers Meta's one-time check of the address. | none |
+| `TWILIO_WHATSAPP_FROM` | With the Twilio settings, switches WhatsApp on through a Twilio WhatsApp sender with this number. Replies and status reports come to the same address, signed with `TWILIO_AUTH_TOKEN`. | off |
+| `WHATSAPP_DAILY_PER_ACCOUNT` | The most WhatsApp messages one account can cause in 24 hours. Each costs the operator money and customers are not charged for it, so this caps the cost until the owner sets a price. `0` lets none through. | `100` |
+| `WHATSAPP_DEV_OUTBOX=1` | Development only: WhatsApp is switched on without a provider and messages are only written to the outbox. Ignored in production unless `DEV_OUTBOX=1`. | off |
+| `VOICE_ENABLED=1` | "Call me with the code" on the code screen of a check by text message: Twilio calls the number and reads the code out slowly, twice (`src/server/voice.ts`). Needs `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM` (a number that can make calls); with `SMS_DEV_OUTBOX=1` on a development machine it only writes to the outbox. A call counts as one text against `SMS_DAILY_PER_ACCOUNT`. | off |
 | `ALLOW_PRIVATE_WEBHOOKS=1` | Accepts webhook addresses that are not public https. Local development only. | off |
 | `DEV_OUTBOX=1` | Shows the outbox in a production build. Never set this on a public server: it exposes every signing link. | off |
 | `CONVERTER` | `soffice`: Word, Excel, PowerPoint, OpenDocument, RTF, text, HTML and TIFF uploads are turned into PDF by LibreOffice on this machine (`soffice` on the `PATH`; Debian and Ubuntu: `apt install libreoffice-writer libreoffice-calc libreoffice-impress`). `gotenberg` (or leave it empty and set `CONVERTER_URL`): by a Gotenberg service. Anything else, or nothing: those files are refused, saying that a converter is needed, and nothing offers them. Read "Turning office files into PDF" first: the converter must have no network. (`stub` is for the tests and is ignored on a production server.) | off |
 | `CONVERTER_URL` | The address of a Gotenberg service (MIT licence, `gotenberg/gotenberg:8`) inside your own network, for example `http://gotenberg:3000`. Files go to its `/forms/libreoffice/convert` in the clear, so keep it on a private network. | none |
 | `CONVERT_TIMEOUT_MS` | How long one conversion may take before it is stopped (with LibreOffice here, its whole process group is killed). The sender is told that it took too long and nothing is saved. 1000 to 600000. | `60000` |
 | `CONVERT_MAX_JOBS` | How many conversions run at the same moment; the rest wait their turn (up to ten times this many, then a polite 503). One account converts at most 2 files at once and 60 an hour. Plan for `CONVERT_MEMORY_MB` of memory for each. 1 to 32. | `2` |
+| `OCR_CMD` | A command on this machine that reads the text of one picture of a page and prints it, for pages that are pictures (scans, photos, PNG and JPEG uploads). For Tesseract: `tesseract {file} stdout -l {lang}` (Debian and Ubuntu: `apt install tesseract-ocr` and a package per language, such as `tesseract-ocr-deu`). `{file}` is the page's picture (PNG or JPEG), `{lang}` the language code; it is started without a shell. Read "Text for scanned pages" under "What is in it". | off |
+| `OCRMYPDF_URL` | Instead of `OCR_CMD`: a service inside your own network that takes the PDF (POST, `application/pdf`, `?lang=eng`) and answers with the same PDF with a text layer, such as OCRmyPDF behind a small web wrapper. The whole document is sent to it. Ignored when `OCR_CMD` is set. | off |
+| `OCR_TIMEOUT_MS` | How long one page may take to be read before the reader is stopped (a service gets this for each page it is asked for). A page that fails is tried again up to 3 times, then left without text. | `60000` |
 | `CONVERT_MEMORY_MB` | The most memory one LibreOffice job may ask for (`ulimit -v`, its address space, which is a little more than what it really uses). A file of 1 KB can describe a sheet of a thousand million cells; we measured LibreOffice at 1.5 GB after 25 seconds on one, and still growing. With the limit such a job fails within seconds and the sender is told the file could not be opened. An ordinary document needs about 200 MB. 256 to 65536, or `0` for no limit. Not used with Gotenberg: limit its container instead. | `1024` |
 
 `/help`, `/` and `/security` quote the refund window and the unused-plan rule. They read them from
@@ -1588,7 +1947,8 @@ told neutrally that texts for this document are on hold, and the sender is told 
 code by email with Correct. A code by email still goes, to the mailbox that already has the link.
 
 **What a text costs.** Texts are not charged to customers. `SMS_DAILY_PER_ACCOUNT` (200) is a hard stop per account
-and 24 hours, every new text counted (`sms_usage`), and deleting an envelope hands nothing back.
+and 24 hours, in text message parts, never passed because a text goes only when all its parts fit, every part of every new text counted (`sms_usage.parts`: a text in Arabic or Amharic is UCS-2, 70
+characters a part), and deleting an envelope hands nothing back.
 
 **Corrections.** `POST /api/envelopes/:id/correct` and the editor take the check and the number. A change resets
 any passed check for that person, clears "not my number", and is written to the audit trail with the numbers
@@ -1607,6 +1967,37 @@ operator's cost to any number they like.
 
 Not tried against a live provider: Twilio and the hook were only tested against a stand-in
 (`tests/signercode.test.ts`). Send one real text in the provider's test mode before relying on it.
+
+### WhatsApp and codes by phone call
+
+**WhatsApp.** With the Meta settings or a Twilio WhatsApp sender, a person's More in step 1 has "Also send the
+link by WhatsApp" under "How they get it", with a mobile number and the tick "They agreed to get messages about
+this by WhatsApp". The tick holds for the number it was given for and is written to the audit trail. The email
+still goes; WhatsApp carries the invitation, a reminder (at most one a day), "closes soon", and once complete the
+link to the finished document. The API takes `"whatsapp": true` and `"whatsapp_agreed": true` on a recipient.
+Refused for templates (so bulk sends and public forms), groups, copies, in-person signers, someone whose link
+the sender sends, and together with the text link. The pause, the fake-notice filter, a report, the daily limit
+(`WHATSAPP_DAILY_PER_ACCOUNT`) and four messages per number a day hold every message, also one the timer tries
+again. The envelope page says "Sent" when the provider took it and "Delivered to the phone" when it says so;
+"read" is never shown, because it proves nothing. The certificate says "Link sent by email and by WhatsApp to
++44 *** *** 0123" once a provider has taken one. A reply STOP (signed webhook) stops WhatsApp from every account
+that wrote to that number; START undoes it.
+
+The texts to have approved as templates, with `{{1}}` the sender, `{{2}}` the document and `{{3}}` the link:
+
+- Invitation: `{{1}} asked you to sign {{2}}. Open: {{3}} This message comes from GrowSigning for {{1}}. Reply STOP to get no more messages about documents from {{1}}.`
+- Reminder: `Reminder: {{1}} is waiting for you to sign {{2}}. Open: {{3}} Reply STOP to get no more messages about documents from {{1}}.`
+- Closes soon: `{{2}} from {{1}} closes soon. Open it before then: {{3}} Reply STOP to get no more messages about documents from {{1}}.`
+- Completed: `{{2}} from {{1}} is complete. Your copy is here: {{3}} Reply STOP to get no more messages about documents from {{1}}.`
+
+**Call me with the code.** With `VOICE_ENABLED=1` and Twilio, the code screen of a check by text message has
+"Call me with the code": Twilio calls the same number and reads a new code out digit by digit, twice. It is the
+same check, with the same digits, tries, limits and lock; the certificate says "One-time code sent by phone
+call". It shows that someone answered that phone line, not who they are.
+
+**What it costs.** Per message and per call fees are the operator's; customers are not charged for them, and
+until the owner sets a price (`src/lib/impact.ts`) the daily limits cap them. Not tried against a live provider:
+only against stand-ins (`tests/ds-channels.test.ts`). Send one real message in the provider's test mode first.
 
 ### Signing in with Google or Microsoft
 
@@ -1736,7 +2127,8 @@ pages and the API say, is in "What is in it" above; this is what an operator nee
      files. Then block it yourself: run the whole app as a user whose outbound traffic is dropped except for what
      the app needs (mail, payments), or use Gotenberg in a container on a network with no way out (Docker:
      `docker network create --internal convert`, then run `gotenberg/gotenberg:8` on that network only, and give
-     this app a second network to reach it). Gotenberg itself does not block a document's outside links.
+     this app a second network to reach it; `docker-compose.example.yml` has this ready as its `office` profile).
+     Gotenberg itself does not block a document's outside links: the network around it does.
 
   Whatever the machine allows, **a web page is never handed over as it was uploaded**
   (`src/server/convert-html.ts`): every address in it is taken out first (backgrounds, pictures, style sheets,
@@ -1899,6 +2291,75 @@ How it is made (`src/server/finalpipe.ts`, `seal.ts`, `sealpdf.ts`, `sealcms.ts`
   triple DES and RC2 that older software wrote. Its password is checked with the file's MAC.
 - Files completed before the seal was set up are never sealed afterwards: their fingerprint is in emails people
   hold. Copies of voided, declined or expired envelopes are not sealed and say so on their first page.
+
+### Long-term checking and the record's time stamp
+
+Both need `TSA_URL`; without it nothing here runs and nothing is asked. The time-stamp service for production is the
+operator's choice (we do not name one). A time stamp is evidence of time from that service, nothing more: nothing
+here calls it qualified.
+
+- **The record's time stamp** (`src/server/auditstamp.ts`). When the last person finishes, before the certificate is
+  drawn, the service is asked for an RFC 3161 time stamp over the SHA-256 of the chain head (the 64 hex characters the
+  certificate prints as "Chain head", without a line break). It shares the 4 seconds for time stamps with the seal's
+  own. With an answer that checks out, the certificate prints one line under the chain head, "The last value of this
+  record was time-stamped by <the name on the service's certificate> at <time> UTC.", the token is kept in
+  `audit_stamps`, and the evidence pack holds `audit-trail-head.txt`, `audit-trail-timestamp.tsr`, the certificates
+  the token carries and the command `openssl ts -verify -in audit-trail-timestamp.tsr -token_in -data
+  audit-trail-head.txt -CAfile <the service's root>`. The History fold on the page of the document ends with one
+  line, "Time-stamped by <service> on <date>, when everyone had finished.", and when the stored record no longer
+  leads to that value its badge reads "Changed after completion" with a warning as its first line (`record_stamp`
+  in `GET /envelopes/{id}`, `src/components/sender/History.tsx`). The service's name and time on the page are read
+  from the token, never from the row beside it. Without `TSA_TRUST` the line adds "Who runs that service was not
+  checked"; with it, a token from any other service does not hold. Without an answer, no certificate line is
+  printed and History says the fingerprint on the certificate still guards the record. What it changes is said in
+  `CHAIN_TRUTH`: before completion the chain is only ours to vouch for; after it, a rewrite of the lines up to
+  completion, even with every hash recomputed, ends at another value than the one the service signed. That holds
+  when it is checked outside this server (the token, with OpenSSL, against the service's own root, over the head on
+  the emailed certificate). The check on the page cannot stand alone against whoever can write the database: they
+  can delete our copy of the token, or, without `TSA_TRUST`, put in one from a service they made themselves. Lines
+  written after completion are not covered.
+- **Long-term checking of the seal** (`src/server/ltv.ts`). After a seal with a time stamp (B-T), every certificate of
+  the seal's chain and of the time-stamp token's chain is checked at the addresses it names: its OCSP service first
+  (with a nonce; the answer must be signed by the issuer or a responder the issuer named, say "good" for this very
+  certificate, and be current), else its revocation list (signed by the issuer, current, not listing it). An issuer
+  the chain does not carry is fetched from the address the certificate gives. The certificates and answers go into a
+  Document Security Store (`/DSS`) as an incremental update: PAdES B-LT. Then one document time stamp over the whole
+  file (`/DocTimeStamp`, `ETSI.RFC3161`): B-LTA at completion. All the answers together get `LTV_WAIT_MS` (20
+  seconds) because the stored file is the one that is emailed. When one does not answer, or an answer does not check
+  out (revoked, signed by someone else, an old nonce, out of date), nothing is added: the file stays at B-T, the
+  history line of the seal says why, and "Checks on the file" says in one plain line that the seal can be checked
+  only while its certificate is valid (the reason, with service names, is never on that screen). Certificates that
+  name no address at all (a certificate the operator made) give nothing to fetch: then nothing is added and nothing
+  is said. In the time-stamp service's own chain, a certificate that names no address, or whose issuer is not there,
+  is left as it is and does not keep the seal's certificates from being checked. Addresses are never asked when
+  they are on this machine or a private network, written as a number, as a name such as `localhost.` or
+  `*.internal`, or as a public-looking name the DNS says leads there (the lookup of `src/server/paydns.ts`; the DNS
+  can still answer one thing to that lookup and another to fetch a moment later). With `OUTSIDE_CALLS` set to
+  `listed` or `none`, these addresses come from certificates and are not on any list: add their hosts to
+  `OUTBOUND_ALLOW`, or every sealed file stays at B-T and its history line names the host to add. A seal without a
+  time stamp (B-B) gets no long-term data. The document time stamp's own certificate data is not added after it:
+  that, and renewing the archive time stamp over the years, would change the file people hold.
+- **`/verify`** (`ltvTail` in `ltv.ts`, called by `checkSeal`) treats what follows a seal as check data, and the file
+  as whole, only when every object after it is the catalog again with nothing changed but `/DSS` and the form, the
+  `/DSS` and the streams it lists, one new invisible field whose value is a document time stamp that holds and covers
+  the whole file, the form's fields and the last page's annotations again with only that field added, and
+  cross-reference sections that point back one to the next and free nothing. Each stream in the `/DSS` must read as
+  the certificate, OCSP answer or revocation list its array says, with nothing else in its dictionary, and together
+  they must check the seal's own certificate and each one above it for the time of the seal: an empty `/DSS`, one
+  holding other bytes, or one about other certificates is not check data. The time stamp's field and signature
+  dictionary may carry only the entries `withLongTerm` writes (no action, no appearance). Anything else (a turned
+  page, another annotation, a time stamp over other bytes) is "more was saved into the file after the seal", as
+  before. A document time stamp from any service that holds over the file is accepted as check data, because it
+  changes nothing a reader shows; its time and the name on its certificate (`doc_timestamp_at`, `doc_timestamp_by`)
+  are given only when it leads to a certificate in `TSA_TRUST`, otherwise `doc_timestamp_unchecked` is true and the
+  page says its time is not shown.
+- What was checked: `tests/ds-seal-ltv.test.ts` with a stub OCSP responder, a stub revocation list and a stub
+  time-stamp service made in the test. poppler's `pdfsig` still says the seal is valid (it says "Not total document
+  signed" for the seal and cannot check document time stamps: it shows the second signature as not verified), and
+  `openssl ts -verify` accepts the document time stamp over the bytes it covers and the record's time stamp over the
+  head, and refuses it for another head. Not yet opened in Acrobat or the EU DSS validator, and not run against a
+  real OCSP responder or time-stamp service: "Can be checked for years" rests on the file carrying what PAdES says
+  a reader needs, not on a reader having been seen to use it.
 - On the screens there is nothing to switch on and nothing to choose. The page of a sealed document gets one
   history line, "Sealed by" and the name on the seal certificate, and a folded "Checks on the file" that says the
   same in two sentences (`src/components/sender/FileChecks.tsx`; `seal` in `GET /envelopes/{id}`). Admins see one
@@ -1908,10 +2369,15 @@ How it is made (`src/server/finalpipe.ts`, `seal.ts`, `sealpdf.ts`, `sealcms.ts`
   people who run the server, because the reason can name files on it. A server without seal settings shows none of
   this. The time-stamp service's address is never repeated in a record, only its host name.
 - Waiting: the last person's Finish makes the signed PDF, so it waits for the time-stamp service, 3 seconds for
-  each service and 4 in all at the most, before the file is sealed without a time-stamp. A service that answers
+  each service and 4 in all at the most, before the file is sealed without a time-stamp. With long-term checking
+  (`LTV_WAIT_MS`), the answers about the certificates and the document time stamp after them share those
+  `LTV_WAIT_MS` (20 seconds at the most by default) and never add to it, so the worst case is about 4 seconds plus
+  `LTV_WAIT_MS`. A service that answers
   takes well under a second. A service that did not answer in time is not asked again for 10 minutes, so while it
-  hangs one signer in ten minutes waits those seconds and everyone else gets their file at once; files completed
-  in those minutes are sealed without a time-stamp, say so, and are not changed afterwards.
+  hangs, the signers who finish after that first wait get their file at once; files completed in those minutes are
+  sealed without a time-stamp, say so, and are not changed afterwards. Signers who finish at the same moment, while
+  the first request is still out, wait together and never longer than the first one. The 10 minutes are kept in the
+  memory of each server process: after a restart, or on a second process, one more signer waits those seconds.
 - On `/security` and `/security/certificate` the seal is explained only on a server with a seal key, in plain words
   (no standard names), including that a file is made without a seal when the certificate cannot be used at that
   moment. Those pages read the setting, not the state of the key: an expired certificate shows in the admins'
@@ -1921,6 +2387,36 @@ What to buy: Acrobat calls a seal valid only when its certificate comes from an 
 Trust List or an EU trusted list. With any other certificate (a company CA, a self-signed one) Acrobat says
 "validity unknown": that is about the certificate, and the panel still shows whether the file changed. Check a file
 by hand with `pdfsig file.pdf` (poppler) or in Acrobat's signature panel.
+
+### Archive format (PDF/A)
+
+Some archives take permanent records only as PDF/A. With `VERAPDF_CMD` set, an admin can switch on "Archive format
+(PDF/A)" under Settings, Records and data. It is off by default, and without veraPDF on the server it is not shown
+and nothing changes. With it on, every document the account completes from then on goes through
+`src/server/pdfa.ts`, a step before the seal in `src/server/finalpipe.ts`:
+
+1. The uploaded documents and the files signers attached are read first. A font that is not inside the file (many
+   programs only name Helvetica or Arial), colours for a printing press (CMYK, which an sRGB output intent cannot
+   describe), or sound, video, 3D or an attached file make PDF/A impossible without changing how the pages look. The
+   document is then made as a normal PDF, and the certificate says "Archive format: not PDF/A (a font in Lease is
+   not inside the file)".
+2. Otherwise the signed PDF is made as PDF/A-2b: XMP metadata with `pdfaid:part` 2 and conformance B, the title and
+   the dates the same as in the information dictionary, an output intent with the sRGB profile in `assets/icc`
+   (made from the published sRGB numbers by `scripts/make-srgb-icc.mjs`; its licence is next to it), a document ID
+   in the trailer, no JavaScript and no actions PDF/A forbids, annotations that cannot be seen taken away and every
+   other one printable. Every font this server draws with (DejaVu, and Noto for other scripts) is embedded already.
+   Then the seal, when the server seals: added as an incremental update, it keeps the file PDF/A-2b.
+3. veraPDF checks the finished file, seal and long-term data included (`--flavour 2b --format mrr`, in a process
+   group of its own, killed at `VERAPDF_TIMEOUT_MS`). Only when it passes does the certificate say "Archive format:
+   PDF/A-2b, checked with veraPDF <version>". When it does not, takes too long or cannot run, the whole file is made
+   again as a normal PDF, whose certificate says "not PDF/A" and why. The document always completes.
+
+What came of it is on the page of the document under "Checks on the file", in its history, and in `GET
+/envelopes/{id}` as `archive_format`. What veraPDF found wrong is written in the server log, not shown to senders.
+
+What was checked: `tests/ds-pdfa.test.ts` with a stand-in that answers in veraPDF's report format, and the real
+veraPDF when `VERAPDF_TEST_CMD` names it. The real veraPDF has not yet been run over files from this code (it could
+not be run where this was built): run that test with veraPDF installed before you rely on the label.
 
 ## Things to decide before launch
 
@@ -2011,8 +2507,12 @@ by hand with `pdfsig file.pdf` (poppler) or in Acrobat's signature panel.
   the agreement, and they promise nothing more.
 - **Impact factors** in the same file are commonly cited estimates. Check them against a source you are happy
   to stand behind publicly.
-- **The 100% promise and the trees per dollar** are business commitments. The app records what was paid and
-  displays it. Actually moving that money to tree planting is something you do, and should be able to show.
+- **The money promise and the trees per dollar** are business commitments. Every page says "what you pay, less
+  card fees, goes to Treegens" (`MONEY_LINE` and `MONEY_SHORT` in `src/lib/impactwords.ts`), because card payments
+  carry the processor's fees and nothing in the code makes them up. If you pay the fees yourself and send every
+  dollar, change those two lines. The trees total counts each whole dollar paid, less refunds, before card fees,
+  and /impact says so. The app records what was paid and displays it. Actually moving that money to tree planting
+  is something you do, and should be able to show.
 - **A person has to answer, and in time.** Set `SUPPORT_EMAIL` and `OPERATOR_EMAILS` and decide who reads the
   queue. The public pages promise that a person replies within `SUPPORT_FIRST_REPLY_HOURS` (urgent requests within
   `SUPPORT_URGENT_REPLY_HOURS`), in real hours, nights and weekends included. Set numbers your team can keep: a
@@ -2141,7 +2641,8 @@ src/app       pages (public, app, signing screen) and the single API entry point
 src/components  editor, PDF viewer, signature pad, shell, public navigation and footer
 src/lib/impact.ts   every environmental number and the prices
 research      what people complain about in other e-signature tools, with sources
-docs          controls.md (a self-assessment, not audited) and runbooks.md, for whoever runs a server
+docs          controls.md (a self-assessment, not audited) and runbooks.md, for whoever runs a server;
+              procurement/ the procurement documents served at /procurement
 deploy        the Helm chart; Dockerfile and docker-compose.example.yml are at the top
 scripts       backup, restore, the bill of materials, encrypting stored files, fonts, the container smoke test
 tests         API tests and the browser test

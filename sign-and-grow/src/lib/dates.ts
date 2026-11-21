@@ -234,6 +234,23 @@ export function dayText(iso: string | Date | null | undefined): string {
   return formatDate(text, DEFAULT_DATE_FORMAT, 'UTC');
 }
 
+/**
+ * A moment as a message, an email, a record or the full record for disputes writes it for a person to read, in UTC:
+ * "21 Nov 2026 05:40:12 UTC", or "21 Nov 2026 05:40 UTC" without the seconds. Day first and the month as a word, like
+ * every date a person reads (the certificate's own times are written the same way). The API, CSV files and file names
+ * keep 2026-11-21T05:40:12Z. Anything that is not a moment comes back as it was given.
+ */
+export function stampText(iso: string | Date | null | undefined, seconds = true): string {
+  if (iso == null || iso === '') return '';
+  const t = typeof iso === 'string' ? new Date(iso) : iso;
+  if (Number.isNaN(t.getTime())) return String(iso);
+  const c = clockIn(t, 'UTC')!;
+  return `${c.d} ${MONTHS[c.m]} ${c.y} ${pad(c.hh)}:${pad(c.mm)}${seconds ? `:${pad(t.getUTCSeconds())}` : ''} UTC`;
+}
+
+/** The locale for a date on a screen in this browser: day first for every English browser, its own language's way otherwise (fmtDateTag). */
+export const screenLocale = (): string | undefined => fmtDateTag(typeof navigator === 'undefined' ? '' : navigator.language);
+
 /** The locale app screens write a date in (fmtDate in src/components/ui.tsx): day first for every English browser, the browser's own otherwise. */
 export function fmtDateTag(browserLanguage: string | null | undefined): string | undefined {
   const l = String(browserLanguage || '');

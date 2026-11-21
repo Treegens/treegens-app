@@ -89,16 +89,18 @@ export function plainTime(iso: any): string {
  * typed is said to be exactly that. `passed` is the record of a code that was typed correctly: what the code was
  * sent as and to where (masked), and when.
  */
-export function checkLine(r: { role?: string; access_code?: any; verify?: any; link_by_sender?: any }, passed: { how: string; at: string } | null): string {
+export function checkLine(r: { role?: string; access_code?: any; verify?: any; link_by_sender?: any; wa_sent_to?: any }, passed: { how: string; at: string } | null): string {
   const inPerson = r.role === 'inperson';
   // "I will send the link myself": we know the sender had the link, not how it travelled (src/lib/bysender.ts).
-  const link = inPerson ? 'Signed in person on a device of the sender, who was emailed the link' : r.link_by_sender ? 'Link shared by the sender' : 'Link sent by email';
+  const link = inPerson ? 'Signed in person on a device of the sender, who was emailed the link' : r.link_by_sender ? 'Link shared by the sender'
+    // The provider took a WhatsApp message with the link for this number, masked (src/server/whatsapp.ts).
+    : r.wa_sent_to ? `Link sent by email and by WhatsApp to ${r.wa_sent_to}` : 'Link sent by email';
   const code = r.access_code ? ' and an access code chosen by the sender' : '';
   // A link that did not simply arrive by email is said with the code, so the line keeps how the person got in.
-  const via = inPerson || r.link_by_sender ? `${link}. ` : '';
+  const via = inPerson || r.link_by_sender || r.wa_sent_to ? `${link}. ` : '';
   if (passed) return `${via}${passed.how}, passed ${plainTime(passed.at)}${r.access_code ? '. Also an access code chosen by the sender' : ''}`;
   if (isCodeCheck(r.verify)) return `${link}${code}. A one-time code by ${CHANNEL_WORDS[r.verify]} was asked for and was not passed`;
-  return r.access_code ? `${link}${code}` : inPerson ? link : `${link} only`;
+  return r.access_code ? `${link}${code}` : inPerson || r.wa_sent_to ? link : `${link} only`;
 }
 
 /**

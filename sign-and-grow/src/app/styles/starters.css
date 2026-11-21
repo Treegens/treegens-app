@@ -1,0 +1,28 @@
+/* Ready-made templates on the Templates page (src/components/templates/Starters.tsx). */
+.rmt-headbtns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.rmt-headlink, .rmt-list .btn, .rmt-invite .btn { min-height: 44px; }
+.rmt-invite { margin: 18px auto 0; display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 460px; }
+.rmt-list { margin-bottom: 16px; }
+.rmt-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.rmt-top h2 { margin: 0; font-size: 18px; }
+.rmt-top h2:focus { outline: none; }
+.rmt-top h2:focus-visible { outline: 2px solid var(--green, #1f7042); outline-offset: 3px; }
+.rmt-lead { margin: 6px 0 12px; }
+.rmt-items { list-style: none; margin: 0; padding: 0; }
+.rmt-items > li { border-top: 1px solid var(--line); padding: 12px 0; }
+.rmt-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.rmt-what { min-width: 0; flex: 1 1 auto; display: grid; gap: 3px; }
+.rmt-row > .btn { flex: 0 0 auto; }
+.rmt-made a { font-weight: 600; display: inline-block; padding: 6px 0; }
+.rmt-form { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg, #faf8f2); }
+.rmt-form .actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.rmt-form label.f { margin-bottom: 10px; }
+@media (max-width: 520px) {
+  .rmt-row { flex-direction: column; align-items: stretch; }
+  .rmt-row > .btn, .rmt-form .actions .btn { width: 100%; }
+}
+.rmt-made a { min-height: 44px; display: inline-flex; align-items: center; padding: 0; }
+.rmt-nomatch { justify-content: center; margin-top: 14px; }
+.rmt-own { padding: 14px 16px; }
+.rmt-own a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; }
+.rmt-nomatch .btn { min-height: 44px; }

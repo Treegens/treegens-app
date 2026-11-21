@@ -1,7 +1,8 @@
 // The routes of keeping closed envelopes for a set time, and of legal holds. The rules are in src/server/records.ts.
 import { route } from './router.ts';
 import { all, get } from './db.ts';
-import { bad, now, str, HttpError } from './util.ts';
+import { bad, now, str, HttpError, rateLimit } from './util.ts';
+import { deletionRecordPdf } from './deletionpdf.ts';
 import { mine } from './routes-envelopes.ts';
 import { isOperator } from './routes-trust.ts';
 import {
@@ -36,9 +37,15 @@ route('GET', '/account/retention', (c) => {
 route('PUT', '/account/retention', async (c) => setPolicy(c, await c.body()), 'admin');
 
 // The disposition record: every rule change, keep, hold, purge and refused attempt. ?format=csv for the file.
-route('GET', '/account/retention/log', (c) => {
+route('GET', '/account/retention/log', async (c) => {
   if (c.q.get('format') === 'csv')
     return new Response(retentionCsv(c.account.id), { headers: { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="deletion-record-${now().slice(0, 10)}.csv"` } });
+  // The same record to print or file, with the fingerprint of each deleted signed PDF (src/server/deletionpdf.ts).
+  if (c.q.get('format') === 'pdf') {
+    rateLimit(`deletion-pdf:${c.account.id}`, 30, 3600_000);
+    const { pdf } = await deletionRecordPdf(c.account.id);
+    return new Response(Buffer.from(pdf), { headers: { 'content-type': 'application/pdf', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="deletion-record-${now().slice(0, 10)}.pdf"` } });
+  }
   return { lines: retentionLog(c.account.id, Math.min(1000, Number(c.q.get('limit')) || 200)) };
 }, 'admin');
 

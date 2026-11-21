@@ -1,5 +1,5 @@
 // Wording and small calculations shared by the sender screens. No React in here, so it can be tested on its own.
-import { momentText, deviceZone } from '../../lib/dates.ts';
+import { momentText, deviceZone, screenLocale } from '../../lib/dates.ts';
 
 export const HOUR_MS = 3600_000;
 export const DAY_MS = 24 * HOUR_MS;
@@ -16,20 +16,20 @@ const withYear = (d: Date) => (d.getFullYear() === new Date().getFullYear() ? {}
 /** "4 December". The year is added when it is not this year. */
 export function longDate(iso?: string | null): string {
   const d = valid(iso);
-  return d ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', ...withYear(d) }) : '';
+  return d ? d.toLocaleDateString(screenLocale(), { day: 'numeric', month: 'long', ...withYear(d) }) : '';
 }
 
 /** "4 Dec, 14:02". The year is added when it is not this year. */
 export function dayTime(iso?: string | null): string {
   const d = valid(iso);
   if (!d) return '';
-  return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...withYear(d) })}, ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+  return `${d.toLocaleDateString(screenLocale(), { day: 'numeric', month: 'short', ...withYear(d) })}, ${d.toLocaleTimeString(screenLocale(), { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 /** "1 December" for a moment that is defined in UTC, like the monthly reset, so it reads the same everywhere. */
 export function longDateUtc(iso?: string | null): string {
   const d = valid(iso);
-  return d ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', timeZone: 'UTC' }) : '';
+  return d ? d.toLocaleDateString(screenLocale(), { day: 'numeric', month: 'long', timeZone: 'UTC' }) : '';
 }
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;

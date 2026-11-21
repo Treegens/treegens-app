@@ -7,7 +7,7 @@ import { senderZone } from './pdf.ts';
 import { passCheckOn } from './signercode.ts';
 import { audit, notifySender, senderOf, signUrl, retireToken, samePerson, yesNo, emailRefusal, noteReached, newerVersion, clearAnswers, advance, notOpen, type Actor } from './envelopes.ts';
 import { labelOf } from '../lib/bysender.ts';
-import { formatDate, validZone } from '../lib/dates.ts';
+import { formatDate, validZone, stampText } from '../lib/dates.ts';
 import { isWitness, waitsForName, openWitnessName, statementText, marksOf, MARK_WORDS, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_NAMES_MAX, WITNESS_CERT_NOTE, sameDevice, SAME_DEVICE_LIMITS, sameName, PARTY_ROLES } from '../lib/witness.ts';
 import { witnessProblem as sharedProblem } from '../lib/witness.ts';
 
@@ -148,7 +148,7 @@ export function settleWitnesses(envelopeId: string) {
     run("UPDATE recipients SET status='pending', sent_at=NULL, unopened_alerted_at=NULL WHERE id=?", w.id);
 }
 
-const at = (s: any) => String(s ?? '').replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+const at = (s: any) => stampText(s);
 
 /**
  * correctEnvelope() in envelopes.ts: who has to sign again. A witness's statement belongs to one signature. When that

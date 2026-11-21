@@ -49,6 +49,15 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-convert.ts');
   await import('../src/server/routes-disclosure.ts');
   await import('../src/server/routes-secpolicy.ts');
+  await import('../src/server/routes-pages.ts');
+  await import('../src/server/routes-reports.ts');
+  await import('../src/server/routes-bulklists.ts');
+  await import('../src/server/routes-signlang.ts');
+  await import('../src/server/routes-ocr.ts');
+  await import('../src/server/routes-starters.ts');
+  await import('../src/server/routes-orgs.ts');
+  await import('../src/server/routes-pdfa.ts');
+  await import('../src/server/routes-whatsapp.ts');
   await import('../src/server/openapi.ts');
   const billing = await import('../src/server/routes-billing.ts');
   handle = (await import('../src/server/router.ts')).handle;

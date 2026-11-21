@@ -12,9 +12,11 @@
 //      on that new margin. The document's own content keeps its place and its size.
 // So the strip is always at the foot, where every screen says the envelope ID is, and never over anything.
 //
-// What is not looked at: lines and filled shapes (a page border, a coloured band). Nearly every page made by a word
-// processor or a browser starts with a white rectangle over the whole sheet, so shapes cannot tell us where the page
-// is in use. A ruled line in the lowest 17 pt of a page can therefore still have the strip printed across it.
+// Lines and filled shapes count as well (a ruled line, a page border, a coloured band, words drawn as outlines), with
+// two exceptions: anything painted white, and a filled shape over most of the page, which is the sheet behind
+// everything (nearly every page made by a word processor or a browser starts with one). What is not looked at: colour
+// gradients ("sh"), what a clipping path hides (a picture counts whole), and comments or stamps a PDF reader shows on
+// top of the page.
 import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, PDFStream, decodePDFRawStream, rgb, type PDFPage, type PDFFont, type Color, type Rotation } from 'pdf-lib';
 import { drawPageFoot, PAGE_STAMP_PT, PAGE_STAMP_UP, PAGE_STAMP_W } from './brandpdf.ts';
 
@@ -59,18 +61,46 @@ function pageStreams(page: PDFPage): Uint8Array[] {
   return [streamBytes(c)];
 }
 
+type Pt = { x: number; y: number };
+/** What a page paints, in the page's own coordinates: pictures as their four corners, and drawn shapes. */
+type Painted = { pics: Pt[][]; shapes: { pts: Pt[]; pad: number; fill: boolean }[] };
+/** The state q saves and Q puts back: where things land, and whether filling and stroking paint white. */
+type Gs = { ctm: Mx; fillWhite: boolean; strokeWhite: boolean; lw: number };
+
+/** Gray, RGB or CMYK numbers that paint white (or as good as), told apart by how many there are. */
+const whiteOf = (v: number[]) => (v.length === 1 ? v[0] >= 0.98 : v.length === 3 ? v.every((c) => c >= 0.98) : v.length === 4 ? v.every((c) => c <= 0.02) : false);
+
 /**
  * Walks drawing commands and reports every picture painted, as the four corners of where it lands in the page's own
- * coordinates. Only what moves the coordinate system is followed (q, Q, cm), plus Do (a picture, or a form that is
- * walked in turn) and inline pictures. Throws when the commands are too many to follow.
+ * coordinates, and every line or shape stroked or filled in a colour other than white (text drawn as outlines, a
+ * ruled line, a page border, a coloured band). What moves the coordinate system is followed (q, Q, cm), the colour
+ * and width of lines, the path commands, Do (a picture, or a form that is walked in turn) and inline pictures.
+ * Throws when the commands are too many to follow.
  */
-function walk(bytes: Uint8Array, ctm: Mx, resources: PDFDict | undefined, look: (o: unknown) => unknown, out: { x: number; y: number }[][], budget: { ops: number }, depth: number) {
-  const stack: Mx[] = [];
+function walk(bytes: Uint8Array, start: Gs, resources: PDFDict | undefined, look: (o: unknown) => unknown, out: Painted, budget: { ops: number }, depth: number) {
+  const stack: Gs[] = [];
+  let gs: Gs = { ...start };
+  let ctm = gs.ctm;
   const nums: number[] = [];
   let name = '';
   let i = 0;
   const n = bytes.length;
-  const paint = () => out.push([at(ctm, 0, 0), at(ctm, 1, 0), at(ctm, 0, 1), at(ctm, 1, 1)]);
+  const paint = () => out.pics.push([at(ctm, 0, 0), at(ctm, 1, 0), at(ctm, 0, 1), at(ctm, 1, 1)]);
+  // The path being built: every point, for a fill, and its pieces one by one, for a stroke (a frame round the page is
+  // four thin lines, not the whole page).
+  let pathPts: Pt[] = [];
+  let pieces: Pt[][] = [];
+  let first: Pt | null = null, last: Pt | null = null;
+  const to = (x: number, y: number) => at(ctm, x, y);
+  const scale = () => Math.sqrt(Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2])) || 1;
+  const paintPath = (fill: boolean, stroke: boolean) => {
+    if (fill && !gs.fillWhite && pathPts.length) out.shapes.push({ pts: pathPts, pad: 0, fill: true });
+    if (stroke && !gs.strokeWhite) {
+      const pad = Math.max(0.5, (gs.lw || 1) * scale() / 2);
+      for (const p of pieces) out.shapes.push({ pts: p, pad, fill: false });
+    }
+    pathPts = []; pieces = []; first = last = null;
+  };
   while (i < n) {
     const c = bytes[i];
     if (WHITE.has(c)) { i++; continue; }
@@ -103,9 +133,39 @@ function walk(bytes: Uint8Array, ctm: Mx, resources: PDFDict | undefined, look: 
     i = j;
     if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(word)) { nums.push(Number(word)); if (nums.length > 6) nums.shift(); continue; }
     if (++budget.ops > MAX_OPS) throw new Error('too many commands');
-    if (word === 'q') stack.push(ctm);
-    else if (word === 'Q') ctm = stack.pop() || ctm;
+    const k2 = nums.slice(-2), k4 = nums.slice(-4), k6 = nums.slice(-6);
+    if (word === 'q') stack.push({ ...gs, ctm });
+    else if (word === 'Q') { const back = stack.pop(); if (back) { gs = back; ctm = back.ctm; } }
     else if (word === 'cm' && nums.length === 6) ctm = mul(nums as Mx, ctm);
+    // Colours and line width.
+    else if (word === 'g' || word === 'rg' || word === 'k') gs.fillWhite = whiteOf(nums.slice(-(word === 'g' ? 1 : word === 'rg' ? 3 : 4)));
+    else if (word === 'G' || word === 'RG' || word === 'K') gs.strokeWhite = whiteOf(nums.slice(-(word === 'G' ? 1 : word === 'RG' ? 3 : 4)));
+    else if (word === 'sc' || word === 'scn') gs.fillWhite = !name && whiteOf(nums); // a pattern (a name) is ink
+    else if (word === 'SC' || word === 'SCN') gs.strokeWhite = !name && whiteOf(nums);
+    else if (word === 'cs') gs.fillWhite = false; // a new colour space starts black
+    else if (word === 'CS') gs.strokeWhite = false;
+    else if (word === 'w' && nums.length) gs.lw = nums[nums.length - 1];
+    // Building a path.
+    else if (word === 'm' && k2.length === 2) { const p = to(k2[0], k2[1]); pathPts.push(p); first = last = p; }
+    else if (word === 'l' && k2.length === 2) { const p = to(k2[0], k2[1]); pathPts.push(p); pieces.push([last || p, p]); last = p; }
+    else if ((word === 'c' && k6.length === 6) || ((word === 'v' || word === 'y') && k4.length === 4)) {
+      const v = word === 'c' ? k6 : k4;
+      const ps: Pt[] = [];
+      for (let q = 0; q < v.length; q += 2) ps.push(to(v[q], v[q + 1]));
+      pathPts.push(...ps); pieces.push([last || ps[0], ...ps]); last = ps[ps.length - 1];
+    } else if (word === 'h') { if (first && last) pieces.push([last, first]); last = first; }
+    else if (word === 're' && k4.length === 4) {
+      const [x, y, w, h] = k4;
+      const c = [to(x, y), to(x + w, y), to(x + w, y + h), to(x, y + h)];
+      pathPts.push(...c);
+      for (let q = 0; q < 4; q++) pieces.push([c[q], c[(q + 1) % 4]]);
+      first = last = c[0];
+    }
+    // Painting it, or not (n ends a path used only to cut out what follows).
+    else if (word === 'S' || word === 's') paintPath(false, true);
+    else if (word === 'f' || word === 'F' || word === 'f*') paintPath(true, false);
+    else if (word === 'B' || word === 'B*' || word === 'b' || word === 'b*') paintPath(true, true);
+    else if (word === 'n') paintPath(false, false);
     else if (word === 'BI') {
       // An inline picture: its bytes follow ID and end at EI standing alone.
       paint();
@@ -124,7 +184,7 @@ function walk(bytes: Uint8Array, ctm: Mx, resources: PDFDict | undefined, look: 
           const mx = look(xo.dict.get(PDFName.of('Matrix')));
           const inner = mx instanceof PDFArray && mx.size() === 6 ? (mx.asArray().map((v) => (look(v) as PDFNumber).asNumber()) as Mx) : ([1, 0, 0, 1, 0, 0] as Mx);
           const res = look(xo.dict.get(PDFName.of('Resources')));
-          walk(streamBytes(xo), mul(inner, ctm), res instanceof PDFDict ? res : resources, look, out, budget, depth + 1);
+          walk(streamBytes(xo), { ...gs, ctm: mul(inner, ctm) }, res instanceof PDFDict ? res : resources, look, out, budget, depth + 1);
         }
       }
     }
@@ -146,23 +206,42 @@ function shownPoint(page: PDFPage) {
 
 const boxOf = (pts: { x: number; y: number }[]): Box => ({ x0: Math.min(...pts.map((p) => p.x)), y0: Math.min(...pts.map((p) => p.y)), x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)) });
 
-/** Every picture a page paints, as boxes on the page as shown. Null when the page's commands could not be followed. */
-export function pictureBoxes(page: PDFPage): Box[] | null {
+/** A shape filled over most of the page is the page's ground (a white or coloured sheet behind everything). */
+const GROUND = 0.85;
+
+/**
+ * Every picture a page paints, and every line and shape it draws in ink, as boxes on the page as shown. Null when the
+ * page's commands could not be followed. A filled shape that covers most of the page is its ground, not its content,
+ * and is left out, as is anything filled or stroked in white.
+ */
+export function paintedBoxes(page: PDFPage): { pictures: Box[]; shapes: Box[] } | null {
   try {
     const look = (o: unknown) => (o instanceof PDFRef ? page.doc.context.lookup(o) : o);
-    const out: { x: number; y: number }[][] = [];
+    const out: Painted = { pics: [], shapes: [] };
     const budget = { ops: 0 };
     const streams = pageStreams(page);
     if (streams.reduce((a, s) => a + s.length, 0) > MAX_STREAM) return null;
     // The streams of a page are one run of commands: a q in one may be closed in the next.
     const all = Buffer.concat(streams.map((s) => Buffer.concat([Buffer.from(s), Buffer.from('\n')])));
-    walk(all, [1, 0, 0, 1, 0, 0], page.node.Resources(), look, out, budget, 0);
+    // A page starts with black ink for filling and stroking, lines 1 unit wide.
+    walk(all, { ctm: [1, 0, 0, 1, 0, 0], fillWhite: false, strokeWhite: false, lw: 1 }, page.node.Resources(), look, out, budget, 0);
     const shown = shownPoint(page);
-    return out.map((corners) => boxOf(corners.map(shown)));
+    const b = page.getCropBox();
+    const area = b.width * b.height;
+    const shapes: Box[] = [];
+    for (const s of out.shapes) {
+      const x = boxOf(s.pts.map(shown));
+      if (s.fill && (x.x1 - x.x0) * (x.y1 - x.y0) >= GROUND * area) continue;
+      shapes.push({ x0: x.x0 - s.pad, y0: x.y0 - s.pad, x1: x.x1 + s.pad, y1: x.y1 + s.pad });
+    }
+    return { pictures: out.pics.map((corners) => boxOf(corners.map(shown))), shapes };
   } catch {
     return null;
   }
 }
+
+/** Every picture a page paints, as boxes on the page as shown. Null when the page's commands could not be followed. */
+export const pictureBoxes = (page: PDFPage): Box[] | null => paintedBoxes(page)?.pictures ?? null;
 
 // ---- the text of a page ---------------------------------------------------------------------------------------------
 
@@ -232,11 +311,11 @@ export async function notePages(pages: PDFPage[], bytes: Uint8Array, key: string
       const b = page.getCropBox();
       const side = page.getRotation().angle % 180 !== 0;
       const W = side ? b.height : b.width, H = side ? b.width : b.height;
-      const pics = pictureBoxes(page);
+      const painted = paintedBoxes(page);
       const words = text[i] ?? null;
-      const known = !!pics && !!words;
+      const known = !!painted && !!words;
       const near = (x: Box) => x.y1 > zoneTop(H) && x.y0 < H && x.x1 > 0 && x.x0 < W;
-      return { W, H, known, boxes: known ? [...pics!, ...words!].filter(near) : [] };
+      return { W, H, known, boxes: known ? [...painted!.pictures, ...painted!.shapes, ...words!].filter(near) : [] };
     });
     if (cache.size >= 64) cache.delete(cache.keys().next().value!);
     cache.set(key, inks);

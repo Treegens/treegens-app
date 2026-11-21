@@ -263,8 +263,10 @@ async function announce(t: any, extra: string[] = []) {
 // reference and nothing a stranger wrote, or the form would send any text to any inbox under our name.
 async function acknowledge(t: any, extra: string[] = []) {
   const hours = hoursFor(priorityOf(t));
-  await sendMail({ to: t.email, subject: `We got your message (${refOf(t)})`, heading: 'A person will reply to you',
+  await sendMail({ to: t.email, subject: `We got your message (${refOf(t)})`, heading: supportReachable() ? 'A person will reply to you' : 'We got your message',
     lines: [`Your reference is ${refOf(t)}.`, ...extra,
+      // With nobody named to read requests (supportReachable), nothing is promised about a reply.
+      ...(supportReachable() ? [] : ['Nobody has been named to answer help requests on this server yet, so we cannot say when someone will read your message.']),
       ...(t.due_at ? [`A person will have answered by ${whenText(t.due_at, customerZone(t))}. That is within ${hours} hour${hours === 1 ? '' : 's'} of your message, counted in real hours: nights and weekends count too. If we are ever late, the request says so and the whole team is told.`] : []),
       ...(t.verified ? ['What you sent us:', t.message] : ['If you did not write to us, someone typed your address into our help form by mistake. You can ignore this email.']),
       `${NO_REPLY} To add something, to read our answer or to see where things stand, use the button below. It opens your request without signing in, so do not forward this email.`],

@@ -31,7 +31,7 @@ export function sayConfirmed() {
  * when this tab is shown again, and every 15 seconds while it is on screen, for a phone that confirmed it.
  * `check` asks the server and answers whether the address is confirmed now.
  */
-export function useConfirmedElsewhere(active: boolean, check: () => void) {
+export function useConfirmedElsewhere(active: boolean, check: (quiet?: boolean) => void) {
   const latest = useRef(check);
   latest.current = check;
   useEffect(() => {
@@ -46,7 +46,8 @@ export function useConfirmedElsewhere(active: boolean, check: () => void) {
     window.addEventListener('storage', stored);
     window.addEventListener('focus', look);
     document.addEventListener('visibilitychange', look);
-    const timer = window.setInterval(look, 15_000);
+    // The look every 15 seconds is quiet: it is not use, so a team's "Sign out after" still signs an idle tab out.
+    const timer = window.setInterval(() => document.visibilityState === 'visible' && latest.current(true), 15_000);
     return () => {
       ch?.close();
       window.removeEventListener('storage', stored);
@@ -61,7 +62,7 @@ export function useConfirmedElsewhere(active: boolean, check: () => void) {
  * The banner at the top of the app while the address is not confirmed: the code box in place, in the tab the person
  * signed up in. It goes by itself once the address is confirmed, here or anywhere else.
  */
-export function ConfirmBanner({ me }: { me: { user: any; reload: () => void } }) {
+export function ConfirmBanner({ me }: { me: { user: any; reload: (quiet?: boolean) => void } }) {
   const unconfirmed = !me.user.email_verified;
   useConfirmedElsewhere(unconfirmed, me.reload);
   // Straight after signing up the keyboard starts in the code box, once: the next thing to do (AuthForm sets the mark).

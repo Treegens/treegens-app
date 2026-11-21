@@ -63,8 +63,26 @@
     ".next-build-simplify-start/dev/types/**/*.ts",
     ".next-dragdrop/types/**/*.ts",
     ".next-dragdrop/dev/types/**/*.ts",
-    ".next-build-open-signing/types/**/*.ts",
-    ".next-build-open-signing/dev/types/**/*.ts"
+    ".next-vop/types/**/*.ts",
+    ".next-vop/dev/types/**/*.ts",
+    ".next-build-ds-page-tools/types/**/*.ts",
+    ".next-build-ds-page-tools/dev/types/**/*.ts",
+    ".next-build-ds-templates-lib/types/**/*.ts",
+    ".next-build-ds-templates-lib/dev/types/**/*.ts",
+    ".next-uxdstpl/types/**/*.ts",
+    ".next-uxdstpl/dev/types/**/*.ts",
+    ".next-build-ds-a11y/types/**/*.ts",
+    ".next-build-ds-a11y/dev/types/**/*.ts",
+    ".next-repair-ds-seal-ltv/types/**/*.ts",
+    ".next-repair-ds-seal-ltv/dev/types/**/*.ts",
+    ".next-ux-ds-fields-checks/types/**/*.ts",
+    ".next-ux-ds-fields-checks/dev/types/**/*.ts",
+    ".next-ux-ds-channels/types/**/*.ts",
+    ".next-ux-ds-channels/dev/types/**/*.ts",
+    ".next-repair-ds-fields-checks/types/**/*.ts",
+    ".next-repair-ds-fields-checks/dev/types/**/*.ts",
+    ".next-verify-ds-a11y/types/**/*.ts",
+    ".next-verify-ds-a11y/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

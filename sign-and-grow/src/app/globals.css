@@ -109,12 +109,12 @@ table.t tr.click:hover td { background: #fbfaf6; }
 .badge.completed { background: var(--green-soft); color: var(--green); }
 .badge.sent, .badge.viewed { background: var(--blue-soft); color: var(--blue); }
 .badge.declined, .badge.voided { background: var(--red-soft); color: var(--red); }
-.badge.expired { background: var(--amber-soft); color: var(--amber); }
+.badge.expired { background: var(--amber-soft); color: #855208; }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; overflow-x: auto; }
 /* On a narrow screen the tabs wrap onto a second line, so every one of them can be seen. */
 @media (max-width: 720px) { .tabs { flex-wrap: wrap; overflow-x: visible; row-gap: 0; } .tabs button, .tabs a { padding: 9px 10px; } }
-.tabs button, .tabs a { border: 0; background: none; font: inherit; font-weight: 600; font-size: 14px; color: var(--muted); padding: 10px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; text-decoration: none; }
+.tabs button, .tabs a { border: 0; background: none; font: inherit; font-weight: 600; font-size: 14px; color: var(--muted); padding: 10px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; text-decoration: none; min-height: 44px; }
 .tabs .on { color: var(--green); border-bottom-color: var(--green); }
 
 .stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }

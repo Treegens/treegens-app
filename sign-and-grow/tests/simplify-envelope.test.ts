@@ -328,7 +328,9 @@ test('with a deletion schedule, the page lists Keep it and Hold for an admin, an
   // Inside the one Delete dialog: keeping it past the schedule, and deleting its files for good, each wired to its
   // dialog. (Their words belong to the ds-retention work and are pinned in tests/retention*.test.ts, not here.)
   const card = read('src/components/sender/Retention.tsx');
-  assert.match(card, /onClick=\{onKeep\}>/);
+  // "Keep it instead" is a button of the Delete dialog's own row (open-platform: no button inside a sentence).
+  // Its label says what it does (repair-open-platform: "Keep it until <day>", keepInsteadLabel).
+  assert.match(read(PAGE), /other=\{!isTpl && keepInstead\(ret\) \? \{ label: keepInsteadLabel\(ret!\), onClick: \(\) => \(setDialog\(''\), setKeeping\('keep'\)\) \}/);
   assert.match(card, /onClick=\{onPurge\}>/);
   assert.doesNotMatch(card, />Purge now<|>Put on legal hold</);
   // The hold really holds, and can be lifted from More afterwards.
@@ -555,7 +557,7 @@ test('the words on the page point at places that exist: Documents, not Envelopes
 test('a person with nothing left to do has no empty More: the facts are on their card, and their role is in the past', () => {
   const people = read(PEOPLE);
   assert.match(people, /const acts = turn \|\| \(out && r\.status === 'pending'\) \|\| \(e\.status !== 'draft' && !!r\.access_code\);/);
-  assert.match(people, /const hasMore = e\.status !== 'draft' && \(acts \|\| r\.role === 'witness' \|\| texts\.some\(\(t\) => t\.recipient_id === r\.id\)\);/);
+  assert.match(people, /const hasMore = e\.status !== 'draft' && \(acts \|\| r\.role === 'witness' \|\| texts\.some\(\(t\) => t\.recipient_id === r\.id\) \|\| !!r\.whatsapp_status\);/);
   assert.match(people, /\{hasMore && <MorePanel label=/);
   assert.match(people, /\{!hasMore && settled && <p className="muted small sn-person-line">\{emailFact\} \{openedFact\}<\/p>\}/);
   assert.match(people, /r\.status === 'completed' \? ROLE_DONE\[r\.role\] \|\| ROLE_LABEL\[r\.role\] : ROLE_LABEL\[r\.role\]/);

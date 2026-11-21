@@ -110,10 +110,11 @@ test('Other actions: one fixed order, no descriptions, never more than six, and 
             assert.deepEqual(keys, ACTION_ORDER.filter((k) => keys.includes(k)), 'the fixed order');
             if (keys.includes('decline')) assert.equal(keys.at(-1), 'decline');
           }
-  // The entries have no descriptions, and paper, which is not built, is offered to nobody.
+  // The entries have no descriptions, and paper is offered only when the account has its own consent text
+  // (tests/ds-consent-own.test.ts): with zero setup, to nobody.
   const actions = page.slice(page.indexOf('const ACTION: Record<ActionKey, MenuItem>'), page.indexOf('const menu: MenuItem[]'));
   assert.doesNotMatch(actions, /hint:/);
-  assert.match(page, /otherActions\(me, \{ stage, deadline: !!env\.expires_at \}\)/, 'no paper: true anywhere');
+  assert.match(page, /otherActions\(me, \{ stage, deadline: !!env\.expires_at, paper: !!data\.own_terms \}\)/, 'paper only with the account\'s own text');
   // After Finish later the page says where the way back is, also for someone with no email from us.
   assert.equal(laterAtConsent(false), 'Nothing is lost. Use the link in your email when you are ready.');
   assert.doesNotMatch(laterAtConsent(true), /email/);
@@ -144,8 +145,11 @@ test('the consent screen: the sender once, 120 words or fewer before the tick, t
   const consent = page.slice(page.indexOf("if (stage === 'consent') {"), page.indexOf('// ---- The document'));
   // The sender is named once, by name and address, and the account only when its name says more than the person's.
   assert.equal((consent.match(/<Sender /g) || []).length, 0, 'the "Sent by / Email / Account" box is gone');
-  assert.match(consent, /<p className="sg-from">From <b>\{sender\.name\}<\/b>\{org \? <> at \{org\}<\/> : null\}/);
-  assert.match(consent, /const org = orgOf\(data\.brand\?\.name, sender\.name\);/);
+  // The top of the screen lives in ConsentTop.tsx, which keeps it to 120 words (tests/open-signing.test.ts).
+  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} \/>/);
+  const top = read('src/components/sign/ConsentTop.tsx');
+  assert.match(top, /<p className="sg-from">From <b>\{sender\.name\}<\/b>\{org \? <> at \{org\}<\/> : null\}/);
+  assert.match(top, /const org = orgOf\(data\.brand\?\.name, sender\.name\);/);
   assert.equal(orgOf("Rosa Gardener's workspace", 'Rosa Gardener'), '', 'never "Rosa Gardener\'s workspace"');
   // The subject is the heading of the screen, so the bar above does not say it a second time.
   assert.match(consent, /<Shell data=\{data\} bar=\{other\} footer=\{report\} helpInNewTab plainBar onHelp=\{headHelp\}>/);
@@ -368,16 +372,17 @@ test('the sender\'s message and note fold behind one line when the consent scree
   // The words themselves are written as text, never as markup.
   assert.doesNotMatch(fold, /dangerouslySetInnerHTML/);
   const consent = page.slice(page.indexOf("if (stage === 'consent') {"), page.indexOf('// ---- The document'));
-  assert.match(consent, /<SenderWords sender=\{sender\.name\} message=\{data\.message\} note=\{data\.note\} \/>/);
+  assert.match(read('src/components/sign/ConsentTop.tsx'), /<SenderWords sender=\{sender\.name\} message=\{data\.message\} note=\{data\.note\} fold=\{level >= 2\} \/>/);
   assert.doesNotMatch(consent, /Message from \{sender\.name\}/, 'the sender is named once');
   // In person, the consent screen says whose turn it is and leaves the line about the connection to the document.
-  assert.match(consent, /Hand this device to <b>\{me\.name\}<\/b> now\.<\/div>/);
+  assert.match(consent, /\{richText\(lang, 'sign\.consent\.hand_over', \{ name: <b>\{me\.name\}<\/b> \}\)\}<\/div>/);
+  assert.equal(JSON.parse(read('src/locales/en.json'))['sign.consent.hand_over'], 'Hand this device to {name} now.');
   assert.doesNotMatch(consent, /SIGNING_ONLINE/);
 });
 
 test('the note from Finish later does not follow the person onto the document, and its link stands on a line of its own', () => {
   const consent = page.slice(page.indexOf("if (stage === 'consent') {"), page.indexOf('// ---- The document'));
-  assert.match(consent, /await api\(`\$\{base\}\/consent`,[^\n]+\);\s+\/\/[^\n]+\s+setLater\(''\);\s+await load\(\);/);
+  assert.match(consent, /await api\(`\$\{base\}\/consent`,[^\n]+\);\s+setAgreedHere\(true\);\s+\/\/[^\n]+\s+setLater\(''\);\s+await load\(\);/);
   assert.match(page, /<div className="sg-later-stop">\s+\{!muted && [^\n]+>Stop reminder emails<\/button>\}\s+<\/div>/);
 });
 

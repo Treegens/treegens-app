@@ -23,7 +23,7 @@ export function SealResult({ seal }: { seal: any }) {
     return (
       <div className="notice warn" style={{ marginTop: 12 }}>
         <b>Something was saved into the file after its seal.</b> The digital seal holds for the part of the file it covers, made with {by}. After that, more was saved into the same file, for example a comment, a filled-in box or a turned page, by a PDF reader.
-        {seal.sealed_part ? <> The sealed part is, byte for byte, the signed PDF of envelope <span className="mono">{seal.sealed_part.envelope_id}</span>, completed {fmtDate(seal.sealed_part.completed_at, true)}.</> : null}
+        {seal.sealed_part ? <> The sealed part is, byte for byte, the signed PDF with the Envelope ID <span className="mono">{seal.sealed_part.envelope_id}</span>, completed {fmtDate(seal.sealed_part.completed_at, true)}.</> : null}
         {' '}What was added is not covered by the seal. A PDF reader such as Acrobat can show the version as it was sealed, from its signature panel. Or ask for the file exactly as it was emailed.
       </div>
     );
@@ -37,7 +37,7 @@ export function SealResult({ seal }: { seal: any }) {
   }
   return (
     <p className="small" style={{ margin: '10px 0 0' }}>
-      <b>Its digital seal holds too.</b> The file carries this server&apos;s digital seal, made with {by}, and nothing in it has changed since it was sealed.{when} A PDF reader that checks signatures can show the same without asking us. The seal is the server&apos;s, not a signature of the people who signed.
+      <b>Its digital seal holds too.</b> The file carries this server&apos;s digital seal, made with {by}, and nothing in it has changed since it was sealed.{when}{seal.long_term ? <> The only thing saved after the seal is what a PDF reader needs to check it after its certificate expires{seal.long_term === 'B-LTA' ? ', with a time stamp over the whole file' : ''}.{seal.doc_timestamp_at ? <> That time stamp is trusted: {fmtDate(seal.doc_timestamp_at, true)}.</> : seal.doc_timestamp_unchecked ? <> This page has no way to check who made that time stamp, so its time is not shown.</> : null}</> : null} A PDF reader that checks signatures can show the same without asking us. The seal is the server&apos;s, not a signature of the people who signed.
     </p>
   );
 }

@@ -10,7 +10,7 @@ import { groupDoes } from '@/lib/groups';
 // The envelope page, for a recipient that is a signing group (src/server/groups.ts): who is in it on this envelope,
 // what became of each member's email, who has taken it on, and the two things only the sender can do. Every member
 // has a link of their own, so "Copy link" is per member. "Give back to the group" takes the document back from the
-// member who has it and clears what they filled in. Who is in the group changes with Edit envelope.
+// member who has it and clears what they filled in. Who is in the group changes with Edit.
 
 type Delivery = { to_email: string; recipient_id?: string | null; status: string; at: string; tried_at?: string | null; next_try_at?: string | null; bounced_at?: string | null };
 

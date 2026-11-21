@@ -7,7 +7,7 @@ import { INK_WORD } from '@/lib/stampink';
 
 // A stamp field in the editor (src/server/stamps.ts): who puts it on, which of the team's stamps when it is the
 // sender's own, and its size on the page. A recipient puts their own stamp on when they sign. The sender's stamp is
-// one of the account's stamps (Settings, Stamps), printed as part of the document from the start.
+// one of the account's stamps (Settings, Stamps and seals), printed as part of the document from the start.
 
 let cache: Promise<any[]> | null = null;
 /** The team's stamps, fetched once while the editor is open. */
@@ -89,7 +89,7 @@ export function StampChoice({ field, open, envelopeId, page, patch }: {
           </div>
         </fieldset>
       ) : (
-        <p className="notice small">Your team has no stamps yet. An admin adds them under Settings, Stamps. Until one is chosen here, this cannot be sent.</p>
+        <p className="notice small">Your team has no stamps yet. An admin adds them under Settings, Stamps and seals. Until one is chosen here, this cannot be sent.</p>
       ))}
       {older && (
         <p className="notice small">

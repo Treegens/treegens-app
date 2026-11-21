@@ -16,6 +16,9 @@ import { strikeLines } from '../lib/strike.ts';
 import { payLineForPrint } from '../lib/paylink.ts';
 import { certName, certGroup } from '../lib/groups.ts';
 import { labelOf } from '../lib/bysender.ts';
+import { consentCertValue } from '../lib/disclosure.ts';
+import { certLanguageLine } from './signlang.ts';
+import { readableWording } from '../lib/wordingday.ts';
 // A witness is listed under the person they witnessed, with their statement (src/server/witness.ts).
 import { witnessOrder, witnessCertLines } from './witness.ts';
 import { drawStamp, stampFor, stampForMark, markFields } from './stamp.ts';
@@ -25,6 +28,13 @@ import { BlendMode } from 'pdf-lib';
 import { stampPng, stampCertLines, senderStampCertLines, stampCertNote } from './stamps.ts';
 import { drawSenderDetails } from './customfields.ts';
 import { sealLineFor } from './seal.ts';
+import { pdfaLineFor } from './pdfa.ts';
+// Hidden values, currency signs and boxes of fixed size (fieldchecks.ts, src/lib/fieldrules.ts).
+import { printedFields, hiddenLine } from './fieldchecks.ts';
+import { printedAmount, fieldChecks, FIXED_MIN_PT } from '../lib/fieldrules.ts';
+/** The smallest a box of fixed size ever prints, for text of wide letters that does not fit at 7 points. */
+const FIXED_FLOOR_PT = 2;
+import { chainStampLine } from './auditstamp.ts';
 import { STAMP_OPACITY, stampTurn } from '../lib/stamps.ts';
 // The logo in the certificate's header and the "Signed with growsigning" stamp at the foot of pages (brandpdf.ts).
 import { drawBrandHeader, drawSheetFoot } from './brandpdf.ts';
@@ -187,6 +197,8 @@ export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null, se
     case 'date': return formatDateValue(f.value, dateFormat);
     // A stamp is a picture. Its value is the fingerprint of that picture, never words on the page.
     case 'stamp': return '';
+    // An amount in a currency is printed as typed, with the currency's sign in front when it was typed without one.
+    case 'number': return printedAmount(f.value || '', fieldChecks(f));
     default: return f.value || '';
   }
 }
@@ -274,7 +286,11 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
   const ts = typesetterFor(ctx.doc, ctx.font, ctx.bold);
   const left = (ln: { width: number; rtl: boolean }, size: number) => (ln.rtl ? vx + vw - 2 - (ln.width * size) / 1000 : vx + 2);
   if (multi) {
-    const size = Math.min(base, 10);
+    let size = Math.min(base, 10);
+    // A box of fixed size makes its text smaller until every line fits in it (fieldrules.ts). The signer can type no
+    // more than about fits at 7 points; text of wide letters (capitals, W) goes smaller still, so nothing typed is
+    // ever cut off or printed past the box.
+    if (fieldChecks(f).fixed) while (size > FIXED_FLOOR_PT && ts.wrap(text, size, vw - 4).length > Math.floor(vh / (size * 1.3))) size = Math.max(FIXED_FLOOR_PT, size - (size > FIXED_MIN_PT ? 0.5 : 0.25));
     const lh = size * 1.3;
     const lines = ts.wrap(text, size, vw - 4).slice(0, Math.max(1, Math.floor(vh / lh)));
     lines.forEach((ln, i) => {
@@ -284,7 +300,10 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
   } else {
     const ln = ts.layout(text);
     // As large as fits the box, in half-point steps, never below 5 points.
-    const size = Math.max(5, Math.min(base, Math.floor((((vw - 4) * 1000) / Math.max(1, ln.width)) * 2) / 2));
+    // A box of fixed size shrinks its text until it fits, below 7 points for wide letters (fieldrules.ts), and never
+    // prints past its box.
+    const floor = fieldChecks(f).fixed ? Math.min(base, FIXED_FLOOR_PT) : 5;
+    const size = Math.max(floor, Math.min(base, Math.floor((((vw - 4) * 1000) / Math.max(1, ln.width)) * 2) / 2));
     const p = m.pt(left(ln, size), vy + vh / 2 + size * 0.35);
     ts.draw(page, ln, { x: p.x, y: p.y, size, color: INK, rotate: m.rotate });
   }
@@ -374,6 +393,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   s.kv('Sent', ts(e.sent_at));
   s.kv('Completed', ts(e.completed_at));
   s.kv('Signing order', e.ordered ? 'Sequential' : 'Everyone at once');
+  if (hiddenLine(e.fields)) s.kv('Hidden values', hiddenLine(e.fields)!);
   // The sender's own stamp: which one, where, and the fingerprint of its picture (stamps.ts).
   for (const [k, v] of senderStampCertLines(e)) s.kv(k, known(v));
   // The custom fields the account prints on the certificate, in the sender's words (customfields.ts).
@@ -411,7 +431,10 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
       // only" when there was no check. The words are made in src/lib/checks.ts (checkLine) and put on the recipient
       // by buildPdf, which knows whether a one-time code was passed by whoever holds the link now.
       s.kv('Identity check', r.check_line || (r.access_code ? 'Link sent by email and an access code chosen by the sender' : 'Link sent by email only'));
-      s.kv('E-record consent', ts(r.consent_at));
+      // With "withdrawn" and when, for someone who asked for paper instead (src/lib/disclosure.ts).
+      s.kv('E-record consent', consentCertValue(r, ts));
+      // In which language they read the signing page and the consent wording (signlang.ts). Absent when neither was recorded.
+      { const l = certLanguageLine(r, audit); if (l) s.kv('Language', l); }
       s.kv('IP address', r.ip || '-');
       // The same moments by this person's own clock, in the time zone their device reported. The date of signing on
       // the pages is the calendar day there, so the certificate shows what that day rests on, next to UTC above.
@@ -456,13 +479,19 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     const y0 = s.y;
     s.page.drawText(ts(a.at), { x: s.L, y: y0 - 8, size: 7.5, font: ctx.font, color: MUTED });
     // A payment link's address never goes out in this certificate, also from a line written before it was kept out.
-    s.text(known(`${a.action}${a.detail ? ` · ${payLineForPrint(a.action, a.detail)}` : ''}`), { size: 8, x: s.L + 118, maxW: 330 });
+    s.text(known(`${a.action}${a.detail ? ` · ${readableWording(payLineForPrint(a.action, a.detail))}` : ''}`), { size: 8, x: s.L + 118, maxW: 330 });
     s.text(known(`${a.actor}${a.ip ? ` · ${a.ip}` : ''} · ${a.hash.slice(0, 16)}${zones.has(a.actor) ? ` · their time ${localStamp(a.at, zones.get(a.actor))}` : ''}`), { size: 6.5, x: s.L + 118, color: MUTED, gap: 3 });
   }
   if (audit.length) s.kv('Chain head', audit[audit.length - 1].hash, s.L, 70);
+  // With a time-stamp service: the line about the time stamp over that head (src/server/auditstamp.ts).
+  const headStamp = chainStampLine(e, audit[audit.length - 1]?.hash);
+  if (headStamp) s.text(headStamp, { size: 7.5, color: MUTED, gap: 4 });
   // The digital seal of this file, when finishPdf is sealing it (src/server/seal.ts). Nothing without seal settings.
   const sealLine = sealLineFor(e);
   if (sealLine) (s.h2('Digital seal'), s.text(sealLine, { size: 8, gap: 4 }));
+  // The archive format of this file, when the account asked for PDF/A (src/server/pdfa.ts). Nothing otherwise.
+  const pdfaLine = pdfaLineFor(e);
+  if (pdfaLine) s.text(pdfaLine, { size: 8, gap: 4 });
 
   // A character none of our fonts has is never left as an empty box. It is marked wherever it stood, and listed here
   // by its Unicode number, so what was typed can be put back together from this record.
@@ -647,7 +676,9 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     return !opts.viewer || !o || o.id === opts.viewer || o.status === 'completed' || f.readonly ? f : { ...f, value: f.prefill ?? null };
   };
   // A field that is not shown (its "Only show when" answer was not given) prints nothing at all (src/server/logic.ts).
-  const seen = e.fields.map(asSeen);
+  // A value the sender hid prints as dots for anyone else while it is out, and as "(hidden by the sender)" in a
+  // completed copy when they asked for that too (fieldchecks.ts).
+  const seen = printedFields(e.fields.map(asSeen), ctx.recipients, opts.certificate ? 'completed' : e.status, opts.viewer);
   const hide = hiddenOf(seen);
   const fields = seen.filter((f: any) => !hide.has(f.id));
   // The mark of a copy that must not pass for a signed document: closed, or still out (stamp.ts).

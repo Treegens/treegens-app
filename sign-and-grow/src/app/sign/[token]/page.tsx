@@ -20,7 +20,7 @@ import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
 import { useLiveLogic } from '@/components/sign/logic';
 import { keepTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
-import { docUrl, allOnScreen } from '@/components/sign/fields';
+import { docUrl, allOnScreen, finishProblem, inputLimit, amountHint, lengthHint, boxRuleHint } from '@/components/sign/fields';
 import { strikeClass } from '@/lib/strike';
 import { pageBoxes } from '@/components/sign/pdfText';
 import { NoViewer } from '@/components/sign/NoViewer';
@@ -36,23 +36,31 @@ import { MailAgain } from '@/components/sign/MailAgain';
 import { NextPerson, FormCleared } from '@/components/sign/SharedDevice';
 import { witnessFirst, WitnessFirst, WitnessNotice, WitnessName, WitnessAfter } from '@/components/sign/Witness';
 // A document sent to a signing group: what this member's own link is to the group (src/server/groups.ts).
-import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText } from '@/components/sign/GroupNotice';
+import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText, groupNoteId } from '@/components/sign/GroupNotice';
 // A stamp field: the signer puts their own stamp on, printed like ink (src/components/stamps, src/server/stamps.ts).
 import { StampDialog, sameStampOf } from '@/components/stamps/StampDialog';
 import { stampTurn, turnStyle } from '@/lib/stamps';
 import { layers } from '@/lib/stacked';
 // The page made simpler: Other actions in one order, Finish that signs unless something needs a look, Next that opens.
 import { otherActions, lookAgain, nextOpens, nameDiffers, laterAtConsent, laterLabel, reviewTitle, GUIDE_NEXT, GUIDE_FINISH, FLAG_MARGIN, type ActionKey } from '@/components/sign/actions';
-import { SenderWords } from '@/components/sign/SenderWords';
+import { ConsentTop } from '@/components/sign/ConsentTop';
 import { readTypedName, writeTypedName } from '@/components/sign/typedName';
-import { orgOf } from '@/lib/sendername';
 import { FixName } from '@/components/sign/dialogs';
 import { MoreButton, MoreDialog } from '@/components/sign/More';
 import { NameDialog } from '@/components/sign/NameDialog';
 import { yourMoment } from '@/lib/dates';
+// The account's own consent text under ours, and "Sign on paper instead" (sign/OwnTerms.tsx, sign/Withdraw.tsx).
+import { OwnTermsBlock } from '@/components/sign/OwnTerms';
+import { PaperDialog } from '@/components/sign/Withdraw';
+import { t } from '@/lib/i18n';
+// The words of this page in the signer's language, and refusals said from their code (src/lib/signlang.ts).
+import { signT, shownError, consentNote, signLangAttr } from '@/lib/signlang';
+import { useSignLang, richText } from '@/components/sign/lang';
+// An account's "Sign out after N minutes": the link is checked again after a break that long (sign/away.ts).
+import { useAwayCheck } from '@/components/sign/away';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
-type Open = '' | 'menu' | 'more' | 'name' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback' | 'help';
+type Open = '' | 'menu' | 'more' | 'name' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback' | 'help' | 'paper';
 const SAVE_TEXT: Record<Save, string> = { idle: 'Saves as you go', pending: 'Saving', saving: 'Saving', saved: 'Saved', error: 'Not saved yet' };
 const FLAG: Record<string, string> = { signature: 'Sign here', initials: 'Initial here', checkbox: 'Tick here', radio: 'Choose one', dropdown: 'Choose here', attachment: 'Attach here', stamp: 'Stamp here' };
 // Phones, and anything else used mainly by touch, get a sheet with a large input instead of typing into the page.
@@ -93,6 +101,8 @@ export default function SignPage() {
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState('');
   const [agree, setAgree] = useState(false);
+  // Agreed on this visit: an account that asks every time the link is opened shows the consent screen until then.
+  const [agreedHere, setAgreedHere] = useState(false);
   const [code, setCode] = useState('');
   const [askedCode, setAskedCode] = useState<'' | 'busy' | 'asked'>('');
   const [formError, setFormError] = useState('');
@@ -191,6 +201,10 @@ export default function SignPage() {
   useEffect(() => {
     load();
   }, [load]);
+  // The language of this page: the header menu's choice in this tab, else the server's (src/components/sign/lang.tsx).
+  const lang = useSignLang(data);
+  const T = (key: string, vars?: Record<string, string | number>) => signT(lang, key, vars);
+  const awayLine = useAwayCheck(base, data?.away_minutes, data?.language?.locale, { status: data?.envelope?.status, version: data?.version, done: data?.recipient?.status === 'completed' }, load);
 
   // Someone who is signed in gets the signature saved on their own account offered, as a choice in the adopt dialog
   // that they have to confirm. It is never put on the page by itself, and it is only offered when the account has
@@ -269,7 +283,7 @@ export default function SignPage() {
   // A closed or not-yet-ready document says so straight away, before anyone is asked for an access code.
   // `wantCopy`: someone who signed a document that was closed later asks for their copy, and it is behind an access
   // code that this browser has not been given (or no longer remembers). Then the code is asked for after all.
-  const stage = handedTo ? 'handed' : !data ? (problem ? 'problem' : 'loading') : closed && !(wantCopy && data.locked) ? 'closed' : me.status === 'pending' ? 'pending' : data.locked ? 'locked' : iAmDone ? 'done' : !me.consented ? 'consent' : 'sign';
+  const stage = handedTo ? 'handed' : !data ? (problem ? 'problem' : 'loading') : closed && !(wantCopy && data.locked) ? 'closed' : me.status === 'pending' ? 'pending' : data.locked ? 'locked' : iAmDone ? 'done' : !me.consented || (data.own_terms?.each_visit && !agreedHere) ? 'consent' : 'sign';
   canSave.current = stage === 'sign' && acts && fields.length > 0;
 
   // When the screen changes, start reading from its heading rather than from wherever focus was left.
@@ -531,10 +545,12 @@ export default function SignPage() {
   async function pressFinish() {
     if (!allShown) return toast(NOT_SHOWN, true);
     if (me.role === 'viewer') return complete();
-    const wrong = acts && ordered.find((f) => problemWith(f, values[f.id] || ''));
-    if (wrong) {
+    // A field that needs another look, or a group of tick boxes whose rule is not met (src/lib/fieldrules.ts).
+    const stop = acts ? finishProblem(ordered, values, env.date_format) : null;
+    if (stop) {
+      const wrong = stop.field;
       // On a phone the field opens in its sheet, which says what is wrong right under the input.
-      if (!usesSheet(wrong)) toast(`${fieldName(wrong)} needs another look. ${problemWith(wrong, values[wrong.id])}`, true);
+      if (!usesSheet(wrong)) toast(`${wrong.type === 'checkbox' && wrong.group_name ? wrong.group_name : fieldName(wrong)} needs another look. ${stop.text}`, true);
       return goTo(wrong);
     }
     setFinishError('');
@@ -658,7 +674,7 @@ export default function SignPage() {
   const report = <button type="button" className="sg-link" onClick={() => setOpen('report')}>Report this request</button>;
   const downloadUrl = `/api${base}/download`;
   // MailAgain: they marked our email as spam, so we email them nothing more about this, and only they can undo it.
-  const notice = <><MailAgain base={base} stopped={!!me.mail_stopped} why={me.mail_stopped_why} />{muteNote === 'done' ? (
+  const notice = <><MailAgain base={base} stopped={!!me.mail_stopped} why={me.mail_stopped_why} />{awayLine && <div className="notice sg-top" role="status">{awayLine}</div>}{muteNote === 'done' ? (
     <div className="notice sg-top" role="status">
       <b>Reminders are off.</b> We will not send you any more reminder emails about this document.{stillOpen ? ` You can still ${acts ? 'sign' : 'open'} it here whenever you are ready.` : ''}
     </div>
@@ -687,6 +703,7 @@ export default function SignPage() {
       {open === 'help' && <HelpChat screen="signing" link={token} code={data.help_code} who={me.role !== 'inperson' && me.email ? { name: me.name, email: me.email } : null} actions={() => helpActs.current} onClose={() => setOpen('')} />}
       {open === 'ask' && <CommentsDialog base={base} sender={sender} documents={data.documents || []} onClose={() => setOpen('')} />}
       {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
+      {open === 'paper' && <PaperDialog base={base} sender={sender} lang={data.language?.locale || 'en'} note={groupDeclineText(data)} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
       {open === 'name' && <NameDialog name={me.name} approving={me.role === 'approver'} onRename={rename} onClose={() => setOpen('')} />}
       {open === 'reassign' && <ReassignDialog base={base} sender={sender} fixName={<FixName name={me.name} onRename={rename} />} onClose={() => setOpen('')} onDone={(name) => { canSave.current = false; writeKept(token, null, null); setOpen(''); setHandedTo(name); }} />}
       {open === 'handback' && <HandBackDialog base={base} data={data} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); toast(`Handed back to ${me.group?.name}. Nothing you filled in was kept.`); load(); }} />}
@@ -779,10 +796,10 @@ export default function SignPage() {
     return (
       <Shell data={data} footer={report}>
         {notice}
-        <StateCard tone={expired ? 'warn' : 'stop'} title={voided ? `${sender.name} cancelled this document` : expired ? (env.form_cleared ? 'This form was cleared before it was finished' : 'This signing request has expired') : mine ? 'You declined this document' : 'This document was declined'}>
+        <StateCard tone={expired ? 'warn' : mine && me.asked_paper && !voided ? 'mail' : 'stop'} title={voided ? `${sender.name} cancelled this document` : expired ? (env.form_cleared ? 'This form was cleared before it was finished' : 'This signing request has expired') : mine ? (me.asked_paper ? t(data.language?.locale, 'sign.paper.closed_title') : 'You declined this document') : 'This document was declined'}>
           {voided && <p>It was voided, so there is nothing for you to sign and nothing more to do.{env.void_reason ? '' : ` Contact ${sender.name} if you have questions.`}</p>}
           {voided && env.void_reason && <p className="sg-quote"><span className="muted small">Their reason</span>{env.void_reason}</p>}
-          {!voided && !expired && <p>{mine ? `We told ${sender.name}. The document is closed and there is nothing more for you to do. Changed your mind? Ask them to send it again.` : 'One of the people asked to sign said no, so the document is closed. There is nothing more for you to do.'}</p>}
+          {!voided && !expired && <p>{mine && me.asked_paper ? t(data.language?.locale, 'sign.paper.closed_body', { sender: sender.name }) : mine ? `We told ${sender.name}. The document is closed and there is nothing more for you to do. Changed your mind? Ask them to send it again.` : 'One of the people asked to sign said no, so the document is closed. There is nothing more for you to do.'}</p>}
           {expired && env.form_cleared && <FormCleared slug={env.start_again} />}
           {expired && !env.form_cleared && (
             <>
@@ -915,7 +932,7 @@ export default function SignPage() {
     handback: { key: 'handback', label: `Hand back to ${me.group?.name}`, icon: 'link', onClick: go('handback') },
     reassign: { key: 'reassign', label: 'Pass to someone else', icon: 'link', onClick: go('reassign') },
     ask: { key: 'ask', label: 'Questions and comments', icon: 'mail', onClick: go('ask') },
-    paper: { key: 'paper', label: 'Sign on paper instead', icon: 'pen' },
+    paper: { key: 'paper', label: 'Sign on paper instead', icon: 'pen', onClick: go('paper') },
     decline: { key: 'decline', label: declineLabel, icon: 'stop', danger: true, onClick: go('decline') },
     // A witness does not close the document for the people who sign it: "I was not there" is theirs (sign/Witness.tsx).
     absent: { key: 'absent', label: 'I was not there', icon: 'stop', onClick: absent },
@@ -923,7 +940,7 @@ export default function SignPage() {
   };
   // Someone asked only to read has nothing to finish: for them the same entry is "Read it later".
   ACTION.later.label = laterLabel(me.role);
-  const menu: MenuItem[] = otherActions(me, { stage, deadline: !!env.expires_at }).map((k) => ACTION[k]);
+  const menu: MenuItem[] = otherActions(me, { stage, deadline: !!env.expires_at, paper: !!data.own_terms }).map((k) => ACTION[k]);
   helpActs.current = [...menu.filter((m) => m.key !== 'help'), { key: 'menu', label: 'Other actions', onClick: go('menu') }];
   const other = <button type="button" className="btn sm sg-other" aria-haspopup="dialog" onClick={go('menu')}>Other actions</button>;
   const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} when={env.expires_at ? `Open until ${yourMoment(env.expires_at, deviceZone())}.` : undefined} back="Back" />;
@@ -943,55 +960,57 @@ export default function SignPage() {
 
   if (stage === 'consent') {
     // Who it is for when it is not a signature: a signer reads "sign" in the words under the tick.
-    const ask = me.role === 'approver' ? 'You have been asked to approve' : me.role === 'viewer' ? 'You have been asked to read' : me.role === 'witness' ? 'You have been asked to sign as a witness' : '';
-    const wording = consentWording(sender.name, acts);
-    // The sender, named once. The account's name only when it says something more ("at Acme Ltd"), never the
-    // "Rosa Gardener's workspace" every new account is called.
-    const org = orgOf(data.brand?.name, sender.name);
+    // Three words at most: the screen holds 120 words before the tick, and our own text takes most of them.
+    const ask = me.role === 'approver' ? T('sign.consent.ask_approve') : me.role === 'viewer' ? T('sign.consent.ask_read') : me.role === 'witness' ? T('sign.consent.ask_witness') : '';
+    // In the page's language where a person has checked that wording, else English with one sentence saying why (note).
+    const wording = consentWording(sender.name, acts, undefined, lang);
     return (
       <Shell data={data} bar={other} footer={report} helpInNewTab plainBar onHelp={headHelp}>
         {notice}
         {laterNote}
         <div className="card sg-consent">
-          {ask && <p className="sg-kicker">{ask}</p>}
-          <h1 className="serif" id="sg-h1" tabIndex={-1}>{env.subject}</h1>
-          <p className="sg-from">From <b>{sender.name}</b>{org ? <> at {org}</> : null}, <a href={`mailto:${sender.email}`}>{sender.email}</a></p>
-          {/* "Report this request" is in the footer of every screen, so it is not said a second time here. */}
-          {/* In person the notice below says whose turn it is, so "For ..." is not said as well. */}
-          {me.role !== 'inperson' && <p className="muted small sg-for">{me.link_by_sender ? <>For {me.name}. {sender.name} sent you the link themselves, not by email from us.</> : <>For {me.name}, {myEmail}.</>}</p>}
-          {/* The sender's own words, in full while the screen stays at 120 words before the tick, else one tap away. */}
-          <SenderWords sender={sender.name} message={data.message} note={data.note} />
+          {/* Who asks, the document, from and for whom, the sender's words; kept to 120 words before the tick. The
+              sender is named once, with the account's name only when it says more ("at Acme Ltd"). */}
+          <ConsentTop data={data} ask={ask} myEmail={myEmail} />
           {/* In person: whose turn it is. The line about the connection is said on the document, where it matters. */}
-          {me.role === 'inperson' && <div className="notice warn sg-gap">Hand this device to <b>{me.name}</b> now.</div>}
+          {me.role === 'inperson' && <div className="notice warn sg-gap">{richText(lang, 'sign.consent.hand_over', { name: <b>{me.name}</b> })}</div>}
           {/* One way to read it first: the PDF in a new tab, where it can be saved or printed. */}
-          <p className="sg-read"><a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer" aria-label="Download or print (opens in a new tab)"><Icon name="download" /> Download or print</a></p>
+          <p className="sg-read"><a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer" aria-label={T('sign.consent.download_label')}><Icon name="download" /> {T('sign.consent.download')}</a></p>
           {/* The words come from src/lib/policy.ts with a version, and the version goes back with the agreement, so the
               audit trail says which wording this person was shown. */}
-          <div id="sg-legal">
+          <div id="sg-legal" lang={wording.language}>
+            {consentNote(lang, wording.note) && <p className="muted sg-legal" lang={signLangAttr(lang)}>{consentNote(lang, wording.note)}</p>}
             <p className="muted sg-legal">{wording.legal}</p>
             <p className="muted sg-legal">{wording.practical}</p>
           </div>
-          <GroupConsentNote data={data} />
+          {/* The account's own consent text, under ours: in full while the screen stays at 120 words, else one tap away. */}
+          {data.own_terms && <OwnTermsBlock key={data.own_terms.id} own={data.own_terms} lang={data.language?.locale || 'en'} paper={menu.some((m) => m.key === 'paper')} />}
           <label className="check sg-agree">
-            <input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setFormError(''))} aria-describedby={formError ? 'sg-legal sg-agree-err' : 'sg-legal'} /> <span>{wording.agree}</span>
+            <input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setFormError(''))} aria-describedby={formError ? 'sg-legal sg-agree-err' : 'sg-legal'} /> <span lang={wording.language}>{wording.agree}</span>
           </label>
+          {/* A group's member: what Continue does for the group, right above it (GroupNotice.tsx). */}
+          <GroupConsentNote data={data} />
           {formError && <div id="sg-agree-err" className="notice err sg-problem" role="alert">{formError}</div>}
-          <button type="button" className="btn primary lg sg-continue" disabled={busy} onClick={async () => {
-            if (!agree) return setFormError('Tick the box above to agree, then choose Continue.');
+          <button type="button" className="btn primary lg sg-continue" disabled={busy} aria-describedby={groupNoteId(data)} onClick={async () => {
+            if (!agree) return setFormError(T('sign.consent.tick_first'));
             setBusy(true);
             try {
-              await api(`${base}/consent`, { body: { version: version.current, wording: wording.version, tz: deviceZone() } });
+              // "own": which version of the account's own text this screen showed, so the record names those words.
+              await api(`${base}/consent`, { body: { version: version.current, wording: wording.version, language: wording.language, page_language: lang, tz: deviceZone(), own: data.own_terms?.id } });
+              setAgreedHere(true);
               // The note from "Finish later" was about coming back. They stayed, so it is not said over the document.
               setLater('');
               await load();
             } catch (e: any) {
               // A colleague in the group took it on a moment earlier: the page then says who (GroupNotice.tsx).
               if (e?.code === 'taken') return void load();
-              setFormError(`${e?.message || 'Something went wrong on our side.'} Try again in a moment.`);
+              // The account saved a new text while this screen was open: the new one is shown, to read and tick again.
+              if (e?.code === 'terms') return void (setAgree(false), setFormError(e.message), load());
+              setFormError(T('sign.error.try_again', { said: shownError(lang, e, 'sign.error.ours') }));
             } finally {
               setBusy(false);
             }
-          }}>Continue</button>
+          }}>{T('sign.consent.continue')}</button>
         </div>
         {menuDialog}
         {dialogs}
@@ -1040,7 +1059,7 @@ export default function SignPage() {
     const value = values[f.id] || '';
     // How the answer reads on the page: a picked date in the format the sender chose for this envelope.
     const shown = f.type === 'date' ? formatDateValue(value, env.date_format) : value;
-    const wrong = !auto && !!problemWith(f, value);
+    const wrong = !auto && !!problemWith(f, value, env.date_format);
     const cls = `field fill sg-f${auto || ok ? ' done' : ''}${f.id === nextField?.id ? ' next' : ''}${isBox(f) ? ' box' : ''}${wrong ? ' bad' : ''}${auto ? ' sg-auto' : ''}`;
     const common = { id: `f-${f.id}`, className: cls, style: { ...pos(f), zIndex: layered.get(f.id) } };
     const name = fieldName(f);
@@ -1072,7 +1091,7 @@ export default function SignPage() {
     if (f.type === 'checkbox')
       return (
         <label key={f.id} {...common}>
-          <input type="checkbox" className="sg-vh" checked={!!value} aria-label={`${name}${need}`} aria-required={!!f.required} onChange={(e) => set(f.id, e.target.checked ? '1' : '')} />
+          <input type="checkbox" className="sg-vh" checked={!!value} aria-label={`${name}${need}${boxRuleHint(f, fields) ? `. ${boxRuleHint(f, fields)}` : ''}`} aria-required={!!f.required} onChange={(e) => set(f.id, e.target.checked ? '1' : '')} />
           {value && <Icon name="check" />}
         </label>
       );
@@ -1116,13 +1135,16 @@ export default function SignPage() {
         </button>
       );
     // dir="auto": the direction comes from what is typed, so right-to-left text starts at the right edge of its box.
-    const shared = { dir: 'auto' as const, 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong, placeholder: name + (f.required ? ' *' : ''), value, title: wrong ? problemWith(f, value) : f.type === 'number' ? NUMBER_HINT : undefined };
+    // A character limit is said under the box while the person is in it (sign.css .sg-doc-count), so typing that stops is never a mystery.
+    const count = lengthHint(f, value);
+    const shared = { dir: 'auto' as const, 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong, 'aria-describedby': count ? `f-${f.id}-count` : undefined, placeholder: name + (f.required ? ' *' : ''), value, maxLength: inputLimit(f), title: wrong ? problemWith(f, value, env.date_format) : f.type === 'number' ? amountHint(f) || NUMBER_HINT : undefined };
     return (
       <div key={f.id} {...common}>
         {isMulti(f)
           ? <textarea {...shared} onChange={(e) => set(f.id, e.target.value)} />
           : <input {...shared} type={f.type === 'date' ? 'date' : 'text'} inputMode={f.type === 'number' ? 'decimal' : undefined} onChange={(e) => set(f.id, e.target.value)}
               {...(f.type === 'date' ? { autoFocus: dateOpen === f.id, onFocus: () => setDateOpen(f.id), onBlur: () => setDateOpen(null) } : {})} />}
+        {count && <span id={`f-${f.id}-count`} className="sg-doc-count" aria-live="polite">{count}</span>}
       </div>
     );
   };
@@ -1146,14 +1168,15 @@ export default function SignPage() {
   const pageFields = (docId: string, page: number) => {
     const here = fields.filter((f) => f.document_id === docId && f.page === page);
     const grouped = (f: any) => f.type === 'radio' && !f.readonly;
+    // The page is said when the focus comes into it (Next or Tab), so a screen reader names the page of each field.
     return (
-      <>
+      <div role="group" aria-label={`Page ${page + 1}`}>
         {here.filter((f) => !grouped(f)).map(docField)}
         {[...new Set(here.filter(grouped).map(groupKey))].map((key) => {
           const members = here.filter((f) => grouped(f) && groupKey(f) === key);
           return <div key={key} role="radiogroup" aria-label={members[0].group_name || 'Choose one'} aria-required={members.some((m) => m.required)}>{members.map(docField)}</div>;
         })}
-      </>
+      </div>
     );
   };
 
@@ -1169,7 +1192,7 @@ export default function SignPage() {
       {pageFields(docId, page)}
       {nextField && nextField.document_id === docId && nextField.page === page && !sheet && (
         <span className={`sg-flag ${flagSide}`} aria-hidden="true" style={flagAt(nextField)}>
-          {FLAG[nextField.type] || 'Fill in here'}
+          {boxRuleHint(nextField, fields, true) || FLAG[nextField.type] || 'Fill in here'}
         </span>
       )}
     </>
@@ -1243,7 +1266,7 @@ export default function SignPage() {
           ))}
         </div>
       ) : (
-        <TextView documents={data.documents} urlFor={(id) => docUrl(base, data.documents.find((d: any) => d.id === id) || { id })} onShown={markShown} senderName={sender.name} onAsk={go('ask')}
+        <TextView documents={data.documents} urlFor={(id) => docUrl(base, data.documents.find((d: any) => d.id === id) || { id })} ocrUrl={`/api${base}/ocr`} onShown={markShown} senderName={sender.name} onAsk={go('ask')}
           fields={(docId, page, near) => <PageFields docId={docId} page={page} c={ctx} near={near} />}
           others={(docId, page, near) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} senderName={sender.name} near={near} />} />
       )}

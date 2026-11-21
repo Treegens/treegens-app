@@ -24,6 +24,7 @@ import type { ZipEntry } from './zip.ts';
 import { SECURITY_KINDS, SECURITY_KIND_LIST, SECURITY_ALERTS, isSecurityKind, securityLogWords, securityDetail, securityDevice, type SecurityKind, type ActorType, type SecurityAlert } from '../lib/seclog.ts';
 import { SOURCE_LOCALE, t } from '../lib/i18n.ts';
 import { securityLogDays, ALERT_FAILED_SIGNINS_HOUR, ALERT_DELETES_HOUR, ALERT_EVERY_MINUTES, KEY_NEW_ADDRESS_PER_DAY } from '../lib/policy.ts';
+import { stampText } from '../lib/dates.ts';
 
 export type Who = { type: ActorType; id?: string | null };
 export type SecurityOpts = {
@@ -225,7 +226,9 @@ export function screenView(r: any) {
     if (type === 'system') return w('system');
     if (type === 'operator') return w('operator');
     if (!oid) return w('unknown');
-    if (type === 'user') return memberNow(r.account_id, oid)?.name || w('gone_user');
+    // An admin of an organisation above the account was never on its team: named with their organisation
+    // ("Grace Central of Government of Example"), as the line itself kept them, never as someone who left.
+    if (type === 'user') return memberNow(r.account_id, oid)?.name || (v.details?.by_organisation || /^org\./.test(r.kind) ? (v.details?.by_name && v.details?.organisation ? `${v.details.by_name} of ${v.details.organisation}` : v.details?.organisation ? `an admin of ${v.details.organisation}` : '') : '') || w('gone_user');
     if (type === 'api_key') {
       const k = get('SELECT name, prefix FROM api_keys WHERE id=? AND account_id=?', oid, r.account_id);
       return k ? w('key', { name: k.name, prefix: k.prefix }) : w('gone_key');
@@ -443,7 +446,7 @@ const whoSaid = (r: any): string => {
   return r.actor_type === 'operator' ? 'the GrowSigning team' : 'GrowSigning';
 };
 const from = (r: any) => (r.ip ? ` from the internet address ${r.ip}` : '');
-const at = (r: any) => `${r.at.slice(0, 16).replace('T', ' ')} UTC`;
+const at = (r: any) => stampText(r.at, false);
 
 async function afterwards(seqs: number[]) {
   for (const seq of seqs) {

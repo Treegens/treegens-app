@@ -114,3 +114,22 @@ export function scanText(file: string, raw: string, patterns: Pattern[] = ALL_PA
 export function scan(root: string): Hit[] {
   return scannedFiles(root).flatMap((f) => scanText(f, fs.readFileSync(path.join(root, f), 'utf8')));
 }
+
+/**
+ * The parts of a hit's line that the scan's words match and no reviewed sentence covers. A line is through only when
+ * every match of the hit's word sits inside one of the reviewed `has` sentences on it, so a new claim added to the
+ * same line as a reviewed denial is still found.
+ */
+export function uncovered(h: Hit, allowed: string[]): string[] {
+  const spans: [number, number][] = [];
+  for (const has of allowed) for (let i = h.text.indexOf(has); i >= 0; i = h.text.indexOf(has, i + 1)) spans.push([i, i + has.length]);
+  const out: string[] = [];
+  for (const p of ALL_PATTERNS.filter((x) => x.key === h.key)) {
+    const re = new RegExp(p.re.source, p.re.flags.includes('g') ? p.re.flags : `${p.re.flags}g`);
+    for (const m of h.text.matchAll(re)) {
+      const at = m.index ?? 0;
+      if (!spans.some(([a, b]) => a <= at && at + m[0].length <= b)) out.push(m[0]);
+    }
+  }
+  return out;
+}

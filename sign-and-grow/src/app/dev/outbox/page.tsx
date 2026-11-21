@@ -29,7 +29,7 @@ export default function Outbox() {
           <table className="t"><tbody>
             {(d?.emails || []).map((m: any) => (
               <tr key={m.id} className="click" onClick={() => setOpen(m.id)} style={open === m.id ? { background: 'var(--green-soft)' } : undefined}>
-                <td><b>{m.subject}</b><div className="muted small">To {m.to_email} · {fmtDate(m.at, true)}</div><div className={`small${m.bounce_kind === 'hard' || m.complained_at ? ' sn-bad' : ' muted'}`} data-outbox-status>{mailStatus(m)}</div>{m.link && <a className="small" href={m.link} onClick={(e) => e.stopPropagation()} data-outbox-link>{m.link.replace(/^https?:\/\/[^/]+/, '')}</a>}</td>
+                <td><b>{m.subject}</b><div className="muted small">To {m.to_email} · {fmtDate(m.at, true)}</div><div className={`small${m.bounce_kind === 'hard' || m.complained_at ? ' sn-bad' : ' muted'}`} data-outbox-status>{mailStatus(m)}</div>{m.link && <a className="small" href={m.link} onClick={(e) => e.stopPropagation()} data-outbox-link style={{ overflowWrap: 'anywhere' }}>{m.link.replace(/^https?:\/\/[^/]+/, '')}</a>}</td>
               </tr>
             ))}
             {d && d.emails.length === 0 && <tr><td className="muted">Nothing sent yet.</td></tr>}

@@ -551,8 +551,9 @@ test('outside: webhooks go only to WEBHOOK_ALLOW_HOSTS, at saving and at deliver
 test('outside: every place the server calls out is on the list', () => {
   // A file in src/server that opens a connection of its own must be one of these, each tied to a line of the list.
   const KNOWN: Record<string, string[]> = {
-    'mail.ts': ['mail'], 'routes-billing.ts': ['payments'], 'oidc.ts': ['google', 'microsoft'], 'sms.ts': ['sms'], 'tsa.ts': ['tsa'],
-    'chat.ts': ['chat'], 'convert.ts': ['converter'], 'routes-bounces.ts': ['sns'], 'webhooks.ts': ['webhooks'], 'pwned.ts': ['pwned'],
+    'mail.ts': ['mail'], 'routes-billing.ts': ['payments'], 'oidc.ts': ['google', 'microsoft'], 'sms.ts': ['sms'], 'tsa.ts': ['tsa'], 'ltv.ts': ['tsa'],
+    'chat.ts': ['chat'], 'convert.ts': ['converter'], 'routes-bounces.ts': ['sns'], 'webhooks.ts': ['webhooks'], 'pwned.ts': ['pwned'], 'ocr.ts': ['ocr'],
+    'whatsapp.ts': ['whatsapp'], 'voice.ts': ['sms'],
   };
   const CALLS = /\bfetch\(|createTransport\(|\bhttps?\.request\(|\bnet\.(connect|createConnection)\(|\btls\.connect\(/;
   const dir = path.join(ROOT, 'src/server');
@@ -878,6 +879,8 @@ test('words: nothing on the pages or in the papers says more than the code does'
   for (const f of ['Dockerfile', 'docker-compose.example.yml', 'README.md']) assert.match(read(f), /unshare -rn/, f);
   // "Nothing that calls home" outside Docker too: the build and dev scripts switch the framework's statistics off.
   const scripts = JSON.parse(read('package.json')).scripts;
-  for (const k of ['build', 'dev']) assert.match(scripts[k], /^NEXT_TELEMETRY_DISABLED=1 next /, k);
+  // Through a small wrapper, so the same scripts work in the Windows command prompt too (an inline VAR=1 does not).
+  for (const k of ['build', 'dev']) assert.equal(scripts[k], `node scripts/next.mjs ${k}`, k);
+  assert.match(read('scripts/next.mjs'), /env: \{ \.\.\.process\.env, NEXT_TELEMETRY_DISABLED: '1' \}/);
   assert.match(read('README.md'), /NEXT_TELEMETRY_DISABLED=1/);
 });

@@ -20,7 +20,8 @@ services:
         # 1 puts LibreOffice in the image, for CONVERTER=soffice (office files turned into PDF on this machine).
         # In this container LibreOffice then has whatever network the container has: "unshare -rn", which the server
         # uses to take the network away from it, is not permitted here (cap_drop ALL, no-new-privileges). Deny
-        # egress in the network around the container before you switch it on (README, "Running it yourself").
+        # egress in the network around the container before you switch it on (README, "Running it yourself"),
+        # or leave this at 0 and use the "gotenberg" service below, which has no way out of its own network.
         WITH_LIBREOFFICE: "0"
     image: growsigning:local
     restart: unless-stopped
@@ -33,6 +34,10 @@ services:
     ports:
       # Only this machine can reach it; the reverse proxy passes requests on. Change to "3000:3000" only on a private network.
       - "127.0.0.1:3000:3000"
+    # "default" is its way out (mail, payments, sign-in providers); "convert" reaches only the converter below.
+    networks:
+      - default
+      - convert
     volumes:
       # Everything the server stores: the database (sign.db) and the stored files (blobs/). Back it up with
       # scripts/backup.mjs (see README, "Running it yourself"); a copy of the folder taken while the server runs is
@@ -75,6 +80,26 @@ services:
     read_only: true
     network_mode: none
     command: ["node", "scripts/backup.mjs", "/backups"]
+
+  # Office files (Word, Excel, PowerPoint, OpenDocument and the rest) turned into PDF by Gotenberg (MIT licence), in a
+  # container of its own on the "convert" network only. That network is internal: it has no route to the internet or
+  # to the rest of your network, so a document that names pictures on other servers cannot make the converter fetch
+  # them. Only this app reaches it. Not started by "up" alone; to use it:
+  #   set CONVERTER_URL=http://gotenberg:3000 in .env
+  #   docker compose --profile office up -d
+  # PDFs and pictures do not need it. Files travel to it unencrypted, inside the "convert" network.
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    profiles: ["office"]
+    restart: unless-stopped
+    networks:
+      - convert
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  convert:
+    internal: true
 
 volumes:
   growsigning-data:

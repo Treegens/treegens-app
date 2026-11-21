@@ -633,8 +633,85 @@ CREATE TRIGGER IF NOT EXISTS disclosure_versions_kept BEFORE DELETE ON disclosur
   WHEN EXISTS (SELECT 1 FROM disclosure_shown WHERE version_id = OLD.id) AND EXISTS (SELECT 1 FROM accounts WHERE id = OLD.account_id)
   BEGIN SELECT RAISE(ABORT, 'A consent text that a document refers to is kept.'); END;
 -- Why a rule of an account signed a browser out (src/server/secpolicy.ts): 'idle' or 'elsewhere', by the session's
--- id, so that browser's sign-in page can say it once. Forgotten after a day.
+-- id, so that browser's sign-in page can say why. Forgotten after a day.
 CREATE TABLE IF NOT EXISTS session_ends (id TEXT PRIMARY KEY, why TEXT NOT NULL, at TEXT NOT NULL);
+-- The monthly report email (src/server/routes-reports.ts): which admins of an account asked for it, since when, and
+-- the last month (YYYY-MM) it went out for, so it goes once a month.
+CREATE TABLE IF NOT EXISTS report_monthly (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  on_at TEXT NOT NULL, last_month TEXT, PRIMARY KEY (account_id, user_id)
+);
+-- Saved lists for Send to many (src/server/bulklists.ts): the list as it was pasted or uploaded, who saved it and when,
+-- and when it was last used. A list nobody used for accounts.list_days (default 180) is deleted by the timer.
+CREATE TABLE IF NOT EXISTS bulk_lists (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL, csv TEXT NOT NULL,
+  rows INTEGER NOT NULL DEFAULT 0, created_by TEXT, created_by_name TEXT NOT NULL, created_at TEXT NOT NULL, used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS bulk_lists_account ON bulk_lists(account_id, name);
+-- The time stamp of an envelope's audit trail at completion (src/server/auditstamp.ts): the chain head it is over, the
+-- RFC 3161 token (base64) and who gave it and when; or, when no service gave one, why (token NULL).
+CREATE TABLE IF NOT EXISTS audit_stamps (
+  envelope_id TEXT PRIMARY KEY REFERENCES envelopes(id) ON DELETE CASCADE, head TEXT NOT NULL, token TEXT, tsa_name TEXT,
+  tsa_host TEXT, trusted INTEGER NOT NULL DEFAULT 0, stamped_at TEXT, why TEXT, created_at TEXT NOT NULL
+);
+-- Organisations above accounts (src/server/orgs.ts): a government, its ministries, their agencies. An account
+-- belongs to at most one (accounts.org_id). policy is JSON of the rules passed down (src/lib/orgs.ts); break_glass is
+-- 1 only when the operator allowed emergency access to a document for this organisation's admins.
+CREATE TABLE IF NOT EXISTS orgs (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT REFERENCES orgs(id), policy TEXT NOT NULL DEFAULT '{}',
+  break_glass INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS orgs_parent ON orgs(parent_id);
+CREATE TABLE IF NOT EXISTS org_admins (
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  added_by TEXT, added_at TEXT NOT NULL, PRIMARY KEY (org_id, user_id)
+);
+-- What was done at the level of an organisation, for its admins to read. Lines are only ever added. What an org
+-- action changed in an account is also written to that account's own security record.
+CREATE TABLE IF NOT EXISTS org_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, org_id TEXT NOT NULL, at TEXT NOT NULL, actor_type TEXT NOT NULL, actor_id TEXT,
+  kind TEXT NOT NULL, account_id TEXT, details TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS org_events_org ON org_events(org_id, seq);
+-- Text read by a machine from pages of a file that are pictures (src/server/ocr.ts), one row per file. state: queued,
+-- running, done or failed. pages: the page numbers (from 1) to read. The text is a JSON object of page number to
+-- text, kept like files.text: in the clear without FILE_ENCRYPTION_KEY, sealed in text_sealed with it.
+CREATE TABLE IF NOT EXISTS ocr_jobs (
+  file_id TEXT PRIMARY KEY, state TEXT NOT NULL, pages TEXT NOT NULL, lang TEXT, text TEXT, text_sealed TEXT, text_key TEXT,
+  tries INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, started_at TEXT, done_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ocr_jobs_state ON ocr_jobs(state);
+-- Whatever deletes a file (a purge, a closed account, a starter) deletes the text read from it too.
+CREATE TRIGGER IF NOT EXISTS ocr_jobs_with_file AFTER DELETE ON files BEGIN DELETE FROM ocr_jobs WHERE file_id=OLD.id; END;
+-- WhatsApp messages with a signing link (src/server/whatsapp.ts), kept like texts: the number only until the
+-- provider took the message, always masked in what anyone reads. status: queued, sent, delivered, failed, outbox.
+CREATE TABLE IF NOT EXISTS wa_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  envelope_id TEXT, recipient_id TEXT, kind TEXT NOT NULL, to_phone TEXT, to_masked TEXT NOT NULL, dest_hash TEXT NOT NULL,
+  body TEXT NOT NULL, params TEXT, status TEXT NOT NULL, error TEXT, tries INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL,
+  tried_at TEXT, next_try_at TEXT, provider TEXT, provider_id TEXT, delivered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS wa_messages_envelope ON wa_messages(envelope_id, id);
+CREATE INDEX IF NOT EXISTS wa_messages_due ON wa_messages(status, next_try_at);
+CREATE INDEX IF NOT EXISTS wa_messages_provider ON wa_messages(provider_id);
+CREATE INDEX IF NOT EXISTS wa_messages_dest ON wa_messages(dest_hash);
+-- One line for every new WhatsApp message an account caused, for WHATSAPP_DAILY_PER_ACCOUNT.
+CREATE TABLE IF NOT EXISTS wa_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, dest_hash TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS wa_usage_account ON wa_usage(account_id, at);
+-- Numbers that replied STOP to a WhatsApp message from an account: nothing more goes to them by WhatsApp from it.
+CREATE TABLE IF NOT EXISTS wa_stops (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, dest_hash TEXT NOT NULL, at TEXT NOT NULL,
+  PRIMARY KEY (account_id, dest_hash)
+);
+-- Calls that read a one-time code (src/server/voice.ts). Never the code, and the number only masked.
+CREATE TABLE IF NOT EXISTS voice_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  envelope_id TEXT, recipient_id TEXT, to_masked TEXT NOT NULL, dest_hash TEXT NOT NULL, status TEXT NOT NULL,
+  error TEXT, at TEXT NOT NULL, provider TEXT, provider_id TEXT,
+  said TEXT -- only on a machine without a provider (the outbox): what the call would have read out, code and all
+);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1159,9 +1236,8 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // 'Trees on the signing record' switched off: the tree and paper lines are left off the certificate (impact.ts).
   ['accounts', 'cert_impact_off', 'INTEGER NOT NULL DEFAULT 0'],
   // What an account chose for itself (src/server/tenantpolicy.ts). impact_display: 'on' or 'off' for the tree lines on
-  // screens and in emails; ai_helper: 'on' or 'off' for AI answers in the help chat. NULL in either: not chosen, so the
-  // server's default applies (on, or off under DEPLOYMENT_PROFILE=government). white_label is kept for a later feature
-  // and read by nothing yet.
+  // screens and in emails; ai_helper: 'on' or 'off' for AI answers in the help chat. NULL in either: not chosen, which
+  // reads as on under every profile. white_label is kept for a later feature and read by nothing yet.
   ['accounts', 'impact_display', 'TEXT'],
   ['accounts', 'ai_helper', 'TEXT'],
   ['accounts', 'white_label', 'INTEGER NOT NULL DEFAULT 0'],
@@ -1183,6 +1259,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['emails', 'archive_draft', 'TEXT'],
   ['emails', 'archive_to', 'TEXT'],
   ['emails', 'archive_envelope', 'TEXT'],
+  // archive_account: on the email that asks an address to confirm, the account that asked, so a spam mark on it still
+  // counts for that account after the address was removed (archiveNews in src/server/routes-archive.ts).
+  ['emails', 'archive_account', 'TEXT'],
   // archive_refused.email_key: the inbox the address reaches, without a "+tag" (archiveKey in src/lib/archivemail.ts),
   // so the "no" holds for every spelling. why: 'spam' when the email that asked was marked as spam, else the button.
   ['archive_refused', 'email_key', 'TEXT'],
@@ -1205,6 +1284,63 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['sessions', 'seen_at', 'TEXT'],
   ['sessions', 'seen_account', 'TEXT'],
   ['users', 'pw_below', 'INTEGER'],
+  // recipients.paper_at: when this person used "Sign on paper instead" (askForPaper). Set by that call only, so a
+  // decline whose typed reason reads like a paper request is never taken for one.
+  ['recipients', 'paper_at', 'TEXT'],
+  // files.page_ops: a file made from another one by removing, turning or moving pages (src/server/pages.ts), as JSON
+  // { from: the file it was made from, ops: what was done }. Read when a document's file is saved, for the audit line.
+  ['files', 'page_ops', 'TEXT'],
+  // accounts.list_days: a saved list for Send to many that nobody used for this many days is deleted (empty: 180,
+  // src/lib/reports.ts LIST_DAYS_DEFAULT).
+  ['accounts', 'list_days', 'INTEGER'],
+  // recipients.page_locale: the language this person last read the signing page in, when it was switched on (set when
+  // they agree, and when they choose one in the page's header menu). The certificate names it (src/server/signlang.ts).
+  ['recipients', 'page_locale', 'TEXT'],
+  // envelopes.starter_id: the ready-made template a template was made from (src/lib/starters/), and starter_note the
+  // note as it stood that day ("A starting point written by GrowSigning, not legal advice. ..."), shown in the editor.
+  // Kept as written then, so a later review of the starter never claims to cover an older copy (src/server/starters.ts).
+  ['envelopes', 'starter_id', 'TEXT'],
+  ['envelopes', 'starter_note', 'TEXT'],
+  // The long-term step after the seal (src/server/ltv.ts). seal_ltv: 'B-LT' when the signed PDF carries what is needed
+  // to check its seal after the certificate expired, 'B-LTA' with a document time stamp after that, 'missing' when it
+  // could not be fetched (seal_ltv_note says why). NULL when nothing was tried: no seal with a time stamp, or no
+  // certificate that names a place to check it.
+  ['envelopes', 'seal_ltv', 'TEXT'],
+  ['envelopes', 'seal_ltv_note', 'TEXT'],
+  // fields.typed_num: what a signer typed into a number field, as a plain number (1234.5 for "1.234,50"), next to the
+  // value kept exactly as typed. Written when they save or finish (src/server/fieldchecks.ts), for exports and the API.
+  ['fields', 'typed_num', 'TEXT'],
+  // accounts.org_id: the organisation an account (an agency) sits in, or NULL (src/server/orgs.ts). org_sending_off_at:
+  // an admin of that organisation switched sending off for it, with org_sending_off_by the organisation's name.
+  ['accounts', 'org_id', 'TEXT'],
+  ['accounts', 'org_sending_off_at', 'TEXT'],
+  ['accounts', 'org_sending_off_by', 'TEXT'],
+  // accounts.org_raised: JSON { rule: { was, set } } of the rules an organisation brought this account up to, with
+  // what the account had before. When the organisation takes the rule away, the account gets back what it had,
+  // unless it changed that setting since (restoreBelow in src/server/orgs.ts).
+  ['accounts', 'org_raised', 'TEXT'],
+  // emails.locale: the language our own words in the email were written in (src/server/maillang.ts). NULL: English,
+  // as every email was before languages. The sender's words in it are never translated.
+  ['emails', 'locale', 'TEXT'],
+  // How many parts a text message is sent as (src/lib/smsparts.ts): a text with one letter outside the GSM alphabet
+  // is sent as UCS-2, 70 characters a part. SMS_DAILY_PER_ACCOUNT counts parts, as the provider bills them.
+  ['sms_usage', 'parts', 'INTEGER NOT NULL DEFAULT 1'],
+  ['texts', 'parts', 'INTEGER NOT NULL DEFAULT 1'],
+  // The signing link also by WhatsApp (src/server/whatsapp.ts): wa_link the sender's choice, wa_agreed_at when the
+  // sender ticked that the person agreed, wa_agreed_for a keyed fingerprint of the number they agreed for (another
+  // number needs the tick again), wa_sent_at the last message, wa_sent_to the masked number the provider took it for.
+  ['recipients', 'wa_link', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'wa_agreed_at', 'TEXT'],
+  ['recipients', 'wa_agreed_for', 'TEXT'],
+  ['recipients', 'wa_sent_at', 'TEXT'],
+  ['recipients', 'wa_sent_to', 'TEXT'],
+  // Archive format (src/server/pdfa.ts): the account's switch "Make completed files PDF/A", off by default; and per
+  // envelope what came of it: 'passed' (veraPDF passed the stored file as PDF/A-2b, pdfa_checker names its version)
+  // or 'not' (pdfa_note says why, in a few words). NULL when the switch was off at completion.
+  ['accounts', 'pdfa_on', 'INTEGER NOT NULL DEFAULT 0'],
+  ['envelopes', 'pdfa', 'TEXT'],
+  ['envelopes', 'pdfa_note', 'TEXT'],
+  ['envelopes', 'pdfa_checker', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

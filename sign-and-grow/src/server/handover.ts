@@ -88,7 +88,9 @@ route('POST', '/auth/unlock', async (c) => {
     const left = HAND_OVER_TRIES - tryNo;
     throw bad(`That password is not right, so the account stays locked on this device. ${left === 1 ? 'One more try' : `${left} more tries`}, then this browser is signed out.`, 401, { code: 'wrong_password', tries_left: left });
   }
-  run('UPDATE sessions SET locked_at=NULL, locked_note=NULL, unlock_tries=0 WHERE id=?', s.id);
+  // Typing the password is use: the account's "Sign out after" clock starts again here, so a host who waited while
+  // someone signed for a long time is not signed out the moment they have the device back (secpolicy.ts).
+  run('UPDATE sessions SET locked_at=NULL, locked_note=NULL, unlock_tries=0, seen_at=? WHERE id=?', now(), s.id);
   // The device is back with its owner: nobody signing in person holds it any more (handlive.ts).
   clearHand(c);
   return { ok: true, envelope_id: note(s).envelope_id || null };

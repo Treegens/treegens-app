@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/components/ui';
 import { Dialog } from './Dialog';
 import { Icon } from './parts';
-import { fieldName, isMulti, problemWith, type Item } from './fields';
+import { fieldName, isMulti, problemWith, inputLimit, amountHint, lengthHint, type Item } from './fields';
 import { CANNOT_PRINT_HEAD, CANNOT_PRINT_THEN, shownChars } from '@/lib/scripts';
 import { formatDateValue } from '@/lib/dates';
 import { NUMBER_HINT } from '@/lib/numbers';
@@ -355,10 +355,10 @@ export function FieldSheet({ field, value, dateFormat, onChange, onDone, onNext 
   const input = useRef<any>(null);
   const hint = useId();
   const name = fieldName(field);
-  const problem = problemWith(field, value);
+  const problem = problemWith(field, value, dateFormat);
   // The sheet stays open while moving from one field to the next, so move focus by hand.
   useEffect(() => input.current?.focus({ preventScroll: true }), [field.id]);
-  const shared = { dir: 'auto' as const, ref: input, 'aria-label': name, 'aria-describedby': hint, 'aria-required': !!field.required, 'aria-invalid': !!problem, className: 'sg-big-input', value, 'data-autofocus': true } as const;
+  const shared = { dir: 'auto' as const, ref: input, 'aria-label': name, 'aria-describedby': hint, 'aria-required': !!field.required, 'aria-invalid': !!problem, className: 'sg-big-input', value, maxLength: inputLimit(field), 'data-autofocus': true } as const;
   return (
     <Dialog title={name} onClose={onDone} variant="field" light>
       <form onSubmit={(e) => {
@@ -380,7 +380,7 @@ export function FieldSheet({ field, value, dateFormat, onChange, onDone, onNext 
         )}
         {problem
           ? <p id={hint} className="sg-sheet-hint bad" role="alert">{problem}</p>
-          : <p id={hint} className="sg-sheet-hint">{field.type === 'date' && value ? `On the document this date is written as ${formatDateValue(value, dateFormat)}.` : field.type === 'number' ? `${NUMBER_HINT}${field.required ? '' : ' Optional.'}` : field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.'}</p>}
+          : <p id={hint} className="sg-sheet-hint">{field.type === 'date' && value ? `On the document this date is written as ${formatDateValue(value, dateFormat)}.` : field.type === 'number' ? `${amountHint(field) ? `${amountHint(field)} ` : ''}${NUMBER_HINT}${field.required ? '' : ' Optional.'}` : `${lengthHint(field, value) ? `${lengthHint(field, value)} ` : ''}${field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.'}`}</p>}
         <div className="actions">
           <button type="button" className={`btn${onNext ? '' : ' primary'}`} onClick={onDone}>Done</button>
           {onNext && <button className="btn primary">Next</button>}

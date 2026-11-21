@@ -776,6 +776,7 @@ test('a recipient who reports the document or declines gets no more texts, and a
 
 test('SMS_DAILY_PER_ACCOUNT is a hard stop: every new text counts, also a code that is asked for again', async () => {
   const cy = await signUp('Cy Sender', 'cy.sender@example.com', ip());
+  // The limit counts parts (lang-mail): the link text and a code are 1 part each here.
   process.env.SMS_DAILY_PER_ACCOUNT = '3';
   try {
     const a = await one(cy, { verify: 'sms_code', phone: '+44 7700 900801', text_link: true }); // 1: the link
@@ -784,22 +785,23 @@ test('SMS_DAILY_PER_ACCOUNT is a hard stop: every new text counts, also a code t
     older(a.rid, 61);
     assert.equal((await c.post(`/sign/${a.tok}/code`)).status, 200); // 3: the code again
     assert.equal(db.get("SELECT COUNT(*) n FROM sms_usage WHERE account_id=(SELECT account_id FROM envelopes WHERE id=?)", a.id).n, 3);
+    assert.equal(db.get("SELECT SUM(parts) n FROM sms_usage WHERE account_id=(SELECT account_id FROM envelopes WHERE id=?)", a.id).n, 3);
     // The fourth is refused to the signer in words that blame nobody in the room, and the sender is told why.
     older(a.rid, 61);
     const fourth = await c.post(`/sign/${a.tok}/code`);
     assert.deepEqual([fourth.status, fourth.data.code], [503, 'unavailable']);
-    assert.match(fourth.data.error, /That is nothing you did: the account this document was sent from has sent as many text messages as this server allows in a day \(3\)\. Cy Sender has been told/);
+    assert.match(fourth.data.error, /That is nothing you did: the account this document was sent from has used the 3 text message parts this server allows it in a day\. Cy Sender has been told/);
     assert.equal(texts(a.rid).length, 3);
     const told = mailTo('cy.sender@example.com').filter((m) => m.subject.startsWith('Cannot open:'));
     assert.equal(told.length, 1);
-    assert.match(told[0].html, /We did not send it, because the account this document was sent from has sent as many text messages as this server allows in a day \(3\)/);
+    assert.match(told[0].html, /We did not send it, because the account this document was sent from has used the 3 text message parts this server allows it in a day/);
     // Asked again: still refused, and the sender is not told a second time the same day.
     assert.equal((await c.post(`/sign/${a.tok}/code`)).status, 503);
     assert.equal(mailTo('cy.sender@example.com').filter((m) => m.subject.startsWith('Cannot open:')).length, 1);
     // Sending something new that needs a text is refused with what to do. Without texts it goes out.
     const more = await tryOne(cy, { phone: '+44 7700 900802', text_link: true });
     assert.equal(more.status, 429);
-    assert.match(more.data.error, /This account has used all 3 text messages this server sends for one account in a day\. Nothing was sent\. There is room again in about 24 hours.*To send now, do it without text messages/);
+    assert.match(more.data.error, /This account has used today's 3 text message parts\. The limit counts text message parts: most of our texts are 1 or 2 parts.*Nothing was sent\. There is room again in about 24 hours.*To send now, do it without text messages/);
     assert.equal((await tryOne(cy, { verify: 'email_code' })).status, 200);
     // Voiding and deleting hands nothing back: the count is not the envelopes.
     await cy.post(`/envelopes/${a.id}/void`, { reason: 'Start again' });
@@ -1275,6 +1277,7 @@ test('a text tried again by the timer is held by the pause, the fake-notice filt
     // but a limit the operator lowered since holds it.
     const cy = await signUp('Cy Retry', 'cy.retry@example.com', ip());
     db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), accountOf('cy.retry@example.com'));
+    // The limit counts parts (lang-mail): each link text here is 1 part.
     const r1 = await failedLink(cy, { phone: '+44 7700 900143' });
     process.env.SMS_DAILY_PER_ACCOUNT = '1';
     out = await retried(r1.rid);
@@ -1284,7 +1287,7 @@ test('a text tried again by the timer is held by the pause, the fake-notice filt
     process.env.SMS_DAILY_PER_ACCOUNT = '1';
     out = await retried(r2.rid);
     assert.deepEqual(out.to, []);
-    assert.match(out.rows[0].error, /Not sent again: the account this document was sent from has sent as many text messages as this server allows in a day \(1\)\./);
+    assert.match(out.rows[0].error, /Not sent again: the account this document was sent from has used the 1 text message part this server allows it in a day\./);
   } finally {
     provider({ SMS_DEV_OUTBOX: '1' });
     sms.answers.length = 0;

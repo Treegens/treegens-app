@@ -29,7 +29,7 @@ export default function Landing() {
           <div>
             <p className="home-kicker"><Mark size={28} label="" /> Planted with Treegens</p>
             <h1>Every signature you pay for plants <em>{TREES_PER_SIGNATURE} mangroves.</em></h1>
-            <p className="lead">GrowSigning is where documents get signed on screen. Everything customers pay goes to Treegens, whose planters put mangroves in the ground: {P.treesPerUsd} for every dollar.</p>
+            <p className="lead">GrowSigning is where documents get signed on screen. What customers pay, less card fees, goes to Treegens, whose planters put mangroves in the ground: {P.treesPerUsd} for every dollar.</p>
             <Link href="/signup" className="btn primary lg">Start free</Link>
             <p className="muted small home-note">{sigs(P.welcomeSignatures)} free to try it, no card needed. Free signatures plant no trees. The people you send to never pay and never need an account.</p>
           </div>
@@ -54,7 +54,7 @@ export default function Landing() {
           <ol className="home-points">
             <li><b>Send it.</b><span>Add your document, say who signs, press Send. They sign on a phone or a computer, with no account.</span></li>
             <li><b>Pay only for signatures that happen.</b><span>{usd(P.topUpUsd)} a signature, or {usd(P.monthlyUsd)} a month for {P.monthlySignatures}. No yearly contract. <Link href="/pricing">Prices and rules</Link>.</span></li>
-            <li><b>The trees get planted, and counted.</b><span>All of what you pay goes to Treegens. Planters film what they plant, and Treegens counts the seedlings in the video. <Link href="/impact">How we count</Link>.</span></li>
+            <li><b>The trees get planted, and counted.</b><span>What you pay, less card fees, goes to Treegens. Planters film what they plant, and Treegens counts the seedlings in the video. <Link href="/impact">How we count</Link>.</span></li>
           </ol>
           <p className="home-more"><Link href="/features">Everything GrowSigning does</Link></p>
         </section>

@@ -713,7 +713,7 @@ test('admins keep up to ten stamps; members use them; names are checked; anythin
   for (let i = 0; i < STAMPS_PER_ACCOUNT - 2; i++) ok(await owner.post('/stamps', { name: `Stamp ${i}`, image: stampPng(20 + i) }));
   const eleventh = await owner.post('/stamps', { name: 'One too many', image: stampPng(40) });
   assert.equal(eleventh.status, 409);
-  assert.match(eleventh.data.error, /as many as an account can keep\. Delete one you no longer use under Settings, Stamps/);
+  assert.match(eleventh.data.error, /as many as an account can keep\. Delete one you no longer use under Settings, Stamps and seals/);
 });
 
 test('a stamp name typed by an account that has not paid is checked like any other name; pictures are not read for words', async () => {
@@ -819,7 +819,7 @@ test('a signer puts on their own stamp: kept by Finish later, never set by the a
   ok(await finish(tok, rita), 'finish');
   const line = trail(e.id).find((a: any) => a.action === 'Stamp put on');
   assert.ok(line, 'the audit trail has the stamp');
-  assert.match(line.detail, new RegExp(`Rita Receiver <rita\\.\\d+@buyer\\.example> put a stamp \\(a picture they uploaded, red ink\\) on page 1, in the field "Company stamp", at \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d UTC\\. Fingerprint of the picture \\(SHA-256\\): ${put.value}\\.`));
+  assert.match(line.detail, new RegExp(`Rita Receiver <rita\\.\\d+@buyer\\.example> put a stamp \\(a picture they uploaded, red ink\\) on page 1, in the field "Company stamp", at \\d{1,2} [A-Z][a-z]{2} \\d{4} \\d\\d:\\d\\d:\\d\\d UTC\\. Fingerprint of the picture \\(SHA-256\\): ${put.value}\\.`));
   assert.ok(trail(e.id).findIndex((a: any) => a.action === 'Stamp put on') < trail(e.id).findIndex((a: any) => a.action === 'Signed'));
   // After Finish it cannot be changed.
   assert.equal((await rita.call('DELETE', `/sign/${tok}/stamp/${f.id}`)).status, 400);
@@ -866,7 +866,7 @@ test('the signed PDF prints the stamp like ink: multiplied in, slightly see-thro
   assert.match(text, /Agreement page 1/, 'the words under the stamp are still in the file');
   assert.match(text, /Sender's stamp/);
   assert.match(text, /"Pia Trading Ltd", a saved stamp of the account, on page 1\. Picture SHA-256/);
-  assert.match(text, /A stamp, a picture they uploaded, on page 1, put on \d{4}-/);
+  assert.match(text, /A stamp, a picture they uploaded, on page 1, put on \d{1,2} [A-Z][a-z]{2} \d{4} /);
   assert.match(text.replace(/\s+/g, ' '), /A stamp here is a picture of a stamp that this person put on the document\. GrowSigning does not check that they may use it, and it is not a certified electronic seal\./);
   assert.doesNotMatch(text, /verified seal|certified stamp|legally binding seal|authenticated stamp/i, 'nothing claims more');
 });
@@ -1352,7 +1352,7 @@ test('the API description has the stamp field and the stamp routes; the words ne
 test('the screens: Settings, the editor, the signing page and its text view, the help and developers pages, with the honest words', () => {
   const settings = read('src/app/app/settings/page.tsx');
   // The sections of Settings are listed in src/lib/settingsnav.ts since 21 November 2026 (simplify-public).
-  assert.match(read('src/lib/settingsnav.ts'), /\{ key: 'stamps', label: 'Stamps', admins: true \}/, 'a Stamps tab under Settings');
+  assert.match(read('src/lib/settingsnav.ts'), /\{ key: 'stamps', label: 'Stamps and seals', admins: true \}/, 'a Stamps and seals tab under Settings');
   assert.match(settings, /\{tab === 'stamps' && <Card><StampSettings \/><\/Card>\}/);
   const team = read('src/components/stamps/StampSettings.tsx');
   assert.match(team, /\{STAMP_IS_TEAM\}/);

@@ -52,7 +52,8 @@ export default function PowerForm() {
             <QrOwnPhone slug={slug} name={form.name} />
           </form>
         )}
-      <p className="muted small center" style={{ marginTop: 14 }}>Powered by GrowSigning, where every dollar plants mangrove trees. <a href="/help?topic=signing#contact">Something not working? Get help</a></p>
+      <p className="muted small center" style={{ marginTop: 14 }}>{/* The tree clause only for an account that shows trees to its signers ('Trees on screens and emails'). */}
+        {form?.trees ? 'Powered by GrowSigning, where every dollar plants mangrove trees.' : 'Powered by GrowSigning.'} <a href="/help?topic=signing#contact">Something not working? Get help</a></p>
     </div>
   );
 }

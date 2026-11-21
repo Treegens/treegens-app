@@ -2,6 +2,7 @@ import { run, get, all } from './db.ts';
 import { now, hmac } from './util.ts';
 import { smsProvider, maskPhone } from '../lib/checks.ts';
 import { smsDailyPerAccount } from '../lib/policy.ts';
+import { textParts, plainSigns } from '../lib/smsparts.ts';
 
 // Text messages. Built like mail.ts on purpose: every text is recorded, the answer says what really became of it,
 // and one the provider would not take is tried again by the timer and never called sent. Two things differ, because
@@ -147,10 +148,14 @@ async function deliver(id: number | bigint, again = false): Promise<TextStatus> 
  */
 export async function sendText(t: Text): Promise<{ status: TextStatus; id: number }> {
   const key = phoneKey(t.to);
-  const r = run('INSERT INTO texts (account_id, envelope_id, recipient_id, kind, to_phone, to_masked, dest_hash, body, status, at, expires_at, provider) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-    t.accountId, t.envelopeId ?? null, t.recipientId ?? null, t.kind, t.to, maskPhone(t.to), key, t.text, 'queued', now(), t.expiresAt ?? null, smsProvider());
+  // A provider bills every part, and the daily limit counts them: see src/lib/smsparts.ts. A curly quote or a long
+  // dash is made plain first, so it does not turn a 1 or 2 part text into 3 or 4.
+  const text = plainSigns(t.text);
+  const { parts } = textParts(text);
+  const r = run('INSERT INTO texts (account_id, envelope_id, recipient_id, kind, to_phone, to_masked, dest_hash, body, status, at, expires_at, provider, parts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    t.accountId, t.envelopeId ?? null, t.recipientId ?? null, t.kind, t.to, maskPhone(t.to), key, text, 'queued', now(), t.expiresAt ?? null, smsProvider(), parts);
   run('DELETE FROM sms_usage WHERE account_id=? AND at < ?', t.accountId, new Date(Date.now() - 2 * 864e5).toISOString());
-  run('INSERT INTO sms_usage (account_id, kind, dest_hash, at) VALUES (?,?,?,?)', t.accountId, t.kind, key, now());
+  run('INSERT INTO sms_usage (account_id, kind, dest_hash, at, parts) VALUES (?,?,?,?,?)', t.accountId, t.kind, key, now(), parts);
   const id = Number(r.lastInsertRowid);
   return { status: await deliver(id), id };
 }
@@ -159,8 +164,8 @@ export async function sendText(t: Text): Promise<{ status: TextStatus; id: numbe
 
 const dayAgo = () => new Date(Date.now() - 864e5).toISOString();
 
-/** How many more texts this account can cause in the 24 hours that end now. */
-export const textsLeft = (accountId: string): number => smsDailyPerAccount() - get('SELECT COUNT(*) n FROM sms_usage WHERE account_id=? AND at > ?', accountId, dayAgo()).n;
+/** How many more text message parts this account can cause in the 24 hours that end now (a long or non-Latin text is several). */
+export const textsLeft = (accountId: string): number => smsDailyPerAccount() - get('SELECT COALESCE(SUM(parts), 0) n FROM sms_usage WHERE account_id=? AND at > ?', accountId, dayAgo()).n;
 
 /** The fingerprints of the numbers this account has texted in the last 24 hours. */
 export const numbersToday = (accountId: string): Set<string> => new Set(all('SELECT DISTINCT dest_hash h FROM sms_usage WHERE account_id=? AND at > ?', accountId, dayAgo()).map((x) => x.h));

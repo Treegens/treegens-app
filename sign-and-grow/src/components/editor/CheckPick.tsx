@@ -59,7 +59,8 @@ export function CheckPick({ r, name, kept, textsOn, open, onChange }: { r: any; 
 /** "Also text the signing link", with the number it goes to. Nothing at all where texts are off and none was set. */
 export function TextLink({ r, textsOn, open, onChange }: { r: any; textsOn: boolean; open: boolean; onChange: (p: any) => void }) {
   const on = !!r.text_link;
-  if (!on && (!textsOn || r.role === 'inperson' || r.link_by_sender)) return null;
+  // Never together with the link by WhatsApp for one person (WaLink.tsx).
+  if (!on && (!textsOn || r.role === 'inperson' || r.link_by_sender || r.whatsapp)) return null;
   return (
     <div className="ed-textlink">
       <label className="check"><input type="checkbox" checked={on} onChange={(e) => onChange({ text_link: e.target.checked })} /> <span>Also text the signing link</span></label>

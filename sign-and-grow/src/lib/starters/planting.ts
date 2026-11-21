@@ -1,0 +1,41 @@
+import type { Starter } from './types.ts';
+
+export const planting: Starter = {
+  id: 'planting',
+  title: 'Consent to plant trees on land',
+  purpose: 'Lets your organisation plant trees on community or private land: whose land, what is planted, who may visit, for how long, how to end it.',
+  written: '2026-11-21',
+  place: 'No particular country',
+  reviewedBy: '',
+  // The organisation writes in what it will plant and for how long, then the person in charge of the land reads it all and signs.
+  roles: [{ key: 'org', name: 'For the organisation', order: 1 }, { key: 'owner', name: 'Person in charge of the land', order: 2 }],
+  blocks: [
+    { id: 'intro', kind: 'p', text: 'This agreement lets {organisation} plant trees on the land described below. The person who signs for the land owns it, or has the right to decide about it for the community or the people who own it.' },
+    { id: 'land-h', kind: 'h', text: 'The land' },
+    { id: 'land', kind: 'p', text: 'Where the land is, and who owns it:' },
+    { id: 'trees-h', kind: 'h', text: 'What is planted' },
+    { id: 'trees', kind: 'p', text: 'The kinds and number of trees, and where on the land they go:' },
+    { id: 'visit-h', kind: 'h', text: 'Who may visit' },
+    { id: 'visit', kind: 'p', text: 'People from {organisation}, and people working with us, may come onto the land to plant the trees, look after them, check how they grow and take photos of them. We agree each visit with you in advance, keep to the paths you show us, close gates behind us and take our waste away.' },
+    { id: 'long-h', kind: 'h', text: 'How long' },
+    { id: 'long', kind: 'p', text: 'This agreement starts on the day the last person signs and lasts for the number of years written here:' },
+    { id: 'trees-own-h', kind: 'h', text: 'The trees' },
+    { id: 'trees-own', kind: 'p', text: 'The trees grow on your land and belong with it. We will not cut or sell them without your agreement. You agree not to cut them down while this agreement lasts, unless one becomes a danger to people or property: then tell us.' },
+    { id: 'end-h', kind: 'h', text: 'Ending it early' },
+    { id: 'end', kind: 'p', text: 'Either of us can end this agreement early by telling the other in writing, at least three months before. When it ends, the trees stay where they are, unless we both agree in writing to something else.' },
+    { id: 'sign-h', kind: 'h', text: 'Signatures' },
+  ],
+  fields: [
+    { type: 'text', role: 'owner', label: 'Where the land is (address or description)', required: true, after: 'land' },
+    { type: 'text', role: 'owner', label: 'Who owns the land', required: true, after: 'land' },
+    { type: 'text', role: 'org', label: 'What will be planted, and where', required: true, after: 'trees' },
+    { type: 'text', role: 'owner', label: 'Anything visitors should know (leave empty if nothing)', required: false, after: 'visit' },
+    { type: 'text', role: 'org', label: 'For how many years', required: true, after: 'long' },
+    { type: 'full_name', role: 'owner', label: 'For the land: full name', required: true, after: 'sign-h' },
+    { type: 'signature', role: 'owner', label: 'For the land: signature', required: true, after: 'sign-h' },
+    { type: 'date_signed', role: 'owner', label: 'Date', required: true, after: 'sign-h' },
+    { type: 'full_name', role: 'org', label: 'For the organisation: full name', required: true, after: 'sign-h' },
+    { type: 'signature', role: 'org', label: 'For the organisation: signature', required: true, after: 'sign-h' },
+    { type: 'date_signed', role: 'org', label: 'Date', required: true, after: 'sign-h' },
+  ],
+};

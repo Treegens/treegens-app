@@ -13,6 +13,9 @@ import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 // Who can use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { AccessDialog, AccessMarks } from '@/components/templates/WhoCanUse';
 import { useTemplateDetails, draftNeedsDetails } from '@/components/sender/UseDetails';
+// Ready-made templates: a list inside this page, opened on purpose (src/lib/starters/).
+import { Starters, StartersInvite, StartersLink } from '@/components/templates/Starters';
+import { SOURCE_LOCALE, t as say } from '@/lib/i18n';
 
 // With a waiver form for each state or client, one flat list stops working at about twenty. So the page has what
 // the envelope list has: a search (every word has to be found in the name, the folder, a role or the document), a
@@ -29,6 +32,12 @@ export default function Templates() {
   const [rules, setRules] = useState<any>(null);
   // Whose More is open: one row at a time, and closed every time the page opens.
   const [more, setMore] = useState('');
+  const [ready, setReady] = useState(false);
+  // /app/templates?ready=1 (from Help) opens the ready-made ones: once there are templates, the page itself offers
+  // them only when a search finds none, so the way to Use stays as short as it was.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('ready') === '1') setReady(true);
+  }, []);
   useEffect(() => {
     if (!more) return;
     const key = (ev: KeyboardEvent) => {
@@ -140,8 +149,13 @@ export default function Templates() {
       <div className="pagehead">
         <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds.</div></div>
         {/* With no template yet, the one filled button is "Create your first template" in the empty list below. */}
-        {(rows.length > 0 || filtered || !data) && <Link href="/app/envelopes/new?kind=template" className="btn primary sn-newtpl">New template</Link>}
+        {(rows.length > 0 || filtered || !data) && (
+          <div className="rmt-headbtns">
+            <Link href="/app/envelopes/new?kind=template" className="btn primary sn-newtpl">New template</Link>
+          </div>
+        )}
       </div>
+      {ready && <Starters onClose={() => setReady(false)} />}
       {/* Shown once there is something to look through, and kept while a search or a folder hides everything. */}
       {(rows.length > 0 || filtered || (data?.folders || []).length > 0) && (
         <div className="sn-filters" role="search">
@@ -168,9 +182,12 @@ export default function Templates() {
         ) : !data ? (
           <div className="empty" role="status">Loading…</div>
         ) : rows.length === 0 && filtered ? (
-          <div className="empty"><h3>Nothing matches</h3>No template fits {view?.q ? <>&ldquo;{view.q}&rdquo;</> : 'this'}{view?.folder ? <> in the folder &ldquo;{view.folder}&rdquo;</> : null}. Every word you type has to be in the name, the folder, a role or the document.<div style={{ marginTop: 14 }}><button className="btn" onClick={showAll}>Show all templates</button></div></div>
+          <div className="empty"><h3>Nothing matches</h3>No template fits {view?.q ? <>&ldquo;{view.q}&rdquo;</> : 'this'}{view?.folder ? <> in the folder &ldquo;{view.folder}&rdquo;</> : null}. Every word you type has to be in the name, the folder, a role or the document.<div className="rmt-headbtns rmt-nomatch"><button className="btn" onClick={showAll}>Show all templates</button>{!ready && <StartersLink onOpen={() => setReady(true)} />}</div></div>
+        ) : rows.length === 0 && ready ? (
+          // The list above is open: one quiet way to make your own instead, not a second main button.
+          <div className="empty rmt-own"><Link href="/app/envelopes/new?kind=template">{say(SOURCE_LOCALE, 'starters.or_own')}</Link></div>
         ) : rows.length === 0 ? (
-          <div className="empty"><h3>No templates yet</h3>Good for contracts, NDAs, waivers and anything else you send more than once.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new?kind=template" className="btn primary">Create your first template</Link></div></div>
+          <div className="empty"><h3>No templates yet</h3>Good for contracts, NDAs, waivers and anything else you send more than once.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new?kind=template" className="btn primary">Create your first template</Link></div>{!ready && <StartersInvite onOpen={() => setReady(true)} />}</div>
         ) : (
           <div className="tablewrap"><table className="t sn-list">
             <thead><tr><th>Template</th><th className="hide-sm">Roles</th><th className="hide-sm">Folder</th><th className="hide-sm">Pages</th><th className="hide-sm">Updated</th><th><span className="sn-vh">Actions</span></th></tr></thead>

@@ -5,6 +5,7 @@ import { scanWarning } from '@/lib/scans';
 import { phoneWeight } from '@/lib/phone';
 import { acceptList, convertNotes } from '@/lib/convert';
 import { plural, type Ed } from './shared';
+import { PageTools } from './PageTools';
 
 // One file in step 1 (research/ux-charter.md, 2.3): its name, how many pages, and one More with what is done to a
 // file now and then (replace it, move it, remove it). Under the row at most one note; when more than one applies,
@@ -12,6 +13,7 @@ import { plural, type Ed } from './shared';
 export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
   const me = useMe();
   const [more, setMore] = useState(false);
+  const [pages, setPages] = useState(false);
   const name = d.name || 'this file';
   const panel = `ed-file-more-${d.id}`;
   const last = i === ed.docs.length - 1;
@@ -32,6 +34,8 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
       <div className="row ed-doc">
         <input value={d.name} aria-label="File name" maxLength={200} readOnly={!!ed.wording} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
         <span className="muted small" style={{ whiteSpace: 'nowrap' }}>{plural(d.pages, 'page')}</span>
+        {/* Remove, turn and move pages (PageTools.tsx), opened from here and closed every time the step opens. */}
+        {!ed.wording && <button type="button" className="btn sm ghost" data-feature="ds-page-tools" onClick={() => setPages(true)} aria-label={`Pages of ${name}`}>Pages</button>}
         {!ed.wording && <button type="button" className="btn sm ghost" data-more="item" aria-expanded={more} aria-controls={panel} aria-label={`More options for ${name}`} onClick={() => setMore(!more)}>More</button>}
       </div>
       {more && !ed.wording && (
@@ -47,6 +51,7 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
           <button type="button" className="btn sm danger" onClick={() => ed.removeDoc(d.id)} aria-label={`Remove ${name}`}>Remove</button>
         </div>
       )}
+      {pages && <PageTools ed={ed} d={d} onClose={() => setPages(false)} />}
       {notes[0]}
       {notes.length > 1 && (
         <details data-fold className="ed-fold">

@@ -13,7 +13,7 @@ export const BY_SENDER_TICK = 'I will send the link myself';
 
 /** Under the tick: what it does, what it costs and what it takes away, before anyone relies on it. */
 export const BY_SENDER_HOW =
-  'We send this person no email at all: no invitation, no reminders, no copy at the end. After sending, copy their link from the envelope page and send it by WhatsApp, text message or any chat, or show it as a QR code. Their link also opens the completed document, and it is the only way they get their copy: without an address, "Find my documents" on our help page cannot find it. If they sign, it uses one of your signatures, also when the person is you.';
+  'We send this person no email at all: no invitation, no reminders, no copy at the end. After sending, copy their link from the document page and send it by WhatsApp, text message or any chat, or show it as a QR code. Their link also opens the completed document, and it is the only way they get their copy: without an address, "Find my documents" on our help page cannot find it. If they sign, it uses one of your signatures, also when the person is you.';
 
 /**
  * A person as the record names them: name and address, or name and how their link reached them. An address that is
@@ -30,9 +30,9 @@ export function bySenderProblem(r: any, e: { fields?: any[] } | null | undefined
   if (!r?.link_by_sender) return null;
   const name = r.name || r.role_name || 'One of the recipients';
   const tick = `"${BY_SENDER_TICK}"`;
-  if (r.group_id || r.group_name) return `${name} is a group, and every member of a group gets an email of their own. ${tick} is for one person. Untick it, or put that person on the envelope by name.`;
+  if (r.group_id || r.group_name) return `${name} is a group, and every member of a group gets an email of their own. ${tick} is for one person. Untick it, or put that person on the document by name.`;
   if (r.role === 'inperson') return `${name} signs in person on your device, so there is no link to send them. Untick ${tick} for them.`;
-  if (r.role === 'cc') return `${name} only gets a copy, and a copy goes out by email once everyone has finished. To give them the finished document yourself, download it from the envelope page then. Untick ${tick} for them, or let them view it instead.`;
+  if (r.role === 'cc') return `${name} only gets a copy, and a copy goes out by email once everyone has finished. To give them the finished document yourself, download it from the document's page then. Untick ${tick} for them, or let them view it instead.`;
   if (String(r.email || '').trim()) return `${name} has an email address and ${tick} ticked. Choose one: leave the address empty and send the link yourself, or untick it and we email them.`;
   if (r.verify === 'email_code') return `${name} has no email address here, so a one-time code by email could never reach them. Choose a one-time code by text message, an access code or no extra check for them.`;
   if (r.text_link) return `For ${name} both ${tick} and "also text the signing link" are on. Choose one of the two.`;
@@ -52,9 +52,9 @@ export function ownOutcome(kind: string, now: boolean, role: string): string | n
   if (kind === 'sign_again') return `Already ${did}. This change touches what they ${did}, so they are asked to ${redo} again ${now ? 'now' : 'when it is their turn'}, on the same link. ${none}: tell them yourself. What they ${did} the first time stays on record.`;
   if (kind === 'held') return `Someone before them in the signing order has not finished, so their turn is taken back. ${none}: tell them yourself if they ask. What they filled in is kept.`;
   if (kind === 'updated') return `Keeps the same link. ${none}: tell them yourself that the document changed.`;
-  if (kind === 'new_link') return now ? `Gets a new link, and the old one stops working. ${none}: send them the new link yourself from the envelope page.` : 'The old link stops working. When it is their turn we tell you, and you send them the new one.';
-  if (kind === 'invited') return now ? `Is added. ${none}: send them their link from the envelope page once you have saved.` : 'Is added. When it is their turn we tell you, and you send them their link.';
-  if (kind === 'waiting' && now) return `It is now their turn. ${none}: send them their link from the envelope page.`;
+  if (kind === 'new_link') return now ? `Gets a new link, and the old one stops working. ${none}: send them the new link yourself from the document's page.` : 'The old link stops working. When it is their turn we tell you, and you send them the new one.';
+  if (kind === 'invited') return now ? `Is added. ${none}: send them their link from the document's page once you have saved.` : 'Is added. When it is their turn we tell you, and you send them their link.';
+  if (kind === 'waiting' && now) return `It is now their turn. ${none}: send them their link from the document's page.`;
   return null;
 }
 

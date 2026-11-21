@@ -20,7 +20,7 @@ import {
   CLICK_LAW, DEFAULT_BUTTON, DEFAULT_CHECKBOX, IDENTITY_LABEL, LABEL_MAX, NAME_MAX, TERMS_MAX_CHARS, VIA_LABEL, VIEW_MAX_HOURS, WHO_MAX_DAYS,
   VIEW_MATCH_LABEL, coverLine, recordShows, termsPlain, usageLine, type Identity, type Via,
 } from '../lib/clickwrap.ts';
-import { dayText } from '../lib/dates.ts';
+import { dayText, stampText } from '../lib/dates.ts';
 
 export const pageUrl = (slug: string) => `${baseUrl()}/agree/${slug}`;
 
@@ -40,7 +40,7 @@ export function usage(accountId: string): { used: number; typed: number; vouched
   const typed = get("SELECT COUNT(*) n FROM clickwrap_acceptances WHERE account_id=? AND at >= ? AND identity='typed'", accountId, monthStart()).n;
   const vouched = get("SELECT COUNT(*) n FROM clickwrap_acceptances WHERE account_id=? AND at >= ? AND identity!='typed'", accountId, monthStart()).n;
   const limit = clickwrapMonthlyLimit();
-  return { used: typed + vouched, typed, vouched, limit, resets: nextMonth(), line: usageLine(typed, vouched, limit, nextMonth()) };
+  return { used: typed + vouched, typed, vouched, limit, resets: nextMonth(), line: usageLine(typed, vouched, limit, dayText(nextMonth())) };
 }
 const admins = (accountId: string): string[] => all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", accountId).map((u) => u.email);
 
@@ -364,7 +364,7 @@ export function statusFor(cw: any, q: { person_id?: string; email?: string }) {
 
 // ---- The certificate -------------------------------------------------------------------------------------------------
 
-const stamp = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '-');
+const stamp = (s: string | null | undefined) => (s ? stampText(s) : '-');
 export async function certificatePdf(r: any): Promise<Uint8Array> {
   const cw = get('SELECT * FROM clickwraps WHERE id=?', r.clickwrap_id);
   const v = get('SELECT * FROM clickwrap_versions WHERE id=?', r.version_id);

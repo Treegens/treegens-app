@@ -6,6 +6,7 @@ import { api, useLoad } from './ui';
 import { Logo, Mark } from './Brand';
 import { fmtNum, usd, TOTALS_FROM, totalWorthShowing } from '@/lib/impact';
 import { HelpChatButton } from './HelpChat';
+import { MONEY_LINE, MONEY_SHORT } from '@/lib/impactwords';
 
 // Shared frame of the public pages: the top navigation, the footer and the live impact numbers.
 
@@ -74,7 +75,7 @@ export function PublicFooter() {
       <div className="wrap pub-foot-grid">
         <div className="pub-foot-brand">
           <Link href="/" className="logo"><Logo height={22} /></Link>
-          <p>100% of what you pay goes to Treegens tree planting.</p>
+          <p>{MONEY_SHORT}</p>
           {/* "A person replies" only where the server says a request reaches somebody (reply is null when neither
               SUPPORT_EMAIL nor OPERATOR_EMAILS is set: supportReachable in src/lib/policy.ts). */}
           {support?.reply
@@ -100,6 +101,9 @@ export function PublicFooter() {
           <Link href="/security">Security</Link>
           <Link href="/security/certifications">Certifications</Link>
           <Link href="/security/processing">Data processing</Link>
+          <Link href="/security/subprocessors">Sub-processors</Link>
+          <Link href="/procurement">Procurement documents</Link>
+          <Link href="/accessibility">Accessibility</Link>
           <Link href="/security/disclosure">Report a weakness</Link>
         </nav>
       </div>
@@ -120,7 +124,7 @@ export function ImpactBand() {
       <div className="wrap">
         <h2 id="impact-h">What signing here has done so far</h2>
         <p className="pub-band-lead">
-          Everything customers pay goes to Treegens to plant mangroves, and a document signed on screen is not printed.
+          {MONEY_LINE} And a document signed on screen is not printed.
         </p>
         <div className="grid g4 keep2">
           {planted && <div className="stat"><div className="k">Mangroves funded</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">from {usd(fmtNum(i.donatedUsd))} paid by customers</div></div>}

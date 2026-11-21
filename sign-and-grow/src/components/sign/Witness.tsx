@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'react';
 import { api, toast } from '@/components/ui';
 import { StateCard, Sender } from './parts';
 import { WHO_MAY_WITNESS, WITNESS_RECORDS } from '@/lib/witness';
+import { headingFor } from '@/lib/consentfit';
 
 // A witness for one signer (src/lib/witness.ts), on the signing page. Two people see something here:
 //   - the witness: their first screen is their own statement, to tick, or "I was not there" instead. Before the
@@ -81,8 +82,10 @@ export function WitnessFirst({ data, base, onDone }: { data: any; base: string; 
   };
   return (
     <div className="card sg-consent wt-card">
-      <p className="sg-kicker">You have been asked to sign as a witness</p>
-      <h1 className="serif" id="sg-h1" tabIndex={-1}>{env.subject}</h1>
+      {/* The same words as above the consent screen that follows (one name for one thing). */}
+      <p className="sg-kicker">Asked to witness</p>
+      {/* A witness is not asked to sign the document, so the app's own "Please sign: " is not shown (headingFor). */}
+      <h1 className="serif" id="sg-h1" tabIndex={-1}>{headingFor(env.subject, true)}</h1>
       <Sender env={env} brand={data.brand} />
       <h2>What you are confirming</h2>
       <p className="wt-note">{w.sender_named ? `${sender.name} named you as the witness of ${w.name}.` : `${w.name} named you as their witness.`} Only go on if you were with them and saw them sign. This is your own statement:</p>

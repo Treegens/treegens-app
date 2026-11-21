@@ -18,10 +18,12 @@ import { MAX_DOCS, SIGNS, clamp, plural, who, type Confirm, type Ed, type Upload
 import { sendAnywayAsk } from '@/lib/mailnews';
 import { stackedFields } from '@/lib/stacked';
 import { WordingBanner, type WordingLock } from './templates/WhoCanUse';
+import { StarterNote } from './templates/Starters';
 import { witnessProblem } from '@/lib/witness';
 import { HelpChatButton } from './HelpChat';
 import { detailsRefused, wantsDetails } from './sender/DetailBoxes';
 import { STEP_NAMES, isBlankPerson, onlyMe, personLabel } from '@/lib/editorux';
+import { moveFields } from '@/lib/pages';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -131,6 +133,8 @@ export function Editor({ id }: { id: string }) {
       locale: r.locale || null,
       // The check before the document opens, and the signing link by text message (see sender/CheckFields.tsx).
       verify: r.verify || 'none', phone: r.phone || '', text_link: !!r.text_link,
+      // The link also by WhatsApp, and the sender's tick that they agreed, for the number it was ticked for (editor/WaLink.tsx).
+      ...(isTpl ? {} : { whatsapp: !!r.whatsapp, ...(r.wa_tick_for !== undefined ? { whatsapp_agreed: !!r.whatsapp_agreed && r.wa_tick_for === String(r.phone || '') } : {}) }),
       // "I will send the link myself": a name and no address, for envelopes only (editor/SendMyself.tsx).
       link_by_sender: !isTpl && !!r.link_by_sender,
       // A signing group instead of a person, and on an envelope that is out who can act for it (GroupRecipient.tsx).
@@ -292,6 +296,16 @@ export function Editor({ id }: { id: string }) {
       toast(e?.message || 'The upload did not go through. Please try again in a moment.', true);
     }
   }
+  // Pages removed, turned or moved (editor/PageTools.tsx). The file is new; the fields go with their pages, and earlier
+  // field steps are forgotten, so Undo never puts a field back on a page that has moved.
+  function pagesChanged(did: string, f: any, plan: { from: number; turn: number }[]) {
+    const was = docs.find((x) => x.id === did);
+    setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted ?? null, existing_signatures_note: undefined } : x)));
+    const hadFields = fields.current().some((x) => x.document_id === did);
+    fields.reset(moveFields(fields.current(), did, plan, was?.page_sizes).fields);
+    dirty();
+    toast(correcting ? 'Pages changed. Review and save to keep the change.' : hadFields ? 'Pages changed. Check that your fields are where you want them.' : 'Pages changed.');
+  }
   function removeDoc(did: string) {
     const d = docs.find((x) => x.id === did);
     const n = fields.current().filter((f) => f.document_id === did).length;
@@ -325,8 +339,20 @@ export function Editor({ id }: { id: string }) {
     const n = fields.current().filter((f) => f.recipient_id === rid).length;
     const go = () => (setRcps((l) => l.filter((x) => x.id !== rid)), dropFieldsOf(rid), dirty());
     if (n) confirm({ title: `Remove ${who(r)}?`, body: `${who(r)} has ${plural(n, 'field')}. ${n === 1 ? 'It is' : 'They are'} removed too.`, yes: `Remove ${isTpl ? 'role' : 'person'}`, no: r?.name ? `Keep ${r.name}` : 'Keep them', danger: true, onYes: go });
-    else go();
+    // Nothing is asked for someone without fields, so they can be brought back with Undo (RemovedLine.tsx). A row
+    // nobody typed into is not worth an Undo.
+    else (go(), setRemoved(r && !isIdle(r) ? { r, at: rcps.indexOf(r) } : null));
   }
+  const [removed, setRemoved] = useState<{ r: any; at: number } | null>(null);
+  const undoRemove = () => {
+    if (!removed) return;
+    setRcps((l) => (l.some((x) => x.id === removed.r.id) ? l : [...l.slice(0, removed.at), removed.r, ...l.slice(removed.at)]));
+    setRemoved(null);
+    dirty();
+    // The keyboard goes back to the name of the person who came back.
+    setTimeout(() => document.querySelectorAll<HTMLElement>('.rcpt [data-ed-name]')[removed.at]?.focus(), 0);
+  };
+  useEffect(() => setRemoved(null), [step]);
 
   // ---- Review ----------------------------------------------------------------------------------------------------
 
@@ -567,7 +593,7 @@ export function Editor({ id }: { id: string }) {
 
   const ed: Ed = {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, wording, docs, rcps, fields, contacts, uploads, color,
-    patchEnv, isIdle, addMe, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
+    patchEnv, isIdle, addMe, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, pagesChanged, addRcp, patchRcp, removeRcp, removed, undoRemove,
     setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
     showField: (fid) => (setJump(fid), void go(2)), jump, clearJump: () => setJump(null),
   };
@@ -584,7 +610,9 @@ export function Editor({ id }: { id: string }) {
     : state === 'saved' ? 'All changes saved' : state === 'saving' ? 'Saving…' : state === 'stuck' ? 'Not saved yet' : 'Unsaved changes';
 
   return (
-    <div className={`ed${step === 2 ? ' ed-step2' : ''}`}>
+    <main className={`ed${step === 2 ? ' ed-step2' : ''}`}>
+      {/* For a screen reader: what this screen is and which step is open (the steps themselves are buttons). */}
+      <h1 className="ed-sr">{isTpl ? 'Template' : correcting ? 'Change a document that is out' : 'Send a document'}, step {step} of 3: {steps[step - 1]}</h1>
       <div className="topbar ed-top">
         {correcting
           ? <button type="button" className="btn sm ghost" onClick={discard}>Discard<span className="hide-sm">changes</span></button>
@@ -602,6 +630,8 @@ export function Editor({ id }: { id: string }) {
       </div>
 
       {wording && <WordingBanner lock={wording} />}
+      {/* A template made from a ready-made one keeps its note (src/lib/starters/). */}
+      {isTpl && <StarterNote note={env?.starter_note} />}
       {correcting && (
         <div className="ed-banner" role="note">
           <b>This document is already out.</b> Change what you need to. Nobody has to start again, and nothing changes until you save.
@@ -659,6 +689,6 @@ export function Editor({ id }: { id: string }) {
           </div>
         </Modal>
       )}
-    </div>
+    </main>
   );
 }

@@ -13,7 +13,7 @@
 // Our own sentence on what kind of signature this is always stays on the screen (src/lib/policy.ts). An account that
 // never saved a text has no row anywhere here and every screen, line and file is as it was before this existed.
 import { all, get, run, tx } from './db.ts';
-import { bad, id, now, sha256, rateLimit, HttpError } from './util.ts';
+import { bad, id, now, sha256, rateLimit, HttpError, baseUrl } from './util.ts';
 import { audit, hasNotPaid, notifySender, declineRecipient, senderOf, type Actor } from './envelopes.ts';
 import { declineForGroup } from './groups.ts';
 import { lureIn, posesAs } from './fakenotice.ts';
@@ -22,9 +22,10 @@ import { settingsChanged } from './seclog.ts';
 import type { Ctx } from './router.ts';
 import { SOURCE_LOCALE, fallbackChain, languageWords, shippedLocales, t } from '../lib/i18n.ts';
 import {
-  OWN_TEXT_KEYS, OWN_TEXT_MAX, DEFAULT_NEEDS, ESIGN_NOTE, WITHDREW_REASON, NEVER_AGREED_REASON, isPaperReason,
+  OWN_TEXT_KEYS, OWN_TEXT_MAX, DEFAULT_NEEDS, ESIGN_NOTE, WITHDREW_REASON, NEVER_AGREED_REASON, askedPaper,
   tidyOwnText, ownTextProblem, ownSections, ownTextPlain, type OwnSection, type OwnTextFields,
 } from '../lib/disclosure.ts';
+import { stampText } from '../lib/dates.ts';
 
 /** The most "agreed again" lines one person can add to one document's audit trail (every time the link is opened). */
 export const AGREED_AGAIN_MAX = 50;
@@ -95,7 +96,7 @@ export function ownTermsFor(e: any, r: any, req?: Request) {
 }
 
 /** Whether this person closed their part by asking for paper: the page then says that, and not "You declined". */
-export const paperFacts = (r: any) => ({ asked_paper: r?.status === 'declined' && isPaperReason(r.decline_reason) });
+export const paperFacts = (r: any) => ({ asked_paper: askedPaper(r) });
 
 // ---- Settings --------------------------------------------------------------------------------------------------
 
@@ -225,17 +226,19 @@ export async function askForPaper(e: any, r: any, actor: Actor) {
       'The document is closed for everyone, and nothing more can be signed on screen. Nothing they had filled in is part of a signed document.',
       'What to do now: send them the paper yourself, the way your own consent text says. GrowSigning does not print or post anything.',
       'If they change their mind, you can copy the document and send it again.',
-    ]);
+    ], { label: 'Open the document', url: `${baseUrl()}/app/envelopes/${x.e.id}` }, { onPaper: true });
   };
   if (r.group_name) await declineForGroup(e, r, reason, actor, told);
   else await declineRecipient(e, r, reason, actor, told);
+  // The one mark that this was a request for paper. The words of the reason are not: anyone can type them in Decline.
+  run("UPDATE recipients SET paper_at=COALESCE(completed_at, ?) WHERE id=? AND status='declined'", now(), r.id);
   audit(e.id, actor, reason, `${r.name}. They asked the sender to send the document on paper instead. Nothing more can be done on screen on this document, and nothing they had filled in is part of a signed document.`);
   return { ok: true, reason };
 }
 
 // ---- The evidence pack ---------------------------------------------------------------------------------------
 
-const stamp = (at: string) => String(at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+const stamp = (at: string) => stampText(at);
 
 /**
  * consent-own-text.txt of the evidence pack: which of the account's versions each person was shown when they agreed,

@@ -22,7 +22,7 @@ const look = {
 };
 
 export const stampSchema = {
-  type: 'object', description: `A stamp of the account (Settings, Stamps). ${STAMP_IS}`,
+  type: 'object', description: `A stamp of the account (Settings, Stamps and seals). ${STAMP_IS}`,
   properties: {
     id: { ...s, readOnly: true }, name: { ...s, maxLength: STAMP_NAME_MAX, description: 'Unique in the account, whatever the case. For an account the checks still apply to, a name that reads like a well-known brand or a payment notice is refused (422), as for any other name it types.' },
     ...look, size_mm: { type: 'number', minimum: STAMP_MIN_MM, maximum: STAMP_MAX_MM, default: STAMP_DEFAULT_MM, description: 'Its real size across, in millimetres: the size a stamp field for it starts at. A round company seal is about 38 to 45.' },

@@ -595,7 +595,7 @@ test('an email to one member that comes back: the sender is told whose it was an
     assert.equal(told.length, 1);
     assert.match(told[0].html, /Ben Ortiz, a member of HR team/);
     assert.match(told[0].html, /The other members of HR team were emailed separately and are not affected/);
-    assert.match(told[0].html, /Edit envelope/);
+    assert.match(told[0].html, /open the document, choose Edit, take/);
     assert.equal(row(e.id).bounced_at, null, 'the group itself is not marked: the others can still be reached');
     const count = (m: string) => subjects(m).filter((x: string) => /^Reminder/.test(x)).length;
     ok(await c.post(`/envelopes/${e.id}/remind`, { recipient_id: row(e.id).id }));
@@ -732,7 +732,7 @@ test('the members of a group that has signed cannot change, and a group cannot s
   // The quick correction has no single name or address to change for a group, and says where members are changed.
   const renamed = await s2.c.post(`/envelopes/${s2.e.id}/correct`, { recipient_id: c2.recipients[0].id, name: 'Someone', email: 'someone@example.com' });
   assert.equal(renamed.status, 400);
-  assert.match(renamed.data.error, /HR team is a group, so there is no single name or address to correct here.*Edit envelope/);
+  assert.match(renamed.data.error, /HR team is a group, so there is no single name or address to correct here.*Edit on its page in the app/);
   // Its access code can be set there, one for the whole group.
   ok(await s2.c.post(`/envelopes/${s2.e.id}/correct`, { recipient_id: c2.recipients[0].id, access_code: 'quay-2026' }));
   assert.equal(row(s2.e.id).access_code, 'quay-2026');
@@ -1035,7 +1035,7 @@ test('repair: an email to the member who has it comes back: the sender is told t
   await mailEvent({ type: 'bounce', email: maya, reason: '550 5.1.1 user unknown' });
   const told = text(mailTo(senderMail(e.id)).filter((m: any) => m.subject === 'Could not be delivered: Staff handbook')[0].html);
   assert.doesNotMatch(told, /choose Correct/);
-  assert.match(told, /Maya Lopez took this on for HR team, and no reminders go to this address now\. If the address is wrong, open the envelope and choose "Give back to the group"/);
+  assert.match(told, /Maya Lopez took this on for HR team, and no reminders go to this address now\. If the address is wrong, open the document and choose "Give back to the group"/);
   // And what it says works: giving it back is accepted.
   ok(await c.post(`/envelopes/${e.id}/recipients/${row(e.id).id}/release`, {}));
 });

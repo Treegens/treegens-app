@@ -21,13 +21,14 @@
 // It reads the environment: server code and server components only.
 import { signInProviders } from './signin.ts';
 import { smsProvider } from './checks.ts';
+import { whatsappProvider } from './channels.ts';
 import { chatProvider, chatModelOn } from './chatprovider.ts';
 import { pwnedUrl } from './signinrules.ts';
 
 type Env = Record<string, string | undefined>;
 
 export type OutsideMode = 'all' | 'listed' | 'none';
-export type ServiceId = 'mail' | 'payments' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks';
+export type ServiceId = 'mail' | 'payments' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks' | 'ocr' | 'whatsapp';
 
 export type OutsideService = {
   id: ServiceId;
@@ -51,7 +52,7 @@ export const OUTSIDE_SETTINGS = ['OUTSIDE_CALLS', 'OUTBOUND_ALLOW', 'WEBHOOK_ALL
 /** Services the software does not have, so nothing calls them. Said on /security so a reader does not have to guess. */
 export const NOT_BUILT = [
   'WhatsApp (a sender can share a signing link there themselves; the server sends nothing to WhatsApp)',
-  'certificate revocation checks (OCSP or CRL)',
+  'storage of files at an outside company: documents and signed files are kept on this server\'s own disk',
   'analytics, advertising, error reporting or any service that "phones home" to the makers of the software',
 ];
 
@@ -129,14 +130,22 @@ export function outsideServices(env: Env = process.env): OutsideService[] {
   const sms = smsProvider(env);
   out.push({ id: 'sms', name: 'Text message provider', purpose: 'Sends one-time codes and signing links by text message, when a sender asks for that.', settings: sms === 'hook' ? ['SMS_WEBHOOK_URL', 'SMS_WEBHOOK_TOKEN'] : ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SMS_WEBHOOK_URL'],
     on: sms === 'twilio' || sms === 'hook', hosts: sms === 'twilio' ? ['api.twilio.com'] : sms === 'hook' ? [hostOfUrl(clean(env.SMS_WEBHOOK_URL))].filter(Boolean) : [] });
+  // The signing link by WhatsApp (src/server/whatsapp.ts). A call with a code (voice.ts, VOICE_ENABLED) goes to the
+  // same Twilio host as the text messages above, and only when those are switched on through Twilio.
+  const wa = whatsappProvider(env);
+  out.push({ id: 'whatsapp', name: 'WhatsApp provider', purpose: 'Sends the signing link by WhatsApp to someone the sender says agreed to it: the number, the sender\'s name, the document\'s title and the link. Never the document.', settings: wa === 'twilio' ? ['TWILIO_WHATSAPP_FROM'] : ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'TWILIO_WHATSAPP_FROM'],
+    on: wa === 'meta' || wa === 'twilio', hosts: wa === 'meta' ? ['graph.facebook.com'] : wa === 'twilio' ? ['api.twilio.com'] : [] });
   const tsa = tsaHosts(env);
-  out.push({ id: 'tsa', name: 'Time-stamp service', purpose: 'Adds a time stamp from that service to the digital seal of a signed PDF. Without it the seal carries the server\'s own time only. It is sent a fingerprint of the seal, never the document.', settings: ['TSA_URL', 'TSA_URLS'], on: tsa.length > 0, hosts: tsa });
+  out.push({ id: 'tsa', name: 'Time-stamp service', purpose: 'Adds a time stamp from that service to the digital seal of a signed PDF, and one over the last value of each record when everyone has finished. Without it the seal carries the server\'s own time only. It is sent fingerprints, never the document. With it, the server also asks the places named inside the seal\'s and the service\'s certificates (their OCSP services and revocation lists) whether those certificates are still good, sending a certificate\'s serial number: those addresses come from the certificates and are not listed here.', settings: ['TSA_URL', 'TSA_URLS'], on: tsa.length > 0, hosts: tsa });
   const chat = chatProvider(env);
   const chatOn = !!chat && chatModelOn(env);
   out.push({ id: 'chat', name: 'AI model for the help chat', purpose: 'Writes the help chat\'s answers from what a person types into the chat. Never a document.', settings: [chat?.keyVar || 'SUPPORT_CHAT_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY'].filter((v, i, a) => a.indexOf(v) === i),
     on: chatOn, hosts: chatOn && chat ? [hostOfUrl(chat.baseUrl)].filter(Boolean) : [] });
   const conv = converterHost(env);
   out.push({ id: 'converter', name: 'Document converter (Gotenberg)', purpose: 'Turns Word, Excel, PowerPoint and similar files into PDF. LibreOffice on this machine (CONVERTER=soffice) needs no network and is not listed.', settings: ['CONVERTER_URL'], on: !!conv, hosts: conv ? [conv] : [] });
+  // OCRMYPDF_URL only: OCR_CMD runs on this machine and needs no network (src/server/ocr.ts).
+  const ocr = (env.OCR_CMD || '').trim() ? '' : (env.OCRMYPDF_URL || '').trim();
+  out.push({ id: 'ocr', name: 'Text reading service for scanned pages (OCRmyPDF)', purpose: 'Reads the text of pages that are pictures, such as scans, so they can be searched and read out. It is sent the whole document that has such pages. OCR_CMD on this machine needs no network and is not listed.', settings: ['OCRMYPDF_URL'], on: !!ocr, hosts: ocr ? [hostOfUrl(ocr)].filter(Boolean) : [] });
   // On unless PWNED_CHECK=0 (src/server/pwned.ts). In mode none it is switched off when the server starts, unless its host is in OUTBOUND_ALLOW.
   const leaks = pwnedUrl(env);
   out.push({ id: 'pwned', name: 'List of leaked passwords (Pwned Passwords)', purpose: 'Looks a new password up in a list of passwords from data leaks, when someone chooses one. It is sent the first 5 characters of a fingerprint of the password, never the password, and never who is asking.', settings: ['PWNED_CHECK', 'HIBP_RANGE_URL'], on: !!leaks, hosts: leaks ? [hostOfUrl(leaks)].filter(Boolean) : [] });

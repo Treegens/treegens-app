@@ -783,7 +783,7 @@ test('each place a link is handed over in person offers a code, with its warning
 
 test('the public pages and the README say what is now true about QR codes', () => {
   const landing = read('src/app/features/page.tsx'); // the feature list moved off the home page (simplify-public)
-  assert.match(landing, /\['Forms', 'A public link that lets anyone fill in and sign a form on their own\. Put it on your website or in an email, or print the QR code the app makes for it on a sheet for a poster or a front desk\./);
+  assert.match(landing, /\['Forms', 'A public link anyone can fill in and sign on their own\. Put it on your website, or print the QR code the app makes for it\./); // shortened by repair-open-public
   assert.doesNotMatch(landing, /we do not make one yet|tool of your own/);
   const help = read('src/app/help/page.tsx');
   assert.match(help, /show it as a QR code/);

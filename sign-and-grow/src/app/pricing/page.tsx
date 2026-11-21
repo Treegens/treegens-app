@@ -13,7 +13,7 @@ export const metadata = { title: 'Pricing', description: 'What GrowSigning costs
 export const dynamic = 'force-dynamic';
 
 const COMPARE: [string, string, string][] = [
-  ['Where your money goes', '100% of what you pay goes to tree planting', 'Company profit'],
+  ['Where your money goes', 'What you pay, less card fees, goes to tree planting', 'Company profit'],
   ['A mistake after sending', 'Corrected in place, signatures kept', 'Often cancel and start again'],
   ['Signing links', 'Work while the document is open, with no click limit', 'Often expire after a few days or a few opens'],
   ['Signers', 'Never need an account, never pay', 'Often nudged to register'],
@@ -27,7 +27,7 @@ const COMPARE: [string, string, string][] = [
   ['Taking your documents with you', 'One free export, any time', 'Often one at a time, or a paid add-on'],
   ['API, webhooks, Send to many, forms', 'On both plans. Each person who signs uses one signature, as on any document', 'Often a separate, pricier plan'],
   ['Check a signed PDF', 'Public page, no account needed', 'Usually needs an account or the sender'],
-  ['History of each document', 'Hash chained, tampering is detectable', 'Event log'],
+  ['History of each document', 'Each step is sealed to the one before, so a later change shows', 'Event log'],
   ['Paper and trees', 'The paper each document saves, as an estimate, with the working published', 'Rarely shown'],
 ];
 
@@ -57,8 +57,6 @@ export default function Pricing() {
               <p className="muted">Try it, and sign your own documents for free.</p>
               <ul>
                 <li><b>{sigs(P.welcomeSignatures)} free</b> to try the product</li>
-                <li>Signing your own documents is always free</li>
-                <li>Every feature, including the API</li>
                 <li>No card needed</li>
                 <li>Signing is free for everyone you send to</li>
               </ul>
@@ -71,8 +69,6 @@ export default function Pricing() {
               <ul>
                 <li><b>{sigs(P.monthlySignatures)} added every month</b></li>
                 <li>More when you need them, {usd(P.topUpUsd)} a signature</li>
-                <li>A fresh {P.monthlySignatures} each month, with the reset date on screen</li>
-                <li>One price for the whole team, not per person</li>
                 <li>Month to month. Cancel in one click</li>
               </ul>
               <Link href="/signup" className="btn primary">Start free, upgrade any time</Link>
@@ -105,7 +101,7 @@ export default function Pricing() {
               <li><b>Same features on both plans.</b> Templates, Send to many, forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
               <li id="bulk-cost"><b>What Send to many costs.</b> {BULK_COST_NOTE} A list of {LIST} people needs {sigs(LIST)}: starting from none on {P.planName}, that is the {P.monthlySignatures} of the month and {listTopUp} more at {usd(P.topUpUsd)} each, {usd(listUsd)} in all, paid before the batch goes out. The Send to many page shows your own numbers before you press Send. What nobody signs comes back to your balance when you cancel the batch or it runs out of time (unless its own date has passed by then), and the refund rule applies to it. An account that has not paid yet can newly email {firstWeekDaily} people a day in its first week and {unpaidDaily} a day after that.</li>
               <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is free.</li>
-              <li><b>Where the money goes.</b> 100% of what you pay goes to Treegens tree planting. Every dollar plants {P.treesPerUsd} mangrove trees, whether its signatures are used or not.</li>
+              <li><b>Where the money goes.</b> What you pay, less card fees, goes to Treegens tree planting. Every dollar plants {P.treesPerUsd} mangrove trees, whether its signatures are used or not.</li>
               <li id="not-for-patients"><b>{NO_BAA_TITLE}</b> {NO_BAA_TEXT} <Link href="/security#not">What would have to be true first</Link>.</li>
             </ul>
             </details>
@@ -113,14 +109,17 @@ export default function Pricing() {
           </div>
         </section>
 
+        {/* Closed until asked for: the plans and the three rules are what most people came for. */}
         <section className="wrap section" aria-labelledby="compare-h">
-          <h2 id="compare-h">How it compares</h2>
+          <details className="pub-fold" id="compare" data-fold="">
+          <summary id="compare-h">How it compares with other e-signature tools</summary>
           <div className="card pad0" style={{ marginTop: 16 }}>
             <table className="t pub-cmp">
               <thead><tr><th scope="col"><span className="pub-vh">What</span></th><th scope="col">GrowSigning</th><th scope="col">Typical e-signature tools</th></tr></thead>
               <tbody>{COMPARE.map(([k, a, b]) => <tr key={k}><th scope="row">{k}</th><td data-label="GrowSigning">{a}</td><td data-label="Elsewhere">{b}</td></tr>)}</tbody>
             </table>
           </div>
+          </details>
         </section>
 
       </main>

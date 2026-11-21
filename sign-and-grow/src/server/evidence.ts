@@ -17,6 +17,8 @@ import { STAMP_IS } from '../lib/stamps.ts';
 import { originalsEvidence } from './converted.ts';
 import { ORIGINALS_README } from '../lib/convert.ts';
 import { dropSignatureFields } from './sealpdf.ts';
+import { evidenceFiles as headStampFiles } from './auditstamp.ts';
+import { dayText, stampText } from '../lib/dates.ts';
 
 const SYSTEM: Actor = { name: 'System' };
 
@@ -197,7 +199,7 @@ export function noteCopyOpened(e: any, r: any, actor: Actor, onScreen: boolean) 
   // may have opened the copy before, so "for the first time" would not be true. The line says what we know.
   const since = e.opens_noted_from || get('SELECT opens_noted_from f FROM envelopes WHERE id=?', e.id)?.f;
   const did = `${r.name} ${onScreen ? 'opened the completed document on screen' : 'downloaded the completed document'}`;
-  audit(e.id, actor, 'Completed copy opened', since ? `${did}, ${onWhat(actor.ua)}. That is the first time since we began writing this down on ${String(since).slice(0, 10)}; they may have opened it before that.`
+  audit(e.id, actor, 'Completed copy opened', since ? `${did}, ${onWhat(actor.ua)}. That is the first time since we began writing this down on ${dayText(since)}; they may have opened it before that.`
     : `${did} for the first time, ${onWhat(actor.ua)}.`);
 }
 
@@ -295,7 +297,7 @@ async function fileDispute(e: any, p: Disputer, who: string, body: any, actor: A
   // or the heading where it would read as our words.
   const named = p.visitor ? `the person who filled in your form as "${p.name}"` : p.name;
   await notifySender(e, 'always', `Disputed: ${e.subject}`, p.visitor ? 'Someone disputes an entry made through your form' : `${p.name} says they did not ${p.did}`, [
-    `${who}${p.before ? ',' : ''} told us on ${t.slice(0, 16).replace('T', ' ')} UTC that ${named} did not ${titled(p.did, e)}, or that it was not them.`,
+    `${who}${p.before ? ',' : ''} told us on ${stampText(t, false)} that ${named} did not ${titled(p.did, e)}, or that it was not them.`,
     detail ? `What they wrote, word for word. We have not checked any of it, so do not call a number or open a link in it: "${detail}"` : 'They wrote nothing more.',
     `Nothing was changed or deleted. The document, its signatures and its audit trail stay exactly as they are. From now on the envelope is marked as disputed, on its page here and for anyone who looks it up at ${baseUrl()}/verify. While the dispute is open, the envelope cannot be deleted for good.`,
     ...(e.status === 'sent' ? ['The envelope is still out for signature, and nothing about it was stopped. If you agree that it was not them, void it and send it again to the right person.'] : []),
@@ -373,8 +375,8 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     sender, recipients: people, chain: { ...chain, how: HASH_HOW }, events,
   }, null, 2));
   add('audit-trail.txt', [
-    `Audit trail of envelope ${e.id}, "${e.subject}", as stored on ${now()}.`, `Record ${chain.ok ? `intact: ${chain.events} lines, chain head ${chain.head}` : 'ALTERED: the stored lines no longer lead from one to the next. Do not rely on it.'}.`, '',
-    ...events.flatMap((a: any) => [`${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}  ${a.actor}${a.ip ? `  from ${a.ip}` : ''}`, `    ${a.action}${a.detail ? `: ${a.detail}` : ''}`, `    hash ${a.hash}`, '']),
+    `Audit trail of envelope ${e.id}, "${e.subject}", as stored on ${stampText(now())}.`, `Record ${chain.ok ? `intact: ${chain.events} lines, chain head ${chain.head}` : 'ALTERED: the stored lines no longer lead from one to the next. Do not rely on it.'}.`, '',
+    ...events.flatMap((a: any) => [`${stampText(a.at)}  ${a.actor}${a.ip ? `  from ${a.ip}` : ''}`, `    ${a.action}${a.detail ? `: ${a.detail}` : ''}`, `    hash ${a.hash}`, '']),
   ].join('\r\n'));
 
   // Every email stored about the envelope, with what became of it at the mail server and afterwards.
@@ -405,7 +407,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
       const w = consentWordingAsRecorded(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version, consentLanguageOf(a.detail));
       const how = !named ? ' (their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line, which only the code before that change wrote, and not stated by their screen)'
         : consentUnstated(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
-      return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. ${consentHeading(w)}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
+      return [`${a.actor}, ${stampText(a.at)}${a.ip ? `, from ${a.ip}` : ''}. ${consentHeading(w)}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
     }) : ['Nobody has agreed yet.']),
   ].join('\r\n'));
 
@@ -415,8 +417,8 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   // The disputes, with what each person wrote, word for word: what the sender is given, nothing more (disputesFor).
   const disputes = disputesFor(e.id);
   if (disputes.length) add('disputes.txt', [`What people named on "${e.subject}" (envelope ${e.id}) told us when they disputed it. Nobody has checked what they wrote. Their internet address and browser are kept by the people who run GrowSigning and are not in this pack.`, '',
-    ...disputes.flatMap((d: any) => [`${String(d.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}, under the name ${d.name}, through ${d.via === 'sign' ? 'a signing link' : 'the security code of one of our emails'}.`, d.detail ? `They wrote: ${d.detail}` : 'They wrote nothing more.',
-      ...(d.closed_at ? [`Closed by a person at GrowSigning on ${String(d.closed_at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${d.closed_how === 'in_error' ? ', as filed in error' : ''}.`] : ['Still open.']), '----', ''])].join('\r\n'));
+    ...disputes.flatMap((d: any) => [`${stampText(d.at)}, under the name ${d.name}, through ${d.via === 'sign' ? 'a signing link' : 'the security code of one of our emails'}.`, d.detail ? `They wrote: ${d.detail}` : 'They wrote nothing more.',
+      ...(d.closed_at ? [`Closed by a person at GrowSigning on ${stampText(d.closed_at)}${d.closed_how === 'in_error' ? ', as filed in error' : ''}.`] : ['Still open.']), '----', ''])].join('\r\n'));
   // The account's own consent text, as each person was shown it under ours (disclosure.ts). Only when someone was.
   const ownText = ownTextEvidence(e);
   if (ownText) add('consent-own-text.txt', ownText);
@@ -426,6 +428,9 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   // The Word file or the like each document was made from, as the sender uploaded it (converted.ts).
   const originals = originalsEvidence(e, notes);
   for (const o of originals) add(o.name, o.data);
+  // The time stamp over the chain head at completion, with the command that checks it (auditstamp.ts).
+  const headStamp = headStampFiles(e.id);
+  for (const f of headStamp.files) add(f.name, f.data);
 
   add('README.txt', [
     `GrowSigning evidence pack for envelope ${e.id}, "${e.subject}".`, `Made on ${now()} by ${madeBy}. It shows the envelope as it stood at that moment.`, '',
@@ -437,12 +442,13 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     'consent.txt           the words each person agreed to before signing, in the version their audit line names (for a line from before versions were recorded, the wording shown then, marked as inferred).',
     ...(stamps.length ? [`stamps/               every stamp on the pages as a PNG picture, named by the start of its SHA-256, with stamps/index.csv saying who put it on, where and when. The audit trail names each one by its full SHA-256. ${STAMP_IS}`] : []),
     ...(originals.length ? [ORIGINALS_README] : []),
+    ...headStamp.readme,
     ...(ownText ? ['consent-own-text.txt  the sender\'s own consent text: which version each person was shown when they agreed, and the exact words of each of those versions.'] : []),
     ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []),
     ...(disputes.length ? ['disputes.txt          each dispute: when, under which name, how the person reached us, what they wrote, and whether a person at GrowSigning has closed it.'] : []), '',
     'What this does and does not show.', CHAIN_TRUTH, WHO_WHEN_WHERE,
     'Rules about electronic signatures differ by country and by kind of document. This pack is a record of what happened in GrowSigning; it does not say that a signature is valid, and it is not legal advice.',
-    ...(e.disputed_at ? ['', `This envelope is disputed: on ${e.disputed_at} a person named on it said they did not sign it, or that it was not them. See the "Disputed" lines in the audit trail.`] : []),
+    ...(e.disputed_at ? ['', `This envelope is disputed: on ${stampText(e.disputed_at, false)} a person named on it said they did not sign it, or that it was not them. See the "Disputed" lines in the audit trail.`] : []),
     ...(notes.length ? ['', ...notes] : []),
   ].join('\r\n'));
   return { entries: out, name: `evidence ${base}.zip` };

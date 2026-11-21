@@ -4,7 +4,8 @@
 //   TSA_USER     and TSA_PASSWORD, when the service wants HTTP Basic credentials
 //   TSA_TRUST    optional: a PEM file of the certificates the service's own certificate must lead to
 // Each service gets 3 seconds and all of them together 4, because the last signer's Finish waits for the seal. A
-// service that did not answer in time is left alone for 10 minutes (TSA_REST_MS), so nobody else waits for it. An
+// service that did not answer in time is left alone for 10 minutes (TSA_REST_MS), so nobody who finishes after that
+// waits for it (signers who finish at the same moment wait together, never longer than the first one does). An
 // answer counts only when it verifies: granted, over the SHA-256 of our signature value, with our nonce, signed by a
 // certificate meant for time-stamping that was valid at the time it gives, a time within 5 minutes of this server's
 // clock (a service that lies about the time, or a server whose clock is wrong, is caught there), and, with TSA_TRUST,
@@ -23,14 +24,19 @@ export const TSA_TIMEOUT_MS = 3_000;
 export const TSA_TOTAL_MS = 4_000;
 /**
  * A service that did not answer in time is not asked again for this long. Without it, every last signer would wait
- * the full TSA_TOTAL_MS for as long as a service hangs; with it, one signer in ten minutes does, and the others get
- * their file at once, sealed without a time-stamp and saying so. A service that answers with an error did not make
- * anybody wait, so it is asked every time.
+ * the full TSA_TOTAL_MS for as long as a service hangs; with it, the signers who finish after that wait get their
+ * file at once, sealed without a time-stamp and saying so. Signers who finish at the same moment, while the first
+ * request is still out, do not each wait their own 3 seconds one after another: their requests end when the first
+ * one's 3 seconds are up (`asking`). The rest is kept in this server process's memory, so after a restart, or on a
+ * second server process, the next signer waits once more. A service that answers with an error did not make anybody
+ * wait, so it is asked every time.
  */
 export const TSA_REST_MS = 10 * 60_000;
 const resting = new Map<string, number>();
+/** For each service, when each request to it that has not been answered yet was sent. */
+const asking = new Map<string, Set<{ at: number }>>();
 /** For tests: forget which services are resting. */
-export const tsaForgetRests = () => resting.clear();
+export const tsaForgetRests = () => (resting.clear(), asking.clear());
 /** How far the time in a time-stamp may be from this server's clock. */
 export const TSA_CLOCK_MS = 5 * 60_000;
 const MAX_ANSWER = 256 * 1024;
@@ -144,14 +150,17 @@ export function checkAnswer(answer: Buffer, imprint: Buffer, nonce: Buffer, trus
   return { token, time: r.time, tsaName: r.tsaName, trusted: r.trusted };
 }
 
-/** Asks each service in turn for a time-stamp over `signature`. Throws TsaError naming what each one did. */
-export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<TimeStamp> {
+/**
+ * Asks each service in turn for a time-stamp over `signature`. Throws TsaError naming what each one did. `until`: when
+ * the time for time-stamps ends, so several asked for one Finish (the record's chain head and the seal, finishPdf in
+ * finalpipe.ts) share the same TSA_TOTAL_MS between them.
+ */
+export async function timeStamp(signature: Buffer, urls = tsaUrls(), until = Date.now() + TSA_TOTAL_MS): Promise<TimeStamp> {
   if (!urls.length) throw new TsaError('no time-stamp service is set');
   const imprint = crypto.createHash('sha256').update(signature).digest();
   const failures: string[] = [];
   const trust = trustCerts();
   const user = process.env.TSA_USER;
-  const until = Date.now() + TSA_TOTAL_MS;
   for (const url of urls) {
     // Only the host is ever repeated: an address can carry a key in its path, and this ends up in the audit trail.
     const host = (() => {
@@ -171,6 +180,16 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
       failures.push(`${host}: not asked, because the ${TSA_TOTAL_MS / 1000} seconds for time-stamps were used up`);
       continue;
     }
+    // Another signer's request to this service is still out: this one ends when that one's time is up, so signers
+    // who finish together wait together, and nobody waits longer than the first one does.
+    const out = asking.get(url) || new Set<{ at: number }>();
+    const first = out.size ? Math.min(...[...out].map((o) => o.at)) : 0;
+    const shared = first ? first + TSA_TIMEOUT_MS - Date.now() : Infinity;
+    if (shared < 250) {
+      failures.push(`${host}: not asked, because a request sent to it ${Math.round((Date.now() - first) / 1000)} seconds ago has had no answer`);
+      continue;
+    }
+    const wait = Math.min(TSA_TIMEOUT_MS, left, shared);
     const nonce = crypto.randomBytes(8);
     nonce[0] &= 0x7f;
     // The user name and password go out with the request, so never over a connection anyone on the way can read.
@@ -178,6 +197,9 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
       failures.push(`${host}: not asked, because its address is plain http and the user name and password are only sent over https`);
       continue;
     }
+    const sent = { at: Date.now() };
+    out.add(sent);
+    asking.set(url, out);
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -187,7 +209,7 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
           ...(user ? { authorization: `Basic ${Buffer.from(`${user}:${process.env.TSA_PASSWORD || ''}`).toString('base64')}` } : {}),
         },
         body: new Uint8Array(timeStampRequest(imprint, nonce)),
-        signal: AbortSignal.timeout(Math.min(TSA_TIMEOUT_MS, left)),
+        signal: AbortSignal.timeout(wait),
         redirect: 'error',
       });
       if (!res.ok) throw new TsaError(`it answered HTTP ${res.status}`);
@@ -196,9 +218,15 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
       const r = checkAnswer(body, imprint, nonce, trust);
       return { ...r, url, host };
     } catch (e: any) {
-      const why = e instanceof TsaError ? e.message : e?.name === 'TimeoutError' ? `it did not answer within ${Math.round(Math.min(TSA_TIMEOUT_MS, left) / 1000)} seconds` : `it could not be reached (${String(e?.cause?.code || e?.message || e).slice(0, 120)})`;
+      const together = wait === shared && shared < Math.min(TSA_TIMEOUT_MS, left);
+      const why = e instanceof TsaError ? e.message
+        : e?.name === 'TimeoutError' ? together ? `it did not answer, nor had it answered within ${TSA_TIMEOUT_MS / 1000} seconds a request sent to it moments earlier` : `it did not answer within ${Math.round(wait / 1000)} seconds`
+        : `it could not be reached (${String(e?.cause?.code || e?.message || e).slice(0, 120)})`;
       failures.push(`${host}: ${why}`);
       if (!(e instanceof TsaError) && e?.name === 'TimeoutError') resting.set(url, Date.now() + TSA_REST_MS);
+    } finally {
+      out.delete(sent);
+      if (!out.size) asking.delete(url);
     }
   }
   throw new TsaError(failures.join('; '));

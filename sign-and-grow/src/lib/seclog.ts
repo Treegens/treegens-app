@@ -5,6 +5,7 @@ import { ALERT_FAILED_SIGNINS_HOUR, ALERT_DELETES_HOUR } from './policy.ts';
 import { SOURCE_LOCALE, t } from './i18n.ts';
 import { deviceName } from './phone.ts';
 import { dayText } from './dates.ts';
+import { orgEventWords, orgRuleWords } from './orgs.ts';
 
 /** Every kind of line the record can hold. Nothing else is ever written. */
 export const SECURITY_KIND_LIST = [
@@ -19,6 +20,8 @@ export const SECURITY_KIND_LIST = [
   'operator.paused', 'operator.resumed', 'operator.trusted', 'operator.untrusted',
   // Keeping finished documents for a set time, and holds (src/server/records.ts).
   'retention.changed', 'legal_hold.placed', 'legal_hold.lifted', 'purge.asked', 'purge.cancelled', 'envelope.retention_purged',
+  // What an organisation above the account did to it, and emergency access to a document (src/server/orgs.ts).
+  'org.changed', 'org.break_glass',
 ] as const;
 export type SecurityKind = (typeof SECURITY_KIND_LIST)[number];
 export const isSecurityKind = (k: any): k is SecurityKind => typeof k === 'string' && (SECURITY_KIND_LIST as readonly string[]).includes(k);
@@ -38,6 +41,7 @@ export const SECURITY_GROUPS: [string, SecurityKind[]][] = [
   ['settings', ['settings.changed']],
   ['keeping', ['retention.changed', 'legal_hold.placed', 'legal_hold.lifted', 'purge.asked', 'purge.cancelled', 'envelope.retention_purged']],
   ['operator', ['operator.paused', 'operator.resumed', 'operator.trusted', 'operator.untrusted']],
+  ['organisation', ['org.changed', 'org.break_glass']],
 ];
 export const securityGroupWords = (group: string, locale: unknown = SOURCE_LOCALE): string => t(locale, `security.group.${group}`) || group;
 
@@ -52,6 +56,15 @@ export const SECURITY_ALERTS = Object.fromEntries(SECURITY_ALERT_LIST.map((k) =>
 
 /** What the screen and the API say about the record, word for word. */
 export const securityLogWords = (days: number, locale: unknown = SOURCE_LOCALE) => t(locale, 'security.words', { days });
+
+/**
+ * A webhook that only carries the security record ("events" is "security.event" and nothing else): it was added in
+ * Settings, Security, and API and webhooks lists it as that, not as one that hears about documents.
+ */
+export const securityOnlyHook = (events: unknown): boolean => {
+  const list = String(events ?? '').split(',').map((e) => e.trim()).filter(Boolean);
+  return list.length > 0 && list.every((e) => e === 'security.event');
+};
 
 /** The most lines one call of GET /account/security-events gives. */
 export const SECURITY_PAGE_MAX = 1000;
@@ -164,10 +177,16 @@ export function securityDetail(kind: string, details: Record<string, any> | null
     say(d.by_operator ? w('by_operator') : '', 'by_operator');
   } else if (kind === 'purge.asked' || kind === 'purge.cancelled' || kind === 'envelope.retention_purged') {
     done.add('level');
+  } else if (kind === 'org.changed' || kind === 'org.break_glass') {
+    say(orgEventWords(kind, d), 'what', 'organisation', 'by_name', 'agency', 'agency_name', 'invited', 'to', 'from', 'role', 'reason', 'name', 'by_organisation', 'document', 'person', 'policy');
+  } else if (kind === 'settings.changed' && d.by_organisation) {
+    // Rules an organisation above the account set or took away: "Government of Example set: ..." (src/lib/orgs.ts).
+    const said = orgRuleWords(d);
+    if (said) say(said, 'settings', 'by_organisation', 'organisation', 'by_name', 'given_back');
   }
 
   // A setting by its name, with what it was and is; a personal or bulky one by its name only.
-  if (d.settings && typeof d.settings === 'object') {
+  if (d.settings && typeof d.settings === 'object' && !done.has('settings')) {
     for (const [name, c] of Object.entries(d.settings as Record<string, any>)) {
       if (name.startsWith('alert_')) {
         out.push(w(c?.to ? 'alert_on' : 'alert_off', { alert: securityAlertWords(name.slice(6), locale) }));

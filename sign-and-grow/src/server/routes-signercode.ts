@@ -1,5 +1,7 @@
 import { route } from './router.ts';
-import { bad, rateLimit } from './util.ts';
+import { rateLimit } from './util.ts';
+// Refusals the page shows carry a code, so it can say them in the signer's language (signlang.ts).
+import { refuse } from './signlang.ts';
 import { find, look } from './routes-sign.ts';
 import { requestCode, checkCode, codeProblem, gateOf, passCookie } from './signercode.ts';
 
@@ -11,7 +13,7 @@ import { requestCode, checkCode, codeProblem, gateOf, passCookie } from './signe
 // The access code comes first when the sender set one, so somebody who has only the link cannot make us send a
 // text or an email.
 const afterAccessCode = (locked: boolean) => {
-  if (locked) throw bad('Enter the access code first.', 401);
+  if (locked) throw refuse('access_code_first', 401);
 };
 
 // "Send me the code" and "Send a new code". The answer says where it went (masked), how long the code works and
@@ -43,7 +45,7 @@ route('POST', '/sign/:token/code/problem', async (c) => {
   const body = await c.body();
   const { e, r, locked, gate, actor } = look(c, false);
   afterAccessCode(locked);
-  if (!gate) throw bad('This document is already open on this device, so there is no code to wait for.', 409);
+  if (!gate) throw refuse('code_not_needed', 409);
   // A few times a day is plenty to be heard, and keeps a link from being used to fill the sender's inbox.
   rateLimit(`codeproblem:${r.id}`, 3, 86400_000);
   return codeProblem(e, r, body.what, actor);

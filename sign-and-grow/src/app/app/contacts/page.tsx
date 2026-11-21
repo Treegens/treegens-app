@@ -5,6 +5,8 @@ import { ConfirmDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
 import { SigningGroups } from '@/components/sender/SigningGroups';
+import { SavedListsSection } from '@/components/reports/SavedLists';
+import '../../styles/reports.css';
 
 type Contact = { id: string; name: string; email: string; company: string | null };
 const EMPTY = { name: '', email: '', company: '' };
@@ -114,7 +116,7 @@ export default function Contacts() {
                     <button type="button" className="btn sm" onClick={cancel}>Cancel</button>
                   </div>
                   {editError && <div className="notice err sn-wide" role="alert">{editError}</div>}
-                  <p className="muted small sn-wide">This changes the saved contact for next time. Envelopes already sent keep the details they were sent with.</p>
+                  <p className="muted small sn-wide">This changes the saved contact for next time. Documents already sent keep the details they were sent with.</p>
                 </form>
               </li>
             ) : (
@@ -136,6 +138,8 @@ export default function Contacts() {
 
       {/* Named groups of people, any one of whom can sign for the group: see SigningGroups.tsx. */}
       <SigningGroups />
+      {/* Lists saved in Send to many, for the whole team: see src/components/reports/SavedLists.tsx. */}
+      <SavedListsSection />
 
       {removing && (
         <ConfirmDialog title={`Remove ${removing.name}`} confirmLabel="Remove contact" keepLabel="Keep" onClose={() => setRemoving(null)}

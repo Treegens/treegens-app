@@ -12,7 +12,6 @@ import { get, all, run } from './db.ts';
 import { hmac, now } from './util.ts';
 import { paidSignatureFor, paidForecast, creditsEnabled, isChargeable } from './credits.ts';
 import { TREES_PER_SIGNATURE, type SignerFacts, type SenderFacts } from '../lib/impactwords.ts';
-import { isGovernment } from '../lib/deployment.ts';
 
 /** Who signs: the only people a tree is ever mentioned to. */
 export const signs = (r: any): boolean => r?.role === 'signer' || r?.role === 'inperson';
@@ -190,5 +189,6 @@ export function allPaidForecast(e: any): boolean {
 }
 
 /** 'Trees on the signing record': on unless an admin switched it off for the account (Settings, Account). */
-// Never under DEPLOYMENT_PROFILE=government, whatever the account chose (src/lib/deployment.ts).
-export const recordShowsTrees = (accountId: string): boolean => !isGovernment() && !get('SELECT cert_impact_off x FROM accounts WHERE id=?', accountId)?.x;
+// Never under DEPLOYMENT_PROFILE=government, whatever the account chose. The rule is read in one place,
+// src/server/tenantpolicy.ts, and this is the same function under the name pdf.ts and routes-impact.ts know.
+export { recordShowsTrees } from './tenantpolicy.ts';

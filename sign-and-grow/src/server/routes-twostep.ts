@@ -12,6 +12,7 @@ import { signInAs, publicUser } from './routes-account.ts';
 import { linkProvider } from './routes-signin.ts';
 import { record, signInFailed } from './seclog.ts';
 import { deviceName } from '../lib/phone.ts';
+import { refuseLoosening, setByFor } from './orgs.ts';
 import { TWO_STEP_SIGNIN_MINUTES, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_PAUSE_MINUTES, TWO_STEP_TRIES, TWO_STEP_LOST_PER_DAY, TWO_STEP_RESET_BLOCK_DAYS } from '../lib/policy.ts';
 import {
   twoStepOn, toBase32, otpauthUri, matchStep, newRecoveryCodes, recoveryLeft, needCode, useCode, logStep, clearTwoStep, pendingOf, endPending,
@@ -368,7 +369,7 @@ route('GET', '/account/two-step', (c) => {
     const can = on && m.id !== c.user.id && adminResetTeams(m.id).includes(c.account.id);
     return { id: m.id, name: m.name, email: m.email, role: m.role, on, can_reset: can, only_by_email: on && m.id !== c.user.id && !can, last_reset: last.get(m.id) || null };
   });
-  return { required: !!c.account.two_step_required_at, required_since: c.account.two_step_required_at || null, can_require: c.role === 'owner', you_on: twoStepOn(c.user), members };
+  return { required: !!c.account.two_step_required_at, required_since: c.account.two_step_required_at || null, can_require: c.role === 'owner', you_on: twoStepOn(c.user), members, ...(setByFor(c.account.id).two_step_required ? { set_by: setByFor(c.account.id).two_step_required } : {}) };
 }, 'admin');
 
 route('POST', '/account/two-step', async (c) => {
@@ -376,6 +377,8 @@ route('POST', '/account/two-step', async (c) => {
   const b = await c.body();
   if (typeof b.required !== 'boolean') throw bad('Send "required": true to ask everyone for two-step login, or false to stop asking.');
   if (b.required === !!c.account.two_step_required_at) return { ok: true, required: b.required, told: 0 };
+  // An organisation above the account may ask it of every account below it (src/server/orgs.ts).
+  if (!b.required) refuseLoosening(c.account.id, { two_step_required: null });
   // The owner first: whoever asks it of others has it, and cannot be shut out of their own account by it.
   if (b.required && !twoStepOn(c.user)) throw bad('Switch two-step login on for yourself first, under Settings, Security. Then you can ask it of everyone.', 409, { code: 'set_up_first' });
   await needCode(c, b.code, b.required ? 'ask everyone for two-step login' : 'stop asking everyone for two-step login');

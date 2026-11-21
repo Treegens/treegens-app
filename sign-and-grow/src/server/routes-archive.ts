@@ -26,7 +26,7 @@ import { record } from './seclog.ts';
 import { mailEventsOn } from '../lib/policy.ts';
 import {
   ARCHIVE_MAX_ADDRESSES, ARCHIVE_BOUNCES_TO_PAUSE, ARCHIVE_CONFIRM_DAYS, ARCHIVE_ASKS_PER_DAY, ARCHIVE_ASKS_PER_ADDRESS_DAY,
-  ARCHIVE_REFUSED_DAYS, ARCHIVE_UNDO_MINUTES, ARCHIVE_WHAT, ARCHIVE_LIMITS, ARCHIVE_ADDED, ARCHIVE_NO, ARCHIVE_BAD_ADDRESS, ARCHIVE_TEAM_MEMBER,
+  ARCHIVE_REFUSED_DAYS, ARCHIVE_UNDO_MINUTES, ARCHIVE_SPAM_STOP, ARCHIVE_WHAT, ARCHIVE_LIMITS, ARCHIVE_ADDED, ARCHIVE_NO, ARCHIVE_BAD_ADDRESS, ARCHIVE_TEAM_MEMBER,
   archiveMoment, archiveAddress, archiveKey,
 } from '../lib/archivemail.ts';
 
@@ -84,6 +84,12 @@ async function askToConfirm(c: Ctx, a: any): Promise<{ delivery: string; until: 
   const key = archiveKey(a.email);
   const forAddress = get('SELECT COUNT(*) n, MIN(at) first FROM archive_asked WHERE account_id=? AND email=? AND at > ?', account.id, key, since);
   const later = (first: string) => `You can send one again from ${archiveMoment(iso(Date.parse(first) + DAY))}.`;
+  // Several strangers marked this account's asking email as spam: it asks nobody new for a while.
+  // One mark for each inbox, oldest first. Asking works again once fewer than ARCHIVE_SPAM_STOP are younger than
+  // ARCHIVE_REFUSED_DAYS: with n marks that is the day the (n - ARCHIVE_SPAM_STOP + 1)th oldest one ages out.
+  const marks = all("SELECT MAX(at) at FROM archive_refused WHERE account_id=? AND why='spam' AND at > ? GROUP BY COALESCE(email_key, email) ORDER BY 1", account.id, iso(Date.now() - ARCHIVE_REFUSED_DAYS * DAY));
+  const marked = { n: marks.length, first: marks.length >= ARCHIVE_SPAM_STOP ? marks[marks.length - ARCHIVE_SPAM_STOP].at : null };
+  if (marked.n >= ARCHIVE_SPAM_STOP) throw bad(`${marked.n} people marked the email that asks an address to confirm as spam in the last ${ARCHIVE_REFUSED_DAYS} days, so this account cannot ask any address until ${archiveMoment(iso(Date.parse(marked.first) + ARCHIVE_REFUSED_DAYS * DAY))}. Addresses already confirmed keep getting their copies. Check that each address is typed right and expects the email before you add it then. Nothing was sent.`, 429, { code: 'asks_stopped' });
   if (forAddress.n >= ARCHIVE_ASKS_PER_ADDRESS_DAY) throw bad(`We have sent ${ARCHIVE_ASKS_PER_ADDRESS_DAY} emails asking ${a.email} to confirm in the last 24 hours, which is as many as we send to one inbox in a day. ${later(forAddress.first)} Meanwhile the newest link works: ask whoever reads that inbox to look for it, also among spam.`, 429);
   if (forAccount.n >= ARCHIVE_ASKS_PER_DAY) throw bad(`This account has sent ${ARCHIVE_ASKS_PER_DAY} emails asking addresses to confirm in the last 24 hours, which is as many as we send for one account in a day. ${later(forAccount.first)}`, 429);
   const tok = token();
@@ -105,7 +111,7 @@ async function askToConfirm(c: Ctx, a: any): Promise<{ delivery: string; until: 
   });
   // Marked as this address's email, so news about it from the mail provider counts for the address (archiveNews)
   // and the timer asks archiveCheck before it tries again.
-  run('UPDATE emails SET archive_to=? WHERE id=?', a.id, mid);
+  run('UPDATE emails SET archive_to=?, archive_account=? WHERE id=?', a.id, account.id, mid);
   return { delivery: (await deliverQueued(mid)) || 'queued', until };
 }
 
@@ -274,7 +280,9 @@ export async function archiveNews(m: any, ev: { type: string }, at: string): Pro
     run('UPDATE emails SET complained_at=? WHERE id=?', at, m.id);
     // The email that asked, marked as spam: that is a "no". No copy ever went there, so nothing is paused, and
     // the admins read it in Settings like any other "no". A copy marked as spam pauses the copies.
-    if (a && !m.archive_envelope) refuse(a, 'spam');
+    // An address removed before the mark arrived still counts for the account that asked, or removing each
+    // address at once would keep every mark out of the stop (ARCHIVE_SPAM_STOP).
+    if (!m.archive_envelope && (a || (m.archive_account && get('SELECT 1 x FROM accounts WHERE id=?', m.archive_account)))) refuse(a || { id: m.archive_to, account_id: m.archive_account, email: m.to_email, confirm_hash: null, added_by: null, added_by_name: null, added_at: null }, 'spam');
     else if (a) await pause(a, 'spam');
     return 'applied';
   }

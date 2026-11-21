@@ -43,7 +43,7 @@ export default function Home() {
     try {
       const { reminded } = await api(`/envelopes/${e.id}/remind`, { method: 'POST' });
       if (reminded) toast(`Reminder emailed to ${reminded} ${reminded === 1 ? 'person' : 'people'}.`);
-      else toast('No reminder went out. They turned reminders off. Open the envelope to share the link another way.', true);
+      else toast('No reminder went out. They turned reminders off. Open the document to share the link another way.', true);
     } catch (err) {
       fail(err);
     } finally {

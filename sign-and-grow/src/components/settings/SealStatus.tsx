@@ -5,9 +5,10 @@
 import { api, useLoad } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { SOURCE_LOCALE, t } from '@/lib/i18n';
+import { screenLocale } from '@/lib/dates';
 
 const ui = SOURCE_LOCALE;
-const day = (s: string) => new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+const day = (s: string) => new Date(s).toLocaleDateString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric' });
 
 export function SealStatus() {
   const me = useMe();

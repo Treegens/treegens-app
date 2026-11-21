@@ -212,7 +212,8 @@ export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { enve
 }
 
 // A plain "are you sure" for things that cannot be undone. The safe choice gets the focus.
-export function ConfirmDialog({ title, children, confirmLabel, keepLabel = 'Keep it', danger = true, unchanged = 'Nothing was changed.', onClose, onConfirm }: { title: string; children: ReactNode; confirmLabel: string; keepLabel?: string; danger?: boolean; unchanged?: string; onClose: () => void; onConfirm: () => Promise<void> }) {
+// `other`: a third way out, between the two (such as "Keep it instead" when a deletion schedule reaches the document).
+export function ConfirmDialog({ title, children, confirmLabel, keepLabel = 'Keep it', danger = true, unchanged = 'Nothing was changed.', other, onClose, onConfirm }: { title: string; children: ReactNode; confirmLabel: string; keepLabel?: string; danger?: boolean; unchanged?: string; other?: { label: string; onClick: () => void } | null; onClose: () => void; onConfirm: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function go() {
@@ -232,6 +233,7 @@ export function ConfirmDialog({ title, children, confirmLabel, keepLabel = 'Keep
       {error && <div className="notice err" role="alert">{error}</div>}
       <div className="actions">
         <button className="btn" onClick={onClose} data-autofocus="">{keepLabel}</button>
+        {other && <button type="button" className="btn" onClick={other.onClick}>{other.label}</button>}
         <button className={`btn primary${danger ? ' sn-danger' : ''}`} disabled={busy} onClick={go}>{busy ? 'Working…' : confirmLabel}</button>
       </div>
     </Dialog>

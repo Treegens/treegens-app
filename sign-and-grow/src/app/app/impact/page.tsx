@@ -17,8 +17,8 @@ export default function Impact() {
         <div style={{ maxWidth: 620 }}>
           <h2 className="serif" style={{ fontSize: 22 }}>Every dollar plants {PRICING.treesPerUsd} mangrove trees</h2>
           <p style={{ margin: '6px 0 0', color: '#cfe2d3' }}>
-            {d.account.donatedUsd > 0 ? <>{me.account.name} has paid <b style={{ color: '#fff' }}>${fmtNum(d.account.donatedUsd, 2)}</b>, all of it sent to Treegens tree planting. That is <b style={{ color: '#fff' }}>{fmtNum(d.account.treesFunded)} mangroves</b>, counted from what was paid, whether its signatures were used or not. Thank you.</>
-              : 'Everything paid to GrowSigning, the monthly plan and top-ups alike, goes to Treegens to plant mangroves. Free signatures fund none.'}
+            {d.account.donatedUsd > 0 ? <>{me.account.name} has paid <b style={{ color: '#fff' }}>${fmtNum(d.account.donatedUsd, 2)}</b>, sent to Treegens tree planting, less card fees. That is <b style={{ color: '#fff' }}>{fmtNum(d.account.treesFunded)} mangroves</b>, counted from what was paid, whether its signatures were used or not. Thank you.</>
+              : 'What is paid to GrowSigning, the monthly plan and top-ups alike, goes to Treegens to plant mangroves, less card fees. Free signatures fund none.'}
           </p>
         </div>
         <Link href="/app/settings?tab=billing" className="btn" style={{ background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>See the plan</Link>

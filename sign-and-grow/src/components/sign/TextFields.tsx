@@ -1,5 +1,5 @@
 'use client';
-import { AUTO, LABEL, fieldName, groupKey, isMulti, isSig, problemWith } from './fields';
+import { AUTO, LABEL, fieldName, groupKey, isMulti, isSig, problemWith, inputLimit, amountHint, lengthHint, boxRuleHint } from './fields';
 import { formatDateValue } from '@/lib/dates';
 import { NUMBER_HINT } from '@/lib/numbers';
 import { isStrike, strikeSays } from '@/lib/strike';
@@ -115,9 +115,9 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
       </div>
     );
   }
-  const problem = problemWith(f, c.values[f.id] || '');
+  const problem = problemWith(f, c.values[f.id] || '', c.dateFormat);
   // dir="auto": right-to-left text (Arabic, Hebrew, Persian) starts at the right edge, by what is typed.
-  const shared = { dir: 'auto' as const, id, value: c.values[f.id] || '', 'aria-required': !!f.required, 'aria-invalid': !!problem, 'aria-describedby': [described, problem ? `${id}-err` : ''].filter(Boolean).join(' ') || undefined };
+  const shared = { dir: 'auto' as const, id, value: c.values[f.id] || '', maxLength: inputLimit(f), 'aria-required': !!f.required, 'aria-invalid': !!problem, 'aria-describedby': [described, problem ? `${id}-err` : ''].filter(Boolean).join(' ') || undefined };
   return (
     <div className="sg-row">
       <label className="f"><span>{name}<Need f={f} /></span>
@@ -127,7 +127,8 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
       </label>
       <Near id={`${id}-near`} text={hint} />
       {problem && <p id={`${id}-err`} className="sg-fielderr">{problem}</p>}
-      {f.type === 'number' && !problem && <p className="muted small sg-row-state">{NUMBER_HINT}</p>}
+      {lengthHint(f, c.values[f.id] || '') && !problem && <p className="muted small sg-row-state" aria-live="polite">{lengthHint(f, c.values[f.id] || '')}</p>}
+      {f.type === 'number' && !problem && <p className="muted small sg-row-state">{amountHint(f) ? `${amountHint(f)} ` : ''}{NUMBER_HINT}</p>}
       {f.type === 'date' && c.values[f.id] && <p className="muted small sg-row-state">On the document this date is written as {formatDateValue(c.values[f.id], c.dateFormat)}.</p>}
     </div>
   );
@@ -142,6 +143,9 @@ export function PageFields({ docId, page, c, near }: { docId: string; page: numb
     <div className="sg-form" role="group" aria-label={`Your fields on page ${page + 1}`}>
       <div className="sg-form-title">For you to fill in on this page</div>
       {here.map((f) => {
+        // The first tick box of a group with a rule says the rule, so nobody learns it only when Finish is refused.
+        const rule = f.type === 'checkbox' && !f.readonly && c.ordered.find((x) => x.type === 'checkbox' && x.group_name === f.group_name)?.id === f.id ? boxRuleHint(f, c.ordered) : '';
+        if (rule) return <div key={f.id}><p className="sg-row-rule small"><b>{rule}</b></p><Row f={f} c={c} near={near?.(f)} /></div>;
         if (f.type !== 'radio' || f.readonly) return <Row key={f.id} f={f} c={c} near={near?.(f)} />;
         const key = groupKey(f);
         if (seen.has(key)) return null;

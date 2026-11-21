@@ -5,6 +5,8 @@ import { cannotOpenLine } from '../lib/policy.ts';
 // Copies for the account's archive addresses (archivemail.ts) and the rule that an email is not handed over unencrypted.
 import { archiveDraft, takeArchiveCopies, markArchiveRow, archiveCheck, noteArchiveSent, ARCHIVE_NOT_WAITING } from './archivemail.ts';
 import { smtpRequireTls, tlsRefusal } from '../lib/mailtls.ts';
+// Our words in the reader's language (lang-mail): the footer below and the lines of the text part.
+import { mt, mailHtml, mailLangAttrs, listIn, storedLocale, mailLine, unquote } from './maillang.ts';
 
 export type Mail = {
   to: string;
@@ -35,6 +37,12 @@ export type Mail = {
   // A short email to someone about their own login, such as the confirmation code: the footer is the help address
   // only, without the line about paper and trees or the copy of the button's link.
   brief?: boolean;
+  // An email that asks its reader to send something on paper ("Sign on paper instead", src/server/disclosure.ts):
+  // the footer leaves out its line about no paper, no printer and no courier.
+  onPaper?: boolean;
+  // The language of our own words in it (the footer and whatever the caller wrote from en.json), for a recipient:
+  // mailLocale in maillang.ts. Left out, English. Kept on the row, so a later try is the same email.
+  locale?: string;
 };
 
 // What became of an email at hand-over: the mail server took it, there is no mail server (it sits in the outbox
@@ -87,6 +95,7 @@ export const helpUrl = (code: string) => `${baseUrl()}/help?topic=signing&code=$
 // A line of an email may hold a word with nowhere to break, such as a SHA-256 fingerprint or a long address. Lines
 // wrap anywhere (overflow-wrap), so the email never becomes wider than the phone it is read on.
 export function renderMail(m: Mail): string {
+  const L = m.locale || 'en';
   const color = /^#[0-9a-f]{6}$/i.test(m.brand?.color || '') ? m.brand!.color! : '#1f6f43';
   // The sender's logo, else the sender's name, else ours: the drawn logo as a picture loaded from APP_URL (until the app
   // is public, mail programs show its alt text, "GrowSigning"). Every email has a light header, so it is always the
@@ -99,31 +108,32 @@ export function renderMail(m: Mail): string {
     : m.brand?.name
       ? `<span style="font-size:18px;font-weight:700;color:${color}">${esc(m.brand.name)}</span>`
       : `<img src="${esc(baseUrl())}/brand/email-logo.png" width="156" height="32" alt="GrowSigning" style="display:block;border:0;width:156px;height:32px;color:#1f6f43;font-size:18px;font-weight:700">`;
-  return `<!doctype html><html><body style="margin:0;background:#f4f1ea;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2a22">
+  return `<!doctype html><html ${mailLangAttrs(L)}><body style="margin:0;background:#f4f1ea;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2a22">
 <div style="max-width:560px;margin:0 auto;padding:32px 16px">
   <div style="padding:${ours ? '0 0 11px' : '0 4px 16px'}">${logo}</div>
   <div style="background:#fff;border-radius:14px;padding:32px;border:1px solid #e4dfd3">
     <h1 style="font-size:20px;margin:0 0 16px;line-height:1.3">${esc(m.heading)}</h1>
-    ${m.lines.map((l) => `<p style="font-size:15px;line-height:1.55;margin:0 0 14px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word">${esc(l)}</p>`).join('')}
+    ${m.lines.map(mailLine).join('')}
     ${(m.links || []).map((l) => `<p style="font-size:15px;line-height:1.45;margin:0 0 12px"><a href="${esc(l.url)}" style="color:${color};font-weight:600">${esc(l.label)}</a>${l.note ? `<br><span style="font-size:13px;color:#6b776f">${esc(l.note)}</span>` : ''}</p>`).join('')}
     ${m.cta ? `<p style="margin:24px 0 8px"><a href="${esc(m.cta.url)}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;font-weight:600;padding:13px 26px;border-radius:10px;font-size:15px">${esc(m.cta.label)}</a></p>` : ''}
-    ${m.footnote ? `<p style="font-size:12px;color:#6b776f;margin:18px 0 0;line-height:1.5">${esc(m.footnote)}</p>` : ''}
+    ${m.footnote ? `<p style="font-size:12px;color:#6b776f;margin:18px 0 0;line-height:1.5;overflow-wrap:anywhere;word-break:break-word">${esc(m.footnote)}</p>` : ''}
   </div>
-  <p style="font-size:12px;color:#6b776f;line-height:1.6;padding:16px 4px 0">
+  <p style="font-size:12px;color:#6b776f;line-height:1.6;padding:16px 4px 0;overflow-wrap:anywhere;word-break:break-word">
     ${m.code
     // One short footer on an email with a signing link (research/ux-charter.md, quick win 12): how to check that the
     // email is real without clicking anything in it, how to report it, and the link itself when the button fails.
-    ? `<b style="color:#1c2a22">Not sure this email is real?</b> Type <b style="color:#1c2a22">${esc(baseUrl().replace(/^https?:\/\//, ''))}/check</b> into your browser and enter <b style="font-family:ui-monospace,Menlo,Consolas,monospace;color:#1c2a22;white-space:nowrap;letter-spacing:1px">${esc(fmtCode(m.code))}</b>. We never ask for a password or a payment by email. <a href="${esc(reportUrl(m.code))}" style="color:#1c2a22;font-weight:600">Report this email</a><br>`
+    // Every part in the reader's language (maillang.ts); English reads as it always has.
+    ? `<b style="color:#1c2a22">${esc(mt(L, 'mail.footer.not_sure'))}</b> ${mailHtml(L, 'mail.footer.type_code', { address: `<b style="color:#1c2a22">${esc(baseUrl().replace(/^https?:\/\//, ''))}/check</b>`, code: `<b style="font-family:ui-monospace,Menlo,Consolas,monospace;color:#1c2a22;white-space:nowrap;letter-spacing:1px">${esc(fmtCode(m.code))}</b>` })} ${esc(mt(L, 'mail.footer.never_ask'))} <a href="${esc(reportUrl(m.code))}" style="color:#1c2a22;font-weight:600">${esc(mt(L, 'mail.footer.report'))}</a><br>`
     : ''}
-    ${m.cta && !m.brief ? `If the button does not work, copy this link: ${esc(m.cta.url)}<br>` : ''}
-    ${m.askForPdf ? `${esc(cannotOpenLine(m.askForPdf))}<br>` : ''}
-    ${m.code ? 'The link is personal to you. Do not forward this email.<br>' : ''}
-    ${m.code ? `<a href="${esc(helpUrl(m.code))}" style="color:#6b776f;font-weight:600">Get help with this document</a>` : `Need a hand? ${esc(baseUrl())}/help`}
-    ${m.brief ? '' : m.help ? '<br>Sent by the people who answer help requests at GrowSigning.' : m.envelopeId || m.links
+    ${m.cta && !m.brief ? `${esc(mt(L, 'mail.footer.button_link', { url: m.cta.url }))}<br>` : ''}
+    ${m.askForPdf ? `${esc(mt(L, 'mail.footer.cannot_open', { sender: m.askForPdf }))}<br>` : ''}
+    ${m.code ? `${esc(mt(L, 'mail.footer.personal'))}<br>` : ''}
+    ${m.code ? `<a href="${esc(helpUrl(m.code))}" style="color:#6b776f;font-weight:600">${esc(mt(L, 'mail.footer.get_help'))}</a>` : esc(mt(L, 'mail.footer.need_hand', { url: `${baseUrl()}/help` }))}
+    ${m.brief ? '' : m.help ? `<br>${esc(mt(L, 'mail.footer.from_help'))}` : m.envelopeId || m.links
     // Emails about a document go to people who only came to sign. The pages promise them no marketing, so these end
     // with where the email came from and nothing that sells. Emails to an account's own people keep the full line.
-    ? `<br>${m.code ? '' : 'Signed digitally, so no paper, no printer and no courier. '}Sent with GrowSigning.`
-    : `<br>Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`}
+    ? `<br>${m.code || m.onPaper ? '' : `${esc(mt(L, 'mail.footer.no_paper'))} `}${esc(mt(L, 'mail.footer.sent_with'))}`
+    : `<br>${esc(mt(L, 'mail.footer.no_paper'))} ${esc(mt(L, 'mail.footer.trees', { trees: String(PRICING.treesPerUsd) }))}`}
   </p>
 </div></body></html>`;
 }
@@ -217,7 +227,7 @@ async function deliver(id: number | bigint, again = false): Promise<MailStatus> 
         return (left.push(String(a.filename || 'the file')), []);
       }
     });
-    const missing = left.length ? `We could not attach ${left.map((f) => `"${f}"`).join(' and ')} to this email: our stored copy could not be read when it went out, and the people who run this service have been told. Use the link in this email instead.` : '';
+    const missing = left.length ? mt(row.locale, 'mail.attach_missing', { files: listIn(row.locale, left.map((f) => `"${f}"`)) }) : '';
     const html = missing ? String(row.html).replace('</h1>', `</h1>\n    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;padding:10px 12px;background:#fdf3e1;border-radius:8px">${esc(missing)}</p>`) : row.html;
     await t.sendMail({
       from: p.from || fromHeader(), replyTo: p.replyTo || undefined, to: row.to_email, subject: row.subject, html, text: missing ? `${missing}\n\n${p.text || ''}` : p.text || undefined,
@@ -277,17 +287,17 @@ export function recordMail(m: Mail): number | bigint {
   // the row only names them.
   const payload = {
     from: fromHeader(m.fromName), replyTo: m.replyTo || process.env.SUPPORT_EMAIL || null,
-    text: [m.heading, ...m.lines, ...(m.links || []).map((l) => `${l.label}${l.note ? ` (${l.note})` : ''}: ${l.url}`), m.cta ? `${m.cta.label}: ${m.cta.url}` : '', m.footnote || '',
-      m.askForPdf ? cannotOpenLine(m.askForPdf) : '',
-      m.code ? `Not sure this email is real? Go to ${baseUrl()}/check and enter the security code ${fmtCode(m.code)}.` : '',
-      m.code ? `Did not expect this, or does it look wrong? Report this email: ${reportUrl(m.code)}` : '',
-      m.code ? `Need a hand with this document? ${helpUrl(m.code)}` : ''].filter(Boolean).join('\n\n'),
+    text: [m.heading, ...m.lines.map(unquote), ...(m.links || []).map((l) => `${l.label}${l.note ? ` (${l.note})` : ''}: ${l.url}`), m.cta ? `${m.cta.label}: ${m.cta.url}` : '', m.footnote || '',
+      m.askForPdf ? mt(m.locale, 'mail.footer.cannot_open', { sender: m.askForPdf }) : '',
+      m.code ? mt(m.locale, 'mail.text.check', { url: `${baseUrl()}/check`, code: fmtCode(m.code) }) : '',
+      m.code ? mt(m.locale, 'mail.text.report', { url: reportUrl(m.code) }) : '',
+      m.code ? mt(m.locale, 'mail.text.help', { url: helpUrl(m.code) }) : ''].filter(Boolean).join('\n\n'),
     attachments: process.env.SMTP_URL ? (m.attachments || []).map((a) => ({ filename: a.filename, sha256: saveBlob(a.content) })) : [],
     ...(m.untilDone && m.recipientId ? { untilDone: true } : {}),
   };
   const r = run(
-    'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at, about_user, message_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null, m.about ?? null, newMessageId(),
+    'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at, about_user, message_id, locale) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null, m.about ?? null, newMessageId(), storedLocale(m.locale),
   );
   // The copy for the account's archive addresses, made now while the whole email is known (archivemail.ts).
   const draft = archiveDraft(m);

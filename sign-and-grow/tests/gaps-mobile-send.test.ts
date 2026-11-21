@@ -653,8 +653,11 @@ test('the screens of in-person signing say to hand the device back and what the 
   const signPage = read('src/app/sign/[token]/page.tsx');
   assert.match(signPage, /\{inPerson && <HandBack signer=\{me\.name\} sender=\{sender\.name\} envelopeId=\{env\.id\} \/>\}/);
   const card = read('src/components/HandBack.tsx');
-  assert.match(card, /Thank you, \{signer\}\. Please hand this device back to \{sender\}\./);
-  assert.match(card, /I am \{sender\}/);
+  // The words are in the catalogue, said in the signer's language (src/locales/en.json, tests/ds-lang-signing.test.ts).
+  const words = JSON.parse(read('src/locales/en.json'));
+  assert.equal(words['sign.handback.title'], 'Thank you, {signer}. Please hand this device back to {sender}.');
+  assert.equal(words['sign.handback.button'], 'I am {sender}');
+  assert.match(card, /T\('sign\.handback\.title', \{ signer, sender \}\)/);
   assert.match(card, /href=\{`\/app\/envelopes\/\$\{encodeURIComponent\(envelopeId\)\}`\}/);
   // The signing page has no way into the account of its own: no link to the app besides that button.
   assert.equal(/href=["'{`]+\/app/.test(signPage), false);
@@ -667,7 +670,8 @@ test('the screens of in-person signing say to hand the device back and what the 
   assert.match(shell, /addEventListener\('visibilitychange', look\)/);
   assert.match(read('src/components/sender/Recipients.tsx'), /if \(r\.role === 'inperson'\) window\.dispatchEvent\(new CustomEvent\('sg-handed-over'/);
   const lock = read('src/components/HandedOver.tsx');
-  assert.match(lock, /This device was handed to \{info\.signer \|\| 'someone'\} to sign/);
+  assert.match(lock, /T\('handover\.title', \{ signer: info\.signer \|\| T\('handover\.someone'\) \}\)/);
+  assert.equal(words['handover.title'], 'This device was handed to {signer} to sign');
   assert.match(lock, /autoComplete="one-time-code"/);
   // What the lock does not cover is said in the same words wherever in-person signing is offered.
   assert.equal(IN_PERSON_LIMITS.length, 4);

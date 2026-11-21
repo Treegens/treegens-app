@@ -2,7 +2,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Modal } from '@/components/ui';
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE = 'a[href], button:not([disabled]), details > summary, input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 // The shared Modal closes on Escape and on a click outside. This adds what a keyboard user also needs:
 // focus moves into the dialog, Tab stays inside it, and focus goes back to where it was when the dialog closes.

@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { api, toast } from '@/components/ui';
 import { Dialog } from './Dialog';
 import { explain, longDate } from './lib';
-import { LEVEL_NAME, LEVEL_DOES, removesAt, KEPT_AT, HOLD_SHORT, HOLD_TRUTH, HOLD_BACKUPS, HOLD_OVERRIDE, SCREEN_LEVELS, RETENTION_NOTICE_DAYS, daysText, copiesKept, type PurgeLevel } from '@/lib/retention';
+import { LEVEL_NAME, LEVEL_DOES, removesAt, KEPT_AT, HOLD_SHORT, HOLD_TRUTH, HOLD_BACKUPS, HOLD_OVERRIDE, SCREEN_LEVELS, RETENTION_NOTICE_DAYS, daysText, copiesKept, keepMovesTo, type PurgeLevel } from '@/lib/retention';
 
 type R = {
   closed_at: string | null; period: { days: number; from: 'account' | 'template'; template?: string } | null; due_at: string | null; rule_level: PurgeLevel | null;
@@ -84,18 +84,34 @@ export function RetentionLine({ envelopeId, r, onChanged, onAsk }: { envelopeId:
 }
 
 /**
- * Inside the page's one Delete dialog, only when a deletion schedule or a request reaches the document: the day
- * its files go anyway, with "Keep it instead", and the way to delete its files for good.
+ * Whether the page's one Delete dialog offers "Keep it instead" in its row of buttons: only when a deletion schedule
+ * or a request reaches the document and gives it a day. The sentence above the buttons (copiesLine) says that day.
  */
-export function DeleteNotes({ r, onKeep, onPurge }: { r: R | null | undefined; onKeep: () => void; onPurge: () => void }) {
+export function keepInstead(r: R | null | undefined, now = Date.now()): boolean {
+  if (!r || r.purged_at || !scheduleOn(r)) return false;
+  if (!(r.goes_at || r.due_at) || !deleteOffers(r).keep) return false;
+  // Keeping calls off a deletion someone asked for. Otherwise it starts the period again from today (keepIt in
+  // src/server/records.ts), so it is offered only when that is at least a day later than the schedule already keeps
+  // it: on a document completed today it would change nothing (the simplicity reviewer).
+  return !!r.asked || !!keepMovesTo(r, now);
+}
+
+/** The words of that button: what it does, not another way of saying Cancel. */
+export const keepInsteadLabel = (r: R, now = Date.now()): string => {
+  const until = r.asked ? null : keepMovesTo(r, now);
+  return until ? `Keep it until ${longDate(until)}` : 'Keep its files';
+};
+
+/**
+ * Inside the page's one Delete dialog, only when a deletion schedule or a request reaches the document: the way to
+ * delete its files for good. "Keep it instead" is a button of the dialog's own row (keepInstead).
+ */
+export function DeleteNotes({ r, onPurge }: { r: R | null | undefined; onKeep?: () => void; onPurge: () => void }) {
   if (!r || r.purged_at || !scheduleOn(r)) return null;
-  const day = r.goes_at || r.due_at;
-  const { keep, purge } = deleteOffers(r);
-  if (!(day && keep) && !purge) return null;
+  if (!deleteOffers(r).purge) return null;
   return (
     <div className="ret-in-delete" data-feature="ds-retention">
-      {day && keep && <p>Rather keep it past {longDate(day)}? <button type="button" className="btn sm" onClick={onKeep}>Keep it instead</button></p>}
-      {purge && <p className="muted">Need the files gone for everyone? <button type="button" className="sn-linkbtn" onClick={onPurge}>Delete its files for good</button> ({RETENTION_NOTICE_DAYS}-day wait)</p>}
+      <p className="muted">Need the files gone for everyone? <button type="button" className="sn-linkbtn" onClick={onPurge}>Delete its files for good</button> ({RETENTION_NOTICE_DAYS}-day wait)</p>
     </div>
   );
 }

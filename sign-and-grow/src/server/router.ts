@@ -3,6 +3,7 @@ import { HttpError, bad, setOrigin, id } from './util.ts';
 import { twoStepGate } from './twostep.ts';
 import { rulesGate } from './secpolicy.ts';
 import { keyUsedFrom } from './seclog.ts';
+import { heldAsMember } from './orgs.ts';
 import type { Actor } from './envelopes.ts';
 
 export type Ctx = {
@@ -129,6 +130,8 @@ export async function handle(req: Request): Promise<Response> {
       const m = r.re.exec(path);
       if (!m) continue;
       const auth = authenticate(req, r.level !== 'public');
+      // An admin of an organisation above this account is a member here, whatever its membership says (orgs.ts).
+      if (auth && heldAsMember(auth)) auth.role = 'member';
       // The first use of a key from an internet address is a line in the account's security record (seclog.ts).
       keyUsedFrom(auth, clientIp(req), req.headers.get('user-agent') || '');
       // A browser that is used stays signed in: when this request moved the end of its session forward, the cookie

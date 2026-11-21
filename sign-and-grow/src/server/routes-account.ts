@@ -1,4 +1,6 @@
 import { route, json, type Ctx } from './router.ts';
+import { whatsappProvider, voiceProvider } from '../lib/channels.ts';
+import { adminOrgs, refuseOrgAdminRole, orgMe } from './orgs.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 import { chosenLocale, defaultFor } from './locales.ts';
 import { all, get, run, tx } from './db.ts';
@@ -30,7 +32,7 @@ import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe, s
 // The security record of each account: one line where something happens (seclog.ts).
 import { record, signedIn, signedUp, signInFailed, settingsChanged } from './seclog.ts';
 import { converterOn } from './convert.ts';
-import { newPasswordOk, notePassword, inviteAccount, rulesMe, endedWhy, forgetEnd } from './secpolicy.ts';
+import { newPasswordOk, notePassword, inviteAccount, rulesMe, endedWhy } from './secpolicy.ts';
 import { readCookie } from './auth.ts';
 import { newConfirmCode, confirmWithCode, codesOpen } from './confirmcode.ts';
 import { showCode, CONFIRM_CODE_HOURS } from '../lib/confirm.ts';
@@ -92,6 +94,8 @@ function openInvite(tokenText: string, email: string): any {
 }
 // Makes the person a member. Call inside tx().
 function join(inv: any, userId: string, t = now(), c?: Ctx) {
+  // An admin of an organisation above this account never joins it as an owner or admin (src/server/orgs.ts).
+  refuseOrgAdminRole(inv.account_id, userId, inv.role);
   if (run('INSERT OR IGNORE INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', inv.account_id, userId, inv.role, t).changes)
     record('member.joined', { c, by: { type: 'user', id: userId }, accounts: inv.account_id, about: ['user', userId], details: { role: inv.role, invite: inv.id } });
   run('UPDATE invites SET accepted_at=? WHERE id=?', t, inv.id);
@@ -344,10 +348,9 @@ route('GET', '/me', (c) => {
   // handed_over: this browser is signed in, but was handed to someone to sign in person and is locked until its
   // owner types their password. The app shows the screen that asks for it, not the sign-in page.
   if (!c.auth) {
-    // A browser that a sign-in rule signed out hears why once, for the sign-in page to say (secpolicy.ts).
-    const cookieToken = readCookie(c.req, SESSION_COOKIE);
-    const why = endedWhy(cookieToken);
-    if (why) forgetEnd(cookieToken);
+    // A browser that a sign-in rule signed out hears why, for the sign-in page to say (secpolicy.ts): every time it
+    // asks with that cookie, for a day, so two pages asking at once both hear it. Signing in gives a new cookie.
+    const why = endedWhy(readCookie(c.req, SESSION_COOKIE));
     return { user: null, ...(handedOver(c.req) ? { handed_over: handedOver(c.req) } : {}), ...(why ? { signed_out: why } : {}) };
   }
   const a = c.account;
@@ -376,6 +379,9 @@ route('GET', '/me', (c) => {
     outbox: devOutbox(),
     // Whether the operator of this server has switched text messages on. When not, nothing offers them.
     text_messages: !!smsProvider(),
+    // Whether this server sends the signing link by WhatsApp, and can call a number to read a code (src/lib/channels.ts).
+    whatsapp: !!whatsappProvider(),
+    phone_calls: !!voiceProvider(),
     // Whether this server turns Word, Excel and other files into a PDF on upload. When not, nothing offers them.
     converts: converterOn(),
     // Set when an email to this login came back for good ({ address, since, reason }), so every page can say so
@@ -386,6 +392,10 @@ route('GET', '/me', (c) => {
     two_step: twoStepMe(c),
     // The sign-in rules of this account that the app acts on: the idle sign-out and a password that is too short.
     ...rulesMe(c),
+    // An admin of an organisation above accounts sees Settings, Organisation (src/server/orgs.ts). Absent otherwise.
+    ...(c.auth.via === 'session' && adminOrgs(c.user.id).length ? { org_admin: true } : {}),
+    // The organisation above this account, if any: who set the two-step rule, and sending switched off from above.
+    ...orgMe(a),
   };
 }, 'public');
 
@@ -410,6 +420,8 @@ route('POST', '/me/password', async (c) => {
   // a link sent to their address (POST /me/signin/password-link), which shows the mailbox is theirs.
   if (!hasPassword(c.user)) throw bad(`This login has no password yet. Under Settings, Security, Ways to sign in, choose "Email me a link to set a password". The link goes to ${c.user.email}.`);
   if (!checkPassword(str(b.current, 200), c.user.password_hash)) throw bad('Your current password is not right.');
+  // A moment we hold the current password: whether it is shorter than a team asks is noted again (secpolicy.ts).
+  notePassword(c.user.id, str(b.current, 200));
   // Before the code is asked for: a password that is refused must not use up the code that was typed with it.
   await newPasswordOk(str(b.password, 200), { userId: c.user.id });
   await needCode(c, b.code, 'change your password');
@@ -507,6 +519,8 @@ route('POST', '/account/invites', async (c) => {
   if (!c.user.email_verified) throw bad('Confirm your email address before you invite anyone. Type the 6-digit code from our email at the top of the app, or press the button in that email. "Send a new code" there emails a new one.', 403);
   const no = inviteRefusal(c.account, c.user, email);
   if (no) throw bad(no.message, no.status);
+  // Only in an account below an organisation, about an admin of that organisation: they may join as a member only.
+  if (c.account.org_id) refuseOrgAdminRole(c.account.id, get('SELECT id FROM users WHERE lower(email)=lower(?)', email)?.id, role);
   run('DELETE FROM invites WHERE account_id=? AND email=? AND accepted_at IS NULL', c.account.id, email);
   const t = token();
   const inviteId = id('inv');
@@ -542,6 +556,7 @@ route('PATCH', '/account/members/:id', async (c) => {
   const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
   if (!m) throw bad('Member not found.', 404);
   if (m.role === 'owner') throw bad('The owner role cannot be changed.');
+  refuseOrgAdminRole(c.account.id, c.params.id, role);
   run('UPDATE memberships SET role=? WHERE account_id=? AND user_id=?', role, c.account.id, c.params.id);
   if (m.role !== role) record('member.role_changed', { c, about: ['user', c.params.id], details: { from: m.role, to: role } });
 }, 'admin');
@@ -654,6 +669,7 @@ route('POST', '/account/transfer-owner', async (c) => {
     if (to === c.user.id) throw bad('You own this account already. Choose another member of this team.');
     if (!get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', c.account.id, to)) throw bad('Choose another member of this team. The person you chose is not on the team now, so nothing was changed.');
     // Someone who is closing their own login cannot be handed a team: it would be left without an owner when they go.
+    refuseOrgAdminRole(c.account.id, to, 'owner');
     if (get('SELECT closing_at FROM users WHERE id=?', to)?.closing_at) throw bad('That person is closing their login, so the account cannot be handed to them. Choose someone else, or ask them to sign in again first (that keeps their login).');
     run("UPDATE memberships SET role='admin' WHERE account_id=? AND user_id=?", c.account.id, c.user.id);
     run("UPDATE memberships SET role='owner' WHERE account_id=? AND user_id=?", c.account.id, to);
@@ -796,18 +812,7 @@ route('DELETE', '/webhooks/:id', (c) => {
 
 // ---- Reports and impact --------------------------------------------------------------------
 
-route('GET', '/reports/summary', (c) => {
-  // A completed envelope its sender deleted is counted nowhere here, so these numbers match the lists they link to.
-  // The paper it saved was saved all the same, so GET /impact and the public totals still count it.
-  const scope = `${c.admin ? '' : ' AND sender_id=?'} AND hidden_at IS NULL`;
-  const p = c.admin ? [c.account.id] : [c.account.id, c.user.id];
-  const byStatus = Object.fromEntries(all(`SELECT status, COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope'${scope} GROUP BY status`, ...p).map((r) => [r.status, r.n]));
-  const done = get(`SELECT COUNT(*) n, AVG((julianday(completed_at) - julianday(sent_at)) * 24) hours, COALESCE(SUM(sheets),0) sheets FROM envelopes WHERE account_id=? AND kind='envelope' AND status='completed'${scope}`, ...p);
-  const months = all(`SELECT substr(sent_at,1,7) month, COUNT(*) sent, SUM(status='completed') completed FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at IS NOT NULL${scope} GROUP BY 1 ORDER BY 1 DESC LIMIT 12`, ...p).reverse();
-  const senders = c.admin ? all("SELECT u.name, COUNT(*) sent, SUM(e.status='completed') completed FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL AND e.hidden_at IS NULL GROUP BY u.id ORDER BY sent DESC LIMIT 20", c.account.id) : [];
-  const sent = Object.entries(byStatus).reduce((n, [k, v]) => n + (k === 'draft' ? 0 : (v as number)), 0);
-  return { byStatus, sent, completed: done.n, avgHours: done.hours, completionRate: sent ? done.n / sent : null, months, senders, impact: impactOf(done.sheets) };
-});
+// GET /reports/summary and the other reports are in routes-reports.ts.
 
 function globalImpact() {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE kind='envelope' AND status='completed'");
@@ -869,5 +874,8 @@ route('GET', '/dev/outbox', (c) => {
   }
   // Text messages land here too on a machine without a provider (SMS_DEV_OUTBOX=1), with the number masked.
   // delivered_at, bounced_at (with its kind and reason) and complained_at: what the mail provider said afterwards.
-  return json({ emails: all('SELECT id, to_email, subject, link, status, at, delivered_at, bounced_at, bounce_kind, bounce_reason, bounce_said, complained_at FROM emails ORDER BY id DESC LIMIT 100'), texts: all('SELECT id, to_masked "to", kind, body, status, at FROM texts ORDER BY id DESC LIMIT 100') });
+  return json({ emails: all('SELECT id, to_email, subject, link, status, at, delivered_at, bounced_at, bounce_kind, bounce_reason, bounce_said, complained_at FROM emails ORDER BY id DESC LIMIT 100'), texts: [...all('SELECT id, to_masked "to", kind, body, status, at FROM texts ORDER BY id DESC LIMIT 100'),
+    // WhatsApp messages and calls with a code on a machine without a provider (whatsapp.ts, voice.ts), in the same list.
+    ...all("SELECT 'wa' || id id, to_masked \"to\", CASE kind WHEN 'invite' THEN 'link' WHEN 'remind' THEN 'reminder' ELSE kind END kind, 'WhatsApp: ' || body body, status, at FROM wa_messages ORDER BY id DESC LIMIT 50"),
+    ...all("SELECT 'call' || id id, to_masked \"to\", 'code' kind, 'Phone call: ' || COALESCE(said, '(not kept)') body, status, at FROM voice_calls ORDER BY id DESC LIMIT 50")].sort((x: any, y: any) => (x.at < y.at ? 1 : -1)) });
 }, 'public');

@@ -14,8 +14,8 @@ import { readFileSync } from 'node:fs';
 import { boot, Client, signUp, mailTo, simple, signAll, tokenFor, type Server } from './helpers.ts';
 import { stripe, unix } from './stripe-fake.ts';
 import { CLAIMS, CLAIM_GROUPS, claimText, claimStatus, claimSentence, claimProblems, claimsSummary, noneHeld, claimById, type Claim } from '../src/lib/claims.ts';
-import { scan, scanText, withoutComments, ALL_PATTERNS, type Hit } from './claims-scan.ts';
-import { deploymentProfile, deploymentProfileWarning, isGovernment } from '../src/lib/deployment.ts';
+import { scan, scanText, withoutComments, uncovered, ALL_PATTERNS, type Hit } from './claims-scan.ts';
+import { deploymentProfile, deploymentProfileWarning, governmentChatWarning, isGovernment } from '../src/lib/deployment.ts';
 
 let db: Server['db'];
 let billing: Server['billing'];
@@ -148,12 +148,12 @@ test('held means: a registry link, a number, a scope, dates that have not run ou
 
   assert.equal(claimStatus(held(), now), 'held');
   const s = claimSentence(held(), now);
-  assert.equal(s, 'GrowSigning holds an ISO/IEC 27001 certificate: number IS 123456, for the hosted service at growsigning.com, issued 2027-01-15 and running until 2030-01-14. Check it yourself at https://registry.example.org/cert/IS-123');
+  assert.equal(s, 'GrowSigning holds an ISO/IEC 27001 certificate: number IS 123456, for the hosted service at growsigning.com, issued 15 Jan 2027 and running until 14 Jan 2030. Check it yourself at https://registry.example.org/cert/IS-123');
   // On its last day it is held; the day after it reads as not held, with the plain sentence.
   assert.equal(claimStatus(held(), new Date('2030-01-14T23:59:00Z')), 'held');
   assert.equal(claimStatus(held(), new Date('2030-01-15T00:00:01Z')), 'not_held');
   assert.equal(claimSentence(held(), new Date('2030-01-15T00:00:01Z')), base.no);
-  assert.match(claimProblems(held(), new Date('2031-01-01T00:00:00Z')).join(' '), /It expired on 2030-01-14\./);
+  assert.match(claimProblems(held(), new Date('2031-01-01T00:00:00Z')).join(' '), /It expired on 14 Jan 2030\./);
 
   for (const [over, why] of [
     [{ registry_url: '' }, 'no link'], [{ registry_url: 'http://registry.example.org/x' }, 'not https'], [{ registry_url: 'see our website' }, 'not a link'],
@@ -175,7 +175,7 @@ test('held means: a registry link, a number, a scope, dates that have not run ou
   // In progress: only with the assessor and the day the engagement was signed. The sentence still says not held.
   const engaged: Claim = { ...base, status: 'in_progress', engaged: { assessor: 'Example Audit Ltd', engaged_on: '2027-02-01' } };
   assert.equal(claimStatus(engaged, now), 'in_progress');
-  assert.equal(claimSentence(engaged, now), `${base.no} Example Audit Ltd was engaged on 2027-02-01 to assess it. Until that is done, it is not held.`);
+  assert.equal(claimSentence(engaged, now), `${base.no} Example Audit Ltd was engaged on 1 Feb 2027 to assess it. Until that is done, it is not held.`);
   assert.equal(claimStatus({ ...base, status: 'in_progress' }, now), 'not_held', '"we plan to" is not in progress');
   assert.equal(claimStatus({ ...engaged, engaged: { assessor: '', engaged_on: '2027-02-01' } }, now), 'not_held');
   assert.equal(claimStatus({ ...engaged, engaged: { assessor: 'Example Audit Ltd', engaged_on: '2027-09-01' } }, now), 'not_held', 'an engagement dated in the future');
@@ -192,7 +192,8 @@ test('/security/certifications is built from the registry alone, and /security a
   assert.deepEqual(scanText('src/app/security/certifications/page.tsx', page), []);
   assert.doesNotMatch(page, /<img|badge|logo/i, 'no badges');
   const sec = read('src/app/security/page.tsx');
-  assert.match(sec, /<Point title="No security certification\.">We have not been audited against a security standard, and we will not hint that we have\. \{claimsSummary\(\)\} <Link href=\{CLAIMS_PAGE\}>/);
+  assert.match(sec, /\{noneHeld\(\)\n\s*\? <Point title="No security certification\.">We have not been audited against a security standard, and we will not hint that we have\. \{claimsSummary\(\)\} <Link href=\{CLAIMS_PAGE\}>/,
+    'the point that says none is held is there only while none is');
   assert.match(read('src/components/Public.tsx'), /<Link href="\/security\/certifications">Certifications<\/Link>/);
 });
 
@@ -226,6 +227,11 @@ test('the scan reads what people read: comments are left out, and colours, sizes
   // JSX text and strings in code are read.
   assert.deepEqual(scanText('x.tsx', '<p>We are FedRAMP authorized.</p> {/* fine */}').map((h) => h.key), ['FedRAMP']);
   assert.deepEqual(scanText('x.ts', "export const A = 'GrowSigning is ISO 27001 certified.'; // not really").map((h) => h.key), ['ISO 27xxx', 'certified']);
+  // A reviewed denial lets only its own words through: a claim put on the same line is still a hit.
+  const [denial] = scanText('x.md', 'GrowSigning is not audited or certified by anyone.');
+  assert.deepEqual(uncovered(denial, ['not audited or certified by anyone']), []);
+  const [both] = scanText('x.md', 'GrowSigning is not audited or certified by anyone. Our signatures are certified by the state.');
+  assert.deepEqual(uncovered(both, ['not audited or certified by anyone']), ['certified']);
 });
 
 test('no page, email, PDF text, README or doc says more about a certification or the law than the registry does', () => {
@@ -240,7 +246,8 @@ test('no page, email, PDF text, README or doc says more about a certification or
   const unlisted: Hit[] = [], wrong: string[] = [];
   for (const h of hits) {
     const on = allow.filter((a) => a.file === h.file && h.text.includes(a.has));
-    if (!on.length) unlisted.push(h);
+    // Every match of the word must sit inside a reviewed sentence: a claim added to the line of a denial is found.
+    if (!on.length || uncovered(h, on.map((a) => a.has)).length) unlisted.push(h);
     for (const a of on) {
       used.add(a);
       // A sentence that says we do not have it is true only while the registry says so too.
@@ -276,36 +283,54 @@ test('DEPLOYMENT_PROFILE: unset or "government", and a value nobody knows is sai
     assert.equal(deploymentProfile({ DEPLOYMENT_PROFILE: typo }), null);
     assert.match(deploymentProfileWarning({ DEPLOYMENT_PROFILE: typo })!, new RegExp(`is set to "${typo}", which is not a profile this server knows\\. The only one is "government"\\.`));
   }
+  // An operator who left a hosted AI key in the settings of a government server hears why the chat does not use it.
+  const gov = { DEPLOYMENT_PROFILE: 'government' };
+  assert.match(governmentChatWarning('OPENROUTER_API_KEY', false, gov)!, /^DEPLOYMENT_PROFILE=government: the help chat does not use the AI service set in OPENROUTER_API_KEY, because .* To have a model answer, set SUPPORT_CHAT_API_KEY together with SUPPORT_CHAT_BASE_URL/);
+  assert.equal(governmentChatWarning('OPENROUTER_API_KEY', false, {}), null, 'the ordinary profile uses it');
+  assert.equal(governmentChatWarning(null, false, gov), null, 'no AI set up: nothing to say');
+  assert.equal(governmentChatWarning(null, true, gov), null, 'its own model answers');
+  const boot = read('src/instrumentation.ts');
+  assert.match(boot, /governmentChatWarning\(chatAt && !ownModel\(chatAt\) \? chatAt\.keyVar : null, chatModelOn\(\)\)/);
 });
 
-test('an account starts with trees and AI answers on; under the government profile with both off, and its record never carries trees', async () => {
+test('an account starts with trees and AI answers on, under both profiles; the government profile only takes the trees off its record', async () => {
   noModel();
+  // What a page is given says what happens: no model answers on this server, so "ai_helper" reads off there, while
+  // the account's own choice (tenantPolicy, GET /account/policy) stays on.
+  const ON = { impact_display: 'on', ai_helper: 'off', white_label: false };
   const p = await person('Ada');
   assert.deepEqual(policy.tenantPolicy(p.id), { impact_display: 'on', impact_record: 'on', ai_helper: 'on', white_label: false });
   assert.deepEqual(policy.tenantPolicy('no-such-account'), { impact_display: 'on', impact_record: 'on', ai_helper: 'on', white_label: false });
   // The shape pages get: from /api/me, and from /api/sign/:token for the account whose document it is.
-  assert.deepEqual((await p.c.get('/me')).data.policy, { impact_display: 'on', ai_helper: 'on', white_label: false });
+  assert.deepEqual((await p.c.get('/me')).data.policy, ON);
   const eid = await send(p, 'shape@signers.example');
-  assert.deepEqual((await new Client().get(`/sign/${tokenFor(eid, 'shape@signers.example')}`)).data.policy, { impact_display: 'on', ai_helper: 'on', white_label: false });
+  assert.deepEqual((await new Client().get(`/sign/${tokenFor(eid, 'shape@signers.example')}`)).data.policy, ON);
+  assert.deepEqual(Object.keys((await new Client().get(`/sign/${tokenFor(eid, 'shape@signers.example')}`)).data.policy).sort(), ['ai_helper', 'impact_display', 'white_label'], 'a signer learns nothing else about the account');
 
+  // The owner's answers (research/government.json, owner_answers) and the designer's notes gov-G01 and gov-G20: the
+  // profile changes defaults on the record and where the chat may go, not the screens (ux-charter P8).
   government();
-  assert.deepEqual(policy.tenantPolicy(p.id), { impact_display: 'off', impact_record: 'off', ai_helper: 'off', white_label: false }, 'an account that never chose follows the server');
+  assert.deepEqual(policy.tenantPolicy(p.id), { impact_display: 'on', impact_record: 'off', ai_helper: 'on', white_label: false });
   const g = await person('Gov');
-  assert.deepEqual((await g.c.get('/me')).data.policy, { impact_display: 'off', ai_helper: 'off', white_label: false });
-  assert.deepEqual((await new Client().get(`/sign/${tokenFor(eid, 'shape@signers.example')}`)).data.policy, { impact_display: 'off', ai_helper: 'off', white_label: false });
-  // An admin may put the tree lines on screens back; the record stays without them whatever the account chose.
-  const on = await g.c.put('/account/policy', { impact_display: 'on' });
-  assert.equal(on.status, 200, JSON.stringify(on.data));
-  assert.deepEqual([on.data.impact_display, on.data.impact_record, on.data.record_fixed], ['on', 'off', true]);
+  assert.deepEqual((await g.c.get('/me')).data.policy, ON);
+  assert.deepEqual((await new Client().get(`/sign/${tokenFor(eid, 'shape@signers.example')}`)).data.policy, ON);
+  // An admin may switch the tree lines on screens off and on; the record stays without them whatever the account chose.
+  const off = await g.c.put('/account/policy', { impact_display: 'off' });
+  assert.equal(off.status, 200, JSON.stringify(off.data));
+  assert.deepEqual([off.data.impact_display, off.data.impact_record, off.data.record_fixed], ['off', 'off', true]);
   assert.deepEqual((await g.c.get('/account/impact-record')).data, { on: false, fixed: true }, 'the page shows no switch for the record');
   const refused = await g.c.put('/account/impact-record', { on: true });
   assert.equal(refused.status, 409);
   assert.equal(refused.data.error, 'This server never puts trees on the signing record, so there is nothing to switch. Nothing was changed.');
-  assert.match(read('src/components/settings/TreesOnRecord.tsx'), /if \(!d \|\| d\.fixed\) return null;/);
+  // No switch for the record, and one plain line saying why, so an admin who read about the switch is not left looking.
+  assert.match(read('src/components/settings/TreesOnRecord.tsx'), /if \(d\.fixed\) return <p className="muted small"[^>]*>This server never puts trees on the signing record\.<\/p>;/);
 
   delete process.env.DEPLOYMENT_PROFILE;
-  assert.equal(policy.tenantPolicy(g.id).impact_display, 'on', 'what an account chose stays chosen');
-  assert.equal(policy.tenantPolicy(g.id).ai_helper, 'on', 'what it never chose follows the server again');
+  assert.equal(policy.tenantPolicy(g.id).impact_display, 'off', 'what an account chose stays chosen');
+  assert.equal(policy.tenantPolicy(g.id).impact_record, 'on', 'the record follows the server again');
+  assert.equal(policy.tenantPolicy(g.id).ai_helper, 'on');
+  // The server says out loud when the profile is spelt wrong, as it starts.
+  assert.match(read('src/instrumentation.ts'), /const profile = deploymentProfileWarning\(\);\n\s*if \(profile\) console\.error\(profile\);/);
 });
 
 test('owners and admins change the switches in a browser; a member, an API key and a stranger cannot; every change is in the history', async () => {
@@ -356,6 +381,11 @@ test('owners and admins change the switches in a browser; a member, an API key a
   assert.equal(viaKey.status, 403);
   assert.equal(viaKey.data.error, 'An API key cannot change these settings. That needs an owner or an admin signed in to the app, under Settings, Account. Nothing was changed.');
   assert.equal((await withKey.call('GET', '/account/policy', undefined, { authorization: `Bearer ${key}` })).data.impact_display, 'off');
+  // Nor the third switch of the same place, 'Trees on the signing record'.
+  const recordViaKey = await withKey.call('PUT', '/account/impact-record', { on: false }, { authorization: `Bearer ${key}` });
+  assert.equal(recordViaKey.status, 403);
+  assert.match(recordViaKey.data.error, /^An API key cannot change these settings\./);
+  assert.equal(policy.tenantPolicy(p.id).impact_record, 'on');
   // A member of the team, and someone who is not signed in.
   assert.equal((await p.c.post('/account/invites', { email: 'member@g01.example', role: 'member' })).status, 200);
   const m = new Client();
@@ -368,7 +398,8 @@ test('owners and admins change the switches in a browser; a member, an API key a
   assert.equal(policy.tenantPolicy(p.id).impact_display, 'off');
   // Another account is not touched by any of it.
   const q = await person('Cy');
-  assert.deepEqual(policy.clientPolicy(q.id), { impact_display: 'on', ai_helper: 'on', white_label: false });
+  assert.deepEqual(policy.clientPolicy(q.id), { impact_display: 'on', ai_helper: 'off', white_label: false }, 'no model answers here');
+  assert.equal(policy.tenantPolicy(q.id).ai_helper, 'on', 'what the account chose is kept');
   // A member reads the client shape through /me like everyone, and learns nothing else.
   assert.deepEqual((await m.get('/me')).data.policy, { impact_display: 'off', ai_helper: 'off', white_label: false });
 });
@@ -381,10 +412,14 @@ test('trees on screens and emails, off: nothing by Finish, on the finished scree
   const impact = await import('../src/server/impact.ts');
   // On, as every account starts: the signer is told, in the email and by Finish.
   const first = await send(p, 'h1@signers.example');
+  const page = async (eid: string, email: string) => (await new Client().get(`/sign/${tokenFor(eid, email)}`)).data.envelope;
   assert.equal((await sees(first, 'h1@signers.example')).finish, 10);
+  assert.ok((await page(first, 'h1@signers.example')).impact.sheets > 0, 'the finished screen has the paper to say');
   assert.match(textOf(mailTo('h1@signers.example').at(-1)!.html), /10 mangroves will be planted with Treegens when you finish\./);
   assert.equal((await p.c.get(`/envelopes/${first}/impact`)).data.sent.paid, 1);
-  assert.equal((await signAll(first, 'h1@signers.example')).status, 200);
+  const finished = await signAll(first, 'h1@signers.example');
+  assert.equal(finished.status, 200);
+  assert.ok(finished.data.impact.sheets > 0);
   assert.equal((await sees(first, 'h1@signers.example')).done.trees, 10);
   assert.match(textOf(mailTo('h1@signers.example').at(-1)!.html), /sheets? of paper and .* litres of water were not used/);
 
@@ -397,7 +432,14 @@ test('trees on screens and emails, off: nothing by Finish, on the finished scree
   assert.deepEqual((await p.c.get(`/envelopes/${second}/impact`)).data, { plus: false, sent: null }, 'the sender\'s envelope page');
   const drafted = await simple(p.c, 'h3@signers.example');
   assert.deepEqual((await p.c.get(`/envelopes/${drafted.id}/impact`)).data, { plus: false, sent: null }, 'the review step of a draft');
-  assert.equal((await signAll(second, 'h2@signers.example')).status, 200);
+  // The review step's own line ("This saves 4 pages of paper from a tree.") is drawn from /api/me's policy.
+  assert.equal((await p.c.get('/me')).data.policy.impact_display, 'off');
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /const off = useMe\(\)\?\.policy\?\.impact_display === 'off';\n\s*if \(off\) return null;/);
+  // The finished screen's paper card ("This document saved 4 pages of paper from a tree.") has nothing to draw.
+  assert.equal((await page(second, 'h2@signers.example')).impact, null);
+  const done = await signAll(second, 'h2@signers.example');
+  assert.equal(done.status, 200);
+  assert.equal(done.data.impact, null);
   assert.deepEqual(await sees(second, 'h2@signers.example'), { finish: 0, done: null }, 'the finished screen');
   for (const mail of mailTo('h2@signers.example')) assert.doesNotMatch(textOf(mail.html), /mangrove|Treegens|sheets? of paper|litres of water/i, `"${mail.subject}" says nothing about trees or paper`);
   for (const mail of mailTo(p.email).filter((x: any) => /Simple agreement|completed|finished/i.test(x.subject + x.html)).slice(-1)) assert.doesNotMatch(textOf(mail.html), /sheets? of paper|litres of water/i);
@@ -495,7 +537,7 @@ test('AI answers in the help chat, off: the account\'s people and its signers ge
   assert.deepEqual(history(p.id).slice(-2), [{ ai_answers_in_help_chat: { from: 'on', to: 'off' } }, { ai_answers_in_help_chat: { from: 'off', to: 'on' } }]);
 });
 
-test('a government installation never sends the chat to a hosted AI service; only to a model the operator points it at, once an admin switches it on', async () => {
+test('a government installation never sends the chat to a hosted AI service; a model the operator runs answers once it is set, and an admin can switch it off', async () => {
   const env = (o: Record<string, string>) => ({ DEPLOYMENT_PROFILE: 'government', ...o });
   // The server's rule, from the settings alone.
   assert.equal(prov.chatModelOn(env({ OPENROUTER_API_KEY: 'k' })), false);
@@ -525,22 +567,39 @@ test('a government installation never sends the chat to a hosted AI service; onl
   assert.match(none.data.error, /^No AI model that this server may use is set up, so there is nothing to switch on\. Whoever runs this server can point the help chat at a model of their own/);
   assert.equal((await p.c.get('/account/policy')).data.ai_available, false, 'so the page shows no switch');
 
-  // The operator's own model: still off for the account until an admin switches it on.
+  // The operator points the chat at a model of their own: it answers from then on (owner: "off until the agency points
+  // it at an OpenAI-compatible model it runs inside its own boundary"), and only there.
   model('own');
   government();
-  assert.deepEqual([(await p.c.get('/account/policy')).data.ai_available, (await p.c.get('/account/policy')).data.ai_helper], [true, 'off']);
+  assert.deepEqual([(await p.c.get('/account/policy')).data.ai_available, (await p.c.get('/account/policy')).data.ai_helper], [true, 'on']);
+  assert.equal((await p.c.get('/me')).data.policy.ai_helper, 'on', 'pages are told a model answers, now that one does');
+  assert.ok(isStream(await ask(p.c)));
+  assert.ok(isStream(await ask(visitor())));
+  assert.equal(modelCalls.length, 2);
+  for (const call of modelCalls) assert.match(call.url, /^https:\/\/llm\.agency\.example\/v1\//);
+  // An admin who would rather not have it switches it off for the account, and nothing more goes to the model.
+  assert.equal((await p.c.put('/account/policy', { ai_helper: 'off' })).status, 200);
+  modelCalls = [];
   assert.equal((await ask(p.c)).data.mode, 'builtin');
   assert.equal(modelCalls.length, 0);
-  assert.equal((await p.c.put('/account/policy', { ai_helper: 'on' })).status, 200);
-  assert.ok(isStream(await ask(p.c)));
-  assert.equal(modelCalls.length, 1);
-  assert.match(modelCalls[0].url, /^https:\/\/llm\.agency\.example\/v1\//);
 });
 
 test('the settings page shows the switches under Account, and the AI one only where a model answers', () => {
   const page = read('src/app/app/settings/page.tsx');
-  assert.match(page, /<TreesOnRecord \/>\n[^\n]*\n\s*<TenantSwitches \/>/, 'under Account, after Trees on the signing record');
+  assert.match(page, /\n\s*<TenantSwitches \/>\n/, 'under Account');
+  assert.doesNotMatch(page, /<TreesOnRecord/, 'drawn by TenantSwitches, under the wider switch');
   const sw = read('src/components/settings/TenantSwitches.tsx');
+  // The wider switch first, the record one right under it, then AI answers.
+  assert.match(sw, /row\('impact_display'[^\n]*\n\s*<TreesOnRecord \/>\n\s*\{d\.ai_available && row\('ai_helper'/);
+  // A screen reader says the title as the name and the hint once, as the description (never the hint twice).
+  assert.match(sw, /aria-labelledby=\{`policy-\$\{key\}-title`\} aria-describedby=\{`policy-\$\{key\}-hint`\}/);
+  assert.match(sw, /<b id=\{`policy-\$\{key\}-title`\}>\{title\}<\/b>/);
+  const rec = read('src/components/settings/TreesOnRecord.tsx');
+  assert.match(rec, /aria-labelledby="trees-record-title" aria-describedby="trees-record-hint"/);
+  assert.match(rec, /<b id="trees-record-title">Trees on the signing record<\/b>/);
+  // The hint promises only what a signer sees everywhere: the paper. Trees only when a payment paid for some.
+  assert.doesNotMatch(sw, /what their signature plants/);
+  assert.match(sw, /how much paper their signature saved, and any trees it paid for/);
   assert.match(sw, /'Trees on screens and emails'/);
   assert.match(sw, /\{d\.ai_available && row\('ai_helper', 'AI answers in the help chat'/);
   assert.match(sw, /role="switch"/);
@@ -548,4 +607,49 @@ test('the settings page shows the switches under Account, and the AI one only wh
   assert.doesNotMatch(sw, /white_label|White label/i, 'nothing is offered for a feature that is not built');
   // The pages never import server code.
   for (const f of ['src/components/settings/TenantSwitches.tsx', 'src/app/security/certifications/page.tsx']) assert.doesNotMatch(read(f), /@\/server\//);
+});
+
+// ---- Repair: the account's public pages follow 'Trees on screens and emails' -------------------------------------------
+
+test('the form page and the terms page of an account with trees off on screens say nothing about trees', async () => {
+  const p = await person('Fen');
+  const tpl = await simple(p.c, '', { kind: 'template', subject: 'Visitor form', recipients: [{ id: 'r', role: 'signer', role_name: 'Visitor' }] });
+  const form = await p.c.post('/powerforms', { template_id: tpl.id, name: 'Visitor form' });
+  assert.equal(form.status, 200, JSON.stringify(form.data));
+  const slug = db.get('SELECT slug FROM powerforms WHERE account_id=?', p.id).slug;
+  const terms = await p.c.post('/clickwraps', { name: 'House rules', text: 'Be kind.' });
+  assert.equal((await p.c.post(`/clickwraps/${terms.data.id}/publish`, {})).status, 200);
+  const cw = db.get('SELECT slug FROM clickwraps WHERE id=?', terms.data.id).slug;
+  const visitor = () => Object.assign(new Client(), { ip: `198.51.94.${++askN}` });
+  const both = async () => [(await visitor().get(`/public/powerforms/${slug}`)).data.trees, (await visitor().get(`/public/agree/${cw}`)).data.trees];
+  // On, as every account starts.
+  assert.deepEqual(await both(), [true, true]);
+  // Off: neither page may say that GrowSigning plants trees.
+  assert.equal((await p.c.put('/account/policy', { impact_display: 'off' })).status, 200);
+  assert.deepEqual(await both(), [false, false]);
+  // Someone else's account is not changed by it.
+  const q = await person('Gil');
+  const tq = await simple(q.c, '', { kind: 'template', subject: 'Other form', recipients: [{ id: 'r', role: 'signer', role_name: 'Visitor' }] });
+  assert.equal((await q.c.post('/powerforms', { template_id: tq.id, name: 'Other form' })).status, 200);
+  assert.equal((await visitor().get(`/public/powerforms/${db.get('SELECT slug FROM powerforms WHERE account_id=?', q.id).slug}`)).data.trees, true);
+  // The pages print the tree clause only when the answer says so, and say only "Powered by GrowSigning." otherwise.
+  for (const [file, v] of [['src/app/f/[slug]/page.tsx', 'form'], ['src/app/agree/[slug]/page.tsx', 'data']]) {
+    const src = read(file);
+    assert.equal((src.match(/every dollar plants mangrove trees/g) || []).length, 1, file);
+    assert.ok(src.includes(`{${v}?.trees ? 'Powered by GrowSigning, where every dollar plants mangrove trees.' : 'Powered by GrowSigning.'}`), file);
+  }
+});
+
+test('the trust pages call the signing record a signing record, next to the page of certifications GrowSigning does not hold', () => {
+  const page = read('src/app/security/certificate/page.tsx');
+  assert.match(page, /title: 'How to read a GrowSigning signing record'/);
+  assert.match(page, /<h1 className="pub-h1">How to read a GrowSigning signing record<\/h1>/);
+  assert.match(page, /The record is a page GrowSigning makes, not a security certification\./);
+  const sec = read('src/app/security/page.tsx');
+  assert.match(sec, /<Point title="Completed documents end with a signing record\.">/);
+  assert.doesNotMatch(sec, /come with a certificate|How to read a GrowSigning certificate/);
+  for (const f of ['src/app/help/NotMe.tsx', 'src/app/verify/page.tsx', 'src/app/verify/ById.tsx']) assert.doesNotMatch(read(f), /How to read a GrowSigning certificate/, f);
+  // An assessment under way is never worded as a certification on its way.
+  assert.match(read('src/app/security/certifications/page.tsx'), /in_progress: 'Not held\. Assessment under way'/);
+  assert.doesNotMatch(read('src/app/security/certifications/page.tsx'), /Not held yet/);
 });

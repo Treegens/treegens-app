@@ -40,14 +40,16 @@ const CHECK_WORDS: Record<string, string> = { email_code: 'Code by email', sms_c
  * `languages` is how many languages this server offers, `isTpl` whether this is a template, `texts` whether this
  * server sends text messages.
  */
-export function moreLines(r: any, o: { isTpl?: boolean; languages?: number; texts?: boolean } = {}): MoreLine[] {
+export function moreLines(r: any, o: { isTpl?: boolean; languages?: number; texts?: boolean; whatsapp?: boolean } = {}): MoreLine[] {
   const lines: MoreLine[] = [];
   lines.push({ key: 'role', label: 'Role', value: ROLE_WORDS[r.role] || ROLE_WORDS.signer });
   if ((o.languages || 1) >= 2) lines.push({ key: 'language', label: 'Language', value: r.locale ? languageOf(r.locale)?.own || String(r.locale) : 'Their browser decides' });
   // Listed when there is something to choose: sending the link yourself, or (where this server sends texts, `texts`)
   // the link by text message as well. Something set earlier keeps its line, so it can be taken off.
   const canText = (!!o.texts && r.role !== 'inperson') || !!r.text_link;
-  if (canSendMyself(r, !!o.isTpl) || r.link_by_sender || canText) lines.push({ key: 'deliver', label: 'How they get it', value: r.link_by_sender ? 'I will send the link myself' : r.text_link ? 'Email and a text message' : 'Email' });
+  // The link by WhatsApp as well, where the operator set it up (src/components/editor/WaLink.tsx), for one person on an envelope.
+  const canWa = (!!o.whatsapp && !o.isTpl && !r.group_id && ['signer', 'approver', 'viewer', 'witness'].includes(r.role)) || !!r.whatsapp;
+  if (canSendMyself(r, !!o.isTpl) || r.link_by_sender || canText || canWa) lines.push({ key: 'deliver', label: 'How they get it', value: r.link_by_sender ? 'I will send the link myself' : r.text_link ? 'Email and a text message' : r.whatsapp ? 'Email and WhatsApp' : 'Email' });
   const checks = [String(r.access_code || '').trim() ? 'Access code' : '', CHECK_WORDS[r.verify] || ''].filter(Boolean);
   lines.push({ key: 'check', label: 'Check who signs', value: checks.length ? checks.join(' and ').replace(' and Code', ' and a code') : 'None' });
   // On screen, or on the sender's own device with the sender next to them. Not for someone the sender only sends a link.
@@ -66,6 +68,7 @@ export function personSummary(r: any): string {
   else if (r.role && r.role !== 'signer') said.push(ROLE_WORDS[r.role] || '');
   if (r.link_by_sender) said.push('You send the link yourself');
   else if (r.text_link) said.push('Link also by text');
+  else if (r.whatsapp) said.push('Link also by WhatsApp');
   if (String(r.access_code || '').trim()) said.push('Access code');
   if (CHECK_WORDS[r.verify]) said.push(CHECK_WORDS[r.verify]);
   if (String(r.note || '').trim()) said.push('Private note');

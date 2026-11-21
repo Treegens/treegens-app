@@ -10,12 +10,15 @@ import { record } from './seclog.ts';
 import { tenantPolicy, setTenantPolicy, clientPolicy, type OnOff } from './tenantpolicy.ts';
 import { chatModelOn, chatProvider } from '../lib/chatprovider.ts';
 import { isGovernment } from '../lib/deployment.ts';
+import { setByField } from './orgs.ts';
 
 function view(accountId: string) {
   const p = tenantPolicy(accountId);
   const ai = chatModelOn();
   return {
     ...clientPolicy(accountId),
+    // What the account chose, which the switch shows (clientPolicy gives pages what happens instead).
+    ai_helper: p.ai_helper,
     impact_record: p.impact_record,
     // Whether each switch does anything here. A page shows a switch only when it does.
     //   record_fixed: the signing record never carries trees on this server (DEPLOYMENT_PROFILE=government).
@@ -23,6 +26,9 @@ function view(accountId: string) {
     record_fixed: isGovernment(),
     ai_available: ai,
     ai_provider: ai ? chatProvider()!.name : null,
+    // A switch an organisation above the account decided: "Set by Ministry of Health" (src/server/orgs.ts). Only
+    // for an account in an organisation that set one.
+    ...setByField(accountId),
   };
 }
 

@@ -15,6 +15,8 @@
 import { route, type Ctx } from './router.ts';
 import { all, get, run } from './db.ts';
 import { bad, now, rateLimit, rateWait, baseUrl } from './util.ts';
+// Refusals the signing page shows carry a code, so it can say them in the signer's language (signlang.ts).
+import { refuse } from './signlang.ts';
 import { sendMail, type Mail } from './mail.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { audit, loadEnvelope, senderOf, signUrl, pausedText } from './envelopes.ts';
@@ -43,8 +45,8 @@ const reachSender = (e: any) => {
 function textOf(v: any): string {
   if (v != null && typeof v !== 'string') throw bad('Send the comment as text in "text". Nothing was sent.');
   const s = String(v ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f‪-‮⁦-⁩]/g, '').trim();
-  if (!s) throw bad('Type your question or comment first. Nothing was sent.');
-  if (s.length > COMMENT_MAX_CHARS) throw bad(`A comment can be up to ${COMMENT_MAX_CHARS} characters, and this one has ${s.length}. Make it shorter or split it in two. Nothing was sent.`);
+  if (!s) throw refuse('comment_empty');
+  if (s.length > COMMENT_MAX_CHARS) throw refuse('comment_too_long', 400, { max: String(COMMENT_MAX_CHARS), length: String(s.length) });
   return s;
 }
 
@@ -72,9 +74,9 @@ function pinFrom(e: any, p: any): Pin | null {
 // or a refused audience must never lock a person out of asking their real question.
 function limits(e: any, author: string, burstKey: string, burst: number) {
   const n = get('SELECT COUNT(*) n FROM comments WHERE envelope_id=? AND author=?', e.id, author).n;
-  if (n >= COMMENTS_PER_PERSON) throw bad(`You have written ${COMMENTS_PER_PERSON} comments on this document, which is as many as one person can. Nothing was sent. If there is more to say, ${author.startsWith('u:') ? 'call or email them' : `email ${reachSender(e)}`}.`, 429);
+  if (n >= COMMENTS_PER_PERSON) throw author.startsWith('u:') ? bad(`You have written ${COMMENTS_PER_PERSON} comments on this document, which is as many as one person can. Nothing was sent. If there is more to say, call or email them.`, 429) : refuse('comment_limit', 429, { max: COMMENTS_PER_PERSON, reach: reachSender(e) });
   const wait = rateWait(burstKey, burst);
-  if (wait) throw bad(`That is ${burst} comments in ${COMMENT_BURST_MINUTES} minutes, which is as many as we take in that time. Nothing was sent. Wait ${Math.max(1, Math.ceil(wait / 60_000))} minute${Math.ceil(wait / 60_000) > 1 ? 's' : ''} and send it again: what you typed is still in the box.`, 429);
+  if (wait) throw refuse('comment_burst', 429, { count: burst, window: COMMENT_BURST_MINUTES, minutes: Math.max(1, Math.ceil(wait / 60_000)) });
 }
 const spend = (burstKey: string) => rateLimit(burstKey, Infinity, COMMENT_BURST_MINUTES * 60_000);
 
@@ -97,9 +99,9 @@ const awayText = (e: any, r: any) => `This is the signing page of ${r.name}, and
 // Someone on the envelope reads comments while they can read the document: once it is their turn, while it is out and
 // after everyone finished. They write only while it is out. A closed envelope keeps its comments for the sender.
 function signerSide(e: any, r: any, writing: boolean) {
-  if (r.status === 'pending') throw bad(`It is not your turn yet, so this document and its comments are not open to you yet. We will email you when it is. To reach ${reachSender(e)} before that, reply to the email you got from us.`, 403, { code: 'not_your_turn' });
-  if (e.status !== 'sent' && e.status !== 'completed') throw bad(`This document is closed, so its comments are closed too. ${senderName(e)} still has them.`, 403, { code: 'closed' });
-  if (writing && e.status !== 'sent') throw bad(`Everyone has finished, so the comments on this document can be read but no longer added to. To reach ${reachSender(e)}, write to them directly.`, 409, { code: 'read_only' });
+  if (r.status === 'pending') throw refuse('not_your_turn', 403, { reach: reachSender(e) });
+  if (e.status !== 'sent' && e.status !== 'completed') throw refuse('closed', 403, { sender: senderName(e) });
+  if (writing && e.status !== 'sent') throw refuse('read_only', 409, { reach: reachSender(e) });
 }
 
 function signerView(e: any, r: any, c: Ctx) {
@@ -134,7 +136,7 @@ async function writeAsSigner(c: Ctx, body: any) {
   signerSide(e, r, true);
   const text = textOf(body.text);
   const v = viewerOf(r, c);
-  if (v.party === AWAY) throw bad(`${awayText(e, r)} Nothing was sent.`, 403, { code: 'handed_on' });
+  if (v.party === AWAY) throw refuse('handed_on', 403, { name: r.name, sender: senderName(e) }, 'handed_on_unsent');
   const author = `r:${r.id}|${v.party}`;
   const visitor = visitorOf(e, r);
   // Where it goes is settled first, and nothing is counted or stored before everything about it is known to be right.
@@ -142,7 +144,7 @@ async function writeAsSigner(c: Ctx, body: any) {
   if (body.thread_id != null) {
     t = get('SELECT * FROM comment_threads WHERE id=? AND envelope_id=?', String(body.thread_id), e.id);
     // Another person's private thread is answered exactly like one that does not exist: nothing about it is given away.
-    if (!t || !sees(t, v)) throw bad('That conversation is not on this document. Load the page again to see the ones you can read. Nothing was sent.', 404);
+    if (!t || !sees(t, v)) throw refuse('thread_gone_unsent', 404);
     everyone = !t.private;
   } else {
     // The usual is private: people ask things they do not want the other party to read.
@@ -153,7 +155,7 @@ async function writeAsSigner(c: Ctx, body: any) {
   }
   // A visitor of a public form typed their own name, and the others on the document did not choose them: they write
   // to the form's owner only, also when the owner started a conversation for everyone.
-  if (everyone && visitor) throw bad(t ? `On a public form, what you write here goes to ${senderName(e)} only, and everyone on the document reads this conversation. Ask ${senderName(e)} in a question of your own instead. Nothing was sent.` : `On a public form, what you write here goes to ${senderName(e)} only. Send it to them instead. Nothing was sent.`, 403);
+  if (everyone && visitor) throw refuse(t ? 'form_everyone_thread' : 'form_everyone', 403, { sender: senderName(e) });
   const again = sameAgain(e, { author, text, threadId: t?.id, to: t ? undefined : { private: !everyone, recipient_id: r.id, party: v.party, pin } });
   if (again) return { thread_id: again.thread_id, comment_id: again.id, again: true, ...signerView(e, r, c) };
   const burstKey = `comment:${c.params.token}`;
@@ -191,12 +193,12 @@ route('POST', '/sign/:token/comments/:thread/settle', async (c) => {
   const { e, r, actor } = look(c);
   signerSide(e, r, true);
   const v = viewerOf(r, c);
-  if (v.party === AWAY) throw bad(awayText(e, r), 403, { code: 'handed_on' });
+  if (v.party === AWAY) throw refuse('handed_on', 403, { name: r.name, sender: senderName(e) });
   const t = get('SELECT * FROM comment_threads WHERE id=? AND envelope_id=?', c.params.thread, e.id);
-  if (!t || !sees(t, v)) throw bad('That conversation is not on this document. Load the page again to see the ones you can read.', 404);
+  if (!t || !sees(t, v)) throw refuse('thread_gone', 404);
   const first = get('SELECT * FROM comments WHERE thread_id=? ORDER BY at, rowid LIMIT 1', t.id);
   const theirs = (t.private && t.recipient_id === v.rid && t.party === v.party) || (!!first && !first.by_sender && first.recipient_id === v.rid && first.party === v.party);
-  if (!theirs) throw bad('Only the person who started this conversation, or the sender, can mark it as settled. You can still answer in it.', 403);
+  if (!theirs) throw refuse('settle_not_yours', 403);
   settle(e, t, body.settled !== false, r.name, actor, `r:${c.params.token}`);
   return signerView(loadEnvelope(e.id), r, c);
 }, 'public');

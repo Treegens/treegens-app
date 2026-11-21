@@ -24,7 +24,7 @@ function closedWhy(e: any): string {
   const acting = e.recipients.filter((r: any) => r.role !== 'cc');
   if (e.status === 'declined') return `${joinNames(acting.filter((r: any) => r.status === 'declined').map((r: any) => r.name)) || 'Someone'} declined`;
   if (e.status === 'expired') return `Closed before ${joinNames(acting.filter((r: any) => r.status !== 'completed').map((r: any) => r.name)) || 'everyone'} finished`;
-  return 'Nobody. It was voided';
+  return 'Nobody. It was cancelled';
 }
 
 type View = { box: string; q: string; folder: string; sender: string; field: string; value: string; col: string };
@@ -108,9 +108,9 @@ export default function Envelopes() {
     try {
       const { reminded, not_reminded } = await api(`/envelopes/${e.id}/remind`, { method: 'POST' });
       if (reminded || not_reminded?.length) {
-        const said = remindedText(reminded, not_reminded, 'Open the envelope to see what to do.');
+        const said = remindedText(reminded, not_reminded, 'Open the document to see what to do.');
         toast(said.text, said.bad);
-      } else toast('No reminder went out. They turned reminders off. Open the envelope to share the link another way.', true);
+      } else toast('No reminder went out. They turned reminders off. Open the document to share the link another way.', true);
     } catch (err) {
       fail(err);
     } finally {
@@ -166,7 +166,7 @@ export default function Envelopes() {
         {BOXES.map(([k, l]) => <button key={k} className={view?.box === k ? 'on' : ''} aria-pressed={view?.box === k} onClick={() => change({ box: k })}>{l}</button>)}
         {isAdmin && (inRemoved || data?.removed > 0) && <button className={inRemoved ? 'on' : ''} aria-pressed={inRemoved} onClick={() => change({ box: REMOVED })}>Removed by its sender{data?.removed > 0 ? ` (${data.removed})` : ''}</button>}
       </div>
-      {inRemoved && <p className="notice sn-inset" role="note">These envelopes were deleted by their sender after somebody had signed. They are in no other tab, search, export or report, and everyone who was on them still has their link and their copy. As an admin you can open each one and put it back.</p>}
+      {inRemoved && <p className="notice sn-inset" role="note">These documents were deleted by their sender after somebody had signed. They are in no other tab, search, export or report, and everyone who was on them still has their link and their copy. As an admin you can open each one and put it back.</p>}
 
       <div className="sn-filters">
         <div className="sn-search">
@@ -217,7 +217,7 @@ export default function Envelopes() {
               <tr>
                 <th className="sn-tick">
                   {pickable.length > 0 && (
-                    <label className="sn-check"><input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(pickable))} aria-label={allPicked ? 'Clear selection' : `Select all ${pickable.length} sent envelopes in this list`} /></label>
+                    <label className="sn-check"><input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(pickable))} aria-label={allPicked ? 'Clear selection' : `Select all ${pickable.length} sent documents in this list`} /></label>
                   )}
                 </th>
                 <th>Subject</th><th className="hide-sm">Status</th><th className="hide-sm">Waiting on</th><th className="hide-sm">Folder</th>{view?.col && <th className="hide-sm">{view.col}</th>}<th className="hide-sm">Updated</th><th className="hide-sm"><span className="sn-vh">Actions</span></th>

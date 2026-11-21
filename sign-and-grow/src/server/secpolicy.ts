@@ -26,6 +26,7 @@ import { all, get, run } from './db.ts';
 import { bad, now, sha256, HttpError } from './util.ts';
 import { record, settingsChanged } from './seclog.ts';
 import { pwnedLookup } from './pwned.ts';
+import { refuseLoosening } from './orgs.ts';
 import { rulesOf, PASSWORD_MIN, QUIET_HEADER, type SignInRules } from '../lib/signinrules.ts';
 import { SOURCE_LOCALE, t } from '../lib/i18n.ts';
 import type { Auth } from './auth.ts';
@@ -120,10 +121,6 @@ export function endedWhy(cookieToken: string | null): Why | null {
   const r = get('SELECT why, at FROM session_ends WHERE id=?', sha256(cookieToken));
   return r && Date.parse(r.at) > Date.now() - NOTE_HOURS * 3600_000 && (r.why === 'idle' || r.why === 'elsewhere') ? r.why : null;
 }
-/** Read once: the sign-in page says it, and then it is forgotten. */
-export function forgetEnd(cookieToken: string | null) {
-  if (cookieToken) run('DELETE FROM session_ends WHERE id=?', sha256(cookieToken));
-}
 export const endedWords = (why: Why) => say(`rules.out.${why}`);
 
 // ---- The rules of the account a browser is in ------------------------------------------------------------------
@@ -191,16 +188,29 @@ export const awayMinutes = (accountId: string | null | undefined): number | null
 // ---- Changing the rules ----------------------------------------------------------------------------------------
 
 /**
+ * The shortest password was lowered from `from` to `to`. A member known to be shorter than a rule between the two is
+ * not known to be long enough for the new one (we never keep the length), so they are held by the new rule until
+ * they next sign in or choose a password, which is when their password is looked at again (notePassword).
+ */
+function lowered(accountId: string, from: number, to: number): void {
+  if (!(to < from) || to <= PASSWORD_MIN) return;
+  run('UPDATE users SET pw_below=? WHERE pw_below > ? AND pw_below <= ? AND id IN (SELECT user_id FROM memberships WHERE account_id=?)', to, to, from, accountId);
+}
+
+/**
  * Saves the rules of an account and writes the change to its security record. Switching "one browser at a time" on
  * signs everyone's extra browsers out at once (the one used last stays, and the browser that made the change);
  * switching the idle rule on, or changing its minutes, starts every clock now.
  */
 export function saveRules(c: Ctx, next: SignInRules): { signed_out: number } {
+  // Never less than an organisation above the account asks (src/server/orgs.ts).
+  refuseLoosening(c.account.id, { min_password_length: next.min_password_length > PASSWORD_MIN ? next.min_password_length : null, idle_minutes: next.idle_minutes, one_session: next.one_session || null });
   const was = rulesOf(c.account);
   const idleChanged = was.idle_minutes !== next.idle_minutes;
   run('UPDATE accounts SET min_password_length=?, idle_minutes=?, one_session=?, idle_since=? WHERE id=?',
     next.min_password_length > PASSWORD_MIN ? next.min_password_length : null, next.idle_minutes, next.one_session ? 1 : 0,
     next.idle_minutes ? (idleChanged ? now() : c.account.idle_since || now()) : null, c.account.id);
+  lowered(c.account.id, was.min_password_length, next.min_password_length);
   let out = 0;
   if (next.one_session && !was.one_session) {
     const rows = all('SELECT id, user_id, last_used_at, seen_at, created_at FROM sessions WHERE account_id=? AND expires_at > ?', c.account.id, now());
@@ -213,7 +223,9 @@ export function saveRules(c: Ctx, next: SignInRules): { signed_out: number } {
       out += endOthers(userId, c.account.id, keep.id);
     }
   }
-  const shown = (r: SignInRules) => ({ min_password_length: r.min_password_length, idle_minutes: r.idle_minutes ?? false, one_session: r.one_session });
-  settingsChanged({ c, details: out ? { browsers_signed_out: out } : {} }, shown(was), shown(next), { min_password_length: 'value', idle_minutes: 'value', one_session: 'value' });
+  // In the record the shortest password is "min_length": the record never keeps a detail whose name says password
+  // (seclog.ts), so a careless one can never put a password in it. The words on the screen are the same.
+  const shown = (r: SignInRules) => ({ min_length: r.min_password_length, idle_minutes: r.idle_minutes ?? false, one_session: r.one_session });
+  settingsChanged({ c, details: out ? { browsers_signed_out: out } : {} }, shown(was), shown(next), { min_length: 'value', idle_minutes: 'value', one_session: 'value' });
   return { signed_out: out };
 }

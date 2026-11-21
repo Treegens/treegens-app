@@ -1,14 +1,16 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, useLoad, fmtDate, toast, Modal } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { SetUpTwoStep, RecoveryCodes, CodeField, LostPhoneRules } from '@/components/TwoStep';
 import { TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_REMEMBER_DAYS, TWO_STEP_EMAIL_RESET_RISK, TWO_STEP_RESET_BLOCK_DAYS } from '@/lib/policy';
+import { screenLocale } from '@/lib/dates';
+import { TEAM_TWO_STEP_ID } from '@/lib/signinrules';
 
 // Settings, Security: two-step login of this login. Settings, Team: the team rule and resets by an admin. The rules
 // are in src/server/twostep.ts and the routes in src/server/routes-twostep.ts.
 
-const longMoment = (s?: string | null) => (s ? new Date(s).toLocaleString(undefined, { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
+const longMoment = (s?: string | null) => (s ? new Date(s).toLocaleString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
 type Doing = '' | 'setup' | 'move' | 'codes' | 'off' | 'lost' | 'email';
 // What POST /me/two-step/lost emailed, in words for the screen.
 const WAY_BACK: Record<string, string> = {
@@ -174,6 +176,16 @@ export function TeamTwoStep() {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // Arriving from "Change this under Team" (Sign-in rules, Settings, Security): this section is far down the tab on a
+  // phone, so it is brought into view and its heading takes the focus once it is drawn.
+  const landed = useRef(false);
+  useEffect(() => {
+    if (!d || landed.current || window.location.hash !== `#${TEAM_TWO_STEP_ID}`) return;
+    landed.current = true;
+    const h = document.getElementById(`${TEAM_TWO_STEP_ID}-h`);
+    h?.scrollIntoView({ block: 'start' });
+    h?.focus({ preventScroll: true });
+  }, [d]);
   if (!d) return null;
   const without = d.members.filter((m: any) => !m.on);
   const act = (fn: () => Promise<any>) => {
@@ -182,8 +194,8 @@ export function TeamTwoStep() {
     fn().then(() => (setAsking(null), setReset(null), setCode(''), reload(), me.reload())).catch((e: any) => setError(e?.message || 'Something went wrong. Nothing was changed.')).finally(() => setBusy(false));
   };
   return (
-    <section className="card twostep" aria-labelledby="team-two-step-h">
-      <h2 id="team-two-step-h" style={{ marginBottom: 4 }}>Two-step login on this team</h2>
+    <section className="card twostep" id={TEAM_TWO_STEP_ID} aria-labelledby={`${TEAM_TWO_STEP_ID}-h`}>
+      <h2 id={`${TEAM_TWO_STEP_ID}-h`} tabIndex={-1} style={{ marginBottom: 4 }}>Two-step login on this team</h2>
       <p className="muted small">{d.required ? `Everyone on ${me.account.name} has to use two-step login, since ${fmtDate(d.required_since)}. Someone without it is asked to set it up the next time they open ${me.account.name}, and nothing else in it opens for them until they have.` : `Members choose for themselves. ${d.members.length - without.length} of ${d.members.length} have it on.`}</p>
       <ul className="ts-list" style={{ marginTop: 8 }}>
         {d.members.map((m: any) => (

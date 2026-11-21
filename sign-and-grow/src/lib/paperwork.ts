@@ -200,7 +200,7 @@ export const STAMP_ZONES: Record<string, 'India' | 'Indonesia'> = {
   'Asia/Jakarta': 'Indonesia', 'Asia/Pontianak': 'Indonesia', 'Asia/Makassar': 'Indonesia', 'Asia/Ujung_Pandang': 'Indonesia', 'Asia/Jayapura': 'Indonesia',
 };
 export const stampNote = (country: 'India' | 'Indonesia'): string =>
-  `Signing here does not pay stamp duty. In ${country} an agreement that should carry a stamp and does not can be refused as evidence. The ${country === 'India' ? 'e-stamp certificate' : 'electronic duty stamp (e-meterai)'} is bought separately, and the stamped page can be added as the first document of the envelope.`;
+  `Signing here does not pay stamp duty. In ${country} an agreement that should carry a stamp and does not can be refused as evidence. The ${country === 'India' ? 'e-stamp certificate' : 'electronic duty stamp (e-meterai)'} is bought separately, and the stamped page can be added as the first file of the document.`;
 
 // ---- Country notes ---------------------------------------------------------------------------------
 // Short, dated, with the source each one rests on. `official` says whether the link is to a government or a court,
@@ -235,7 +235,7 @@ export const COUNTRY_NOTES: CountryNote[] = [
   },
   {
     id: 'in', place: 'India', checked: CHECKED,
-    text: 'GrowSigning makes an ordinary electronic signature, not an Aadhaar eSign and not a digital signature certificate. Where a law requires a signature, the Information Technology Act recognises electronic signatures of the kinds it lists, and those two are the usual ones. Where no law demands one, ours can be used, and whoever relies on it may have to prove who signed. The Act also has a list of documents it does not cover. Our research confirmed that wills and trusts are still on it after a 2022 amendment. It did not confirm the rest of that list, which has also named powers of attorney and contracts for the sale of land, so read the current First Schedule. And signing here does not pay stamp duty: an agreement that should be stamped and is not can be refused as evidence. Duty is paid separately, for example with an e-stamp certificate, and the stamped page can be added as the first document of the envelope. Duty differs by state.',
+    text: 'GrowSigning makes an ordinary electronic signature, not an Aadhaar eSign and not a digital signature certificate. Where a law requires a signature, the Information Technology Act recognises electronic signatures of the kinds it lists, and those two are the usual ones. Where no law demands one, ours can be used, and whoever relies on it may have to prove who signed. The Act also has a list of documents it does not cover. Our research confirmed that wills and trusts are still on it after a 2022 amendment. It did not confirm the rest of that list, which has also named powers of attorney and contracts for the sale of land, so read the current First Schedule. And signing here does not pay stamp duty: an agreement that should be stamped and is not can be refused as evidence. Duty is paid separately, for example with an e-stamp certificate, and the stamped page can be added as the first file of the document. Duty differs by state.',
     sources: [
       { label: 'Notification S.O. 4720(E) amending the First Schedule of the Information Technology Act', url: 'https://www.cca.gov.in/sites/files/pdf/ACT/SO4720.pdf', official: true },
       { label: 'Leegality, questions and answers on eSign and e-stamping', url: 'https://www.leegality.com/blog/esign-estamp-faqs', official: false },
@@ -243,7 +243,7 @@ export const COUNTRY_NOTES: CountryNote[] = [
   },
   {
     id: 'id', place: 'Indonesia', checked: CHECKED,
-    text: 'Signing here does not pay stamp duty. The tax office sells an electronic duty stamp (e-meterai) for documents that need one, and the stamped page can be added as the first document of the envelope.',
+    text: 'Signing here does not pay stamp duty. The tax office sells an electronic duty stamp (e-meterai) for documents that need one, and the stamped page can be added as the first file of the document.',
     sources: [{ label: 'Directorate General of Taxes, on the electronic duty stamp', url: 'https://pajak.go.id/en/node/71611', official: true }],
   },
   {

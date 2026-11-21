@@ -52,10 +52,10 @@ export const impactPaths = () => ({
     post: { tags: ['Envelopes'], parameters: [idParam], summary: 'The first-send picture was shown: it is not offered again', responses: ok({ type: 'object', properties: { ok: bool } }) },
   },
   '/account/impact-record': {
-    get: { tags: ['Account'], summary: '"Trees on the signing record": whether the certificate of completion ends with the box on paper and mangroves', responses: ok({ type: 'object', properties: { on: bool } }) },
+    get: { tags: ['Account'], summary: '"Trees on the signing record": whether the certificate of completion ends with the box on paper and mangroves', responses: ok({ type: 'object', properties: { on: bool, fixed: { ...bool, description: 'Only on a server set up for a public body: the record never carries trees there, so there is nothing to switch.' } } }) },
     put: {
       tags: ['Account'], summary: 'Switch "Trees on the signing record" on or off (admins)',
-      description: 'On by default. Off leaves the box "Signed without paper" off the signing record of documents completed from then on. Screens, emails and the impact pages are not changed by it. The change is written to the security record.',
+      description: 'On by default. Off leaves the box "Signed without paper" off the signing record of documents completed from then on. Screens, emails and the impact pages are not changed by it. The change is written to the security record. 403 for an API key: like the other switches under Settings, Account (PUT /account/policy), it needs an owner or admin signed in to the app. On a server set up for a public body (DEPLOYMENT_PROFILE=government) the record never carries trees: GET answers { on: false, fixed: true } and PUT answers 409.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['on'], properties: { on: bool } } } } },
       responses: ok({ type: 'object', properties: { on: bool } }),
     },

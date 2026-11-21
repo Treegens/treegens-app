@@ -6,7 +6,7 @@ import { StampMaker, OnPaper, type Made } from './StampMaker';
 import { STAMP_IS_TEAM, STAMP_DEFAULT_MM, STAMP_MIN_MM, STAMP_MAX_MM, STAMP_NAME_MAX, stampTurn, turnStyle } from '@/lib/stamps';
 import { INK_WORD } from '@/lib/stampink';
 
-// Settings, Stamps: the team's own stamps. Admins add them (a name, a picture made into an impression, its real size),
+// Settings, Stamps and seals: the team's own stamps. Admins add them (a name, a picture made into an impression, its real size),
 // rename, resize, give one a new picture, or delete one. Everyone on the team can use them: as the sender's stamp on
 // an envelope, and when they sign a document sent to their own address. Changing one never changes a document it is
 // already on (src/server/stamps.ts).
@@ -110,7 +110,7 @@ export function StampSettings() {
   return (
     <section className="card" aria-labelledby="st-h">
       <div className="row between wrap" style={{ gap: 12 }}>
-        <h2 id="st-h">Stamps</h2>
+        <h2 id="st-h">Stamps and seals</h2>
         {may_change && stamps.length < max && <button type="button" className="btn primary" style={{ minHeight: 44 }} onClick={() => setForm({})}>Add a stamp</button>}
       </div>
       <p className="muted" style={{ margin: '6px 0 0' }}>Your company stamp or seal, printed like ink next to a signature.</p>

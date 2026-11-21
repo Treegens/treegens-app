@@ -13,6 +13,7 @@ import {
 import { hmac, safeEqual } from './util.ts';
 import { bouncedBefore, bouncedRefusal, bouncedLine, mailStop, mailStopText } from './bounces.ts';
 import { correctWithCheck, assertBulkChecks, bulkChecksRefusal, assertFormChecks, textsOf } from './signercode.ts';
+import { waOf } from './whatsapp.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
 import { memberLink, memberInbox, groupReach, assertNoGroupCheck, membersNotReminded, assertTemplateGroups } from './groups.ts';
 import { assertBySenderCorrection } from './bysender.ts';
@@ -23,6 +24,7 @@ import { CLOSED, senderNotice } from './evidence.ts';
 import { sendWarnings } from './warnings.ts';
 import { emailRefusal, fieldProgress, formPageRefusal, yesNo } from './envelopes.ts';
 import { PRICING } from '../lib/impact.ts';
+import { showsTrees } from './tenantpolicy.ts';
 import { printProblems, unprintable } from './pdftext.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
 import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../lib/policy.ts';
@@ -38,6 +40,7 @@ import { rowFieldProblem } from './logic.ts';
 // A bulk row's "language", and a form visitor's language from their browser (locales.ts).
 import { rowLanguageRefusal, assertRowLanguages, visitorLocale, correctionLocale } from './locales.ts';
 import { keepText, sealedTextHits } from './searchtext.ts';
+import { queueOcr } from './ocr.ts';
 import { assertFormNotStacked, tellStackedForm } from './stackedforms.ts';
 // Office files and others turned into a PDF on upload, with the original kept (src/server/converted.ts).
 import { convertUpload, keepOriginal } from './converted.ts';
@@ -47,6 +50,8 @@ import { record } from './seclog.ts';
 // The account's own custom fields (customfields.ts): values on envelopes and templates, bulk columns, the list filter.
 import { readCustom, writeCustom, assertBulkCustom, bulkCustomRefusal, applyRowCustom, formCustomProblem, customFilter, attachCustom, customPrintProblems } from './customfields.ts';
 import { existingSignatures, sealFacts } from './seal.ts';
+import { pdfaFacts } from './pdfa.ts';
+import { chainStampFacts } from './auditstamp.ts';
 import { signNowFor } from './signnow.ts';
 import { signaturesLost } from '../lib/seal.ts';
 import { dayText } from '../lib/dates.ts';
@@ -100,9 +105,11 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   const kept = keepText(fid, text);
   run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text, scan_pages, text_sealed, text_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), kept.text, scanPages.length ? JSON.stringify(scanPages) : null, kept.sealed, kept.key);
   const converted = conv ? keepOriginal(fid, conv) : null;
+  // Pages that are pictures are read by a machine in the background, when this server is set up for it (ocr.ts).
+  const ocr = !!accountId && queueOcr(fid, scanPages);
   // Signatures already in the PDF do not survive in the signed copy, which is made from flattened pages (seal.ts).
   const signed = isPdf && accountId ? await existingSignatures(bytes) : 0;
-  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages, converted, ...(signed ? { existing_signatures: signed, existing_signatures_note: signaturesLost(signed) } : {}) };
+  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages, converted, ...(ocr ? { ocr: 'queued' } : {}), ...(signed ? { existing_signatures: signed, existing_signatures_note: signaturesLost(signed) } : {}) };
 }
 
 route('POST', '/files', (c) => storeUpload(c, c.account.id));
@@ -330,7 +337,7 @@ route('GET', '/envelopes/:id', (c) => {
   // texts: what became of every text message about this envelope, like deliveries for email. Numbers are masked.
   // kept_on_delete: whether deleting it now would only take it out of the lists (deleting.ts), for the delete dialog.
   // retention: how long it is kept, a purge asked for or announced, holds, and what a purge left (records.ts).
-  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e), seal: sealFacts(e) };
+  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), whatsapp: waOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e), seal: sealFacts(e), archive_format: pdfaFacts(e), record_stamp: chainStampFacts(e.id, verifyChain(e.id).ok) };
 });
 
 // The same check for text that is not saved yet: the editor asks before sending, with what stands on screen.
@@ -919,7 +926,7 @@ route('GET', '/public/powerforms/:slug', async (c) => {
   const noCustom = posing ? null : formCustomProblem(tpl);
   if (noCustom) await tellFormOwner(p, tpl.sender_id, noCustom);
   // Said before anyone types their name and address into a form that cannot take them.
-  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || !!noCustom || formClosed(p, tpl), shared_device: !!p.shared_device };
+  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || !!noCustom || formClosed(p, tpl), shared_device: !!p.shared_device, trees: showsTrees(p.account_id) };
 }, 'public');
 
 // The owner of a form hears why it could not take someone, in plain words and once a day at most. The visitor is

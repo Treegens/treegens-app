@@ -11,6 +11,9 @@ import { headerFor, readRecipients, bulkLanguageHint, MAX_ROWS, type BulkRow, ty
 import { readFieldColumns, fillableColumns } from '@/components/sender/fieldColumns';
 // Columns named like one of the account's custom fields fill it for that row (customColumns.ts).
 import { readCustomColumns } from '@/components/sender/customColumns';
+// Saved lists and groups from Contacts to send to, and saving the list in the box (src/components/reports/SavedLists.tsx).
+import { UseSavedList, SaveList } from '@/components/reports/SavedLists';
+import '../../styles/reports.css';
 import { dayTime, explain, plural } from '@/components/sender/lib';
 import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 import { reminderText } from '@/lib/policy';
@@ -140,7 +143,7 @@ function BulkSend({ preset }: { preset: string }) {
     if (!waiting) sendKey.current = null;
     setResult({ id: r.id, sent: r.sent, failed });
     setConfirming(null);
-    toast(waiting ? `${plural(r.sent, 'envelope')} sent so far, ${waiting} still going out. Nobody is sent to twice.` : r.sent ? `${plural(r.sent, 'envelope')} sent.` : 'Nothing was sent. See why below.', !r.sent && !waiting);
+    toast(waiting ? `${plural(r.sent, 'document')} sent so far, ${waiting} still going out. Nobody is sent to twice.` : r.sent ? `${plural(r.sent, 'document')} sent.` : 'Nothing was sent. See why below.', !r.sent && !waiting);
     if (!failed.length) (setCsv(''), setName(''), setFileNote(''));
     reloadBatches();
     reloadAllowance();
@@ -168,7 +171,8 @@ function BulkSend({ preset }: { preset: string }) {
 
         {loaded && roles.length > 0 && (
           <>
-            <label className="f" style={{ marginBottom: 6 }}><span>2. Add your list <span className="hint">(paste from a spreadsheet or upload a CSV file, one row per envelope)</span></span>
+            <UseSavedList roles={roles} header={header} onLoad={(text, note) => (setCsv(text), setResult(null), setFileNote(note))} />
+            <label className="f" style={{ marginBottom: 6 }}><span>2. Add your list <span className="hint">(paste from a spreadsheet or upload a CSV file, one row per document)</span></span>
               <textarea className="sn-csv" spellCheck={false} placeholder={`${header}\nAda Lovelace,ada@example.org`} value={csv} onChange={(e) => (setCsv(e.target.value), setResult(null), setFileNote(''))} aria-describedby="sn-csv-help" />
             </label>
             <div className="sn-csvtools">
@@ -176,8 +180,9 @@ function BulkSend({ preset }: { preset: string }) {
               <button type="button" className="btn sm ghost" onClick={starter}>Download a starter file</button>
               {fileNote && <span className="small muted" role="status">{fileNote}</span>}
             </div>
+            {reading.rows.length > 0 && !reading.missing.length && !tooMany && <SaveList csv={csv} rows={reading.rows.length} />}
             <p className="muted small" id="sn-csv-help">
-              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.{bulkLanguageHint()}{fillableColumns(loaded?.fields).size ? ` A column named like a field of the template (${[...fillableColumns(loaded?.fields).values()].slice(0, 4).join(', ')}) fills that field in each envelope, as if you had typed it in, and anything that depends on it shows or hides from the start.` : ''}{customs?.fields?.length ? ` A column named like one of your account's details (${customs.fields.slice(0, 4).map((f: any) => f.name).join(', ')}) fills it for that envelope, in place of the template's value.${customs.fields.some((f: any) => f.required) ? ' Every envelope needs a value for the required ones, from a column or from the template.' : ''}` : ''}
+              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.{bulkLanguageHint()}{fillableColumns(loaded?.fields).size ? ` A column named like a field of the template (${[...fillableColumns(loaded?.fields).values()].slice(0, 4).join(', ')}) fills that field in each document, as if you had typed it in, and anything that depends on it shows or hides from the start.` : ''}{customs?.fields?.length ? ` A column named like one of your account's details (${customs.fields.slice(0, 4).map((f: any) => f.name).join(', ')}) fills it for that document, in place of the template's value.${customs.fields.some((f: any) => f.required) ? ' Every document needs a value for the required ones, from a column or from the template.' : ''}` : ''}
               {' '}No header row? Then use exactly that order.
             </p>
 
@@ -234,12 +239,12 @@ function BulkSend({ preset }: { preset: string }) {
                 {/* What the batch holds, what is there, what is missing and what that costs: before the button, for every list. */}
                 {listOk && <BatchCost check={check} failed={checkFailed} />}
                 {/* Said before every send, also here: each envelope of the batch reminds as the template says (reminderText). */}
-                {listOk && <p className="muted small" id="sn-batch-reminders">{reminderText(loaded.reminder_days)} That comes from the template, for every envelope in this batch. To change it, <Link href={`/app/templates/${tid}/edit`}>edit the template</Link> first.</p>}
+                {listOk && <p className="muted small" id="sn-batch-reminders">{reminderText(loaded.reminder_days)} That comes from the template, for every document in this batch. To change it, <Link href={`/app/templates/${tid}/edit`}>edit the template</Link> first.</p>}
 
                 <div className="sn-sendrow">
                   <label className="f"><span>Name this batch <span className="hint">(optional, only you see it)</span></span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder={loaded.subject || 'Send to many'} /></label>
                   <button className="btn primary" disabled={!canSend} aria-describedby={listOk ? 'sn-batch-cost sn-batch-reminders' : undefined} onClick={() => setConfirming(ready)}>
-                    {stuck.length > 0 && ready.length > 0 ? `Send the ${plural(ready.length, 'ready row')}` : `Send ${plural(ready.length, 'envelope')}`}
+                    {stuck.length > 0 && ready.length > 0 ? `Send the ${plural(ready.length, 'ready row')}` : `Send ${plural(ready.length, 'document')}`}
                   </button>
                 </div>
                 {stuck.length > 0 && ready.length > 0 && !reading.missing.length && <p className="muted small" style={{ textAlign: 'right' }}>The {plural(stuck.length, 'row')} that {stuck.length === 1 ? 'needs' : 'need'} a fix will be left out.</p>}
@@ -250,7 +255,7 @@ function BulkSend({ preset }: { preset: string }) {
 
         {result && (
           <div className={`notice${result.failed.length ? ' warn' : ''}`} role="status" style={{ marginTop: 14 }}>
-            <b>{result.sent ? `${plural(result.sent, 'envelope')} sent.` : 'Nothing was sent.'}</b>
+            <b>{result.sent ? `${plural(result.sent, 'document')} sent.` : 'Nothing was sent.'}</b>
             {result.failed.length > 0 && (
               <>
                 {' '}{plural(result.failed.length, 'row')} could not be sent and {result.failed.length === 1 ? 'was' : 'were'} saved as {result.failed.length === 1 ? 'a draft' : 'drafts'} in the batch, so nothing is lost:
@@ -288,7 +293,7 @@ function BulkSend({ preset }: { preset: string }) {
       </section>
 
       {confirming && (
-        <ConfirmDialog title={`Send ${plural(confirming.length, 'envelope')}`} confirmLabel={dead.length ? 'Send anyway' : `Send ${plural(confirming.length, 'envelope')}`} keepLabel="Not yet" danger={false} unchanged="" onClose={() => setConfirming(null)}
+        <ConfirmDialog title={`Send ${plural(confirming.length, 'document')}`} confirmLabel={dead.length ? 'Send anyway' : `Send ${plural(confirming.length, 'document')}`} keepLabel="Not yet" danger={false} unchanged="" onClose={() => setConfirming(null)}
           onConfirm={async () => {
             try {
               await send(confirming, dead.length > 0);

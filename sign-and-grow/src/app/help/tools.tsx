@@ -8,7 +8,7 @@ import type { ChatLine } from '@/lib/chat';
 // The self-service tools on the help page. Every one of them works without logging in.
 
 // Billing dates are written in the reader's own time zone, like the Plan page and our emails, so the three agree.
-export const billDay = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
+export const billDay = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
 
 // Turns a failed call into a sentence that says what to do next. Errors without a status never reached the server.
 const explain = (e: any, tooMany: string, byStatus: Record<number, string> = {}) =>
@@ -261,7 +261,7 @@ export function ContactForm({ chat, onDropChat, topic: firstTopic, code: firstCo
     return (
       <div className="card pub-sent">
         <Result show>
-          <p><b>We got your message.</b> A person will read it and reply by email to {a.done.email}.</p>
+          <p><b>We got your message.</b> {info.reply ? <>A person will read it and reply by email to {a.done.email}.</> : <>It is kept, but nobody has been named to answer help requests on this server yet, so we cannot say when someone will read it.</>}</p>
           <p>Your reference is <span className="pub-ref">{a.done.reference}</span></p>
           {a.done.due_at && <p><b>A person will have answered by {whenText(a.done.due_at)}</b> (your time). That is within {hoursText(a.done.reply_hours || 0)}, counted in real hours. If we are ever late, your request says so and the whole team is told.</p>}
           <p>We also emailed you this reference, with a private link to your request. Use that link to read the answer, to add something or to see where things stand. It works without signing in. Replying to the email itself does not reach us.</p>

@@ -156,7 +156,7 @@ test('bulk send is no longer "on every plan, including free" without its price',
   assert.match(landing, /<li id="bulk-cost"><b>What Send to many costs\.<\/b> \{BULK_COST_NOTE\}/);
   assert.match(policy.BULK_COST_NOTE, /Each person who signs uses one signature/);
   assert.match(policy.BULK_COST_NOTE, /only goes out when all of its signatures are already in your balance/);
-  assert.match(read('src/app/help/page.tsx'), /<b>Bulk send:<\/b> \{BULK_COST_NOTE\}/);
+  assert.match(read('src/app/help/page.tsx'), /<b>Send to many:<\/b> \{BULK_COST_NOTE\}/);
   assert.match(read('README.md'), /a batch only goes\s+out when all of its signatures are already in the balance/);
 });
 
@@ -1175,14 +1175,14 @@ test('the payment address is in no email, attached certificate, export or eviden
   // A line written the way it was before this repair, with the address in it, stays in the record as it was (the
   // chain of hashes holds it), and the certificate that is emailed still leaves the address out.
   const { payLineForPrint } = await import('../src/lib/paylink.ts');
-  assert.equal(payLineForPrint('Shown the payment link', 'Ana was shown "Pay", which opens https://buy.stripe.com/x?a=1.'), 'Ana was shown "Pay", which opens [the address, kept on the envelope page].');
+  assert.equal(payLineForPrint('Shown the payment link', 'Ana was shown "Pay", which opens https://buy.stripe.com/x?a=1.'), 'Ana was shown "Pay", which opens [the address, kept on the document page].');
   assert.equal(payLineForPrint('Signed', 'see https://example.com/x'), 'see https://example.com/x', 'other lines are printed as they are');
   const old2 = await simple(c, 'leg-acy@example.com', { send: true });
   const { audit } = await import('../src/server/envelopes.ts');
   audit(old2.id, { name: 'Cal Carpenter' }, 'Payment link changed', '"Pay the deposit" opens https://buy.stripe.com/cal_legacy (it opened https://buy.stripe.com/cal_older before). It is shown to each person who signs.');
   assert.equal((await signAll(old2.id, 'leg-acy@example.com')).status, 200);
   const legacy = flat(await pdfText((await new Client().get(`/sign/${tokenFor(old2.id, 'leg-acy@example.com')}/download`)).data));
-  assert.match(legacy, /opens\[theaddress,keptontheenvelopepage\]\(itopened\[theaddress,keptontheenvelopepage\]before\)/);
+  assert.match(legacy, /opens\[theaddress,keptonthedocumentpage\]\(itopened\[theaddress,keptonthedocumentpage\]before\)/);
   assert.doesNotMatch(legacy, /stripe|cal_legacy/);
 });
 

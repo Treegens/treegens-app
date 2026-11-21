@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { consentWording, adoptLine, LANGUAGE_NOTE, cannotOpenLine } from '@/lib/policy';
+import { versionText } from '@/lib/wordingday';
 import { COUNTRY_NOTES, paperWordList } from '@/lib/paperwork';
 import { BY_SENDER_TICK, BY_SENDER_HOW, BY_SENDER_LINE } from '@/lib/bysender';
 
@@ -22,13 +23,13 @@ export function ConsentWords() {
   const w = consentWording('the sender', true);
   return (
     <QA id="consent-wording" q="What do I agree to before I sign?">
-      <p>Before any field opens, the signing page shows you the words below and asks you to tick a box. You can decline instead, or ask the sender for a paper copy. The audit trail of the document records that you agreed, when, and which wording you were shown.</p>
+      <p>Before any field opens, the signing page shows you the words below and asks you to tick a box. You can decline instead, or ask the sender for a paper copy. The document's history records that you agreed, when, and which wording you were shown.</p>
       <blockquote className="pub-quote">
         <p>{w.legal}</p>
         <p>{w.practical}</p>
         <p><b>{w.agree}</b></p>
       </blockquote>
-      <p className="muted small">This is wording {w.version}, the one in use now, as shown to someone who signs. Where it says &quot;the sender&quot;, your screen names the person. Someone who approves or only reads is told the same without the sentences about signing. When you place your signature you also agree to this: &quot;{adoptLine('signature')}&quot;</p>
+      <p className="muted small">This is the wording of {versionText(w.version)}, the one in use now, as shown to someone who signs. Where it says &quot;the sender&quot;, your screen names the person. Someone who approves or only reads is told the same without the sentences about signing. When you place your signature you also agree to this: &quot;{adoptLine('signature')}&quot;</p>
       <p className="muted small">{LANGUAGE_NOTE} If you cannot read what you are asked to agree to, do not tick the box: ask the sender to explain it or to send the document on paper.</p>
     </QA>
   );
@@ -59,7 +60,7 @@ export function SignatureKind() {
           <li>Anything a law, a registry, a court or a public body says must be on paper, in written form, or signed with an advanced or a qualified signature.</li>
           <li>In Germany: the fixed term in an employment contract, a notice of termination and a separation agreement.</li>
         </ul>
-        <p><b>The check before sending.</b> When the subject, the name of a document or the text of a document contains a word that usually means one of these, the review step of the editor shows a warning that names the word and where it stands, and the audit trail of the envelope gets a line that says so. Through the API the same list comes back as <code>warnings</code> in the answer to sending, and from <code>GET /api/envelopes/&#123;id&#125;/warnings</code> before it. It is a reminder and nothing more: it never blocks a send, it only knows the words below, and a document it says nothing about can still need paper.</p>
+        <p><b>The check before sending.</b> When the subject, the name of a document or the text of a document contains a word that usually means one of these, the review step of the editor shows a warning that names the word and where it stands, and the document's History gets a line that says so. Through the API the same list comes back as <code>warnings</code> in the answer to sending, and from <code>GET /api/envelopes/&#123;id&#125;/warnings</code> before it. It is a reminder and nothing more: it never blocks a send, it only knows the words below, and a document it says nothing about can still need paper.</p>
         <details data-fold="">
           <summary>The words it looks for</summary>
           <p className="muted small" style={{ margin: '8px 0 0' }}>Capitals and accents make no difference, and an umlaut may be written out (ue for ü). The name of a document is usually its file name, and it is read too: underscores and dots count as spaces, so Power_of_Attorney.pdf and PowerOfAttorney.pdf are found. A word followed by three dots stands for every word that begins that way.</p>
@@ -96,13 +97,13 @@ export function SignatureKind() {
         <p>Some countries and some office networks do not let a website through. We have not tested from which places this one can be reached, so we make no promise about any country. Every email we send in your name that asks someone to sign (the request, the reminders and the notices about it) therefore ends with this line, and a reply to it comes to you. The list a signer gets from Find my documents comes from us and can name several senders, so it tells them to reply to your own email about the document instead.</p>
         <blockquote className="pub-quote"><p>{cannotOpenLine('you')}</p></blockquote>
         <p>When someone writes that to you: open the document, choose <b>More</b>, then <b>Open the PDF</b>, and save the file. It is the document as it stands, with what has been filled in so far. Send it to them yourself, and collect their signature on paper or as a scan.</p>
-        <p>A signature collected that way is outside GrowSigning. It is not on our certificate and not in the audit trail, so keep the paper or the scan yourself. The envelope here stays open until you void it or its deadline passes. If the others on it should still finish here, take that one person off with a correction instead.</p>
+        <p>A signature collected that way is outside GrowSigning. It is not on our signing record and not in the document's History, so keep the paper or the scan yourself. The document here stays open until you cancel it or its deadline passes. If the others on it should still finish here, take that one person off with a correction instead.</p>
       </QA>
 
       <QA id="no-email" q="My signer has no email address, or does not read it">
         <p>Type their name and tick <b>{BY_SENDER_TICK}</b> instead of an address. {BY_SENDER_HOW}</p>
-        <p>We tell you what only you can pass on: when it becomes their turn after someone before them has finished, the reminders you set for the envelope, when their link has not been opened for a while, and, in the email that tells you everything is signed, that their copy is waiting behind their link. Their own page never promises them an email.</p>
-        <p>The audit trail and the certificate say &quot;{BY_SENDER_LINE}&quot; where an address would be. That is all we know: not how you sent it, not whether it arrived, and not who opened it. If it matters who signs, give them an access code and tell it to them another way, or ask for a one-time code by text message where this server sends texts. You can add their address later with <b>Correct</b> on the envelope page: from then on we email them, and the link you sent stops working.</p>
+        <p>We tell you what only you can pass on: when it becomes their turn after someone before them has finished, the reminders you set for the document, when their link has not been opened for a while, and, in the email that tells you everything is signed, that their copy is waiting behind their link. Their own page never promises them an email.</p>
+        <p>The History and the signing record say &quot;{BY_SENDER_LINE}&quot; where an address would be. That is all we know: not how you sent it, not whether it arrived, and not who opened it. If it matters who signs, give them an access code and tell it to them another way, or ask for a one-time code by text message where this server sends texts. You can add their address later: on the document's page, open the More next to their name and choose <b>Change person</b>. From then on we email them, and the link you sent stops working.</p>
       </QA>
     </>
   );

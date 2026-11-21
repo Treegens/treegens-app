@@ -5,6 +5,7 @@ import { QrCode } from './QrCode';
 import { ConfirmCode } from './ConfirmEmail';
 import { qrSvg } from '@/lib/qr';
 import { TWO_STEP_API_KEYS, TWO_STEP_LOST, TWO_STEP_RECOVERY_CODES, TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES } from '@/lib/policy';
+import { screenLocale } from '@/lib/dates';
 
 // Setting up two-step login, and the recovery codes shown once. Used under Settings, Security, and by the screen a
 // team that asks for it shows to someone without it (TwoStepRequired). The rules are in src/server/twostep.ts.
@@ -158,7 +159,7 @@ export function TwoStepResetBanner({ me }: { me: any }) {
   const at = me?.two_step?.reset_at;
   if (said) return <div className="notice row between wrap" role="status" style={{ marginBottom: 16 }}><span>{said}</span><button className="btn" style={{ minHeight: 44 }} onClick={() => setSaid('')}>OK</button></div>;
   if (!at) return null;
-  const when = new Date(at).toLocaleString(undefined, { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const when = new Date(at).toLocaleString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   const stop = () => {
     setBusy(true);
     api('/me/two-step/reset/stop', { method: 'POST' })
@@ -179,13 +180,15 @@ export function TwoStepRequired({ me }: { me: any }) {
   const [done, setDone] = useState(false);
   const [resent, setResent] = useState('');
   const others = (me.accounts || []).filter((a: any) => a.id !== me.account.id);
+  // Who asks it: an organisation above the workspace (me.org.two_step_by, src/server/orgs.ts), or the workspace itself.
+  const asks = me.org?.two_step_by ? `${me.org.two_step_by} asks everyone in ${me.account.name}` : `${me.account.name} asks everyone on the team`;
   // Two-step login needs a confirmed address (src/server/routes-twostep.ts), and this screen hides the rest of the
   // app, with its banner that sends the confirmation again. So it is offered here.
   if (!me.user.email_verified && !done) return (
     <main className="authbox" style={{ maxWidth: 560 }}>
       <div className="card twostep">
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>Confirm your email address first</h1>
-        <p>{me.account.name} asks everyone on the team to sign in with two-step login, and it can only be switched on for a confirmed address. Type the 6-digit code we sent to {me.user.email}, or press the button in that email in this browser.</p>
+        <p>{asks} to sign in with two-step login, and it can only be switched on for a confirmed address. Type the 6-digit code we sent to {me.user.email}, or press the button in that email in this browser.</p>
         {me.user.confirm_by_code !== false && <ConfirmCode main email={me.user.email} onConfirmed={() => window.location.reload()} />}
         {resent && <p className="notice" role="status">{resent}</p>}
         <div className="row wrap" style={{ gap: 8 }}>
@@ -201,12 +204,12 @@ export function TwoStepRequired({ me }: { me: any }) {
     <main className="authbox" style={{ maxWidth: 560 }}>
       <div className="card twostep">
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>Set up two-step login to open {me.account.name}</h1>
-        <p>{me.account.name} asks everyone on the team to sign in with two-step login: after the password, a 6-digit code from an authenticator app on your phone. Until yours is set up, nothing else in {me.account.name} opens. It takes a minute.</p>
+        <p>{asks} to sign in with two-step login: after the password, a 6-digit code from an authenticator app on your phone. Until yours is set up, nothing else in {me.account.name} opens. It takes a minute.</p>
         {done
           ? <button className="btn primary" onClick={() => window.location.assign('/app')}>Open {me.account.name}</button>
           : <SetUpTwoStep hasPassword={me.user.has_password !== false} onDone={() => setDone(true)} />}
         <hr style={{ margin: '18px 0', border: 0, borderTop: '1px solid var(--line)' }} />
-        <p className="small muted">Cannot set it up now? {others.length ? 'Your other workspaces are not affected:' : 'Ask an owner or admin of the team, or sign out.'}</p>
+        <p className="small muted">Cannot set it up now? {others.length ? 'Your other workspaces are not affected:' : me.org?.two_step_by ? `Only an admin of ${me.org.two_step_by} can change this rule. Ask them, or sign out.` : 'Ask an owner or admin of the team, or sign out.'}</p>
         <div className="row wrap" style={{ gap: 8 }}>
           {others.map((a: any) => <button key={a.id} className="btn" onClick={() => api('/auth/switch', { body: { account_id: a.id } }).then(() => window.location.assign('/app')).catch(() => {})}>Open {a.name}</button>)}
           <button className="btn" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => window.location.assign('/'))}>Sign out</button>

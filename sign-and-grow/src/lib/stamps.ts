@@ -7,7 +7,7 @@ export const STAMP_IS = 'A stamp here is a picture of a stamp that this person p
 /** The same, to the person putting it on. */
 export const STAMP_IS_YOU = 'A stamp here is a picture of a stamp that you put on the document. GrowSigning does not check that you may use it, and it is not a certified electronic seal.';
 /** The same, to the admins who keep the account's stamps. */
-export const STAMP_IS_TEAM = 'A stamp here is a picture of a stamp that someone on your team puts on a document. GrowSigning does not check that they may use it, and it is not a certified electronic seal.';
+export const STAMP_IS_TEAM = 'A stamp or seal here is a picture of a stamp that someone on your team puts on a document. GrowSigning does not check that they may use it, and it is not a certified electronic seal.';
 
 /** A picture of a stamp as it is chosen: up to this many bytes. */
 export const STAMP_UPLOAD_MAX_BYTES = 8 * 1024 * 1024;

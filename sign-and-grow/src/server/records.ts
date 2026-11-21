@@ -532,7 +532,7 @@ function removeDocuments(e: any): string[] {
 /** Level 'values'. Answers the texts that are to be taken out of the audit trail too (the reasons). */
 function removeValues(e: any, gone: string): string[] {
   const texts: string[] = [];
-  run('UPDATE fields SET value=NULL, calc_num=NULL, prefill=NULL, stamp_meta=NULL WHERE envelope_id=?', e.id);
+  run('UPDATE fields SET value=NULL, calc_num=NULL, typed_num=NULL, prefill=NULL, stamp_meta=NULL WHERE envelope_id=?', e.id);
   run('UPDATE earlier_signatures SET answers=?, signature_png=NULL, initials_png=NULL WHERE envelope_id=?', '[]', e.id);
   for (const r of all("SELECT id, decline_reason FROM recipients WHERE envelope_id=? AND decline_reason IS NOT NULL AND decline_reason!=''", e.id)) texts.push(r.decline_reason);
   run('UPDATE recipients SET signature_png=NULL, initials_png=NULL, decline_reason=CASE WHEN decline_reason IS NULL OR decline_reason=\'\' THEN decline_reason ELSE ? END WHERE envelope_id=?', gone, e.id);
@@ -572,6 +572,10 @@ function removePersonal(e: any, gone: string): string[] {
   for (const d of all('SELECT id, name, email, ip, user_agent FROM disputes WHERE envelope_id=?', e.id))
     (note(d.name, d.email, d.ip, d.user_agent), run('UPDATE disputes SET name=?, email=?, ip=?, user_agent=?, detail=CASE WHEN detail IS NULL THEN NULL ELSE ? END WHERE id=?', gone, keep(d.email), keep(d.ip), keep(d.user_agent), gone, d.id));
   for (const t of all('SELECT id, to_masked FROM texts WHERE envelope_id=?', e.id)) (note(t.to_masked), run('UPDATE texts SET to_masked=?, body=?, to_phone=NULL WHERE id=?', gone, gone, t.id));
+  // WhatsApp messages and calls with a code (whatsapp.ts, voice.ts), and the masked number the certificate names.
+  for (const t of all('SELECT id, to_masked FROM wa_messages WHERE envelope_id=?', e.id)) (note(t.to_masked), run('UPDATE wa_messages SET to_masked=?, body=?, params=NULL, to_phone=NULL WHERE id=?', gone, gone, t.id));
+  for (const t of all('SELECT id, to_masked FROM voice_calls WHERE envelope_id=?', e.id)) (note(t.to_masked), run('UPDATE voice_calls SET to_masked=? WHERE id=?', gone, t.id));
+  run('UPDATE recipients SET wa_sent_to=CASE WHEN wa_sent_to IS NULL THEN NULL ELSE ? END WHERE envelope_id=?', gone, e.id);
   for (const s of all('SELECT id, dest, ip FROM signer_codes WHERE envelope_id=?', e.id)) (note(s.dest, s.ip), run('UPDATE signer_codes SET dest=?, ip=NULL WHERE id=?', gone, s.id));
   for (const a of all('SELECT DISTINCT ip, user_agent FROM audit WHERE envelope_id=?', e.id)) note(a.ip, a.user_agent);
   const env = get('SELECT form_ip, message FROM envelopes WHERE id=?', e.id);

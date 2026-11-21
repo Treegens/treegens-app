@@ -338,7 +338,8 @@ test('a support message is shown only to the person who wrote it, and the form m
   assert.equal(sent.status, 200);
   const ack = mailTo('victim@support.test').at(-1)!;
   assert.ok(ack.subject.includes(sent.data.reference), 'the acknowledgement gives the reference');
-  assert.match(ack.html, /A person will reply to you/);
+  // The acknowledgement promises a person only where someone reads requests (repair-open-platform).
+  assert.match(ack.html, process.env.SUPPORT_EMAIL || process.env.OPERATOR_EMAILS ? /A person will reply to you/ : /We got your message/);
   assert.ok(!ack.html.includes('4242'), 'and does not repeat what was typed to an address nobody confirmed');
 
   // Someone registers that address without confirming it.

@@ -3,6 +3,13 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Logo, Mark, SentWith } from '@/components/Brand';
 import { savedLine } from '@/components/sign/actions';
 import { jumpRatherThanGlide } from '@/components/pdfMemory';
+import { orgOf } from '@/lib/sendername';
+import { headingFor } from '@/lib/consentfit';
+import { signT } from '@/lib/signlang';
+import { useSignLang, useDocumentLang, SignLangProvider, LanguageMenu, langAttrs } from '@/components/sign/lang';
+
+/** The roles whose screens never say "Please sign": they approve, read or witness. */
+const NOT_SIGNING = ['approver', 'viewer', 'witness'];
 
 const ICONS: Record<string, string> = {
   download: 'M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14',
@@ -76,33 +83,42 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
   onHelp?: () => void;
 }) {
   const brand = data?.brand;
-  const title = data?.envelope?.subject || 'GrowSigning';
+  // Someone asked to approve, read or witness is not asked to sign: no "Please sign: " over their screen (headingFor).
+  const title = data?.envelope?.subject ? headingFor(data.envelope.subject, NOT_SIGNING.includes(data?.recipient?.role)) : 'GrowSigning';
   const named = !!data?.envelope?.subject && !plainBar;
   const style = brand?.brand_color ? ({ ['--brand' as any]: brand.brand_color, ['--sg-bar-ink' as any]: inkOn(brand.brand_color) }) : undefined;
+  // The language of everything under the Shell, on its root as lang and dir (src/components/sign/lang.tsx).
+  const lang = useSignLang(data);
+  useDocumentLang(lang);
+  const T = (key: string) => signT(lang, key);
   return (
-    <div className="sg-shell">
-      <a className="sg-skip" href="#sg-main">Skip to content</a>
+    <SignLangProvider value={lang}>
+    <div className="sg-shell" {...langAttrs(lang)}>
+      <a className="sg-skip" href="#sg-main">{T('sign.shell.skip')}</a>
       <header className="signbar sg-bar" style={style}>
-        {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || 'Sender logo'} /> : named && <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
+        {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || T('sign.shell.logo')} /> : named && <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
         {/* With no subject to show (a link that did not open), the bar shows the drawn logo, never the mark beside the typed name. */}
         {(() => {
-          const shown = named ? title : <Logo height={20} tone={brand?.brand_color ? 'mono' : 'dark'} style={{ display: 'block' }} />;
+          // With the language menu there, a phone shows the leaf alone rather than a logo cut off mid-word (sign.css).
+          const shown = named ? <span dir="auto">{title}</span> : <><span className="sg-logo-full"><Logo height={20} tone={brand?.brand_color ? 'mono' : 'dark'} style={{ display: 'block' }} /></span><span className="sg-logo-small"><Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} /></span></>;
           return titleIsHeading ? <h1 className="sg-title grow truncate">{shown}</h1> : <div className="sg-title grow truncate">{shown}</div>;
         })()}
+        <LanguageMenu lang={lang} />
         {bar}
-        {onHelp && <button type="button" className="btn sm sg-other sg-help" aria-haspopup="dialog" onClick={onHelp}>Help</button>}
+        {onHelp && <button type="button" className="btn sm sg-other sg-help" aria-haspopup="dialog" onClick={onHelp}>{T('sign.shell.help')}</button>}
       </header>
       <main id="sg-main" className="signwrap" tabIndex={-1}>{children}</main>
       <footer className="sg-foot">
         <div className="sg-foot-links">
           {footer}
-          {!onHelp && <a href={helpHref(data)} {...(helpInNewTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Help{helpInNewTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>}
+          {!onHelp && <a href={helpHref(data)} {...(helpInNewTab ? { target: '_blank', rel: 'noreferrer' } : {})}>{T('sign.shell.help')}{helpInNewTab && <span className="sg-vh"> {T('sign.shell.new_tab')}</span>}</a>}
         </div>
         <div className="sg-foot-by"><SentWith height={16} /></div>
       </footer>
       {bottom && <div className="sg-bottom">{bottom}</div>}
       <div className="sg-vh" role="status" aria-live="polite">{live || ''}</div>
     </div>
+    </SignLangProvider>
   );
 }
 
@@ -126,7 +142,9 @@ export function Sender({ env, brand, lead = 'Sent by' }: { env: any; brand?: any
     <dl className="sg-who">
       <div><dt>{lead}</dt><dd><b>{s.name}</b></dd></div>
       <div><dt>Email</dt><dd><a href={`mailto:${s.email}`}>{s.email}</a></dd></div>
-      {brand?.name && <div><dt>Account</dt><dd>{brand.name}</dd></div>}
+      {/* The account's name only when it says more than the sender's own, never the "Rosa Gardener's workspace" every
+          new account is called (orgOf, as on the consent screen and in the email). */}
+      {orgOf(brand?.name, s.name) && <div><dt>Account</dt><dd>{orgOf(brand?.name, s.name)}</dd></div>}
     </dl>
   );
 }

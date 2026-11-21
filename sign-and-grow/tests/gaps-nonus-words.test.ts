@@ -77,10 +77,11 @@ test('the signing screen and the signature dialog show those words and nothing s
   assert.doesNotMatch(page, PROMISES);
   assert.doesNotMatch(pad, PROMISES);
   // The screen prints the shared wording, ties it to the tick box for a screen reader, and sends its version back.
-  assert.match(page, /const wording = consentWording\(sender\.name, acts\)/);
+  // In the page's language where a person checked that wording, else English (tests/ds-lang-signing.test.ts).
+  assert.match(page, /const wording = consentWording\(sender\.name, acts, undefined, lang\)/);
   assert.match(page, /<p className="muted sg-legal">\{wording\.legal\}<\/p>/);
   assert.match(page, /aria-describedby=\{formError \? 'sg-legal sg-agree-err' : 'sg-legal'\}/);
-  assert.match(page, /<span>\{wording\.agree\}<\/span>/);
+  assert.match(page, /<span lang=\{wording\.language\}>\{wording\.agree\}<\/span>/);
   assert.match(page, /body: \{ version: version\.current, wording: wording\.version[ ,}]/);
   assert.match(pad, /\{adoptLine\(word\)\}/);
   // Nothing else in the product makes the promise either: pages, components, emails, the README.
@@ -125,7 +126,7 @@ test('the audit line for consent names the wording the signer was shown', async 
   const help = src('app/help/outside.tsx');
   assert.match(help, /<QA id="consent-wording" q="What do I agree to before I sign\?">/);
   assert.match(help, /<p>\{w\.legal\}<\/p>/);
-  assert.match(help, /This is wording \{w\.version\}/);
+  assert.match(help, /This is the wording of \{versionText\(w\.version\)\}/); // day first since repair-open-public
   assert.match(src('app/help/page.tsx'), /<ConsentWords \/>/);
 });
 
@@ -135,7 +136,7 @@ test('a page promises a QR code only because the app draws one, and every public
   // of your own. The app now makes the code itself (src/lib/qr.ts, held to the standard in tests/qr.test.ts), so the
   // page says that, and the promise stands on code that exists.
   assert.doesNotMatch(landing, /link or QR code|tool of your own|we do not make one yet/);
-  assert.match(landing, /print the QR code the app makes for it on a sheet/);
+  assert.match(landing, /print the QR code the app makes for it/);
   assert.match(src('lib/qr.ts'), /export function qrEncode\(/);
   assert.match(src('app/app/powerforms/page.tsx'), /\/app\/powerforms\/\$\{p\.id\}\/qr/);
 
@@ -388,7 +389,7 @@ test('the review step shows the warning without switching Send off, and the help
   assert.equal(STAMP_ZONES['Asia/Kolkata'], 'India');
   assert.equal(STAMP_ZONES['Asia/Jakarta'], 'Indonesia');
   assert.equal(STAMP_ZONES['Europe/Berlin'], undefined);
-  assert.match(stampNote('India'), /^Signing here does not pay stamp duty\..*e-stamp certificate.*first document of the envelope/);
+  assert.match(stampNote('India'), /^Signing here does not pay stamp duty\..*e-stamp certificate.*first file of the document/);
   assert.match(stampNote('Indonesia'), /e-meterai/);
   assert.match(check, /STAMP_ZONES\[Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.timeZone\]/);
 
@@ -592,7 +593,7 @@ test('every email that asks someone to sign says what to do when the page will n
   assert.match(help, /<QA id="cannot-open" q="My signer says the page will not open where they are">/);
   assert.match(help, /\{cannotOpenLine\('you'\)\}/);
   assert.match(help, /We have not tested from which places this one can be reached, so we make no promise about any country\./);
-  assert.match(help, /A signature collected that way is outside GrowSigning\. It is not on our certificate and not in the audit trail/);
+  assert.match(help, /A signature collected that way is outside GrowSigning\. It is not on our signing record and not in the document's History/);
   for (const f of ['app/help/outside.tsx', 'app/help/page.tsx', 'app/page.tsx', 'app/security/page.tsx', 'lib/policy.ts']) assert.doesNotMatch(src(f), /works in China|reachable from China|VPN/i, f);
 });
 
@@ -885,7 +886,8 @@ test('the screens offer the choice, hand the sender the link, and never promise 
   // A question is a comment now (src/components/sign/Comments.tsx): where an answer is emailed comes from the server
   // (answers_to, null for someone without an address), and with none the page promises no email.
   assert.match(src('components/sign/Comments.tsx'), /data\?\.answers_to \? `Their answer appears here, and we email it to \$\{data\.answers_to\}\.` : 'Their answer appears here when you open this link again\.'/);
-  assert.match(page, /sent you the link themselves, not by email from us/);
+  // The consent screen's For line lives in ConsentTop.tsx.
+  assert.match(src('components/sign/ConsentTop.tsx'), /sent you the link themselves, not by email from us/);
 
   // Help, security, developers and the API description say the same, and "Find my documents" says what it cannot find.
   const help = src('app/help/outside.tsx');
@@ -935,7 +937,7 @@ test('before a correction is saved, the editor says what really happens to someo
   const before = { documents: [doc], recipients: [mailed], fields: [sig('a')] };
   const after = { documents: [doc], recipients: [mailed, { id: 'w', role: 'signer', name: 'Wanjiru Kamau', email: '', link_by_sender: true, routing_order: 1 }], fields: [sig('a'), sig('w')] };
   const said = outcomes(before, after).people;
-  assert.equal(said.find((p) => p.id === 'w')!.text, 'Is added. We send them no email: send them their link from the envelope page once you have saved.');
+  assert.equal(said.find((p) => p.id === 'w')!.text, 'Is added. We send them no email: send them their link from the document\'s page once you have saved.');
   assert.equal(said.find((p) => p.id === 'a')!.text, 'Nothing changes for them. They keep the same link.', 'everyone else is told as before');
 });
 

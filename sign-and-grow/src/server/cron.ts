@@ -4,6 +4,7 @@ import { purgeClosedAccounts } from './routes-trust.ts';
 import { supportTick } from './routes-support.ts';
 import { retryMail } from './mail.ts';
 import { retryTexts } from './sms.ts';
+import { retryWhatsApp } from './whatsapp.ts';
 import { forgetOldBounces } from './bounces.ts';
 import { twoStepTick } from './twostep.ts';
 import { flushComments } from './routes-comments.ts';
@@ -13,6 +14,9 @@ import { purgeSecurityLog, sendHeldAlerts } from './seclog.ts';
 import { exportSecurityHeads } from './secheads.ts';
 import { retentionTick, sweepArchiveCopies } from './records.ts';
 import { noteTickStart, noteTick } from './selfhost.ts';
+import { monthlyReports } from './routes-reports.ts';
+import { purgeOldLists } from './bulklists.ts';
+import { runOcr } from './ocr.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -34,7 +38,7 @@ export async function tick() {
 }
 async function tickOnce() {
   // Text messages the provider would not take are tried again the same way (`texts`).
-  const r = { ...(await cronTick()), mail: await retryMail(), texts: await retryTexts() };
+  const r = { ...(await cronTick()), mail: await retryMail(), texts: await retryTexts(), whatsapp: await retryWhatsApp() };
   return { ...r, renewals: await renewalReminders(),
     // Signatures whose date has passed and that nobody holds expire, with a line in the plan history (credits.ts),
     // and top-ups about to expire unused are announced 30 and 3 days before (routes-billing.ts).
@@ -65,5 +69,11 @@ async function tickOnce() {
     // Closed envelopes at the end of their retention period: the email 14 days before, then the purge (records.ts).
     retention: await retentionTick(),
     // Our stored archive copies about envelopes deleted or purged since, once they have left (archivemail.ts).
-    archive_copies_forgotten: sweepArchiveCopies() };
+    archive_copies_forgotten: sweepArchiveCopies(),
+    // Last month's report for the admins who asked for it, on the first days of a month (routes-reports.ts).
+    monthly_reports: await monthlyReports().catch((e) => (console.error('[cron] monthly reports', e?.message), 0)),
+    // Saved lists for Send to many that nobody used for the account's number of days (bulklists.ts).
+    lists_deleted: purgeOldLists(),
+    // Text of scanned pages still waiting to be read, when OCR_CMD or OCRMYPDF_URL is set (ocr.ts).
+    ocr_read: await runOcr().catch((e) => (console.error('[cron] ocr', e?.message), 0)) };
 }

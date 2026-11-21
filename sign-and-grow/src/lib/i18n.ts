@@ -42,6 +42,12 @@ export type Language = {
   legal: Status;
   /** Switched on: a sender can choose it and a browser that asks for it gets it. The owner switches a language on. */
   shipped: boolean;
+  /**
+   * Recipients' emails and texts may be written in it (src/server/maillang.ts). Set it only once every email a
+   * recipient gets, and the pages those emails link to (/check, /verify, signer help), are in the catalogue in this
+   * language: until then a recipient gets every email in English, so no two emails about one document differ.
+   */
+  mail?: boolean;
 };
 
 /** The language every text starts in, and the one shown when nothing better is there. */

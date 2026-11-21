@@ -209,6 +209,10 @@
 }
 /* A link inside a folded note is as tall as any other thing a finger presses. */
 .ed-tap-link { display: inline-flex; align-items: center; min-height: 44px; }
+/* A tick box with its words: the whole line is the target, 44 px tall (Required, Read only, Format and limits). */
+label.check.ed-tap { min-height: 44px; }
+label.check.ed-tap > input[type='checkbox'] { width: 20px; height: 20px; }
+.ed-checks-fold > summary { width: auto; }
 .ed-textlink { margin-top: 10px; }
 .ed-checkpick .ed-check-says { margin: 8px 0 0; }
 /* The name of the step, on screens too narrow for it in the top bar. */

@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { toastLift } from '@/lib/toastplace';
 import { fmtDateTag } from '@/lib/dates';
+import { signedOutPath } from '@/lib/signinrules';
 import { Mark } from './Brand';
 
 // The reader's time zone, sent along when the app loads, so dates in emails match the dates on screen.
@@ -21,6 +22,9 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     credentials: 'same-origin',
   });
   const data = await res.json().catch(() => ({}));
+  // A sign-in rule of the account signed this browser out (src/server/secpolicy.ts): a page of the app goes to the
+  // sign-in page, which says why, instead of showing the refusal next to whatever was pressed.
+  if (res.status === 401 && data.code === 'signed_out' && (data.why === 'idle' || data.why === 'elsewhere') && window.location.pathname.startsWith('/app')) window.location.assign(signedOutPath(data.why, `${window.location.pathname}${window.location.search}`));
   // Some refusals carry a code a screen can act on (a stale copy, a change that needs a signer to sign again), next
   // to the sentence for the person. Both travel with the error.
   if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong.'), { status: res.status, code: data.code as string | undefined, data });
@@ -99,7 +103,7 @@ export const Leaf = ({ size = 20, color = 'currentColor' }: { size?: number; col
   <Mark size={size} tone="mono" label="" style={{ color }} />
 );
 
-const STATUS: Record<string, string> = { draft: 'Draft', sent: 'Waiting for others', completed: 'Completed', declined: 'Declined', voided: 'Voided', expired: 'Expired', pending: 'Not yet sent', viewed: 'Viewed' };
+const STATUS: Record<string, string> = { draft: 'Draft', sent: 'Waiting for others', completed: 'Completed', declined: 'Declined', voided: 'Cancelled', expired: 'Expired', pending: 'Not yet sent', viewed: 'Viewed' };
 export const Status = ({ s, label }: { s: string; label?: string }) => <span className={`badge ${s}`}>{label || STATUS[s] || s}</span>;
 
 export const ROLE_LABEL: Record<string, string> = { signer: 'Needs to sign', approver: 'Needs to approve', cc: 'Gets a copy', viewer: 'Must open it', inperson: 'Signs in person', witness: 'Is a witness' };

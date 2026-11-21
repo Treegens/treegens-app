@@ -119,7 +119,7 @@ export function convertedOf(stored: any): Converted | null {
 export const ORIGINALS_README = 'originals/            each file as the sender uploaded it, before it was turned into a PDF: a Word, Excel, PowerPoint, OpenDocument, RTF, text, web page or TIFF file. These were not signed. The PDF made from each is what people saw and signed; the audit trail names each original by its SHA-256 and says what made the PDF. Text can move when a PDF is made, so the original and the PDF may not look the same.';
 
 /** The same folder in the account's export (Settings, Records and data), one folder for each envelope. */
-export const ORIGINALS_EXPORT_README = 'originals/     each file as it was uploaded, where a document was made from a Word, Excel, PowerPoint or similar file, in a folder named like its envelope. These were not signed: the PDF made from each is what people saw and signed, and the audit trail names each original by its SHA-256.';
+export const ORIGINALS_EXPORT_README = 'originals/     each file as it was uploaded, where a document was made from a Word, Excel, PowerPoint or similar file, in a folder named like its document. These were not signed: the PDF made from each is what people saw and signed, and the audit trail names each original by its SHA-256.';
 
 /** Whether this server turns office files into PDF, for the public help page (a server component). It reads the
  *  settings, and for LibreOffice it also asks `programThere` whether the program is installed, when the page gives

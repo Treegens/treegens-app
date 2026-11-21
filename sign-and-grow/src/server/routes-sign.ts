@@ -6,6 +6,7 @@ import { cookie, readCookie } from './auth.ts';
 import { handDevice } from './handover.ts';
 import { loadEnvelope, markViewed, applyValues, completeRecipient, declineRecipient, reassignRecipient, audit, finalPdf, buildPdf, requestExtension, muteReminders, reportAbuse, renameSelf, noteDeadLink, okImage } from './envelopes.ts';
 import { fieldDisplayValue, senderZone } from './pdf.ts';
+import { forOthers } from './fieldchecks.ts';
 import { validZone, clockIn, formatDateValue, momentText } from '../lib/dates.ts';
 import { storeUpload } from './routes-envelopes.ts';
 import { impactOf } from '../lib/impact.ts';
@@ -22,6 +23,8 @@ import { CONSENT_VERSION } from '../lib/policy.ts';
 import { PURGED_LINK } from '../lib/retention.ts';
 // Which language this person's screens are in, and the audit line for agreeing with its language (locales.ts).
 import { signerLanguage, consentLine } from './locales.ts';
+// Refusals the page shows in the signer's language, and the language each person read the page in (signlang.ts).
+import { refuse, notePageLanguage } from './signlang.ts';
 import { labelOf } from '../lib/bysender.ts';
 // A recipient that is a group: whose link this is, who has taken the document on, and what a member's link may do.
 import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup, memberReported, memberWrongCode } from './groups.ts';
@@ -35,7 +38,8 @@ import { hiddenFor, formulaInputs } from './logic.ts';
 import { stampSeen } from './stamps.ts';
 // The account's own consent text under ours, and whether this person asked for paper instead (disclosure.ts).
 import { ownTermsFor, ownAtConsent, paperFacts } from './disclosure.ts';
-import { clientPolicy } from './tenantpolicy.ts';
+import { clientPolicy, showsTrees } from './tenantpolicy.ts';
+import { awayMinutes } from './secpolicy.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -70,19 +74,19 @@ export function look(c: Ctx, needUnlocked = true) {
     if (get('SELECT 1 x FROM retired_tokens WHERE token=?', c.params.token)) {
       // The sender hears once that this replaced link was opened: it usually means someone is using the wrong email.
       void noteReplacedLink(c.params.token, { name: 'Someone with a replaced link', ip: c.ip, ua: c.ua }).catch(() => {});
-      throw new HttpError(410, 'This link was replaced by a newer one.');
+      throw new HttpError(410, 'This link was replaced by a newer one.', { code: 'replaced' });
     }
-    throw bad('We do not recognise this link. It may have been copied incompletely.', 404);
+    throw refuse('unknown_link', 404);
   }
   const e = loadEnvelope(r.envelope_id);
   // A purged envelope (src/server/records.ts) has nothing left to open: the link says the sender deleted it.
   if (e?.purged_at) throw new HttpError(410, PURGED_LINK, { code: 'purged', deleted_on: String(e.purged_at).slice(0, 10) });
   const locked = !!r.access_code && !safeEqual(readCookie(c.req, `ts_ac_${r.id}`) || '', hmac(`ac:${r.id}:${r.access_code}`));
-  if (locked && needUnlocked) throw bad('Enter the access code first.', 401);
+  if (locked && needUnlocked) throw refuse('access_code_first', 401);
   // The one-time code this browser still has to pass, when the sender asked for one (see signercode.ts). A device
   // that passed is remembered by a cookie, the same way a correct access code is.
   const gate = gateOf(c.req, r);
-  if (gate && needUnlocked) throw bad('Type the one-time code first.', 401);
+  if (gate && needUnlocked) throw refuse('one_time_code_first', 401);
   // Signed with how this person is reached: an address, or "link shared by the sender" (src/lib/bysender.ts).
   const actor = { name: labelOf(r), ip: c.ip, ua: c.ua };
   const out = { e, r: e.recipients.find((x: any) => x.id === r.id), locked, gate, actor };
@@ -93,9 +97,9 @@ export function look(c: Ctx, needUnlocked = true) {
 const CLOSED = ['voided', 'expired', 'declined'];
 // Documents are only readable while it is the recipient's turn or after they finished, never once the envelope is
 // closed. The one exception is the download of someone who had signed: see GET /sign/:token/download.
-function assertViewable(e: any, r: any) {
-  if (CLOSED.includes(e.status)) throw bad('This envelope is closed.', 403);
-  if (r.status === 'pending') throw bad('It is not your turn yet.', 403);
+export function assertViewable(e: any, r: any) {
+  if (CLOSED.includes(e.status)) throw refuse('envelope_closed', 403);
+  if (r.status === 'pending') throw refuse('turn_not_yet', 403);
 }
 
 route('GET', '/sign/:token', (c) => {
@@ -108,7 +112,12 @@ route('GET', '/sign/:token', (c) => {
     brand: a,
     // What the sender's account switched on or off (tenantpolicy.ts): { impact_display, ai_helper, white_label }.
     policy: clientPolicy(e.account_id),
-    envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: impactOf(e.sheets),
+    // Only in an account with "Sign out after N minutes": the page checks its link again after a break that long
+    // (src/components/sign/away.ts). Absent everywhere else.
+    ...(awayMinutes(e.account_id) ? { away_minutes: awayMinutes(e.account_id) } : {}),
+    // impact: the paper this document saves, for the finished screen. Null when the account switched 'Trees on screens
+    // and emails' off, so that screen says nothing about paper or trees (tenantpolicy.ts).
+    envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: showsTrees(e.account_id) ? impactOf(e.sheets) : null,
       // For someone who came through a public form on a shared device: where the next person starts.
       next_person: (e.powerform_id && e.form_recipient_id === r.id && get('SELECT slug FROM powerforms WHERE id=? AND active=1 AND shared_device=1', e.powerform_id)?.slug) || null,
       // A public form's start that was cleared before the visitor finished: they start again (start_again is the
@@ -191,7 +200,8 @@ route('GET', '/sign/:token', (c) => {
         label: f.label, by: o?.name || null, from: !f.recipient_id || f.readonly || printsName(f) ? 'sender' : done ? 'signer' : 'start',
         // Dates read here as they will on the signed PDF: in the envelope's format, the date of signing by the
         // signer's own calendar.
-        value: done ? fieldDisplayValue(f, o, e.date_format, senderZone(e)) : f.type === 'date' ? formatDateValue(words(f), e.date_format) : words(f),
+        // A value the sender hid from the others shows as dots while the document is out (fieldchecks.ts).
+        value: forOthers(f, done ? fieldDisplayValue(f, o, e.date_format, senderZone(e)) : f.type === 'date' ? formatDateValue(words(f), e.date_format) : words(f), e.status),
         image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : null,
         // A finished person's calculated result also as its plain number, so "1.233" is never read as 1233 (logic.ts).
         ...(done && f.formula && f.value && f.calc_num != null ? { num: Number(f.calc_num) } : {}),
@@ -205,7 +215,7 @@ route('GET', '/sign/:token', (c) => {
 }, 'public');
 
 // What the locked screen says once a code is frozen. The same words whether it just happened or happened earlier.
-const frozenText = (e: any) => `This access code was entered wrongly ${ACCESS_CODE_TRIES} times, so it is frozen and no longer opens the document. ${sender(e).name} has been told and can set a new code. Ask them for the new one.`;
+const frozen = (e: any) => refuse('access_code_frozen', 423, { tries: ACCESS_CODE_TRIES, sender: sender(e).name });
 
 // Only wrong tries count, in two ways. An internet address that gets it wrong a few times within a quarter of an
 // hour waits (a right try in between does not wipe the count, and everyone behind the same connection shares it),
@@ -219,18 +229,18 @@ route('POST', '/sign/:token/unlock', async (c) => {
   const code = str((await c.body()).code).trim();
   const { e, r, actor } = look(c, false);
   if (!r.access_code) return; // nothing to unlock
-  if (r.code_frozen_at) throw bad(frozenText(e), 423);
+  if (r.code_frozen_at) throw frozen(e);
   // A member of a signing group whose colleague has it, or who only reads a copy, is counted alone (groups.ts), so
   // a colleague behind the same office connection is not made to wait for their wrong tries.
   const tries = `code:${r.member && (r.group_state === 'taken' || r.group_state === 'copy') ? r.member.id : r.id}:${c.ip}`;
   const wait = rateWait(tries, CODE_TRIES_PER_ADDRESS);
-  if (wait) throw bad(`That makes ${CODE_TRIES_PER_ADDRESS} wrong codes from your internet connection in a quarter of an hour. Wait ${Math.ceil(wait / 60_000)} minutes and try again, or ask ${sender(e).name} for the code: ${sender(e).email}. Nothing you filled in is lost.`, 429);
+  if (wait) throw refuse('access_code_wait', 429, { tries: CODE_TRIES_PER_ADDRESS, minutes: Math.ceil(wait / 60_000), sender: sender(e).name, email: sender(e).email });
   if (!safeEqual(code, r.access_code)) {
     rateLimit(tries, Infinity, CODE_WAIT_MS); // counts this wrong try for this device address
     // Never the group's code for a member who cannot act: their tries freeze their own link only (memberWrongCode).
     const left = (await memberWrongCode(e, r, actor)) ?? (await wrongAccessCode(e, r, actor));
-    if (!left) throw bad(frozenText(e), 423);
-    throw bad(`That access code is not right. ${sender(e).name} chose the code and can tell you what it is: ${sender(e).email}. It is not in the email we sent you.${left <= 3 ? ` After ${left} more wrong ${left === 1 ? 'try' : 'tries'} the code is frozen until ${sender(e).name} sets a new one.` : ''}`, 401);
+    if (!left) throw frozen(e);
+    throw refuse(left <= 3 ? 'access_code_wrong_left' : 'access_code_wrong', 401, { sender: sender(e).name, email: sender(e).email, ...(left <= 3 ? { left } : {}) });
   }
   c.cookies.push(cookie(`ts_ac_${r.id}`, hmac(`ac:${r.id}:${r.access_code}`), 86400, c.secure));
   audit(e.id, actor, 'Access code accepted', r.name);
@@ -279,6 +289,8 @@ route('POST', '/sign/:token/consent', async (c) => {
   const own = ownAtConsent(seen.e, seen.r, b, c.req);
   const { e, r, actor } = takeOn(seen);
   noteZone(e, r, b?.tz, actor);
+  // The language the page was in when they agreed, for the certificate (signlang.ts).
+  notePageLanguage(r.id, b?.page_language);
   const first = !r.consent_at;
   if (first) {
     run('UPDATE recipients SET consent_at=? WHERE id=?', now(), r.id);
@@ -293,7 +305,7 @@ route('GET', '/sign/:token/doc/:doc', (c) => {
   const { e, r } = find(c);
   assertViewable(e, r);
   const d = e.documents.find((x: any) => x.id === c.params.doc);
-  if (!d) throw bad('Document not found.', 404);
+  if (!d) throw refuse('document_not_found', 404);
   return pdfResponse(readBlob(d.sha256), d.name, true);
 }, 'public');
 
@@ -353,7 +365,7 @@ route('POST', '/sign/:token/complete', async (c) => {
   beforeFinish(c, e, r);
   await completeRecipient(e, r, body, actor);
   const after = get('SELECT status, sheets FROM envelopes WHERE id=?', e.id);
-  return { ok: true, envelope_status: after.status, impact: impactOf(after.sheets) };
+  return { ok: true, envelope_status: after.status, impact: showsTrees(e.account_id) ? impactOf(after.sheets) : null };
 }, 'public');
 
 route('POST', '/sign/:token/decline', async (c) => {
@@ -394,7 +406,7 @@ route('POST', '/sign/:token/mute', (c) => {
   // Stopping reminders also stops the texts the sender chose for this person, so where the sender asked for a
   // one-time code, only someone who passed it can do that: a stranger who has the link cannot silence the signer.
   // The page asks for the code and stops the reminders straight after (src/app/sign/[token]/page.tsx).
-  if (gate) throw bad('This document asks for a one-time code first. Type it, and the reminders stop straight after.', 401, { code: 'code_first' });
+  if (gate) throw refuse('code_first', 401);
   // One member of a group stops their own reminders. The others keep getting theirs (groups.ts).
   if (r.member) return void muteMember(e, r, actor);
   muteReminders(e, r, actor);

@@ -18,6 +18,7 @@
 // of the software may hold certificates of their own; this list says nothing about them, and the page says so.
 //
 // No dependencies, no environment: pages, server code and tests can all import it.
+import { dayText } from './dates.ts';
 
 export type ClaimStatus = 'not_held' | 'in_progress' | 'held';
 
@@ -105,7 +106,7 @@ export const CLAIMS: Claim[] = [
   cert('icp-brasil', 'ICP-Brasil', 'ICP-Brasil accreditation', 'Brazil\'s public key infrastructure. Its certificates are what a qualified signature in Brazil is made with.', 'signatures', 'GrowSigning is not part of ICP-Brasil and does not issue or use ICP-Brasil certificates.'),
 
   cert('wcag-audit', 'Third-party WCAG 2.2 AA or EN 301 549 audit', 'an accessibility audit by a third party', 'A check by an outside expert that the screens meet the accessibility guidelines public bodies must buy to.', 'accessibility', 'No third party has audited GrowSigning against WCAG 2.2 AA or EN 301 549.'),
-  cert('section-508-acr', 'Section 508 Accessibility Conformance Report (VPAT)', 'a published Accessibility Conformance Report', 'The report, written on the VPAT template, that United States federal buyers ask for.', 'accessibility', 'GrowSigning has not published an Accessibility Conformance Report (VPAT) for Section 508.'),
+  cert('section-508-acr', 'Section 508 Accessibility Conformance Report (VPAT)', 'a published Accessibility Conformance Report', 'The report, written on the VPAT template, that United States federal buyers ask for.', 'accessibility', 'GrowSigning has only a draft Accessibility Conformance Report on the VPAT template, written and self-assessed by its authors and not audited by anyone.'),
 
   cert('hipaa-baa', 'HIPAA business associate agreement', 'a HIPAA business associate agreement to offer', 'The agreement United States law asks a healthcare provider to have with every service that handles patient information.', 'other', 'There is no HIPAA business associate agreement for GrowSigning. Nobody can sign one with us, on any plan.'),
   cert('dpg-registry', 'Digital Public Goods registry', 'a listing in the Digital Public Goods registry', 'The register of open software that the Digital Public Goods Alliance has reviewed against its standard.', 'other', 'GrowSigning is not listed in the Digital Public Goods registry.'),
@@ -134,7 +135,7 @@ export function claimProblems(c: Claim, now: Date = new Date()): string[] {
     if (day(h.issued) && day(h.issued)! > today(now)) out.push('The date of issue is in the future.');
     if (day(h.checked_on) && day(h.checked_on)! > today(now)) out.push('The day it was checked is in the future.');
     if (day(h.issued) && day(h.expires) && h.expires < h.issued) out.push('It expires before it was issued.');
-    if (day(h.expires) && day(h.expires)! < today(now)) out.push(`It expired on ${h.expires}.`);
+    if (day(h.expires) && day(h.expires)! < today(now)) out.push(`It expired on ${dayText(h.expires)}.`);
   } else if (c.status === 'in_progress') {
     if (!said(c.engaged?.assessor)) out.push('The assessor is not named.');
     if (!day(c.engaged?.engaged_on) || day(c.engaged?.engaged_on)! > today(now)) out.push('The day the engagement was signed is missing, cannot be read or is in the future.');
@@ -158,9 +159,9 @@ export function claimSentence(c: Claim, now: Date = new Date()): string {
   const s = claimStatus(c, now);
   if (s === 'held') {
     const h = c.held!;
-    return `GrowSigning holds ${c.thing}: number ${said(h.number)}, for ${said(h.scope).replace(/\.$/, '')}, issued ${h.issued} and running until ${h.expires}. Check it yourself at ${said(h.registry_url)}`;
+    return `GrowSigning holds ${c.thing}: number ${said(h.number)}, for ${said(h.scope).replace(/\.$/, '')}, issued ${dayText(h.issued)} and running until ${dayText(h.expires)}. Check it yourself at ${said(h.registry_url)}`;
   }
-  if (s === 'in_progress') return `${c.no} ${said(c.engaged!.assessor)} was engaged on ${c.engaged!.engaged_on} to assess it. Until that is done, it is not held.`;
+  if (s === 'in_progress') return `${c.no} ${said(c.engaged!.assessor)} was engaged on ${dayText(c.engaged!.engaged_on)} to assess it. Until that is done, it is not held.`;
   return c.no;
 }
 

@@ -11,7 +11,7 @@ export const metadata = { title: 'Certifications', description: 'Every certifica
 // worked out on every visit, so an entry stops reading as held the day after it expires.
 export const dynamic = 'force-dynamic';
 
-const WORD = { held: 'Held', in_progress: 'Not held yet', not_held: 'Not held' } as const;
+const WORD = { held: 'Held', in_progress: 'Not held. Assessment under way', not_held: 'Not held' } as const;
 
 export default function Certifications() {
   const now = new Date();
@@ -23,7 +23,7 @@ export default function Certifications() {
       <main id="main" className="wrap pub-page pub-doc">
         <header className="pub-top">
           <h1 className="pub-h1">Certifications</h1>
-          <p className="pub-lead">{held ? `GrowSigning holds ${held} of the ${CLAIMS.length} listed here.` : 'GrowSigning holds none of these today.'} Each line below says so in one sentence, so that nobody has to guess from a logo.</p>
+          <p className="pub-lead">{held ? `GrowSigning holds ${held} of the ${CLAIMS.length} listed here.` : 'GrowSigning holds none of these today.'} Each line below says so in one sentence.</p>
         </header>
         <p>This list is about GrowSigning: the software, and the service its makers run. {operator ? `This server is run by ${operator}.` : 'Someone else may run the server you are on.'} Whoever runs a server may hold certificates of their own for how they run it. Ask them; this page does not speak for them.</p>
         <p>A line says &quot;holds&quot; only with a number, a scope, the dates and a link to the official register where you can check it yourself. From the day after a certificate runs out, its line says it is not held.</p>

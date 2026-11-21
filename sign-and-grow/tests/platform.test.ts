@@ -336,7 +336,7 @@ test('removing a team member says which API keys stop, in the answer and by emai
   // Whatever used the key is told what happened, not "Please sign in."
   const after = await withKey(key).get('/envelopes');
   assert.equal(after.status, 401);
-  assert.match(after.data.error, /stopped working on \d{4}-\d\d-\d\d because the person who created it is no longer in the account/);
+  assert.match(after.data.error, /stopped working on \d{1,2} [A-Z][a-z]{2} \d{4} because the person who created it is no longer in the account/);
 
   // Both admins and the person removed get the names.
   for (const to of ['team@example.com', 'ada.admin@example.com', 'pat.keys@example.com']) {
@@ -376,7 +376,7 @@ test('API keys are switched off while an account is being closed, and work again
   assert.equal((await owner.post('/me/delete', { password: 'correct horse battery' })).data.closed, 'scheduled');
   const read = await api.get('/envelopes');
   assert.equal(read.status, 403);
-  assert.match(read.data.error, /This account is being closed.*Nothing is deleted before \d{4}-\d\d-\d\d.*Signing in/);
+  assert.match(read.data.error, /This account is being closed.*Nothing is deleted before \d{1,2} [A-Z][a-z]{2} \d{4}\..*Signing in/);
   assert.equal((await api.post(`/envelopes/${e.id}/send`)).status, 403);
   assert.equal(mailTo('afterclose@example.com').length, 0, 'nothing is sent for an account that is going away');
 
@@ -455,7 +455,7 @@ test('a member who closes their own login takes their API keys along, and the te
   assert.equal(db.get("SELECT COUNT(*) n FROM users WHERE email='lea.ver@example.com'").n, 0);
   const gone = await withKey(key).get('/envelopes');
   assert.equal(gone.status, 401);
-  assert.match(gone.data.error, /stopped working on \d{4}-\d\d-\d\d because the person who created it is no longer in the account/);
+  assert.match(gone.data.error, /stopped working on \d{1,2} [A-Z][a-z]{2} \d{4} because the person who created it is no longer in the account/);
   const stopped = await listed('Nightly sync');
   assert.ok(stopped?.stopped_at, 'the key is still on the admins\' list, as stopped');
   assert.deepEqual([stopped.owner_name, stopped.closing], ['Lea Ver', null]);

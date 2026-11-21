@@ -491,7 +491,7 @@ test('nobody is invited into, joins or sends from an account that is being close
   assert.equal((await cron.tick()).purged, 0);
   assert.equal(reminders().length, 1);
   const m = reminders()[0];
-  assert.equal(m.subject, `Your GrowSigning account will be deleted on ${soon.slice(0, 10)}`);
+  assert.equal(m.subject, `Your GrowSigning account will be deleted on ${dayText(soon)}`);
   assert.match(m.link, /\/login$/);
   const said = text(m.html);
   assert.match(said, new RegExp(`${CLOSING_REMINDER_DAYS - 1} days left`));

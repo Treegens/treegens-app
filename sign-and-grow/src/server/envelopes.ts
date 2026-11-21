@@ -1,7 +1,10 @@
 import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
+import { zoneForEmail } from './zonememo.ts';
 import { assertCanStore } from './filestore.ts';
 import { bad, id, token, sha256, now, isEmail, str, baseUrl, checkCode } from './util.ts';
 import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
+import { mailLocale, theirWords } from './maillang.ts';
+import { requestMail, translatable } from './requestmail.ts';
 import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
@@ -12,10 +15,15 @@ import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant,
 import { STANDING_PAYMENT, personGen, lastExpiry, swapRefusal, reholdEnvelope, pastDateText, renewalPending } from './credits.ts';
 import { DATE_FORMATS, DEFAULT_DATE_FORMAT, momentText, momentForEmail, momentForReader, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
+// Formats, limits, number ranges, hidden values and tick-box group rules (fieldchecks.ts, src/lib/fieldrules.ts).
+import { matchesPattern } from '../lib/fieldrules.ts';
+import { validationOnSave, sendProblem, legacyRule, assertLimits, assertChecks as assertFieldChecks, keepNumbers, checksView } from './fieldchecks.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { PAID_TRUST_DAYS, paidTrustText, TEAM_INVITES_PER_DAY, expiryMoment } from '../lib/policy.ts';
 import { posesAs, lureIn } from './fakenotice.ts';
 import { saveChecks, copyCheck, assertChecks, checkBits, alsoText, textWaiting, passCheckOn, withCheckLines, publicCheck } from './signercode.ts';
+// The signing link also by WhatsApp, for someone who agreed to it (src/server/whatsapp.ts).
+import { saveWhatsApp, assertWhatsApp, alsoWhatsApp, waCompleted } from './whatsapp.ts';
 import { sendWarnings, PAPER_AUDIT_ACTION } from './warnings.ts';
 import { paperAuditNote } from '../lib/paperwork.ts';
 import { strikePlace } from '../lib/strike.ts';
@@ -52,7 +60,12 @@ import { CONFIRM_BEFORE_SEND } from '../lib/confirm.ts';
 import { customView, copyCustom, assertCustomFields, customWords } from './customfields.ts';
 // "Sign now": the sender is the only person on it, so their own invitation is not emailed (signnow.ts).
 import { holdInvite, inviteHeld, dropHold, SIGN_NOW_AUDIT, signNowNote } from './signnow.ts';
-import { dayText } from '../lib/dates.ts';
+import { dayText, stampText } from '../lib/dates.ts';
+// Pages removed, turned or moved in a document before it is sent: one audit line when the new file is saved (pages.ts).
+import { notePageChanges } from './pages.ts';
+import { pageChangeWords } from './pagechain.ts';
+import { orgSendingOffText } from './orgs.ts';
+import { ocrField } from './ocr.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson', 'witness'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike', 'stamp'];
@@ -120,11 +133,12 @@ export function loadEnvelope(envelopeId: string): any {
     envelopeId,
     // Which pages are pictures with no text is kept with the file and said wherever the file is listed, so the
     // warning about a scan does not disappear when a draft is opened again.
-  ).map((d) => ({ ...d, page_sizes: JSON.parse(d.page_sizes), ...scanFlag(d.scan_pages), converted: convertedOf(d.converted) }));
+  // ocr: where reading the text of those pages stands, only when this server reads it (src/server/ocr.ts).
+  ).map((d) => ({ ...d, page_sizes: JSON.parse(d.page_sizes), ...scanFlag(d.scan_pages), converted: convertedOf(d.converted), ...ocrField(d.file_id, d.scan_pages) }));
   e.recipients = all('SELECT * FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', envelopeId);
   // A recipient that is a group carries its members (without their links): see attachGroups in groups.ts.
   attachGroups(e);
-  e.fields = all('SELECT * FROM fields WHERE envelope_id=?', envelopeId).map((f) => ({ ...f, options: f.options ? JSON.parse(f.options) : [], show_when: ruleOf(f) }));
+  e.fields = all('SELECT * FROM fields WHERE envelope_id=?', envelopeId).map((f) => ({ ...f, options: f.options ? JSON.parse(f.options) : [], show_when: ruleOf(f), checks: checksView(f) }));
   return e;
 }
 
@@ -252,6 +266,8 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     docPages.set(did, f.pages);
     run('INSERT INTO documents (id, envelope_id, file_id, name, position) VALUES (?,?,?,?,?)', did, e.id, f.id, fit(d.name || f.name, 200, `The name of document ${i + 1}`), i);
   });
+  // A file made from the one before by removing, turning or moving pages is said in words on the audit trail (pages.ts).
+  notePageChanges(e, by);
   const seen = new Set<string>();
   // Every recipient as the request named them, with the id they were saved under, for saveChecks below.
   const asked: { rid: string; r: any; i: number }[] = [];
@@ -297,6 +313,8 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
   saveGroups(e, asked, oldRecs, correcting);
   // Who has no email address because the sender sends their link themselves ("link_by_sender"): bysender.ts.
   saveBySender(e, asked, oldRecs);
+  // Who also gets the link by WhatsApp ("whatsapp", "whatsapp_agreed"): whatsapp.ts.
+  saveWhatsApp(e, asked, oldRecs, correcting);
   // Whose signature a witness witnesses, and whether that signer names them ("witness_for", "named_by_signer"): witness.ts.
   saveWitnesses(e, asked, oldRecs, correcting);
   // The language each person's screens are in ("locale"), or none for their browser: locales.ts.
@@ -359,7 +377,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
       Math.min(clamp01(share(f.x, `${which}: "x"`)), 1 - w), Math.min(clamp01(share(f.y, `${which}: "y"`)), 1 - h), w, h, yesNo(f.required, true, `${which}: "required"`) ? 1 : 0,
       fit(f.label, 120, `${which}: the label`) || null, value,
       Array.isArray(f.options) ? JSON.stringify(f.options.map((o: any, n: number) => fit(o, 200, `${which}: choice ${n + 1}`))) : null,
-      fit(f.group_name, 80, `${which}: the group name`) || null, fit(f.validation, 200, `${which}: the validation rule`) || null, readonly, prefill);
+      fit(f.group_name, 80, `${which}: the group name`) || null, validationOnSave(f, which, did, { w, h }, e.status === 'draft'), readonly, prefill);
     // What a stamp field holds is decided here from what was there before, never taken from the request (stamps.ts).
     const stamp = f.type === 'stamp' ? stampOnSave(f, old, rid, accountId, which, by, e.fields) : null;
     if (stamp) run('UPDATE fields SET value=?, stamp_id=?, stamp_meta=?, readonly=?, required=COALESCE(?, required) WHERE id=?', stamp.value, stamp.stamp_id, stamp.meta, stamp.readonly, stamp.required, fid);
@@ -438,12 +456,15 @@ function assertSendable(e: any) {
   // The sender's own stamp has one chosen, and only someone who signs has a stamp to put on (stamps.ts).
   const stamp = stampProblem(e);
   if (stamp) throw bad(stamp);
+  // A format or limit that cannot work (a pattern still half typed, a pattern with no message) (fieldchecks.ts).
+  const checks = sendProblem(e.fields, e.recipients, e.documents);
+  if (checks) throw bad(checks);
 }
 
 const r6 = (n: number) => Math.round(n * 1e6);
 const byFirst = (a: any[], b: any[]) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
 
-const ts = (s: any) => String(s ?? '').replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+const ts = (s: any) => stampText(s);
 
 // The words the sender put on a page: a note, a read-only value, or the value a signer's field starts out with.
 // Every signer is shown these from the first time they open the document, whoever the field belongs to.
@@ -584,7 +605,12 @@ function describeCorrection(a: any, b: any): { people: string[]; content: string
   for (const d of b.documents) {
     const o = docA.get(d.id);
     if (!o) fileLine((print) => `Document ${q(d.name)} added (${pages(d.pages)}${print(d)}).`);
-    else if (o.file_id !== d.file_id) fileLine((print) => `The file of document ${q(d.name)} was replaced. Before: ${pages(o.pages)}${print(o)}. Now: ${pages(d.pages)}${print(d)}.`);
+    else if (o.file_id !== d.file_id) {
+      // Made from the old file by turning, removing or moving pages (src/server/pagechain.ts): said in those words.
+      const turned = pageChangeWords(o.file_id, d.file_id);
+      fileLine((print) => turned ? `The pages of document ${q(d.name)} were changed: ${turned} Before: ${pages(o.pages)}${print(o)}. Now: ${pages(d.pages)}${print(d)}.`
+        : `The file of document ${q(d.name)} was replaced. Before: ${pages(o.pages)}${print(o)}. Now: ${pages(d.pages)}${print(d)}.`);
+    }
     if (o && o.name !== d.name) content.push(`Document ${q(o.name)} renamed to ${q(d.name)}.`);
   }
   for (const o of a.documents) if (!docB.has(o.id)) fileLine((print) => `Document ${q(o.name)} removed (${pages(o.pages)}${print(o)}).`);
@@ -978,6 +1004,8 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
     carryRules(src, eid, o.kind);
     // "Only show when" and formulas go with the copy, and a bulk send row may fill fields they depend on (logic.ts).
     copyLogic(src, fmap, eid, o.extra?.values);
+    // A copy of a template made from a ready-made one keeps its note: same wording, same "not legal advice" (starters.ts).
+    if (o.kind === 'template' && src.kind === 'template' && src.starter_note) run('UPDATE envelopes SET starter_id=?, starter_note=? WHERE id=?', src.starter_id, src.starter_note, eid);
   });
   return eid;
 }
@@ -1150,6 +1178,9 @@ export function emailRefusal(e: any, reach: string[] = [], o: Guard = {}): { sta
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
   if (!account) return null;
   if (account.suspended_at && o.pause !== false) return { status: 403, message: pausedText(account) };
+  // An organisation above the account switched its sending off (src/server/orgs.ts): the same as a pause.
+  const orgOff = o.pause !== false ? orgSendingOffText(account) : null;
+  if (orgOff) return { status: 403, message: orgOff };
   if (!hasNotPaid(account)) return null;
   const fake = fakeNotice(e, account, senderOf(e), o.extra);
   if (fake) return { status: 422, message: fake };
@@ -1166,6 +1197,7 @@ export function assertMayEmail(e: any, reach: string[] = [], o: Guard = {}) {
 // to the account), and a daily limit of its own, which a person lifts by marking the account as trusted.
 export function inviteRefusal(account: any, inviter: any, email: string): { status: number; message: string } | null {
   if (account.suspended_at) return { status: 403, message: pausedText(account) };
+  if (orgSendingOffText(account)) return { status: 403, message: orgSendingOffText(account)! };
   const fake = hasNotPaid(account) ? nameRefusal([inviter?.name, account.name]) : null;
   if (fake) return { status: 422, message: fake };
   if (account.trusted_at) return null;
@@ -1231,6 +1263,7 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
   assertCodes(e.recipients);
   // A check by one-time code can work for everyone it was asked for, and the account may text whom it asks to text.
   assertChecks(e);
+  assertWhatsApp(e);
   // Every group on it still exists and has members (groups.ts).
   assertGroups(e);
   // The visitor of a public form typed their own address. They count against the form's own limit, and everyone
@@ -1373,12 +1406,17 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
   // Someone who has signed or approved and asks for their link again ("Email me the current link") is not asked to
   // sign: the email says what the link opens now, and its button says "view".
   const done = r.status === 'completed' && (r.role === 'signer' || r.role === 'approver' || r.role === 'witness');
-  const deadline = e.expires_at && r.role !== 'cc' && !done ? momentForReader(e.expires_at, r.tz) : '';
+  // Before this document has been told the person's zone, the zone this address told the same sender earlier, if any
+  // (zonememo.ts); the footnote below still points to the signing page until this document knows it.
+  const deadline = e.expires_at && r.role !== 'cc' && !done ? momentForReader(e.expires_at, zoneForEmail(e, r)) : '';
   const shared = (e.recipients || []).some((x: any) => x.id !== r.id && x.email.toLowerCase() === r.email.toLowerCase());
   const subjectUnder = verb.endsWith(':') && r.role !== 'inperson' && kind !== 'again' && !done;
   // The account is named at the top only when its name says more than the sender's own ("Rosa Gardener's workspace"
   // does not): the same rule as on the consent screen (src/lib/sendername.ts). A logo of theirs is always shown.
   const brand = brandOf(e.account_id);
+  // Someone whose language is not English gets our words in theirs (lang-mail, requestmail.ts); English is below.
+  const L = mailLocale(r);
+  const own = translatable(L, r, e.last_change) ? requestMail(L, { kind, role: r.role, name: r.name, sender, subject: e.subject, message: e.message, note: r.note, accessCode: !!r.access_code, shared, done, complete: e.status === 'completed', deadline: deadline ? e.expires_at : '', tz: zoneForEmail(e, r), zoneKnown: !!validZone(r.tz), before, ready: kind === 'reminder' && fieldProgress(e, r).ready, trees: kind === 'new' && showsTrees(e.account_id) ? treesInInvite(r) : 0, url: signUrl(r) }) : null;
   const mailed = await sendMail({
     to,
     subject: `${NOTICE_PREFIX[kind]}${e.subject}`,
@@ -1408,7 +1446,7 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
       ...(r.role === 'inperson' ? [`Open the document on your device and hand it to ${r.name} to sign in person. If that browser is signed in to GrowSigning, your account is locked in it while they hold the device, and you type your password to come back.`] : []),
       // To a witness: whose signature, and to open it only if they were there (witness.ts).
       ...witnessMailLines(e, r, kind, sender),
-      ...(e.message ? [`${sender.name} wrote:\n${e.message}`] : []),
+      ...(e.message ? [theirWords('en', sender.name, e.message)] : []),
       ...groupLine(r), // to a member of a group: that it went to the group, and how that works
       ...(r.note ? [`Note for you: ${r.note}`] : []),
       ...(r.access_code ? [`You will need an access code to open it. ${sender.name} will give it to you separately. It is not in this email.`] : []),
@@ -1430,9 +1468,11 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
     // in-person signing: that one goes to the sender, who would be asking themselves.
     askForPdf: r.role === 'inperson' ? undefined : sender.name,
     footnote: [deadline && kind !== 'expiring' ? `Open until ${deadline}.${validZone(r.tz) ? '' : ' The signing page shows your own time.'}` : '', kind === 'reminder' ? `Too many reminders? Stop them for this document: ${signUrl(r)}?mute=1` : ''].filter(Boolean).join(' ') || undefined,
+    ...(own ? { ...own, locale: L } : {}),
   });
   // The same news by text message, for a recipient the sender chose that for: see alsoText in signercode.ts.
   await alsoText(e, r, kind);
+  await alsoWhatsApp(e, r, kind);
   return mailed;
 }
 
@@ -1459,7 +1499,7 @@ onMailOutcome('envelope', async (m, what) => {
   await notifySender(e, 'problems', `Email not delivered: ${e.subject}`, `We could not email ${r?.name || m.to_email}`,
     [`The email "${m.subject}" to ${m.to_email} could not be handed to the mail server${tries}, so we have stopped trying.${said}`,
       // A member of a group is corrected in the group, not with Correct (which has no single address to change there).
-      r?.group_name ? `This address belongs to a member of ${r.group_name}. Every member is emailed separately, so the others are not affected. To correct the address, open the envelope, choose Edit envelope and change that member: a new email goes to the corrected address when you save. Or copy that member's signing link from the envelope page and send it to them yourself.`
+      r?.group_name ? `This address belongs to a member of ${r.group_name}. Every member is emailed separately, so the others are not affected. To correct the address, open the document, choose Edit and change that member: a new email goes to the corrected address when you save. Or copy that member's signing link from the document's page and send it to them yourself.`
         : 'Check the address: open the envelope and choose Correct next to their name, and a new email goes out at once. Or copy their signing link from the same page and send it to them yourself.']);
 });
 
@@ -1625,6 +1665,7 @@ async function completeEnvelope(e: any) {
     sent.add(to);
     const shared = fresh.recipients.some((x: any) => x.id !== r.id && sameEmail(x.email, r.email));
     noteCopyMailed(e, r, copy, await sendMail({ to: r.email, recipientId: r.id, subject: `Completed: ${fresh.subject}`, heading: `${shared ? `For ${r.name}: ` : ''}Your document is complete`, lines: [...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []), ...lines, `Keep this email. The link below keeps working for as long as ${sender?.name || 'the sender'} keeps their GrowSigning account, and the PDF is attached when it is small enough to send. Lost it later? Any time, ${baseUrl()}/help can send your documents to this address again.`], cta: { label: 'View completed document', url: signUrl(r) }, envelopeId: e.id, brand, attachments, replyTo: sender?.email, fromName: sender?.name, code: r.check_code }));
+    await waCompleted(e, r);
   }
   if (sender && !sent.has(sender.email.toLowerCase()) && notifyPrefs(sender).completed)
     noteCopyMailed(e, { name: sender.name, email: sender.email, sender: true }, copy, await sendMail({ to: sender.email, subject: `Completed: ${fresh.subject}`, heading: 'Your document is complete', lines: [...lines, ...senderCopyLines(fresh)], cta: { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand, attachments }));
@@ -1655,10 +1696,10 @@ export async function buildFinal(envelopeId: string): Promise<boolean> {
 }
 
 // Emails the sender about their own envelope, if they asked for that kind of news. 'always' is for things that need them to act.
-export async function notifySender(e: any, key: NotifyKey | 'always', subject: string, heading: string, lines: string[], cta?: { label: string; url: string }) {
+export async function notifySender(e: any, key: NotifyKey | 'always', subject: string, heading: string, lines: string[], cta?: { label: string; url: string }, more?: { onPaper?: boolean }) {
   const sender = senderOf(e);
   if (!sender || (key !== 'always' && !notifyPrefs(sender)[key])) return;
-  await sendMail({ to: sender.email, subject, heading, lines, cta: cta || { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand: brandOf(e.account_id) });
+  await sendMail({ to: sender.email, subject, heading, lines, cta: cta || { label: 'Open envelope', url: `${baseUrl()}/app/envelopes/${e.id}` }, envelopeId: e.id, brand: brandOf(e.account_id), ...(more?.onPaper ? { onPaper: true } : {}) });
 }
 
 // Emails for this envelope are being held back by the guard: the next people in a signing order, or a reminder from
@@ -1859,7 +1900,7 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   // access code is one for the whole group and can be set here, like anyone's (groups.ts).
   assertGroupCorrection(r, patch);
   if (isOpenGroup(r)) return patch.access_code === undefined ? undefined : lateAccessCode(e, r, patch.access_code, actor);
-  if (r.status === 'completed') throw bad(`${r.name} has already finished, so their name and address cannot be changed from here. Nothing was changed. To change those after all, edit the envelope itself (Edit envelope in the app): a new name or address means asking them to sign again, and you are asked first. Their access code can be changed from here: send "access_code" with the name and the address as they are.`);
+  if (r.status === 'completed') throw bad(`${r.name} has already finished, so their name and address cannot be changed from here. Nothing was changed. To change those after all, edit the document itself (Edit on its page in the app): a new name or address means asking them to sign again, and you are asked first. Their access code can be changed from here: send "access_code" with the name and the address as they are.`);
   const name = fit(patch.name ?? r.name, 120, 'The name').trim();
   const email = fit(patch.email ?? r.email, 254, 'The email address').trim();
   // Someone whose link the sender passes on has no address, and keeps none when only the name or the code changes.
@@ -1882,7 +1923,7 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   if (over.length) {
     const names = listSome(over.map((o: any) => o.name), 8);
     const what = e.fields.some((f: any) => f.recipient_id === r.id && f.type === 'full_name') && name !== r.name ? 'name' : 'email address';
-    throw bad(`The ${what} of ${r.name} is printed on the document, and ${names} ${over.length === 1 ? 'has' : 'have'} already finished. Nothing was changed. To change it, edit the envelope itself (Edit envelope in the app, or PUT /envelopes/{id} with "resign": true). ${names} will then be told what changed and asked to sign again.`,
+    throw bad(`The ${what} of ${r.name} is printed on the document, and ${names} ${over.length === 1 ? 'has' : 'have'} already finished. Nothing was changed. To change it, edit the document itself (Edit on its page in the app, or PUT /envelopes/{id} with "resign": true). ${names} will then be told what changed and asked to sign again.`,
       409, { code: 'sign_again', sign_again: over.map((o: any) => o.name), changes: [`The ${what} of ${r.name}, which is printed on the document.`] });
   }
   const fresh = 'code_fails=0, code_frozen_at=NULL';
@@ -1963,6 +2004,8 @@ export function applyValues(e: any, r: any, values: Record<string, any>, strict:
     const v = f.type === 'date' && f.id in values && !f.formula ? str(values[f.id], 4000) : '';
     if (v && !isDateValue(v)) throw bad(`"${v.slice(0, 40)}" in ${f.label || 'a date field'}: ${DATE_PROBLEM} Nothing was saved.`);
   }
+  // Nothing longer than a field takes is stored, at any save (fieldchecks.ts).
+  assertLimits(mine, values);
   for (const f of mine) {
     // A calculated field is the server's to work out: whatever the browser sent for it is not taken (logic.ts). A
     // stamp is put on and taken off by its own request (POST /sign/:token/stamp), never by the answers.
@@ -1976,6 +2019,7 @@ export function applyValues(e: any, r: any, values: Record<string, any>, strict:
   }
   // What is shown and what every formula comes to, worked out again from what is now stored. A field this person's
   // answers hide loses its answer and is not required, whatever the browser said about it (logic.ts).
+  keepNumbers(mine);
   const hidden = settleLogic(e.id, r.id, e.fields);
   atFinish?.(hidden);
   if (!strict) return hidden;
@@ -1992,13 +2036,14 @@ export function applyValues(e: any, r: any, values: Record<string, any>, strict:
       continue;
     }
     if (f.required && !f.value) throw bad(`A required field is still empty: ${label}.`);
-    const rule = f.type === 'number' ? 'number' : f.validation;
+    const rule = f.type === 'number' ? 'number' : legacyRule(f.validation);
     if (f.value && rule) {
-      const re = VALIDATORS[rule] || (() => { try { return new RegExp(`^(?:${rule})$`); } catch { return null; } })();
-      if (re && !re.test(f.value)) throw bad(rule === 'number' ? `"${f.value}" does not read as a number for ${label}. Type it as you write it, like 2500, 12.5, 1.234,56 or 1,234.56, with nothing else in the field.` : `"${f.value}" is not valid for ${label}.`);
+      // A pattern of the sender's own is checked with a time limit (matchesPattern, fieldchecks.ts).
+      if (VALIDATORS[rule] ? !VALIDATORS[rule].test(f.value) : !matchesPattern(rule, f.value)) throw bad(rule === 'number' ? `"${f.value}" does not read as a number for ${label}. Type it as you write it, like 2500, 12.5, 1.234,56 or 1,234.56, with nothing else in the field.` : `"${f.value}" is not valid for ${label}.`);
     }
   }
   for (const [name, gr] of groups) if (gr.required && !gr.ok) throw bad(`Choose an option for ${name}.`);
+  assertFieldChecks(mine, hidden, e.date_format);
   return hidden;
 }
 
@@ -2479,7 +2524,7 @@ export async function renameSelf(e: any, r: any, newName: string, actor: Actor):
     const names = listSome(over.map((o: any) => o.name), 8);
     await ask(`The name is printed on the document and ${names} ${over.length === 1 ? 'has' : 'have'} already finished`,
       [`${signerAt(r)} asked for their name to be written "${name}" instead of "${r.name}". That name is printed on the document, and ${names} ${over.length === 1 ? 'has' : 'have'} already finished, so we did not change it.`,
-        `If "${name}" is right, open the envelope, choose Edit envelope and change the name there. You are then asked whether ${names} should sign again, and nothing is saved until you say yes. If you do nothing, the name stays "${r.name}".`]);
+        `If "${name}" is right, open the document, choose Edit and change the name there. You are then asked whether ${names} should sign again, and nothing is saved until you say yes. If you do nothing, the name stays "${r.name}".`]);
     return { applied: false, name: r.name, message: `We did not change it here. Your name is printed on the document and ${names} ${over.length === 1 ? 'has' : 'have'} already finished, so only ${from} can change it now. We asked them for you. You can wait for their answer, or finish under "${r.name}" if that is close enough.` };
   }
   run('UPDATE recipients SET name=?, sender_name=?, self_name=? WHERE id=?', name, written, name, r.id);

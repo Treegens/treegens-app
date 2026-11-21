@@ -254,7 +254,9 @@ test('with nobody to reach, no response time is promised anywhere', async () => 
     assert.deepEqual([t.due_at, t.reply_hours], [null, null]);
     const said = text(mails('nobody-home@cust.test', t.reference).at(-1)!.html);
     assert.doesNotMatch(said, /will have answered by|within \d+ hours?/);
-    assert.match(said, /A person will reply to you Your reference is/);
+    // Nobody is named to read it, so no reply is promised either (repair-open-platform).
+    assert.match(said, /We got your message Your reference is [^.]+\. Nobody has been named to answer help requests on this server yet/);
+    assert.doesNotMatch(said, /A person will reply/);
     const v = await seen(link('nobody-home@cust.test', t.reference).api);
     assert.deepEqual([v.due_at, v.late], [null, false]);
     assert.equal(standing(v, (iso) => whenText(iso)).text, 'A person will read it and answer by email. The answer is shown here too.');

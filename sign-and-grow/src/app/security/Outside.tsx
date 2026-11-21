@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { outsideServices, outsideMode, outsidePolicy, switchedOff, NOT_BUILT } from '@/lib/outside';
+import { outsideMode, outsidePolicy, switchedOff, NOT_BUILT } from '@/lib/outside';
+import { outsideShown } from '@/lib/outside-shown';
 import { PRODUCT } from '@/lib/site';
-import { sealSet } from '@/lib/seal';
 
 // "What this server connects to", for /security. Every row comes from src/lib/outside.ts, which reads the settings the
 // server runs on, the same list the server logs when it starts and holds itself to under OUTSIDE_CALLS. Two facts are
@@ -13,9 +13,10 @@ export function WhatItConnectsTo() {
   const { mode } = outsideMode();
   const p = outsidePolicy();
   const off = switchedOff();
-  // A time-stamp service is only ever asked for the digital seal of a completed PDF, so on a server without a seal
-  // key it is never called and the row is left out: nothing here speaks of a seal then (src/lib/seal.ts).
-  const services = outsideServices().filter((s) => s.id !== 'tsa' || sealSet());
+  // Every service, on or off. A time-stamp service is asked at every completion even without a seal key (the record's
+  // last line, src/server/auditstamp.ts), so its row is always here; without a seal its words do not speak of one
+  // (src/lib/outside-shown.ts).
+  const services = outsideShown();
   const offWhy = (id: string) => off.find((s) => s.id === id);
   // Made by scripts/sbom.mjs when the server is built; a server run from source without a build has none.
   const sbom = fs.existsSync(path.join(/* turbopackIgnore: true */ process.cwd(), 'public', 'security', 'sbom.json'));

@@ -10,6 +10,7 @@ import { treesAtFinish, signerMoment, signerSaw, senderMoment, senderSaw, allPai
 // 'Trees on screens and emails' (src/server/tenantpolicy.ts): off, these routes answer as for someone who plants nothing.
 import { showsTrees } from './tenantpolicy.ts';
 import { isGovernment } from '../lib/deployment.ts';
+import { refuseLoosening, setByFor } from './orgs.ts';
 
 const CLOSED = ['voided', 'expired', 'declined'];
 
@@ -51,11 +52,16 @@ route('POST', '/envelopes/:id/impact/seen', (c) => {
 // 'Trees on the signing record' (Settings, Account). On by default. Off: the box "Signed without paper" is left off
 // the signing record of documents completed from then on. Screens, emails and /impact are not changed by it.
 // fixed: this server never puts them there (DEPLOYMENT_PROFILE=government), so the page shows no switch.
-route('GET', '/account/impact-record', (c) => ({ on: recordShowsTrees(c.account.id), ...(isGovernment() ? { fixed: true } : {}) }));
+// set_by: an organisation above the account switched tree lines off for every account below it, the record included
+// (src/server/orgs.ts), so the switch is shown off and locked with who set it.
+route('GET', '/account/impact-record', (c) => ({ on: recordShowsTrees(c.account.id), ...(isGovernment() ? { fixed: true } : {}), ...(setByFor(c.account.id).impact_display ? { set_by: setByFor(c.account.id).impact_display } : {}) }));
 route('PUT', '/account/impact-record', async (c) => {
+  // Like the other switches of Settings, Account (routes-tenantpolicy.ts): a person signed in, never an API key.
+  if (c.auth?.via === 'api_key') throw bad('An API key cannot change these settings. That needs an owner or an admin signed in to the app, under Settings, Account. Nothing was changed.', 403);
   const b = await c.body();
   if (typeof b?.on !== 'boolean') throw bad('Send "on" as true or false. Nothing was changed.');
   if (isGovernment()) throw bad('This server never puts trees on the signing record, so there is nothing to switch. Nothing was changed.', 409);
+  if (b.on) refuseLoosening(c.account.id, { impact_display: 'on' });
   const was = recordShowsTrees(c.account.id);
   run('UPDATE accounts SET cert_impact_off=? WHERE id=?', b.on ? 0 : 1, c.account.id);
   if (was !== b.on) record('settings.changed', { c, about: ['account', c.account.id], details: { settings: { trees_on_signing_record: { from: was, to: b.on } } } });

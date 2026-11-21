@@ -20,17 +20,25 @@ import { StampSettings } from '@/components/stamps/StampSettings';
 import { RetentionSettings } from '@/components/settings/RetentionSettings';
 import { ArchiveSettings } from '@/components/settings/ArchiveSettings';
 import { SealStatus } from '@/components/settings/SealStatus';
-import { TreesOnRecord } from '@/components/settings/TreesOnRecord';
+import { ArchiveFormat } from '@/components/settings/ArchiveFormat';
 import { TenantSwitches } from '@/components/settings/TenantSwitches';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
 import { LanguageSettings } from '@/components/settings/LanguageSettings';
 // The account's own custom fields, such as a case number (src/components/settings/CustomFieldSettings.tsx).
 import { CustomFieldSettings } from '@/components/settings/CustomFieldSettings';
 import { SecurityLog } from '@/components/settings/SecurityLog';
+import { securityOnlyHook } from '@/lib/seclog';
+import { SecurityPolicy } from '@/components/settings/SecurityPolicy';
+import { Organisation } from '@/components/settings/Organisation';
 // Sections, cards, "Saved" next to what saved, and the one More options of a section (research/ux-charter.md, 2.2).
 import { sectionsFor, landingFor, closingCount, nextTab, KEYS_AND_TWO_STEP, MEMBER_READS } from '@/lib/settingsnav';
 import { Card, MoreOptions, useSaved } from '@/components/settings/Frame';
 import { SendingDefaults } from '@/components/settings/SendingDefaults';
+// "Your consent text", the account's own words on the consent screen, behind Sending's More options (admins).
+import { Disclosure } from '@/components/settings/Disclosure';
+import { MonthlyReport } from '@/components/reports/MonthlyReport';
+import { ListDaysSetting } from '@/components/reports/SavedLists';
+import { screenLocale } from '@/lib/dates';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -38,11 +46,11 @@ const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   r.onerror = rej;
   r.readAsDataURL(file);
 });
-const longDate = (s?: string | null) => (s ? new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '');
+const longDate = (s?: string | null) => (s ? new Date(s).toLocaleDateString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric' }) : '');
 // A charge happens at a moment, not on a day: "cancel any time before" needs the time as well.
 // Free signatures arrive at the start of the month in UTC, so that date is written in UTC and says so.
-const utcDate = (s?: string | null) => (s ? `${new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}, UTC` : '');
-const longMoment = (s?: string | null) => (s ? `${longDate(s)} at ${new Date(s).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` : '');
+const utcDate = (s?: string | null) => (s ? `${new Date(s).toLocaleDateString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}, UTC` : '');
+const longMoment = (s?: string | null) => (s ? `${longDate(s)} at ${new Date(s).toLocaleTimeString(screenLocale(), { hour: 'numeric', minute: '2-digit' })}` : '');
 
 function Profile() {
   const me = useMe();
@@ -111,6 +119,8 @@ function Security() {
           <SignedIn />
         </section>
       </Card>
+      {/* Sign-in rules for the team: shortest password, sign out after no use, one session at a time (SecurityPolicy.tsx). */}
+      {me.role !== 'member' && <Card><SecurityPolicy /></Card>}
       {me.role !== 'member' && <Card><SecurityLog /></Card>}
     </div>
   );
@@ -228,6 +238,8 @@ function Notifications() {
           <span><b>{title}</b> {last === k && said}<span className="muted small" style={{ display: 'block' }}>{hint}</span></span>
         </label>
       ))}
+      {/* Owners and admins of a team that has sent something: last month's report by email (reports/MonthlyReport.tsx). */}
+      <MonthlyReport />
       <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>People you send to get one request, the reminders you set on the document, and one copy when it is complete. They can turn reminders off for themselves.</p>
     </div>
   );
@@ -256,9 +268,8 @@ function Account() {
       </div>
       <p className="muted small">Emails to your recipients come from "{me.user.name} via GrowSigning" and replies go straight to you.</p>
       <div className="row"><button className="btn" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (saved(), me.reload())).catch(oops)}>Save</button>{said}</div>
-      {/* A switch that saves by itself, set apart from the Save button of the boxes above (settings/TreesOnRecord.tsx). */}
-      <TreesOnRecord />
-      {/* 'Trees on screens and emails' and, where a model answers the help chat, 'AI answers in the help chat'. */}
+      {/* Switches that save by themselves, set apart from the Save button above: 'Trees on screens and emails', 'Trees on
+          the signing record' under it, and, where a model answers the help chat, 'AI answers in the help chat'. */}
       <TenantSwitches />
     </div>
   );
@@ -456,6 +467,7 @@ function Developers() {
           {(hooks?.webhooks || []).map((h: any) => (
             <div key={h.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
               <div className="row between"><b className="truncate">{h.url}</b><button className="btn sm ghost danger" onClick={() => api(`/webhooks/${h.id}`, { method: 'DELETE' }).then(() => (only === h.id ? setOnly('') : reloadHooks())).catch(oops)}>Delete</button></div>
+              {securityOnlyHook(h.events) && <div className="muted small">Sends the security record only, nothing about documents. It is also listed under <Link href="/app/settings?tab=security">Security</Link>.</div>}
               <div className="mono muted">Secret: {h.secret}</div>
             </div>
           ))}
@@ -956,12 +968,12 @@ export default function Settings() {
   // Said once when a link asked for a section this person does not have (src/lib/settingsnav.ts).
   const [note, setNote] = useState('');
   // The sections this person has: an owner or admin at most 10, a member at most 4.
-  const TABS = sectionsFor(me.role);
+  const TABS = sectionsFor(me.role, !!me.org_admin);
   // A member reading the plan or the stamps is in a section that has no tab of its own.
   const listed = TABS.some(([k]) => k === tab);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    const to = landingFor(me.role, q.get('tab'), window.location.hash, !!(q.get('signin') || q.get('signin_error')));
+    const to = landingFor(me.role, q.get('tab'), window.location.hash, !!(q.get('signin') || q.get('signin_error')), !!me.org_admin);
     setTab(to.tab);
     setNote(to.note || '');
     // An old link to something that moved: bring it into view once its section is drawn.
@@ -1008,16 +1020,20 @@ export default function Settings() {
       {tab === 'security' && <Security />}
       {tab === 'account' && <Card><Account /></Card>}
       {tab === 'account' && <LanguageSettings />}
-      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><CustomFieldSettings /></div>}
+      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><CustomFieldSettings /><MoreOptions><Disclosure /></MoreOptions></div>}
       {tab === 'team' && <Team />}
       {tab === 'billing' && <Billing />}
       {tab === 'data' && <Card><RetentionSettings /></Card>}
+      {/* Admins, once a list for Send to many is saved: after how many days an unused one is deleted (reports/SavedLists.tsx). */}
+      {tab === 'data' && <ListDaysSetting />}
       {tab === 'data' && <ArchiveSettings />}
       {tab === 'data' && <SealStatus />}
+      {tab === 'data' && <ArchiveFormat />}
       {tab === 'data' && <YourData only="export" />}
       {tab === 'data' && <MoreOptions><YourData only="close" /></MoreOptions>}
       {tab === 'developers' && <Developers />}
       {tab === 'stamps' && <Card><StampSettings /></Card>}
+      {tab === 'organisation' && me.org_admin && <Organisation />}
       </div>
     </div>
   );

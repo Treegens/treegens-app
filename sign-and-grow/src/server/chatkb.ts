@@ -17,6 +17,7 @@ import { replyPromise } from '../lib/support.ts';
 // When signatures expire (decided 2026-11-20), in the same words as the Plan page, /help and the pricing block.
 import { expiryRuleText, HELD_EXPIRY_TEXT } from '../lib/policy.ts';
 import { PRICING, usd, CURRENCY_NOTE } from '../lib/impact.ts';
+import { MONEY_LINE } from '../lib/impactwords.ts';
 import { CHAT_SCREENS, CHAT_TOOLS, type ChatScreen } from '../lib/chat.ts';
 import { helpTopics, notInIt } from './chatsources.ts';
 import {
@@ -223,7 +224,7 @@ export function systemPrompt(screen: ChatScreen, env: Record<string, string | un
   const dormant = dormantStopDays();
   const reachable = supportReachable(env);
   const email = (env.SUPPORT_EMAIL || '').trim();
-  return `You are the GrowSigning helper, an AI assistant inside GrowSigning, an e-signature service. You answer questions from visitors, from people who were sent a document to sign, and from people who send documents. 100% of what customers pay goes to Treegens tree planting.
+  return `You are the GrowSigning helper, an AI assistant inside GrowSigning, an e-signature service. You answer questions from visitors, from people who were sent a document to sign, and from people who send documents. ${MONEY_LINE}
 
 How you answer:
 - You are an AI and you can be wrong. When it matters, say so. The rules printed on GrowSigning's own pages are what count, not what you say.

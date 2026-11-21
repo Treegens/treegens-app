@@ -95,6 +95,9 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
  */
 export function SavingBox({ pages, people, envelopeId }: { pages: number; people: number; envelopeId?: string }) {
   const s = savingLine(pages, people);
+  // The account switched 'Trees on screens and emails' off (Settings, Account): no saving line at all.
+  const off = useMe()?.policy?.impact_display === 'off';
+  if (off) return null;
   if (s.sheets < 1) return null;
   return (
     <div className="card row ed-saving" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>

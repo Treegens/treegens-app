@@ -21,6 +21,12 @@ export const ARCHIVE_ASKS_PER_ADDRESS_DAY = 3;
 export const ARCHIVE_REFUSED_DAYS = 30;
 /** How long that "no" can be taken back from the same page. */
 export const ARCHIVE_UNDO_MINUTES = 60;
+/**
+ * Inboxes that marked an account's asking email as spam within ARCHIVE_REFUSED_DAYS, from which that account sends no
+ * more asking emails until the oldest of those marks is that old: the email goes to people who never asked for it.
+ * Copies to addresses already confirmed go on.
+ */
+export const ARCHIVE_SPAM_STOP = 3;
 
 /** What stands in a copy where a link was (the designer's words, research/ux-notes.json, "ds-mail-records"). */
 export const ARCHIVE_LINK_REMOVED = '(link removed in this copy)';

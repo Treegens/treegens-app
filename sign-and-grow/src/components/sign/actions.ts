@@ -23,7 +23,8 @@ export type Signer = { role: string; group?: { can_hand_back?: boolean; name?: s
 
 /**
  * The entries of Other actions that apply, in their order. `stage` is the screen ('consent' or 'sign'), `deadline`
- * whether the document has one, `paper` whether the sender allows signing on paper (not built yet: always false).
+ * whether the document has one, `paper` whether "Sign on paper instead" applies: for now when the account has its own
+ * consent text, whose one choice is to ask the sender to send it by post (src/components/sign/Withdraw.tsx).
  */
 export function otherActions(me: Signer, o: { stage: string; deadline: boolean; paper?: boolean }): ActionKey[] {
   if (me.role === 'witness') return [...WITNESS_ACTIONS];
@@ -35,7 +36,8 @@ export function otherActions(me: Signer, o: { stage: string; deadline: boolean; 
     handback: !!me.group?.can_hand_back,
     reassign: (me.role === 'signer' || me.role === 'approver') && !me.group,
     ask: true,
-    paper: !!o.paper,
+    // Asking for paper stops this person's part, so only someone who has a part to stop gets it (askForPaper).
+    paper: !!o.paper && me.role !== 'viewer' && me.role !== 'cc',
     decline: me.role !== 'viewer' && me.role !== 'cc',
   };
   const keys: ActionKey[] = ACTION_ORDER.filter((k) => on[k]);

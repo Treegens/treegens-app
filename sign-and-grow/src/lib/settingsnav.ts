@@ -5,31 +5,33 @@
 //   password, ways to sign in, two-step login, where you are signed in   Profile -> Security
 //   reminders, the deadline and the date format of new documents          Account -> Sending
 //   the emails you get about your documents                               Notifications -> Profile
-// Members have no Account, Sending, Stamps, Plan or Records and data section: everything there is set by admins. What a
+// Members have no Account, Sending, Stamps and seals, Plan or Records and data section: everything there is set by admins. What a
 // member could do in them before is under Profile, More options: export their documents, close their own login, and
 // read the plan and the stamps (MEMBER_READS: shown without a tab of their own).
 
 export type Role = 'owner' | 'admin' | 'member';
-export type SectionKey = 'profile' | 'security' | 'account' | 'sending' | 'team' | 'stamps' | 'billing' | 'data' | 'developers';
+export type SectionKey = 'profile' | 'security' | 'account' | 'sending' | 'team' | 'stamps' | 'billing' | 'data' | 'developers' | 'organisation';
 
-const SECTIONS: { key: SectionKey; label: string; admins?: true }[] = [
+const SECTIONS: { key: SectionKey; label: string; admins?: true; orgAdmins?: true }[] = [
   { key: 'profile', label: 'Profile' },
   { key: 'security', label: 'Security' },
   { key: 'account', label: 'Account', admins: true },
   { key: 'sending', label: 'Sending', admins: true },
   { key: 'team', label: 'Team' },
-  { key: 'stamps', label: 'Stamps', admins: true },
+  { key: 'stamps', label: 'Stamps and seals', admins: true },
   { key: 'billing', label: 'Plan', admins: true },
   { key: 'data', label: 'Records and data', admins: true },
   { key: 'developers', label: 'API and webhooks' },
+  // Only for an admin of an organisation above accounts (src/server/orgs.ts), whatever their role in this account.
+  { key: 'organisation', label: 'Organisation', orgAdmins: true },
 ];
 
 export const SETTINGS_MAX = { admin: 10, member: 4, cards: 4 };
 
 /** The sections this person sees, in order. */
-export function sectionsFor(role: string | null | undefined): [SectionKey, string][] {
+export function sectionsFor(role: string | null | undefined, orgAdmin = false): [SectionKey, string][] {
   const member = role !== 'owner' && role !== 'admin';
-  return SECTIONS.filter((s) => !(member && s.admins)).map((s) => [s.key, s.label]);
+  return SECTIONS.filter((s) => !(member && s.admins) && (!s.orgAdmins || orgAdmin)).map((s) => [s.key, s.label]);
 }
 
 export type Landing = {
@@ -46,8 +48,8 @@ export type Landing = {
  * carries the answer of a sign-in provider. Old addresses keep working, and a member who follows a link to a section
  * of the admins is told so in words instead of being shown an empty page.
  */
-export function landingFor(role: string | null | undefined, tab: string | null | undefined, hash = '', signin = false): Landing {
-  const mine = sectionsFor(role).map(([k]) => k);
+export function landingFor(role: string | null | undefined, tab: string | null | undefined, hash = '', signin = false, orgAdmin = false): Landing {
+  const mine = sectionsFor(role, orgAdmin).map(([k]) => k);
   const asked = String(tab || '').toLowerCase();
   const anchor = hash.replace(/^#/, '');
   if (asked === 'notifications') return { tab: 'profile', focus: 'notifications' };

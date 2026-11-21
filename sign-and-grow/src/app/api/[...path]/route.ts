@@ -28,6 +28,15 @@ import '@/server/routes-tenantpolicy';
 import '@/server/routes-convert';
 import '@/server/routes-disclosure';
 import '@/server/routes-secpolicy';
+import '@/server/routes-pages';
+import '@/server/routes-reports';
+import '@/server/routes-bulklists';
+import '@/server/routes-signlang';
+import '@/server/routes-ocr';
+import '@/server/routes-starters';
+import '@/server/routes-orgs';
+import '@/server/routes-pdfa';
+import '@/server/routes-whatsapp';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

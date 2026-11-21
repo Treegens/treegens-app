@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { api } from '@/components/ui';
 import { Logo } from '@/components/Brand';
 import { TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_RESET_BLOCK_DAYS } from '@/lib/policy';
+import { screenLocale } from '@/lib/dates';
 
-const moment = (s: string) => new Date(s).toLocaleString(undefined, { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+const moment = (s: string) => new Date(s).toLocaleString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 // The link in every email about a reset under way (?stop=...): it stops it, without signing in (POST
 // /auth/two-step/email-reset/stop). Here too a person presses the button, so a mail program that opens links to check

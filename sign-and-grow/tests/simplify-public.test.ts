@@ -120,7 +120,7 @@ test('no total is shown until it means something, and no figure under one tree a
 
 test('Settings: an owner or admin sees at most 10 sections and a member at most 4, and old links still land', () => {
   const owner = sectionsFor('owner'), member = sectionsFor('member');
-  assert.deepEqual(owner.map(([, l]) => l), ['Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps', 'Plan', 'Records and data', 'API and webhooks']);
+  assert.deepEqual(owner.map(([, l]) => l), ['Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps and seals', 'Plan', 'Records and data', 'API and webhooks']);
   assert.deepEqual(sectionsFor('admin'), owner);
   assert.deepEqual(member.map(([, l]) => l), ['Profile', 'Security', 'Team', 'API and webhooks']);
   assert.ok(owner.length <= SETTINGS_MAX.admin && member.length <= SETTINGS_MAX.member);
@@ -144,8 +144,8 @@ test('Settings: an owner or admin sees at most 10 sections and a member at most 
 
 test('Settings: the page is built from those sections, with sign-in under Security and the sending defaults under Sending', () => {
   const page = read('src/app/app/settings/page.tsx');
-  assert.match(page, /const TABS = sectionsFor\(me\.role\);/);
-  assert.match(page, /const to = landingFor\(me\.role, q\.get\('tab'\), window\.location\.hash, !!\(q\.get\('signin'\) \|\| q\.get\('signin_error'\)\)\);/);
+  assert.match(page, /const TABS = sectionsFor\(me\.role(, !!me\.org_admin)?\);/);
+  assert.match(page, /const to = landingFor\(me\.role, q\.get\('tab'\), window\.location\.hash, !!\(q\.get\('signin'\) \|\| q\.get\('signin_error'\)\)(, !!me\.org_admin)?\);/);
   // Security: one card "Your sign-in" for everyone, then the security record for admins.
   assert.match(page, /<h2 id="your-signin-h" className="set-group">Your sign-in<\/h2>\s*<SignInWays \/>\s*<TwoStepCard \/>\s*<SignedIn \/>/);
   assert.match(page, /\{me\.role !== 'member' && <Card><SecurityLog \/><\/Card>\}/);
@@ -156,7 +156,7 @@ test('Settings: the page is built from those sections, with sign-in under Securi
   // A member keeps what was theirs to do under Records and data: export, and closing their own login.
   assert.match(profile, /\{member && <MoreOptions>[\s\S]*?<YourData \/>\s*<\/MoreOptions>\}/);
   // Sending: reminders, deadline and date format left Account.
-  assert.match(page, /\{tab === 'sending' && <div className="stack"><Card><SendingDefaults \/><\/Card><CustomFieldSettings \/><\/div>\}/);
+  assert.match(page, /\{tab === 'sending' && <div className="stack"><Card><SendingDefaults \/><\/Card><CustomFieldSettings \/><MoreOptions><Disclosure \/><\/MoreOptions><\/div>\}/);
   const account = page.slice(page.indexOf('function Account()'), page.indexOf('function Team()'));
   assert.doesNotMatch(account, /default_reminder_days|default_expire_days|default_date_format/);
   const sending = read('src/components/settings/SendingDefaults.tsx');

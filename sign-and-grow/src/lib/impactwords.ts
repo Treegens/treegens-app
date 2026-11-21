@@ -22,6 +22,14 @@ export const TREEGENS_ORG_URL = 'https://treegens.org';
  *  pages are read again, change the sentences and this date together. */
 export const TREEGENS_READ_ON = '21 November 2026';
 
+/**
+ * Where the money goes, in the one form every page uses. Card payments carry the card processor's fees, and nothing
+ * in this code makes them up, so the words never say "100%" or "everything". Change it here, and only here.
+ */
+export const MONEY_LINE = 'What customers pay GrowSigning, less card fees, goes to Treegens to plant mangroves.';
+/** The same, short, for the footer of every public page. */
+export const MONEY_SHORT = 'What you pay, less card fees, goes to Treegens tree planting.';
+
 const n = (k: number) => Math.round(k).toLocaleString('en');
 const mangroves = (k: number) => `${n(k)} ${k === 1 ? 'mangrove' : 'mangroves'}`;
 const pages = (k: number) => `${n(k)} ${k === 1 ? 'page' : 'pages'}`;

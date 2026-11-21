@@ -2,22 +2,33 @@
 // has left before the idle rule signs it out, and the signing page's second look at its link after a long break.
 // The rules themselves are in secpolicy.ts.
 import { route } from './router.ts';
+import { setByField, floorForAccount } from './orgs.ts';
 import { run } from './db.ts';
 import { bad, now } from './util.ts';
 import { needCode, twoStepOn } from './twostep.ts';
 import { find } from './routes-sign.ts';
 import { saveRules, idleLeft, awayMinutes } from './secpolicy.ts';
 import { pwnedOn } from './pwned.ts';
+import { isOperator } from './routes-trust.ts';
+import { switchedOff } from '../lib/outside.ts';
 import { rulesOf, wholeIn, PASSWORD_MIN, PASSWORD_RULE_MAX, IDLE_MIN_MINUTES, IDLE_MAX_MINUTES, IDLE_WARN_SECONDS } from '../lib/signinrules.ts';
 import { SOURCE_LOCALE, t } from '../lib/i18n.ts';
 
 const say = (key: string, vars: Record<string, string | number> = {}) => t(SOURCE_LOCALE, key, vars);
+// The limits a person can choose from: never below what an organisation above the account asks (src/server/orgs.ts),
+// so the box and its hint say "From 12 to 64" when the Government asks for 12.
+const floorLimits = (accountId: string) => {
+  const f = floorForAccount(accountId).policy;
+  return { password: [Math.max(PASSWORD_MIN, f.min_password_length || 0), PASSWORD_RULE_MAX], idle_minutes: [IDLE_MIN_MINUTES, Math.min(IDLE_MAX_MINUTES, f.idle_minutes || IDLE_MAX_MINUTES)] };
+};
 const view = (c: any) => ({
   ...rulesOf(c.account),
-  limits: { password: [PASSWORD_MIN, PASSWORD_RULE_MAX], idle_minutes: [IDLE_MIN_MINUTES, IDLE_MAX_MINUTES], warn_seconds: IDLE_WARN_SECONDS },
+  limits: { ...floorLimits(c.account.id), warn_seconds: IDLE_WARN_SECONDS },
   // Whether new passwords are looked up in the list of leaked passwords on this server. Off: the card says nothing of it.
   leak_check: pwnedOn(),
   two_step_required: !!c.account.two_step_required_at,
+  // Rules an organisation above the account decided: "Set by Ministry of Health" (src/server/orgs.ts).
+  ...setByField(c.account.id),
   // Changing the rules asks for the code of two-step login from someone who has it.
   code_needed: twoStepOn(c.user),
 });
@@ -26,7 +37,7 @@ route('GET', '/account/rules', (c) => view(c), 'admin');
 
 route('PATCH', '/account/rules', async (c) => {
   // The rules decide who gets into the account, so a leaked key must not be able to loosen them.
-  if (c.auth?.via !== 'session') throw bad('An API key cannot change the sign-in rules. That needs a person signed in to the app.', 403);
+  if (c.auth?.via !== 'session') throw bad('An API key cannot change the sign-in rules. Sign in to the app as an owner or admin and change them under Settings, Security.', 403);
   const b = await c.body();
   const was = rulesOf(c.account);
   const next = { ...was };
@@ -44,7 +55,7 @@ route('PATCH', '/account/rules', async (c) => {
     }
   }
   if (b.one_session !== undefined) {
-    if (typeof b.one_session !== 'boolean') throw bad('Send "one_session": true or false.', 400, { field: 'one_session' });
+    if (typeof b.one_session !== 'boolean') throw bad('One session at a time is on or off, so nothing was changed. Send "one_session" as true or false.', 400, { field: 'one_session' });
     next.one_session = b.one_session;
   }
   if (JSON.stringify(next) === JSON.stringify(was)) return { ok: true, signed_out: 0, ...view(c) };
@@ -62,8 +73,18 @@ route('POST', '/me/idle/stay', (c) => {
 });
 
 // The signing page of an account with the idle rule asks this on the first action after a long break: the link is
-// looked up again exactly as when the page was opened (and refused in the same words when it no longer opens).
+// looked up again exactly as when the page was opened (and refused in the same words when it no longer opens). What
+// comes back is what the page compares with what it shows: the document's state and version, and whether this
+// person has finished. When one differs (cancelled, expired, corrected, finished in another tab), the page loads again.
 route('GET', '/sign/:token/away', (c) => {
-  const { e } = find(c);
-  return { ok: true, minutes: awayMinutes(e.account_id) };
+  const { e, r } = find(c);
+  return { ok: true, minutes: awayMinutes(e.account_id), status: e.status, version: e.content_version ?? null, done: r?.status === 'completed' };
 }, 'public');
+
+// For /app/operator: whether this server looks new passwords up in the list of leaked ones, and if not, why. Only
+// "off" is drawn there (one line), so a server with the check on shows nothing new.
+route('GET', '/operator/leak-check', (c) => {
+  if (!isOperator(c.user)) throw bad('Not found', 404);
+  const on = pwnedOn();
+  return { on, why: on ? null : switchedOff().some((s) => s.id === 'pwned') ? 'outside_calls' : 'setting' };
+});

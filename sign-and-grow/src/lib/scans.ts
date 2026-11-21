@@ -3,7 +3,8 @@
 // (storeUpload in src/server/routes-envelopes.ts), so this can be said at upload, again when a draft is opened
 // later, and once more before sending. No imports and no side effects: pages and tests can both use it.
 
-export type ScanInfo = { is_scan?: boolean; scan_pages?: number[]; pages?: number };
+// ocr: where reading the text of those pages by machine stands, when the server does that (src/server/ocr.ts).
+export type ScanInfo = { is_scan?: boolean; scan_pages?: number[]; pages?: number; ocr?: string | null };
 
 /** "page 2", "pages 2 and 3", "pages 2, 3 and 5", and for a long list the first six and how many more. */
 export function pageList(pages: number[]): string {
@@ -23,5 +24,8 @@ export function scanWarning(d: ScanInfo): string {
     ? 'This looks like a scan or a photo: it is a picture of the pages with no real text.'
     : `${pageList(pages).replace(/^p/, 'P')} of this document ${one ? 'has' : 'have'} no real text: ${one ? 'it looks like a scan or a photo of a page' : 'they look like scans or photos of pages'}.`;
   const it = whole ? 'it' : one ? 'that page' : 'those pages';
+  // The server read (or is reading) the text of those pages by machine: say that, and that it may have mistakes.
+  if (d.ocr === 'done') return `${what} This server read its text by machine, so it can be searched and a screen reader can read it from the text view, with a note that it may contain mistakes. If you have the original file, export a PDF from that and use Replace file.`;
+  if (d.ocr === 'queued' || d.ocr === 'running') return `${what} This server is reading its text by machine now, so that it can be searched and read out. If you have the original file, export a PDF from that and use Replace file.`;
   return `${what} People who use a screen reader will not be able to have ${it} read to them, ${whole ? 'it' : one ? 'it' : 'they'} cannot be found by searching, and Place fields for me has nothing to work with there. If you have the original file, export a PDF from that and use Replace file.`;
 }

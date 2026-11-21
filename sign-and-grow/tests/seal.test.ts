@@ -294,7 +294,8 @@ test('with a time-stamp service the seal is B-T: the token is over the signature
   const stub = stubTsa((req) => tsaAnswer(req, tsa, [tsaRoot]));
   try {
     const { id, pdf } = await complete();
-    assert.equal(stub.calls.length, 1);
+    // One for the record's chain head (auditstamp.ts), one for the seal.
+    assert.equal(stub.calls.length, 2);
     assert.equal(stub.calls[0].auth, `Basic ${Buffer.from('seal-user:tsa pass').toString('base64')}`);
     assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-T');
     const check = (await seal.checkSeal(pdf))!;
@@ -365,7 +366,8 @@ test('several services are tried in order; the first that answers well gives the
   const stub = stubTsa((req, url) => (url.includes('down.test') ? 500 : tsaAnswer(req, tsa, [tsaRoot])));
   try {
     const { id } = await complete();
-    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['down.test', 'tsa.test']);
+    // Twice in order: for the record's chain head (auditstamp.ts), then for the seal.
+    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['down.test', 'tsa.test', 'down.test', 'tsa.test']);
     assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-T');
   } finally {
     stub.restore();
@@ -383,7 +385,9 @@ test('a service that never answers is given up after 3 seconds, and all of them 
     assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['slow.test', 'slower.test'], 'the third is not asked once the 4 seconds are used up');
     assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-B');
     const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action LIKE 'Sealed by %'", id).detail;
-    assert.match(line, /slow\.test: it did not answer within 3 seconds/);
+    // The record's chain head is asked first (auditstamp.ts) and shares the 4 seconds: the seal finds both resting.
+    assert.match(line, /slow\.test: not asked, because it did not answer a short while ago/);
+    assert.match(s.db.get('SELECT why FROM audit_stamps WHERE envelope_id=?', id).why, /slow\.test: it did not answer within 3 seconds/);
     assert.match(line, /never\.test: not asked, because the 4 seconds for time-stamps were used up/);
   } finally {
     stub.restore();
@@ -600,7 +604,7 @@ test('the screens: the history line says "Sealed by <name>" in plain words, the 
   settings(pemSettings());
   const { id, c } = await complete();
   const page = (await c.get(`/envelopes/${id}`)).data;
-  assert.deepEqual(page.seal, { by: 'Example Operator Seal', issuer: 'Test Issuing CA', time_stamp: false, time_stamp_trusted: false });
+  assert.deepEqual(page.seal, { by: 'Example Operator Seal', issuer: 'Test Issuing CA', time_stamp: false, time_stamp_trusted: false, long_term: null, long_term_missing: null });
   const line = page.audit.find((a: any) => a.action === 'Sealed by Example Operator Seal');
   assert.ok(line, 'one history line, in the words of the charter');
   assert.equal(page.audit.filter((a: any) => /^Sealed by /.test(a.action)).length, 1);
@@ -812,13 +816,13 @@ test('the user name and password of the time-stamp service are never sent over p
   const stub = stubTsa((req) => tsaAnswer(req, tsa, [tsaRoot]));
   try {
     const { id } = await complete();
-    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['tsa.test'], 'the http address is not asked at all');
+    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['tsa.test', 'tsa.test'], 'the http address is not asked at all (the record\'s chain head, then the seal)');
     assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-T');
     stub.calls.length = 0;
     // Without credentials a plain http service is asked: its answer is signed, and nothing secret goes out.
     settings({ ...pemSettings(), TSA_URL: 'http://plain.test/ts' });
     await complete();
-    assert.deepEqual(stub.calls.map((c) => [new URL(c.url).host, c.auth]), [['plain.test', null]]);
+    assert.deepEqual(stub.calls.map((c) => [new URL(c.url).host, c.auth]), [['plain.test', null], ['plain.test', null]]);
     // Only http: with credentials nothing is asked, and the record says why.
     settings({ ...pemSettings(), TSA_URL: 'http://plain.test/ts', TSA_USER: 'seal-user', TSA_PASSWORD: 'tsa pass' });
     stub.calls.length = 0;
@@ -863,10 +867,13 @@ test('with no seal key the public pages say nothing about a seal, and with one t
   const cert = fs.readFileSync('src/app/security/certificate/page.tsx', 'utf8');
   // Every mention of the seal on the certificate page sits behind sealSet(), and the page is read on each request.
   assert.match(cert, /export const dynamic = 'force-dynamic'/);
-  const outside = cert.replace(/\{sealSet\(\) && <>[\s\S]*?\n {8}<\/>\}/g, '').replace(/\{sealSet\(\) && <li>[\s\S]*?<\/li>\}/g, '').replace(/^import .*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\/\/.*$/gm, '');
+  const outside = cert.replace(/\{sealSet\(\) && <>[\s\S]*?\n {8}<\/>\}/g, '').replace(/\{sealSet\(\) && <li>[\s\S]*?<\/li>\}/g, '').replace(/\{timeStampSet\(\) && <Line[\s\S]*?\/>\}/g, '').replace(/^import .*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\/\/.*$/gm, '');
   assert.doesNotMatch(outside, /digital seal|time.stamp|SEAL_/i, 'nothing about the digital seal outside the gated parts');
-  // The table of outside services leaves the time-stamp row out without a seal key.
-  assert.match(fs.readFileSync('src/app/security/Outside.tsx', 'utf8'), /filter\(\(s\) => s\.id !== 'tsa' \|\| sealSet\(\)\)/);
+  // The table of outside services keeps the time-stamp row (the server stamps each record's last line with or without a
+  // seal, src/server/auditstamp.ts), but without a seal key its words say nothing about a seal (src/lib/outside-shown.ts).
+  assert.match(fs.readFileSync('src/app/security/Outside.tsx', 'utf8'), /const services = outsideShown\(\);/);
+  const shownTsa = (await import('../src/lib/outside-shown.ts')).outsideShown({ TSA_URL: 'https://tsa.test' }).find((x) => x.id === 'tsa')!;
+  assert.doesNotMatch(shownTsa.purpose, /seal|OCSP/i);
   assert.equal(lib.sealSet({}), false);
   assert.equal(lib.sealSet({ TSA_URL: 'https://tsa.test' }), false, 'a time-stamp service alone is no seal');
   // The public words: no technical names, the unsealed case is said, and "trusted" only with the operator's list.

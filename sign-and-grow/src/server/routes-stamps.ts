@@ -1,6 +1,8 @@
 import { route, type Ctx } from './router.ts';
 import { get, run, tx } from './db.ts';
 import { bad, now, str, rateLimit, rateWait } from './util.ts';
+// Refusals the signing page shows carry a code, so it can say them in the signer's language (signlang.ts).
+import { refuse } from './signlang.ts';
 import { sameEmail } from './credits.ts';
 import { find, look } from './routes-sign.ts';
 import { mine } from './routes-envelopes.ts';
@@ -81,25 +83,25 @@ route('POST', '/sign/:token/stamp', async (c) => {
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw notOpen(e, r);
   const shown = shownVersion(r, b);
   if (shown != null && shown !== e.content_version) throw changedSince(e);
-  if (!r.consent_at) throw bad('Please agree to use electronic records and signatures first.');
-  if (!ACTS(r.role)) throw bad('Only someone who signs can put a stamp on this document.', 403);
+  if (!r.consent_at) throw refuse('consent_first');
+  if (!ACTS(r.role)) throw refuse('stamp_signers_only', 403);
   const f = e.fields.find((x: any) => x.id === b.field_id && x.recipient_id === r.id && x.type === 'stamp');
-  if (!f) throw bad('That stamp field is not yours, or is no longer on the document. Load the page again to see it as it is now.', 404);
+  if (!f) throw refuse('stamp_field_gone', 404);
   let meta: StampMeta, sha: string, stampId: string | null = null;
   if (b.same_as != null && b.same_as !== '') {
     // The stamp this person already put on another of their own stamp fields of this document: the same picture
     // and settings again, so both prints are the same stamp. Nothing is uploaded, so it does not count as a picture.
     const src = e.fields.find((x: any) => x.id === b.same_as && x.id !== f.id && x.recipient_id === r.id && x.type === 'stamp' && x.value);
     const was = src ? metaOf(src) : null;
-    if (!src || !was) throw bad('The stamp you put on before is not on the document any more. Choose a picture of the stamp again.', 404);
+    if (!src || !was) throw refuse('stamp_before_gone', 404);
     sha = src.value;
     stampId = src.stamp_id || null;
     meta = { ...was, at: now(), by: actor.name };
   } else if (b.stamp_id != null && b.stamp_id !== '') {
     const { why } = savedFor(c, r);
-    if (why) throw bad(why === 'in person' ? 'Saved stamps are not offered on a device that is handed to someone to sign in person. Upload a picture of the stamp or take a photo of it instead.' : `Saved stamps come from the account you are signed in to, and only when it is signed in with the address this document was sent to (${r.email}). Upload a picture of the stamp or take a photo of it instead.`, 403);
+    if (why) throw why === 'in person' ? refuse('stamp_saved_in_person', 403) : refuse('stamp_saved_other_account', 403, { email: r.email });
     const s = accountStamp(c.account.id, b.stamp_id);
-    if (!s) throw bad('That stamp is not in your account any more. Someone on your team may have changed or deleted it. Choose another one.', 404);
+    if (!s) throw refuse('stamp_saved_gone', 404);
     sha = s.image_sha;
     stampId = s.id;
     meta = { name: s.name, ink: s.ink, seed: s.seed, tilt: s.tilt, texture: s.texture, turn: stampTurn(s.turn), size_mm: s.size_mm, from: 'account', at: now(), by: actor.name, stamp_id: s.id };
@@ -107,7 +109,7 @@ route('POST', '/sign/:token/stamp', async (c) => {
     // A picture from a stranger's link: images only, a size limit, and a limit on how many in an hour.
     const per = `stamp:${r.id}`, ip = `stampip:${c.ip}`;
     const wait = Math.max(rateWait(per, STAMP_UPLOADS_PER_LINK_HOUR), rateWait(ip, STAMP_UPLOADS_PER_ADDRESS_HOUR));
-    if (wait) throw bad(`That is a lot of stamp pictures in one hour, so this one was not taken. Wait ${Math.ceil(wait / 60_000)} minutes and try again. A stamp that is already on the page stays there.`, 429);
+    if (wait) throw refuse('stamp_wait', 429, { minutes: Math.ceil(wait / 60_000) });
     rateLimit(per, Infinity, 3600_000);
     rateLimit(ip, Infinity, 3600_000);
     const look = lookOf(b, 'The stamp');
@@ -126,7 +128,7 @@ route('DELETE', '/sign/:token/stamp/:field', async (c) => {
   const { e, r } = find(c);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw notOpen(e, r);
   const f = e.fields.find((x: any) => x.id === c.params.field && x.recipient_id === r.id && x.type === 'stamp');
-  if (!f) throw bad('That stamp field is not yours, or is no longer on the document. Load the page again to see it as it is now.', 404);
+  if (!f) throw refuse('stamp_field_gone', 404);
   run('UPDATE fields SET value=NULL, stamp_id=NULL, stamp_meta=NULL WHERE id=?', f.id);
   return { ok: true };
 }, 'public');
@@ -139,6 +141,6 @@ route('GET', '/sign/:token/stamp-image/:sha', (c) => {
   const by = new Map<string, any>(e.recipients.map((x: any) => [x.id, x]));
   const may = e.fields.some((f: any) => f.type === 'stamp' && f.value === sha && (f.recipient_id === r.id || isSenderStamp(f) || by.get(f.recipient_id)?.status === 'completed'));
   const png = may ? stampPng(sha) : null;
-  if (!png) throw bad('That stamp is not on your part of this document.', 404);
+  if (!png) throw refuse('stamp_not_yours', 404);
   return pngResponse(png);
 }, 'public');

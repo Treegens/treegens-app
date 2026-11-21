@@ -3,9 +3,15 @@ import { all, get, run, tx } from './db.ts';
 import { bad, hmac, now, str, safeEqual, sha256, baseUrl } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
 import { sendMail, onMailOutcome } from './mail.ts';
+import { mailLocale, mt } from './maillang.ts';
+import { linkTextIn } from './textlang.ts';
+import { sentParts } from '../lib/smsparts.ts';
 import { sendText, smsMode, phoneKey, textsLeft, numbersToday, linkTextsToday, textsRoomInHours, onTextOutcome, dropCodeTexts, onTextRetry, dropTexts } from './sms.ts';
 import { audit, emailRefusal, hasNotPaid, dailyCap, signUrl, notifySender, senderOf, correctRecipient, loadEnvelope, samePerson, type Actor } from './envelopes.ts';
 import { reporterKey } from './bysender.ts';
+import { callCode } from './voice.ts';
+import { lastWa } from './whatsapp.ts';
+import { voiceProvider } from '../lib/channels.ts';
 import { CHECKS, isCodeCheck, CHANNEL_WORDS, normalPhone, PHONE_HOW, maskPhone, maskEmail, checkLine, plainTime, SMS_OFF } from '../lib/checks.ts';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODE_WAIT_SECONDS, SIGNER_CODES_PER_HOUR, SIGNER_CODES_PER_CALLER_HOUR, SIGNER_CODES_PER_DESTINATION_DAY, LINK_TEXTS_PER_NUMBER_DAY, SIGNER_PASS_HOURS, smsDailyPerAccount } from '../lib/policy.ts';
 
@@ -121,6 +127,8 @@ export function lockedView(view: any, r: any, accessLocked: boolean, gate: strin
       // Someone using this link, or another link from the same account, said the number is not theirs. No code goes
       // to it until the sender has corrected or confirmed it.
       stopped: r.verify === 'sms_code' && stoppedFor(r),
+      // "Call me with the code": this server can call the same number and read the code out (voice.ts).
+      call: r.verify === 'sms_code' && !!voiceProvider(),
       // We have no address for this person: their link came from the sender, so the screen never mentions an email.
       shared: !!r.link_by_sender && !r.email,
     },
@@ -137,7 +145,11 @@ export const withCheckLines = (e: any) => ({ ...e, recipients: e.recipients.map(
 export function publicCheck(r: any, token: string | null): any {
   const { check_gen: _g, checked_at, checked_how, checked_for, check_stop, texted_at: _t, ...rest } = r;
   const passed = passedCheck({ ...r, token, checked_at, checked_how, checked_for });
-  return { ...rest, verify: isCodeCheck(r.verify) ? r.verify : 'none', phone: r.phone || null, text_link: !!r.text_link,
+  const { wa_agreed_for, ...kept } = rest;
+  const waPhone = normalPhone(r.phone);
+  return { ...kept, verify: isCodeCheck(r.verify) ? r.verify : 'none', phone: r.phone || null, text_link: !!r.text_link,
+    // The link also by WhatsApp (whatsapp.ts), and whether the sender's tick holds for the number on file now.
+    whatsapp: !!r.wa_link, whatsapp_agreed: !!waPhone && !!wa_agreed_for && wa_agreed_for === phoneKey(waPhone), whatsapp_status: r.wa_link && r.id ? lastWa(r.id) : null,
     check: { line: checkLine(r, passed), passed_at: passed?.at || null, stopped: (r.verify === 'sms_code' || !!r.text_link) && stoppedFor({ ...r, check_stop }) } };
 }
 
@@ -193,18 +205,29 @@ function checkProblem(r: any, e: any): string | null {
   return null;
 }
 
-// What an account may still text, said to its sender before anything goes out: the hard stop per day
-// (SMS_DAILY_PER_ACCOUNT), and for an account the daily limit on emails applies to, the same number of phone
-// numbers a day. A text is counted like an email to that person.
-function textRefusal(e: any, recipients: any[], atOnce = 0): string | null {
+// The parts of the text with the signing link that `r` gets when `e` goes out, worked out before it is written: the
+// link has a fixed length, so a stand-in of that length counts the same. 0 for someone who gets no link by text.
+const TOKEN_STAND_IN = 'x'.repeat(43); // util.ts token(): 32 bytes, base64url
+function linkParts(e: any, r: any): number {
+  if (!r.text_link || r.role === 'inperson') return 0;
+  return sentParts(linkText(e, { ...r, token: r.token || TOKEN_STAND_IN }, e.sender_id ? senderOf(e) : null, 'new'));
+}
+
+// What an account may still text, said to its sender before anything goes out: the daily limit in text message
+// parts (SMS_DAILY_PER_ACCOUNT), and for an account the daily limit on emails applies to, the same number of phone
+// numbers a day. A text is counted like an email to that person. `parts` is what the texts that go out at once need,
+// worked out by the caller for a bulk send; otherwise it is the link texts of `recipients`. A code by text is sent
+// later, when it is asked for, so it needs at least 1 part left now and is held then if there is none.
+function textRefusal(e: any, recipients: any[], parts?: number): string | null {
   const will = recipients.filter((r) => texted(r) && normalPhone(r.phone));
   if (!will.length || !smsMode()) return null;
   const cap = smsDailyPerAccount(), left = textsLeft(e.account_id);
+  const need = Math.max(1, parts ?? will.reduce((n, r) => n + linkParts(e, r), 0));
   const room = `There is room again in about ${many(textsRoomInHours(e.account_id), 'hour')}, because the limit looks at the last 24 hours.`;
   const without = 'To send now, do it without text messages: choose a one-time code by email, and leave "also text the signing link" off.';
   if (!cap) return `The operator of this server has set the number of text messages an account can send in a day to zero, so none can be sent. Nothing was sent. ${without}`;
-  if (left < 1) return `This account has used all ${cap} text messages this server sends for one account in a day. Nothing was sent. ${room} ${without}`;
-  if (atOnce > left) return `This would send ${many(atOnce, 'text message')} at once, and this account can send ${left} more today (the limit is ${cap} in 24 hours). Nothing was sent. Send to fewer people at a time, or ${without.replace(/^To send now, do/, 'do')}`;
+  if (left < 1) return `This account has used today's ${cap} text message parts. ${PARTS_ARE} Nothing was sent. ${room} ${without}`;
+  if (need > left) return `This would use ${many(need, 'text message part')}, and this account has ${left} left today (the limit is ${cap} parts in 24 hours). ${PARTS_ARE} Nothing was sent. Send to fewer people at a time, or ${without.replace(/^To send now, do/, 'do')}`;
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
   if (!hasNotPaid(account)) return null;
   const { cap: people, firstWeek } = dailyCap(account);
@@ -302,10 +325,10 @@ export function assertBulkChecks(tpl: any, rows: any[], open: any[]) {
       if (typed && !phone) throw bad(`Row ${i + 1}: "${typed}" is not a mobile number we can text for "${role}". ${PHONE_HOW}`);
       if (texted(r) && !phone) throw bad(`Row ${i + 1}: "${role}" needs a mobile number, because this template ${r.verify === 'sms_code' ? 'checks them with a one-time code by text message' : 'also texts them the signing link'}. Add a "phone" to the row. ${PHONE_HOW}`);
       people.push({ ...r, phone: phone || r.phone });
-      if (r.text_link && r.role !== 'inperson') atOnce++;
+      atOnce += linkParts(tpl, r);
     }
   });
-  atOnce += rows.length * tpl.recipients.filter((r: any) => r.email && r.text_link && r.role !== 'inperson' && r.phone).length;
+  atOnce += rows.length * tpl.recipients.filter((r: any) => r.email && r.phone).reduce((n: number, r: any) => n + linkParts(tpl, r), 0);
   if (people.some((r) => texted(r)) && !smsMode()) throw bad(`${SMS_OFF} This template asks for text messages. Change the template to a one-time code by email or no extra check, and switch "also text the signing link" off.`, 400, { code: 'texts_off' });
   const no = textRefusal({ account_id: tpl.account_id }, people, atOnce);
   if (no) throw bad(no, 429);
@@ -459,11 +482,13 @@ const codeBucket = (e: any, r: any) => (e.powerform_id && e.form_recipient_id ==
 
 // `own` is for a text the timer tries again: it was counted when it was first written, and while that count is
 // still inside the last 24 hours it is not counted against itself a second time.
-function mayText(e: any, phone: string, kind: 'code' | 'link' | 'reminder', own = false): string | null {
+// `parts` is what the text about to go needs: it goes only when that many parts are left (for a try made again, its
+// own parts are already counted and are added back first).
+function mayText(e: any, phone: string, kind: 'code' | 'link' | 'reminder', own = false, parts = 1): string | null {
   if (!smsMode()) return 'text messages are switched off on this server';
   if (numberStopped(e.account_id, phone)) return 'someone using a signing link from this account said this number is not theirs, and nothing more is texted to it until the sender confirms it with them';
   const mine = own ? 1 : 0;
-  if (textsLeft(e.account_id) + mine < 1) return `the account this document was sent from has sent as many text messages as this server allows in a day (${smsDailyPerAccount()})`;
+  if (textsLeft(e.account_id) + (own ? parts : 0) < parts) return `the account this document was sent from has used the ${many(smsDailyPerAccount(), 'text message part')} this server allows it in a day`;
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
   if (hasNotPaid(account)) {
     const have = numbersToday(account.id);
@@ -490,16 +515,22 @@ async function textHeld(e: any, r: any, what: string, why: string) {
     [`${what[0].toUpperCase()}${what.slice(1)} to ${maskPhone(r.phone)} was not sent, because ${why}.`, 'The email with the same link was not affected. You can also copy their signing link from the envelope page and send it yourself.']);
 }
 
+// What a sender reads about parts when the daily limit stops a send.
+const PARTS_ARE = 'The limit counts text message parts: most of our texts are 1 or 2 parts, and a long one, or one with letters outside the basic Latin alphabet, uses more.';
+
+// The text with a one-time code. The last line is the form phones read to offer the code on this site only.
+function codeText(r: any, sender: any, code: string): string {
+  const host = baseUrl().replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
+  return `${mt(mailLocale(r), 'text.code', { code, sender: clip(sender.name, 40), minutes: SIGNER_CODE_MINUTES })}\n\n@${host} #${code}`;
+}
+
 const clip = (s: any, max: number) => (String(s ?? '').length > max ? `${String(s).slice(0, max - 3).trimEnd()}...` : String(s ?? ''));
-const ASKS: Record<string, string> = { signer: 'is waiting for you to sign', approver: 'is waiting for you to approve', viewer: 'is waiting for you to read', cc: 'was sent to you as a copy' };
 
 // Short on purpose: who it is for, which document, that it comes from GrowSigning for that sender, and the link.
 function linkText(e: any, r: any, sender: any, kind: string): string {
   const doc = `"${clip(e.subject, 60)}"`, who = clip(sender?.name || 'the sender', 40);
-  const asks = ASKS[r.role] || ASKS.signer;
-  if (kind === 'reminder') return `Reminder from GrowSigning, sent for ${who}: ${doc} ${asks.replace('is waiting', 'is still waiting')}. ${signUrl(r)}`;
-  if (kind === 'again') return `GrowSigning, sent for ${who}: ${doc} was changed and ${asks} again. ${signUrl(r)}`;
-  return `GrowSigning, sent for ${who}: ${doc} ${asks}. ${signUrl(r)}`;
+  // In the person's language (lang-mail): src/server/textlang.ts. English reads as it always has.
+  return linkTextIn(mailLocale(r), r.role, kind, { sender: who, doc, url: signUrl(r) });
 }
 
 /**
@@ -520,14 +551,15 @@ export async function alsoText(e: any, r: any, kind: string): Promise<void> {
     if (cur.check_stop) return;
     if (kind === 'reminder' && cur.texted_at && Date.now() - Date.parse(cur.texted_at) < 864e5) return;
     const what = kind === 'reminder' ? 'a reminder by text message' : 'the signing link by text message';
+    const body = linkText(e, cur, senderOf(e), kind);
     // Someone who told us this document looks wrong hears nothing more from us about it by text. Whoever holds the
     // link can report without a code, so the sender is told the texts stopped and can reach the person another way.
     // The pause and the filter for fake payment notices hold for a text whoever it goes to, also when the email went
     // to the sender's own address.
-    const no = reported(e, cur) ? 'someone using their signing link reported this document as suspicious, and we send nothing more to them about it by text' : textGuard(e) || mayText(e, phone, kind === 'reminder' ? 'reminder' : 'link');
+    const no = reported(e, cur) ? 'someone using their signing link reported this document as suspicious, and we send nothing more to them about it by text' : textGuard(e) || mayText(e, phone, kind === 'reminder' ? 'reminder' : 'link', false, sentParts(body));
     if (no) return void (await textHeld(e, cur, what, no));
     run('UPDATE recipients SET texted_at=? WHERE id=?', now(), cur.id);
-    const { status } = await sendText({ to: phone, text: linkText(e, cur, senderOf(e), kind), accountId: e.account_id, envelopeId: e.id, recipientId: cur.id, kind: kind === 'reminder' ? 'reminder' : 'link' });
+    const { status } = await sendText({ to: phone, text: body, accountId: e.account_id, envelopeId: e.id, recipientId: cur.id, kind: kind === 'reminder' ? 'reminder' : 'link' });
     if (status === 'sent') audit(e.id, SYSTEM, kind === 'reminder' ? 'Reminder sent by text message' : 'Signing link sent by text message', `${cur.name}, to ${maskPhone(phone)}`);
     else if (status === 'outbox') audit(e.id, SYSTEM, 'Not texted', `${cur.name}, to ${maskPhone(phone)}. This machine has no text message provider, so the text was only written to the outbox.`);
   } catch (err: any) {
@@ -571,7 +603,7 @@ onTextRetry('envelope', async (t) => {
   const what = t.kind === 'code' ? 'a one-time code by text message' : t.kind === 'reminder' ? 'a reminder by text message' : 'the signing link by text message';
   const own = Date.parse(t.at) > Date.now() - 864e5;
   const no = (t.kind !== 'code' && reported(e, r) ? 'someone using their signing link reported this document as suspicious, and we send nothing more to them about it by text' : null)
-    || textGuard(e) || mayText(e, phone, t.kind, own);
+    || textGuard(e) || mayText(e, phone, t.kind, own, Number(t.parts) || sentParts(t.body));
   // The sender hears it the way they hear a first try that is held back. A code is asked for by whoever holds the
   // link, who is told why at once when they ask for the next one.
   if (no && t.kind !== 'code') await textHeld(e, r, what, no);
@@ -608,7 +640,10 @@ const codeHash = (r: any, stamp: string, code: string) => hmac(`otp:${r.id}:${st
 onMailOutcome('signercode', (m, what) => {
   if (what === 'delayed' || !m?.envelope_id) return;
   const row = get('SELECT html, expires_at FROM emails WHERE id=?', m.id);
-  const code = row?.expires_at && new RegExp(`(\\d{${SIGNER_CODE_DIGITS}}) is your code`).exec(row.html || '')?.[1];
+  // The code is in the heading in every language ("mail.code.heading" keeps {code}), so it is found there, not by
+  // English words (lang-mail); the English sentence is the fallback for an email written before.
+  const code = row?.expires_at && (new RegExp(`<h1[^>]*>[^<]*?(?<![\\d:./-])(\\d{${SIGNER_CODE_DIGITS}})(?![\\d:./-])[^<]*</h1>`).exec(row.html || '')?.[1]
+    || new RegExp(`(\\d{${SIGNER_CODE_DIGITS}}) is your code`).exec(row.html || '')?.[1]);
   if (code) run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=?", code, code, m.id);
 });
 const brandOf = (accountId: string) => {
@@ -630,16 +665,19 @@ async function tellOnce(e: any, action: string, detail: string, mail: () => Prom
  * address over every link it opens, SIGNER_CODES_PER_DESTINATION_DAY a day for one mailbox or number whoever asks,
  * and for a text the account's own limits. A new code ends the one before it.
  */
-export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
+export async function requestCode(e: any, r: any, actor: Actor, by: 'text' | 'call' = 'text'): Promise<any> {
   if (!isCodeCheck(r.verify)) throw bad('This document does not ask for a one-time code.', 409);
+  // "Call me with the code" (voice.ts): the code of a check by text message, read out on a call to the same number.
+  if (by === 'call' && r.verify !== 'sms_code') throw bad('A call with the code is only for a code by text message.', 409);
   // A code is only worth sending for a document this person can open once they have it.
   if (r.status === 'pending' || !(e.status === 'sent' || e.status === 'completed' || (r.status === 'completed' && r.role !== 'cc'))) throw bad('This document is not waiting for a code right now.', 409);
   const sender = senderOf(e) || { name: 'the sender', email: '' };
   const reach = sender.email ? `${sender.name}: ${sender.email}` : sender.name;
   const kind: 'email_code' | 'sms_code' = r.verify;
   const byText = kind === 'sms_code';
+  const byCall = byText && by === 'call';
   const d = destOf(r);
-  const how = CHANNEL_WORDS[kind];
+  const how = byCall ? 'phone call' : CHANNEL_WORDS[kind];
   // "This is not my number" said on this link, or on another link from the same account for the same number: its
   // owner is left alone by that account, on every envelope, until the sender confirms the number with the person.
   if (byText && stoppedFor(r)) {
@@ -650,7 +688,7 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
     throw bad(`No code is sent to ${d.masked} any more, because someone using ${r.check_stop ? 'this link' : `a signing link from ${sender.name}`} said it is not their number. ${sender.name} has been told and has to put in the right number. Until then this document cannot be opened. You can reach ${reach}.`, 409, { code: 'stopped' });
   }
   // The server cannot send this kind of message at all, or the number cannot be texted. Nothing the signer did.
-  const cannot = byText ? (!smsMode() ? 'text messages are switched off on this server' : !d.to ? 'the mobile number on file is not complete' : '') : !canEmail() || !d.to ? 'this server cannot send email' : '';
+  const cannot = byCall && !voiceProvider() ? 'calls are switched off on this server' : byText ? (!smsMode() ? 'text messages are switched off on this server' : !d.to ? 'the mobile number on file is not complete' : '') : !canEmail() || !d.to ? 'this server cannot send email' : '';
   const sorry = (why: string) => bad(`We cannot send you a code by ${how} right now. That is nothing you did: ${why}. ${sender.name} has been told and can fix it or choose another check. You can reach ${reach}. Nothing you filled in is lost.`, 503, { code: 'unavailable' });
   const tellSender = (why: string) => tellOnce(e, 'One-time code could not be sent', `${r.name}: a code by ${how} to ${d.masked} was asked for and not sent, because ${why}.`, () =>
     notifySender(e, 'always', `Cannot open: ${e.subject}`, `${r.name} cannot get a one-time code`,
@@ -688,7 +726,7 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
   if (get('SELECT COUNT(*) n FROM signer_codes WHERE dest_hash=? AND COALESCE(bucket, account_id)=? AND at > ?', d.key, bucket, iso(t - 864e5)).n >= SIGNER_CODES_PER_DESTINATION_DAY)
     throw bad(`${SIGNER_CODES_PER_DESTINATION_DAY} codes for documents from ${sender.name}${bucket === e.account_id ? '' : ' through this form'} have gone to ${d.masked} in the last 24 hours, which is the most we send to one ${byText ? 'number' : 'mailbox'} in a day. Try again tomorrow. If you need the document sooner, you can reach ${reach}.`, 429, { code: 'wait_destination' });
   if (byText) {
-    const no = mayText(e, d.to!, 'code');
+    const no = mayText(e, d.to!, 'code', false, sentParts(codeText(r, sender, '0'.repeat(SIGNER_CODE_DIGITS))));
     if (no) {
       await tellSender(no);
       throw sorry(no);
@@ -702,7 +740,7 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
   const id = tx(() => {
     run("UPDATE signer_codes SET ended_at=?, ended_how='replaced' WHERE recipient_id=? AND ended_at IS NULL", at, r.id);
     return Number(run('INSERT INTO signer_codes (recipient_id, envelope_id, account_id, channel, dest, dest_hash, code_hash, stamp, ip, at, expires_at, bucket) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-      r.id, e.id, e.account_id, kind, d.masked, d.key, codeHash(r, stamp, code), stamp, actor.ip || null, at, expires, bucket).lastInsertRowid);
+      r.id, e.id, e.account_id, byCall ? 'call_code' : kind, d.masked, d.key, codeHash(r, stamp, code), stamp, actor.ip || null, at, expires, bucket).lastInsertRowid);
   });
   // An older code that is still waiting to be sent would arrive after this one and work for nothing.
   // (An email about an envelope that carries an end time is a code email. They are filed under the envelope and the
@@ -711,17 +749,18 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
   dropCodeTexts(r.id);
 
   let delivery: string;
-  if (byText) {
-    // The last line is the form phones read to offer the code on this site only.
-    const host = baseUrl().replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
+  if (byCall) delivery = await callCode({ to: d.to!, code, sender: clip(sender.name, 40), accountId: e.account_id, envelopeId: e.id, recipientId: r.id });
+  else if (byText) {
     delivery = (await sendText({ to: d.to!, kind: 'code', accountId: e.account_id, envelopeId: e.id, recipientId: r.id, expiresAt: expires,
-      text: `${code} is your GrowSigning code to open a document from ${clip(sender.name, 40)}. It works for ${SIGNER_CODE_MINUTES} minutes. Did not ask for it? Ignore this text.\n\n@${host} #${code}` })).status;
+      text: codeText(r, sender, code) })).status;
   } else {
+    const L = mailLocale(r);
     delivery = await sendMail({
-      to: d.to!, subject: `Your code to open a document from ${sender.name}`, heading: `${code} is your code`,
-      lines: [`Type this code on the page that asked for it. It works for ${SIGNER_CODE_MINUTES} minutes, and only for the document ${sender.name} sent you.`,
-        `Nobody at GrowSigning and nobody working for ${sender.name} will ever ask you for this code. If you did not just open a document from ${sender.name}, someone else has the link that was emailed to you: do not pass the code on${sender.email ? `, and tell ${sender.name} (${sender.email})` : ''}.`],
-      envelopeId: e.id, brand: brandOf(e.account_id), replyTo: sender.email || undefined, fromName: sender.name, expiresAt: expires,
+      // In the person's language (lang-mail), every line of it from en.json.
+      to: d.to!, subject: mt(L, 'mail.code.subject', { sender: sender.name }), heading: mt(L, 'mail.code.heading', { code }),
+      lines: [mt(L, 'mail.code.type', { minutes: SIGNER_CODE_MINUTES, sender: sender.name }),
+        sender.email ? mt(L, 'mail.code.never_ask', { sender: sender.name, email: sender.email }) : mt(L, 'mail.code.never_ask_plain', { sender: sender.name })],
+      locale: L, envelopeId: e.id, brand: brandOf(e.account_id), replyTo: sender.email || undefined, fromName: sender.name, expiresAt: expires,
     });
     // Once the mail server has it, our own copy of the email no longer needs to hold the code.
     if (delivery === 'sent') run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE envelope_id=? AND lower(to_email)=lower(?) AND expires_at=?)", code, code, e.id, d.to, expires);
@@ -729,13 +768,13 @@ export async function requestCode(e: any, r: any, actor: Actor): Promise<any> {
   run('UPDATE signer_codes SET delivery=? WHERE id=?', delivery, id);
   const to = `${r.name}: by ${how} to ${d.masked}`;
   if (delivery === 'sent') audit(e.id, actor, 'One-time code sent', to);
-  else if (delivery === 'outbox') audit(e.id, actor, 'One-time code not delivered', `${to}. This machine has no ${byText ? 'text message provider' : 'mail server'}, so the code was only written to the outbox.`);
+  else if (delivery === 'outbox') audit(e.id, actor, 'One-time code not delivered', `${to}. This machine has no ${byCall ? 'call provider' : byText ? 'text message provider' : 'mail server'}, so the code was only written to the outbox.`);
   else {
     // The record of why is written by the listeners for emails and texts. The person is told at once, and may ask again.
-    audit(e.id, actor, 'One-time code could not be sent', `${to}. The ${byText ? 'text message provider' : 'mail server'} would not take it.`);
+    audit(e.id, actor, 'One-time code could not be sent', `${to}. The ${byCall ? 'call provider' : byText ? 'text message provider' : 'mail server'} would not take it.`);
     throw bad(`We could not send the code just now. That is nothing you did, and nothing you filled in is lost. Try again in a minute. If it keeps happening, tell ${reach}.`, 502, { code: 'not_sent', resend_in: SIGNER_CODE_WAIT_SECONDS });
   }
-  return { sent: true, kind, to: d.masked, minutes: SIGNER_CODE_MINUTES, expires_in: SIGNER_CODE_MINUTES * 60, resend_in: SIGNER_CODE_WAIT_SECONDS, tries_left: SIGNER_CODE_TRIES, delivery };
+  return { sent: true, kind, by: byCall ? 'call' : 'text', to: d.masked, minutes: SIGNER_CODE_MINUTES, expires_in: SIGNER_CODE_MINUTES * 60, resend_in: SIGNER_CODE_WAIT_SECONDS, tries_left: SIGNER_CODE_TRIES, delivery };
 }
 
 /**
@@ -751,7 +790,7 @@ export async function checkCode(e: any, r: any, typed: any, actor: Actor): Promi
   if (digits.length !== SIGNER_CODE_DIGITS) throw bad(`The code has ${SIGNER_CODE_DIGITS} digits. Type all of them, with nothing else.`, 400, { code: 'format' });
   const d = destOf(r);
   const how = CHANNEL_WORDS[r.verify as 'email_code' | 'sms_code'];
-  const out = tx((): { kind: 'none' | 'expired' | 'spent' | 'ok' | 'wrong'; left?: number } => {
+  const out = tx((): { kind: 'none' | 'expired' | 'spent' | 'ok' | 'wrong'; left?: number; how?: string } => {
     const c = get('SELECT * FROM signer_codes WHERE recipient_id=? ORDER BY id DESC LIMIT 1', r.id);
     if (!c || c.stamp !== deviceStamp(r) || (c.ended_at && c.ended_how !== 'tries')) return { kind: 'none' };
     if (c.ended_how === 'tries') return { kind: 'spent' };
@@ -761,8 +800,10 @@ export async function checkCode(e: any, r: any, typed: any, actor: Actor): Promi
       run("UPDATE signer_codes SET ended_at=?, ended_how='used' WHERE id=?", t, c.id);
       // The record for the certificate: how the code was sent, to where (masked) and when it was typed. Someone
       // who has finished keeps the record of the check they passed before they signed.
-      if (r.status !== 'completed' || !passedCheck(r)) run('UPDATE recipients SET checked_at=?, checked_how=?, checked_for=? WHERE id=?', t, `One-time code sent by ${how} to ${d.masked}`, linkStamp(r), r.id);
-      return { kind: 'ok' };
+      // A code read out on a call says so (voice.ts): the certificate names the way it really travelled.
+      const went = c.channel === 'call_code' ? 'phone call' : how;
+      if (r.status !== 'completed' || !passedCheck(r)) run('UPDATE recipients SET checked_at=?, checked_how=?, checked_for=? WHERE id=?', t, `One-time code sent by ${went} to ${d.masked}`, linkStamp(r), r.id);
+      return { kind: 'ok', how: went };
     }
     const fails = c.fails + 1, spent = fails >= SIGNER_CODE_TRIES;
     run('UPDATE signer_codes SET fails=?, ended_at=?, ended_how=? WHERE id=?', fails, spent ? now() : null, spent ? 'tries' : null, c.id);
@@ -770,7 +811,7 @@ export async function checkCode(e: any, r: any, typed: any, actor: Actor): Promi
   });
   const spentText = `That code was typed wrongly ${SIGNER_CODE_TRIES} times, so it no longer works. Ask for a new one below.`;
   if (out.kind === 'ok') {
-    audit(e.id, actor, 'One-time code accepted', `${r.name}: the code sent by ${how} to ${d.masked}`);
+    audit(e.id, actor, 'One-time code accepted', `${r.name}: the code sent by ${out.how || how} to ${d.masked}`);
     return { ok: true };
   }
   if (out.kind === 'none') throw bad('There is no code waiting to be typed in. Ask for a new one below.', 410, { code: 'no_code' });
