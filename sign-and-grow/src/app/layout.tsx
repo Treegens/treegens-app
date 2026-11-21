@@ -30,7 +30,7 @@ import type { Metadata, Viewport } from 'next';
 import { siteBase, SITE_TITLE } from '@/lib/site';
 import { Toasts } from '@/components/ui';
 import { headers } from 'next/headers';
-import { chooseLocale, dir } from '@/lib/i18n';
+import { pageLocale, shippedLocales, dir } from '@/lib/i18n';
 
 export const metadata: Metadata = {
   title: { default: SITE_TITLE, template: '%s · GrowSigning' },
@@ -44,10 +44,13 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#134a2c' };
 
 // The language of the page and its direction, from what the browser asks for among the languages switched on, else
-// English (src/lib/i18n.ts). Only English is switched on, so today this is lang="en" dir="ltr" everywhere. The signing
-// page sets its signer's own language when its words are translated (lang-signing).
+// English (src/lib/i18n.ts). While English is the only language switched on the answer is always lang="en" dir="ltr",
+// so the request is not read at all: reading it would make every page be built again for each visitor and stop
+// browsers and caches from keeping the public pages (/, /help, /security, /pricing). The header is read from the day
+// a second language is switched on. The signing page sets its signer's own language when its words are translated
+// (lang-signing).
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const lang = chooseLocale({ acceptLanguage: (await headers()).get('accept-language') });
+  const lang = pageLocale(shippedLocales().length > 1 ? (await headers()).get('accept-language') : null);
   return (
     <html lang={lang} dir={dir(lang)}>
       <body>

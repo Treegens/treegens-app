@@ -352,6 +352,9 @@ export function chooseLocale(o: { chosen?: unknown; acceptLanguage?: unknown }, 
   return browserLocale(o.acceptLanguage, langs) || SOURCE_LOCALE;
 }
 
+/** The language of a page that belongs to nobody in particular (src/app/layout.tsx): the browser's among those switched on, else English. */
+export const pageLocale = (acceptLanguage: unknown, langs: Language[] = SUPPORTED_LOCALES): string => chooseLocale({ acceptLanguage }, langs);
+
 /** The language the screens are actually in for `locale`: the first switched-on one along its chain, else English. */
 export const uiLocale = (locale: unknown, langs: Language[] = SUPPORTED_LOCALES): string =>
   fallbackChain(locale).find((x) => isShipped(x, langs)) || SOURCE_LOCALE;
