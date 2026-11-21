@@ -120,7 +120,7 @@ test('no total is shown until it means something, and no figure under one tree a
 
 test('Settings: an owner or admin sees at most 10 sections and a member at most 4, and old links still land', () => {
   const owner = sectionsFor('owner'), member = sectionsFor('member');
-  assert.deepEqual(owner.map(([, l]) => l), ['Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps', 'Plan', 'Your data', 'API and webhooks']);
+  assert.deepEqual(owner.map(([, l]) => l), ['Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps', 'Plan', 'Records and data', 'API and webhooks']);
   assert.deepEqual(sectionsFor('admin'), owner);
   assert.deepEqual(member.map(([, l]) => l), ['Profile', 'Security', 'Team', 'API and webhooks']);
   assert.ok(owner.length <= SETTINGS_MAX.admin && member.length <= SETTINGS_MAX.member);
@@ -136,7 +136,7 @@ test('Settings: an owner or admin sees at most 10 sections and a member at most 
   // (Plan and Stamps are the two a member may still read: see the repair test about MEMBER_READS below.)
   const sent = landingFor('member', 'data');
   assert.equal(sent.tab, 'profile');
-  assert.equal(sent.note, 'Your data is set by the owner and the admins of this account, so it is not in your Settings. Ask one of them: Team lists who they are.');
+  assert.equal(sent.note, 'Records and data is set by the owner and the admins of this account, so it is not in your Settings. Ask one of them: Team lists who they are.');
   // A made-up section is not echoed anywhere.
   assert.deepEqual(landingFor('member', '<img src=x onerror=alert(1)>'), { tab: 'profile' });
   assert.deepEqual(landingFor('owner', 'SECURITY'), { tab: 'security', focus: undefined });
@@ -153,7 +153,7 @@ test('Settings: the page is built from those sections, with sign-in under Securi
   assert.doesNotMatch(profile, /<SignInWays|<TwoStepCard|<SignedIn/, 'Profile no longer mixes in the password and two-step login');
   assert.match(profile, /Your password, two-step login and the places you are signed in are under/, 'and says where they went');
   assert.match(profile, /<Card><Notifications \/><\/Card>/);
-  // A member keeps what was theirs to do under Your data: export, and closing their own login.
+  // A member keeps what was theirs to do under Records and data: export, and closing their own login.
   assert.match(profile, /\{member && <MoreOptions>[\s\S]*?<YourData \/>\s*<\/MoreOptions>\}/);
   // Sending: reminders, deadline and date format left Account.
   assert.match(page, /\{tab === 'sending' && <div className="stack"><Card><SendingDefaults \/><\/Card><CustomFieldSettings \/><\/div>\}/);
@@ -179,7 +179,7 @@ test('Settings: "Saved" stands next to what saved, the long lists are folded, an
   assert.match(frame, /<div data-item="card" className="set-card">/);
   // A text card saves with a button that is not the filled one (one main button a page: P5).
   assert.doesNotMatch(mine.slice(mine.indexOf('function Profile()'), mine.indexOf('function Team()')), /btn primary/);
-  // Your data: the two lists are behind "What is kept", closed, and the page still says where to look.
+  // Records and data: the two lists are behind "What is kept", closed, and the page still says where to look.
   const kept = page.slice(page.indexOf('function WhatIsKept()'), page.indexOf('function YourData('));
   assert.match(kept, /<details data-fold="" className="set-kept">\s*<summary className="set-fold">What is kept<\/summary>/);
   assert.match(kept, /DELETED_WITH_ACCOUNT\.map/);
@@ -188,7 +188,7 @@ test('Settings: "Saved" stands next to what saved, the long lists are folded, an
   assert.equal((data.match(/<WhatIsKept \/>/g) || []).length, 2);
   assert.doesNotMatch(data, /DELETED_WITH_ACCOUNT\.map/);
   assert.match(data, /&quot;What is kept&quot; below says exactly what goes and what stays\./);
-  // An admin closes the account from the one More options of Your data; nothing on any section is open on arrival.
+  // An admin closes the account from the one More options of Records and data; nothing on any section is open on arrival.
   assert.match(page, /\{tab === 'data' && <MoreOptions><YourData only="close" \/><\/MoreOptions>\}/);
   assert.doesNotMatch(mine + frame + read('src/components/settings/SendingDefaults.tsx'), /<details[^>]* open/);
   // The plan rules are behind "How signatures work" (the payment owner's part, checked here so it stays).
@@ -356,7 +356,7 @@ test('repair: a deletion that was asked for is written into its record as "Goes 
 test('repair: Settings says document, the fold labels differ, and developer text is with the API keys', () => {
   const page = read('src/app/app/settings/page.tsx');
   const mine = page.slice(0, page.indexOf('function Team()')) + page.slice(page.indexOf('function WhatIsKept()'));
-  assert.doesNotMatch(mine.replace(/\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, ''), /(your|the|every|an|new|its) envelopes?\b|envelope\(s\)|audit trail/i, 'no "envelope" or "audit trail" in the words of Profile, Security, Account or Your data');
+  assert.doesNotMatch(mine.replace(/\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, ''), /(your|the|every|an|new|its) envelopes?\b|envelope\(s\)|audit trail/i, 'no "envelope" or "audit trail" in the words of Profile, Security, Account or Records and data');
   assert.match(page, /<h2 style=\{\{ marginBottom: 4 \}\}>Emails about your documents<\/h2>/);
   assert.match(page, /the full history of every document/);
   assert.doesNotMatch(page, /envelope\(s\)/);

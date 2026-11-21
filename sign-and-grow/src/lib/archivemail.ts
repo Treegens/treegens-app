@@ -72,12 +72,20 @@ export function archiveAddress(typed: unknown): string | null {
   return s;
 }
 
+/** Mail hosts known to ignore full stops before the @, and the one name each is filed under. */
+const DOTLESS_HOSTS: Record<string, string> = { 'gmail.com': 'gmail.com', 'googlemail.com': 'gmail.com' };
+
 /**
- * The inbox an address reaches, as far as its spelling says: the address without a "+tag". The daily limits, and
- * a "no" from whoever reads the inbox, hold for every address with the same key.
+ * The inbox an address reaches, as far as its spelling says: the address without a "+tag", and at Gmail (gmail.com
+ * and googlemail.com are one mailbox, and full stops before the @ mean nothing there) without the full stops. The
+ * daily limits, and a "no" from whoever reads the inbox, hold for every address with the same key. Other providers'
+ * aliases, and a second address that forwards to the same mailbox, cannot be told from the spelling.
  */
 export function archiveKey(email: string): string {
   const s = String(email ?? '').trim().normalize('NFKC').toLowerCase();
   const at = s.lastIndexOf('@');
-  return at < 1 ? s : `${s.slice(0, at).split('+')[0]}${s.slice(at)}`;
+  if (at < 1) return s;
+  const local = s.slice(0, at).split('+')[0];
+  const host = s.slice(at + 1);
+  return DOTLESS_HOSTS[host] ? `${local.replace(/\./g, '')}@${DOTLESS_HOSTS[host]}` : `${local}@${host}`;
 }

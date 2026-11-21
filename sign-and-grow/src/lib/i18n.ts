@@ -230,7 +230,7 @@ const rulesFor = (locale: string) => {
   return pluralRules.get(locale)!;
 };
 const numberIn = (locale: string, n: number) => {
-  if (!numberFormats.has(locale)) numberFormats.set(locale, new Intl.NumberFormat(locale, { maximumFractionDigits: 20 }));
+  if (!numberFormats.has(locale)) numberFormats.set(locale, new Intl.NumberFormat(locale, { maximumFractionDigits: 20, numberingSystem: 'latn' }));
   return numberFormats.get(locale)!.format(n);
 };
 const shown = (locale: string, v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? numberIn(locale, v) : v == null ? '' : String(v));

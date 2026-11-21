@@ -57,7 +57,7 @@ function inkOn(hex?: string | null): string | undefined {
 export const helpHref = (data?: any, anchor = 'signing') =>
   `/help?topic=signing${data?.help_code ? `&code=${encodeURIComponent(data.help_code)}` : data?.envelope?.id ? `&envelope=${encodeURIComponent(data.envelope.id)}` : ''}#${anchor}`;
 
-export function Shell({ data, children, bar, bottom, footer, titleIsHeading, live, helpInNewTab, plainBar }: {
+export function Shell({ data, children, bar, bottom, footer, titleIsHeading, live, helpInNewTab, plainBar, onHelp }: {
   data?: any;
   children: ReactNode;
   /** Controls on the right of the top bar. */
@@ -72,6 +72,8 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
   helpInNewTab?: boolean;
   /** The bar shows our logo and not the document's name: for a screen whose own heading is that name (the consent). */
   plainBar?: boolean;
+  /** Opens the help dialog. With it, Help is one button in the top bar and the footer has no second Help (charter 2.6, P12). */
+  onHelp?: () => void;
 }) {
   const brand = data?.brand;
   const title = data?.envelope?.subject || 'GrowSigning';
@@ -88,12 +90,13 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
           return titleIsHeading ? <h1 className="sg-title grow truncate">{shown}</h1> : <div className="sg-title grow truncate">{shown}</div>;
         })()}
         {bar}
+        {onHelp && <button type="button" className="btn sm sg-other sg-help" aria-haspopup="dialog" onClick={onHelp}>Help</button>}
       </header>
       <main id="sg-main" className="signwrap" tabIndex={-1}>{children}</main>
       <footer className="sg-foot">
         <div className="sg-foot-links">
           {footer}
-          <a href={helpHref(data)} {...(helpInNewTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Help{helpInNewTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
+          {!onHelp && <a href={helpHref(data)} {...(helpInNewTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Help{helpInNewTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>}
         </div>
         <div className="sg-foot-by"><SentWith height={16} /></div>
       </footer>

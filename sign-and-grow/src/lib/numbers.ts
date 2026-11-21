@@ -37,5 +37,7 @@ export function numberOnScreen(n: number, locale?: unknown, digits = 2): string 
   } catch {
     /* not a language tag: English */
   }
-  return new Intl.NumberFormat(tag, { maximumFractionDigits: digits }).format(n);
+  // The digits 0 to 9 in every language, as dates are written (dates.ts): an amount in a signed-in screen and the
+  // same amount in an email or a PDF never differ in their digits.
+  return new Intl.NumberFormat(tag, { maximumFractionDigits: digits, numberingSystem: 'latn' }).format(n);
 }

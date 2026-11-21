@@ -11,7 +11,7 @@
 /**
  * The order is fixed so two screens never show two different menus: Finish later, Ask for more time, Pass to someone
  * else (or Hand back to the group), Questions and comments, Sign on paper instead (when the sender allows it), and
- * Decline, always last. Help is the dialog's own second button, under the list, for everyone but a witness.
+ * Decline, always last. Help is not in the list: it is one button in the top bar, for everyone but a witness.
  */
 export const ACTION_ORDER = ['later', 'time', 'handback', 'reassign', 'ask', 'paper', 'decline'] as const;
 /** A witness signs nothing for themselves and closes nothing for others: their own short list. */

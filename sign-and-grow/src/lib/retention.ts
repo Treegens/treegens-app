@@ -96,6 +96,13 @@ export const removedOn = (day: string) => `Removed on ${day}`;
 /** Whether a stored value is such a line, and its day. The screens then say it once, with the day written out. */
 export const removedDay = (v: any): string | null => /^Removed on (\d{4}-\d{2}-\d{2})$/.exec(String(v ?? ''))?.[1] || null;
 
+/**
+ * A line of the history that quotes such a value in the middle of its words ('Sent to "Removed on 2026-11-21"'),
+ * with the day written out by `say` (the reader's own format on a screen). The stored line is not changed.
+ */
+export const removedInWords = (text: string | null | undefined, say: (day: string) => string): string =>
+  String(text ?? '').replace(/Removed on (\d{4}-\d{2}-\d{2})/g, (_m, day: string) => `Removed on ${say(day) || day}`);
+
 /** A day as an email or a line of the history writes it: "5 December 2026". Screens use the reader's own format. */
 export const plainDay = (iso: string | null | undefined): string => {
   const t = Date.parse(String(iso || ''));

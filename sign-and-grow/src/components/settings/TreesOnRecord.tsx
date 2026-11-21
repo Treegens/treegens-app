@@ -10,7 +10,8 @@ export function TreesOnRecord() {
   const [d, reload] = useLoad<any>(() => api('/account/impact-record').catch(() => null), []);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
-  if (!d) return null;
+  // fixed: the server never puts trees on the record (a government installation), so there is no switch to show.
+  if (!d || d.fixed) return null;
   const flip = async (on: boolean) => {
     setBusy(true);
     setSaved(false);

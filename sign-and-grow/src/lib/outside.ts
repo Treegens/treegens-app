@@ -22,11 +22,12 @@
 import { signInProviders } from './signin.ts';
 import { smsProvider } from './checks.ts';
 import { chatProvider, chatModelOn } from './chatprovider.ts';
+import { pwnedUrl } from './signinrules.ts';
 
 type Env = Record<string, string | undefined>;
 
 export type OutsideMode = 'all' | 'listed' | 'none';
-export type ServiceId = 'mail' | 'payments' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'sns' | 'webhooks';
+export type ServiceId = 'mail' | 'payments' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks';
 
 export type OutsideService = {
   id: ServiceId;
@@ -50,7 +51,6 @@ export const OUTSIDE_SETTINGS = ['OUTSIDE_CALLS', 'OUTBOUND_ALLOW', 'WEBHOOK_ALL
 /** Services the software does not have, so nothing calls them. Said on /security so a reader does not have to guess. */
 export const NOT_BUILT = [
   'WhatsApp (a sender can share a signing link there themselves; the server sends nothing to WhatsApp)',
-  'a check of passwords against lists of leaked passwords',
   'certificate revocation checks (OCSP or CRL)',
   'analytics, advertising, error reporting or any service that "phones home" to the makers of the software',
 ];
@@ -137,6 +137,9 @@ export function outsideServices(env: Env = process.env): OutsideService[] {
     on: chatOn, hosts: chatOn && chat ? [hostOfUrl(chat.baseUrl)].filter(Boolean) : [] });
   const conv = converterHost(env);
   out.push({ id: 'converter', name: 'Document converter (Gotenberg)', purpose: 'Turns Word, Excel, PowerPoint and similar files into PDF. LibreOffice on this machine (CONVERTER=soffice) needs no network and is not listed.', settings: ['CONVERTER_URL'], on: !!conv, hosts: conv ? [conv] : [] });
+  // On unless PWNED_CHECK=0 (src/server/pwned.ts). In mode none it is switched off when the server starts, unless its host is in OUTBOUND_ALLOW.
+  const leaks = pwnedUrl(env);
+  out.push({ id: 'pwned', name: 'List of leaked passwords (Pwned Passwords)', purpose: 'Looks a new password up in a list of passwords from data leaks, when someone chooses one. It is sent the first 5 characters of a fingerprint of the password, never the password, and never who is asking.', settings: ['PWNED_CHECK', 'HIBP_RANGE_URL'], on: !!leaks, hosts: leaks ? [hostOfUrl(leaks)].filter(Boolean) : [] });
   const sns = !!clean(env.MAIL_EVENTS_TOKEN);
   out.push({ id: 'sns', name: 'Amazon SNS confirmation', purpose: 'When news about emails comes from Amazon SNS, SNS asks once that a link of its own is opened to confirm the address. Only that link is fetched.', settings: ['MAIL_EVENTS_TOKEN'], on: sns, hosts: [], hostWords: 'sns.<region>.amazonaws.com, named by the message' });
   const hooks = hostList(env.WEBHOOK_ALLOW_HOSTS);
@@ -218,6 +221,8 @@ export function applyOutsideCalls(env: Env = process.env): SwitchedOff[] {
       const all = s.id === 'chat' ? ['SUPPORT_CHAT_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY'] : s.id === 'sms' ? ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SMS_WEBHOOK_URL', 'SMS_WEBHOOK_TOKEN'] : s.id === 'converter' ? ['CONVERTER_URL'] : s.settings;
       const had = all.filter((k) => clean(env[k]));
       for (const k of had) delete env[k];
+      // The leaked-password check is on without any setting, so it is switched off by one.
+      if (s.id === 'pwned') env.PWNED_CHECK = '0';
       // CONVERTER=gotenberg with its address gone names nothing: leave LibreOffice (soffice) alone.
       if (s.id === 'converter' && clean(env.CONVERTER).toLowerCase() === 'gotenberg') delete env.CONVERTER;
       off.push({ id: s.id, name: s.name, settings: had });

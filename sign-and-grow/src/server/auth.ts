@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { all, get, run } from './db.ts';
 import { sha256, token, now, HttpError } from './util.ts';
 import { SESSION_DAYS, SESSION_MAX_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
+import { sessionRule, endedWhy, endedWords } from './secpolicy.ts';
 
 export const SESSION_COOKIE = 'ts_session';
 const DAYS = SESSION_DAYS;
@@ -131,6 +132,12 @@ export function authenticate(req: Request, required = false): Auth | null {
   // (src/server/handover.ts). Until then it counts as nobody, and is not noted as used.
   if (s?.locked_at) return refuse(401, 'This device was handed to someone to sign in person, so your account is locked in this browser. Open GrowSigning here and type your password to come back.', { code: 'handed_over' });
   const m = s ? get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', s.account_id, s.user_id) : null;
+  // The sign-in rules of the account this browser is in (secpolicy.ts): signed out after too long without use, and
+  // one browser at a time. A browser that a rule signed out is told which rule, in place of "Please sign in."
+  const ruled = m ? sessionRule(s, req) : null;
+  if (ruled) return refuse(ruled.status, ruled.message, ruled.data);
+  const why = !found && t ? endedWhy(t) : null;
+  if (why) return refuse(401, endedWords(why), { code: 'signed_out', why });
   if (m) return { user: get('SELECT * FROM users WHERE id=?', s.user_id), account: get('SELECT * FROM accounts WHERE id=?', s.account_id), role: m.role, via: 'session', sessionId: s.id, slid: touch(s, req) };
   // Something was sent in place of a key, but not in the form a key has.
   if (header) return refuse(401, `We could not read an API key from the Authorization header. Send it as "Authorization: Bearer tsk_..." with a key from ${KEYS_PAGE}.`);

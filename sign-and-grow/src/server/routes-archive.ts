@@ -74,8 +74,10 @@ function person(c: Ctx, what: string) {
 async function askToConfirm(c: Ctx, a: any): Promise<{ delivery: string; until: string }> {
   const account = get('SELECT * FROM accounts WHERE id=?', c.account.id);
   if (account.suspended_at) throw bad(pausedText(account), 403);
-  const fake = hasNotPaid(account) ? nameRefusal([c.user?.name, account.name]) : null;
-  if (fake) throw bad(fake, 422);
+  // Names that read like a brand or a payment notice: refused while the checks apply to the account, and for any
+  // other account left out of this email, which goes to someone who never asked for it. The sign-in address stays.
+  const lure = nameRefusal([c.user?.name, account.name]);
+  if (lure && hasNotPaid(account)) throw bad(lure, 422);
   const since = iso(Date.now() - DAY);
   run('DELETE FROM archive_asked WHERE at < ?', iso(Date.now() - 2 * DAY));
   const forAccount = get('SELECT COUNT(*) n, MIN(at) first FROM archive_asked WHERE account_id=? AND at > ?', account.id, since);
@@ -88,12 +90,12 @@ async function askToConfirm(c: Ctx, a: any): Promise<{ delivery: string; until: 
   const until = iso(Date.now() + ARCHIVE_CONFIRM_DAYS * DAY);
   run('UPDATE archive_addresses SET confirm_hash=?, confirm_sent_at=?, confirm_until=? WHERE id=?', sha256(tok), now(), until, a.id);
   run('INSERT INTO archive_asked (account_id, email, at) VALUES (?,?,?)', account.id, key, now());
-  const team = `"${str(account.name, 80)}"`;
-  const who = `${str(c.user?.name, 80) ? `"${str(c.user?.name, 80)}", ` : ''}signed in as ${c.user.email}`;
+  const team = lure ? '' : `, "${str(account.name, 80)}",`;
+  const who = `${!lure && str(c.user?.name, 80) ? `"${str(c.user?.name, 80)}", ` : 'someone '}signed in as ${c.user.email}`;
   const mid = recordMail({
     to: a.email, subject: 'Should this address get copies of a team\'s emails?', heading: 'Should this address get copies?',
     lines: [
-      `A team that uses GrowSigning to get documents signed, ${team}, asked us to send ${a.email} a copy of every email the team sends about its documents, with any signed PDF attached, for their records. The request was made by ${who}.`,
+      `A team that uses GrowSigning to get documents signed${team} asked us to send ${a.email} a copy of every email the team sends about its documents, with any signed PDF attached, for their records. The request was made by ${who}.`,
       `Nothing is sent here unless someone with this inbox confirms. The button opens a page that asks first. The link works until ${archiveMoment(until)}.`,
       `Did not expect this? Open the page and choose "${ARCHIVE_NO}", or do nothing.`,
     ],

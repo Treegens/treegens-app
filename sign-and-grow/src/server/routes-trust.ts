@@ -25,7 +25,8 @@ import { rememberGoneMail } from './bounces.ts';
 import { forgetArchiveCopies } from './archivemail.ts';
 import { stampExport, pruneStampImages } from './stamps.ts';
 import { record, securityExport, securityWords } from './seclog.ts';
-import { originalShas } from './converted.ts';
+import { originalShas, originalsExport } from './converted.ts';
+import { ORIGINALS_EXPORT_README } from '../lib/convert.ts';
 import { assertMayClose, forgetRetentionLog } from './records.ts';
 import { customCsv } from './customfields.ts';
 import { dayText } from '../lib/dates.ts';
@@ -170,6 +171,9 @@ route('GET', '/export', (c) => {
     const notMade: string[] = [];
     // Envelopes whose documents a retention purge removed (records.ts): only their record is left to export.
     const purged: string[] = [];
+    // Originals of converted files that are in the ZIP, and the ones that are not, each with why.
+    let originals = 0;
+    const originalsLeft: string[] = [];
     for (const e of rows) {
       const people = all('SELECT name, email, role, status FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
       const base = `${(e.completed_at || e.sent_at || e.created_at).slice(0, 10)} ${safeName(e.subject)} ${e.id.slice(-6)}`;
@@ -198,6 +202,13 @@ route('GET', '/export', (c) => {
       // The questions and comments in full, private ones included: this export is the sender's side (comments.ts).
       const said = files < ZIP_MAX_FILES - 3 ? commentsText(e) : '';
       if (said) (files++, yield { name: `comments/${base}.txt`, data: Buffer.from(said) });
+      // The files as they were uploaded, where a document was made from a Word file or the like (converted.ts).
+      for (const o of !e.purged_at && files < ZIP_MAX_FILES - 8 ? originalsExport(e.id, base, ZIP_MAX_BYTES - bytes, originalsLeft) : []) {
+        bytes += o.data.length;
+        files++;
+        originals++;
+        yield o;
+      }
       index.push(csv([e.id, e.subject, e.status, e.sent_at, e.completed_at, people.map((p) => `${p.name} <${p.email}> (${p.role}: ${p.status})`).join('; '), e.final_sha256 || e.purged_sha256, file, ...custom.cells(e.id)]));
     }
     yield { name: 'envelopes.csv', data: Buffer.from('﻿' + index.join('\r\n')) };
@@ -211,6 +222,7 @@ route('GET', '/export', (c) => {
       'signed/        completed documents, each with its certificate of completion',
       'audit/         the full audit trail of every envelope, as JSON',
       'comments/      the questions and comments on an envelope, in full, where anyone wrote any. They are not part of what was signed.',
+      ...(originals ? [ORIGINALS_EXPORT_README] : []),
       ...(stamps.length ? ['stamps/        the stamps your team keeps under Settings, Stamps, as pictures, with their names and settings in stamps/index.csv'] : []),
       ...(c.admin ? [`security/      the security record of the account as it stands now (Settings, Security), oldest first. ${securityWords()}`] : []),
       `envelopes.csv  one row per envelope${custom.head.length ? ', with a column for each detail your account keeps on envelopes' : ''}`,
@@ -219,6 +231,7 @@ route('GET', '/export', (c) => {
       ...(unreadable.length ? ['', `${unreadable.length} signed document(s) could not be read from storage and are not in this file. Their stored copy failed its check, so nothing damaged was put in. Their audit trails are here. The people who run this server have been told and can put the files back from a backup; export again later. Not included:`, ...unreadable.map((u) => `  ${u}`)] : []),
       ...(locked.length ? ['', `${locked.length} signed document(s) are locked with an encryption key this server was not given, so they are not in this file. They are not damaged and not lost, and nothing about them was changed. Their audit trails are here. Export again once the people who run this server have set that key. Not included:`, ...locked.map((u) => `  ${u}`)] : []),
       ...(purged.length ? ['', `${purged.length} document(s) had their files deleted, by the account's deletion schedule or at the request of the sender or an admin, so only their audit trails are here. envelopes.csv keeps the fingerprint of each signed PDF. Files deleted:`, ...purged.map((u) => `  ${u}`)] : []),
+      ...(originalsLeft.length ? ['', `${originalsLeft.length} file(s) that were turned into a PDF are not in this file as they were uploaded. The PDFs made from them, which are what people signed, are not affected. Export again with fewer envelopes selected, or take the evidence pack of the envelope. Not included:`, ...originalsLeft.map((u) => `  ${u}`)] : []),
       ...(notMade.length ? ['', `${notMade.length} completed document(s) have no signed PDF yet, because it could not be made so far. Everyone finished, and their audit trails are here. It is made by itself once it can be; export again then. Not included:`, ...notMade.map((u) => `  ${u}`)] : []),
     ].join('\r\n')) };
   }
@@ -490,7 +503,7 @@ export async function purgeClosedAccounts(): Promise<number> {
     await sendMail({ to: u.email, subject: `Your GrowSigning account will be deleted on ${day}`, heading: `${left === 1 ? 'One day' : `${left} days`} left: your account is deleted on ${day}`,
       lines: [`Hi ${u.name}, you closed your GrowSigning account. On ${day} ${owns ? 'it is deleted for good, with its envelopes, signed documents and audit trails' : 'your login is deleted for good'}. After that day nobody can bring it back, and that includes us.`,
         'To keep the account: sign in before that day. That is all it takes. Everything is there again at once, and nothing is deleted.',
-        `To take a copy of everything first: sign in, go to Settings, then Your data, and choose Export everything. You get one ZIP file with every signed PDF, every audit trail and a list of all envelopes. Signing in keeps the account, so close it again afterwards if you still want it gone. That starts a new ${CLOSE_GRACE_DAYS} days.`,
+        `To take a copy of everything first: sign in, go to Settings, then Records and data, and choose Export everything. You get one ZIP file with every signed PDF, every audit trail and a list of all envelopes. Signing in keeps the account, so close it again afterwards if you still want it gone. That starts a new ${CLOSE_GRACE_DAYS} days.`,
         'If you do nothing, the account is deleted on that day and you will not hear from us again.'],
       cta: { label: 'Sign in to keep my account', url: `${baseUrl()}/login` } });
   }
@@ -590,7 +603,7 @@ route('POST', '/me/delete', async (c) => {
     lines: [confirmed ? 'Any subscription has been stopped and you will not be charged again.' : 'Your subscription is cancelled on our side. The payment provider did not confirm it straight away, so we keep trying until it does. If a payment is taken in the meantime, the software refunds it by itself.',
       `Until ${dayText(when)} nothing is deleted. Changed your mind, or closed it by mistake? Just sign in again and the account comes straight back.`,
       ...ownKeyLines(keys, `${keys.length === 1 ? 'This API key of yours is' : 'These API keys of yours are'} switched off from now. Signing in again before ${dayText(when)} switches ${keys.length === 1 ? 'it' : 'them'} back on:`),
-      owned.length ? `After that date your login and ${owned.map((a) => `"${a.name}"`).join(' and ')} are removed for good, with everything in it: envelopes, signed documents, files signers attached, audit trails and our copies of the emails about them. To take a copy first, sign in, export everything under Settings, Your data, and close the account again.` : 'After that date your login is removed for good.',
+      owned.length ? `After that date your login and ${owned.map((a) => `"${a.name}"`).join(' and ')} are removed for good, with everything in it: envelopes, signed documents, files signers attached, audit trails and our copies of the emails about them. To take a copy first, sign in, export everything under Settings, Records and data, and close the account again.` : 'After that date your login is removed for good.',
       ...(teams ? [`What you sent as a member of ${teams} is not deleted. It belongs to that team and passes to its owner on that date.`] : []),
       ...kept, `We remind you by email ${CLOSING_REMINDER_DAYS} days before that date.`],
     cta: { label: 'Sign in to keep my account', url: `${baseUrl()}/login` } });

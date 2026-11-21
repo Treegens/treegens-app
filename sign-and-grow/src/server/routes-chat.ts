@@ -3,6 +3,7 @@ import { get } from './db.ts';
 import { bad, rateLimit, str, HttpError } from './util.ts';
 import { addressKey } from './clickwrap.ts';
 import { answer, cleanConversation } from './chat.ts';
+import { aiAnswersFor, accountOfLink } from './tenantpolicy.ts';
 import { chatProvider, chatModelOn } from '../lib/chatprovider.ts';
 import { chatScreen, CHAT_AI_NOTE, CHAT_BUILTIN_NOTE, CHAT_DO_NOT_TYPE, CHAT_KEPT, CHAT_PER_ADDRESS_MINUTE, CHAT_PER_ADDRESS_DAY, CHAT_PER_LINK_DAY, CHAT_PER_ACCOUNT_DAY, CHAT_BODY_BYTES } from '../lib/chat.ts';
 
@@ -61,7 +62,9 @@ async function smallBody(c: Ctx): Promise<any> {
 route('GET', '/public/chat', (c) => {
   if (c.auth?.via === 'api_key') throw new HttpError(403, 'An API key cannot use the help chat. It is for people, in the app and on our pages.');
   const p = chatProvider();
-  const ai = chatModelOn();
+  // Not for an account that switched AI answers off, nor for the people who sign its documents (the signing page
+  // sends its link as ?link=). They are told what is true for them: the answers come from the built-in help.
+  const ai = chatModelOn() && aiAnswersFor(c.account?.id) && aiAnswersFor(accountOfLink(str(c.q.get('link'), 200)));
   return {
     ai, provider: ai ? p!.name : null, note: ai ? CHAT_AI_NOTE : CHAT_BUILTIN_NOTE, do_not_type: CHAT_DO_NOT_TYPE, kept: CHAT_KEPT,
     limits: { per_address_minute: CHAT_PER_ADDRESS_MINUTE, per_address_day: CHAT_PER_ADDRESS_DAY, per_link_day: CHAT_PER_LINK_DAY, per_account_day: CHAT_PER_ACCOUNT_DAY },
@@ -83,5 +86,7 @@ route('POST', '/public/chat', async (c) => {
   if (!conv) throw bad('Type a question first.');
   const token = str(b.link, 200);
   const signer = token ? get('SELECT id FROM recipients WHERE token=?', token) : null;
-  return answer(conv, chatScreen(b.screen), { ip: c.ip, link: signer?.id || null, account: c.account?.id || null, gone: c.req.signal });
+  // 'AI answers in the help chat' off, for the account signed in here or for the account whose document is being signed.
+  const noModel = !aiAnswersFor(c.account?.id) || (!!signer && !aiAnswersFor(accountOfLink(token)));
+  return answer(conv, chatScreen(b.screen), { ip: c.ip, link: signer?.id || null, account: c.account?.id || null, gone: c.req.signal, noModel });
 }, 'public');

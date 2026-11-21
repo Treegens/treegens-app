@@ -33,6 +33,9 @@ import { witnessFacts, beforeFinish } from './witness.ts';
 import { hiddenFor, formulaInputs } from './logic.ts';
 // A stamp on someone else's part of the page, or the sender's own (stamps.ts).
 import { stampSeen } from './stamps.ts';
+// The account's own consent text under ours, and whether this person asked for paper instead (disclosure.ts).
+import { ownTermsFor, ownAtConsent, paperFacts } from './disclosure.ts';
+import { clientPolicy } from './tenantpolicy.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -103,6 +106,8 @@ route('GET', '/sign/:token', (c) => {
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', e.account_id);
   const base = {
     brand: a,
+    // What the sender's account switched on or off (tenantpolicy.ts): { impact_display, ai_helper, white_label }.
+    policy: clientPolicy(e.account_id),
     envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: impactOf(e.sheets),
       // For someone who came through a public form on a shared device: where the next person starts.
       next_person: (e.powerform_id && e.form_recipient_id === r.id && get('SELECT slug FROM powerforms WHERE id=? AND active=1 AND shared_device=1', e.powerform_id)?.slug) || null,
@@ -137,6 +142,7 @@ route('GET', '/sign/:token', (c) => {
   Object.assign(base.recipient, { group: groupFacts(e, r) });
   // To a signer with a witness: who and how far. To a witness: whose signature, and the statement they would tick.
   Object.assign(base.recipient, witnessFacts(e, r));
+  Object.assign(base.recipient, paperFacts(r));
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
   // A member whose colleague has the document, or who was taken out of the group, is told so and shown no more.
   if (r.member && (r.group_state === 'taken' || r.group_state === 'removed')) return { ...base, locked: false };
@@ -165,6 +171,8 @@ route('GET', '/sign/:token', (c) => {
     changed: e.last_change || null,
     message: e.message,
     note: r.note,
+    // The account's own consent text for this person's language, when it has one (disclosure.ts).
+    own_terms: ownTermsFor(e, r, c.req),
     recipient: { ...base.recipient, status: r.status === 'sent' ? 'viewed' : r.status, signature_png: r.signature_png, initials_png: r.initials_png, signed_before: r.status === 'completed' ? null : signedBefore },
     // sha256 is the fingerprint of the file behind each document. The screen loads the pages again whenever it
     // changes, and Finish waits until the new pages are on it, so nobody signs a file they were not shown.
@@ -266,13 +274,18 @@ route('POST', '/sign/:token/consent', async (c) => {
   const b = await c.req.json().catch(() => ({}));
   // The first member of a group who agrees takes the document on for the group, and is the recipient from here on.
   // Whoever comes second is told who has it (takeOn in groups.ts).
-  const { e, r, actor } = takeOn(look(c));
+  // The account's own text, when it has one: the screen must have shown the version in use (ownAtConsent).
+  const seen = look(c);
+  const own = ownAtConsent(seen.e, seen.r, b, c.req);
+  const { e, r, actor } = takeOn(seen);
   noteZone(e, r, b?.tz, actor);
-  if (!r.consent_at) {
+  const first = !r.consent_at;
+  if (first) {
     run('UPDATE recipients SET consent_at=? WHERE id=?', now(), r.id);
     // The wording and the language the screen showed (consentLine in locales.ts).
-    audit(e.id, actor, 'Agreed to electronic records and signatures', `${r.name}. ${consentLine(b)}`);
+    audit(e.id, actor, 'Agreed to electronic records and signatures', `${r.name}. ${own.note}${consentLine(b)}`);
   }
+  own.record(actor, first, consentLine(b));
   return { ok: true, version: e.content_version, wording: CONSENT_VERSION };
 }, 'public');
 

@@ -5,6 +5,7 @@ import { sendMail, type MailStatus } from './mail.ts';
 import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnvelope, type Actor } from './envelopes.ts';
 import { safeName, type ZipEntry } from './zip.ts';
 import { labelOf } from '../lib/bysender.ts';
+import { ownTextEvidence } from './disclosure.ts';
 import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf, consentVersionOf, consentUnstated, consentHeading } from '../lib/policy.ts';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '../lib/evidence.ts';
 import { FINGERPRINT_KEPT_DAYS } from '../lib/evidence.ts';
@@ -416,6 +417,9 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   if (disputes.length) add('disputes.txt', [`What people named on "${e.subject}" (envelope ${e.id}) told us when they disputed it. Nobody has checked what they wrote. Their internet address and browser are kept by the people who run GrowSigning and are not in this pack.`, '',
     ...disputes.flatMap((d: any) => [`${String(d.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}, under the name ${d.name}, through ${d.via === 'sign' ? 'a signing link' : 'the security code of one of our emails'}.`, d.detail ? `They wrote: ${d.detail}` : 'They wrote nothing more.',
       ...(d.closed_at ? [`Closed by a person at GrowSigning on ${String(d.closed_at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${d.closed_how === 'in_error' ? ', as filed in error' : ''}.`] : ['Still open.']), '----', ''])].join('\r\n'));
+  // The account's own consent text, as each person was shown it under ours (disclosure.ts). Only when someone was.
+  const ownText = ownTextEvidence(e);
+  if (ownText) add('consent-own-text.txt', ownText);
   // Every stamp on the pages as its own picture, so its fingerprint in the audit trail can be checked (stamps.ts).
   const stamps = stampEvidence(e);
   for (const s of stamps) add(s.name, s.data);
@@ -433,6 +437,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     'consent.txt           the words each person agreed to before signing, in the version their audit line names (for a line from before versions were recorded, the wording shown then, marked as inferred).',
     ...(stamps.length ? [`stamps/               every stamp on the pages as a PNG picture, named by the start of its SHA-256, with stamps/index.csv saying who put it on, where and when. The audit trail names each one by its full SHA-256. ${STAMP_IS}`] : []),
     ...(originals.length ? [ORIGINALS_README] : []),
+    ...(ownText ? ['consent-own-text.txt  the sender\'s own consent text: which version each person was shown when they agreed, and the exact words of each of those versions.'] : []),
     ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []),
     ...(disputes.length ? ['disputes.txt          each dispute: when, under which name, how the person reached us, what they wrote, and whether a person at GrowSigning has closed it.'] : []), '',
     'What this does and does not show.', CHAIN_TRUTH, WHO_WHEN_WHERE,

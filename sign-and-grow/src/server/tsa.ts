@@ -3,7 +3,8 @@
 //   TSA_URL      the time-stamp service; several, separated by commas, are tried in order (TSA_URLS is read too)
 //   TSA_USER     and TSA_PASSWORD, when the service wants HTTP Basic credentials
 //   TSA_TRUST    optional: a PEM file of the certificates the service's own certificate must lead to
-// Each service gets 3 seconds and all of them together 4, because the last signer's Finish waits for the seal. An
+// Each service gets 3 seconds and all of them together 4, because the last signer's Finish waits for the seal. A
+// service that did not answer in time is left alone for 10 minutes (TSA_REST_MS), so nobody else waits for it. An
 // answer counts only when it verifies: granted, over the SHA-256 of our signature value, with our nonce, signed by a
 // certificate meant for time-stamping that was valid at the time it gives, a time within 5 minutes of this server's
 // clock (a service that lies about the time, or a server whose clock is wrong, is caught there), and, with TSA_TRUST,
@@ -20,6 +21,16 @@ import { readCert, issued, selfSigned, type CertInfo } from './x509.ts';
 export const TSA_TIMEOUT_MS = 3_000;
 /** All services together: the last signer's Finish waits for the seal, so never longer than this for time-stamps. */
 export const TSA_TOTAL_MS = 4_000;
+/**
+ * A service that did not answer in time is not asked again for this long. Without it, every last signer would wait
+ * the full TSA_TOTAL_MS for as long as a service hangs; with it, one signer in ten minutes does, and the others get
+ * their file at once, sealed without a time-stamp and saying so. A service that answers with an error did not make
+ * anybody wait, so it is asked every time.
+ */
+export const TSA_REST_MS = 10 * 60_000;
+const resting = new Map<string, number>();
+/** For tests: forget which services are resting. */
+export const tsaForgetRests = () => resting.clear();
 /** How far the time in a time-stamp may be from this server's clock. */
 export const TSA_CLOCK_MS = 5 * 60_000;
 const MAX_ANSWER = 256 * 1024;
@@ -150,6 +161,11 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
         return 'a service whose address cannot be read';
       }
     })();
+    const rest = (resting.get(url) || 0) - Date.now();
+    if (rest > 0) {
+      failures.push(`${host}: not asked, because it did not answer a short while ago and is left alone for ${Math.ceil(rest / 60_000)} more minute${Math.ceil(rest / 60_000) === 1 ? '' : 's'}`);
+      continue;
+    }
     const left = until - Date.now();
     if (left < 500) {
       failures.push(`${host}: not asked, because the ${TSA_TOTAL_MS / 1000} seconds for time-stamps were used up`);
@@ -182,6 +198,7 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
     } catch (e: any) {
       const why = e instanceof TsaError ? e.message : e?.name === 'TimeoutError' ? `it did not answer within ${Math.round(Math.min(TSA_TIMEOUT_MS, left) / 1000)} seconds` : `it could not be reached (${String(e?.cause?.code || e?.message || e).slice(0, 120)})`;
       failures.push(`${host}: ${why}`);
+      if (!(e instanceof TsaError) && e?.name === 'TimeoutError') resting.set(url, Date.now() + TSA_REST_MS);
     }
   }
   throw new TsaError(failures.join('; '));

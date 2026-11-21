@@ -21,6 +21,8 @@ import { sealSet, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/s
 import { DEVICE_COOKIE_WORDS } from '@/lib/witness';
 import { chatPrivacyPoint } from '@/lib/chatprovider';
 import { mailTlsPoint } from '@/lib/mailtls';
+// Every certification a buyer may ask about, and the one sentence about each (src/lib/claims.ts).
+import { claimsSummary, CLAIMS_PAGE } from '@/lib/claims';
 
 export const metadata = { title: 'Security and trust', description: 'What GrowSigning does to protect signers, senders and documents, in plain words. And what it does not do.' };
 
@@ -182,7 +184,7 @@ export default function Security() {
           <Point title="No text-message codes or security keys for signing in.">The second step of our two-step login is an authenticator app only. Codes by text message to sign in, passkeys and hardware keys are not built.</Point>
           <Point title={NO_BAA_TITLE}>{NO_BAA_TEXT} What would have to be true first: {NO_BAA_FIRST.map((x, i) => `(${i + 1}) ${x}`).join(' ')} {NO_BAA_AFTER}</Point>
           <Point title="No payment collection.">GrowSigning never takes money for a sender. An account that has earned trust can show a link to its own payment page after a person presses Finish, with the name of whoever set it and the full address. The address is never put in an email, a certificate or an export. We do not check where that page sends people next, we do not see that payment, and we cannot confirm or refund it.</Point>
-          <Point title="No security certification.">We have not been audited against a security standard, and we will not hint that we have.</Point>
+          <Point title="No security certification.">We have not been audited against a security standard, and we will not hint that we have. {claimsSummary()} <Link href={CLAIMS_PAGE}>The full list, one sentence each</Link>.</Point>
           <Point title={notEncrypted.title}>{notEncrypted.text}</Point>
         </Block>
 

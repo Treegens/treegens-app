@@ -27,7 +27,8 @@ import { drawSenderDetails } from './customfields.ts';
 import { sealLineFor } from './seal.ts';
 import { STAMP_OPACITY, stampTurn } from '../lib/stamps.ts';
 // The logo in the certificate's header and the "Signed with growsigning" stamp at the foot of pages (brandpdf.ts).
-import { drawBrandHeader, drawSheetFoot, drawPageFoot } from './brandpdf.ts';
+import { drawBrandHeader, drawSheetFoot } from './brandpdf.ts';
+import { notePages, drawFootClear, fieldBox } from './footplace.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -583,8 +584,11 @@ async function flatPages(doc: PDFDocument, sha256: string): Promise<PDFPage[]> {
   flattenForm(src);
   // flattenForm has drawn every picture that could be drawn. Left to itself, save() would try the ones that could
   // not be drawn once more and fail the whole document over them.
-  const flat = await PDFDocument.load(await src.save({ updateFieldAppearances: false }));
-  return doc.copyPages(flat, flat.getPageIndices());
+  const bytes = await src.save({ updateFieldAppearances: false });
+  const flat = await PDFDocument.load(bytes);
+  const pages = await doc.copyPages(flat, flat.getPageIndices());
+  await notePages(pages, bytes, sha256); // what each page has near its foot, for the stamp's place (footplace.ts)
+  return pages;
 }
 
 // The page a copy opens with when it must not pass for a finished agreement: a red band with the title, then the
@@ -649,6 +653,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   // The mark of a copy that must not pass for a signed document: closed, or still out (stamp.ts).
   const mark = opts.notice ? stampFor(e.status) : opts.unfinished && e.status === 'sent' && !opts.certificate ? stampFor('sent') : null;
 
+  const footLine = `GrowSigning Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`;
   for (const d of e.documents) {
     const pages = await flatPages(doc, d.sha256);
     pages.forEach((p) => doc.addPage(p));
@@ -656,10 +661,11 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
       const page = pages[f.page];
       if (page) await drawField(ctx, page, f);
     }
-    for (const page of pages) {
+    for (const [i, page] of pages.entries()) {
       const m = mapper(page);
-      // The stamp and the envelope ID, side by side at the foot; nothing of ours at the top (brandpdf.ts).
-      drawPageFoot(page, m, { line: `GrowSigning Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`, font, color: MUTED });
+      // The stamp and the envelope ID, side by side at the foot, where the page has neither words nor pictures nor
+      // one of our fields (footplace.ts); nothing of ours at the top.
+      drawFootClear(page, m, fields.filter((f: any) => f.document_id === d.id && f.page === i).map((f: any) => fieldBox(f, m)), { line: footLine, font, color: MUTED });
       if (mark) drawStamp(page, bold, mark); // and across the whole page (stamp.ts)
     }
     if (mark) markFields(pages, fields.filter((f: any) => f.document_id === d.id), bold, mark);
@@ -668,7 +674,8 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     const file = get('SELECT sha256 FROM files WHERE id=?', f.value);
     if (!file) continue;
     try {
-      (await flatPages(doc, file.sha256)).forEach((p) => (doc.addPage(p), mark && drawStamp(p, bold, mark)));
+      // A file a signer attached is part of the signed copy, so its pages carry the stamp and the envelope ID too.
+      (await flatPages(doc, file.sha256)).forEach((p) => (doc.addPage(p), drawFootClear(p, mapper(p), [], { line: footLine, font, color: MUTED }), mark && drawStamp(p, bold, mark)));
     } catch (err: any) {
       // The signed PDF is stored for good, so it is never sealed without a signer's attachment whose stored copy failed
       // its check or is locked: the build fails and is tried again until the file is back (finalretry.ts tells the

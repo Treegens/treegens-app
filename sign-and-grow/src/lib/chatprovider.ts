@@ -9,6 +9,7 @@
 // name exactly whom the server sends the typed chat to. It reads the environment: server code and server components
 // only. It never returns the key itself, only the name of the setting that holds it.
 import { CHAT_DAILY_DEFAULT, CHAT_KEPT_PAGE } from './chat.ts';
+import { isGovernment } from './deployment.ts';
 
 type Env = Record<string, string | undefined>;
 const val = (v: string | undefined): string | null => (v || '').replace(/\s+/g, ' ').trim().slice(0, 200) || null;
@@ -74,8 +75,16 @@ export const CHAT_WHO = 'Anyone who types into the help chat: visitors, signers 
 /** Whether a model answers the help chat on this server: a provider, its key, and a daily limit above 0. */
 export const chatModelOn = (env: Env = process.env): boolean => {
   const p = chatProvider(env);
-  return !!p && !!(env[p.keyVar] || '').trim() && chatDailyLimit(env) > 0;
+  return !!p && !!(env[p.keyVar] || '').trim() && chatDailyLimit(env) > 0 && (!isGovernment(env) || ownModel(p, env));
 };
+
+/**
+ * Under DEPLOYMENT_PROFILE=government (src/lib/deployment.ts) the chat never goes to a hosted service. A model
+ * answers only when the operator set SUPPORT_CHAT_API_KEY together with SUPPORT_CHAT_BASE_URL, and that address is
+ * not OpenRouter's or Moonshot AI's. The server cannot check where the address leads: whoever sets it answers for it.
+ */
+export const ownModel = (p: ChatProvider, env: Env = process.env): boolean =>
+  p.keyVar === 'SUPPORT_CHAT_API_KEY' && !!val(env.SUPPORT_CHAT_BASE_URL) && p.style === 'plain';
 
 /** The point on /security under "Privacy and AI", from the same settings. */
 export function chatPrivacyPoint(env: Env = process.env): { title: string; text: string } {

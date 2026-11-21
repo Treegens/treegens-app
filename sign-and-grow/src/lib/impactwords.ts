@@ -16,6 +16,11 @@ export const TREES_PER_SIGNATURE = PRICING.topUpUsd * PRICING.treesPerUsd;
 
 /** Where Treegens shows its own work. Linked from /impact, never fetched by the server. */
 export const TREEGENS_URL = 'https://treegens.app';
+/** Where Treegens states its average planting cost (ten cents a tree across a run). Linked from /impact. */
+export const TREEGENS_ORG_URL = 'https://treegens.org';
+/** The day both pages were read for the sentences on /impact that say what Treegens says about itself. When the
+ *  pages are read again, change the sentences and this date together. */
+export const TREEGENS_READ_ON = '21 November 2026';
 
 const n = (k: number) => Math.round(k).toLocaleString('en');
 const mangroves = (k: number) => `${n(k)} ${k === 1 ? 'mangrove' : 'mangroves'}`;

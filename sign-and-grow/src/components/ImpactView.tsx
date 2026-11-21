@@ -4,7 +4,7 @@
 // enough to mean something (TOTALS_FROM in src/lib/impact.ts): until then its place is simply absent, never a tiny
 // number. Nothing here claims an offset, a removal of CO2 or that signing undoes any harm.
 import { IMPACT, PRICING, TOTALS_FROM, fmtNum, totalWorthShowing } from '@/lib/impact';
-import { TREEGENS_URL } from '@/lib/impactwords';
+import { TREEGENS_URL, TREEGENS_ORG_URL, TREEGENS_READ_ON } from '@/lib/impactwords';
 
 /** Is there any total worth showing for these numbers? */
 export const anyTotal = (i: any): boolean => !!i && (totalWorthShowing(i.sheets) || Number(i.treesFunded) >= TOTALS_FROM.treesPlanted);
@@ -35,8 +35,9 @@ export function Methodology() {
         <li>Everything customers pay GrowSigning, the monthly plan and top-ups alike, goes to Treegens to plant mangroves. Every dollar funds {PRICING.treesPerUsd} mangroves, and a signature costs one dollar, so a signature that was paid for funds {PRICING.treesPerUsd}.</li>
         <li>A free signature funds none: the {PRICING.welcomeSignatures} signatures a new account starts with, a free code, or signing your own document. Nobody is told that a free signature planted anything.</li>
         <li>The total of mangroves is what was paid, less anything refunded, times {PRICING.treesPerUsd}. It counts the trees funded from that money, not signatures used: a signature that expires unused was paid for, and its trees are planted all the same. It is shown from {TOTALS_FROM.treesPlanted} trees up.</li>
-        <li>The planting itself is done by Treegens planters. Recording and checking that the trees were planted is Treegens&apos; work, not ours: we have not checked plantings ourselves. <a href={TREEGENS_URL} {...out}>treegens.app</a> is where Treegens shows its work.</li>
-        <li>What you cannot check here yet: we do not publish receipts for the money sent to Treegens, or Treegens&apos; own statement of what it received and how many trees a dollar plants. Until we do, the rate of {PRICING.treesPerUsd} mangroves for a dollar and the totals on this page are our own figures.</li>
+        <li>The planting itself is done by Treegens planters. Treegens describes its own checking on <a href={TREEGENS_URL} {...out}>treegens.app</a>: a planter films the land and then the planting in its app, the phone stores a GPS fix with the clips, and verifiers in the Treegens DAO watch both videos and vote to approve or reject. That is what Treegens says about its own work, as we read it there on {TREEGENS_READ_ON}. It is not our finding: we have not checked plantings ourselves.</li>
+        <li>The rate: <a href={TREEGENS_ORG_URL} {...out}>treegens.org</a> says ten cents is the average cost of planting a tree across a run, not an invoice for a named tree. That is where {PRICING.treesPerUsd} mangroves for a dollar comes from. It is an average Treegens states, not a price we can show for each tree.</li>
+        <li>What you cannot check here yet: we do not publish receipts for the money sent to Treegens, or Treegens&apos; own statement of what it received. Until we do, the totals on this page are our own figures.</li>
       </ul>
       <h3 style={{ margin: '14px 0 6px' }}>2. Paper: an estimate of what was not printed</h3>
       <ul style={{ paddingLeft: 20, lineHeight: 1.7, margin: 0 }}>

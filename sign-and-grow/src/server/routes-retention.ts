@@ -62,7 +62,7 @@ route('DELETE', '/envelopes/:id/hold', async (c) => {
   const own = get('SELECT id FROM legal_holds WHERE envelope_id=? AND lifted_at IS NULL', e.id);
   if (!own) {
     const other = (isHeld([e.id]).get(e.id) || [])[0];
-    if (other) throw bad(`This document is on hold because its folder "${other.folder}" is on hold. Lift that hold under Settings, Your data, if it may go.`, 409, { code: 'folder_hold', hold_id: other.id });
+    if (other) throw bad(`This document is on hold because its folder "${other.folder}" is on hold. Lift that hold under Settings, Records and data, if it may go.`, 409, { code: 'folder_hold', hold_id: other.id });
     throw bad('This document is not on hold, so there is nothing to lift. Leave it as it is.', 409);
   }
   return liftHold(c, own.id, b.reason);

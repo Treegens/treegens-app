@@ -21,6 +21,7 @@ import { RetentionSettings } from '@/components/settings/RetentionSettings';
 import { ArchiveSettings } from '@/components/settings/ArchiveSettings';
 import { SealStatus } from '@/components/settings/SealStatus';
 import { TreesOnRecord } from '@/components/settings/TreesOnRecord';
+import { TenantSwitches } from '@/components/settings/TenantSwitches';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
 import { LanguageSettings } from '@/components/settings/LanguageSettings';
 // The account's own custom fields, such as a case number (src/components/settings/CustomFieldSettings.tsx).
@@ -82,7 +83,7 @@ function Profile() {
       </div></Card>
       <Card><Notifications /></Card>
       <p className="muted small" style={{ margin: '12px 0 0' }}>Your password, two-step login and the places you are signed in are under Security, the next section.</p>
-      {/* A member has no Your data section: what was theirs to do there is here, behind the one More options. */}
+      {/* A member has no Records and data section: what was theirs to do there is here, behind the one More options. */}
       {member && <MoreOptions>
         <div className="card" data-item="card">
           <h2 style={{ marginBottom: 4 }}>What the admins set</h2>
@@ -257,6 +258,8 @@ function Account() {
       <div className="row"><button className="btn" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (saved(), me.reload())).catch(oops)}>Save</button>{said}</div>
       {/* A switch that saves by itself, set apart from the Save button of the boxes above (settings/TreesOnRecord.tsx). */}
       <TreesOnRecord />
+      {/* 'Trees on screens and emails' and, where a model answers the help chat, 'AI answers in the help chat'. */}
+      <TenantSwitches />
     </div>
   );
 }

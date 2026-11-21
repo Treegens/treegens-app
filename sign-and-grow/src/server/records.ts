@@ -123,8 +123,8 @@ export function assertNotHeld(envelopeIds: string[], who: string, what: string) 
   }
   const one = held.size === 1;
   // A draft on hold is frozen as it is: saving it could empty it, which is deleting by another name.
-  if (what === 'change it') throw bad('This draft is on hold, so the software refuses to change it. Ask an admin of the account to lift the hold under Settings, Your data, or start a new document. Nothing was changed, and this attempt was recorded.', 409, { code: 'legal_hold', held: [...held.keys()] });
-  throw bad(`${one ? 'This document is' : `${held.size} of these documents are`} on hold, so the software refuses to delete ${one ? 'it' : 'them'}. Ask an admin of the account to lift the hold under Settings, Your data, if ${one ? 'it' : 'they'} may go. Nothing was deleted, and this attempt was recorded.`, 409,
+  if (what === 'change it') throw bad('This draft is on hold, so the software refuses to change it. Ask an admin of the account to lift the hold under Settings, Records and data, or start a new document. Nothing was changed, and this attempt was recorded.', 409, { code: 'legal_hold', held: [...held.keys()] });
+  throw bad(`${one ? 'This document is' : `${held.size} of these documents are`} on hold, so the software refuses to delete ${one ? 'it' : 'them'}. Ask an admin of the account to lift the hold under Settings, Records and data, if ${one ? 'it' : 'they'} may go. Nothing was deleted, and this attempt was recorded.`, 409,
     { code: 'legal_hold', held: [...held.keys()] });
 }
 
@@ -228,7 +228,7 @@ export async function operatorLift(holdId: string, op: { name: string; email: st
       lines: [`Two people who run this GrowSigning server lifted ${holdName(h)}.`, `What they gave as the reason: ${why}`,
         'What it covered can be deleted again by the usual rules. If your deletion schedule had reached any of it, you get a new email at least 14 days before anything is deleted.',
         'If you did not expect this, contact the people who run this server.'],
-      cta: { label: 'Open Your data', url: `${baseUrl()}/app/settings?tab=data` } });
+      cta: { label: 'Open Records and data', url: `${baseUrl()}/app/settings?tab=data` } });
   return { lifted: true, covered: n };
 }
 
@@ -736,5 +736,5 @@ export function assertMayClose(userId: string, who: string) {
     if (!get('SELECT 1 x FROM retention_log WHERE account_id=? AND what=? AND detail=? AND at > ?', h.account_id, 'refused', detail, new Date(Date.now() - DAY).toISOString()))
       logLine(h.account_id, h.envelope_id, 'refused', { who, detail });
   }
-  throw bad(`Your account cannot be closed while something in it is on hold: ${holds.map(holdName).join('; ')}. Lift the hold first, under Settings, Your data, if what it covers may go. ${HOLD_TRUTH} Nothing was changed, and this attempt was recorded.`, 409, { code: 'legal_hold', holds: holds.map((h) => h.id) });
+  throw bad(`Your account cannot be closed while something in it is on hold: ${holds.map(holdName).join('; ')}. Lift the hold first, under Settings, Records and data, if what it covers may go. ${HOLD_TRUTH} Nothing was changed, and this attempt was recorded.`, 409, { code: 'legal_hold', holds: holds.map((h) => h.id) });
 }

@@ -5,7 +5,7 @@
 // "Full record for disputes" (src/lib/envelopepage.ts decides what is left out).
 import { fmtDate } from '@/components/ui';
 import { historyLines } from '@/lib/envelopepage';
-import { redactedNote } from '@/lib/retention';
+import { redactedNote, removedInWords } from '@/lib/retention';
 import { BackNews, deliveredLine } from './MailNews';
 import { dayTime } from './lib';
 import { Fold } from './More';
@@ -33,9 +33,9 @@ export function History({ audit, deliveries, chain, fullRecordHref }: { audit: a
       <ol className="sn-history" role="list">
         {lines.map((l) => (
           <li key={l.key}>
-            <div className="row between wrap" style={{ rowGap: 0 }}><b className="small">{l.title}</b><span className="muted small">{fmtDate(l.at, true)}</span></div>
-            <div className={`small${l.bad ? ' sn-bad' : ' muted'}`}>{l.detail}{l.mail && back.get(l.key) ? <BackNews d={back.get(l.key)!} /> : null}</div>
-            {l.who && <div className="muted small">{l.who}</div>}
+            <div className="row between wrap" style={{ rowGap: 0 }}><b className="small">{removedInWords(l.title, dayText)}</b><span className="muted small">{fmtDate(l.at, true)}</span></div>
+            <div className={`small${l.bad ? ' sn-bad' : ' muted'}`}>{removedInWords(l.detail, dayText)}{l.mail && back.get(l.key) ? <BackNews d={back.get(l.key)!} /> : null}</div>
+            {l.who && <div className="muted small">{removedInWords(l.who, dayText)}</div>}
             {l.removed && <span className="badge ret-audit-mark">Details removed {dayText(l.removed)}</span>}
           </li>
         ))}

@@ -538,7 +538,7 @@ route('POST', '/me/email', async (c) => {
   // With two-step login on, the address (where a reset by email would go) is changed only with a current code too.
   await needCode(c, b.code, 'move your login to another address');
   rateLimit(`email-change:${c.user.id}`, 5, 86400_000);
-  if (get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(`There is already a GrowSigning login with ${email}, so this one cannot move there. Nothing was changed. If that login is yours too, sign in with it instead, or close it first under Settings, Your data.`, 409);
+  if (get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(`There is already a GrowSigning login with ${email}, so this one cannot move there. Nothing was changed. If that login is yours too, sign in with it instead, or close it first under Settings, Records and data.`, 409);
   const t = token();
   const until = new Date(Date.now() + 3600_000).toISOString();
   run('DELETE FROM email_changes WHERE user_id=? OR expires_at < ?', c.user.id, now());

@@ -683,7 +683,7 @@ export default function SignPage() {
   const dialogs = (
     <>
       {open === 'report' && <ReportDialog base={base} sender={sender} onClose={() => setOpen('')} />}
-      {/* The help chat lives in Other actions, never floating over Finish or the fields (components/HelpChat.tsx). */}
+      {/* The help chat opens from Help in the top bar, never floating over Finish or the fields (components/HelpChat.tsx). */}
       {open === 'help' && <HelpChat screen="signing" link={token} code={data.help_code} who={me.role !== 'inperson' && me.email ? { name: me.name, email: me.email } : null} actions={() => helpActs.current} onClose={() => setOpen('')} />}
       {open === 'ask' && <CommentsDialog base={base} sender={sender} documents={data.documents || []} onClose={() => setOpen('')} />}
       {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
@@ -888,7 +888,7 @@ export default function SignPage() {
   const go = (o: Open) => () => setOpen(o);
   const declineLabel = me.role === 'approver' ? 'Decline to approve' : 'Decline to sign';
   // One list in one order, no descriptions, never more than six (src/components/sign/actions.ts). Gone from it, not
-  // from the page: Download and the view (the toolbar's More, sign/More.tsx), Help (the dialog's own button), "Change
+  // from the page: Download and the view (the toolbar's More, sign/More.tsx), Help (the top bar's own button), "Change
   // my signature" (tap the signature itself) and "Stop reminder emails" (the note after Finish later, and every
   // reminder). "Fix my name" is behind a tap on the name where the document prints it (sign/NameDialog.tsx), in
   // "Pass to someone else", and in "Check before you finish" when that opens.
@@ -926,8 +926,10 @@ export default function SignPage() {
   const menu: MenuItem[] = otherActions(me, { stage, deadline: !!env.expires_at }).map((k) => ACTION[k]);
   helpActs.current = [...menu.filter((m) => m.key !== 'help'), { key: 'menu', label: 'Other actions', onClick: go('menu') }];
   const other = <button type="button" className="btn sm sg-other" aria-haspopup="dialog" onClick={go('menu')}>Other actions</button>;
-  const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} when={env.expires_at ? `Open until ${yourMoment(env.expires_at, deviceZone())}.` : undefined}
-    onHelp={me.role === 'witness' ? undefined : go('help')} back="Back" />;
+  const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} when={env.expires_at ? `Open until ${yourMoment(env.expires_at, deviceZone())}.` : undefined} back="Back" />;
+  // Help is one button in the top bar (charter 2.6), so neither Other actions nor the footer carries a second one.
+  // A witness keeps Help in their own short list (sign/actions.ts) and the footer link.
+  const headHelp = me.role === 'witness' ? undefined : go('help');
   // After Finish later: the way back, and the one place on the page to stop reminder emails. Someone with no address
   // gets no reminder emails, so there is nothing for them to stop.
   const laterNote = later && (
@@ -947,7 +949,7 @@ export default function SignPage() {
     // "Rosa Gardener's workspace" every new account is called.
     const org = orgOf(data.brand?.name, sender.name);
     return (
-      <Shell data={data} bar={other} footer={report} helpInNewTab plainBar>
+      <Shell data={data} bar={other} footer={report} helpInNewTab plainBar onHelp={headHelp}>
         {notice}
         {laterNote}
         <div className="card sg-consent">
@@ -1191,7 +1193,7 @@ export default function SignPage() {
   const sheetTarget = sheetField && nextAfter(sheetField.id);
 
   return (
-    <Shell data={data} bar={bar} bottom={bottom} footer={report} titleIsHeading live={live} helpInNewTab>
+    <Shell data={data} bar={bar} bottom={bottom} footer={report} titleIsHeading live={live} helpInNewTab onHelp={headHelp}>
       {notice}
       {/* A field that appears or goes because of an answer is said to a screen reader (useLiveLogic). */}
       <p className="sg-vh" role="status" aria-live="polite">{logic.said}</p>

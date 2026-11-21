@@ -62,7 +62,9 @@
     ".next-build-simplify-start/types/**/*.ts",
     ".next-build-simplify-start/dev/types/**/*.ts",
     ".next-dragdrop/types/**/*.ts",
-    ".next-dragdrop/dev/types/**/*.ts"
+    ".next-dragdrop/dev/types/**/*.ts",
+    ".next-build-open-signing/types/**/*.ts",
+    ".next-build-open-signing/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

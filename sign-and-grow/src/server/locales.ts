@@ -9,6 +9,8 @@
 // (subject, message, documents, notes) is ever translated, here or anywhere else.
 import { get, run } from './db.ts';
 import { bad, str } from './util.ts';
+// Used only when a request is handled, so the two files may import each other.
+import { samePerson } from './envelopes.ts';
 import { chooseLocale, dir, isShipped, normalizeLocale, shippedLocales, browserLocale, languageWords, SOURCE_LOCALE } from '../lib/i18n.ts';
 import { CONSENT_VERSION, consentAuditNote, isConsentLanguage, isConsentVersion } from '../lib/policy.ts';
 
@@ -57,7 +59,10 @@ export function saveLocales(asked: { rid: string; r: any; i: number }[], before:
     const same = old?.locale && want.value != null && normalizeLocale(want.value) === old.locale;
     // A row whose address changed is another person: the language chosen for the one before is not theirs, so with
     // nothing said they start as a new recipient does. (The editor always says, so its row keeps what it shows.)
-    const kept = old && (!old.email || sameAddress(old.email, r?.email));
+    // So is the same address under a name that is not the old one in another spelling: a couple or an office can
+    // share an inbox (samePerson in envelopes.ts, the rule a correction uses too).
+    const otherName = !!old?.name && typeof r?.name === 'string' && !!r.name.trim() && old.name !== r.name && !samePerson(old.name, r.name);
+    const kept = old && (!old.email || sameAddress(old.email, r?.email)) && !otherName;
     const value = want.value === undefined ? (kept ? old.locale ?? null : defaultFor(account)) : same ? old.locale : chosenLocale(want.value, whom);
     if (!old || (old.locale ?? null) !== value) run('UPDATE recipients SET locale=? WHERE id=?', value, rid);
   }

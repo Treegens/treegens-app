@@ -306,18 +306,20 @@ const FULL = {
 const hostsOf = (env: any) => Object.fromEntries(outsideServices(env).filter((s) => s.on).map((s) => [s.id, s.hosts]));
 
 test('outside: the hosts the settings imply, for several configurations', () => {
-  // Nothing set: nothing outside, only webhooks to whatever an admin enters.
-  assert.deepEqual(hostsOf({}), { webhooks: [] });
+  // Nothing set: the list of leaked passwords (on until PWNED_CHECK=0), and webhooks to whatever an admin enters.
+  assert.deepEqual(hostsOf({}), { pwned: ['api.pwnedpasswords.com'], webhooks: [] });
+  assert.deepEqual(hostsOf({ PWNED_CHECK: '0' }), { webhooks: [] });
+  assert.deepEqual(hostsOf({ HIBP_RANGE_URL: 'https://leaks.intranet.example/range' }).pwned, ['leaks.intranet.example']);
   assert.equal(outsideServices({}).find((s) => s.id === 'webhooks')!.hostWords, 'any public https address an account admin enters');
   // Everything set.
   assert.deepEqual(hostsOf(FULL), {
     mail: ['smtp.example.org'], payments: ['api.stripe.com'], google: ['oauth2.googleapis.com', 'www.googleapis.com'], microsoft: ['login.microsoftonline.com'],
-    sms: ['api.twilio.com'], tsa: ['tsa.example.net', 'tsa2.example.net'], chat: ['llm.example.com'], converter: ['gotenberg'], sns: [], webhooks: [],
+    sms: ['api.twilio.com'], tsa: ['tsa.example.net', 'tsa2.example.net'], chat: ['llm.example.com'], converter: ['gotenberg'], pwned: ['api.pwnedpasswords.com'], sns: [], webhooks: [],
   });
   // Text messages through a hook of one's own, the chat's default host, LibreOffice on this machine.
-  assert.deepEqual(hostsOf({ SMS_WEBHOOK_URL: 'https://texts.internal.example/send', OPENROUTER_API_KEY: 'k', CONVERTER: 'soffice' }), { sms: ['texts.internal.example'], chat: ['openrouter.ai'], webhooks: [] });
+  assert.deepEqual(hostsOf({ PWNED_CHECK: '0', SMS_WEBHOOK_URL: 'https://texts.internal.example/send', OPENROUTER_API_KEY: 'k', CONVERTER: 'soffice' }), { sms: ['texts.internal.example'], chat: ['openrouter.ai'], webhooks: [] });
   // Half set up counts as off, as the features themselves read it.
-  assert.deepEqual(hostsOf({ GOOGLE_CLIENT_ID: 'g', TWILIO_ACCOUNT_SID: 'AC1', CONVERTER: 'gotenberg' }), { webhooks: [] });
+  assert.deepEqual(hostsOf({ PWNED_CHECK: '0', GOOGLE_CLIENT_ID: 'g', TWILIO_ACCOUNT_SID: 'AC1', CONVERTER: 'gotenberg' }), { webhooks: [] });
   // The time-stamp hosts are read as src/server/tsa.ts reads them.
   for (const v of ['https://a.example/x,https://b.example', ' http://c.example ', 'ftp://no.example,https://d.example/tsr', '']) {
     process.env.TSA_URL = v;
@@ -363,7 +365,9 @@ test('outside: what each mode allows', () => {
 test('outside: OUTSIDE_CALLS=none switches off every service that needs another host, so it is absent, and keeps mail', () => {
   const env: Record<string, string | undefined> = { ...FULL, OUTSIDE_CALLS: 'none', OUTBOUND_ALLOW: 'gotenberg' };
   const off = applyOutsideCalls(env);
-  assert.deepEqual(off.map((s) => s.id), ['payments', 'google', 'microsoft', 'sms', 'tsa', 'chat']);
+  assert.deepEqual(off.map((s) => s.id), ['payments', 'google', 'microsoft', 'sms', 'tsa', 'chat', 'pwned']);
+  // The leaked-password check is on without a setting, so it is switched off by one.
+  assert.equal(env.PWNED_CHECK, '0');
   assert.deepEqual(off.find((s) => s.id === 'payments')!.settings, ['STRIPE_SECRET_KEY', 'STRIPE_PRICE_GROVE', 'STRIPE_WEBHOOK_SECRET']);
   for (const k of ['STRIPE_SECRET_KEY', 'GOOGLE_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'TWILIO_AUTH_TOKEN', 'TSA_URL', 'SUPPORT_CHAT_API_KEY']) assert.equal(env[k], undefined, k);
   // Each feature now reads itself as not set up, the same way as on a server where it never was.
@@ -376,7 +380,7 @@ test('outside: OUTSIDE_CALLS=none switches off every service that needs another 
   assert.equal(env.CONVERTER_URL, FULL.CONVERTER_URL);
   assert.equal(env.MAIL_EVENTS_TOKEN, FULL.MAIL_EVENTS_TOKEN);
   // A help chat on this machine itself needs no outside host and stays.
-  const local: Record<string, string | undefined> = { OUTSIDE_CALLS: 'none', SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'http://localhost:11434/v1' };
+  const local: Record<string, string | undefined> = { OUTSIDE_CALLS: 'none', PWNED_CHECK: '0', SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'http://localhost:11434/v1' };
   assert.deepEqual(applyOutsideCalls(local), []);
   assert.equal(chatModelOn(local), true);
   // listed and all change nothing.
@@ -548,7 +552,7 @@ test('outside: every place the server calls out is on the list', () => {
   // A file in src/server that opens a connection of its own must be one of these, each tied to a line of the list.
   const KNOWN: Record<string, string[]> = {
     'mail.ts': ['mail'], 'routes-billing.ts': ['payments'], 'oidc.ts': ['google', 'microsoft'], 'sms.ts': ['sms'], 'tsa.ts': ['tsa'],
-    'chat.ts': ['chat'], 'convert.ts': ['converter'], 'routes-bounces.ts': ['sns'], 'webhooks.ts': ['webhooks'],
+    'chat.ts': ['chat'], 'convert.ts': ['converter'], 'routes-bounces.ts': ['sns'], 'webhooks.ts': ['webhooks'], 'pwned.ts': ['pwned'],
   };
   const CALLS = /\bfetch\(|createTransport\(|\bhttps?\.request\(|\bnet\.(connect|createConnection)\(|\btls\.connect\(/;
   const dir = path.join(ROOT, 'src/server');
@@ -562,7 +566,8 @@ test('outside: every place the server calls out is on the list', () => {
   for (const f of fs.readdirSync(path.join(ROOT, 'src/lib')).filter((x) => x.endsWith('.ts'))) assert.ok(!CALLS.test(read(`src/lib/${f}`).replace(/\/\/.*$/gm, '')), f);
   // What is not built is said, and none of it is half there.
   assert.ok(NOT_BUILT.length >= 3);
-  assert.ok(!/pwnedpasswords|haveibeenpwned/i.test(fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n')), 'a leaked-password check now exists: take it off NOT_BUILT and put it on the list');
+  // The leaked-password check exists now (src/server/pwned.ts): it is on the list, and no longer said to be missing.
+  assert.ok(ids.has('pwned' as any) && !NOT_BUILT.some((x) => /leaked passwords/.test(x)));
 });
 
 // ---- 4. The security contact -----------------------------------------------------------------------------------------

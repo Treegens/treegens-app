@@ -7,6 +7,8 @@ import { PDFDocument } from 'pdf-lib';
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'growsigning-'));
 process.env.APP_URL = 'http://test.local';
+// The leaked-password list is an outside service: off in tests, except where a test points it at a stub (tests/ds-sec-policy.test.ts).
+process.env.PWNED_CHECK ??= '0';
 
 export type Server = {
   db: typeof import('../src/server/db.ts');
@@ -43,7 +45,10 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-customfields.ts');
   await import('../src/server/routes-seal.ts');
   await import('../src/server/routes-impact.ts');
+  await import('../src/server/routes-tenantpolicy.ts');
   await import('../src/server/routes-convert.ts');
+  await import('../src/server/routes-disclosure.ts');
+  await import('../src/server/routes-secpolicy.ts');
   await import('../src/server/openapi.ts');
   const billing = await import('../src/server/routes-billing.ts');
   handle = (await import('../src/server/router.ts')).handle;

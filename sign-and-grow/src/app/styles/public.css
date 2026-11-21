@@ -51,7 +51,7 @@
 .pub-foot-brand p { margin: 8px 0 0; max-width: 340px; }
 .pub-foot nav { display: grid; gap: 2px; justify-items: start; }
 .pub-foot h2 { font-family: var(--sans); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink); margin-bottom: 6px; }
-.pub-foot nav a { display: inline-flex; align-items: center; min-height: 32px; color: var(--muted); text-decoration: none; }
+.pub-foot nav a { display: inline-flex; align-items: center; min-height: 44px; color: var(--muted); text-decoration: none; }
 .pub-foot nav a:hover { color: var(--green); text-decoration: underline; }
 @media (max-width: 760px) {
   .pub-foot-grid { grid-template-columns: 1fr 1fr; gap: 24px 20px; }

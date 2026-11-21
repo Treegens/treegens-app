@@ -104,7 +104,7 @@ export function securityDetail(kind: string, details: Record<string, any> | null
     if (d.second_step) say(w(d.second_step === 'remembered_device' ? 'second_step_remembered' : 'second_step_code'));
     done.add('method').add('second_step').add('new_login').add('reason');
   } else if (kind === 'session.ended') {
-    say(d.how === 'ended_from_settings' ? w('ended_from_settings') : '', 'how');
+    say(d.how === 'ended_from_settings' ? w('ended_from_settings') : d.how === 'idle' ? w('ended_idle', { count: Number(d.minutes) || 0 }) : d.how === 'signed_in_elsewhere' ? w('ended_elsewhere', { count: Number(d.browsers) || 1 }) : '', 'how', 'minutes', 'browsers');
   } else if (kind === 'signout.everywhere') {
     say(w('signed_out_n', { count: Number(d.signed_out) || 0 }), 'signed_out');
     say(Number(d.devices_forgotten) ? w('devices_n', { count: Number(d.devices_forgotten) }) : '', 'devices_forgotten');
@@ -154,7 +154,11 @@ export function securityDetail(kind: string, details: Record<string, any> | null
     say(d.reason ? w('reason', { reason: String(d.reason) }) : '', 'reason');
   } else if (kind === 'retention.changed') {
     const days = (n: unknown) => (Number(n) ? w('days_n', { count: Number(n) }) : w('kept_until_deleted'));
-    say(w('retention', { from: days(d.was_days), to: days(d.days) }), 'days', 'was_days', 'level', 'was_level', 'templates');
+    // Each of the two lines of the schedule is said only when it changed (an older line carries no second pair).
+    const moved = (a: unknown, b: unknown) => (Number(a) || 0) !== (Number(b) || 0);
+    const both = 'stopped_days' in d || 'was_stopped_days' in d;
+    say(!both || moved(d.was_days, d.days) ? w('retention', { from: days(d.was_days), to: days(d.days) }) : '', 'days', 'was_days', 'level', 'was_level', 'templates');
+    say(both && moved(d.was_stopped_days, d.stopped_days) ? w('retention_stopped', { from: days(d.was_stopped_days), to: days(d.stopped_days) }) : '', 'stopped_days', 'was_stopped_days');
   } else if (kind === 'legal_hold.placed' || kind === 'legal_hold.lifted') {
     say(Number(d.covers) ? w('covers_n', { count: Number(d.covers) }) : '', 'covers', 'folder', 'envelope_id');
     say(d.by_operator ? w('by_operator') : '', 'by_operator');
@@ -174,6 +178,7 @@ export function securityDetail(kind: string, details: Record<string, any> | null
     }
     done.add('settings');
   }
+  if (Number(d.browsers_signed_out)) say(w('browsers_signed_out', { count: Number(d.browsers_signed_out) }), 'browsers_signed_out');
   if (typeof d.change === 'string') say(sentence(d.change), 'change');
   if (typeof d.custom_field === 'string') done.add('custom_field');
 

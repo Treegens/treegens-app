@@ -4,7 +4,7 @@ import { PublicNav, PublicFooter } from '@/components/Public';
 import { WEBHOOK_EVENTS, MAX_WEBHOOKS, KEEP_BODIES } from '@/server/webhooks';
 import { ROLES, FIELD_TYPES } from '@/server/envelopes';
 import { DEFAULT_REMINDER_DAYS, PNG_MAX_PIXELS, JPEG_MAX_PIXELS, PHOTO_MAX_SIDE } from '@/lib/policy';
-import { mailEventsOn } from '@/lib/policy';
+import { mailEventsOn, supportReachable } from '@/lib/policy';
 
 // Whether this server is told about bounces (MAIL_EVENTS_TOKEN) is a setting: read it when the page is asked for.
 export const dynamic = 'force-dynamic';
@@ -270,7 +270,7 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers
           </ul>
         </div>
 
-        <p className="muted">Stuck on something this page does not answer? <Link href="/help?topic=sending#contact">Write to us</Link>. A person replies.</p>
+        {supportReachable() && <p className="muted">Stuck on something this page does not answer? <Link href="/help?topic=sending#contact">Write to us</Link>. A person replies.</p>}
       </main>
       <PublicFooter />
     </div>

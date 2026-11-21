@@ -1,0 +1,57 @@
+{
+  "about": "The reviewed list for the honesty scan (tests/gov-g01.test.ts, tests/claims-scan.ts). Each entry lets the lines of one file that contain `has` use the words the scan looks for. kind 'denial': the sentence says we do not have it; `claim` names the entry of src/lib/claims.ts it denies ('any' for 'nothing is certified'), and the test fails the day that entry reads as held. kind 'explains': it says what a law, a standard or another provider does, and nothing about us. kind 'not-shown': words the software looks for in what people type; no person reads them. A sentence that says we HAVE something is never added here: it is printed with claimText() from the registry. Add an entry only after reading the sentence, and say why.",
+  "allow": [
+    { "file": "README.md", "has": "audited or certified by anyone", "kind": "denial", "claim": "any", "why": "Says the self-hosting papers are not audited or certified." },
+    { "file": "README.md", "has": "not audited, not certified", "kind": "denial", "claim": "any", "why": "Quotes the heading of docs/controls.md." },
+    { "file": "README.md", "has": "Anything certified, and more than one server", "kind": "denial", "claim": "any", "why": "Under 'What is not in it'." },
+    { "file": "README.md", "has": "ISO/IEC 27001:2022 Annex A", "kind": "explains", "why": "Names the standard whose themes docs/controls.md goes through as a self-assessment; the same lines say it is not audited." },
+    { "file": "README.md", "has": "notarised or qualified signature", "kind": "explains", "why": "What some documents need; says ours is a simple electronic signature." },
+    { "file": "README.md", "has": "a notary or a qualified signature", "kind": "explains", "why": "The check before sending: what some documents need." },
+    { "file": "README.md", "has": "no HIPAA business associate agreement", "kind": "denial", "claim": "hipaa-baa", "why": "Says there is none." },
+    { "file": "README.md", "has": "- A HIPAA business associate", "kind": "denial", "claim": "hipaa-baa", "why": "Under 'What is not in it'." },
+    { "file": "README.md", "has": "certified electronic seal, and it pays", "kind": "denial", "claim": "qualified-seal", "why": "A stamp is a picture; 'it is not a certified electronic seal'." },
+    { "file": "README.md", "has": "signatures under eIDAS", "kind": "denial", "claim": "qes", "why": "'not advanced or qualified signatures under eIDAS'." },
+    { "file": "README.md", "has": "not \"advanced\" or \"qualified\"", "kind": "denial", "claim": "qes", "why": "The line before it: the same sentence, broken over two lines." },
+    { "file": "README.md", "has": "seal under eIDAS", "kind": "denial", "claim": "qualified-seal", "why": "A stamp is not an electronic seal backed by a certificate." },
+    { "file": "README.md", "has": "an advanced or a qualified seal", "kind": "denial", "claim": "qualified-seal", "why": "'We do not call it an advanced or a qualified seal.'" },
+
+    { "file": "docs/controls.md", "has": "Not audited, not certified", "kind": "denial", "claim": "any", "why": "The heading of the self-assessment." },
+    { "file": "docs/controls.md", "has": "ISO/IEC 27001:2022 Annex A", "kind": "explains", "why": "The standard whose themes the self-assessment follows; the page says it is not an audit." },
+    { "file": "docs/runbooks.md", "has": "is not certified by following these steps", "kind": "denial", "claim": "any", "why": "Says following the runbook certifies nothing." },
+
+    { "file": "src/app/developers/page.tsx", "has": "a notary or a qualified signature", "kind": "explains", "why": "The check before sending: what some documents need." },
+    { "file": "src/app/developers/page.tsx", "has": "not a certified electronic seal", "kind": "denial", "claim": "qualified-seal", "why": "What a stamp is not." },
+    { "file": "src/app/features/page.tsx", "has": "there is no HIPAA agreement to sign with us", "kind": "denial", "claim": "hipaa-baa", "why": "Says there is none." },
+    { "file": "src/app/help/outside.tsx", "has": "<b>Qualified.</b> An advanced signature made with a qualified certificate", "kind": "denial", "claim": "qes", "why": "Explains the EU level and ends 'GrowSigning does not make these.'" },
+    { "file": "src/app/help/outside.tsx", "has": "a notary or a qualified signature", "kind": "explains", "why": "When to check before sending." },
+    { "file": "src/app/help/outside.tsx", "has": "an advanced or a qualified signature", "kind": "explains", "why": "What not to send through a simple signature." },
+    { "file": "src/app/security/page.tsx", "has": "Not advanced or qualified signatures.", "kind": "denial", "claim": "qes", "why": "Under 'What this is not'." },
+
+    { "file": "src/lib/chat.ts", "has": "gdpr|hipaa|notar", "kind": "not-shown", "why": "Words the chat looks for in a question to hand legal questions over. Never printed." },
+    { "file": "src/lib/chat.ts", "has": "eidas|esign act|ueta", "kind": "not-shown", "why": "The same list of words. Never printed." },
+    { "file": "src/server/chatkb.ts", "has": "'qualified', 'eidas'", "kind": "not-shown", "why": "Words that pick the built-in answer on legal questions. Never printed." },
+    { "file": "src/server/chatkb.ts", "has": "words: ['hipaa', 'patient'", "kind": "not-shown", "why": "Words that pick the built-in answer on patient information. Never printed." },
+    { "file": "src/server/chatkb.ts", "has": "There is no HIPAA business associate", "kind": "denial", "claim": "hipaa-baa", "why": "The built-in answer says no." },
+    { "file": "src/server/chatkb.ts", "has": "\"is legally binding\"", "kind": "explains", "why": "The instruction to the model never to say it." },
+    { "file": "src/server/chatkb.ts", "has": "does not make advanced or qualified signatures", "kind": "denial", "claim": "qes", "why": "What the model is told about us." },
+
+    { "file": "src/lib/paperwork.ts", "has": "a qualified electronic signature, which GrowSigning does not provide", "kind": "denial", "claim": "qes", "why": "What German written form needs, and that we do not provide it." },
+    { "file": "src/lib/paperwork.ts", "has": "notarised or qualified signature", "kind": "explains", "why": "The audit note of the check before sending." },
+    { "file": "src/lib/paperwork.ts", "has": "simple, advanced and qualified. GrowSigning makes the first", "kind": "denial", "claim": "qes", "why": "The EU levels, and which one we make." },
+    { "file": "src/lib/paperwork.ts", "has": "written form or a qualified signature", "kind": "explains", "why": "Each country decides which documents need one." },
+    { "file": "src/lib/paperwork.ts", "has": "(eIDAS), the EU\\'s own text on EUR-Lex", "kind": "explains", "why": "A source: the regulation itself." },
+    { "file": "src/lib/paperwork.ts", "has": "without a qualified signature to be invalid", "kind": "explains", "why": "A court decision about someone else's document." },
+    { "file": "src/lib/paperwork.ts", "has": "Görg, on fixed terms and qualified signatures", "kind": "explains", "why": "A source and its web address." },
+    { "file": "src/lib/paperwork.ts", "has": "from an accredited provider counts", "kind": "explains", "why": "South African law, followed by 'GrowSigning is not such a provider.'" },
+    { "file": "src/lib/paperwork.ts", "has": "uses an ICP-Brasil certificate, which GrowSigning does not provide", "kind": "denial", "claim": "icp-brasil", "why": "Brazil's qualified signature, and that we do not provide it." },
+    { "file": "src/lib/paperwork.ts", "has": "an accredited provider (PSC) can issue a constancia", "kind": "explains", "why": "Says we do not issue one and who can." },
+
+    { "file": "src/lib/policy.ts", "has": "notarised or qualified signature", "kind": "explains", "why": "The text every signer agrees to: some documents need more than this." },
+    { "file": "src/lib/policy.ts", "has": "There is no HIPAA business associate agreement", "kind": "denial", "claim": "hipaa-baa", "why": "NO_BAA_TEXT." },
+    { "file": "src/lib/policy.ts", "has": "A business associate agreement written by a lawyer", "kind": "explains", "why": "What someone who runs their own server would need." },
+    { "file": "src/lib/seal.ts", "has": "an advanced or a qualified seal", "kind": "denial", "claim": "qualified-seal", "why": "SEAL_TRUTH: 'We do not claim it is'." },
+    { "file": "src/lib/stamps.ts", "has": "it is not a certified electronic seal", "kind": "denial", "claim": "qualified-seal", "why": "What a stamp is not." },
+
+    { "file": "src/server/openapi.ts", "has": "a notary or a qualified signature", "kind": "explains", "why": "The check before sending: what some documents need." }
+  ]
+}

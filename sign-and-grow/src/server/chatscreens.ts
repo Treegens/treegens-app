@@ -178,6 +178,6 @@ export function screenFacts(): string {
     `- There is no way to sign on paper in GrowSigning, and no button for it.`,
     `- The app (people who send, signed in): the menu starts with "${A.start.label}" (on a phone: Send, in the bar at the bottom). It has Home, ${A.envelopes.label}, To sign, ${A.templates.label}, Contacts, ${A.more.label}, ${A.settings.label} and Help. Under ${A.more.label} are ${A.bulk.label}, Forms, Reports and Trees planted.`,
     `- An envelope's own page shows each person's progress and has one main button ("${A.remind.label}" and the person's name while it is out, "${A.download.label}" once it is completed), a "More" with "${A.moreTime.label}", "${A.void.label}" (while it is out) and "${A.saveTemplate.label}", and a "More" for each person with "${A.copyLink.label}".`,
-    `- ${A.settings.label} has tabs: ${A.profile.label} (your name, your signature, which emails you get), ${A.security.label} (password, two-step login, where you are signed in), ${A.team.label} and API and webhooks. Owners and admins also have Account, Sending (reminders, deadline and date format of new documents), Stamps, Plan and Your data.`,
+    `- ${A.settings.label} has tabs: ${A.profile.label} (your name, your signature, which emails you get), ${A.security.label} (password, two-step login, where you are signed in), ${A.team.label} and API and webhooks. Owners and admins also have Account, Sending (reminders, deadline and date format of new documents), Stamps, Plan and Records and data.`,
   ].join('\n');
 }

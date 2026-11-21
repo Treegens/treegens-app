@@ -214,3 +214,5 @@
 /* The name of the step, on screens too narrow for it in the top bar. */
 .ed-stepname { display: none; margin: 10px 16px 0; font-weight: 600; }
 @media (max-width: 350px) { .ed-stepname { display: block; } }
+/* Every field button of the palette is 44 px to press, with a mouse too (it was 37 px on a desktop). */
+.ed .palette button { min-height: 44px; }

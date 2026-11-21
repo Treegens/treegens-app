@@ -117,9 +117,9 @@ test('Other actions: one fixed order, no descriptions, never more than six, and 
   // After Finish later the page says where the way back is, also for someone with no email from us.
   assert.equal(laterAtConsent(false), 'Nothing is lost. Use the link in your email when you are ready.');
   assert.doesNotMatch(laterAtConsent(true), /email/);
-  // What left the list did not leave the page: Help is the dialog's own button, Stop reminder emails is in the note
+  // What left the list did not leave the page: Help is one button in the top bar, Stop reminder emails is in the note
   // after Finish later, and "Fix my name" is behind a tap on the name on the document and in Pass to someone else.
-  assert.match(page, /onHelp=\{me\.role === 'witness' \? undefined : go\('help'\)\}/);
+  assert.match(page, /const headHelp = me\.role === 'witness' \? undefined : go\('help'\);/);
   assert.match(page, /onClick=\{\(\) => mute\(\)\}>Stop reminder emails<\/button>/);
   assert.match(page, /if \(f\.type === 'full_name' && me\.role !== 'viewer'\)\s+return <button key=\{f\.id\} type="button" \{\.\.\.common\} title="Added for you" aria-haspopup="dialog" onClick=\{go\('name'\)\}/);
   assert.match(page, /\{open === 'name' && <NameDialog name=\{me\.name\} approving=\{me\.role === 'approver'\} onRename=\{rename\}/);
@@ -148,7 +148,7 @@ test('the consent screen: the sender once, 120 words or fewer before the tick, t
   assert.match(consent, /const org = orgOf\(data\.brand\?\.name, sender\.name\);/);
   assert.equal(orgOf("Rosa Gardener's workspace", 'Rosa Gardener'), '', 'never "Rosa Gardener\'s workspace"');
   // The subject is the heading of the screen, so the bar above does not say it a second time.
-  assert.match(consent, /<Shell data=\{data\} bar=\{other\} footer=\{report\} helpInNewTab plainBar>/);
+  assert.match(consent, /<Shell data=\{data\} bar=\{other\} footer=\{report\} helpInNewTab plainBar onHelp=\{headHelp\}>/);
   // One way to read it first, and one tick. No tree line and no price on the screen where the method is agreed to.
   assert.equal((consent.match(/href=\{`\$\{downloadUrl\}/g) || []).length, 1);
   assert.equal((consent.match(/type="checkbox"/g) || []).length, 1);

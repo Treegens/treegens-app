@@ -1,5 +1,6 @@
 // Custom fields (customfields.ts): the account's own fields, which admins define, and the values of one envelope or
 // template set on their own. Values also go with POST and PUT /envelopes ("custom_fields", "documents[].fields").
+import { assertNotHeld } from './records.ts';
 import { route } from './router.ts';
 import { bad } from './util.ts';
 import { mine, assertMayChange } from './routes-envelopes.ts';
@@ -28,6 +29,8 @@ route('PUT', '/envelopes/:id/custom-fields', async (c) => {
   if (b.custom_fields === undefined || b.custom_fields === null) throw bad('Send "custom_fields": a list of {"name", "value"} objects, the whole list as it should be. Nothing was changed.');
   const e = mine(c, c.params.id);
   assertMayChange(c, e);
+  // A draft on hold is frozen as it is, through this door too (records.ts).
+  if (e.kind === 'envelope' && e.status === 'draft') assertNotHeld([e.id], c.actor.name, 'change it');
   const plan = readCustom(c.account.id, e, { custom_fields: b.custom_fields });
   writeCustom(e.id, plan, c.actor);
   return { custom_fields: valuesOf(e.id) };

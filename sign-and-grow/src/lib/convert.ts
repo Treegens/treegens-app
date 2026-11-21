@@ -118,12 +118,17 @@ export function convertedOf(stored: any): Converted | null {
 /** What the original is called inside the evidence pack, and the line its README gives the folder. */
 export const ORIGINALS_README = 'originals/            each file as the sender uploaded it, before it was turned into a PDF: a Word, Excel, PowerPoint, OpenDocument, RTF, text, web page or TIFF file. These were not signed. The PDF made from each is what people saw and signed; the audit trail names each original by its SHA-256 and says what made the PDF. Text can move when a PDF is made, so the original and the PDF may not look the same.';
 
-/** Whether the settings name a converter, for the public help page (a server component). The server's own answer
- *  (GET /me "converts") also knows whether LibreOffice was found; this only reads the settings. */
-export function converterConfigured(): boolean {
+/** The same folder in the account's export (Settings, Records and data), one folder for each envelope. */
+export const ORIGINALS_EXPORT_README = 'originals/     each file as it was uploaded, where a document was made from a Word, Excel, PowerPoint or similar file, in a folder named like its envelope. These were not signed: the PDF made from each is what people saw and signed, and the audit trail names each original by its SHA-256.';
+
+/** Whether this server turns office files into PDF, for the public help page (a server component). It reads the
+ *  settings, and for LibreOffice it also asks `programThere` whether the program is installed, when the page gives
+ *  one (src/app/help/convert.tsx looks on the PATH): a server set to LibreOffice without LibreOffice refuses every
+ *  Word file, so the help page must not answer "Yes". Without `programThere` only the settings are read. */
+export function converterConfigured(programThere?: (program: string) => boolean): boolean {
   const c = (process.env.CONVERTER || '').trim().toLowerCase();
   const url = (process.env.CONVERTER_URL || '').trim();
   if (c === 'stub') return process.env.NODE_ENV !== 'production';
-  if (c === 'soffice' || c === 'libreoffice') return true;
+  if (c === 'soffice' || c === 'libreoffice') return programThere ? programThere('soffice') : true;
   return (c === 'gotenberg' || !c) && /^https?:\/\/[^\s/]+/i.test(url);
 }

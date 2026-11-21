@@ -87,7 +87,7 @@ Contrast ratios by the WCAG 2.1 formula. AA asks 4.5 for text and 3.0 for large 
 
 ## The stamp
 
-`stamp.svg`: the mark, "Signed with" in Lora Medium Italic and the wordmark, in a ruled box, one colour. It goes at the foot of the certificate and of every page of a signed copy, in muted ink (`rgb(0.42, 0.47, 0.44)` in `pdf.ts`), with the envelope ID line that the server writes beside it on its baseline. Never larger than the document's own text: 14 pt tall on our own sheets (the certificate), 12 pt on a page of somebody's document, where it and the ID line stay in the lowest 17 pt of the page (the strip desk printers leave blank) so they do not land on the document's own footer. Nothing of ours is printed at the top of a document's page (`drawPageFoot()` in `src/server/brandpdf.ts`).
+`stamp.svg`: the mark, "Signed with" in Lora Medium Italic and the wordmark, in a ruled box, one colour. It goes at the foot of the certificate and of every page of a signed copy, in muted ink (`rgb(0.42, 0.47, 0.44)` in `pdf.ts`), with the envelope ID line that the server writes beside it on its baseline. Never larger than the document's own text: 14 pt tall on our own sheets (the certificate), 12 pt on a page of somebody's document, where it and the ID line stay in one strip 17 pt deep at the foot. The strip never stands on the document's own text, pictures or filled-in fields: `src/server/footplace.ts` looks at the foot of each page and puts the strip on the left, on the right or in a clear stretch, and adds a 17 pt margin under a page whose foot is in use from side to side. Nothing of ours is printed at the top of a document's page (`drawPageFoot()` in `src/server/brandpdf.ts` draws; `drawFootClear()` in `footplace.ts` decides where).
 
 ## Things not to do
 
@@ -236,10 +236,10 @@ this.page.drawSvgPath(STAMP.d, { x: this.L, y: 36, scale: ss, color: MUTED });
 this.page.drawText(this.footer, { x: this.L + STAMP.width * ss + 8, y: 26.8, size: 7, font: this.font, color: MUTED });
 ```
 
-**Foot of every page of a signed copy**, in `renderEnvelopePdf()`, in the `for (const page of pages)` loop: `drawPageFoot()` in `src/server/brandpdf.ts` draws the stamp 12 pt tall, 5 pt above the bottom edge, and the "Envelope ID" line beside it on its baseline (as built on 21 November 2026; the line used to sit at the top of the page, while every screen said "at the foot"):
+**Foot of every page of a signed copy**, in `renderEnvelopePdf()`, in the `for (const page of pages)` loop: `drawFootClear()` in `src/server/footplace.ts` chooses a clear place at the foot and calls `drawPageFoot()` in `src/server/brandpdf.ts`, which draws the stamp 12 pt tall, 5 pt above the bottom edge, and the "Envelope ID" line beside it on its baseline (as built on 21 November 2026; the line used to sit at the top of the page, while every screen said "at the foot"):
 
 ```ts
-drawPageFoot(page, m, { line: `GrowSigning Envelope ID: ${e.id}`, font, color: MUTED });
+drawFootClear(page, m, fieldBoxesOfThisPage, { line: `GrowSigning Envelope ID: ${e.id}`, font, color: MUTED });
 ```
 
 The rest of `pdf.ts` is text: "Signed via GrowSigning" under each signature, "GrowSigning Envelope ID", `setProducer` and `setCreator`.

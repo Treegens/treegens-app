@@ -106,7 +106,7 @@ export const FAQ: Faq[] = [
   { id: 'locked', words: ['log in', 'login', 'sign in', 'password', 'locked out', 'two-step', '2fa', 'authenticator', 'reset', 'lost my phone', 'lost the phone', 'recovery code', 'cannot sign in', "can't sign in", 'cannot log in', "can't log in"],
     answer: () => 'Forgot the password? Use Forgot password on the sign-in page. Made your login with Google or Microsoft? Use that button. Lost the phone with your authenticator app? Type one of your recovery codes in place of the code. "I cannot log in" on the help page has every case, and a person can help too.' },
   { id: 'close', side: 'sender', words: ['close my account', 'delete my account', 'delete everything', 'remove my data', 'close account', 'deleted'],
-    answer: () => `Settings, then Your data, then Close my account. Any subscription stops at once. You have ${CLOSE_GRACE_DAYS} days to undo it by signing in again, and ${CLOSING_REMINDER_DAYS} days before the end we email you. Export first if you want copies. Some things are kept after deleting, such as the record of payments without your name: the help page and Security and trust list exactly what.` },
+    answer: () => `Settings, then Records and data, then Close my account. Any subscription stops at once. You have ${CLOSE_GRACE_DAYS} days to undo it by signing in again, and ${CLOSING_REMINDER_DAYS} days before the end we email you. Export first if you want copies. Some things are kept after deleting, such as the record of payments without your name: the help page and Security and trust list exactly what.` },
   { id: 'who-sees', words: ['who can see', 'who sees', 'privacy', 'private', 'confidential', 'admins see', 'operator'],
     answer: () => `In short: ${WHO_CAN_SEE.map((w) => w.who.replace(/\.$/, '')).join('; ')}. A signing link opens its document for whoever holds it, which is why a sender can add an access code or a one-time code. Security and trust lists it in full.` },
   { id: 'account', words: ['need an account', 'register', 'sign up to sign', 'create an account', 'do i need'],
@@ -122,7 +122,7 @@ export const FAQ: Faq[] = [
   { id: 'not-received', words: ['did not get the email', "didn't get the email", 'never got the email', 'never received', 'not received', 'recipient', 'spam folder'],
     answer: (s) => (sending(s) ? noEmailForSender(s) : s === 'signing' ? noCodeForSigner() : noEmailAnywhere()) },
   { id: 'after-cancel', side: 'sender', words: ['documents after cancel', 'documents when i cancel', 'happens to my documents', 'lose my documents', 'export', 'download everything', 'keep my documents'],
-    answer: () => 'Cancelling or a failed payment deletes nothing and locks nothing. Every document, audit trail and receipt stays, documents that are out can still be signed, and your signatures can be used until their own dates. Settings, Your data, Export everything gives you all of it as one ZIP file, free, on any plan.' },
+    answer: () => 'Cancelling or a failed payment deletes nothing and locks nothing. Every document, audit trail and receipt stays, documents that are out can still be signed, and your signatures can be used until their own dates. Settings, Records and data, Export everything gives you all of it as one ZIP file, free, on any plan.' },
   { id: 'signatures', side: 'sender', words: ['signature used', 'what uses', 'held', 'balance', 'run out', 'top up', 'top-up'],
     answer: () => `A signature is one person signing one envelope. Sending holds one for each signer, and voiding, declining or expiring gives back the ones not used. ${HELD_EXPIRY_TEXT} Signing your own documents, approvers, viewers, copies and reminders are free. With none left, sending pauses: it never turns into a charge.` },
   { id: 'free-code', side: 'sender', words: ['was given a code', 'free code', 'promo', 'coupon', 'voucher', 'community code'],
@@ -276,7 +276,7 @@ ${lines(CHAT_TOOLS.map((t) => `${t.label} (${t.href}): ${t.what}`))}
 - A team can invite ${TEAM_INVITES_PER_DAY} people a day. When ${abuseSuspendAfter()} different recipients report one account, its sending is paused until a person has looked. Documents that read like a fake payment notice cannot be sent by an account that is not trusted yet.
 
 === CLOSING AND DELETING AN ACCOUNT ===
-- Settings, then Your data, then Close my account. ${CLOSE_GRACE_DAYS} days to undo it by signing in again; an email ${CLOSING_REMINDER_DAYS} days before the end. It can also be deleted at once.
+- Settings, then Records and data, then Close my account. ${CLOSE_GRACE_DAYS} days to undo it by signing in again; an email ${CLOSING_REMINDER_DAYS} days before the end. It can also be deleted at once.
 - Deleted with it:
 ${lines(DELETED_WITH_ACCOUNT)}
 - Kept after deleting:

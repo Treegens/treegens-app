@@ -5,7 +5,7 @@
 //   password, ways to sign in, two-step login, where you are signed in   Profile -> Security
 //   reminders, the deadline and the date format of new documents          Account -> Sending
 //   the emails you get about your documents                               Notifications -> Profile
-// Members have no Account, Sending, Stamps, Plan or Your data section: everything there is set by admins. What a
+// Members have no Account, Sending, Stamps, Plan or Records and data section: everything there is set by admins. What a
 // member could do in them before is under Profile, More options: export their documents, close their own login, and
 // read the plan and the stamps (MEMBER_READS: shown without a tab of their own).
 
@@ -20,7 +20,7 @@ const SECTIONS: { key: SectionKey; label: string; admins?: true }[] = [
   { key: 'team', label: 'Team' },
   { key: 'stamps', label: 'Stamps', admins: true },
   { key: 'billing', label: 'Plan', admins: true },
-  { key: 'data', label: 'Your data', admins: true },
+  { key: 'data', label: 'Records and data', admins: true },
   { key: 'developers', label: 'API and webhooks' },
 ];
 

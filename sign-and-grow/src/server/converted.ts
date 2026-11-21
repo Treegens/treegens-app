@@ -82,5 +82,33 @@ export function originalsEvidence(e: any, notes: string[]): ZipEntry[] {
   return out;
 }
 
+/**
+ * The originals for the account's export (Settings, Records and data, GET /export): each file of this envelope as it was
+ * uploaded, under originals/<folder>/. `room` is how many bytes still fit in the ZIP: an original that does not fit,
+ * or cannot be read, is left out and named in `left`, so one of them never breaks the rest of the export.
+ */
+export function originalsExport(envelopeId: string, folder: string, room: number, left: string[]): ZipEntry[] {
+  const out: ZipEntry[] = [];
+  const seen = new Set<string>();
+  const docs = all('SELECT name, file_id FROM documents WHERE envelope_id=? ORDER BY position', envelopeId);
+  convertedDocs({ documents: docs }).forEach(({ d, c }, i) => {
+    if (seen.has(c.sha256)) return;
+    seen.add(c.sha256);
+    const sha = get('SELECT original_sha256 s FROM files WHERE id=?', d.file_id)?.s;
+    const what = `${nameForRecord(c)}, the original of "${str(d.name, 200)}" (envelope ${envelopeId})`;
+    if (c.size > room) return void left.push(`${what}: it did not fit in this ZIP file`);
+    try {
+      const data = readBlob(sha);
+      if (sha256(data) !== c.sha256) throw new HttpError(500, 'changed');
+      room -= data.length;
+      out.push({ name: `originals/${folder}/${String(i + 1).padStart(2, '0')} ${safeName(c.from)}`, data });
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      left.push(`${what}: it could not be read from storage`);
+    }
+  });
+  return out;
+}
+
 /** The stored originals of an account's files, so deleting the account deletes them too. */
 export const originalShas = (accountId: string): string[] => all('SELECT original_sha256 s FROM files WHERE account_id=? AND original_sha256 IS NOT NULL', accountId).map((r) => r.s);

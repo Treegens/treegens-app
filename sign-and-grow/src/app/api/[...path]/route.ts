@@ -24,7 +24,10 @@ import '@/server/routes-archive';
 import '@/server/routes-customfields';
 import '@/server/routes-seal';
 import '@/server/routes-impact';
+import '@/server/routes-tenantpolicy';
 import '@/server/routes-convert';
+import '@/server/routes-disclosure';
+import '@/server/routes-secpolicy';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

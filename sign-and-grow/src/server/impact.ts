@@ -10,8 +10,9 @@
 // signature can still be asked about, it is asked again each time, so a payment that went back later no longer counts.
 import { get, all, run } from './db.ts';
 import { hmac, now } from './util.ts';
-import { paidSignatureFor, lotsOf, creditsEnabled, isChargeable } from './credits.ts';
+import { paidSignatureFor, paidForecast, creditsEnabled, isChargeable } from './credits.ts';
 import { TREES_PER_SIGNATURE, type SignerFacts, type SenderFacts } from '../lib/impactwords.ts';
+import { isGovernment } from '../lib/deployment.ts';
 
 /** Who signs: the only people a tree is ever mentioned to. */
 export const signs = (r: any): boolean => r?.role === 'signer' || r?.role === 'inperson';
@@ -176,8 +177,8 @@ export function senderMoment(e: any, userId: string): (SenderFacts & { celebrate
 export const senderSaw = (accountId: string) => markSeen(`a:${accountId}`);
 
 /**
- * Before sending: would every signature of this draft come out of a payment? Signatures are used soonest-to-expire
- * first (credits.ts), so the lots are walked in that order. It is a forecast, used only to decide whether the review
+ * Before sending: would every signature of this draft come out of a payment that stands? The order signatures are
+ * used in is one rule in one place (paidForecast in credits.ts). It is a forecast, used only to decide whether the review
  * step may say that each person who signs plants 10 mangroves; anything short of "all of them" says nothing.
  */
 export function allPaidForecast(e: any): boolean {
@@ -185,16 +186,9 @@ export function allPaidForecast(e: any): boolean {
   const sender = get('SELECT email, name FROM users WHERE id=?', e.sender_id);
   const need = (e.recipients || []).filter((r: any) => signs(r) && String(r.email || '').trim() && (!sender || isChargeable(r, sender))).length;
   if (!need || need !== (e.recipients || []).filter(signs).length) return false;
-  const lots = lotsOf(e.account_id).filter((l) => l.live && l.left > 0)
-    .sort((a, b) => String(a.expires_at || '9999').localeCompare(String(b.expires_at || '9999')) || Number(a.paid) - Number(b.paid) || a.id - b.id);
-  let left = need;
-  for (const l of lots) {
-    if (!l.paid) return false;
-    left -= l.left;
-    if (left <= 0) return true;
-  }
-  return false;
+  return paidForecast(e.account_id, need);
 }
 
 /** 'Trees on the signing record': on unless an admin switched it off for the account (Settings, Account). */
-export const recordShowsTrees = (accountId: string): boolean => !get('SELECT cert_impact_off x FROM accounts WHERE id=?', accountId)?.x;
+// Never under DEPLOYMENT_PROFILE=government, whatever the account chose (src/lib/deployment.ts).
+export const recordShowsTrees = (accountId: string): boolean => !isGovernment() && !get('SELECT cert_impact_off x FROM accounts WHERE id=?', accountId)?.x;

@@ -802,7 +802,7 @@ export async function askTakeOver(e: any, r: any, actor: Actor): Promise<void> {
  * One member declining declines for the group, and the screen says so before they do. A member who had not taken
  * the document on is first put on record as the person who acted. The other members who were sent it are told.
  */
-export async function declineForGroup(e: any, r: any, reason: string, actor: Actor): Promise<void> {
+export async function declineForGroup(e: any, r: any, reason: string, actor: Actor, told?: (x: { e: any; r: any }) => Promise<void>): Promise<void> {
   let x = { e, r, actor };
   if (r.member) {
     // Checked before anyone is put on record for it: a decline that is going to be refused takes nothing on.
@@ -810,7 +810,7 @@ export async function declineForGroup(e: any, r: any, reason: string, actor: Act
     if (!reason.trim()) throw bad('Please tell the sender why you are declining.');
     x = takeOn(x, ', in order to decline it');
   }
-  await declineRecipient(x.e, x.r, reason, x.actor);
+  await declineRecipient(x.e, x.r, reason, x.actor, told);
   const row = x.r;
   const { to: others, stopped } = reachable(row, active(row.id).filter((m: any) => m.id !== row.claimed_by && m.sent_at));
   noteStopped(x.e, row.group_name, stopped, 'that it was declined');

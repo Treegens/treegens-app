@@ -5,6 +5,7 @@
 // The address itself is shown to the sender on the envelope page and to a signer after Finish, and nowhere else: the
 // audit trail, and with it the certificate in every "Completed" email, every export and every evidence pack, names it
 // by a fingerprint (payPrint in paydrop.ts).
+import { assertNotHeld } from './records.ts';
 import { route, type Ctx } from './router.ts';
 import { all, get, run } from './db.ts';
 import { bad, baseUrl, now, str } from './util.ts';
@@ -121,6 +122,8 @@ route('PUT', '/envelopes/:id/pay-link', async (c: Ctx) => {
     assertMayChange(c, e);
     // The link comes with the template's wording, so an envelope whose wording is locked keeps it (tplroles.ts).
     assertNotLocked(c, e, 'The payment link cannot be changed.');
+    // A draft on hold is frozen as it is, through this door too (records.ts).
+    if (e.kind === 'envelope' && e.status === 'draft') assertNotHeld([e.id], c.actor.name, 'change it');
   };
   const before = mine(c, c.params.id);
   check(before);

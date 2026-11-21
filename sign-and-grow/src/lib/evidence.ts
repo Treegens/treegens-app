@@ -26,7 +26,7 @@ export const WHO_WHEN_WHERE = 'A name is the one the sender typed, attached to w
  * The day /security/certificate was last written from drawCertificate() in src/server/pdf.ts. Whoever changes what the
  * certificate prints changes that page and this date in the same change.
  */
-export const CERTIFICATE_PAGE_VERSION = '2026-11-20';
+export const CERTIFICATE_PAGE_VERSION = '2026-11-21';
 
 /** After a deletion: what /verify still knows about a completed file, and for how long. */
 export const FINGERPRINT_KEPT_DAYS = 365;

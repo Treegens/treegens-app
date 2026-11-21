@@ -7,6 +7,9 @@ import { find } from './routes-sign.ts';
 import { mine } from './routes-envelopes.ts';
 import { record } from './seclog.ts';
 import { treesAtFinish, signerMoment, signerSaw, senderMoment, senderSaw, allPaidForecast, recordShowsTrees, signs } from './impact.ts';
+// 'Trees on screens and emails' (src/server/tenantpolicy.ts): off, these routes answer as for someone who plants nothing.
+import { showsTrees } from './tenantpolicy.ts';
+import { isGovernment } from '../lib/deployment.ts';
 
 const CLOSED = ['voided', 'expired', 'declined'];
 
@@ -17,7 +20,7 @@ const CLOSED = ['voided', 'expired', 'declined'];
 //                   viewer, a copy or a witness.
 route('GET', '/sign/:token/impact', (c) => {
   const { e, r } = find(c);
-  if (CLOSED.includes(e.status) || !signs(r)) return { finish: 0, done: null };
+  if (CLOSED.includes(e.status) || !signs(r) || !showsTrees(e.account_id)) return { finish: 0, done: null };
   return { finish: treesAtFinish(r), done: signerMoment(e, r) };
 }, 'public');
 
@@ -34,6 +37,7 @@ route('POST', '/sign/:token/impact/seen', (c) => {
 //   Sent:     { paid, signers, planted, sheets, celebrate }.
 route('GET', '/envelopes/:id/impact', (c) => {
   const e = mine(c, c.params.id, 'envelope');
+  if (!showsTrees(e.account_id)) return { plus: false, sent: null };
   if (e.status === 'draft') return { plus: allPaidForecast(e), sent: null };
   return { plus: false, sent: senderMoment(e, c.user.id) };
 });
@@ -46,10 +50,12 @@ route('POST', '/envelopes/:id/impact/seen', (c) => {
 
 // 'Trees on the signing record' (Settings, Account). On by default. Off: the box "Signed without paper" is left off
 // the signing record of documents completed from then on. Screens, emails and /impact are not changed by it.
-route('GET', '/account/impact-record', (c) => ({ on: recordShowsTrees(c.account.id) }));
+// fixed: this server never puts them there (DEPLOYMENT_PROFILE=government), so the page shows no switch.
+route('GET', '/account/impact-record', (c) => ({ on: recordShowsTrees(c.account.id), ...(isGovernment() ? { fixed: true } : {}) }));
 route('PUT', '/account/impact-record', async (c) => {
   const b = await c.body();
   if (typeof b?.on !== 'boolean') throw bad('Send "on" as true or false. Nothing was changed.');
+  if (isGovernment()) throw bad('This server never puts trees on the signing record, so there is nothing to switch. Nothing was changed.', 409);
   const was = recordShowsTrees(c.account.id);
   run('UPDATE accounts SET cert_impact_off=? WHERE id=?', b.on ? 0 : 1, c.account.id);
   if (was !== b.on) record('settings.changed', { c, about: ['account', c.account.id], details: { settings: { trees_on_signing_record: { from: was, to: b.on } } } });

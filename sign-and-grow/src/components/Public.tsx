@@ -75,7 +75,11 @@ export function PublicFooter() {
         <div className="pub-foot-brand">
           <Link href="/" className="logo"><Logo height={22} /></Link>
           <p>100% of what you pay goes to Treegens tree planting.</p>
-          <p>Stuck? <Link href="/help">The help page</Link> has answers, or <Link href="/help#contact">write to us</Link>{support?.email ? <> or email <a href={`mailto:${support.email}`}>{support.email}</a></> : null}. A person replies, and you do not need to log in.</p>
+          {/* "A person replies" only where the server says a request reaches somebody (reply is null when neither
+              SUPPORT_EMAIL nor OPERATOR_EMAILS is set: supportReachable in src/lib/policy.ts). */}
+          {support?.reply
+            ? <p>Stuck? <Link href="/help">The help page</Link> has answers, or <Link href="/help#contact">write to us</Link>{support?.email ? <> or email <a href={`mailto:${support.email}`}>{support.email}</a></> : null}. A person replies, and you do not need to log in.</p>
+            : <p>Stuck? <Link href="/help">The help page</Link> has answers.</p>}
         </div>
         <nav aria-label="For signers">
           <h2>For signers</h2>
@@ -94,6 +98,7 @@ export function PublicFooter() {
         <nav aria-label="Trust">
           <h2>Trust</h2>
           <Link href="/security">Security</Link>
+          <Link href="/security/certifications">Certifications</Link>
           <Link href="/security/processing">Data processing</Link>
           <Link href="/security/disclosure">Report a weakness</Link>
         </nav>

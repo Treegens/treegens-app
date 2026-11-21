@@ -10,6 +10,7 @@ import { flushComments } from './routes-comments.ts';
 import { pruneStampImages } from './stamps.ts';
 import { sweepSignIns } from './reclaim.ts';
 import { purgeSecurityLog, sendHeldAlerts } from './seclog.ts';
+import { exportSecurityHeads } from './secheads.ts';
 import { retentionTick, sweepArchiveCopies } from './records.ts';
 import { noteTickStart, noteTick } from './selfhost.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
@@ -58,6 +59,9 @@ async function tickOnce() {
     security_lines_purged: purgeSecurityLog(),
     // What a security alert held back during its hour, said in one email once the hour is over (seclog.ts).
     security_alerts_followed: await sendHeldAlerts(),
+    // Where each account's security record stands, noted once a day in a folder outside the database, when
+    // SECURITY_HEADS_DIR names one (secheads.ts).
+    security_heads_noted: exportSecurityHeads(),
     // Closed envelopes at the end of their retention period: the email 14 days before, then the purge (records.ts).
     retention: await retentionTick(),
     // Our stored archive copies about envelopes deleted or purged since, once they have left (archivemail.ts).

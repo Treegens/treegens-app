@@ -110,7 +110,9 @@ What stops working, from reading the code (`src/server/util.ts` has the function
   the old value when you rotate, and the lines written before still check. Without it, every account's admins are
   told that a line of their record does not match, until those lines have gone after `SECURITY_LOG_DAYS`. If the
   old secret leaked, whoever has it and can write the database could have rewritten lines made under it: say so
-  to the accounts concerned.
+  to the accounts concerned. If `SECURITY_HEADS_DIR` was set and its folder was out of that person's reach, the
+  daily notes there still show it: Settings, Security reads as changed for a record whose noted line no longer
+  matches.
 
 What keeps working: logins and sessions, API keys, signing links, webhooks (each has its own secret), stored files
 (they use `FILE_ENCRYPTION_KEY`), audit trails and their chains, and `/verify`.

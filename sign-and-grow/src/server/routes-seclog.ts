@@ -5,6 +5,7 @@ import { route, json } from './router.ts';
 import { all, get, run } from './db.ts';
 import { bad, now, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
+import { checkSecurityHeads } from './secheads.ts';
 import { eventView, screenView, filterSql, csvLine, CSV_HEAD, emailsOn, alertsOff, verifySecurityChain, securityWords, record, oncePerHour, type Filter } from './seclog.ts';
 import { SECURITY_ALERTS, SECURITY_ALERT_LIST, SECURITY_PAGE_MAX, SECURITY_SEARCH_MAX, isSecurityKind, type SecurityAlert } from '../lib/seclog.ts';
 import { webhookHostsRule } from '../lib/outside.ts';
@@ -57,14 +58,28 @@ route('GET', '/account/security-events/view', (c) => {
 // The same lines as a CSV file, newest first, as filtered on the screen. An admin who is signed in gets the names
 // the screen shows them. An API key gets people by their id, and by name and email address only when the account
 // sends those to its security system (PATCH /account/security, "emails").
+/** Lines read from the database and handed to the browser at a time by the CSV download. */
+export const CSV_PAGE = 2000;
 route('GET', '/account/security-events/csv', (c) => {
   const [where, p] = filterSql(c.account.id, filterOf(c.q));
   const n = get(`SELECT COUNT(*) n FROM security_events WHERE ${where}`, ...p).n;
   if (n > CSV_MAX) throw bad(`These filters match ${n} lines, and one download holds up to ${CSV_MAX}. Choose fewer days or one kind of event, and download the rest separately.`, 413);
   const emails = emailsOn(c.account.id);
   const named = c.auth?.via !== 'api_key';
-  const lines = [CSV_HEAD.map((h) => `"${h}"`).join(','), ...all(`SELECT * FROM security_events WHERE ${where} ORDER BY seq DESC`, ...p).map((r) => csvLine(r, emails, named))];
-  return new Response('﻿' + lines.join('\r\n'), { headers: { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="security-record-${now().slice(0, 10)}.csv"` } });
+  // Read and sent a page at a time, so a download of CSV_MAX lines never stands in memory as one text.
+  const enc = new TextEncoder();
+  let last: number | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(ctrl) {
+      const rows = all(`SELECT * FROM security_events WHERE ${where}${last === null ? '' : ' AND seq < ?'} ORDER BY seq DESC LIMIT ${CSV_PAGE}`, ...p, ...(last === null ? [] : [last]));
+      let out = last === null ? '\ufeff' + CSV_HEAD.map((h) => `"${h}"`).join(',') : '';
+      for (const r of rows) out += '\r\n' + csvLine(r, emails, named);
+      if (out) ctrl.enqueue(enc.encode(out));
+      if (rows.length < CSV_PAGE) ctrl.close();
+      else last = rows[rows.length - 1].seq;
+    },
+  });
+  return new Response(stream, { headers: { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="security-record-${now().slice(0, 10)}.csv"` } });
 }, 'admin');
 
 // What the screen needs around the list: how long lines are kept, the alerts, what leaves the app, whether the chain
@@ -72,7 +87,11 @@ route('GET', '/account/security-events/csv', (c) => {
 route('GET', '/account/security', (c) => {
   const a = get('SELECT * FROM accounts WHERE id=?', c.account.id);
   const off = alertsOff(a);
-  const chain = verifySecurityChain(a.id);
+  let chain = verifySecurityChain(a.id);
+  // With SECURITY_HEADS_DIR set, a record that is whole by itself is also held against the daily notes kept outside
+  // the database (secheads.ts): an older database put back, or a record rewritten with the server's secret, shows here.
+  const noted = chain.ok ? checkSecurityHeads(a.id) : null;
+  if (noted && !noted.ok) chain = { ...chain, ok: false, why: noted.why, broken_at: noted.why === 'line' ? noted.seq : null };
   return {
     days: securityLogDays(), note: securityWords(),
     alerts: SECURITY_ALERT_LIST.map((k) => ({ id: k, label: SECURITY_ALERTS[k], on: !off.includes(k) })),

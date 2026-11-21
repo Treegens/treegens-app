@@ -1,6 +1,7 @@
 import { authenticate, renewedCookie, type Auth } from './auth.ts';
 import { HttpError, bad, setOrigin, id } from './util.ts';
 import { twoStepGate } from './twostep.ts';
+import { rulesGate } from './secpolicy.ts';
 import { keyUsedFrom } from './seclog.ts';
 import type { Actor } from './envelopes.ts';
 
@@ -146,6 +147,8 @@ export async function handle(req: Request): Promise<Response> {
         }
         // An account that asks everyone for two-step login opens nothing else to a person signed in without it.
         twoStepGate(auth, `${r.method} ${r.path}`);
+        // A member whose password is shorter than the account asks chooses a longer one first (secpolicy.ts).
+        rulesGate(auth, `${r.method} ${r.path}`);
       }
       // Cookie sessions must come from our own pages. API keys are exempt.
       if (auth?.via === 'session' && req.method !== 'GET' && r.level !== 'public') {

@@ -611,6 +611,30 @@ CREATE TABLE IF NOT EXISTS impact_seen (key TEXT PRIMARY KEY, at TEXT NOT NULL);
 -- Wrong confirmation codes typed for an email address, over every login made with it (confirmcode.ts). The key is an
 -- HMAC of the address, never the address; a row is forgotten 30 days after its first guess.
 CREATE TABLE IF NOT EXISTS confirm_guesses (address_key TEXT PRIMARY KEY, wrong INTEGER NOT NULL DEFAULT 0, first_at TEXT NOT NULL);
+-- The account's own consent text (src/server/disclosure.ts). disclosure_versions: every text an admin saved, for one
+-- language, with the words as a signer reads them (sections) and their fingerprint. A version is never changed: the
+-- trigger refuses it, whatever code asks, and it is never deleted while a document refers to it. Which version is
+-- shown today is on the account (accounts.disclosure_now). disclosure_shown: which version a person was shown when
+-- they agreed on one document, by the line of the audit trail that says so (audit_seq), so no name is kept here. It
+-- goes with the document.
+CREATE TABLE IF NOT EXISTS disclosure_versions (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, language TEXT NOT NULL, number INTEGER NOT NULL,
+  fields TEXT NOT NULL, sections TEXT NOT NULL, sha256 TEXT NOT NULL, saved_by TEXT, saved_by_name TEXT, saved_at TEXT NOT NULL,
+  UNIQUE (account_id, language, number)
+);
+CREATE TRIGGER IF NOT EXISTS disclosure_versions_fixed BEFORE UPDATE ON disclosure_versions BEGIN SELECT RAISE(ABORT, 'A saved consent text is never changed.'); END;
+CREATE TABLE IF NOT EXISTS disclosure_shown (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, recipient_id TEXT NOT NULL,
+  audit_seq INTEGER, version_id TEXT NOT NULL, again INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS disclosure_shown_envelope ON disclosure_shown(envelope_id, id);
+CREATE INDEX IF NOT EXISTS disclosure_shown_version ON disclosure_shown(version_id);
+CREATE TRIGGER IF NOT EXISTS disclosure_versions_kept BEFORE DELETE ON disclosure_versions
+  WHEN EXISTS (SELECT 1 FROM disclosure_shown WHERE version_id = OLD.id) AND EXISTS (SELECT 1 FROM accounts WHERE id = OLD.account_id)
+  BEGIN SELECT RAISE(ABORT, 'A consent text that a document refers to is kept.'); END;
+-- Why a rule of an account signed a browser out (src/server/secpolicy.ts): 'idle' or 'elsewhere', by the session's
+-- id, so that browser's sign-in page can say it once. Forgotten after a day.
+CREATE TABLE IF NOT EXISTS session_ends (id TEXT PRIMARY KEY, why TEXT NOT NULL, at TEXT NOT NULL);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1134,6 +1158,13 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['accounts', 'retention_mailed_at', 'TEXT'],
   // 'Trees on the signing record' switched off: the tree and paper lines are left off the certificate (impact.ts).
   ['accounts', 'cert_impact_off', 'INTEGER NOT NULL DEFAULT 0'],
+  // What an account chose for itself (src/server/tenantpolicy.ts). impact_display: 'on' or 'off' for the tree lines on
+  // screens and in emails; ai_helper: 'on' or 'off' for AI answers in the help chat. NULL in either: not chosen, so the
+  // server's default applies (on, or off under DEPLOYMENT_PROFILE=government). white_label is kept for a later feature
+  // and read by nothing yet.
+  ['accounts', 'impact_display', 'TEXT'],
+  ['accounts', 'ai_helper', 'TEXT'],
+  ['accounts', 'white_label', 'INTEGER NOT NULL DEFAULT 0'],
   ['envelopes', 'retention_days', 'INTEGER'],
   ['envelopes', 'purged_at', 'TEXT'],
   ['envelopes', 'purged_level', 'TEXT'],
@@ -1156,6 +1187,24 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // so the "no" holds for every spelling. why: 'spam' when the email that asked was marked as spam, else the button.
   ['archive_refused', 'email_key', 'TEXT'],
   ['archive_refused', 'why', 'TEXT'],
+  // The account's own consent text (src/server/disclosure.ts). disclosure_now: which saved version is shown today, by
+  // language, as JSON ({"en": "<version id>"}); empty when the account shows only our own words. disclosure_each_visit:
+  // 1 when the consent screen is shown every time the link is opened, 0 for once for each document.
+  ['accounts', 'disclosure_now', 'TEXT'],
+  ['accounts', 'disclosure_each_visit', 'INTEGER NOT NULL DEFAULT 0'],
+  // The sign-in rules of an account (src/server/secpolicy.ts). accounts.min_password_length: members choose a password
+  // of at least this many characters (empty: 8). idle_minutes: a browser not used for this long is signed out (empty:
+  // never), idle_since: when that rule was last set, so no clock starts before it. one_session: one browser at a time.
+  // sessions.seen_at, seen_account: when the session last counted as used, and in which account that was counted.
+  // users.pw_below: this person's password is shorter than a rule of this many characters, noticed when they signed
+  // in with it. Never the length itself, and empty for everyone who breaks no rule.
+  ['accounts', 'min_password_length', 'INTEGER'],
+  ['accounts', 'idle_minutes', 'INTEGER'],
+  ['accounts', 'idle_since', 'TEXT'],
+  ['accounts', 'one_session', 'INTEGER NOT NULL DEFAULT 0'],
+  ['sessions', 'seen_at', 'TEXT'],
+  ['sessions', 'seen_account', 'TEXT'],
+  ['users', 'pw_below', 'INTEGER'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

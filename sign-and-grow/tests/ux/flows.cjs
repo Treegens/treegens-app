@@ -943,9 +943,14 @@ async function flowF(f, signer) {
   await f.screen('Signing: who sent it, and the consent');
   const footHelp = await visible(p.locator('footer').getByRole('link', { name: /help/i })).count();
   f.note(footHelp ? 'There is also a Help link in the footer, below the consent text.' : 'No Help link in the footer.');
-  await f.press(byRole(p, 'button', /other actions|more|menu|help/i), 'Other actions', () => p.getByRole('dialog').first().waitFor());
-  await f.screen('Other actions');
-  await f.press(byRole(p.getByRole('dialog').first(), 'button', /^help/i), 'Help in Other actions', () => p.getByRole('dialog').filter({ hasText: /question|helper|person/i }).first().waitFor());
+  // Help is one button in the top bar (charter 2.6). An older page had it inside Other actions: still followed.
+  if (await visible(p.locator('header').getByRole('button', { name: /^help/i })).count()) {
+    await f.press(byRole(p.locator('header'), 'button', /^help/i), 'Help in the top bar', () => p.getByRole('dialog').filter({ hasText: /question|helper|person/i }).first().waitFor());
+  } else {
+    await f.press(byRole(p, 'button', /other actions|more|menu|help/i), 'Other actions', () => p.getByRole('dialog').first().waitFor());
+    await f.screen('Other actions');
+    await f.press(byRole(p.getByRole('dialog').first(), 'button', /^help/i), 'Help in Other actions', () => p.getByRole('dialog').filter({ hasText: /question|helper|person/i }).first().waitFor());
+  }
   await f.screen('Help');
   const box = visible(p.getByRole('dialog').first().getByRole('textbox')).first();
   await f.type(box, 'I cannot sign this today. What can I do?', 'the question');

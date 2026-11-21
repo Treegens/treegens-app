@@ -6,6 +6,7 @@ import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { treesInInvite, noteFinished } from './impact.ts';
+import { showsTrees } from './tenantpolicy.ts';
 import { mailLine } from '../lib/impactwords.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
 import { STANDING_PAYMENT, personGen, lastExpiry, swapRefusal, reholdEnvelope, pastDateText, renewalPending } from './credits.ts';
@@ -1412,7 +1413,7 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
       ...(r.note ? [`Note for you: ${r.note}`] : []),
       ...(r.access_code ? [`You will need an access code to open it. ${sender.name} will give it to you separately. It is not in this email.`] : []),
       // To someone who signs with a paid signature, and nobody else: what finishing plants (impact.ts).
-      ...(kind === 'new' && treesInInvite(r) ? [mailLine(treesInInvite(r), r.role === 'inperson' ? r.name : '')] : []),
+      ...(kind === 'new' && showsTrees(e.account_id) && treesInInvite(r) ? [mailLine(treesInInvite(r), r.role === 'inperson' ? r.name : '')] : []),
       `Reply to this email to reach ${sender.name} (${sender.email}).`,
     ],
     cta: { label: done ? (e.status === 'completed' ? 'View completed document' : 'View document') : r.role === 'cc' ? 'View document' : r.role === 'viewer' ? 'View document' : `${r.role === 'approver' ? 'Review and approve' : r.role === 'witness' ? 'Open and witness' : 'Review and sign'}${kind === 'again' ? ' again' : ''}`, url: signUrl(r) },
@@ -1594,7 +1595,8 @@ async function completeEnvelope(e: any) {
   const i = impactOf(fresh.sheets);
   const lines = [
     pdf ? 'Everyone has finished. The signed document and its certificate of completion are ready.' : 'Everyone has finished. The signed document and its certificate of completion are being prepared and will be at the link below shortly.',
-    `Because this was signed on screen, about ${fmtNum(i.sheets)} ${i.sheets === 1 ? 'sheet' : 'sheets'} of paper and ${fmtNum(i.litresWater)} litres of water were not used. That is an estimate: ${baseUrl()}/impact shows how it is worked out.`,
+    // The paper estimate belongs to 'Trees on screens and emails' (tenantpolicy.ts): an account that switched it off gets none.
+    ...(showsTrees(e.account_id) ? [`Because this was signed on screen, about ${fmtNum(i.sheets)} ${i.sheets === 1 ? 'sheet' : 'sheets'} of paper and ${fmtNum(i.litresWater)} litres of water were not used. That is an estimate: ${baseUrl()}/impact shows how it is worked out.`] : []),
   ];
   const attachments = pdf && pdf.length < 8_000_000 ? [{ filename: `${(fresh.subject || 'signed').replace(/[^\w .-]+/g, '_').slice(0, 80)}.pdf`, content: Buffer.from(pdf) }] : undefined;
   // The fingerprint of the signed PDF, so every person holds a reference of their own outside this service, and
@@ -2116,7 +2118,8 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   await advance(e.id);
 }
 
-export async function declineRecipient(e: any, r: any, reason: string, actor: Actor) {
+// `told`: another way to tell the sender, for a decline that is really a request for paper (askForPaper in disclosure.ts).
+export async function declineRecipient(e: any, r: any, reason: string, actor: Actor, told?: (x: { e: any; r: any }) => Promise<void>) {
   // A second Decline (a double tap, a retry) is a conflict with the first: 409, like a second Finish.
   if (r.status === 'declined') throw bad('This envelope is no longer open for signing.', 409);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw notOpen(e, r);
@@ -2136,7 +2139,8 @@ export async function declineRecipient(e: any, r: any, reason: string, actor: Ac
   });
   audit(e.id, actor, 'Declined', `${r.name}: ${str(reason, 500)}`);
   fireWebhooks(e.account_id, 'envelope.declined', e.id, { recipient_id: r.id });
-  await notifySender(e, 'problems', `Declined: ${e.subject}`, `${r.name} declined to sign`, [`Reason: ${reason}`, 'The envelope is closed. You can clone it, change what needs changing and send it again.']);
+  if (told) await told({ e, r });
+  else await notifySender(e, 'problems', `Declined: ${e.subject}`, `${r.name} declined to sign`, [`Reason: ${reason}`, 'The envelope is closed. You can clone it, change what needs changing and send it again.']);
   // The notice to the others names who declined, and a name is something the sender wrote: a sender could put
   // themselves on an envelope under a name that carries a lure and decline. So where the checks apply, the name is
   // read with the rest first, and left out when together they read like a fake notice. An envelope that reads

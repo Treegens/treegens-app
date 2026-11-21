@@ -24,6 +24,7 @@ import { seclogPaths, securityEventSchema } from './openapi-seclog.ts';
 import { retentionPaths } from './openapi-retention.ts';
 import { archivePaths } from './openapi-archive.ts';
 import { impactPaths } from './openapi-impact.ts';
+import { disclosurePaths } from './openapi-disclosure.ts';
 import { customFieldPaths, customFieldsProp, documentFieldsProp, customListParams, webhookCustomProps } from './openapi-customfields.ts';
 import { localeProp, rowLanguageProp, localePaths } from './openapi-locales.ts';
 import { STAMP_IS } from '../lib/stamps.ts';
@@ -302,7 +303,7 @@ export function openapi() {
       '/print-check': { post: { summary: 'Ask whether text can be printed on the signed PDF, before it is saved or sent', description: 'For each text that holds a character the signed PDF has no font for, the answer says where and which characters. See "print_problems" on GET /envelopes/{id} for the scripts that print. Nothing is saved by asking.',
         requestBody: body({ type: 'object', required: ['texts'], properties: { texts: { type: 'array', items: { type: 'object', properties: { where: { ...str, description: 'Your own label for this text. It comes back with the answer.' }, text: str } } } } }),
         responses: ok({ type: 'object', properties: { problems: { type: 'array', items: { type: 'object', properties: { where: str, chars: str } } } } }) } },
-      '/export': { get: { summary: 'A ZIP of signed PDFs, audit trails and a CSV index', description: 'Everything the caller can see: their own envelopes for a member, the whole account for an admin. A completed envelope its sender deleted is not in it.', parameters: [{ name: 'ids', in: 'query', description: 'Comma separated envelope ids. Leave out for everything.', schema: str }, { name: 'bulk', in: 'query', description: 'A bulk batch id, to export just that batch.', schema: str }], responses: { 200: { description: 'A ZIP file', content: { 'application/zip': { schema: { type: 'string', format: 'binary' } } } } } } },
+      '/export': { get: { summary: 'A ZIP of signed PDFs, audit trails and a CSV index', description: 'Everything the caller can see: their own envelopes for a member, the whole account for an admin. A completed envelope its sender deleted is not in it. Where a document was made from a Word file or the like, the file as it was uploaded is in originals/, in a folder for its envelope; one that does not fit or cannot be read is named in README.txt.', parameters: [{ name: 'ids', in: 'query', description: 'Comma separated envelope ids. Leave out for everything.', schema: str }, { name: 'bulk', in: 'query', description: 'A bulk batch id, to export just that batch.', schema: str }], responses: { 200: { description: 'A ZIP file', content: { 'application/zip': { schema: { type: 'string', format: 'binary' } } } } } } },
       '/billing': { get: {
         summary: 'The plan, the signatures and when each of them expires',
         description: `Read only; changing the plan, paying and refunds need a person signed in to the app. Signatures expire: ${expiryRuleText()} Every number here is what can still be used: signatures whose date has passed and that nobody holds are not counted (they are written off as "expired" lines of the ledger, and the plan history says how many). ${HELD_EXPIRY_TEXT}`,
@@ -379,6 +380,8 @@ export function openapi() {
       ...impactPaths(),
       // The account's custom fields, such as a case number (src/server/openapi-customfields.ts).
       ...customFieldPaths(),
+      // The account's own consent text, and asking for paper instead (src/server/openapi-disclosure.ts).
+      ...disclosurePaths(),
       '/public/check/report': { post: { summary: 'Report the email a security code came from, without opening its signing link', description: 'Counts exactly like a report made on the signing page: enough different recipients reporting one account pause its sending until a person has looked. The code of an email whose document the sender has deleted since still works: the report is filed against the account that sent it, and the answer has "deleted": true. A report from the visitor of a public form is kept for a person to look at and does not count towards the pause, also after the owner deleted that start. The code of an email to a member of a signing group reports as that member, and nothing more is emailed to that member about the document ("mail_stopped": true), as when they report it on their signing page; the other members are not affected. Answers 404 for a code we do not recognise, and for a code whose document and account are both gone.', security: [], requestBody: body({ type: 'object', required: ['code'], properties: { code: str, reason: { type: 'string', enum: ABUSE_REASONS }, detail: str } }), responses: ok({ type: 'object', properties: { ok: { type: 'boolean' }, mail_stopped: { type: 'boolean' } } }) } },
     },
   };

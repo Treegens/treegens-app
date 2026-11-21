@@ -7,7 +7,8 @@
 //   sealPdf()       appends the seal (sealpdf.ts) and fills it with the CMS (sealcms.ts), at B-T when a time-stamp
 //                   service gives a time-stamp that checks out (tsa.ts), else at B-B
 //   checkSeal()     for /verify: whether a file carries a seal, whether it holds, and whether it is ours
-//   existingSignatures()  how many signed signature fields an uploaded PDF has (they do not survive in the signed copy)
+//   existingSignatures()  how many signatures an uploaded PDF carries, in its form or anywhere in its bytes (they do not
+//                         survive in the signed copy)
 //
 // finishPdf in finalpipe.ts decides the plan once, renders the certificate with it and seals; the stored SHA-256 is
 // of the sealed file. With no seal settings nothing here runs and the file is byte for byte what it was before.
@@ -244,16 +245,39 @@ function timeStampOf(token: Buffer, signature: Buffer): { time: string; trusted:
 // ---- Signatures already in an uploaded PDF ---------------------------------------------------
 
 /**
- * How many signed signature fields a PDF has. The signed copy is built from flattened pages (flatPages in pdf.ts),
- * so none of those signatures survives in it: the editor and the API say so when such a file is uploaded.
+ * How many signatures a PDF already carries. The signed copy is built from flattened pages (flatPages in pdf.ts),
+ * so none of them survives in it: the editor and the API say so when such a file is uploaded.
+ *
+ * Counted two ways, and the larger number wins. The form's own signed signature fields, which is where a reader
+ * looks. And the file's bytes: every signature (and every document time stamp) names the bytes it covers in a
+ * /ByteRange of four numbers, written in the clear because the signature is worked out over the file around it.
+ * The second way also finds a signature that is not listed in the form's fields, and one in a file the PDF library
+ * cannot open, where the first way found nothing and the sender was told nothing.
  */
 export async function existingSignatures(pdf: Uint8Array): Promise<number> {
+  let inForm = 0;
   try {
     const doc = await PDFDocument.load(pdf, { updateMetadata: false, ignoreEncryption: true });
-    return doc.getForm().getFields().filter((f) => f instanceof PDFSignature && f.acroField.dict.get(PDFName.of('V'))).length;
+    inForm = doc.getForm().getFields().filter((f) => f instanceof PDFSignature && f.acroField.dict.get(PDFName.of('V'))).length;
   } catch {
-    return 0;
+    inForm = 0;
   }
+  return Math.max(inForm, signaturesInBytes(pdf));
+}
+
+/** Signature dictionaries found in the bytes themselves: a /ByteRange of four numbers with /Contents close by. */
+export function signaturesInBytes(pdf: Uint8Array): number {
+  const s = Buffer.from(pdf.buffer, pdf.byteOffset, pdf.byteLength).toString('latin1');
+  const re = /\/ByteRange\s*\[\s*\d+\s+\d+\s+\d+\s+\d+\s*\]/g;
+  let n = 0;
+  for (let m = re.exec(s); m; m = re.exec(s)) {
+    // The dictionary the range sits in: back to its "<<", forward to "endobj" (the hex of the signature can be long).
+    const from = Math.max(0, s.lastIndexOf('obj', m.index));
+    const end = s.indexOf('endobj', m.index);
+    const dict = s.slice(from, end < 0 ? Math.min(s.length, m.index + 200_000) : end);
+    if (/\/Contents\b/.test(dict)) n++;
+  }
+  return n;
 }
 
 

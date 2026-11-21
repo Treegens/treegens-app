@@ -210,12 +210,12 @@ export default function Help() {
           <QA id="after-cancel" q="What happens to my documents when I cancel?">
             <p>Nothing. Cancelling or a failed payment deletes nothing and locks nothing.</p>
             <p>Every document, audit trail and receipt stays in the account. Documents that are already out can still be signed, and the signatures you have left can be used until their own dates (the Plan page shows each one).</p>
-            <p>You can take everything with you as one ZIP file at any time, on any plan: Settings, then Your data, then <b>Export everything</b>. It is free and it keeps working after you cancel.</p>
+            <p>You can take everything with you as one ZIP file at any time, on any plan: Settings, then Records and data, then <b>Export everything</b>. It is free and it keeps working after you cancel.</p>
           </QA>
 
           <QA id="close" q="How do I close my account?">
             <p>Closing is separate from cancelling. If you only want to stop paying, cancel the plan and keep your documents.</p>
-            <p>To close: Settings, then Your data, then <b>Close my account</b>. Any subscription stops at once.</p>
+            <p>To close: Settings, then Records and data, then <b>Close my account</b>. Any subscription stops at once.</p>
             <p><b>You have {closeGraceDays} days to undo it.</b> Nothing is deleted during that time. Changed your mind, or closed it by mistake? Sign in again and the account comes straight back.</p>
             <p>While it is closing, nothing new starts in it: nothing can be sent, nobody can be invited or join, and its API keys are switched off. People who already have a document can still sign it. {CLOSING_REMINDER_DAYS} days before the end we email you the date, how to keep the account and how to take a copy of everything first.</p>
             <p>After {closeGraceDays} days it is removed for good. Export first if you want copies. You can also choose to delete everything immediately. <b>What is deleted:</b></p>

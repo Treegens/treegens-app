@@ -496,7 +496,7 @@ test('nobody is invited into, joins or sends from an account that is being close
   const said = text(m.html);
   assert.match(said, new RegExp(`${CLOSING_REMINDER_DAYS - 1} days left`));
   assert.match(said, /To keep the account: sign in before that day/);
-  assert.match(said, /To take a copy of everything first: sign in, go to Settings, then Your data, and choose Export everything/);
+  assert.match(said, /To take a copy of everything first: sign in, go to Settings, then Records and data, and choose Export everything/);
   assert.match(said, new RegExp(`close it again afterwards.*new ${CLOSE_GRACE_DAYS} days`));
   await cron.tick();
   assert.equal(reminders().length, 1, 'said once');

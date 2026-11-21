@@ -277,6 +277,36 @@ function fund(accountId: string) {
     cur.held--;
     better.held++;
   }
+  renewalGap(accountId, lots, t);
+}
+
+// The hour between the end of a paid month and its renewal payment (renewalPending): the new month's signatures are
+// not there yet, so a signature someone signs with in that gap is taken from a top-up, which the new month would
+// have paid for had it been there (the soonest to expire is used first). When the renewal payment arrives, those
+// signatures move to the new month while it has room, and the top-up gets them back with its own later date. Only
+// when the payment came within RENEWAL_GAP_HOURS of the old month's end: a plan started again weeks later is a new
+// start, not a renewal. Nothing moves twice: a line that has moved no longer sits in a top-up.
+export const RENEWAL_GAP_HOURS = 24;
+function renewalGap(accountId: string, lots: Lot[], t: string) {
+  for (const p of lots.filter((l) => l.source === 'plan' && liveAt(l, t) && freeIn(l) > 0)) {
+    const ended = lots.filter((x) => x.source === 'plan' && x.id !== p.id && x.expires_at && x.expires_at <= p.at
+      && Date.parse(p.at) - Date.parse(x.expires_at) <= RENEWAL_GAP_HOURS * 3600_000).map((x) => x.expires_at!).sort().at(-1);
+    if (!ended) continue;
+    for (const d of all(`SELECT d.id, d.credit_id, d.lot_id, d.n FROM credit_draws d JOIN credits c ON c.id=d.credit_id
+        WHERE c.account_id=? AND c.reason='signature' AND c.at >= ? AND c.at < ? AND d.n > 0 AND d.lot_id IS NOT NULL ORDER BY d.id`, accountId, ended, p.at)) {
+      const from = lots.find((l) => l.id === d.lot_id);
+      if (!from || from.source !== 'topup' || soonest(p, from) >= 0) continue;
+      const k = Math.min(d.n, freeIn(p));
+      if (k <= 0) break;
+      if (k === d.n) run('UPDATE credit_draws SET lot_id=? WHERE id=?', p.id, d.id);
+      else {
+        run('UPDATE credit_draws SET n=? WHERE id=?', d.n - k, d.id);
+        addDraw(d.credit_id, p.id, k);
+      }
+      p.drawn += k;
+      from.drawn -= k;
+    }
+  }
 }
 
 // What a lot is, in the words of the plan history.
@@ -670,7 +700,31 @@ export function paidSignatureFor(recipientId: string): boolean {
     ? get('SELECT lot_id FROM credit_draws WHERE credit_id=? AND n > 0 AND lot_id IS NOT NULL ORDER BY id LIMIT 1', line.id)?.lot_id
     : get('SELECT lot_id FROM credit_holds WHERE account_id=? AND key=?', r.account_id, holdKey(ref))?.lot_id;
   const l = lotId ? get('SELECT * FROM credit_lots WHERE id=?', lotId) : null;
+  return paymentStands(l);
+}
+// A lot that was paid for, whose payment still stands: not refunded in full and not disputed (or the dispute was won).
+function paymentStands(l: { paid?: number | boolean; ref?: string } | null | undefined): boolean {
   if (!l?.paid) return false;
   const p = get('SELECT amount_cents, refunded_cents, disputed FROM payments WHERE id=?', l.ref);
   return !!p && p.amount_cents > 0 && p.refunded_cents < p.amount_cents && (p.disputed == null || p.disputed === 'won');
+}
+
+/**
+ * Before sending: would the next `need` signatures all come out of payments that stand? They are used
+ * soonest-to-expire first, the same order a send holds them in (soonest), so this walks the lots that way. True only
+ * when every one of them would: a free one in the way, too few left, or a payment that went back, and the answer is
+ * no. It is a forecast for the sentence about trees at the review step (allPaidForecast in impact.ts), which says
+ * nothing unless this is true; what is said to a signer is decided again from the held signature (paidSignatureFor).
+ */
+export function paidForecast(accountId: string, need: number): boolean {
+  if (!creditsEnabled() || !accountId || !(need > 0)) return false;
+  settle(accountId);
+  const t = now();
+  let left = need;
+  for (const l of loadLots(accountId).filter((x) => liveAt(x, t) && freeIn(x) > 0).sort(soonest)) {
+    if (!paymentStands(l)) return false;
+    left -= freeIn(l);
+    if (left <= 0) return true;
+  }
+  return false;
 }

@@ -102,7 +102,7 @@ export function HelpChat({ screen, link, code, who, actions, onClose }: {
 
   useEffect(() => {
     let live = true;
-    fetch('/api/public/chat', { credentials: 'same-origin' }).then((r) => r.json()).then((d) => live && d && typeof d.ai === 'boolean' && setStatus(d)).catch(() => {});
+    fetch(`/api/public/chat${link ? `?link=${encodeURIComponent(link)}` : ''}`, { credentials: 'same-origin' }).then((r) => r.json()).then((d) => live && d && typeof d.ai === 'boolean' && setStatus(d)).catch(() => {});
     return () => {
       live = false;
     };

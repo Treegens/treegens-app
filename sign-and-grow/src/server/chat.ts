@@ -70,7 +70,9 @@ const fp = (kind: string, v: string) => `${kind}:${hmac(`chat-limit:${kind}:${v}
 export const countKey = (kind: 'ip' | 'link' | 'account', v: string) => fp(kind, kind === 'ip' ? addressKey(v) : v);
 type Bucket = { which: ChatLimit; key: string; slot: string; max: number; until: Date };
 /** `gone` is the request's own signal: it fires when the page that asked goes away (the dialog closed, the tab too). */
-export type Who = { ip: string; link?: string | null; account?: string | null; gone?: AbortSignal | null };
+// noModel: the account this person belongs to, or whose document they are signing, switched AI answers off
+// (src/server/tenantpolicy.ts). Their question never goes to the model; it is answered as on a server without one.
+export type Who = { ip: string; link?: string | null; account?: string | null; gone?: AbortSignal | null; noModel?: boolean };
 function bucketsFor(who: Who, t = new Date()): Bucket[] {
   const day = `d:${t.toISOString().slice(0, 10)}`, minute = `m:${t.toISOString().slice(0, 16)}`;
   const nextMinute = new Date(Math.floor(t.getTime() / 60_000) * 60_000 + 60_000);
@@ -161,7 +163,7 @@ export async function answer(c: Cleaned, screen: ChatScreen, who: Who): Promise<
   const p = chatProvider();
   // No provider, no key, or SUPPORT_CHAT_DAILY_LIMIT=0: no model answers on this server at all, which is not a limit
   // that was reached. The dialog says the same (GET /public/chat answers ai: false).
-  if (!p || !chatModelOn()) return builtIn(c, 'off', undefined, screen);
+  if (!p || !chatModelOn() || who.noModel) return builtIn(c, 'off', undefined, screen);
   const ok = admit(who);
   if (!ok.ok) {
     const until = `${ok.until.toISOString().slice(11, 16)} UTC`;

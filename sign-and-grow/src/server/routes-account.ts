@@ -22,6 +22,7 @@ import { redeemCode } from './routes-billing.ts';
 import { emailProblem } from './bounces.ts';
 import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
+import { clientPolicy } from './tenantpolicy.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
 import { forgottenFile, disputeFacts } from './evidence.ts';
 import { sealForVerify } from './seal.ts';
@@ -29,6 +30,8 @@ import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe, s
 // The security record of each account: one line where something happens (seclog.ts).
 import { record, signedIn, signedUp, signInFailed, settingsChanged } from './seclog.ts';
 import { converterOn } from './convert.ts';
+import { newPasswordOk, notePassword, inviteAccount, rulesMe, endedWhy, forgetEnd } from './secpolicy.ts';
+import { readCookie } from './auth.ts';
 import { newConfirmCode, confirmWithCode, codesOpen } from './confirmcode.ts';
 import { showCode, CONFIRM_CODE_HOURS } from '../lib/confirm.ts';
 
@@ -110,7 +113,8 @@ route('POST', '/auth/signup', async (c) => {
   const password = str(b.password, 200);
   if (!name) throw bad('Tell us your name.');
   if (!isEmail(email)) throw bad('Enter a valid email address.');
-  if (password.length < 8) throw bad('Use a password of at least 8 characters.');
+  // Long enough for the team being joined, and not a password from a leak (secpolicy.ts, pwned.ts).
+  await newPasswordOk(password, { accounts: [inviteAccount(b.invite)] });
   if (get('SELECT id FROM users WHERE email=?', email)) throw bad(b.invite ? 'You already have a GrowSigning login with this address. Sign in with it and the invitation is accepted.' : 'An account with this email already exists. Sign in instead.', 409);
   const made = await createLogin(c, { name, email, passwordHash: hashPassword(password), invite: b.invite, code: b.code });
   return { user: publicUser(made.user) };
@@ -167,6 +171,8 @@ route('POST', '/auth/login', async (c) => {
     if (u) signInFailed(c, u, 'wrong_password');
     throw bad('That email and password do not match.', 401);
   }
+  // The one moment we hold the password: whether it is shorter than a team of theirs asks is noted (secpolicy.ts).
+  notePassword(u.id, str(b.password, 200), [inviteAccount(b.invite)]);
   const r = await signInAs(c, u, b.invite);
   // Held for the second step: nothing about the login goes back yet, not even that the password was right.
   return 'two_step' in r ? r : { user: publicUser(u), ...r };
@@ -295,7 +301,9 @@ route('POST', '/auth/reset', async (c) => {
   const b = await c.body();
   const r = get('SELECT * FROM password_resets WHERE token_hash=? AND expires_at > ?', sha256(str(b.token)), now());
   if (!r) throw bad('This reset link has expired. Ask for a new one.');
-  if (str(b.password, 200).length < 8) throw bad('Use a password of at least 8 characters.');
+  await newPasswordOk(str(b.password, 200), { userId: r.user_id });
+  // The check above waited for an answer: the link is looked at once more, so it still chooses one password only.
+  if (!get('SELECT 1 x FROM password_resets WHERE token_hash=? AND user_id=? AND expires_at > ?', r.token_hash, r.user_id, now())) throw bad('This reset link has expired. Ask for a new one.');
   const hash = hashPassword(str(b.password, 200));
   // Opening this link shows that the address belongs to whoever is choosing the password now. If nobody had shown
   // that before, whatever else leads into the login was put there by someone who never did: it is cut off here, so
@@ -315,6 +323,7 @@ route('POST', '/auth/reset', async (c) => {
     return cut;
   });
   // A sign-in that typed the old password and waits for its code ends (twostep.ts).
+  notePassword(r.user_id, str(b.password, 200));
   await passwordChanged({ id: r.user_id }, 'email');
   await tellRemoved(get('SELECT email FROM users WHERE id=?', r.user_id), removed, 'You chose a password for your GrowSigning login with the link we emailed to you.');
   // two_step: the next sign-in asks for the code as well, because a reset by email is not a second step (twostep.ts).
@@ -334,7 +343,13 @@ route('POST', '/auth/switch', async (c) => {
 route('GET', '/me', (c) => {
   // handed_over: this browser is signed in, but was handed to someone to sign in person and is locked until its
   // owner types their password. The app shows the screen that asks for it, not the sign-in page.
-  if (!c.auth) return { user: null, ...(handedOver(c.req) ? { handed_over: handedOver(c.req) } : {}) };
+  if (!c.auth) {
+    // A browser that a sign-in rule signed out hears why once, for the sign-in page to say (secpolicy.ts).
+    const cookieToken = readCookie(c.req, SESSION_COOKIE);
+    const why = endedWhy(cookieToken);
+    if (why) forgetEnd(cookieToken);
+    return { user: null, ...(handedOver(c.req) ? { handed_over: handedOver(c.req) } : {}), ...(why ? { signed_out: why } : {}) };
+  }
   const a = c.account;
   // The browser says which time zone it is in. Emails with dates in them (renewals, cancellations) use it, so the
   // day in the email is the day on the screen.
@@ -349,6 +364,8 @@ route('GET', '/me', (c) => {
     user: publicUser(c.user, c),
     role: c.role,
     account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || null, default_locale: defaultFor(a), subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
+    // What the account switched on or off for itself (tenantpolicy.ts): { impact_display, ai_helper, white_label }.
+    policy: clientPolicy(a.id),
     admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
     members: get('SELECT COUNT(*) n FROM memberships WHERE account_id=?', a.id).n,
     ...trustInfo(c),
@@ -367,6 +384,8 @@ route('GET', '/me', (c) => {
     // Two-step login: whether it is on, and whether this account asks for it while it is not (setup_required: the app
     // shows the screen that sets it up and nothing else). See twostep.ts.
     two_step: twoStepMe(c),
+    // The sign-in rules of this account that the app acts on: the idle sign-out and a password that is too short.
+    ...rulesMe(c),
   };
 }, 'public');
 
@@ -391,9 +410,11 @@ route('POST', '/me/password', async (c) => {
   // a link sent to their address (POST /me/signin/password-link), which shows the mailbox is theirs.
   if (!hasPassword(c.user)) throw bad(`This login has no password yet. Under Settings, Security, Ways to sign in, choose "Email me a link to set a password". The link goes to ${c.user.email}.`);
   if (!checkPassword(str(b.current, 200), c.user.password_hash)) throw bad('Your current password is not right.');
+  // Before the code is asked for: a password that is refused must not use up the code that was typed with it.
+  await newPasswordOk(str(b.password, 200), { userId: c.user.id });
   await needCode(c, b.code, 'change your password');
-  if (str(b.password, 200).length < 8) throw bad('Use a password of at least 8 characters.');
   run('UPDATE users SET password_hash=? WHERE id=?', hashPassword(str(b.password, 200)), c.user.id);
+  notePassword(c.user.id, str(b.password, 200));
   run('DELETE FROM sessions WHERE user_id=? AND id != ?', c.user.id, c.auth?.sessionId || '');
   record('password.changed', { c, member: c.user.id, about: ['user', c.user.id] });
   // A sign-in that typed the old password and waits for its code ends, and a reset by email under way stops.
@@ -531,7 +552,7 @@ route('DELETE', '/account/members/:id', async (c) => {
   if (m.role === 'owner') throw bad('The owner cannot be removed. Make someone else the owner first.');
   // Nobody removes themselves: whoever leaves must not be the one who keeps their envelopes, and with them the
   // signed copies that arrive later. Another admin does it, and chooses who takes over.
-  if (c.params.id === c.user.id) throw bad(`You cannot remove yourself from ${c.account.name} this way. To leave, use "Leave this team" on the Team tab (POST /account/leave): you choose who takes over your envelopes, templates and bulk sends, and nothing you sent is lost. To give up your whole login instead, use Settings, Your data.`);
+  if (c.params.id === c.user.id) throw bad(`You cannot remove yourself from ${c.account.name} this way. To leave, use "Leave this team" on the Team tab (POST /account/leave): you choose who takes over your envelopes, templates and bulk sends, and nothing you sent is lost. To give up your whole login instead, use Settings, Records and data.`);
   // Their envelopes, templates and bulk sends stay with the team: they pass to a chosen successor, or to whoever
   // removed them. The successor is someone who stays. A name we do not know is refused, never quietly replaced.
   const to = c.q.get('to');
@@ -592,7 +613,7 @@ route('POST', '/account/leave', async (c) => {
   const { others, heir, keys, ...left } = tx(() => {
     const role = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', c.account.id, me.id)?.role;
     if (!role) throw bad(`You are no longer on the team ${c.account.name}, so there was nothing to leave. Nothing was changed. Reload the page to see the workspace you are in now.`, 409);
-    if (role === 'owner') throw bad(`You own ${c.account.name}, so you cannot leave it. Make someone else the owner first (Team tab, Make owner) and then leave, or close the account under Settings, Your data.`);
+    if (role === 'owner') throw bad(`You own ${c.account.name}, so you cannot leave it. Make someone else the owner first (Team tab, Make owner) and then leave, or close the account under Settings, Records and data.`);
     const others: any[] = all('SELECT m.user_id, m.role, u.name, u.email, u.closing_at FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id!=?', c.account.id, me.id);
     // The successor is someone who stays. Without a choice it is the owner. A name we do not know is refused.
     const heir = to ? others.find((o) => o.user_id === to) : others.find((o) => o.role === 'owner');
