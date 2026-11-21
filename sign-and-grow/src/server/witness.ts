@@ -364,7 +364,7 @@ export const signerTold = (s: any): boolean => !!s && s.role !== 'inperson' && !
 
 /** "I was not there" (POST /sign/:token/not-present). The document stays unwitnessed until another witness signs. */
 export async function notPresent(e: any, w: any, note: any, actor: Actor) {
-  if (!isWitness(w)) throw bad('Only a witness can say this. If you are not the right person to sign, use "Assign to someone else" or decline.');
+  if (!isWitness(w)) throw bad('Only a witness can say this. If you are not the right person to sign, use "Pass to someone else" or decline.');
   if (w.witness_absent_at) throw bad('You have already told us that you were not there. There is nothing more for you to do.', 409);
   if (e.status !== 'sent' || (w.status !== 'sent' && w.status !== 'viewed')) throw notOpen(e, w);
   const s = signerOf(e, w);

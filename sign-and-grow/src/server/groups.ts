@@ -748,7 +748,7 @@ const toldText = (t: Told) =>
  * sender's business), and their own link is a member's link again.
  */
 export async function handBack(e: any, r: any, reason: any, actor: Actor): Promise<void> {
-  if (!r?.group_name || !r.claimed_by) throw bad('This document was not sent to a group, so there is no group to hand it back to. To pass it to another person, choose "Assign to someone else".');
+  if (!r?.group_name || !r.claimed_by) throw bad('This document was not sent to a group, so there is no group to hand it back to. To pass it to another person, choose "Pass to someone else".');
   if (r.status === 'completed') throw bad('You have already finished this document, so it can no longer be handed back.', 409);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw notOpen(e, r);
   const why = str(reason, 300).trim();

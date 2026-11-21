@@ -345,7 +345,7 @@ test('a signature field the signer\'s own answer hides is not asked for, and one
   const box = mine.find((f: any) => f.type === 'checkbox').id, own = mine.find((f: any) => f.type === 'initials').id;
   let r = await c.post(`/sign/${tok}/complete`, { values: { [box]: '1', [own]: '1' }, initials_png: PNG });
   assert.equal(r.status, 400);
-  assert.match(r.data.error, /Adopt a signature before finishing/, 'ticked: the signature is needed');
+  assert.match(r.data.error, /Your signature is missing\. Make it on the page, then finish again\./, 'ticked: the signature is needed');
   r = await c.post(`/sign/${tok}/complete`, { values: { [box]: '', [own]: '1' }, initials_png: PNG });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(id('x'), undefined);
@@ -790,7 +790,7 @@ test('nobody finishes as signed without a picture: what is shown at Finish is wo
   // A file id that does not exist is not kept, so the signature stays on the page and needs a picture.
   let r = await m.c.post(`/sign/${m.tok}/complete`, { values: { [m.id('Signed paper copy')!]: 'file_doesnotexist', [m.id('Sign here')!]: '1' } });
   assert.equal(r.status, 400, JSON.stringify(r.data));
-  assert.match(r.data.error, /Adopt a signature before finishing/);
+  assert.match(r.data.error, /Your signature is missing\. Make it on the page, then finish again\./);
   assert.equal(db.get("SELECT status FROM recipients WHERE email='mal@logic.example'").status, 'viewed', 'nothing was signed, the claim was undone');
   assert.equal(db.all("SELECT 1 FROM audit WHERE envelope_id=? AND action='Signed'", e.id).length, 0);
   r = await m.c.post(`/sign/${m.tok}/complete`, { values: { [m.id('Signed paper copy')!]: 'file_doesnotexist', [m.id('Sign here')!]: '1' }, signature_png: PNG });
@@ -822,7 +822,7 @@ test('nobody finishes as signed without a picture: what is shown at Finish is wo
     r = await al.c.post(`/sign/${al.tok}/complete`, { values: { [al.id('Quantity')!]: q, [al.id('Buyer signs (under 1000)')!]: '1' } });
     said.add(`${r.status} ${r.data.error}`);
   }
-  assert.deepEqual([...said], ['400 Adopt a signature before finishing.']);
+  assert.deepEqual([...said], ['400 Your signature is missing. Make it on the page, then finish again.']);
   // Bi changing an unfinished answer changes nothing Al counts, so Al's screen is not sent back to look again.
   assert.equal((await bi.c.post(`/sign/${bi.tok}/save`, { values: { [bi.id('Price')!]: '999' } })).status, 200);
   r = await al.c.post(`/sign/${al.tok}/complete`, { values: { [al.id('Quantity')!]: '3', [al.id('Buyer signs (under 1000)')!]: '1' }, inputs: al.v.inputs, signature_png: PNG });

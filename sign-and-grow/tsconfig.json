@@ -63,12 +63,14 @@
     ".next-build-simplify-signing/dev/types/**/*.ts",
     ".next-build-simplify-start/types/**/*.ts",
     ".next-build-simplify-start/dev/types/**/*.ts",
-    ".next-uxrev/types/**/*.ts",
-    ".next-uxrev/dev/types/**/*.ts",
-    ".next-finish-ux-revise/types/**/*.ts",
-    ".next-finish-ux-revise/dev/types/**/*.ts",
     ".next-finish-simplify-signing/types/**/*.ts",
-    ".next-finish-simplify-signing/dev/types/**/*.ts"
+    ".next-finish-simplify-signing/dev/types/**/*.ts",
+    ".next-verify-brand-wire/types/**/*.ts",
+    ".next-verify-brand-wire/dev/types/**/*.ts",
+    ".next-verify-brand-wire-b/types/**/*.ts",
+    ".next-verify-brand-wire-b/dev/types/**/*.ts",
+    ".next-ux-chat/types/**/*.ts",
+    ".next-ux-chat/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

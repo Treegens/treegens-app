@@ -548,14 +548,15 @@ test('the sender is shown who filled in everything but has not pressed Finish, a
   assert.equal(s.db.get('SELECT status FROM recipients WHERE id=?', abe.r.id).status, 'completed');
 });
 
-test('the screens say it: the step before Finish opens by itself, and the envelope page names who has not pressed it', () => {
+test('the screens say it: Finish asks to be pressed once everything is filled in, and the envelope page names who has not pressed it', async () => {
   const page = read('src/app/sign/[token]/page.tsx');
-  assert.match(page, /useAutoReview\(stage === 'sign' && acts && required\.length > 0 && left\.length === 0 && allShown/, 'the first time nothing required is left');
-  assert.match(page, /, pressFinish\);/, 'it opens the same step the Finish button opens');
-  const hook = read('src/components/sign/autoReview.ts');
-  assert.match(hook, /if \(!ready \|\| shown\.current\) return;/, 'once for each visit');
-  assert.match(hook, /at\.addEventListener\('blur', done, \{ once: true \}\)/, 'never while someone is still typing in a field');
-  assert.match(hook, /panel\.focus\(\{ preventScroll: true \}\)/, 'and the focus does not land on the button that signs');
+  // (simplify-signing: no dialog opens by itself any more, research/ux-charter.md P9. Once nothing required is left
+  // the main button is Finish, it asks to be pressed once, the line above the pages says what it does, and Finish
+  // then signs without a second step unless something needs a look.)
+  assert.match(page, /const ready = stage === 'sign' && acts && required\.length > 0 && left\.length === 0 && allShown;/, 'when nothing required is left');
+  assert.match(page, /className=\{`btn go finish\$\{big \? ' sg-big' : ''\}\$\{ready \? ' sg-ready' : ''\}`\}/);
+  assert.match(read('src/app/styles/simplesign.css'), /\.btn\.go\.finish\.sg-ready \{ animation: sg-ready/);
+  assert.equal((await import('../src/components/sign/actions.ts')).GUIDE_FINISH, 'Everything needed is filled in. Choose Finish to sign and send it.');
   const people = read('src/components/sender/Recipients.tsx');
   assert.match(people, /r\.progress\?\.ready\) return \{ s: 'expired', label: 'Filled in, not finished' \}/);
   assert.match(people, /<b>Filled in everything but has not pressed Finish\.<\/b>/);

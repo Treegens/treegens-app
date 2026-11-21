@@ -228,7 +228,9 @@ test('Finish that cannot reach us says that nothing was signed, keeps everything
   const page = signPage();
   const complete = page.slice(page.indexOf('async function complete()'), page.indexOf('async function askForTime()'));
   assert.ok(complete.indexOf('isConnectionError(e)') > 0 && complete.indexOf('isConnectionError(e)') < complete.indexOf("e?.code === 'changed'"));
-  assert.match(complete, /const say = \(said: string\) => \(open === 'review' \? setFinishError\(said\) : toast\(said, true\)\)/);
+  // (simplify-signing: Finish goes straight through when nothing needs a look, so the step that holds these words is
+  // opened for them; a viewer, who has no such step, still gets a toast.)
+  assert.match(complete, /const say = \(said: string\) => \(me\.role !== 'viewer' \? \(setOpen\('review'\), setFinishError\(said\)\) : toast\(said, true\)\)/);
   // Nothing is shown as signed before the server said so: the done screen follows a successful request, or the
   // server's own word that this person's part is done (tests/mobile-repair.test.ts).
   assert.ok(complete.indexOf('const landed') < complete.indexOf('await api(`${base}/complete`'));
@@ -351,7 +353,9 @@ test('Next jumps to a far field instead of gliding past it, and checks where it 
 test('the signing page offers 100, 150 and 200 percent, sharp at each, in a strip that leaves the bars alone; pinch zoom stays on', () => {
   assert.deepEqual(ZOOMS, [1, 1.5, 2]);
   const page = signPage();
-  assert.match(page, /\{view === 'doc' && <ZoomControl zoom=\{zoom\} onZoom=\{setZoom\} \/>\}/, 'only in the document view, where it means something');
+  // (simplify-signing: the sizes moved from the row above the pages into the toolbar's More, src/components/sign/More.tsx.)
+  assert.match(page, /<MoreDialog view=\{view\} onView=\{chooseView\} zoom=\{zoom\} onZoom=\{setZoom\}/);
+  assert.match(read('src/components/sign/More.tsx'), /\{view === 'doc' && \(\s+<div>\s+<h3 id="sg-more-size">Size of the pages<\/h3>\s+<ZoomControl zoom=\{zoom\}/, 'only in the document view, where it means something');
   assert.match(page, /<PdfDoc key=\{d\.sha256 \|\| d\.id\} url=\{docUrl\(base, d\)\} zoom=\{zoom\}/);
   assert.match(page, /className=\{`stack sg-doc sg-pan\$\{zoom > 1 \? ' zoomed' : ''\}`\}/);
   const zoom = read('src/components/sign/Zoom.tsx');
@@ -410,8 +414,9 @@ test('two fields of the same person that cover each other are named; anything a 
   // Next coming back to the same empty field points to Text view, from the second time.
   const again = sameFieldAgain();
   assert.deepEqual([again('a'), again('a'), again('a'), again('b'), again('a')], [false, true, true, false, false]);
-  assert.match(CANNOT_REACH, /Text view/);
-  assert.match(signPage(), /nextAgain\(nextField\.id\) && view === 'doc' && toast\(CANNOT_REACH\)/);
+  assert.match(CANNOT_REACH, /Choose More, then Text view/);
+  // (simplify-signing: not for a field Next opens by itself, a signature or a stamp still to be made.)
+  assert.match(signPage(), /nextAgain\(nextField\.id\) && view === 'doc' && !opensOnNext\(nextField\) && toast\(CANNOT_REACH\)/);
 });
 
 test('the server refuses to send or correct into stacked fields, and nothing goes out', async () => {
@@ -449,7 +454,7 @@ test('the adopt dialog keeps its buttons, the sentence and any problem on screen
   const pad = read('src/components/SignaturePad.tsx');
   const foot = pad.slice(pad.indexOf('<div className="sg-adopt-foot">'), pad.indexOf('</Dialog>'));
   assert.ok(foot.includes('role="alert">{error}</div>'), 'the problem is read out, and shown next to the buttons');
-  assert.ok(foot.includes('sg-siglegal') && foot.includes('Adopt and sign') && foot.includes('>Cancel</button>'));
+  assert.ok(foot.includes('sg-siglegal') && foot.includes('{sign}</button>') && foot.includes('>Cancel</button>'));
   assert.ok(!pad.slice(0, pad.indexOf('<div className="sg-adopt-foot">')).includes('role="alert"'), 'only one place for the problem');
   const css = read('src/app/styles/signphone.css');
   assert.match(css, /\.sg-adopt-foot \{ position: sticky; bottom: calc\(-1 \* var\(--sg-dpb\)\);/);

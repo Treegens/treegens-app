@@ -647,7 +647,9 @@ test('the screens: a witness of their own on the signing page, the choice in the
   assert.match(page, /<WitnessFirst data=\{data\} base=\{base\} onDone=\{load\} \/>/);
   assert.match(page, /<WitnessName me=\{me\} base=\{base\} onNamed=\{load\} \/>/, 'naming is on the review screen');
   assert.match(page, /<WitnessAfter me=\{me\} base=\{base\} onNamed=\{load\} \/>/);
-  assert.match(page, /me\.role !== 'witness' \? \[\{ key: 'decline'/, 'no Decline for a witness');
+  // (simplify-signing: the list of Other actions is worked out in src/components/sign/actions.ts.)
+  assert.match(read('src/components/sign/actions.ts'), /if \(me\.role === 'witness'\) return \[\.\.\.WITNESS_ACTIONS\];/, 'no Decline for a witness');
+  assert.match(read('src/components/sign/actions.ts'), /WITNESS_ACTIONS = \['absent', 'ask', 'help'\] as const/);
   assert.match(page, /key: 'absent', label: 'I was not there'/);
   const first = read('src/components/sign/Witness.tsx');
   assert.match(first, /<blockquote className="wt-statement"/);

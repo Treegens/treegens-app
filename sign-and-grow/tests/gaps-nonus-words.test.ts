@@ -1010,10 +1010,11 @@ test('someone with no address who asks for more time is never told "by email", a
   // The signing page picks them by me.link_by_sender, and offers no "Stop reminder emails" to someone who gets none.
   const page = src('app/sign/[token]/page.tsx');
   assert.doesNotMatch(page, /They will be in touch by email|You will get an email as soon as the document is open again|Use the link in your email to come back/);
-  assert.equal(page.match(/moreTimeWords\(sender\.name, !!me\.link_by_sender\)/g)?.length, 3);
-  assert.match(page, /toast\(laterWords\(!!me\.link_by_sender\)\)/);
-  assert.match(page, /key: 'mute'/);
-  assert.match(page, /!muted && me\.role !== 'inperson' && !me\.link_by_sender \? \[\{ key: 'mute'/);
+  // (simplify-signing: Other actions has no descriptions, so the hint is gone and two uses are left; Finish later
+  // answers in a note on the page, and "Stop reminder emails" moved from Other actions into that note.)
+  assert.equal(page.match(/moreTimeWords\(sender\.name, !!me\.link_by_sender\)/g)?.length, 2);
+  assert.match(page, /setLater\(stage === 'consent' \? laterAtConsent\(!!me\.link_by_sender\) : laterWords\(!!me\.link_by_sender\)\)/);
+  assert.match(page, /\{!muted && me\.role !== 'inperson' && !me\.link_by_sender && <button type="button" className="sg-link" onClick=\{\(\) => mute\(\)\}>Stop reminder emails<\/button>\}/);
 
   // The sender's email: the deadline by their own clock too, and a plain word that there is no address to answer.
   assert.equal((await ada.call('GET', '/me', undefined, { 'x-tz': 'Pacific/Auckland' })).status, 200);
