@@ -341,6 +341,8 @@ export const consentVersionOf = (detail: unknown): string | null => {
 };
 /** The language an audit line written by consentAuditNote names, or English for a line from before languages were recorded. */
 export const consentLanguageOf = (detail: unknown): string => normalizeLocale(CONSENT_NOTE_TAIL.exec(String(detail ?? '').trimEnd())?.[2]) || SOURCE_LOCALE;
+/** How the evidence pack heads a person's wording: "Wording 2026-11-21, in English (en)". */
+export const consentHeading = (w: Pick<ConsentWording, 'version' | 'language'>): string => `Wording ${w.version}, in ${languageWords(w.language)}`;
 /** Whether the line says the screen did not name its wording (the words consentAuditNote puts right before the tail). */
 export const consentUnstated = (detail: unknown): boolean => {
   const d = String(detail ?? '').trimEnd();

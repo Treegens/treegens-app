@@ -45,9 +45,9 @@ export const viewport: Viewport = { width: 'device-width', initialScale: 1, them
 
 // The language of the page and its direction, from what the browser asks for among the languages switched on, else
 // English (src/lib/i18n.ts). While English is the only language switched on the answer is always lang="en" dir="ltr",
-// so the request is not read at all: reading it would make every page be built again for each visitor and stop
-// browsers and caches from keeping the public pages (/, /help, /security, /pricing). The header is read from the day
-// a second language is switched on. The signing page sets its signer's own language when its words are translated
+// so the request is not read at all: reading it here makes every page of the app be built again for each visitor,
+// also the ones that are otherwise static (/login, /check, /verify, the app's own pages). The header is read from
+// the day a second language is switched on. The signing page sets its signer's own language when its words are translated
 // (lang-signing).
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const lang = pageLocale(shippedLocales().length > 1 ? (await headers()).get('accept-language') : null);

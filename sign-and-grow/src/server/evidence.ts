@@ -5,8 +5,7 @@ import { sendMail, type MailStatus } from './mail.ts';
 import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnvelope, type Actor } from './envelopes.ts';
 import { safeName, type ZipEntry } from './zip.ts';
 import { labelOf } from '../lib/bysender.ts';
-import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf, consentVersionOf, consentUnstated } from '../lib/policy.ts';
-import { languageWords } from '../lib/i18n.ts';
+import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf, consentVersionOf, consentUnstated, consentHeading } from '../lib/policy.ts';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '../lib/evidence.ts';
 import { FINGERPRINT_KEPT_DAYS } from '../lib/evidence.ts';
 import { deviceName } from '../lib/phone.ts';
@@ -405,7 +404,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
       const w = consentWordingAsRecorded(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version, consentLanguageOf(a.detail));
       const how = !named ? ' (their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line, which only the code before that change wrote, and not stated by their screen)'
         : consentUnstated(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
-      return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. Wording ${w.version}, in ${languageWords(w.language)}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
+      return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. ${consentHeading(w)}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
     }) : ['Nobody has agreed yet.']),
   ].join('\r\n'));
 

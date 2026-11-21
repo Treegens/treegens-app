@@ -73,7 +73,7 @@ function askedOf(r: any): { value: unknown; word: 'locale' | 'language' } {
   if (!r || typeof r !== 'object') return { value: undefined, word: 'locale' };
   const { locale, language } = r;
   if (locale !== undefined && language !== undefined && (normalizeLocale(locale) || locale || null) !== (normalizeLocale(language) || language || null))
-    throw bad(`${r.name ? `${str(r.name, 120)} has` : 'A recipient has'} both "locale" (${JSON.stringify(locale)}) and "language" (${JSON.stringify(language)}), and they say different things. Send one of them. Nothing was saved.`);
+    throw bad(`${r.name ? `${str(r.name, 120)} has` : 'A recipient has'} both "locale" (${str(JSON.stringify(locale) ?? '', 40)}) and "language" (${str(JSON.stringify(language) ?? '', 40)}), and they say different things. Send one of them. Nothing was saved.`);
   return locale !== undefined ? { value: locale, word: 'locale' } : { value: language, word: 'language' };
 }
 

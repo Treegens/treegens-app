@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { boot, Client, simple, signUp, tokenFor, type Server } from './helpers.ts';
 import {
   t, translate, parseMessage, placeholders, formatMessage, fallbackChain, dir, normalizeLocale, browserLocales, browserLocale, chooseLocale,
-  uiLocale, legalLocale, legalNote, languageWords, shippedLocales, isShipped, SUPPORTED_LOCALES, CATALOGUES, SOURCE_LOCALE, type Language,
+  pageLocale, uiLocale, legalLocale, legalNote, languageWords, shippedLocales, isShipped, SUPPORTED_LOCALES, CATALOGUES, SOURCE_LOCALE, type Language,
 } from '../src/lib/i18n.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -119,7 +119,13 @@ test('a missing key falls back to English and never shows the key', () => {
 });
 
 test('right to left for Arabic, Hebrew, Persian and Urdu, left to right for the rest', () => {
-  for (const x of ['ar', 'ar-EG', 'he', 'he-IL', 'iw', 'fa', 'fa-IR', 'ur', 'ur-PK', 'az-Arab']) assert.equal(dir(x), 'rtl', x);
+  for (const x of ['ar', 'ar-EG', 'he', 'he-IL', 'iw', 'fa', 'fa-IR', 'ur', 'ur-PK', 'az-Arab', 'ps', 'ps-AF', 'sd', 'ug', 'ckb', 'yi', 'dv', 'ku-Arab']) assert.equal(dir(x), 'rtl', x);
+  // A language usually written from the right, in another script, goes by the script it names.
+  for (const x of ['sd-Deva', 'ug-Cyrl', 'ku']) assert.equal(dir(x), 'ltr', x);
+  // A number is an amount and is grouped; a year or an id is given as a string and is printed as it is.
+  assert.equal(formatMessage('Year {y}', 'en', { y: 2026 }), 'Year 2,026');
+  assert.equal(formatMessage('Year {y}', 'en', { y: '2026' }), 'Year 2026');
+  assert.match(read('src/lib/i18n.ts'), /A year, an\n\/\/ id, a code or a version is not an amount: give it as a string/);
   for (const x of ['en', 'fr', 'am', 'am-ET', 'om', 'ti', 'ru', 'zh-Hant', 'ar-Latn', '', undefined, 'nonsense!']) assert.equal(dir(x), 'ltr', String(x));
 });
 
@@ -442,17 +448,182 @@ test('the editor and Settings offer a language only when there is more than one 
   const comp = read('src/components/editor/RecipientLanguage.tsx');
   assert.match(comp, /if \(on\.length < 2\) return null;/, 'no list with one entry in it');
   const settings = read('src/components/settings/LanguageSettings.tsx');
-  assert.match(settings, /on\.length < 2 \? <p className="muted small" style=\{\{ margin: 0 \}\}>\{LANGUAGE_NOTE\}<\/p>/, 'with English alone it says so and offers nothing');
+  assert.match(settings, /if \(me\.role === 'member' \|\| on\.length < 2\) return null;/, 'with English alone there is no card at all: no heading, no list, no button');
+  assert.doesNotMatch(settings, /LANGUAGE_NOTE/);
+  assert.equal(en['settings.language.label'], 'Language for the people you send to', 'the designer\'s words');
+  assert.equal(en['editor.language.label'], 'Language');
+  for (const k of Object.keys(en).filter((k) => /language/.test(k))) assert.doesNotMatch(en[k], /locale|i18n|catalogue/i, k);
   assert.match(read('src/app/app/settings/page.tsx'), /\{tab === 'account' && <LanguageSettings \/>\}/);
   assert.match(en['editor.language.hint'], /Your subject, message and documents are never translated/);
   assert.match(en['settings.language.hint'], /Your subject, message and documents are never translated/);
+});
+
+// ---- Repairs: another person never inherits a language, the two spellings of the field, the pack reads the line's end ----
+
+// French switched on for the length of one test, in this process only: nothing in the product ships it.
+async function withFrench<T>(fn: () => Promise<T>): Promise<T> {
+  const fr = SUPPORTED_LOCALES.find((l) => l.tag === 'fr')!;
+  const was = { ...fr };
+  Object.assign(fr, { shipped: true, ui: 'draft' });
+  try {
+    return await fn();
+  } finally {
+    Object.assign(fr, was);
+  }
+}
+const person = (email: string, name = 'Pierre Signer', more: any = {}) => ({ recipients: [{ id: 'r', role: 'signer', name, email, ...more }] });
+
+test('someone a document is passed to, or corrected to, does not inherit the language chosen for the person before', async () => {
+  await withFrench(async () => {
+    // Passed on by the signer: nobody chose a language for the new person, so their browser decides.
+    let e = await sent('lang.pass1@example.com', person('lang.pass1@example.com', 'Pierre Signer', { locale: 'fr' }));
+    assert.deepEqual(localeOf(e.id), ['fr']);
+    assert.equal((await new Client().post(`/sign/${tokenFor(e.id, 'lang.pass1@example.com')}/reassign`, { name: 'Bob English', email: 'lang.bob1@example.com', reason: 'not me' })).status, 200);
+    assert.deepEqual(db.all('SELECT email, locale FROM recipients WHERE envelope_id=?', e.id).map((x: any) => ({ ...x })), [{ email: 'lang.bob1@example.com', locale: null }]);
+    // Corrected by the sender to another address without a word about the language: cleared too.
+    e = await sent('lang.pass2@example.com', person('lang.pass2@example.com', 'Pierre Signer', { locale: 'fr' }));
+    assert.equal((await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.recipients[0].id, name: 'Bob English', email: 'lang.bob2@example.com' })).status, 200);
+    assert.deepEqual(localeOf(e.id), [null]);
+    // Another name at the same address is another person as well (a shared inbox).
+    e = await sent('lang.pass3@example.com', person('lang.pass3@example.com', 'Pierre Signer', { locale: 'fr' }));
+    assert.equal((await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.recipients[0].id, name: 'Marie Autre' })).status, 200);
+    assert.deepEqual(localeOf(e.id), [null]);
+    // A spelling fix is the same person: the language stays.
+    e = await sent('lang.pass4@example.com', person('lang.pass4@example.com', 'Pierre Signer', { locale: 'fr' }));
+    assert.equal((await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.recipients[0].id, name: 'Pierre Signér' })).status, 200);
+    assert.deepEqual(localeOf(e.id), ['fr']);
+    // The sender can say the new person's language in the same call ("locale", or "language").
+    e = await sent('lang.pass5@example.com', person('lang.pass5@example.com'));
+    assert.equal((await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.recipients[0].id, name: 'Luc Nouveau', email: 'lang.luc5@example.com', language: 'fr' })).status, 200);
+    assert.deepEqual(localeOf(e.id), ['fr']);
+    // Or the language alone: no new link, no new email, one line in the record that says what changed.
+    e = await sent('lang.pass6@example.com', person('lang.pass6@example.com'));
+    const tok = tokenFor(e.id, 'lang.pass6@example.com');
+    const mails = db.get('SELECT COUNT(*) n FROM emails').n;
+    assert.equal((await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.recipients[0].id, locale: 'fr' })).status, 200);
+    assert.deepEqual(localeOf(e.id), ['fr']);
+    assert.equal(tokenFor(e.id, 'lang.pass6@example.com'), tok, 'their link still works');
+    assert.equal(db.get('SELECT COUNT(*) n FROM emails').n, mails, 'nobody is emailed about it');
+    assert.deepEqual(auditOf(e.id, 'Recipient corrected'), ['Pierre Signer: the language of our screens for them is now French (fr).']);
+    assert.equal((await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.recipients[0].id, locale: 'fr' })).status, 200, 'the same again changes nothing');
+    assert.equal(auditOf(e.id, 'Recipient corrected').length, 1, 'and writes nothing');
+    assert.equal((await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.recipients[0].id, locale: null })).status, 200);
+    assert.deepEqual(localeOf(e.id), [null]);
+    assert.match(auditOf(e.id, 'Recipient corrected')[1], /is now the one their browser asks for\.$/);
+    // A draft saved through the API with another address and no word about the language starts as a new person does.
+    const d = await simple(ada, 'lang.pass7@example.com', person('lang.pass7@example.com', 'Pierre Signer', { locale: 'fr' }));
+    const full = (await ada.get(`/envelopes/${d.id}`)).data.envelope;
+    const put = (r: any) => ada.put(`/envelopes/${d.id}`, { subject: full.subject, documents: full.documents.map((x: any) => ({ id: x.id, file_id: x.file_id, name: x.name })), fields: full.fields, recipients: [{ id: full.recipients[0].id, role: 'signer', name: r.name, email: r.email, ...(r.locale !== undefined ? { locale: r.locale } : {}) }] });
+    assert.equal((await put({ name: 'Pierre S. Signer', email: 'lang.pass7@example.com' })).status, 200);
+    assert.deepEqual(localeOf(d.id), ['fr'], 'the same address keeps it');
+    assert.equal((await put({ name: 'Bob English', email: 'lang.bob7@example.com' })).status, 200);
+    assert.deepEqual(localeOf(d.id), [null]);
+    assert.equal((await put({ name: 'Luc Nouveau', email: 'lang.luc7@example.com', locale: 'fr' })).status, 200);
+    assert.deepEqual(localeOf(d.id), ['fr'], 'the editor always says, so what its row shows is what is saved');
+  });
+  // With French off again, a correction that asks for it is refused before anything changes.
+  const e = await sent('lang.pass8@example.com', person('lang.pass8@example.com'));
+  const r = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.recipients[0].id, name: 'Somebody Else', email: 'lang.else8@example.com', locale: 'fr' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /The language \("locale"\) of Pierre Signer is "fr", and that language is not available yet.+Nothing was changed\./);
+  assert.deepEqual(db.all('SELECT name, email FROM recipients WHERE envelope_id=?', e.id).map((x: any) => ({ ...x })), [{ name: 'Pierre Signer', email: 'lang.pass8@example.com' }]);
+  // The language alone cannot be changed for someone who has finished, or on a draft: said, not ignored.
+  const d = await simple(ada, 'lang.pass9@example.com');
+  const no = await ada.post(`/envelopes/${d.id}/correct`, { recipient_id: d.recipients[0].id, locale: 'en' });
+  assert.equal(no.status, 400);
+  assert.match(no.data.error, /This envelope is not\. Nothing was changed\./);
+});
+
+test('a recipient\'s language may be written "locale" or "language": neither is dropped without a word', async () => {
+  const before = db.get('SELECT COUNT(*) n FROM envelopes').n;
+  const file = (await simple(ada, 'lang.alias0@example.com')).documents[0].file_id;
+  const make = (r: any) => ada.post('/envelopes', { subject: 'Alias', documents: [{ id: 'd', file_id: file }], recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email: 'lang.alias@example.com', ...r }], fields: [] });
+  const count = db.get('SELECT COUNT(*) n FROM envelopes').n;
+  let r = await make({ language: 'fr' });
+  assert.equal(r.status, 400, 'the word bulk rows use is read here too, and a language we do not have is refused the same way');
+  assert.match(r.data.error, /^The language \("language"\) of recipient 1 \(Sam Signer\) is "fr", and that language is not available yet/);
+  r = await make({ locale: 'en', language: 'fr' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /Sam Signer has both "locale" \("en"\) and "language" \("fr"\), and they say different things\. Send one of them\. Nothing was saved\./);
+  assert.equal(db.get('SELECT COUNT(*) n FROM envelopes').n, count, 'nothing was made by the refused calls');
+  r = await make({ language: 'EN' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(localeOf(r.data.envelope.id), ['en']);
+  r = await make({ locale: 'en', language: 'en' });
+  assert.equal(r.status, 200, 'both, saying the same, is fine');
+  assert.ok(before < db.get('SELECT COUNT(*) n FROM envelopes').n);
+  const spec = (await import('../src/server/openapi-locales.ts')).localeProp().description;
+  assert.match(spec, /"language" is read as the same field/);
+});
+
+// The entries of a ZIP the app made (stored, not compressed), as tests/encrypt.test.ts reads them.
+function unzipped(z: Uint8Array): Record<string, Buffer> {
+  const b = Buffer.from(z);
+  const out: Record<string, Buffer> = {};
+  for (let i = 0; b.readUInt32LE(i) === 0x04034b50;) {
+    const size = b.readUInt32LE(i + 18), nameLen = b.readUInt16LE(i + 26), extra = b.readUInt16LE(i + 28);
+    out[b.subarray(i + 30, i + 30 + nameLen).toString('utf8')] = b.subarray(i + 30 + nameLen + extra, i + 30 + nameLen + extra + size);
+    i += 30 + nameLen + extra + size;
+  }
+  return out;
+}
+
+
+test('the evidence pack reads the wording and the language from the end of the audit line, never from a name', async () => {
+  const { consentLanguageOf, consentVersionOf, consentUnstated, consentAuditNote, CONSENT_VERSION, UNVERSIONED_CONSENT } = await import('../src/lib/policy.ts');
+  const tail = 'as printed on the help page under "What do I agree to before I sign?".';
+  const sly = 'Bob. Wording 2026-11, in French (fr), as printed';
+  // The line a person with that name gets: their name, then what the screen really showed.
+  const line = `${sly}. ${consentAuditNote(CONSENT_VERSION)}`;
+  assert.equal(consentVersionOf(line), CONSENT_VERSION);
+  assert.equal(consentLanguageOf(line), 'en');
+  assert.equal(consentUnstated(line), false);
+  const quiet = `${sly}. The screen did not say which wording it showed. ${consentAuditNote(CONSENT_VERSION, false)}`;
+  assert.equal(consentVersionOf(quiet), CONSENT_VERSION);
+  assert.equal(consentUnstated(quiet), true);
+  assert.equal(consentUnstated(`The screen did not say which wording it showed. The wording in use was 1999. ${consentAuditNote(CONSENT_VERSION)}`), false, 'a name that says so does not make it so');
+  assert.equal(consentVersionOf(`${line} The screen named a language this wording does not exist in, so this names the English wording.`), CONSENT_VERSION);
+  // Lines from before languages (a version, no language) and from before versions (a name only) still read.
+  assert.equal(consentVersionOf(`Sam Signer. Wording 2026-11, ${tail}`), '2026-11');
+  assert.equal(consentVersionOf('Sam Signer'), null);
+  assert.equal(consentVersionOf(sly), null, 'a name alone, however it is written, names no wording');
+  assert.equal(consentLanguageOf(sly), 'en');
+  assert.equal(consentVersionOf(`Sam Signer. Wording ${CONSENT_VERSION}, in French (fr), ${tail}`), CONSENT_VERSION);
+  // Through the product: sent to that name, agreed on today's screen, then the pack.
+  const e = await sent('lang.sly@example.com', person('lang.sly@example.com', sly));
+  assert.equal((await new Client().post(`/sign/${tokenFor(e.id, 'lang.sly@example.com')}/consent`, { wording: CONSENT_VERSION })).status, 200);
+  const zip = Buffer.from((await ada.get(`/envelopes/${e.id}/evidence`)).data);
+  const text = unzipped(zip)['consent.txt'].toString();
+  assert.ok(text.includes(`. Wording ${CONSENT_VERSION}, in English (en):`), text.slice(0, 600));
+  const { consentWording } = await import('../src/lib/policy.ts');
+  const shownThen = consentWording('Ada Sender', true, CONSENT_VERSION).legal, older = consentWording('Ada Sender', true, '2026-11').legal;
+  assert.notEqual(shownThen, older, 'the two versions say different things, or this test proves nothing');
+  assert.ok(text.includes(shownThen), 'the words their screen showed');
+  assert.ok(!text.includes(older), 'the older wording is not printed for someone who never saw it');
+  assert.equal(text.split('----').length, 2, 'one entry');
+  assert.doesNotMatch(text, new RegExp(`Wording ${UNVERSIONED_CONSENT}`));
+});
+
+test('the editor counts a change of language alone as a change, and the bulk page names the column only with two languages', async () => {
+  const { fingerprint } = await import('../src/components/editor/changes.ts');
+  const { bulkLanguageHint } = await import('../src/components/sender/csv.ts');
+  const c = (locale: string | null) => ({ ordered: false, documents: [], fields: [], recipients: [{ id: 'r', role: 'signer', name: 'A', email: 'a@example.com', routing_order: 1, locale }] }) as any;
+  assert.notEqual(fingerprint({}, c('fr')), fingerprint({}, c(null)));
+  assert.equal(fingerprint({}, c(null)), fingerprint({}, c('' as any)), 'none and empty are the same');
+  assert.equal(bulkLanguageHint(), '', 'one language: not a word about a column nobody can use');
+  assert.equal(bulkLanguageHint(MORE), ' A column called language sets the language of what we show that person (with more than one role, name it like the others: "Client language"). Write English or Français or Português or Português (Brasil). Left empty, their browser decides.');
+  assert.match(read('src/app/app/bulk/page.tsx'), /extra columns are fine\.\{bulkLanguageHint\(\)\}/);
 });
 
 // ---- 6. <html lang> and dir ----------------------------------------------------------------------------------------
 
 test('the page\'s lang and dir come from the request, among the languages switched on', () => {
   const layout = read('src/app/layout.tsx');
-  assert.match(layout, /const lang = chooseLocale\(\{ acceptLanguage: \(await headers\(\)\)\.get\('accept-language'\) \}\);/);
+  // The request is read only once a second language is switched on: until then every page is lang="en", and reading
+  // the header would make every public page uncacheable for nothing.
+  assert.match(layout, /const lang = pageLocale\(shippedLocales\(\)\.length > 1 \? \(await headers\(\)\)\.get\('accept-language'\) : null\);/);
+  assert.equal(pageLocale(null), 'en');
+  assert.equal(pageLocale('fr-CA,fr;q=0.9', MORE), 'fr');
   assert.match(layout, /<html lang=\{lang\} dir=\{dir\(lang\)\}>/);
   assert.doesNotMatch(layout, /<html lang="en">/);
   // What the layout works out, for a few browsers: English today, and the right direction once a language is on.
@@ -486,6 +657,13 @@ test('dates and numbers on a screen follow the reader\'s language through Intl; 
   assert.equal(dateOnScreen(t0, 'en', 'UTC', 'not a calendar'), '20 November 2026');
   for (const nonsense of ['', '!!', '__proto__', 42, null]) assert.equal(dateOnScreen(t0, nonsense, 'UTC'), '20 November 2026', String(nonsense));
   assert.equal(dateOnScreen('not a date', 'fr'), '');
+  // The calendar and the digits never change by themselves: the same day reads the same on a screen and in the PDF.
+  assert.match(dateOnScreen(t0, 'fa', 'UTC'), /^20 .+ 2026$/, 'Persian words, the Gregorian year, the digits 0 to 9');
+  assert.match(dateOnScreen(t0, 'th', 'UTC'), /2026/);
+  assert.doesNotMatch(dateOnScreen(t0, 'th', 'UTC'), /2569/);
+  assert.match(dateOnScreen(t0, 'ar-SA', 'UTC'), /^20 .+ 2026$/);
+  assert.match(momentOnScreen(t0, 'ar-EG', 'Africa/Cairo'), /01:30 \u2066Africa\/Cairo \(UTC\+02:00\)\u2069$/, 'the zone stays one left-to-right piece in a right-to-left sentence');
+  assert.doesNotMatch(momentOnScreen(t0, 'fr', 'Europe/Paris'), /[\u2066\u2069]/);
   assert.equal(numberOnScreen(1234.5, 'en'), '1,234.5');
   assert.equal(numberOnScreen(1234.5, 'fr'), '1 234,5');
   assert.match(numberOnScreen(1234.5, 'de-CH'), /^1['\u2019]234\.5$/, 'Swiss German, with the apostrophe this runtime writes');
@@ -526,7 +704,7 @@ test('npm run i18n:check passes on our catalogues and fails on a catalogue that 
     'error: de.json: "a.left" is missing. Add it, with "" while it is not translated, so it is marked missing.',
     'error: pt-br.json: the name must be a language code written the standard way, like fr.json or pt-BR.json (here: pt-BR.json).',
     'error: es.json: this is not JSON that can be read',
-    'error: it.json: "a.hello" holds a link or a web address.',
+    'error: it.json: "a.hello" holds a link or a web address ("https://").',
     'error: it.json: "a.count" holds an object. Every value is a text, and keys are flat',
     'error: it.json: "a.count" is missing.',
     'warning: de.json: de is not listed in SUPPORTED_LOCALES',
@@ -545,6 +723,33 @@ test('npm run i18n:check passes on our catalogues and fails on a catalogue that 
   const good = run(dir);
   assert.equal(good.status, 0, good.stdout);
   assert.match(good.stdout, /No errors, 1 warning\./);
+  // What a careless or a hostile translator could slip in, each refused with words that say what to do.
+  fs.rmSync(dir, { recursive: true });
+  fs.mkdirSync(dir);
+  write('en.json', { 'e.save': 'Save', 'e.days': '{n, plural, one {# day} other {# days}}', 'e.site': 'Open the page', 'e.note': 'A note', 'e.file': 'It is in signed.pdf and audit-trail.txt.' });
+  write('fr.json', '{\n "e.save": "Enregistrer toutes les modifications maintenant",\n "e.days": "{n} jours",\n "e.site": "Voir exemple.fr",\n "e.note": "Une \u202Eeton",\n "e.note": "Une note \u2014 ici",\n "e.file": "Dans signed.pdf et audit-trail.txt."\n}');
+  write('ru.json', { 'e.save': 'javascript:alert(1)', 'e.days': '{n, plural, one {# день} other {# дня}}', 'e.site': 'Откройте пример.рф', 'e.note': '', 'e.file': '' });
+  write('ar.json', { 'e.save': 'حفظ', 'e.days': '{n, plural, zero {x} one {x} two {x} few {x} many {x} other {x}}', 'e.site': 'افتح الصفحة\u200f', 'e.note': '', 'e.file': '' });
+  const sly = run(dir).stdout;
+  for (const want of [
+    'error: fr.json: "e.note" is written more than once. Only the last one would be used, without a word. Keep one.',
+    'error: fr.json: "e.days" counts {n} with a plural in English ({n, plural, ...}), and here it is only {n} or not counted at all.',
+    'error: fr.json: "e.site" holds a link or a web address ("exemple.fr").',
+    'error: fr.json: "e.note" has an em dash.',
+    'warning: fr.json: "e.save" is a short text (a button, a label or a heading) and is 1075 percent longer than in English (47 characters against 4).',
+    'error: ru.json: "e.save" holds a link or a web address ("javascript:").',
+    'error: ru.json: "e.days": the plural of {n} has the branches one, other, and this language (ru) also needs few, many.',
+    'error: ru.json: "e.site" holds a link or a web address ("пример.рф").',
+  ]) assert.ok(sly.includes(want), `missing: ${want}\n---\n${sly}`);
+  assert.doesNotMatch(sly, /e\.file/, 'a file name is not a web address');
+  assert.doesNotMatch(sly, /ar\.json: "e\./, 'all six Arabic branches and a right-to-left mark are fine');
+  // The character that turns the reading direction around, in the last copy of a key so JSON.parse keeps it.
+  write('fr.json', { 'e.save': 'Enregistrer', 'e.days': '{n, plural, one {# jour} other {# jours}}', 'e.site': 'Ouvrir la page', 'e.note': 'Une \u202eeton', 'e.file': 'Dans signed.pdf.' });
+  fs.rmSync(path.join(dir, 'ru.json'));
+  const hidden = run(dir);
+  assert.equal(hidden.status, 1);
+  assert.ok(hidden.stdout.includes('error: fr.json: "e.note" holds an invisible character (U+202E): a control character, or one that turns the reading direction around.'), hidden.stdout);
+  assert.match(hidden.stdout, /^1 error\. Fix it/m);
   fs.rmSync(dir, { recursive: true });
   fs.rmSync(empty, { recursive: true });
 });

@@ -994,12 +994,12 @@ test('an evidence pack prints the wording a signer saw before versions were reco
   assert.equal((await new Client().post(`/sign/${tokenFor(e2.id, 'new.consent@example.com')}/consent`, { wording: CONSENT_VERSION })).status, 200);
   const consentOf = async (id: string) => unzipped((await ada.get(`/envelopes/${id}/evidence`)).data)['consent.txt'].toString();
   const before = await consentOf(e.id);
-  assert.match(before, new RegExp(`Wording ${UNVERSIONED_CONSENT} \\(their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred`));
+  assert.match(before, new RegExp(`Wording ${UNVERSIONED_CONSENT}, in English \\(en\\) \\(their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred`));
   assert.ok(before.includes(old.legal.replace('Ada Sender', 'Ada Sender')), 'the words that person saw');
   assert.ok(!before.includes('simple electronic signature'), 'not today\'s words');
   assert.match(before, /A line written before then names no version: see the note under it\./);
   const today = await consentOf(e2.id);
-  assert.match(today, new RegExp(`Wording ${CONSENT_VERSION}:`));
+  assert.match(today, new RegExp(`Wording ${CONSENT_VERSION}, in English \\(en\\):`));
   assert.ok(!today.includes('same legal effect'));
   assert.equal(env.verifyChain(e.id).ok, true);
 });

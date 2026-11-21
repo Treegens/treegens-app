@@ -2,6 +2,8 @@
 // section 2.3). Pure functions and words: nothing here reads the environment or the database.
 
 import { IMPACT, sheetsSaved } from './impact.ts';
+// A language is shown by its own name (Français), never by its code.
+import { languageOf } from './i18n.ts';
 
 /** The names of the three steps. Never a fourth. */
 export const STEP_NAMES = ['Files and people', 'Fields', 'Review and send'] as const;
@@ -41,7 +43,7 @@ const CHECK_WORDS: Record<string, string> = { email_code: 'Code by email', sms_c
 export function moreLines(r: any, o: { isTpl?: boolean; languages?: number; texts?: boolean } = {}): MoreLine[] {
   const lines: MoreLine[] = [];
   lines.push({ key: 'role', label: 'Role', value: ROLE_WORDS[r.role] || ROLE_WORDS.signer });
-  if ((o.languages || 1) >= 2) lines.push({ key: 'language', label: 'Language', value: r.locale ? String(r.locale) : 'Their browser decides' });
+  if ((o.languages || 1) >= 2) lines.push({ key: 'language', label: 'Language', value: r.locale ? languageOf(r.locale)?.own || String(r.locale) : 'Their browser decides' });
   // Listed when there is something to choose: sending the link yourself, or (where this server sends texts, `texts`)
   // the link by text message as well. Something set earlier keeps its line, so it can be taken off.
   const canText = (!!o.texts && r.role !== 'inperson') || !!r.text_link;
