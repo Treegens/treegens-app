@@ -33,6 +33,8 @@ export const paperFor = (locale: string | null | undefined): Paper => (/-(US|CA|
 // ---- The words --------------------------------------------------------------------------------------------------
 export const WRITE_LINK = 'No document yet? Write one';
 export const WRITE_TEMPLATE_LINK = 'Write a template';
+/** Said under the writing view when the header's Next is pressed before the text was made into the document. */
+export const WRITE_NEXT_NUDGE = 'Press Use this document first to turn your text into the document.';
 export const AI_DRAFT_NOTE = 'Drafted by an AI from what you typed. It can be wrong or leave things out, and it is not legal advice. Read every word before you send it.';
 export const DRAFT_PLACEHOLDER = 'A freelance agreement: I design a logo for Sam Lee for $800, half up front, finished by 15 March';
 export const CHANGE_PLACEHOLDER = 'Make payment due in 30 days';
@@ -46,21 +48,36 @@ export const writtenLine = (ai: boolean) => (ai ? 'Written in GrowSigning, with 
 
 // ---- Tags and blanks ---------------------------------------------------------------------------------------------
 export type Tag = { start: number; end: number; type: string; signer: number; label: string };
-/** The tags in a text, in order. `signer` counts from 1. */
-export function tagsIn(text: string): Tag[] {
+// The signer numbers a text names, in order, counted again from 1 without gaps: a text with {{signature}} and
+// {{signature9}} has two signers, not nine, so a typo or a model's odd number never adds empty rows under People.
+const signerOrder = (text: string): Map<number, number> => {
+  const raw = new Set<number>();
+  for (const m of String(text ?? '').matchAll(new RegExp(TAG.source, 'gi'))) raw.add(Math.max(1, Number(m[2]) || 1));
+  return new Map([...raw].sort((a, b) => a - b).map((n, i) => [n, i + 1]));
+};
+function tagsWith(text: string, order: Map<number, number>): Tag[] {
   const out: Tag[] = [];
   const re = new RegExp(TAG.source, 'gi');
   for (const m of String(text ?? '').matchAll(re)) {
     const type = TAG_TYPE[m[1].toLowerCase()];
-    out.push({ start: m.index!, end: m.index! + m[0].length, type, signer: Math.max(1, Number(m[2]) || 1), label: (m[3] || '').trim().slice(0, 120) });
+    const raw = Math.max(1, Number(m[2]) || 1);
+    out.push({ start: m.index!, end: m.index! + m[0].length, type, signer: order.get(raw) || 1, label: (m[3] || '').trim().slice(0, 120) });
   }
   return out;
 }
+/** The tags in a text, in order. `signer` counts from 1, the people in the order of the numbers the tags give. */
+export const tagsIn = (text: string): Tag[] => tagsWith(text, signerOrder(text));
 const FIELD_WORD: Record<string, string> = { signature: 'Signature', initials: 'Initials', date_signed: 'Date signed', full_name: 'Name', email: 'Email', title: 'Title', company: 'Company', checkbox: 'Tick box', text: 'Text' };
-/** What a tag is called on its chip in the preview: "Signature, Signer 2". */
-export const tagChip = (t: Pick<Tag, 'type' | 'signer' | 'label'>) => `${t.label || FIELD_WORD[t.type] || 'Field'}, Signer ${t.signer}`;
-/** How many people sign or fill in: the highest signer number a tag names. */
-export const signersNeeded = (text: string) => tagsIn(text).reduce((n, t) => Math.max(n, t.signer), 0);
+/** What a tag is called on its chip in the preview: "Signature, Person 2", the word step 2 uses for the same row. */
+export const tagChip = (t: Pick<Tag, 'type' | 'signer' | 'label'>) => `${t.label || FIELD_WORD[t.type] || 'Field'}, Person ${t.signer}`;
+/** How many people sign or fill in. */
+export const signersNeeded = (text: string) => signerOrder(text).size;
+/** The tags for the next person, for "Add a place to sign": a number above every number the text uses. */
+export const nextPlace = (text: string) => {
+  const top = Math.max(0, ...signerOrder(text).keys());
+  const n = Math.min(99, top + 1);
+  return n === 1 ? '{{signature}} {{date}}\n{{name}}' : `{{signature${n}}} {{date${n}}}\n{{name${n}}}`;
+};
 
 export type Blank = { start: number; end: number; label: string };
 const BLANK = /\[([^[\]\n]{1,160})\]/g;
@@ -80,8 +97,8 @@ export function blanksIn(text: string): Blank[] {
 export type Piece = { text: string; bold?: boolean; tag?: Tag; blank?: boolean };
 export type WriteBlock = { kind: Block['kind']; items: Piece[][] };
 // A piece of a line split where tags and blanks stand.
-function pieces(text: string, bold?: boolean): Piece[] {
-  const marks = [...tagsIn(text).map((t) => ({ start: t.start, end: t.end, tag: t })), ...blanksIn(text).map((b) => ({ start: b.start, end: b.end, tag: undefined as Tag | undefined }))].sort((a, b) => a.start - b.start);
+function pieces(text: string, order: Map<number, number>, bold?: boolean): Piece[] {
+  const marks = [...tagsWith(text, order).map((t) => ({ start: t.start, end: t.end, tag: t })), ...blanksIn(text).map((b) => ({ start: b.start, end: b.end, tag: undefined as Tag | undefined }))].sort((a, b) => a.start - b.start);
   const out: Piece[] = [];
   let at = 0;
   for (const m of marks) {
@@ -95,27 +112,37 @@ function pieces(text: string, bold?: boolean): Piece[] {
 }
 /** The blocks of a written document: clickwrap's headings, lists and paragraphs, with tags and blanks picked out. */
 export function writeBlocks(text: string): WriteBlock[] {
-  return termBlocks(text).map((b) => ({ kind: b.kind, items: b.items.map((spans) => spans.flatMap((s) => pieces(s.text, s.bold))) }));
+  const order = signerOrder(text);
+  return termBlocks(text).map((b) => ({ kind: b.kind, items: b.items.map((spans) => spans.flatMap((s) => pieces(s.text, order, s.bold))) }));
 }
 
 // ---- What the model sends back -------------------------------------------------------------------------------------
+// A web address without its https:// ("evil.example/pay", "paypal-secure.com"), and an email address.
+const HOST = /(?<![\w@.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|info|biz|io|co|app|dev|me|ai|xyz|online|site|shop|store|link|click|top|club|pay|money|bank|finance|live|tech|cloud|page|web|email|support|help|example|test|local|gov|edu|[a-z]{2})(?![\w-])(?:[/:?#][^\s)\]]*)?/gi;
+const EMAIL = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
 /**
- * The model's text made safe and plain: no fences, no HTML, no links or web addresses, no pictures, no em dashes. What
- * is left is read by the same formatter as everything else, which carries no link or script anyway: this takes out
- * the words of them too, so a draft cannot print an address someone did not type.
+ * The model's text made safe and plain: no fences, no HTML, no links, no web or email addresses, no pictures, no em
+ * dashes. What is left is read by the same formatter as everything else, which carries no link or script anyway: this
+ * takes out the words of them too, so a draft cannot print an address that is not in `typed` (what the person typed
+ * in the writing view: the description, the text and the request).
  */
-export function cleanModelText(raw: string): string {
+export function cleanModelText(raw: string, typed = ''): string {
   let s = String(raw ?? '').replace(/\r\n?/g, '\n');
+  const mine = String(typed ?? '').toLowerCase();
+  const keep = (m: string) => (mine && mine.includes(m.toLowerCase()) ? m : '');
   s = s.replace(/^\s*```[a-z]*\s*$/gim, '');
   s = s.replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '');
   s = s.replace(/<\/?[a-z!][^>]*>/gi, '');
   s = s.replace(/!\[[^\]]*\]\((?:[^()]|\([^()]*\))*\)/g, '');
   s = s.replace(/\[([^\]\n]+)\]\((?:[^()\s]|\([^()\s]*\))+(?:\s+"[^"]*")?\)/g, '$1');
-  s = s.replace(/\b(?:https?|ftp|javascript|data|vbscript|file):\/*[^\s)\]]*/gi, '');
-  s = s.replace(/\bwww\.[^\s)\]]+/gi, '');
+  s = s.replace(/\b(?:https?|ftp|javascript|data|vbscript|file):\/*[^\s)\]]*/gi, keep);
+  s = s.replace(/\bwww\.[^\s)\]]+/gi, keep);
+  s = s.replace(EMAIL, keep);
+  s = s.replace(HOST, (m) => keep(m) || keep(m.replace(/[/:?#].*$/, '')));
   s = s.replace(/&(lt|gt|amp|quot|#39|nbsp);/g, (_, e) => ({ lt: '<', gt: '>', amp: '&', quot: '"', '#39': "'", nbsp: ' ' } as any)[e]);
   s = s.replace(/<|>/g, '');
   s = s.replace(/\s*—\s*/g, ', ');
+  s = s.replace(/[ \t]+([.,;:])/g, '$1').replace(/[ \t]{2,}/g, ' ');
   s = s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
   return s.trim().slice(0, WRITE_TEXT_MAX);
 }

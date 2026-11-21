@@ -38,6 +38,7 @@ import { STAMP_IS } from '../lib/stamps.ts';
 import { CONVERT_API, CONVERTED_SCHEMA, ORIGINAL_PATH } from './openapi-convert.ts';
 import { PAGES_PATH } from './openapi-pages.ts';
 import { starterPaths } from './openapi-starters.ts';
+import { writePaths } from './openapi-writedoc.ts';
 
 // A machine-readable description of the developer API, served at /api/openapi.json.
 // It is written by hand and kept honest by a test: every path here must exist in the router.
@@ -417,6 +418,8 @@ export function openapi() {
       ...reportPaths(),
       // Ready-made templates (src/server/openapi-starters.ts).
       ...starterPaths(),
+      // Writing a document in the app (src/server/openapi-writedoc.ts).
+      ...writePaths(),
       '/public/check/report': { post: { summary: 'Report the email a security code came from, without opening its signing link', description: 'Counts exactly like a report made on the signing page: enough different recipients reporting one account pause its sending until a person has looked. The code of an email whose document the sender has deleted since still works: the report is filed against the account that sent it, and the answer has "deleted": true. A report from the visitor of a public form is kept for a person to look at and does not count towards the pause, also after the owner deleted that start. The code of an email to a member of a signing group reports as that member, and nothing more is emailed to that member about the document ("mail_stopped": true), as when they report it on their signing page; the other members are not affected. Answers 404 for a code we do not recognise, and for a code whose document and account are both gone.', security: [], requestBody: body({ type: 'object', required: ['code'], properties: { code: str, reason: { type: 'string', enum: ABUSE_REASONS }, detail: str } }), responses: ok({ type: 'object', properties: { ok: { type: 'boolean' }, mail_stopped: { type: 'boolean' } } }) } },
     },
   };

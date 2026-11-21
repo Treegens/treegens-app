@@ -42,7 +42,7 @@ export default function ProcessingSummary() {
         <h2>Who decides, and who handles</h2>
         <ul className="pub-list">
           <li><b>You, the account holder,</b> decide which documents are uploaded, who they are sent to and how long they are kept.</li>
-          <li><b>The operator of this server</b> stores and handles them for you with this software. The software does not read documents to sell anything, does not pass them to an AI service and does not use them to train one. What the operator does beyond the software is for them to say.</li>
+          <li><b>The operator of this server</b> stores and handles them for you with this software. The software does not read documents to sell anything, does not pass them to an AI service and does not use them to train one{d.processors.some((p) => p.id === 'chat') ? ' (the one exception is below: a text someone writes in the app and asks the AI to draft or change)' : ''}. What the operator does beyond the software is for them to say.</li>
           <li><b>The people you send to</b> get what you send them, and keep their own copy of what they signed.</li>
         </ul>
 
@@ -56,6 +56,8 @@ export default function ProcessingSummary() {
           <li><b>Payments, if you pay:</b> what was paid, refunded and bought, and the provider&apos;s reference for it. A full card number never reaches this server.</li>
           <li><b>Help requests:</b> what was written, by whom, and the answers.</li>
           <li><b>The help chat:</b> {CHAT_KEPT_PAGE}{d.processors.some((p) => p.id === 'chat') ? ' What is typed into it goes to the help chat provider in the table below, to be answered.' : ' On this server it answers from the built-in help, so nothing typed into it leaves the server.'}</li>
+          {/* Writing a document in the app (src/server/writedoc.ts) uses the same model and settings as the help chat. */}
+          {d.processors.some((p) => p.id === 'chat') && <li><b>Writing a document in the app:</b> on accounts whose AI switch is on, when someone presses &ldquo;Write it&rdquo; or &ldquo;Ask for a change&rdquo;, what they typed in that writing view (their description, the text and the change they ask for) goes to the same provider as the help chat, to write it. Never other documents, contacts or anything from other envelopes, and nothing that says who is asking. Nothing of it is kept beyond the text the person chooses to make into a document, which is kept with that document.</li>}
         </ul>
 
         <h2>For how long</h2>
@@ -90,7 +92,7 @@ export default function ProcessingSummary() {
         <h2>Where it is, and who else handles it</h2>
         <ul className="pub-list">
           <li><b>The server and its files:</b> <Stated value={d.region} what="where it is hosted" /> {d.host ? <>Hosted by {d.host}.</> : notSaid('which company hosts it')} There is one region, and it cannot be chosen.</li>
-          <li><b>What leaves the server:</b> only what the table lists. There is no analytics service and no advertising{d.processors.some((p) => p.id === 'chat') ? '. The one AI service is the help chat\'s, and it gets only what people type into the chat.' : ', and no AI service.'}</li>
+          <li><b>What leaves the server:</b> only what the table lists. There is no analytics service and no advertising{d.processors.some((p) => p.id === 'chat') ? '. The one AI service is the help chat\'s, and it gets only what people type into the chat, and what they type in the writing view when they ask it to write.' : ', and no AI service.'}</li>
         </ul>
         <ProcessorTable d={d} />
         {d.off.length > 0 && <p style={{ marginTop: 12 }}><b>Not in use on this server:</b> {d.off.join(' ')}</p>}

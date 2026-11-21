@@ -449,7 +449,8 @@ export function Editor({ id }: { id: string }) {
       // Said once, where the file goes, and gone as soon as there is one. The cursor goes to the file chooser.
       setNudge('file');
       setStep(1);
-      return void setTimeout(() => document.querySelector<HTMLElement>('.ed-drop input[type="file"]')?.focus(), 0);
+      // With the writing view open, the cursor goes to its "Use this document" (editor/WriteDoc.tsx) instead.
+      return void setTimeout(() => (document.getElementById('wd-use') || document.querySelector<HTMLElement>('.ed-drop input[type="file"]'))?.focus(), 0);
     }
     // A new document with a file and nobody typed in: stay, say so where people are added, and put the cursor in
     // the first empty name box. A template's roles and a document that is already out are not asked this.

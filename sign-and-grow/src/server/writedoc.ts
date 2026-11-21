@@ -27,7 +27,7 @@ import { validClaimSpans } from './chatguard.ts';
 import { admit, modelCall } from './chat.ts';
 import { aiAnswersFor } from './tenantpolicy.ts';
 import { chatProvider, chatModelOn } from '../lib/chatprovider.ts';
-import { handOverReason, HAND_OVER_TEXT, limitText } from '../lib/chat.ts';
+import { handOverReason, HAND_OVER_TEXT, CHAT_PER_ADDRESS_MINUTE, CHAT_PER_ADDRESS_DAY, CHAT_PER_LINK_DAY, CHAT_PER_ACCOUNT_DAY, type ChatLimit } from '../lib/chat.ts';
 import { PRINT_MARK, shownChars } from '../lib/scripts.ts';
 import {
   writeBlocks, blanksIn, tagsIn, cleanModelText, blanksLine, sentLine, WRITE_TEXT_MAX, WRITE_TITLE_MAX, WRITE_PROMPT_MAX, WRITE_CHANGE_MAX,
@@ -280,6 +280,31 @@ export function writtenWords(e: any): string[] {
 }
 
 // ---- Honest words in a draft ---------------------------------------------------------------------------------------
+// What the chat's backstop does not look for, because the chat is not asked to write documents: that a lawyer or a
+// court approved the text, that it meets the law, that it has legal force, that it is airtight. `true`: the sentence
+// goes; `false`: only the words ("a court-approved agreement" becomes "an agreement").
+const MORE_CLAIMS: [RegExp, boolean][] = [
+  [/\b(?:approved|reviewed|checked|drafted|written|vetted|certified|endorsed|prepared)\s+by\s+(?:a\s+|an\s+|our\s+|the\s+|your\s+)?(?:qualified\s+|licensed\s+|professional\s+)?(?:lawyers?|attorneys?|solicitors?|barristers?|notar(?:y|ies)|legal\s+(?:team|counsel|experts?|professionals?)|courts?|judges?)\b/gi, true],
+  [/\b(?:lawyer|attorney|solicitor|court|legally|judge)[- ](?:approved|reviewed|vetted|certified|proof|tested)\b/gi, false],
+  [/\b(?:meets?|meeting|satisf(?:y|ies)|fulfil+s?|complies\s+with|comply\s+with|compliant\s+with|conforms?\s+(?:to|with)|in\s+line\s+with)\s+(?:all\s+|every\s+|any\s+|the\s+)?(?:applicable\s+|relevant\s+|current\s+)?(?:legal\s+(?:requirements?|standards?|rules?)|requirements?\s+of\s+(?:the\s+)?law|laws?\b|regulations?)/gi, true],
+  [/\b(?:has|have|carries|carry|with|gives?)\s+(?:full\s+|the\s+full\s+|complete\s+)?legal\s+(?:force|effect|weight|standing|validity)\b/gi, true],
+  [/\blegally\s+(?:sound|compliant|airtight|watertight|approved|effective|correct)\b/gi, false],
+  [/\b(?:air-?tight|water-?tight|bullet-?proof|iron-?clad)\b/gi, false],
+];
+const TAKEN_BACK = /(?:\b(?:not|never|no|nobody|cannot|whether|if|unless)\b|n['’]t\b)/i;
+function moreClaimSpans(text: string): [number, number, boolean][] {
+  const out: [number, number, boolean][] = [];
+  for (const [re, whole] of MORE_CLAIMS) {
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re)) {
+      const before = text.slice(Math.max(0, m.index - 200), m.index);
+      const clause = before.slice(Math.max(...[...'.;:!?,\n'].map((c) => before.lastIndexOf(c))) + 1);
+      if (TAKEN_BACK.test(clause)) continue;
+      out.push([m.index, m.index + m[0].length, whole]);
+    }
+  }
+  return out;
+}
 const PREDICATE = /^(?:is|are|was|were|['’]s|['’]re|will|would|should|shall|remains?|stays?|does|do|can|courts?|judges?|holds?|stands?|has|have|carries|carry|counts?|good|fine|ok|okay|accepted|recogni)/i;
 /**
  * A draft with every claim that it is valid, binding or enforceable or will hold up taken out, read the way the chat's
@@ -287,12 +312,12 @@ const PREDICATE = /^(?:is|are|was|were|['’]s|['’]re|will|would|should|shall|
  * both parties." loses the sentence. `taken` counts what was taken out, so the person is told.
  */
 export function withoutClaims(text: string): { text: string; taken: number } {
-  const spans = validClaimSpans(text);
+  const spans: [number, number, boolean][] = [...validClaimSpans(text).map(([a, b]): [number, number, boolean] => [a, b, PREDICATE.test(text.slice(a, b))]), ...moreClaimSpans(text)].sort((x, y) => x[0] - y[0]);
   if (!spans.length) return { text, taken: 0 };
   const cuts: [number, number][] = [];
-  for (const [a, b] of spans) {
+  for (const [a, b, whole] of spans) {
     if (cuts.some(([x, y]) => a >= x && b <= y)) continue;
-    if (PREDICATE.test(text.slice(a, b))) {
+    if (whole) {
       // The sentence it stands in: from the end of the one before to its own full stop.
       let s = a;
       while (s > 0 && !/[.!?\n]/.test(text[s - 1])) s--;
@@ -311,7 +336,7 @@ export function withoutClaims(text: string): { text: string; taken: number } {
     .replace(/^(#{1,3}|[-*•]|\d{1,3}[.)])\s*$/gm, '').replace(/\n{3,}/g, '\n\n');
   return { text: out.trim(), taken: cuts.length };
 }
-export const CLAIMS_TAKEN = 'We took out words that said this document is binding, valid or enforceable, or will hold up. Nobody here can promise that: it depends on the law where you are and on the kind of document.';
+export const CLAIMS_TAKEN = 'We took out words that said this document is binding, valid or enforceable, approved by a lawyer or a court, meets the law, or will hold up. Nobody here can promise that: it depends on the law where you are and on the kind of document.';
 
 // ---- Who may ask, and how much -------------------------------------------------------------------------------------
 /** WRITE_AI_DAILY_LIMIT: drafts and changes per account per day (UTC). 0 switches asking the AI off on this server. */
@@ -334,6 +359,15 @@ export function writeInfo(accountId: string, userId: string) {
 const dayKey = (accountId: string) => `write:${hmac(`write-limit:${accountId}`).slice(0, 32)}`;
 const today = () => `d:${new Date().toISOString().slice(0, 10)}`;
 const usedToday = (accountId: string) => get('SELECT n FROM chat_counts WHERE key=? AND slot=?', dayKey(accountId), today())?.n || 0;
+// The help chat's limits, said for the writing view: the chat's own sentence talks about its built-in answers.
+const LIMIT_WHAT: Record<ChatLimit, string> = {
+  address_minute: `${CHAT_PER_ADDRESS_MINUTE} requests a minute from this internet connection`,
+  address_day: `${CHAT_PER_ADDRESS_DAY} requests a day from this internet connection`,
+  link_day: `${CHAT_PER_LINK_DAY} requests a day from one signing page`,
+  account_day: `${CHAT_PER_ACCOUNT_DAY} requests a day from this account`,
+  daily: 'the number of requests it can take today for everyone',
+};
+export const busyText = (which: ChatLimit, until: string) => `The AI has reached its limit of ${LIMIT_WHAT[which]}, shared with the help chat. You can ask again after ${until}. Your text is as you left it, and typing and the starters still work.`;
 export const DAILY_FULL = (n: number) => `You have asked for ${n} drafts and changes today, which is the most for one account in a day. Typing and the starters still work. You can ask again after midnight UTC.`;
 /** One more draft or change, if every limit has room: the account's own daily number, then the chat's per-minute and per-day limits. */
 export function admitWrite(who: { ip: string; account: string }): { ok: true } | { ok: false; text: string } {
@@ -341,7 +375,7 @@ export function admitWrite(who: { ip: string; account: string }): { ok: true } |
   // No await between the three steps, so nothing else runs in between on this server. admit() is its own transaction.
   if (usedToday(who.account) >= max) return { ok: false, text: DAILY_FULL(max) };
   const a = admit({ ip: who.ip, account: who.account });
-  if (!a.ok) return { ok: false, text: `${limitText(a.which, `${a.until.toISOString().slice(11, 16)} UTC`)} Typing and the starters still work.` };
+  if (!a.ok) return { ok: false, text: busyText(a.which, `${a.until.toISOString().slice(11, 16)} UTC`) };
   run('INSERT INTO chat_counts (key, slot, n, at) VALUES (?,?,1,?) ON CONFLICT(key, slot) DO UPDATE SET n=n+1, at=excluded.at', dayKey(who.account), today(), now());
   return { ok: true };
 }
@@ -349,13 +383,14 @@ export function admitWrite(who: { ip: string; account: string }): { ok: true } |
 // ---- What may not be asked for -------------------------------------------------------------------------------------
 const PAPERS = String.raw`(?:invoices?|bills?|receipts?|notices?|statements?|letters?|renewals?|subscriptions?|orders?|refunds?|certificates?|documents?|contracts?|ids?|licen[cs]es?|notes?|references?|emails?|messages?|signatures?)`;
 const DECEIVE = new RegExp(String.raw`\b(?:(?:fake|faked|forged?|counterfeit|bogus|phony|phoney)\s+(?:\w+\s+){0,3}?${PAPERS}|forgery|impersonat\w*|spoof\w*|phish\w*|pretend(?:ing)? to (?:be|come from)|pos(?:e|ing) as|as if it (?:came|comes|is|was) from|look(?:s|ing)? like it (?:came|comes|is|was) from|so (?:they|he|she|people) (?:think|believe) (?:it|this)|official[- ]looking|on (?:their|his|her|the bank'?s?|the company'?s?) letterhead|trick (?:them|him|her|people|someone)|(?:in the name of|on behalf of|signed as|from)\s+(?:the\s+)?(?:tax office|irs|hmrc|police|government|bank of)\b)`);
-// "An invoice from PayPal", "a notice in the name of Amazon": a paper said to come from a real company.
-const FROM_BRAND = new RegExp(String.raw`\b${PAPERS}\b[^.;:!?\n]{0,40}?\b(?:from|by|in the name of|on behalf of|as|of)\s+([^.,;:!?\n]{2,40})`, 'g');
+// "An invoice from PayPal", "a notice in the name of Amazon": a paper said to come from a real company. Not "paid by
+// PayPal" or "a receipt of payment by Venmo": the way money was paid names a company without posing as it.
+const FROM_BRAND = new RegExp(String.raw`\b${PAPERS}\b[^.;:!?\n]{0,40}?\b(?:from|in the name of|on behalf of)\s+([^.,;:!?\n]{2,40})`, 'g');
 export const DECEIVE_TEXT = 'We cannot write a document meant to deceive someone or to look as if it came from a real company, a bank or a public office. Describe a document between you and the people who sign it, under your own name.';
 /** Whether a description or a request asks for a document that deceives or poses as someone: the words people use
  *  when they ask for a fake, a paper said to come from a company the send filter knows, and that filter itself
  *  (a brand, words about money and a phone number, fakenotice.ts). */
-export function deceptive(text: string): boolean {
+export function deceptive(text: string, lure = true): boolean {
   const p = plain(text);
   if (DECEIVE.test(p)) return true;
   for (const m of p.matchAll(FROM_BRAND)) {
@@ -363,7 +398,7 @@ export function deceptive(text: string): boolean {
     const name = m[1].split(/\s+(?:for|to|and|with|on|about|that|which|saying|asking|in|at|dated|because|so)\b/)[0].trim();
     if (name && posesLike(name)) return true;
   }
-  return !!lureIn([text]);
+  return lure && !!lureIn([text]);
 }
 
 // ---- The model -------------------------------------------------------------------------------------------------------
@@ -374,7 +409,7 @@ const RULES = [
   'Use only these marks: a line that starts with "## " is a heading, a line that starts with "- " is a list item, "1. " a numbered item, **two stars** around words make them bold, an empty line starts a new paragraph. No tables, no links, no web addresses, no HTML, no pictures, no code.',
   'Use the names, amounts, dates and other facts the person gave, exactly as given. Never make up facts about the people: no names, addresses, amounts, dates or numbers they did not give. Where something the document needs is missing, write a short blank in square brackets instead, such as [client\'s address] or [date].',
   'Do not name a governing law, a country, a state, a court or a place for disputes unless the person named one.',
-  'Never write that the document is legally binding, enforceable, valid, lawful, lawyer-approved or compliant, or that it will hold up in court. Do not say what the law requires and give no legal advice.',
+  'Never write that the document is legally binding, enforceable, valid, lawful or lawyer-approved, or that it meets any law or will hold up in court. Do not say what the law requires and give no legal advice.',
   'Where each person signs, write a line with {{signature}} {{date}} and under it {{name}} for the first person; {{signature2}} {{date2}} and {{name2}} for the second, and so on. Something a signer fills in while signing is {{text:Label}}, a tick box is {{checkbox}}. Use no other curly brackets.',
   'Keep it short: at most about 600 words, in simple words a person reads once and understands. Write in the language the person wrote in.',
   'If you are asked for a document that deceives someone, or that pretends to come from a real company, a bank, a public office or another person, answer with the single word REFUSE.',
@@ -383,7 +418,7 @@ const DRAFT_SYSTEM = `${RULES}\nStart with one line: "# " and a short title. The
 const CHANGE_SYSTEM = `${RULES}\nYou are given a document and a change to make to it. Answer with the whole document after the change, and nothing else. Change only what the request asks for; keep every other word, tag and [blank] exactly as it was.`;
 const PASSAGE_SYSTEM = `${RULES}\nYou are given a passage of a longer document and a change to make to it. Answer with the passage after the change, and nothing else. Keep every tag and [blank] that the change does not touch.`;
 
-export type Ask = { kind: 'draft'; prompt: string } | { kind: 'change'; text: string; request: string; passage?: string };
+export type Ask = { kind: 'draft'; prompt: string } | { kind: 'change'; text: string; request: string; passage?: string; at?: number };
 const messagesFor = (a: Ask) =>
   a.kind === 'draft' ? [{ role: 'system' as const, content: DRAFT_SYSTEM }, { role: 'user' as const, content: `Write this document: ${a.prompt}` }]
     : a.passage ? [{ role: 'system' as const, content: PASSAGE_SYSTEM }, { role: 'user' as const, content: `The passage:\n<<<\n${a.passage}\n>>>\n\nThe change: ${a.request}` }]
@@ -404,10 +439,35 @@ export function checkAsk(b: any): Ask {
   if (request.length > WRITE_CHANGE_MAX) throw bad(`Say the change in up to ${WRITE_CHANGE_MAX} characters.`, 413);
   if (!text.trim()) throw bad('There is no text to change yet. Write some, or ask for a draft first.');
   if (text.length > WRITE_TEXT_MAX) throw bad(`The text is longer than ${WRITE_TEXT_MAX.toLocaleString('en')} characters. Make it shorter first.`, 413);
-  if (deceptive(request) || deceptive(text)) throw bad(DECEIVE_TEXT, 400, { code: 'deceptive' });
+  // The text is read for the words people use when they ask for a fake, not for the send filter's mix of a brand, money
+  // and a phone number: a filled permission form names a shop, a price and a phone, and the send filter reads the
+  // finished document anyway (writtenWords).
+  if (deceptive(request) || deceptive(text, false)) throw bad(DECEIVE_TEXT, 400, { code: 'deceptive' });
   const s = Number(b?.selection?.start), e = Number(b?.selection?.end);
   const passage = Number.isInteger(s) && Number.isInteger(e) && s >= 0 && e > s && e <= text.length ? text.slice(s, e) : undefined;
-  return { kind: 'change', text, request, ...(passage && passage.trim() ? { passage } : {}) };
+  return { kind: 'change', text, request, ...(passage && passage.trim() ? { passage, at: s } : {}) };
+}
+
+/** Everything the person typed in the writing view for this ask: an address in it may stay in the answer. */
+const typedIn = (a: Ask) => (a.kind === 'draft' ? a.prompt : `${a.text}\n${a.request}`);
+/**
+ * What came before Stop, made safe like a whole answer (POST /write/tidy): the view holds the raw pieces, and this is
+ * what it keeps. `typed` is what the person typed, so an address of their own may stay.
+ */
+export function tidyStopped(raw: string, typed: string, draft: boolean): { text: string; title?: string; notes: string[] } {
+  let clean = cleanModelText(str(raw, WRITE_ANSWER_MAX + 1).slice(0, WRITE_ANSWER_MAX), str(typed, WRITE_TEXT_MAX + WRITE_PROMPT_MAX + WRITE_CHANGE_MAX + 2));
+  let title: string | undefined;
+  if (draft) {
+    const m = /^#\s+(.+)\n?/.exec(clean);
+    if (m) (title = cleanTitle(m[1].replace(/\*\*/g, ''))), (clean = clean.slice(m[0].length).trim());
+  }
+  if (/^[\s*#"'`]*REFUSE\b/.test(clean)) return { text: '', notes: [] };
+  const fixed = withoutClaims(clean);
+  return { text: fixed.text, ...(title ? { title } : {}), notes: fixed.taken ? [CLAIMS_TAKEN] : [] };
+}
+/** The day's count given back when the model sent nothing. */
+export function giveBack(accountId: string) {
+  run('UPDATE chat_counts SET n=MAX(0, n-1) WHERE key=? AND slot=?', dayKey(accountId), today());
 }
 
 export const MODEL_DOWN = 'The AI could not write it just now. Your text is as you left it. Try again in a minute, or carry on typing.';
@@ -422,7 +482,7 @@ export const MODEL_DOWN = 'The AI could not write it just now. Your text is as y
  *   {error: "sentence"}               nothing usable came; the view keeps what it had
  * `gone` is the request's own signal: Stop in the view, or the tab closing, stops the model too.
  */
-export async function askModel(a: Ask, gone?: AbortSignal | null): Promise<Response> {
+export async function askModel(a: Ask, gone?: AbortSignal | null, nothingCame?: () => void): Promise<Response> {
   const p = chatProvider()!;
   const abort = new AbortController();
   let late = false;
@@ -511,10 +571,13 @@ export async function askModel(a: Ask, gone?: AbortSignal | null): Promise<Respo
       }
       if (gone?.aborted) {
         // Stopped by the person: nothing more to say, and the view keeps what came.
-      } else if (/^\s*REFUSE\b/.test(text) && text.trim().length < 40) send({ error: DECEIVE_TEXT, code: 'deceptive' });
-      else if (!text.trim()) send({ error: late ? MODEL_DOWN : broke ? MODEL_DOWN : 'The AI sent back nothing. Your text is as you left it. Try again, or say it another way.' });
-      else {
-        let clean = cleanModelText(text);
+      } else if (/^[\s*#"'`]*REFUSE\b/.test(text)) send({ error: DECEIVE_TEXT, code: 'deceptive' });
+      else if (!text.trim()) {
+        // Nothing came back: it does not count against the account's number for the day.
+        nothingCame?.();
+        send({ error: late ? MODEL_DOWN : broke ? MODEL_DOWN : 'The AI sent back nothing. Your text is as you left it. Try again, or say it another way.' });
+      } else {
+        let clean = cleanModelText(text, typedIn(a));
         let title: string | undefined;
         if (a.kind === 'draft') {
           const m = /^#\s+(.+)\n?/.exec(clean);
@@ -528,8 +591,8 @@ export async function askModel(a: Ask, gone?: AbortSignal | null): Promise<Respo
         // A passage comes back as the passage: it is put back where it was taken from.
         let whole = fixed.text;
         if (a.kind === 'change' && a.passage) {
-          const at = a.text.indexOf(a.passage);
-          whole = at >= 0 ? a.text.slice(0, at) + fixed.text + a.text.slice(at + a.passage.length) : a.text;
+          const at = a.at ?? -1;
+          whole = at >= 0 && a.text.slice(at, at + a.passage.length) === a.passage ? a.text.slice(0, at) + fixed.text + a.text.slice(at + a.passage.length) : a.text;
         }
         send({ done: true, text: whole.slice(0, WRITE_TEXT_MAX), ...(title ? { title } : {}), notes, ...(late || cut ? { cut: true } : {}) });
       }

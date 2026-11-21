@@ -164,7 +164,7 @@ test('headings, lists, bold, right-to-left and Latin in one document; a script i
   assert.deepEqual(blocks.map((b) => b.kind), ['h1', 'h2', 'ul', 'ol', 'p', 'p', 'p', 'p', 'p']);
   assert.ok(blocks[2].items[1].some((p) => p.bold && p.text === 'bold'));
   assert.ok(blocks.at(-1)!.items[0].some((p) => p.tag?.type === 'signature'));
-  assert.equal(lib.tagChip({ type: 'signature', signer: 2, label: '' }), 'Signature, Signer 2');
+  assert.equal(lib.tagChip({ type: 'signature', signer: 2, label: '' }), 'Signature, Person 2', 'the word step 2 uses');
 });
 
 test('the title is checked like a starter name, and a text too long is refused in words', async () => {
@@ -356,4 +356,153 @@ test('withoutClaims and cleanModelText on their own', () => {
   assert.equal(wd.withoutClaims('Pay on time. This contract is binding on both sides. Sign below.').text, 'Pay on time. Sign below.', 'a sentence that claims goes');
   assert.equal(wd.withoutClaims('Either side may end it. Nobody can say whether it is valid.').taken, 0, 'a claim taken back stays');
   assert.equal(lib.cleanModelText('A—B <i>c</i> [d](javascript:alert(1)) ![p](x.png)'), 'A, B c d');
+});
+
+test('the send filter reads the words of a written document', async () => {
+  const c = await person();
+  const r = await c.post('/write/render', { title: 'Order', text: 'Your PayPal order of $499 was charged. Call +1 800 555 0199 to cancel.\n\n{{signature}}' });
+  assert.equal(r.status, 200);
+  const f = r.data.fields[0];
+  const env = (await c.post('/envelopes', { subject: 'Order', documents: [{ id: 'd', file_id: r.data.file.id }], recipients: [{ id: 'a', role: 'signer', name: 'Pat Doe', email: 'pat@example.com' }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'a', type: 'signature', page: f.page, x: f.x, y: f.y, w: f.w, h: f.h }] })).data.envelope;
+  const sent = await c.post(`/envelopes/${env.id}/send`);
+  assert.notEqual(sent.status, 200, 'a fake payment notice written here is stopped at sending like any other');
+});
+
+// ---- Repairs after the skeptic and the simplicity review -------------------------------------------------------------
+test('a selected passage is put back where it was selected, even when the same words stand earlier', async () => {
+  model();
+  const c = await person();
+  const text = 'Pay in 14 days.\n\nPay in 14 days.\n\n{{signature}}';
+  const second = text.indexOf('Pay', 5);
+  stub(() => sse(['Pay in 30 days.']));
+  const done = last(await c.post('/write/change', { text, request: 'Make it 30', selection: { start: second, end: second + 15 } }));
+  assert.equal(done.text, 'Pay in 14 days.\n\nPay in 30 days.\n\n{{signature}}');
+  // A whole-text ask after it sends the whole text: the server takes no selection it was not given.
+  stub(() => sse(['Pay in 30 days.\n\nPay in 30 days.\n\n{{signature}}']));
+  const whole = last(await c.post('/write/change', { text: done.text, request: 'Make both 30' }));
+  assert.equal(whole.text, 'Pay in 30 days.\n\nPay in 30 days.\n\n{{signature}}');
+  assert.match(calls[0].body.messages[1].content, /The document:/);
+});
+
+test('signer numbers count again from 1 without gaps, so a high number adds no empty rows', async () => {
+  const c = await person();
+  const r = await c.post('/write/render', { title: 'Nine', text: 'Only one person signs here: {{signature9}} {{date9}}' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.deepEqual([...new Set(r.data.fields.map((f: any) => f.signer))], [1]);
+  const two = await c.post('/write/render', { title: 'Two', text: '{{signature}}\n\n{{signature99}} {{name99}}' });
+  assert.deepEqual(two.data.fields.map((f: any) => f.signer), [1, 2, 2]);
+  assert.equal(lib.signersNeeded('{{signature}} {{signature12}}'), 2);
+  assert.equal(lib.tagChip(lib.tagsIn('{{signature12}}')[0]), 'Signature, Person 1');
+  // The preview numbers the tags of the whole text, not line by line.
+  const chips = lib.writeBlocks('A {{signature}}\n\nB {{signature5}}').map((b) => b.items[0].filter((p) => p.tag).map((p) => p.tag!.signer));
+  assert.deepEqual(chips, [[1], [2]]);
+  // "Add a place to sign" gives a number above every one in use.
+  assert.match(lib.nextPlace('{{signature}} {{signature5}}'), /\{\{signature6\}\}/);
+  assert.equal(lib.nextPlace(''), '{{signature}} {{date}}\n{{name}}');
+});
+
+test('a model refusal of any length is a refusal, never the draft', async () => {
+  model();
+  const c = await person();
+  stub(() => sse(['REFUSE. I will not write a fake bank notice because that would deceive people.']));
+  const d = last(await c.post('/write/draft', { prompt: 'A notice for my tenants about the bins' }));
+  assert.equal(d.code, 'deceptive');
+  assert.equal(d.text, undefined);
+  // A title that only starts with the word is a draft.
+  stub(() => sse(['# Refuse collection rota\nWe take the bins out in turn.\n\n{{signature}}']));
+  const ok = last(await c.post('/write/draft', { prompt: 'A rota for taking out the bins' }));
+  assert.ok(ok.done);
+  assert.equal(ok.title, 'Refuse collection rota');
+});
+
+test('a failed model call gives the day back; a refusal or a draft does not', async () => {
+  model();
+  process.env.WRITE_AI_DAILY_LIMIT = '2';
+  const c = await person();
+  stub(() => new Response('down', { status: 503 }));
+  assert.equal(last(await c.post('/write/draft', { prompt: 'One' })).error, wd.MODEL_DOWN);
+  assert.equal(last(await c.post('/write/draft', { prompt: 'Two' })).error, wd.MODEL_DOWN);
+  assert.equal((await c.get('/write')).data.left, 2, 'nothing came, nothing counted');
+  stub(() => sse(['Fine.']));
+  assert.ok(last(await c.post('/write/draft', { prompt: 'Three' })).done);
+  stub(() => sse(['REFUSE']));
+  assert.equal(last(await c.post('/write/draft', { prompt: 'Four' })).code, 'deceptive');
+  const fifth = await c.post('/write/draft', { prompt: 'Five' });
+  assert.equal(fifth.status, 429);
+  assert.equal(fifth.data.error, wd.DAILY_FULL(2));
+});
+
+test('web and email addresses the person did not type are taken out of a draft; their own stay', async () => {
+  for (const [raw, want] of [
+    ['See evil-pay.example/x today.', 'See today.'],
+    ['Pay at paypal-secure.com now.', 'Pay at now.'],
+    ['Write to a@b.com.', 'Write to.'],
+    ['HTTPS://EVIL.EXAMPLE/pay', ''],
+    ['Section 2.1 of the plan.pdf, e.g. now. U.S. rules. Pay $3.50.', 'Section 2.1 of the plan.pdf, e.g. now. U.S. rules. Pay $3.50.'],
+  ] as const) assert.equal(lib.cleanModelText(raw), want, raw);
+  assert.equal(lib.cleanModelText('Reach Sam at sam@lee.example or lee-studio.com.', 'my email is sam@lee.example and my site lee-studio.com'), 'Reach Sam at sam@lee.example or lee-studio.com.');
+  model();
+  const c = await person();
+  stub(() => sse(['# Job\nPay to sam@lee.example, not to pay@evil.example. Details at evil-pay.example/x.\n\n{{signature}}']));
+  const d = last(await c.post('/write/draft', { prompt: 'A job for me, Sam, sam@lee.example' }));
+  assert.match(d.text, /sam@lee\.example/);
+  assert.doesNotMatch(d.text, /evil/);
+});
+
+test('claims of a lawyer, a court or the law approving the text are taken out too', () => {
+  for (const [s, want] of [
+    ['This agreement is approved by a lawyer. Pay on time.', 'Pay on time.'],
+    ['This NDA meets all legal requirements.', ''],
+    ['This is a court-approved agreement.', 'This is an agreement.'],
+    ['This document has full legal force.', ''],
+    ['A lawyer-approved, airtight contract.', 'A, contract.'],
+    ['It complies with all applicable laws.', ''],
+  ] as const) {
+    const r = wd.withoutClaims(s);
+    assert.equal(r.text, want, s);
+    assert.ok(r.taken > 0, s);
+  }
+  assert.equal(wd.withoutClaims('This was not reviewed by a lawyer.').taken, 0, 'a claim taken back stays');
+});
+
+test('Stop: what came is made safe on the server like a whole draft (POST /write/tidy)', async () => {
+  const c = await person();
+  const r = await c.post('/write/tidy', { text: '# Lease\nThis is a legally binding agreement. See evil-pay.example/x <b>now</b>', typed: 'A lease', kind: 'draft' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.title, 'Lease');
+  assert.doesNotMatch(r.data.text, /legally binding|evil|<b>/);
+  assert.match(r.data.text, /This is an agreement\./);
+  assert.ok(r.data.notes.includes(wd.CLAIMS_TAKEN));
+  assert.equal((await c.post('/write/tidy', { text: 'REFUSE. No.', kind: 'draft' })).data.text, '', 'a refusal is never kept');
+  assert.equal((await new Client().post('/write/tidy', { text: 'x' })).status, 401);
+});
+
+test('honest receipts and filled forms that name a payment service or a shop are not refused', async () => {
+  for (const ok of ['A receipt for a phone I sold, paid by PayPal', 'Receipt of payment by Venmo for babysitting', 'A receipt for a bike I sold to Sam, paid through PayPal']) assert.equal(wd.deceptive(ok), false, ok);
+  for (const bad of ['An invoice from PayPal for $400 for a laptop', 'A fake receipt from Venmo']) assert.equal(wd.deceptive(bad), true, bad);
+  model();
+  const c = await person();
+  const consent = lib.WRITE_STARTERS.find((s) => s.id === 'consent')!.text
+    .replace('[what is allowed, for example my child to join the school trip to the museum]', 'my child to join a trip to the Apple Store to learn coding, cost $20')
+    .replace(/\[[^\]\n]+\]/g, 'Ms Lee, +1 415 555 0134');
+  stub(() => sse([consent.replace('$20', '$25')]));
+  const r = await c.post('/write/change', { text: consent, request: 'Make it $25' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.ok(last(r).done);
+});
+
+test('the chat limit a writing request runs into is said in writing words, not the chat\'s', async () => {
+  model();
+  const c = await person();
+  stub(() => sse(['Fine.']));
+  let r: any;
+  for (let i = 0; i < 12; i++) {
+    r = await c.post('/write/draft', { prompt: `Ask ${i}` });
+    if (r.status !== 200) break;
+  }
+  assert.equal(r.status, 429);
+  assert.match(r.data.error, /shared with the help chat/);
+  assert.match(r.data.error, /Your text is as you left it/);
+  assert.doesNotMatch(r.data.error, /built-in help|Talk to a person/);
 });

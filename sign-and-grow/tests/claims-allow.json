@@ -66,6 +66,11 @@
     { "file": "docs/acr.md", "has": "## EN 301 549 report", "kind": "explains", "why": "Section heading of the template." },
     { "file": "docs/acr.md", "has": "See the WCAG 2.2 report above. EN 301 549 V3.2.1 points at WCAG 2.1; every WCAG 2.1 criterion at A and AA is in", "kind": "explains", "why": "Explains which version of the guidelines the European standard refers to." },
     { "file": "docs/a11y-checks.md", "has": "It runs axe-core (rules for WCAG 2.0, 2.1 and 2.2 at levels A and AA", "kind": "explains", "why": "Names the axe-core rule sets the check runs; the document starts by saying it is not an audit." },
-    { "file": "README.md", "has": "a draft report on the VPAT 2.5 INT template, headed", "kind": "explains", "why": "Names the template the draft accessibility report follows; the next line quotes its heading Self-assessed, not audited." }
+    { "file": "README.md", "has": "a draft report on the VPAT 2.5 INT template, headed", "kind": "explains", "why": "Names the template the draft accessibility report follows; the next line quotes its heading Self-assessed, not audited." },
+    { "file": "src/server/writedoc.ts", "has": "Never write that the document is legally binding", "kind": "not-shown", "why": "The instruction the AI model gets when it writes a draft: it tells the model never to make these claims. No person reads it on a page." },
+    { "file": "src/server/writedoc.ts", "has": "drafted|written|vetted|certified|endorsed|prepared", "kind": "not-shown", "why": "A pattern withoutClaims uses to find and take OUT a claim that a lawyer or court approved a draft. No person reads it." },
+    { "file": "src/server/writedoc.ts", "has": "approved|reviewed|vetted|certified|proof|tested", "kind": "not-shown", "why": "A pattern withoutClaims uses to take OUT 'lawyer-approved' and the like from an AI draft. No person reads it." },
+    { "file": "src/server/writedoc.ts", "has": "complies\\s+with|comply\\s+with|compliant\\s+with", "kind": "not-shown", "why": "A pattern withoutClaims uses to take OUT a claim that a draft meets the law. No person reads it." },
+    { "file": "src/server/writedoc.ts", "has": "legally\\s+(?:sound|compliant|airtight", "kind": "not-shown", "why": "A pattern withoutClaims uses to take OUT 'legally sound' and the like from an AI draft. No person reads it." }
   ]
 }

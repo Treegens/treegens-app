@@ -16,7 +16,7 @@ import { PersonMore, PersonSummary, morePanelId } from './PersonMore';
 import { RemovedLine } from './RemovedLine';
 // Writing a document here instead of uploading one (WriteDoc.tsx): one quiet link under the drop zone.
 import { WriteDoc, useWriting } from './WriteDoc';
-import { WRITE_LINK } from '@/lib/writedoc';
+import { WRITE_LINK, WRITE_NEXT_NUDGE } from '@/lib/writedoc';
 
 const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Has a copy', witness: 'Witnessed' };
 
@@ -44,8 +44,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
         {anyLocked && <div className="notice warn ed-lockline" style={{ marginBottom: 10 }}><Lock size={16} /><span>{lockedNames} already finished. If you add, replace, remove or reorder a file, they have to sign again. You are asked before anything is saved. Renaming a file is always fine.</span></div>}
         {wording && <LockedLine>The files come from the template{wording.template ? ` "${wording.template}"` : ''} and stay as they are. To change them, ask {wording.ask}.</LockedLine>}
         {!wording && writing && <WriteDoc ed={ed} writing={writing} onClose={() => setWriting(null)} />}
-        {!wording && !writing && (
-          <label className={`drop ed-drop${over ? ' over' : ''}`}
+        {!wording && (
+          <label className={`drop ed-drop${over ? ' over' : ''}${writing ? ' wd-hidden' : ''}`}
             onDragOver={(e) => (e.preventDefault(), setOver(true))} onDragLeave={() => setOver(false)}
             onDrop={(e) => (e.preventDefault(), setOver(false), ed.addFiles(e.dataTransfer.files))}>
             <input type="file" className="ed-sr" multiple accept={acceptList(!!me.converts)} onChange={(e) => (ed.addFiles(e.target.files), (e.target.value = ''))} />
@@ -56,9 +56,9 @@ export function StepAdd({ ed }: { ed: Ed }) {
             <div className="muted small" data-feature={me.converts ? 'ds-convert' : undefined}>{uploadLimitsShort(!!me.converts)}</div>
           </label>
         )}
-        {!wording && !writing && !docs.length && !uploading && <p className="small" style={{ margin: '8px 0 0' }} data-feature="ds-write-doc"><button type="button" className="btn ghost sm" onClick={() => setWriting({})}>{WRITE_LINK}</button></p>}
+        {!wording && !writing && !docs.length && !uploading && <p className="small" style={{ margin: '8px 0 0' }} data-feature="ds-write-doc"><button type="button" className="btn ghost sm" style={{ minHeight: 44 }} onClick={() => setWriting({})}>{WRITE_LINK}</button></p>}
         {/* Next was pressed with no file: said here, where the file goes, and gone once one is added (Editor.tsx go). */}
-        {ed.nudge === 'file' && !docs.length && !uploading && <p className="notice warn small" role="alert" style={{ margin: '10px 0 0' }}>{NUDGE.file}</p>}
+        {ed.nudge === 'file' && !docs.length && !uploading && <p className="notice warn small" role="alert" style={{ margin: '10px 0 0' }}>{writing ? WRITE_NEXT_NUDGE : NUDGE.file}</p>}
         <p className="muted small ed-touch" style={{ margin: '8px 0 0' }}>{PAPER_HINT}</p>
 
         {uploads.length > 0 && (

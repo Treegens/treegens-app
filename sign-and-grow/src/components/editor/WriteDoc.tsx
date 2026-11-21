@@ -8,9 +8,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, toast } from '../ui';
 import { useMe } from '../AppShell';
 import type { Ed } from './shared';
+import { TAG as TAG_RE } from '@/lib/autoplace';
 import {
   AI_DRAFT_NOTE, CHANGE_PLACEHOLDER, DRAFT_PLACEHOLDER, PAPER_LABEL, WHAT_IS_SIGNED, WRITE_STARTERS, WRITE_TEXT_MAX, WRITE_TITLE_MAX, WRITE_PROMPT_MAX, WRITE_CHANGE_MAX,
-  blanksIn, blanksLine, cleanModelText, paperFor, signersNeeded, tagChip, wordDiff, writeBlocks, type DiffPart, type Paper, type Piece, type WriteBlock,
+  blanksIn, blanksLine, nextPlace, paperFor, tagChip, tagsIn, wordDiff, writeBlocks, type DiffPart, type Paper, type Piece, type WriteBlock,
 } from '@/lib/writedoc';
 
 // ---- Opening the view from a file's row ("Edit the text", FileRow.tsx) -----------------------------------------------
@@ -37,8 +38,13 @@ export function useWriting(): [Writing, (w: Writing) => void] {
 
 type Info = { ai: boolean; sent?: string; left?: number };
 type Snap = { title: string; text: string };
+// What was written when Back was pressed, so opening the view again brings it back. In this tab only, for this person,
+// until the text is made into the document.
+type Kept = Snap & { paper: Paper; ai: boolean };
+const kept = new Map<string, Kept>();
 const CSS = `
 .wd { display: grid; gap: 14px; }
+.wd-hidden { display: none !important; }
 .wd-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .wd-head h2 { margin: 0; }
 .wd-box { display: grid; gap: 6px; }
@@ -54,14 +60,17 @@ const CSS = `
 .wd-chip { display: inline-flex; align-items: center; min-height: 28px; padding: 2px 10px; margin: 2px 2px; border-radius: 6px; border: 1px dashed var(--green); background: var(--green-soft); color: var(--green-deep); font-size: 13px; font-weight: 600; vertical-align: middle; }
 .wd-chip.s2 { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
 .wd-chip.s3 { border-color: var(--amber); background: var(--amber-soft); color: #7a4f0c; }
-.wd-blank { font: inherit; border: 0; border-bottom: 2px solid var(--amber); background: var(--amber-soft); color: inherit; padding: 0 3px; min-height: 28px; cursor: pointer; border-radius: 3px; }
+.wd-blank { display: inline; font: inherit; text-align: start; white-space: normal; -webkit-box-decoration-break: clone; box-decoration-break: clone; border: 0; border-bottom: 2px solid var(--amber); background: var(--amber-soft); color: inherit; padding: 0 3px; min-height: 28px; line-height: 1.6; cursor: pointer; border-radius: 3px; }
+.wd-box textarea.wd-one { min-height: 46px; }
+.wd-diff .wd-chip { margin: 0 2px; }
+.wd-diff .wd-gap { color: var(--muted); }
 .wd-diff ins { background: var(--green-soft); color: var(--green-deep); text-decoration: none; border-bottom: 2px solid var(--green); }
 .wd-diff del { background: var(--red-soft); color: var(--red); }
 .wd-diff { white-space: pre-wrap; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: #fff; max-height: 40vh; overflow: auto; font-size: 14px; }
 .wd-starters { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .wd-starters .btn { white-space: normal; text-align: left; justify-content: flex-start; min-height: 44px; }
 .wd .btn, .wd select { min-height: 44px; }
-.wd input { min-height: 46px; }
+.wd input { min-height: 46px; box-sizing: border-box; }
 .wd-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .wd-only-phone { display: none; }
 @media (max-width: 760px) {
@@ -111,16 +120,28 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
   const undo = useRef<Snap[]>([]), redo = useRef<Snap[]>([]), lastPush = useRef(0);
   const [, tick] = useState(0);
   const area = useRef<HTMLTextAreaElement>(null);
-  const sel = useRef<{ start: number; end: number } | null>(null);
+  // Whether words are selected in the text right now: then "Ask for a change" changes only those, and says so.
+  const [picked, setPicked] = useState(false);
   const stop = useRef<AbortController | null>(null);
   const cur = (): Snap => ({ title, text });
+  const keyOf = `${me.user?.id || ''}:${writing.fileId || ''}`;
+  const latest = useRef<Kept>({ title, text, paper, ai: aiUsed });
+  latest.current = { title, text, paper, ai: aiUsed };
+  const used = useRef(false);
 
   useEffect(() => {
     api('/write').then(setInfo).catch(() => setInfo({ ai: false }));
-    if (writing.fileId)
+    const k = kept.get(keyOf);
+    if (k) (setTitle(k.title), setText(k.text), setPaper(k.paper), setAiUsed(k.ai), setLoading(false));
+    else if (writing.fileId)
       api(`/write/source/${writing.fileId}`).then((s) => (setTitle(s.title), setText(s.text), setPaper(s.paper), setAiUsed(!!s.ai))).catch((e) => setError(e.message)).finally(() => setLoading(false));
-    return () => stop.current?.abort();
-  }, [writing.fileId]);
+    return () => {
+      stop.current?.abort();
+      const l = latest.current;
+      if (!used.current && (l.text.trim() || l.title.trim())) kept.set(keyOf, l);
+      else kept.delete(keyOf);
+    };
+  }, [writing.fileId, keyOf]);
 
   // Undo and redo cover typing and asked changes alike. Typing is remembered in steps of a moment.
   const remember = (before: Snap, force = false) => {
@@ -131,7 +152,7 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
     redo.current = [];
     tick((n) => n + 1);
   };
-  const restore = (s: Snap) => (setTitle(s.title), setText(s.text));
+  const restore = (s: Snap) => (setTitle(s.title), setText(s.text), setPicked(false));
   const doUndo = () => {
     const s = undo.current.pop();
     if (!s) return;
@@ -147,12 +168,16 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
     restore(s);
     tick((n) => n + 1);
   };
-  const type = (next: string) => (remember(cur()), setText(next.slice(0, WRITE_TEXT_MAX)), setError(''));
+  // Typing after an asked change keeps it: its "What changed" box goes, so its Undo can never throw the typing away.
+  const type = (next: string) => (remember(cur()), setText(next.slice(0, WRITE_TEXT_MAX)), setError(''), setPending(null));
 
   const pick = (s: (typeof WRITE_STARTERS)[number] | null) => {
     remember(cur(), true);
     setTitle(s ? s.title : title);
-    setText(s ? s.text : '');
+    // The sender's own name is known: one blank fewer to stop on.
+    const mine = String(me.user?.name || '').trim();
+    setText(s ? (mine ? s.text.replace(/\[your name\]/g, mine) : s.text) : '');
+    setPicked(false);
     setTimeout(() => area.current?.focus(), 0);
   };
   // A blank in the preview, clicked: its words are selected in the text, so typing replaces them.
@@ -168,14 +193,14 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
     }, 0);
   };
   const addPlace = () => {
-    const n = signersNeeded(text) + 1;
-    const tag = n === 1 ? '{{signature}} {{date}}\n{{name}}' : `{{signature${n}}} {{date${n}}}\n{{name${n}}}`;
+    const tag = nextPlace(text);
     const a = area.current;
     const at = a ? a.selectionEnd : text.length;
     const before = text.slice(0, at), after = text.slice(at);
     const piece = `${before && !before.endsWith('\n\n') ? (before.endsWith('\n') ? '\n' : '\n\n') : ''}${tag}\n`;
     remember(cur(), true);
     setText(`${before}${piece}${after}`.slice(0, WRITE_TEXT_MAX));
+    setPending(null);
     setTimeout(() => (a?.focus(), a?.setSelectionRange(before.length + piece.length, before.length + piece.length)), 0);
   };
 
@@ -210,9 +235,18 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
       });
     } catch (err: any) {
       if (ctl.signal.aborted) {
-        // Stopped: what came is kept, made safe like a whole draft would be.
-        if (got.trim()) (setText(cleanModelText(got.replace(/^#\s+[^\n]*\n?/, ''))), setAiUsed(true), setNotes(['You stopped the AI part way. What it wrote so far is kept: read it through and finish it by typing.']));
-        else (restore(before), undo.current.pop());
+        // Stopped: what came is kept, made safe on the server exactly as a whole draft is (POST /write/tidy).
+        const t = got.trim() ? await api('/write/tidy', { body: { text: got, typed: prompt, kind: 'draft' } }).catch(() => null) : null;
+        if (t && t.text.trim()) {
+          setText(t.text);
+          if (t.title && !before.title.trim()) setTitle(t.title);
+          setAiUsed(true);
+          setNotes(['You stopped the AI part way. What it wrote so far is kept: read it through and finish it by typing.', ...(t.notes || [])]);
+        } else {
+          restore(before);
+          undo.current.pop();
+          if (got.trim()) setError('You stopped the AI, and what it had written could not be kept. Your text is as you left it. Ask again, or carry on typing.');
+        }
       } else {
         restore(before);
         undo.current.pop();
@@ -232,7 +266,9 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
     setError('');
     setNotes([]);
     const before = cur();
-    const s = sel.current && sel.current.end > sel.current.start ? sel.current : null;
+    // The words selected in the text now, read from the text box itself: never a selection left from before a change.
+    const a = area.current;
+    const s = a && a.selectionEnd > a.selectionStart ? { start: a.selectionStart, end: a.selectionEnd } : null;
     const ctl = new AbortController();
     stop.current = ctl;
     setBusy('change');
@@ -244,6 +280,7 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
           setNotes(e.notes || []);
           setAiUsed(true);
           setPending({ before, parts: wordDiff(before.text, e.text) });
+          setPicked(false);
           setRequest('');
         }
         if (e.error) setError(e.error);
@@ -265,8 +302,9 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
     try {
       const r = await api('/write/render', { body: { title, text, paper, ai: aiUsed } });
       ed.addWritten(r.file, r.fields, writing.replace);
-      const people = [...new Set(r.fields.map((f: any) => f.signer))].sort().map((n) => `Signer ${n}`);
-      toast(r.warning || (writing.replace ? 'The document was made again from your text. Check its fields in step 2.' : people.length ? `Added. Its places to fill in are for ${people.join(' and ')}: type who they are under People.` : 'Added. Place the fields in step 2.'), !!r.warning);
+      used.current = true;
+      const people = new Set(r.fields.map((f: any) => f.signer)).size;
+      toast(r.warning || (writing.replace ? 'The document was made again from your text. Check its fields in step 2.' : people > 1 ? `Added. Under People, type who signs: the first row is Person 1, the second row Person 2${people > 2 ? ', and so on' : ''}.` : people ? 'Added. Under People, type who signs in the first row: that is Person 1.' : 'Added. Place the fields in step 2.'), !!r.warning);
       onClose();
     } catch (e: any) {
       setError(e.message);
@@ -284,7 +322,8 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
       if (p.tag) return <span key={`${key}-${i}`} className={chipClass(p.tag.signer)}>{tagChip(p.tag)}</span>;
       if (p.blank) {
         const n = blankNo++;
-        return <button key={`${key}-${i}`} type="button" className="wd-blank" onClick={() => toBlank(n)} aria-label={`Fill in: ${p.text.slice(1, -1)}`}>{p.text}</button>;
+        // A span acting as a button: a real <button> is always a block in the line, so a long blank broke its sentence.
+        return <span key={`${key}-${i}`} role="button" tabIndex={0} className="wd-blank" onClick={() => toBlank(n)} onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toBlank(n))} aria-label={`Fill in: ${p.text.slice(1, -1)}`}>{p.text}</span>;
       }
       return p.bold ? <b key={`${key}-${i}`}>{p.text}</b> : <span key={`${key}-${i}`}>{p.text}</span>;
     });
@@ -296,6 +335,40 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
     return <L key={i} dir="auto">{b.items.map((it, j) => <li key={j}>{pieces(it, `${i}-${j}`)}</li>)}</L>;
   };
   const grow = (which: 'prompt' | 'request', value: string) => (focus === which || value ? 3 : 1);
+  // "What changed" reads like the preview: no marks, places to sign as their chips, and long unchanged stretches cut
+  // to their ends so the change itself stands out.
+  // Each tag's chip as the whole text numbers it (the text after the change, then the one before for a tag taken out).
+  const chipFor = (raw: string) => {
+    for (const whole of [text, pending?.before.text || '']) {
+      const t = tagsIn(whole).find((x) => whole.slice(x.start, x.end) === raw);
+      if (t) return t;
+    }
+    return tagsIn(raw)[0];
+  };
+  const readable = (t: string) => t.replace(/\*\*/g, '').replace(/^#{1,3}\s+/gm, '').replace(new RegExp(TAG_RE.source, 'gi'), (m) => { const c = chipFor(m); return ` ${c ? tagChip(c) : m} `; });
+  const gap = (t: string, first: boolean, lastOne: boolean) => {
+    if (t.length <= 160) return t;
+    const head = first ? '' : t.slice(0, 70).replace(/\S*$/, '');
+    const tail = lastOne ? '' : t.slice(-70).replace(/^\S*/, '');
+    return `${head}\u0000${tail}`;
+  };
+  const shown = (t: string, key: string): ReactNode[] => {
+    const out: ReactNode[] = [];
+    const re = new RegExp(`${TAG_RE.source}|\u0000`, 'gi');
+    let at = 0, n = 0;
+    const plainOf = (x: string) => x.replace(/\*\*/g, '').replace(/^#{1,3}\s+/gm, '');
+    for (const m of t.matchAll(re)) {
+      if (m.index! > at) out.push(plainOf(t.slice(at, m.index)));
+      if (m[0] === '\u0000') out.push(<span key={`${key}g${n++}`} className="wd-gap">{'\n…\n'}</span>);
+      else {
+        const tag = chipFor(m[0]);
+        out.push(<span key={`${key}t${n++}`} className={chipClass(tag?.signer || 1)}>{tag ? tagChip(tag) : m[0]}</span>);
+      }
+      at = m.index! + m[0].length;
+    }
+    if (at < t.length) out.push(plainOf(t.slice(at)));
+    return out;
+  };
 
   return (
     <section className="wd" aria-labelledby="wd-h" data-feature="ds-write-doc">
@@ -309,7 +382,7 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
       {info.ai && (
         <div className="wd-box" data-feature="ds-ai-assist">
           <label htmlFor="wd-prompt">Describe what you need</label>
-          <textarea id="wd-prompt" rows={grow('prompt', prompt)} value={prompt} maxLength={WRITE_PROMPT_MAX} placeholder={DRAFT_PLACEHOLDER}
+          <textarea id="wd-prompt" className={grow('prompt', prompt) === 1 ? 'wd-one' : undefined} rows={grow('prompt', prompt)} value={prompt} maxLength={WRITE_PROMPT_MAX} placeholder={DRAFT_PLACEHOLDER}
             onFocus={() => setFocus('prompt')} onBlur={() => setFocus('')} onChange={(e) => setPrompt(e.target.value)} aria-describedby="wd-sent" />
           <div className="wd-tools">
             {busy === 'draft'
@@ -342,7 +415,7 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
 
         <div className="wd-box">
           <label htmlFor="wd-title">Title</label>
-          <input id="wd-title" value={title} maxLength={WRITE_TITLE_MAX} placeholder="For example: Logo design agreement" onChange={(e) => (remember(cur()), setTitle(e.target.value))} />
+          <input id="wd-title" style={{ minHeight: 46 }} value={title} maxLength={WRITE_TITLE_MAX} placeholder="For example: Logo design agreement" onChange={(e) => (remember(cur()), setTitle(e.target.value))} />
         </div>
 
         <div className="wd-tools wd-only-phone" role="group" aria-label="Show">
@@ -353,13 +426,13 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
           <div className="wd-edit wd-box">
             <label htmlFor="wd-text">Text</label>
             <textarea id="wd-text" ref={area} className="wd-text" value={text} aria-describedby="wd-marks" maxLength={WRITE_TEXT_MAX} readOnly={busy === 'draft'}
-              onChange={(e) => type(e.target.value)} onSelect={(e) => (sel.current = { start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })}
+              onChange={(e) => type(e.target.value)} onSelect={(e) => setPicked(e.currentTarget.selectionEnd > e.currentTarget.selectionStart)} onKeyUp={(e) => setPicked(e.currentTarget.selectionEnd > e.currentTarget.selectionStart)} onMouseUp={(e) => setPicked(e.currentTarget.selectionEnd > e.currentTarget.selectionStart)}
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') (e.preventDefault(), e.shiftKey ? doRedo() : doUndo());
                 if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') (e.preventDefault(), doRedo());
               }} />
             <p id="wd-marks" className="muted small" style={{ margin: 0 }}>
-              Start a line with # for a heading or - for a list. **Two stars** make words bold. Words in [square brackets] are blanks to fill in. {'{{signature}}'} is where Signer 1 signs, {'{{signature2}}'} Signer 2.
+              Start a line with # for a heading or - for a list. **Two stars** make words bold. Words in [square brackets] are blanks to fill in. Use Add a place to sign for each person who signs.
             </p>
             <div className="wd-tools">
               <button type="button" className="btn sm" onClick={doUndo} disabled={!undo.current.length || !!busy}>Undo</button>
@@ -369,9 +442,9 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
             {info.ai && (
               <div className="wd-box" data-feature="ds-ai-assist">
                 <label htmlFor="wd-change">Ask for a change</label>
-                <textarea id="wd-change" rows={grow('request', request)} value={request} maxLength={WRITE_CHANGE_MAX} placeholder={CHANGE_PLACEHOLDER} aria-describedby="wd-change-hint"
+                <textarea id="wd-change" className={grow('request', request) === 1 ? 'wd-one' : undefined} rows={grow('request', request)} value={request} maxLength={WRITE_CHANGE_MAX} placeholder={CHANGE_PLACEHOLDER} aria-describedby="wd-change-hint"
                   onFocus={() => setFocus('request')} onBlur={() => setFocus('')} onChange={(e) => setRequest(e.target.value)} />
-                <p id="wd-change-hint" className="muted small" style={{ margin: 0 }}>Select words in the text first to change only those.</p>
+                <p id="wd-change-hint" className="muted small" style={{ margin: 0 }} aria-live="polite">{picked ? 'Only the words you selected change. Click in the text without selecting to change all of it.' : 'Select words in the text first to change only those.'}</p>
                 <div className="wd-tools">
                   {busy === 'change'
                     ? <button type="button" className="btn" onClick={() => stop.current?.abort()}>Stop</button>
@@ -391,11 +464,15 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
           <div className="wd-box" role="region" aria-label="What changed">
             <b>What changed</b>
             <div className="wd-diff" tabIndex={0}>
-              {pending.parts.map((p, i) => (p.kind === 'add' ? <ins key={i} aria-label={`Added: ${p.text}`}>{p.text}</ins> : p.kind === 'del' ? <del key={i} aria-label={`Removed: ${p.text}`}>{p.text}</del> : <span key={i}>{p.text}</span>))}
+              {pending.parts.map((p, i) => {
+                const words = shown(p.kind === 'same' ? gap(p.text, i === 0, i === pending.parts.length - 1) : p.text, `${i}`);
+                return p.kind === 'add' ? <ins key={i} aria-label={`Added: ${readable(p.text)}`}>{words}</ins> : p.kind === 'del' ? <del key={i} aria-label={`Removed: ${readable(p.text)}`}>{words}</del> : <span key={i}>{words}</span>;
+              })}
             </div>
             <div className="wd-tools">
-              <button type="button" className="btn" onClick={() => setPending(null)}>Keep the change</button>
-              <button type="button" className="btn" onClick={() => (restore(pending.before), undo.current.pop(), setPending(null), tick((n) => n + 1))}>Undo</button>
+              <button type="button" className="btn primary" onClick={() => setPending(null)}>Keep the change</button>
+              {/* The change is the last step in Undo (typing after it closes this box), so this is the same Undo. */}
+              <button type="button" className="btn" onClick={doUndo}>Undo the change</button>
             </div>
           </div>
         )}
@@ -407,7 +484,7 @@ export function WriteDoc({ ed, writing, onClose }: { ed: Ed; writing: NonNullabl
             {(['a4', 'letter'] as Paper[]).map((p) => <option key={p} value={p}>{PAPER_LABEL[p]}</option>)}
           </select>
           <span className="grow" />
-          <button type="button" className="btn" onClick={use} disabled={!!busy}>{busy === 'use' ? 'Making the PDF…' : 'Use this document'}</button>
+          <button type="button" className="btn primary" id="wd-use" onClick={use} disabled={!!busy}>{busy === 'use' ? 'Making the PDF…' : 'Use this document'}</button>
         </div>
       </>}
     </section>

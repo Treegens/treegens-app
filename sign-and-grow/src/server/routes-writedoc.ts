@@ -2,12 +2,13 @@
 //   GET  /write          what the view may offer: whether the AI can be asked here, and to whom the text goes
 //   POST /write/draft    a draft from a description, streamed (only with the AI on)
 //   POST /write/change   the text after a change asked in words, streamed (only with the AI on)
+//   POST /write/tidy     what came before Stop, made safe like a whole answer (no model is asked)
 //   POST /write/render   the text as a PDF, stored like an uploaded file, with the fields its tags make
 //   GET  /write/source/:file  the text a file was written from, to edit it again
 import { route, type Ctx } from './router.ts';
 import { get } from './db.ts';
 import { bad, rateLimit, str } from './util.ts';
-import { writeInfo, writeAiOn, admitWrite, checkAsk, askModel, storeWritten, writtenSource, cleanTitle } from './writedoc.ts';
+import { writeInfo, writeAiOn, admitWrite, checkAsk, askModel, storeWritten, writtenSource, cleanTitle, tidyStopped, giveBack } from './writedoc.ts';
 import { WRITE_TEXT_MAX, type Paper } from '../lib/writedoc.ts';
 
 // The body of a writing call is the text and a few words around it: a larger one is refused while it is read.
@@ -52,10 +53,22 @@ async function ask(c: Ctx, kind: 'draft' | 'change') {
   }
   const ok = admitWrite({ ip: c.ip, account: c.account.id });
   if (!ok.ok) throw bad(ok.text, 429, { code: 'limit' });
-  return askModel(a, c.req.signal);
+  return askModel(a, c.req.signal, () => giveBack(c.account.id));
 }
 route('POST', '/write/draft', (c) => ask(c, 'draft'));
 route('POST', '/write/change', (c) => ask(c, 'change'));
+
+// After Stop the view holds the raw pieces the model sent so far: this takes out what a whole answer would lose.
+// No model is asked and nothing is counted; it needs a signed-in account like every writing route.
+route('POST', '/write/tidy', async (c) => {
+  const b = await body(c);
+  try {
+    rateLimit(`write-tidy:${c.account.id}`, 30, 60_000);
+  } catch {
+    throw bad('That is a lot of requests at once. Wait a minute, then try again.', 429);
+  }
+  return tidyStopped(str(b.text, 200_000), str(b.typed, 200_000), b.kind === 'draft');
+});
 
 route('POST', '/write/render', async (c) => {
   const b = await body(c);
