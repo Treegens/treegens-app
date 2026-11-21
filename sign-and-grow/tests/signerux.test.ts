@@ -642,7 +642,9 @@ test('two signers on one address each get their own completion email with their 
   assert.match(mailTo('alone@example.com').find((m) => m.subject === 'Completed: Just me')!.html, /<h1[^>]*>Your document is complete</);
   // "Signers are never sent marketing": no email about a document carries the line about what a dollar buys.
   for (const m of [...mailTo('both@example.com'), ...mailTo('alone@example.com')]) assert.doesNotMatch(m.html, /every dollar plants/);
-  assert.match(mailTo('alone@example.com')[0].html, /Sent with GrowSigning\./);
+  // (The newest email to this address can be the short one about their own login, which has no such line: the
+  // email about the document is the one meant here.)
+  assert.match(mailTo('alone@example.com').find((m) => m.subject === 'Just me')!.html, /Sent with GrowSigning\./);
   // An email to an account's own person about the account keeps it.
   assert.match(mailTo('jo@example.com')[0].html, /every dollar plants/);
 });
