@@ -26,6 +26,7 @@ import { sendMail } from './mail.ts';
 import { audit, type Actor } from './envelopes.ts';
 import { pruneStampImages } from './stamps.ts';
 import { rememberGoneMail } from './bounces.ts';
+import { forgetArchiveCopies } from './archivemail.ts';
 import { forgetCommentHooks } from './commentrules.ts';
 import { disputeOpen } from './evidence.ts';
 import { record } from './seclog.ts';
@@ -545,6 +546,7 @@ function removePersonal(e: any, gone: string): string[] {
   // them still counts against the account (bounces.ts), and one still waiting for the mail server is left to go out.
   rememberGoneMail(e.id, e.account_id);
   run(`DELETE FROM emails WHERE envelope_id=? AND ${NOT_WAITING}`, e.id);
+  forgetArchiveCopies(e.id); // and our stored copies for the archive addresses (archivemail.ts)
   run('DELETE FROM webhook_deliveries WHERE envelope_id=?', e.id);
   return found;
 }

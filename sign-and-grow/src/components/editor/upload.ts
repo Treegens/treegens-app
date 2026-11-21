@@ -5,7 +5,7 @@ import { isConvertible, notTaken, uploadLimits, type Converted } from '../../lib
 // is_scan and scan_pages: the pages that are pictures with no text, counted from 1. See src/lib/scans.ts.
 // size: the bytes of the stored PDF, which is what every signer downloads. See src/lib/phone.ts.
 // converted: what the PDF was made from, on a server that turns Word files and the like into PDF (src/lib/convert.ts).
-export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean; scan_pages?: number[]; size?: number; converted?: Converted | null };
+export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean; scan_pages?: number[]; size?: number; converted?: Converted | null; existing_signatures?: number; existing_signatures_note?: string };
 
 export const MAX_BYTES = 25_000_000;
 // What the server takes, and what that costs a signer on a phone (measured, see src/lib/phone.ts): both are true.

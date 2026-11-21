@@ -43,6 +43,10 @@ import { assertFormNotStacked, tellStackedForm } from './stackedforms.ts';
 import { convertUpload, keepOriginal } from './converted.ts';
 import { KNOWN_EXT } from '../lib/convert.ts';
 import { record } from './seclog.ts';
+// The account's own custom fields (customfields.ts): values on envelopes and templates, bulk columns, the list filter.
+import { readCustom, writeCustom, assertBulkCustom, bulkCustomRefusal, applyRowCustom, formCustomProblem, customFilter, attachCustom } from './customfields.ts';
+import { existingSignatures } from './seal.ts';
+import { signaturesLost } from '../lib/seal.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -91,7 +95,9 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   const kept = keepText(fid, text);
   run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text, scan_pages, text_sealed, text_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', fid, accountId, saveBlob(bytes), name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), kept.text, scanPages.length ? JSON.stringify(scanPages) : null, kept.sealed, kept.key);
   const converted = conv ? keepOriginal(fid, conv) : null;
-  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages, converted };
+  // Signatures already in the PDF do not survive in the signed copy, which is made from flattened pages (seal.ts).
+  const signed = isPdf && accountId ? await existingSignatures(bytes) : 0;
+  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages, converted, ...(signed ? { existing_signatures: signed, existing_signatures_note: signaturesLost(signed) } : {}) };
 }
 
 route('POST', '/files', (c) => storeUpload(c, c.account.id));
@@ -160,6 +166,8 @@ route('GET', '/envelopes', (c) => {
   if (kind === 'envelope' && boxes[box]) where.push(boxes[box]);
   if (c.q.get('folder')) (where.push('e.folder=?'), p.push(c.q.get('folder')));
   if (c.admin && c.q.get('sender')) (where.push('e.sender_id=?'), p.push(c.q.get('sender')));
+  // ?field=Case number&value=2026/114: only those with that value of a custom field, any value when it is empty.
+  customFilter(c.q, where, p);
   const q = (c.q.get('q') || '').trim();
   // Every word that was typed has to be found somewhere: in the subject, the folder, on a person or in the name of
   // a role, in a document's name or in the words inside the documents. So "texas progress" finds the template
@@ -189,6 +197,8 @@ route('GET', '/envelopes', (c) => {
     e.email_failed = all("SELECT m.status FROM emails m WHERE m.envelope_id=? AND m.id IN (SELECT MAX(id) FROM emails WHERE envelope_id=? GROUP BY COALESCE(recipient_id, to_email))", e.id, e.id).some((m) => m.status === 'failed');
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;
   }
+  // Each row's custom fields, for the column the list can show (customfields.ts).
+  attachCustom(rows);
   // Only the folders of what this person can see: a folder name such as "Layoffs 2026" says something by itself.
   const folders = all(`SELECT DISTINCT folder FROM envelopes e WHERE account_id=? AND kind=? AND ${hidden} AND folder IS NOT NULL AND folder != ''${own ? ' AND sender_id=?' : ''}${usable ? ` AND ${usable}` : ''}`, ...(own ? [c.account.id, kind, c.user.id] : [c.account.id, kind]), ...usableP).map((r) => r.folder);
   // Admins can narrow the list to one person's envelopes.
@@ -249,14 +259,20 @@ route('POST', '/envelopes', async (c) => {
     // A person named for a group's role, and (when sending) a group that is gone, are refused before anything is made (groups.ts).
     assertTemplateGroups(tpl, [b.recipients && !Array.isArray(b.recipients) ? b.recipients : null], !!send && kind === 'envelope');
     // "kind": "template" with a template_id is a copy of the template, held to the same rule as /clone (cloneOwner).
+    // "custom_fields" set or empty the ones named, and the template's values stand for the rest (customfields.ts).
+    const custom = readCustom(c.account.id, tpl, { custom_fields: b.custom_fields }, { merge: true });
     eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: cloneOwner(c, tpl, kind), kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
+    writeCustom(eid, custom, c.actor);
     if (kind === 'template') noteCopy(c, eid, tpl);
   } else {
+    // "custom_fields" and "documents[].fields", checked before anything is made (customfields.ts).
+    const custom = readCustom(c.account.id, null, b);
     eid = createEnvelope(c.account, c.user.id, kind, b);
     try {
       // Anything the body says about the envelope goes through the same checks as a save, so a setting that cannot
       // be carried out (a date format that does not exist, say) is refused here too and never dropped.
       if (['documents', 'recipients', 'fields', 'ordered', 'date_format', 'reminder_days', 'expire_days'].some((k) => b[k] != null && b[k] !== '')) saveDraft(loadEnvelope(eid), b, c.account.id);
+      writeCustom(eid, custom, c.actor);
     } catch (e) {
       // A request that is turned down (a field for a recipient who is not on it, say) leaves no empty draft behind.
       run('DELETE FROM envelopes WHERE id=?', eid);
@@ -337,10 +353,13 @@ route('PUT', '/envelopes/:id', async (c) => {
   assertMayChange(c, e);
   // Started from a template whose wording is locked for this person: the locked parts stay as they are (tplroles.ts).
   assertWordingKept(c, e, b);
+  // "custom_fields" and "documents[].fields", checked before anything is saved and written after (customfields.ts).
+  const custom = readCustom(c.account.id, e, b);
   // A body that carries the edit_version its sender loaded is refused with 409 when someone has saved since, so a
   // save from an older copy never wipes a colleague's work. A body without it is saved as it always was.
   if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, b, c.account.id, c.actor);
   else saveDraft(e, b, c.account.id, c.actor);
+  writeCustom(e.id, custom, c.actor);
   return { envelope: publicEnvelope(loadEnvelope(e.id)) };
 });
 
@@ -579,6 +598,8 @@ async function sendBatch(b: { id: string; account_id: string; sender_id: string;
           // change the template's own wording is decided for whoever sends the batch (forRows in tplroles.ts).
           const fill = JSON.parse(row.fill);
           eid = copyEnvelope(forRows(who, tpl), { accountId: b.account_id, senderId: b.sender_id, kind: 'envelope', fill, extra: { bulk_id: b.id, values: fill?.fields && typeof fill.fields === 'object' ? fill.fields : null } });
+          // A column named like a custom field fills it for this row ("custom_fields", checked before the batch began).
+          applyRowCustom(b.account_id, tpl, eid, fill);
           set('envelope_id=?', eid);
         }
         const status = get('SELECT status FROM envelopes WHERE id=?', eid)?.status;
@@ -644,7 +665,7 @@ route('POST', '/bulk/check', async (c) => {
   const topUp = short - planSignatures;
   const reach = [...tpl.recipients.map((r: any) => r.email), ...groupReach(tpl), ...rows.flatMap((row) => open.map((r: any) => str(row?.[r.role_name || r.id]?.email).trim()))].filter(Boolean);
   // bulkChecksRefusal: a row without the mobile number its role needs, or more text messages than the account may send today.
-  const refusal = tooMany || (rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) || bulkChecksRefusal(tpl, rows, open) || rowLanguageRefusal(rows, open) : null);
+  const refusal = tooMany || (rows.length ? emailRefusal({ ...tpl, sender_id: c.user.id }, reach) || bulkChecksRefusal(tpl, rows, open) || rowLanguageRefusal(rows, open) || bulkCustomRefusal(c.account.id, tpl, rows) : null);
   return {
     counted, rows: all_, signers_per_row: perRow, need, have: Math.max(0, have), short, plan: c.account.plan,
     cost: counted && short > 0 ? { usd: (onPlan ? 0 : PRICING.monthlyUsd) + topUp * PRICING.topUpUsd, plan_usd: onPlan ? 0 : PRICING.monthlyUsd, plan_signatures: onPlan ? 0 : PRICING.monthlySignatures, top_up: topUp, top_up_usd: topUp * PRICING.topUpUsd } : null,
@@ -692,6 +713,8 @@ route('POST', '/bulk', async (c) => {
   // A role the template checks or reaches by text message needs a mobile number ("phone") in every row, and the
   // account must be allowed that many texts today. Refused for the whole batch, like everything below.
   assertBulkChecks(tpl, rows, open);
+  // A row's custom fields, and a value for every one the account requires, from the row or the template (customfields.ts).
+  assertBulkCustom(c.account.id, tpl, rows);
   // A row's "language" for a role must be one that is switched on, for every row, before anything is sent (locales.ts).
   assertRowLanguages(rows, open);
   // A pause, the fake-notice filter and the daily limit refuse the whole batch before anything is written, instead of
@@ -840,6 +863,9 @@ route('POST', '/powerforms', async (c) => {
   if (no) throw bad(`${no.message} The form was not made.`, no.status);
   // A template whose fields cover each other is refused here too, not found out from the first visitor.
   assertFormNotStacked(tpl.id);
+  // A visitor cannot fill custom fields in, so a required one needs its value in the template (customfields.ts).
+  const noCustom = formCustomProblem(tpl);
+  if (noCustom) throw bad(`${noCustom} The form was not made.`);
   const pid = id('pwf');
   run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at, shared_device) VALUES (?,?,?,?,?,?,?)', pid, c.account.id, tpl.id, token(9), name, now(), b.shared_device ? 1 : 0);
   return { id: pid };
@@ -865,8 +891,11 @@ route('GET', '/public/powerforms/:slug', async (c) => {
   // its name nor the account's, and its owner is told why. See formPageRefusal.
   const posing = formPageRefusal(get('SELECT * FROM accounts WHERE id=?', p.account_id), p.name);
   if (posing) await tellFormOwner(p, tpl.sender_id, posing);
+  // A required custom field the template has no value for: closed before anyone types, and its owner is told.
+  const noCustom = posing ? null : formCustomProblem(tpl);
+  if (noCustom) await tellFormOwner(p, tpl.sender_id, noCustom);
   // Said before anyone types their name and address into a form that cannot take them.
-  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || formClosed(p, tpl), shared_device: !!p.shared_device };
+  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || !!noCustom || formClosed(p, tpl), shared_device: !!p.shared_device };
 }, 'public');
 
 // The owner of a form hears why it could not take someone, in plain words and once a day at most. The visitor is

@@ -14,12 +14,21 @@ import { parseSignedData, checkSigner, OID } from './sealcms.ts';
 import { readCert, issued, selfSigned, type CertInfo } from './x509.ts';
 
 export const TSA_TIMEOUT_MS = 10_000;
+/** All services together: the last signer's Finish waits for the seal, so never longer than this for time-stamps. */
+export const TSA_TOTAL_MS = 20_000;
 const MAX_ANSWER = 256 * 1024;
 const TIME_STAMPING = '1.3.6.1.5.5.7.3.8';
 
 /** The services to ask, in order. Empty when none is set. */
 export function tsaUrls(): string[] {
-  return [...new Set(`${process.env.TSA_URL || ''},${process.env.TSA_URLS || ''}`.split(',').map((s) => s.trim()).filter((s) => /^https?:\/\/[^\s]+$/i.test(s)))];
+  const all = `${process.env.TSA_URL || ''},${process.env.TSA_URLS || ''}`.split(',').map((s) => s.trim()).filter(Boolean);
+  const ok = [...new Set(all.filter((s) => /^https?:\/\/[^\s]+$/i.test(s)))];
+  const g = globalThis as any;
+  if (ok.length < all.length && !g.__tsaWarned) {
+    g.__tsaWarned = true;
+    console.error(`[seal] TSA_URL holds ${all.length - ok.length === 1 ? 'an entry that is' : 'entries that are'} not an http or https address, and ${all.length - ok.length === 1 ? 'it is' : 'they are'} not asked.`);
+  }
+  return ok;
 }
 
 export class TsaError extends Error {}
@@ -102,7 +111,13 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
   const failures: string[] = [];
   const trust = trustCerts();
   const user = process.env.TSA_USER;
+  const until = Date.now() + TSA_TOTAL_MS;
   for (const url of urls) {
+    const left = until - Date.now();
+    if (left < 1000) {
+      failures.push(`${url}: not asked, because the ${TSA_TOTAL_MS / 1000} seconds for time-stamps were used up`);
+      continue;
+    }
     const host = (() => {
       try {
         return new URL(url).host;
@@ -121,7 +136,7 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
           ...(user ? { authorization: `Basic ${Buffer.from(`${user}:${process.env.TSA_PASSWORD || ''}`).toString('base64')}` } : {}),
         },
         body: new Uint8Array(timeStampRequest(imprint, nonce)),
-        signal: AbortSignal.timeout(TSA_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.min(TSA_TIMEOUT_MS, left)),
         redirect: 'error',
       });
       if (!res.ok) throw new TsaError(`it answered HTTP ${res.status}`);
@@ -130,7 +145,7 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
       const r = checkAnswer(body, imprint, nonce, trust);
       return { ...r, url, host };
     } catch (e: any) {
-      const why = e instanceof TsaError ? e.message : e?.name === 'TimeoutError' ? `it did not answer within ${TSA_TIMEOUT_MS / 1000} seconds` : `it could not be reached (${String(e?.cause?.code || e?.message || e).slice(0, 120)})`;
+      const why = e instanceof TsaError ? e.message : e?.name === 'TimeoutError' ? `it did not answer within ${Math.round(Math.min(TSA_TIMEOUT_MS, left) / 1000)} seconds` : `it could not be reached (${String(e?.cause?.code || e?.message || e).slice(0, 120)})`;
       failures.push(`${host}: ${why}`);
     }
   }

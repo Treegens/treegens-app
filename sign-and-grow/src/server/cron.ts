@@ -11,6 +11,8 @@ import { pruneStampImages } from './stamps.ts';
 import { sweepSignIns } from './reclaim.ts';
 import { purgeSecurityLog } from './seclog.ts';
 import { retentionTick } from './records.ts';
+import { noteTickStart, noteTick } from './selfhost.ts';
+import { forgetArchiveCopies } from './archivemail.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -19,6 +21,18 @@ import './signercode.ts';
 // nudge, free codes that were switched off, and removing accounts whose closing grace period has passed. Emails the
 // mail server would not take earlier are tried again here too (`mail` in the answer says how that went).
 export async function tick() {
+  // When each run starts and ends, for GET /api/health (src/server/selfhost.ts).
+  noteTickStart();
+  try {
+    const out = await tickOnce();
+    noteTick(true);
+    return out;
+  } catch (e) {
+    noteTick(false);
+    throw e;
+  }
+}
+async function tickOnce() {
   // Text messages the provider would not take are tried again the same way (`texts`).
   const r = { ...(await cronTick()), mail: await retryMail(), texts: await retryTexts() };
   return { ...r, renewals: await renewalReminders(),
@@ -44,5 +58,7 @@ export async function tick() {
     // Lines of the security record older than SECURITY_LOG_DAYS (seclog.ts).
     security_lines_purged: purgeSecurityLog(),
     // Closed envelopes at the end of their retention period: the email 14 days before, then the purge (records.ts).
-    retention: await retentionTick() };
+    retention: await retentionTick(),
+    // Our stored archive copies about envelopes deleted or purged since, once they have left (archivemail.ts).
+    archive_copies_forgotten: forgetArchiveCopies() };
 }

@@ -14,6 +14,7 @@ import { PayLinkChoice } from './PayLinkChoice';
 import { PrintCheck } from './PrintCheck';
 import { LabelCheck } from './LabelCheck';
 import { LogicCheck } from './FieldLogic';
+import { CustomFieldsStep } from './CustomFieldsStep';
 import { phoneWeight } from '@/lib/phone';
 import { isGroupRow, groupLine } from './GroupRecipient';
 
@@ -165,6 +166,8 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {/* A link to the sender's own payment page, shown to signers after Finish. Absent for an account that may not show one. */}
       {/* The payment link comes with a template's wording, so it is not offered where that wording is locked (tplroles.ts). */}
       {!closed && !ed.wording && <PayLinkChoice envelopeId={env.id} isTpl={isTpl} />}
+      {/* The account's own references, such as a case number. Absent when the account has none (CustomFieldsStep.tsx). */}
+      {!closed && <CustomFieldsStep ed={ed} />}
 
       {correcting && result ? (
         <div className="card">

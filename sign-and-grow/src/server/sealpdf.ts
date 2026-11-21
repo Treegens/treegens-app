@@ -21,6 +21,8 @@ import { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFNumber } from 'pdf-
 export const CONTENTS_BYTES = 32 * 1024;
 const BYTE_RANGE_SLOT = 46; // "[0 1234567890 1234567890 1234567890]" fits, padded with spaces
 export const SEAL_FIELD = 'Seal';
+/** What a reader shows as the reason of the seal, so nobody takes it for a person's signature. Plain ASCII. */
+export const SEAL_REASON = 'Sealed by the server when the document was completed. Not a signature of a person who signed.';
 
 export type Prepared = {
   /** The whole file with the update, /Contents still zeros. */
@@ -105,7 +107,7 @@ export async function prepareSeal(pdf: Uint8Array, when: Date, contentsBytes = C
   }
 
   const placeholderHex = '0'.repeat(contentsBytes * 2);
-  const sigBody = `<<\n/Type /Sig\n/Filter /Adobe.PPKLite\n/SubFilter /ETSI.CAdES.detached\n/M (${pdfDate(when)})\n/ByteRange ${' '.repeat(BYTE_RANGE_SLOT)}\n/Contents <${placeholderHex}>\n>>`;
+  const sigBody = `<<\n/Type /Sig\n/Filter /Adobe.PPKLite\n/SubFilter /ETSI.CAdES.detached\n/M (${pdfDate(when)})\n/Reason (${SEAL_REASON})\n/ByteRange ${' '.repeat(BYTE_RANGE_SLOT)}\n/Contents <${placeholderHex}>\n>>`;
   const widgetBody = `<<\n/Type /Annot\n/Subtype /Widget\n/FT /Sig\n/T (${SEAL_FIELD})\n/F 132\n/Rect [0 0 0 0]\n/P ${page.ref.toString()}\n/V ${sigNum} 0 R\n>>`;
 
   const parts: Buffer[] = [prefix];

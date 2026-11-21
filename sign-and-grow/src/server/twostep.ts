@@ -357,7 +357,7 @@ export function holdWrongPassword(c: Ctx, u: any, invite?: any) {
 // go to another workspace, leave the team, have the confirmation email sent again, see and end where they are signed
 // in, or close their login. Those are about the login, not the account. Everything else in that account answers 403
 // with "code": "two_step_setup". API keys are not affected.
-const OPEN_WHILE_REQUIRED = [/^[A-Z]+ \/me\/two-step/, /^POST \/auth\/switch$/, /^POST \/account\/leave$/, /^POST \/auth\/resend-verification$/, /^[A-Z]+ \/me\/sessions/, /^POST \/me\/delete$/];
+const OPEN_WHILE_REQUIRED = [/^[A-Z]+ \/me\/two-step/, /^POST \/auth\/switch$/, /^POST \/account\/leave$/, /^POST \/auth\/resend-verification$/, /^POST \/auth\/verify-code$/, /^[A-Z]+ \/me\/sessions/, /^POST \/me\/delete$/];
 export function twoStepGate(auth: Auth | null, what: string) {
   if (auth?.via !== 'session' || !auth.account?.two_step_required_at || twoStepOn(auth.user)) return;
   if (OPEN_WHILE_REQUIRED.some((re) => re.test(what))) return;

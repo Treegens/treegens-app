@@ -9,6 +9,7 @@ import { HandedOver, type Locked } from './HandedOver';
 import { EmailProblemBanner } from './EmailProblem';
 import { TwoStepRequired, TwoStepResetBanner } from './TwoStep';
 import { HelpChatButton } from './HelpChat';
+import { ConfirmBanner } from './ConfirmEmail';
 
 type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; /** This server turns Word files and the like into PDF on upload (src/server/convert.ts). */ converts?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
@@ -152,12 +153,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               <button className="btn sm" onClick={() => setNotice('')}>OK</button>
             </div>
           )}
-          {!me.user.email_verified && (
-            <div className="notice warn row between wrap" style={{ marginBottom: 16 }}>
-              <span>Confirm your email ({me.user.email}) before you send. It also puts documents others send you in your inbox. This keeps scammers from sending in someone else&apos;s name.</span>
-              <button className="btn sm" onClick={() => api('/auth/resend-verification', { method: 'POST' }).then(() => toast('Confirmation email sent')).catch(oops)}>Resend email</button>
-            </div>
-          )}
+          {/* Not confirmed yet: the 6-digit code from the email is typed right here, and the banner goes by itself
+              once the address is confirmed in this tab or anywhere else (ConfirmEmail.tsx). */}
+          <ConfirmBanner me={{ ...me, reload }} />
+
           {children}
         </main>
       </div>

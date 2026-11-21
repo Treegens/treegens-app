@@ -21,6 +21,8 @@ import { StampSettings } from '@/components/stamps/StampSettings';
 import { RetentionSettings } from '@/components/settings/RetentionSettings';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
 import { LanguageSettings } from '@/components/settings/LanguageSettings';
+// The account's own custom fields, such as a case number (src/components/settings/CustomFieldSettings.tsx).
+import { CustomFieldSettings } from '@/components/settings/CustomFieldSettings';
 import { SecurityLog } from '@/components/settings/SecurityLog';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
@@ -421,10 +423,16 @@ function Developers() {
               <div className="mono muted">Secret: {h.secret}</div>
             </div>
           ))}
-          <form className="row" style={{ marginTop: 12 }} onSubmit={(e) => { e.preventDefault(); api('/webhooks', { body: { url } }).then(() => (setUrl(''), reloadHooks())).catch(oops); }}>
-            <input placeholder="https://example.com/hooks/growsigning" value={url} onChange={(e) => setUrl(e.target.value)} required aria-label="Webhook URL" />
-            <button className="btn">Add webhook</button>
-          </form>
+          {/* The operator may allow only some hosts, or none (OUTSIDE_CALLS, src/lib/outside.ts): then no form. */}
+          {Array.isArray(hooks?.allowed_hosts) && hooks.allowed_hosts.length === 0
+            ? <p className="muted small" style={{ marginTop: 12 }}>Webhooks are switched off on this server: it sends nothing to other systems. That is a rule of the people who run it.</p>
+            : <>
+              {Array.isArray(hooks?.allowed_hosts) && <p className="muted small" style={{ marginTop: 12 }}>On this server a webhook can only go to {hooks.allowed_hosts.join(', ')}.</p>}
+              <form className="row" style={{ marginTop: 12 }} onSubmit={(e) => { e.preventDefault(); api('/webhooks', { body: { url } }).then(() => (setUrl(''), reloadHooks())).catch(oops); }}>
+                <input placeholder="https://example.com/hooks/growsigning" value={url} onChange={(e) => setUrl(e.target.value)} required aria-label="Webhook URL" />
+                <button className="btn">Add webhook</button>
+              </form>
+            </>}
           {(deliveries.length > 0 || !!only) && (
             <div style={{ marginTop: 16 }}>
               <div className="row between wrap"><h3>Deliveries</h3>
@@ -545,25 +553,25 @@ function Billing() {
         <div className="card">
           <div className="muted small" style={{ fontWeight: 600 }}>Ready to send</div>
           <div className="balance"><b className="num">{Math.max(0, s.available)}</b> signature{s.available === 1 ? '' : 's'}</div>
-          <p className="plan-line" style={{ marginTop: 6 }}>
-            One signature is one person signing one envelope. {s.held > 0 ? <>{s.held} more {s.held === 1 ? 'is' : 'are'} held for people who have been asked and have not signed yet. </> : ''}
-            A signature is only used when somebody actually signs, and the one that expires soonest is always used first. If you void an envelope, or someone declines or runs out of time, the ones held for people who had not signed yet come straight back. {b.held_rule} One that was already used stays used.
-          </p>
           {/* Like a usage limit that resets: this month's signatures and when they reset, then every other lot with its own date. */}
           {b.period && (
-            <p className="plan-line lot-line"><b>This month of the plan: {b.period.left} of {b.period.of} left</b>, {b.period.fresh === 'none'
+            <p className="plan-line lot-line" style={{ marginTop: 6 }}><b>This month of the plan: {b.period.left} of {b.period.of} left</b>, {b.period.fresh === 'none'
               ? <>they expire on {expiryMoment(b.period.resets_at)}, and no new month follows.</>
               : <>they reset on {expiryMoment(b.period.resets_at)}.</>}{b.period.held > 0 ? <> {b.period.held} more {b.period.held === 1 ? 'is' : 'are'} held for envelopes that are out.</> : ''}</p>
           )}
           {b.lots?.filter((l: any) => !(b.period && (l.source === 'plan' || l.source === 'code') && l.expires_at === b.period.resets_at)).length > 0 && (
             <ul className="lot-list">{b.lots.filter((l: any) => !(b.period && (l.source === 'plan' || l.source === 'code') && l.expires_at === b.period.resets_at)).map((l: any, i: number) => (
               <li key={i}>
-                <b>{l.source === 'topup' ? `Top-up of ${longDate(l.at)}` : l.label}: {l.left} of {l.of} left</b>
+                <b>{l.source === 'topup' ? `Top-up of ${expiryMoment(l.at).replace(/ at .*$/, '')}` : l.label}: {l.left} of {l.of} left</b>
                 {l.expires_at ? (l.live ? <>, {l.left === 1 ? 'it expires' : 'they expire'} on {expiryMoment(l.expires_at)}.</> : <>, past {l.held === 1 ? 'its' : 'their'} date ({expiryMoment(l.expires_at)}): only the held ones are left, and they do not expire while held.</>) : <>, with no expiry date.</>}
                 {l.held > 0 && l.live ? <> {l.held} more {l.held === 1 ? 'is' : 'are'} held for envelopes that are out.</> : ''}
               </li>
             ))}</ul>
           )}
+          <p className="plan-line">
+            One signature is one person signing one envelope. {s.held > 0 ? <>{s.held} more {s.held === 1 ? 'is' : 'are'} held for people who have been asked and have not signed yet. </> : ''}
+            A signature is only used when somebody actually signs, and the one that expires soonest is always used first. If you void an envelope, or someone declines or runs out of time, the ones held for people who had not signed yet come straight back. {b.held_rule} One that was already used stays used.
+          </p>
           {s.available < 0 && <div className="notice warn">You are {n(b.short)} short. {s.held > 0 ? 'More envelopes are out than you have signatures for, and people can still sign them. ' : ''}Whatever you add next covers those {b.short} first, so add more than that before sending to someone new. Signing your own documents stays free.</div>}
         </div>
       )}
@@ -935,6 +943,7 @@ export default function Settings() {
       {tab === 'notifications' && <Notifications />}
       {tab === 'account' && <Account />}
       {tab === 'account' && <LanguageSettings />}
+      {tab === 'account' && <CustomFieldSettings />}
       {tab === 'team' && <Team />}
       {tab === 'billing' && <Billing />}
       {tab === 'data' && <RetentionSettings />}

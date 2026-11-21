@@ -101,7 +101,7 @@ export function BatchCost({ check, failed, onPaying }: { check: BatchCheck | nul
           {fits > 0 && <li><b>Send a shorter list now.</b> The first {plural(fits, 'row')} could go out with what you have.</li>}
           {next && c.plan === 'grove' && <li><b>Wait.</b> The next {plural(PRICING.monthlySignatures, 'signature')} arrive on {fmtDate(next)}.</li>}
         </ul>
-        <p className="small" style={{ margin: '8px 0 0' }}>What nobody signs is not lost: it comes back to your balance when you void the batch or it runs out of time, and signatures you have not used are refunded on request within the refund window. Paying opens the payment page in this tab. Your list is kept in this browser tab, so it is still here when you come back to Bulk send.</p>
+        <p className="small" style={{ margin: '8px 0 0' }}>What nobody signs is not lost: it comes back to your balance when you void the batch or it runs out of time (unless its own date has passed by then, when it expires instead), and signatures you have not used and that have not expired are refunded on request within the refund window. Paying opens the payment page in this tab. Your list is kept in this browser tab, so it is still here when you come back to Bulk send.</p>
         <div className="row wrap" style={{ marginTop: 10 }}>
           {admin && b?.enabled && c.plan === 'grove' && !tooBig && <button type="button" className="btn sm primary" onClick={() => pay('/billing/topup', { quantity: c.short })}>Pay {usd(cost.top_up_usd)} and add {plural(c.short, 'signature')}</button>}
           {admin && b?.enabled && c.plan !== 'grove' && <button type="button" className="btn sm primary" onClick={() => pay('/billing/checkout')}>Start the plan for {usd(cost.plan_usd)} a month</button>}

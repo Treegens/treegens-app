@@ -82,7 +82,9 @@ export function stubTsa(answer: (req: Buffer, url: string) => Buffer | number | 
     const body = Buffer.from(init?.body || []);
     const a = await answer(body, url);
     if (a === 'hang') {
-      return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('timeout'), { name: 'TimeoutError' }))));
+      // AbortSignal.timeout does not keep a process alive by itself; a real server's open socket does. This stands in for it.
+      const alive = setInterval(() => {}, 1000);
+      return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => (clearInterval(alive), reject(Object.assign(new Error('timeout'), { name: 'TimeoutError' })))));
     }
     if (typeof a === 'number') return new Response('no', { status: a });
     return new Response(new Uint8Array(a), { status: 200, headers: { 'content-type': 'application/timestamp-reply' } });

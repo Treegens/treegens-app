@@ -99,6 +99,10 @@ async function used(p: Person, k: number, tag: string) {
   }
 }
 const lot = (p: Person, source: string, i = 0) => credits.lotsOf(p.id).filter((l) => l.source === source)[i];
+// The payment part of the timer: the same three calls cron.ts makes (its first tests below run the whole timer).
+// After a long journey only these are run, because some other jobs of the timer compare the fake clock with the
+// database's own clock (the security record's guard), which a fake clock cannot move.
+const moneyTimer = async () => ({ renewals: await billing.renewalReminders(), expired: billing.expireSignatures(), warned: await billing.topUpExpiryNotices() });
 const history = (p: Person, what: string) => db.all('SELECT detail, at, ref FROM billing_log WHERE account_id=? AND what=? ORDER BY id', p.id, what);
 
 // Every signature is accounted for, whatever has happened: what came in equals what was used, is held, was refunded,
@@ -248,10 +252,12 @@ test('use order: the soonest to expire first, a held one sits in the soonest lot
   // One more: the top-up is all there is.
   const c = await send(p, `oc-${p.k}@signers.example`);
   assert.equal(lot(p, 'topup').held, 1);
-  // The renewal brings a month that ends sooner than the top-up: the held one moves into it, so the top-up keeps it.
+  // The renewal brings a month that ends sooner than the top-up, and sooner than the trial (25 days against 30): all
+  // three held ones move into it, so the top-up and the trial keep theirs.
   await event('invoice.paid', invoice(p, `in9_${p.k}_2`, 25, { billing_reason: 'subscription_cycle' }));
   assert.deepEqual([lot(p, 'topup').held, lot(p, 'topup').left], [0, 5]);
-  assert.equal(lot(p, 'plan', 1).held, 1);
+  assert.deepEqual([lot(p, 'welcome').held, lot(p, 'welcome').left], [0, 2]);
+  assert.deepEqual([lot(p, 'plan', 1).held, lot(p, 'plan', 1).left], [3, 6]);
   for (const e of [a, b, c]) assert.ok(e.rid);
   balanced(p);
 });
@@ -284,6 +290,21 @@ test('a held signature does not expire while held; let go after its date, it is 
   for (const f of ['src/app/app/settings/page.tsx', 'src/app/help/page.tsx', 'src/app/page.tsx', 'src/components/sender/UsageMeter.tsx']) {
     assert.match(readFileSync(f, 'utf8'), /HELD_EXPIRY_TEXT|held_rule/, `${f} explains holds and says what happens after the date`);
   }
+  balanced(p);
+});
+
+test('a signer who finishes after the date uses the held signature, even when the balance is read between Finish and the ledger line', async () => {
+  const p = await person('Gap');
+  const e = await send(p, `g1-${p.k}@signers.example`);
+  travel(31);
+  // The moment between the Finish (the recipient is marked completed) and the "signature used" line, with a page
+  // reading the balance in between: the hold is kept for it, so it does not expire there.
+  db.run("UPDATE recipients SET status='completed', completed_at=? WHERE id=?", new Date().toISOString(), e.rid);
+  assert.equal(sig(p).held, 0);
+  const r = db.get('SELECT id, email, person_gen FROM recipients WHERE id=?', e.rid);
+  credits.grant(p.id, -1, 'signature', credits.sigRef(r));
+  assert.deepEqual([lot(p, 'welcome').used, lot(p, 'welcome').expired], [1, 2]);
+  assert.deepEqual(sig(p), { balance: 0, held: 0, available: 0 }, 'nothing owed: it was paid for by the held one');
   balanced(p);
 });
 
@@ -388,7 +409,9 @@ test('a dispute decided in our favour after the date: the set-aside signatures e
 
 test('the expiry rule is written once and quoted on the Plan page, the pricing block, /help, both payment pages, the receipts and every renewal reminder', async () => {
   const rule = expiryRuleText();
-  assert.match(rule, /^Signatures expire\. The 9 that come with each month of Grove belong to that month/);
+  assert.match(rule, /^The 9 signatures that come with each month of Grove belong to that month/);
+  // The refund rule keeps its meaning for what was not used and has not expired.
+  assert.match(refundRuleText(30), /^Signatures you have not used, and that have not expired, are refunded in full within 30 days/);
   assert.match(rule, /Top-up signatures expire 12 months after the payment that bought them/);
   assert.match(rule, /The 3 free signatures of a new account expire 30 days after it is made/);
   assert.match(rule, /The one that expires soonest is always used first/);
@@ -438,7 +461,7 @@ test('every renewal reminder says how many of this month\'s signatures will expi
   await subscribe(p, 6);
   await used(p, 2, 'r');
   assert.equal(acct(p.id).renews_at, lot(p, 'plan').expires_at, 'the renewal is the moment the month ends');
-  assert.ok((await cron.tick()).renewals >= 1);
+  assert.ok((await moneyTimer()).renewals >= 1);
   const m = lastMail(p.email, /^Heads up: your plan renews/)!;
   assert.match(m, new RegExp(`7 of this month's 9 signatures are still unused\\. If they are not used by the renewal, they expire then, on ${expiryMoment(lot(p, 'plan').expires_at)}, and the renewal brings a fresh 9\\.`));
   assert.ok(m.includes(expiryRuleText()));
@@ -447,7 +470,7 @@ test('every renewal reminder says how many of this month\'s signatures will expi
   await send(p, `rh1-${p.k}@signers.example`);
   await send(p, `rh2-${p.k}@signers.example`);
   travel(5.2);
-  await cron.tick();
+  await moneyTimer();
   const last = lastMail(p.email, /^Last reminder: your plan renews/)!;
   assert.match(last, /None of this month's 9 signatures will expire at the renewal: they are all used or held for envelopes that are out \(a held one does not expire while it is held\)/);
   assert.ok(last.includes(expiryRuleText()));
@@ -463,14 +486,14 @@ test('a top-up is emailed 30 days and 3 days before it expires, once each and on
   const expires = lot(p, 'topup').expires_at!;
   const subject = /from your top-up expire on/;
   travel((Date.parse(expires) - Date.now()) / DAY - 31);
-  await cron.tick();
+  await moneyTimer();
   assert.equal(mails(p.email, subject).length, 0, 'not before 30 days');
   // Q's top-up is used up by then (the month and trial are long gone, so these come from it).
   credits.grant(q.id, -2, 'adjust', `q-used-${q.k}`);
   assert.equal(lot(q, 'topup').left, 0);
   travel(1.1);
-  await cron.tick();
-  await cron.tick();
+  await moneyTimer();
+  await moneyTimer();
   assert.equal(mails(p.email, subject).length, 1, 'once, 30 days before');
   const first = lastMail(p.email, subject)!;
   assert.match(first, new RegExp(`5 of them are still unused, and they expire on ${expiryMoment(expires)}, 12 months after that payment`));
@@ -478,12 +501,12 @@ test('a top-up is emailed 30 days and 3 days before it expires, once each and on
   assert.equal(mails(q.email, subject).length, 0, 'nothing for a top-up that is used up');
   assert.equal(history(p, 'topup-expiry').length, 1);
   travel(27);
-  await cron.tick();
-  await cron.tick();
+  await moneyTimer();
+  await moneyTimer();
   assert.equal(mails(p.email, subject).length, 2, 'and once, 3 days before');
   assert.match(lastMail(p.email, subject)!, /Your top-up signatures expire in a few days|5 of them are still unused/);
   travel(4);
-  await cron.tick();
+  await moneyTimer();
   assert.equal(mails(p.email, subject).length, 2, 'nothing after they expired');
   assert.equal(mails(q.email, subject).length, 0);
   assert.equal(lot(p, 'topup').expired, 5);

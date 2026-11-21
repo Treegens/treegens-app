@@ -5,9 +5,8 @@ import { api, toast, fmtDate } from '@/components/ui';
 import { PdfDoc } from '@/components/PdfDoc';
 import { HandBack } from '@/components/HandBack';
 import { AdoptSignature, type SavedMark } from '@/components/SignaturePad';
-import { formatDate, formatDateValue, deviceZone, momentText } from '@/lib/dates';
+import { formatDate, formatDateValue, deviceZone } from '@/lib/dates';
 import { consentWording } from '@/lib/policy';
-import { fmtNum } from '@/lib/impact';
 import { NUMBER_HINT } from '@/lib/numbers';
 import { Shell, StateCard, Sender, Impact, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
 import { PurgedLink } from '@/components/sign/PurgedLink';
@@ -21,7 +20,6 @@ import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWi
 import { useLiveLogic } from '@/components/sign/logic';
 import { keepTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
 import { docUrl, allOnScreen } from '@/components/sign/fields';
-import { useAutoReview } from '@/components/sign/autoReview';
 import { strikeClass } from '@/lib/strike';
 import { pageBoxes } from '@/components/sign/pdfText';
 import { NoViewer } from '@/components/sign/NoViewer';
@@ -43,6 +41,10 @@ import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineTex
 import { StampDialog } from '@/components/stamps/StampDialog';
 import { stampTurn, turnStyle } from '@/lib/stamps';
 import { layers } from '@/lib/stacked';
+// The page made simpler: Other actions in one order, Finish that signs unless something needs a look, Next that opens.
+import { otherActions, lookAgain, nextOpens, laterAtConsent, GUIDE_NEXT, GUIDE_FINISH, type ActionKey } from '@/components/sign/actions';
+import { FixName } from '@/components/sign/dialogs';
+import { yourMoment } from '@/lib/dates';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback' | 'help';
@@ -96,6 +98,10 @@ export default function SignPage() {
   // 'code': the "stop reminders" link was followed to a document behind a one-time code, which is asked for first.
   const [muteNote, setMuteNote] = useState<'' | 'done' | 'failed' | 'code'>('');
   const [moreTime, setMoreTime] = useState<'' | 'busy' | 'asked'>('');
+  // After "Finish later": where the way back is, with "Stop reminder emails" next to it (it left Other actions).
+  const [later, setLater] = useState('');
+  // The name typed for the signature, when it was typed: one that is not the name on the document is a name to fix.
+  const [typedName, setTypedName] = useState<string | null>(null);
   const [wantCopy, setWantCopy] = useState(false);
   // Set when the sender changed the document while this page was open: the page has loaded the new version and
   // asks the person to look again before they finish.
@@ -429,7 +435,19 @@ export default function SignPage() {
   // ---- Moving around ------------------------------------------------------------------------------
   const usesSheet =(f: any) => touch && view === 'doc' && (TYPED.includes(f.type) || f.type === 'dropdown');
 
-  function goTo(f: any) {
+  /** Whether Next opens this field as well as going to it: a signature, initials or stamp still to be made (actions.ts). */
+  function opensOnNext(f: any) {
+    const kind = f.type as 'signature' | 'initials';
+    const ready = (kind === 'signature' || kind === 'initials') && tapOnMark({ current: kind === 'signature' ? sig : ini, seen: seen[kind], account: account[kind] }).apply;
+    return nextOpens(f, filled(f), ready);
+  }
+  function goTo(f: any, open = false) {
+    // Next opens what a tap would only have opened anyway: the signature dialog, or the stamp. It goes there first.
+    if (open && opensOnNext(f)) {
+      const at = document.getElementById(`${view === 'text' ? 't' : 'f'}-${f.id}`);
+      if (at) bringIntoView(at, 0.42);
+      return f.type === 'stamp' ? setStampFor(f.id) : clickSig(f);
+    }
     const el = document.getElementById(`${view === 'text' ? 't' : 'f'}-${f.id}`);
     // When the pages cannot be shown on this device at all (NoViewer), waiting will not help: say so.
     if (!el) return toast(document.querySelector('.sg-noview') ? 'The document cannot be shown on this device, so its fields cannot be reached here. The notice above the pages says what you can do.' : 'The document is still loading. Try again in a moment.', !!document.querySelector('.sg-noview'));
@@ -496,11 +514,10 @@ export default function SignPage() {
   // Said instead of finishing while the pages of the document, as it is now, are not on the screen yet.
   const NOT_SHOWN = 'The document is still loading. You can finish as soon as its pages are on your screen.';
 
-  // The first time nothing required is left, "Check before you finish" opens by itself (see autoReview.ts).
-  useAutoReview(stage === 'sign' && acts && required.length > 0 && left.length === 0 && allShown && !sheet && !adopt && !open && !signedField && !stampFor && !changedOpen && !busy
-    && !ordered.some((f) => problemWith(f, values[f.id] || '')), pressFinish);
+  // Nothing required is left: Finish glows once where it is. No dialog opens by itself (research/ux-charter.md, P9).
+  const ready = stage === 'sign' && acts && required.length > 0 && left.length === 0 && allShown;
 
-  function pressFinish() {
+  async function pressFinish() {
     if (!allShown) return toast(NOT_SHOWN, true);
     if (me.role === 'viewer') return complete();
     const wrong = acts && ordered.find((f) => problemWith(f, values[f.id] || ''));
@@ -511,7 +528,15 @@ export default function SignPage() {
     }
     setFinishError('');
     setFinishPending(false);
-    setOpen('review');
+    // "Check before you finish" opens only when something needs another look (actions.ts): an unanswered question, a
+    // witness to name, a typed signature under another name, or characters the signed PDF cannot print. Otherwise
+    // Finish signs and sends at once, the way its words on the page say.
+    if (lookAgain({ questions, witness: me.witness, typedName, name: me.name }).length) return setOpen('review');
+    setBusy(true);
+    const unprintable = await api(`${base}/print-check`, { body: { values } }).then((r: any) => r?.problems?.length || 0, () => 0);
+    setBusy(false);
+    if (unprintable) return setOpen('review');
+    complete();
   }
 
   async function complete() {
@@ -529,7 +554,9 @@ export default function SignPage() {
       landed(await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, inputs: data?.inputs ?? null, tz: deviceZone() } }));
     } catch (e: any) {
       const msg = e?.message || 'Something went wrong on our side.';
-      const say = (said: string) => (open === 'review' ? setFinishError(said) : toast(said, true));
+      // Said in "Check before you finish", opened for it when Finish went straight through: the message stays next to
+      // the button, and a Finish that did not get through is sent again from there (see the effect by autosave).
+      const say = (said: string) => (me.role !== 'viewer' ? (setOpen('review'), setFinishError(said)) : toast(said, true));
       if (isAlreadyFinished(e)) {
         // Sent again after a Finish that went through without its answer reaching us: done, not a mistake.
         landed();
@@ -559,7 +586,7 @@ export default function SignPage() {
         setOpen('');
         toast(msg, true);
         await load();
-      } else if (open === 'review') setFinishError(`${msg} Go back, put it right, then finish again.`);
+      } else if (me.role !== 'viewer') say(`${msg} Go back, put it right, then finish again.`);
       else toast(`${msg} Try again in a moment.`, true);
     } finally {
       setBusy(false);
@@ -730,7 +757,7 @@ export default function SignPage() {
           {expired && env.form_cleared && <FormCleared slug={env.start_again} />}
           {expired && !env.form_cleared && (
             <>
-              <p>The deadline{env.expires_at ? ` was ${momentText(env.expires_at, deviceZone())}` : ' has passed'}. {env.removed ? `${sender.name} has since removed this document from their list, so it cannot be opened again from here. If you still need to sign it, ask them to send it again.` : `Nothing is lost: ${sender.name} can open it again and you carry on from where you were.`}</p>
+              <p>The deadline{env.expires_at ? ` was ${yourMoment(env.expires_at, deviceZone())}` : ' has passed'}. {env.removed ? `${sender.name} has since removed this document from their list, so it cannot be opened again from here. If you still need to sign it, ask them to send it again.` : `Nothing is lost: ${sender.name} can open it again and you carry on from where you were.`}</p>
               {!env.removed && me.status !== 'completed' && me.status !== 'declined' && me.role !== 'cc' && (moreTime === 'asked' ? (
                 <div className="notice sg-confirmed" role="status"><b>Done. We asked {sender.name} for more time.</b> {moreTimeWords(sender.name, !!me.link_by_sender).open}</div>
               ) : (
@@ -830,46 +857,84 @@ export default function SignPage() {
 
   const go = (o: Open) => () => setOpen(o);
   const declineLabel = me.role === 'approver' ? 'Decline to approve' : 'Decline to sign';
-  const menu: MenuItem[] = [
-    ...(stage === 'sign' && acts ? [{ key: 'later', label: 'Finish later', hint: 'Your answers are saved. Come back with the same link.', icon: 'clock', onClick: async () => { const ok = await flush(); setOpen(''); if (ok) toast(laterWords(!!me.link_by_sender)); } }] : []),
-    { key: 'help', label: 'Help', hint: 'Ask the GrowSigning helper, or write to a person. Nothing on this page is lost.', icon: 'mail', onClick: go('help') },
-    { key: 'ask', label: 'Questions and comments', hint: `Ask ${sender.name} about the document, or read what was written. It signs nothing.`, icon: 'mail', onClick: go('ask') },
-    { key: 'download', label: 'Download the document', icon: 'download', href: downloadUrl, download: true },
-    { key: 'print', label: 'View or print the document', hint: 'Opens in a new tab.', icon: 'eye', href: `${downloadUrl}?inline=1` },
-    ...(stage === 'sign' && acts && (sig || ini) ? [{ key: 'sig', label: 'Change my signature', icon: 'pen', onClick: () => { setOpen(''); changeMark(sig ? 'signature' : 'initials'); } }] : []),
-    ...(env.expires_at ? [{ key: 'time', label: `Ask ${sender.name} for more time`, hint: moreTime === 'asked' ? moreTimeWords(sender.name, !!me.link_by_sender).hint : `The deadline is ${momentText(env.expires_at, deviceZone())}.`, icon: 'clock', onClick: async () => { if (moreTime !== 'asked' && (await askForTime())) toast(moreTimeWords(sender.name, !!me.link_by_sender).say); } }] : []),
-    // The one who took on a group's document can hand it back to the group, and passes it to nobody outside it.
-    ...(me.group?.can_hand_back ? [{ key: 'handback', label: `Hand back to ${me.group.name}`, hint: 'If a colleague should do it instead. What you filled in is not kept.', icon: 'link', onClick: go('handback') }] : []),
-    ...((me.role === 'signer' || me.role === 'approver') && !me.group ? [{ key: 'reassign', label: 'Assign to someone else', hint: 'If you are not the right person to sign.', icon: 'link', onClick: go('reassign') }] : []),
-    // Someone with no address gets no reminder emails, so there is nothing for them to stop.
-    ...(!muted && me.role !== 'inperson' && !me.link_by_sender ? [{ key: 'mute', label: 'Stop reminder emails', hint: 'For this document only.', icon: 'stop', onClick: () => { setOpen(''); mute(); } }] : []),
+  // One list in one order, no descriptions, never more than six (src/components/sign/actions.ts). Gone from it, not
+  // from the page: Download and the view (below, on the document), Help (the dialog's own button), "Change my
+  // signature" (tap the signature itself) and "Stop reminder emails" (the note after Finish later, and every reminder).
+  const finishLater = async () => {
+    const ok = await flush();
+    setOpen('');
+    if (!ok) return;
+    setLater(stage === 'consent' ? laterAtConsent(!!me.link_by_sender) : laterWords(!!me.link_by_sender));
+    window.scrollTo({ top: 0 });
+  };
+  const absent = async () => {
+    setOpen('');
+    try {
+      await api(`${base}/not-present`, { body: {} });
+      toast(`Done. We told ${me.witness_of?.name || 'the signer'} and ${sender.name}.`);
+      load();
+    } catch (e: any) {
+      toast(e?.message || 'Something went wrong on our side. Try again in a moment.', true);
+    }
+  };
+  const ACTION: Record<ActionKey, MenuItem> = {
+    later: { key: 'later', label: 'Finish later', icon: 'clock', onClick: finishLater },
+    time: { key: 'time', label: moreTime === 'asked' ? `Asked ${sender.name} for more time` : `Ask ${sender.name} for more time`, icon: 'clock', onClick: async () => { if (moreTime === 'asked' || (await askForTime())) toast(moreTimeWords(sender.name, !!me.link_by_sender).say); } },
+    handback: { key: 'handback', label: `Hand back to ${me.group?.name}`, icon: 'link', onClick: go('handback') },
+    reassign: { key: 'reassign', label: 'Pass to someone else', icon: 'link', onClick: go('reassign') },
+    ask: { key: 'ask', label: 'Questions and comments', icon: 'mail', onClick: go('ask') },
+    paper: { key: 'paper', label: 'Sign on paper instead', icon: 'pen' },
+    decline: { key: 'decline', label: declineLabel, icon: 'stop', danger: true, onClick: go('decline') },
     // A witness does not close the document for the people who sign it: "I was not there" is theirs (sign/Witness.tsx).
-    ...(me.role === 'witness' ? [{ key: 'absent', label: 'I was not there', hint: `Signs nothing, and tells ${me.witness_of?.name || 'the signer'} and ${sender.name}.`, icon: 'stop', onClick: async () => { setOpen(''); try { await api(`${base}/not-present`, { body: {} }); toast(`Done. We told ${me.witness_of?.name || 'the signer'} and ${sender.name}.`); load(); } catch (e: any) { toast(e?.message || 'Something went wrong on our side. Try again in a moment.', true); } } }] : []),
-    ...(me.role !== 'viewer' && me.role !== 'cc' && me.role !== 'witness' ? [{ key: 'decline', label: declineLabel, hint: 'Closes the document for everyone.', icon: 'stop', danger: true, onClick: go('decline') }] : []),
-  ];
+    absent: { key: 'absent', label: 'I was not there', icon: 'stop', onClick: absent },
+    help: { key: 'help', label: 'Help', icon: 'mail', onClick: go('help') },
+  };
+  const menu: MenuItem[] = otherActions(me, { stage, deadline: !!env.expires_at }).map((k) => ACTION[k]);
+  // How the document is shown, and its download: in Other actions, so the pages start near the top of a phone.
+  const docTools = stage === 'sign' ? (
+    <div className="sg-menu-doc" role="group" aria-labelledby="sg-menu-doc-h">
+      <h3 id="sg-menu-doc-h">The document</h3>
+      <div className="sg-seg" role="group" aria-label="How to read the document">
+        <button type="button" aria-pressed={view === 'doc'} onClick={() => (chooseView('doc'), setOpen(''))}>Document</button>
+        <button type="button" aria-pressed={view === 'text'} onClick={() => (chooseView('text'), setOpen(''))}>Text view</button>
+      </div>
+      {view === 'doc' && <ZoomControl zoom={zoom} onZoom={(z) => (setOpen(''), setZoom(z))} />}
+      <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
+    </div>
+  ) : undefined;
   const other = <button type="button" className="btn sm sg-other" aria-haspopup="dialog" onClick={go('menu')}>Other actions</button>;
-  const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} />;
+  const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} when={env.expires_at ? `Open until ${yourMoment(env.expires_at, deviceZone())}.` : undefined}
+    doc={docTools} onHelp={me.role === 'witness' ? undefined : go('help')} back={stage === 'consent' ? 'Back' : 'Back to the document'} />;
+  // After Finish later: the way back, and the one place on the page to stop reminder emails. Someone with no address
+  // gets no reminder emails, so there is nothing for them to stop.
+  const laterNote = later && (
+    <div className="notice sg-top" role="status">
+      <b>{later}</b>{' '}
+      {!muted && me.role !== 'inperson' && !me.link_by_sender && <button type="button" className="sg-link" onClick={() => mute()}>Stop reminder emails</button>}
+    </div>
+  );
 
   if (stage === 'consent') {
-    const ask = me.role === 'approver' ? 'You have been asked to approve' : me.role === 'viewer' ? 'You have been asked to read' : me.role === 'witness' ? 'You have been asked to sign as a witness' : 'You have been asked to sign';
+    // Who it is for when it is not a signature: a signer reads "sign" in the words under the tick.
+    const ask = me.role === 'approver' ? 'You have been asked to approve' : me.role === 'viewer' ? 'You have been asked to read' : me.role === 'witness' ? 'You have been asked to sign as a witness' : '';
     const wording = consentWording(sender.name, acts);
+    // The sender, named once. The account's name only when it says something more ("at Acme Ltd"), never the
+    // "Rosa Gardener's workspace" every new account is called.
+    const org = data.brand?.name && !String(data.brand.name).toLowerCase().includes(String(sender.name).toLowerCase()) ? data.brand.name : '';
     return (
       <Shell data={data} bar={other} footer={report} helpInNewTab>
         {notice}
+        {laterNote}
         <div className="card sg-consent">
-          <p className="sg-kicker">{ask}</p>
+          {ask && <p className="sg-kicker">{ask}</p>}
           <h1 className="serif" id="sg-h1" tabIndex={-1}>{env.subject}</h1>
-          <Sender env={env} brand={data.brand} />
-          <p className="muted small">{me.link_by_sender ? <>This is for {me.name}. {sender.name} sent you the link themselves, not by email from us.</> : <>This was sent to {me.name} ({myEmail}).</>} Not expecting it? Do not sign. You can <button type="button" className="sg-link" onClick={go('report')}>report this request</button>.</p>
+          <p className="sg-from">From <b>{sender.name}</b>{org ? <> at {org}</> : null}, <a href={`mailto:${sender.email}`}>{sender.email}</a></p>
+          <p className="muted small sg-for">{me.link_by_sender ? <>For {me.name}. {sender.name} sent you this link themselves.</> : <>For {me.name}, {myEmail}.</>} Not expecting it? Do not sign, and <button type="button" className="sg-link" onClick={go('report')}>report it</button>.</p>
           {data.message && <div className="sg-quote"><span className="muted small">Message from {sender.name}</span>{data.message}</div>}
           {data.note && <div className="notice sg-gap"><b>Private note for you:</b> {data.note}</div>}
           {me.role === 'inperson' && <div className="notice warn sg-gap">In-person signing. Hand this device to <b>{me.name}</b> now. {SIGNING_ONLINE}</div>}
-          <div className="row wrap sg-actions">
-            <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
-            <a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="eye" /> View or print<span className="sg-vh"> (opens in a new tab)</span></a>
-          </div>
-          <hr className="sg-rule" />
-          <h2>Electronic records and signatures</h2>
+          {/* One way to read it first: the PDF in a new tab, where it can be saved or printed. */}
+          <p className="sg-read"><a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="download" /> Download or print<span className="sg-vh"> (opens in a new tab)</span></a></p>
           {/* The words come from src/lib/policy.ts with a version, and the version goes back with the agreement, so the
               audit trail says which wording this person was shown. */}
           <div id="sg-legal">
@@ -908,8 +973,9 @@ export default function SignPage() {
   const hasNext = acts && left.length > 0;
   const count = !acts ? '' : !required.length ? 'Nothing is required' : left.length ? `${left.length} of ${required.length} left` : 'Ready to finish';
   const mainButton = (big: boolean) => hasNext
-    ? <button type="button" className={`btn go${big ? ' sg-big' : ''}`} onClick={() => (nextAgain(nextField.id) && view === 'doc' && toast(CANNOT_REACH), goTo(nextField))}>Next</button>
-    : <button type="button" className={`btn go finish${big ? ' sg-big' : ''}`} disabled={busy || !allShown} aria-describedby={allShown ? undefined : 'sg-guide'} onClick={pressFinish}>{finishLabel}</button>;
+    // Next goes to the field and opens it. "Cannot reach this field?" only for a field Next does not open itself.
+    ? <button type="button" className={`btn go${big ? ' sg-big' : ''}`} onClick={() => (nextAgain(nextField.id) && view === 'doc' && !opensOnNext(nextField) && toast(CANNOT_REACH), goTo(nextField, true))}>Next</button>
+    : <button type="button" className={`btn go finish${big ? ' sg-big' : ''}${ready ? ' sg-ready' : ''}`} disabled={busy || !allShown} aria-describedby={allShown ? undefined : 'sg-guide'} onClick={pressFinish}>{finishLabel}</button>;
   const done = required.length - left.length;
   const bar = (
     <>
@@ -1110,23 +1176,17 @@ export default function SignPage() {
       <WitnessNotice me={me} />{/* who witnesses, or what the witness confirmed (sign/Witness.tsx) */}
       <p className="sg-guide" id="sg-guide">
         {!acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
-          : hasNext ? <>Choose <b>Next</b> and we take you to each place that needs you, one at a time.</>
-          : <>Everything needed is filled in. Choose <b>Finish</b> to check it and send.</>}
+          : hasNext ? GUIDE_NEXT
+          : GUIDE_FINISH}
         {/* Finish is switched off until the pages of the document, as it is now, are on the screen. Said here, so a
             button that does nothing is never the only sign of it. */}
         {!allShown && !hasNext && <> The document is still loading: you can {acts ? 'finish' : me.role === 'approver' ? 'approve' : 'confirm'} as soon as its pages are on your screen. If they do not appear, reload this page.</>}
       </p>
-      {/* Said once, before the pages, to someone who cannot see them: the Document view shows each page as a picture. */}
-      {view === 'doc' && <p className="sg-vh">The pages below are shown as pictures, with your fields placed on them. To have the whole document read as text, with the same fields as an ordinary form, choose Text view, the next button.</p>}
-      <div className="sg-tools">
-        <div className="sg-seg" role="group" aria-label="How to read the document">
-          <button type="button" aria-pressed={view === 'doc'} onClick={() => chooseView('doc')}>Document</button>
-          <button type="button" aria-pressed={view === 'text'} onClick={() => chooseView('text')}>Text view</button>
-        </div>
-        {view === 'doc' && <ZoomControl zoom={zoom} onZoom={setZoom} />}
-        <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
-        <button type="button" className="btn" aria-haspopup="dialog" onClick={go('ask')}><Icon name="mail" /> Questions and comments</button>
-      </div>
+      {laterNote}
+      {/* The view, the size of the pages, Download and Questions and comments are in Other actions, so the pages start
+          near the top of a phone. Someone on a keyboard or a screen reader meets the text view right here, before the
+          pages, which are pictures: this button shows itself when it has the focus, like the skip link. */}
+      {view === 'doc' && <button type="button" className="sg-skip sg-skip-text" onClick={() => chooseView('text')}>The pages below are pictures. Read the document as text instead</button>}
 
       {view === 'doc' ? (
         <div className={`stack sg-doc sg-pan${zoom > 1 ? ' zoomed' : ''}`}>
@@ -1145,7 +1205,8 @@ export default function SignPage() {
           fields={(docId, page, near) => <PageFields docId={docId} page={page} c={ctx} near={near} />}
           others={(docId, page, near) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} senderName={sender.name} near={near} />} />
       )}
-      <p className="muted small center sg-envelope">Envelope {env.id}{env.expires_at ? ` · open until ${momentText(env.expires_at, deviceZone())}` : ''} · Signing on screen saves about {fmtNum(env.impact.sheets)} sheets of paper.</p>
+      {/* No impact figure here: one tree line at most, by Finish, and the Done screen (research/ux.json, "ux:check"). */}
+      <p className="muted small center sg-envelope">Envelope {env.id}{env.expires_at ? ` · open until ${yourMoment(env.expires_at, deviceZone())}` : ''}</p>
 
       {sheetField && (
         <FieldSheet field={sheetField} dateFormat={env.date_format} value={values[sheetField.id] || ''} onChange={(v) => set(sheetField.id, v)} onDone={() => setSheet(null)} onNext={sheetTarget ? () => sheetNext(sheetField.id) : undefined} />

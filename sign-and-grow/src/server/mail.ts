@@ -2,6 +2,9 @@ import { run, get, all, saveBlob, readBlob } from './db.ts';
 import { esc, now, baseUrl, fmtCode, sha256, token, HttpError } from './util.ts';
 import { PRICING } from '../lib/impact.ts';
 import { cannotOpenLine } from '../lib/policy.ts';
+// Copies for the account's archive addresses (archivemail.ts) and the rule that an email is not handed over unencrypted.
+import { archiveDraft, takeArchiveCopies, markArchiveRow, archiveCheck, noteArchiveSent, ARCHIVE_NOT_WAITING } from './archivemail.ts';
+import { smtpRequireTls, tlsRefusal } from '../lib/mailtls.ts';
 
 export type Mail = {
   to: string;
@@ -29,6 +32,9 @@ export type Mail = {
   // An email about a help request (src/server/routes-support.ts). It is about no document, and it often goes to
   // someone who only came to sign, so it ends with where it came from and nothing about signing or selling.
   help?: boolean;
+  // A short email to someone about their own login, such as the confirmation code: the footer is the help address
+  // only, without the line about paper and trees or the copy of the button's link.
+  brief?: boolean;
 };
 
 // What became of an email at hand-over: the mail server took it, there is no mail server (it sits in the outbox
@@ -41,18 +47,27 @@ async function transport() {
   if (!process.env.SMTP_URL) return null;
   if (!g.__tsmail) {
     const nodemailer = (await import('nodemailer')).default;
-    // A mail server that takes the connection and then says nothing must not hold up whatever is waiting for this
-    // email (a payment step, say) for nodemailer's own limits of up to ten minutes. These limits apply unless the
-    // address names its own (?connectionTimeout=...&greetingTimeout=...&socketTimeout=..., in milliseconds).
-    let url = process.env.SMTP_URL;
-    try {
-      const u = new URL(url);
-      for (const [k, v] of [['connectionTimeout', '10000'], ['greetingTimeout', '10000'], ['socketTimeout', '20000']]) if (!u.searchParams.has(k)) u.searchParams.set(k, v);
-      url = u.toString();
-    } catch {}
-    g.__tsmail = nodemailer.createTransport(url);
+    g.__tsmail = nodemailer.createTransport(transportOptions());
   }
   return g.__tsmail;
+}
+
+/** What the mail library is given: the address in SMTP_URL with our time limits, and requireTLS with SMTP_REQUIRE_TLS. */
+export function transportOptions(smtpUrl = process.env.SMTP_URL || ''): { url: string; requireTLS?: true } {
+  // A mail server that takes the connection and then says nothing must not hold up whatever is waiting for this
+  // email (a payment step, say) for nodemailer's own limits of up to ten minutes. These limits apply unless the
+  // address names its own (?connectionTimeout=...&greetingTimeout=...&socketTimeout=..., in milliseconds).
+  let url = smtpUrl;
+  const tls = smtpRequireTls();
+  try {
+    const u = new URL(url);
+    for (const [k, v] of [['connectionTimeout', '10000'], ['greetingTimeout', '10000'], ['socketTimeout', '20000']]) if (!u.searchParams.has(k)) u.searchParams.set(k, v);
+    // Nothing in the address switches the rule off: the library reads the address last, and its requireTLS wins over
+    // ignoreTLS and opportunisticTLS. Without STARTTLS it refuses to hand the email over (src/lib/mailtls.ts).
+    if (tls) u.searchParams.set('requireTLS', 'true');
+    url = u.toString();
+  } catch {}
+  return tls ? { url, requireTLS: true } : { url };
 }
 
 // "Ada Lovelace via GrowSigning" <sign@example.com>: recipients see who it is from before they open it.
@@ -98,12 +113,12 @@ export function renderMail(m: Mail): string {
     <div style="margin-top:8px">Did not expect this, or does it look wrong? <a href="${esc(reportUrl(m.code))}" style="color:#1c2a22;font-weight:600">Report this email</a>. That opens our check page with this code filled in. You do not have to open the document to report it.</div>
   </div>` : ''}
   <p style="font-size:12px;color:#6b776f;line-height:1.6;padding:16px 4px 0">
-    ${m.help ? 'Sent by the people who answer help requests at GrowSigning.' : m.envelopeId || m.links
+    ${m.brief ? '' : m.help ? 'Sent by the people who answer help requests at GrowSigning.' : m.envelopeId || m.links
     // Emails about a document go to people who only came to sign. The pages promise them no marketing, so these end
     // with where the email came from and nothing that sells. Emails to an account's own people keep the full line.
     ? 'Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning.'
     : `Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`}
-    ${m.cta ? `<br>If the button does not work, copy this link: ${esc(m.cta.url)}` : ''}
+    ${m.cta && !m.brief ? `<br>If the button does not work, copy this link: ${esc(m.cta.url)}` : ''}
     ${m.askForPdf ? `<br>${esc(cannotOpenLine(m.askForPdf))}` : ''}
     ${m.code ? '<br>Do not forward this email. The link is personal to you.' : ''}
     <br>Need a hand? ${m.code ? `<a href="${esc(helpUrl(m.code))}" style="color:#6b776f;font-weight:600">Get help with this document</a>. The link opens our help page and tells us which document you mean. Or go to ${esc(baseUrl())}/help yourself.` : `${esc(baseUrl())}/help`}
@@ -184,6 +199,7 @@ async function deliver(id: number | bigint, again = false): Promise<MailStatus> 
     const t = await transport();
     if (!t) {
       run("UPDATE emails SET status='outbox' WHERE id=?", id);
+      await archiveAfter(id);
       return 'outbox';
     }
     const p = JSON.parse(row.payload || '{}');
@@ -210,11 +226,14 @@ async function deliver(id: number | bigint, again = false): Promise<MailStatus> 
     if (missing) run('UPDATE emails SET html=? WHERE id=?', html, id);
     run("UPDATE emails SET status='sent', error=NULL, tries=tries+1, tried_at=?, next_try_at=NULL WHERE id=?", now(), id);
     if (again) await tell(id, 'sent');
+    noteArchiveSent(row);
+    await archiveAfter(id);
     return 'sent';
   } catch (e: any) {
     const tries = row.tries + 1;
     const wait = MAIL_RETRY_MINUTES[tries - 1];
-    run("UPDATE emails SET status='failed', error=?, tries=?, tried_at=?, next_try_at=? WHERE id=?", String(e?.message || e).slice(0, 500), tries, now(), wait ? new Date(Date.now() + wait * 60_000).toISOString() : null, id);
+    // A mail server that would not encrypt the connection, with SMTP_REQUIRE_TLS on, is said in our words (mailtls.ts).
+    run("UPDATE emails SET status='failed', error=?, tries=?, tried_at=?, next_try_at=? WHERE id=?", (tlsRefusal(e) || String(e?.message || e)).slice(0, 500), tries, now(), wait ? new Date(Date.now() + wait * 60_000).toISOString() : null, id);
     console.error('[mail] failed', row.to_email, e?.message);
     if (!wait) await tell(id, 'gave_up');
     else if (tries === 1) await tell(id, 'delayed');
@@ -226,6 +245,23 @@ async function deliver(id: number | bigint, again = false): Promise<MailStatus> 
 // The answer says which, so nothing has to claim an email was sent when it was not.
 export async function sendMail(m: Mail): Promise<MailStatus> {
   return deliver(recordMail(m));
+}
+
+// Once an email about a document has left (taken by the mail server, or in the outbox where there is none), every
+// confirmed archive address of its account gets a copy of its own, without links or codes (archivemail.ts). A copy
+// that must wait (sending is paused) stays queued for the timer. Never throws: the email it copies has gone.
+async function archiveAfter(id: number | bigint) {
+  try {
+    for (const c of takeArchiveCopies(id)) {
+      const mid = recordMail(c.mail);
+      markArchiveRow(mid, c);
+      const no = archiveCheck(get('SELECT * FROM emails WHERE id=?', mid));
+      if (!no) await deliver(mid);
+      else if (no !== 'wait') run("UPDATE emails SET status='failed', next_try_at=NULL, error=? WHERE id=?", no.why, mid);
+    }
+  } catch (e: any) {
+    console.error('[mail] archive copy', e?.message);
+  }
 }
 
 // The two halves of sendMail, for code that must not wait for the mail server where it writes an email (the payment
@@ -251,6 +287,9 @@ export function recordMail(m: Mail): number | bigint {
     'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at, about_user, message_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
     m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null, m.about ?? null, newMessageId(),
   );
+  // The copy for the account's archive addresses, made now while the whole email is known (archivemail.ts).
+  const draft = archiveDraft(m);
+  if (draft) run('UPDATE emails SET archive_draft=? WHERE id=?', draft, r.lastInsertRowid);
   return r.lastInsertRowid;
 }
 export async function deliverQueued(id: number | bigint): Promise<MailStatus | null> {
@@ -306,12 +345,18 @@ export async function retryMail(): Promise<{ sent: number; failed: number; dropp
   const done = { sent: 0, failed: 0, dropped: 0 };
   const t = now(), stuck = new Date(Date.now() - MAIL_STUCK_MS).toISOString();
   const isDue = "((status='failed' AND next_try_at IS NOT NULL AND next_try_at <= ?) OR (status='queued' AND COALESCE(tried_at, at) < ?))";
-  for (const { id } of all(`SELECT id FROM emails WHERE ${isDue} ORDER BY id LIMIT 200`, t, stuck)) {
+  // Archive copies that wait for a pause to be lifted are not even looked at, so they never crowd out other emails.
+  for (const { id } of all(`SELECT id FROM emails WHERE ${isDue} AND ${ARCHIVE_NOT_WAITING} ORDER BY id LIMIT 200`, t, stuck)) {
     // The timer can run twice at once (the built-in one and a scheduler calling /api/cron). Each email is claimed
     // by one statement before it is tried, so the other run passes it over and nobody gets it twice.
     const lease = new Date(Date.now() + MAIL_STUCK_MS).toISOString();
     if (!run(`UPDATE emails SET tried_at=?, next_try_at=CASE WHEN status='failed' THEN ? ELSE next_try_at END WHERE id=? AND ${isDue}`, t, lease, id, t, stuck).changes) continue;
-    const no = tooLate(get('SELECT * FROM emails WHERE id=?', id));
+    const row = get('SELECT * FROM emails WHERE id=?', id);
+    // An archive copy has rules of its own instead: it waits while sending is paused, however long, and goes nowhere
+    // once its address was removed or paused (archivemail.ts).
+    const arch = row?.archive_to ? archiveCheck(row) : null;
+    if (arch === 'wait') continue;
+    const no = row?.archive_to ? arch : tooLate(row);
     if (no) {
       run("UPDATE emails SET status='failed', next_try_at=NULL, error=COALESCE(error || ' ', '') || ? WHERE id=?", no.why, id);
       if (!no.quiet) await tell(id, 'gave_up');

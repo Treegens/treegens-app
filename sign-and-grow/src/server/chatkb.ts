@@ -4,8 +4,9 @@
 // of it as its system prompt on every question, and the built-in answers (used when no model is set up, when it is
 // down or slow, and past a limit) are taken from the same list of frequent questions.
 //
-// The help topics and the "not in it" list are written out here once more, and tests/chat.test.ts holds them to the
-// help page and to README.md: a topic added, renamed or removed there fails the test until it is changed here too.
+// The questions of /help and README's "What is not in it" are read from those files themselves while the server runs
+// (src/server/chatsources.ts), so an edit there reaches the next question. Only a few words on what each help topic
+// covers are written here (TOPIC_NOTES); a topic without a note is still known by its question.
 import {
   refundDays, refundRuleText, priceRuleText, dormantStopDays, CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION,
   WHO_CAN_SEE, NO_BAA_TITLE, NO_BAA_TEXT, LANGUAGE_NOTE, consentWording, newAccountDailyRecipients, unpaidDailyRecipients, PAID_TRUST_DAYS,
@@ -17,72 +18,51 @@ import { replyPromise } from '../lib/support.ts';
 import { expiryRuleText, HELD_EXPIRY_TEXT } from '../lib/policy.ts';
 import { PRICING, usd, CURRENCY_NOTE } from '../lib/impact.ts';
 import { CHAT_SCREENS, CHAT_TOOLS, type ChatScreen } from '../lib/chat.ts';
+import { helpTopics, notInIt } from './chatsources.ts';
 
 // ---- The topics of /help -------------------------------------------------------------------------------------
-// Every question on the help page with its anchor, exactly as the page writes it, and what it covers in a few words.
-// The helper points to these by their question.
-export const HELP_TOPICS: { id: string; q: string; about: string }[] = [
-  { id: 'find-documents', q: 'I cannot find the email, or my link stopped working', about: 'Find my documents emails a link to every document sent to an address. Links do not wear out.' },
-  { id: 'real', q: 'Is this email really from GrowSigning?', about: 'Type the 12 character security code from the email into Check an email.' },
-  { id: 'unexpected', q: 'I got a request I did not expect', about: 'You do not have to sign. Report it from the email, from Check an email, or from the signing page.' },
-  { id: 'not-me', q: 'I am named on a document I did not sign', about: '"I did not sign this, or this was not me" marks it as disputed. What we give out and to whom.' },
-  { id: 'more-time', q: 'I ran out of time', about: 'Open the link anyway: a passed deadline offers to ask the sender for more time.' },
-  { id: 'copy', q: 'How do I get a copy later?', about: 'The completion email links to the signed document. Find my documents sends it again.' },
-  { id: 'while-signing', q: 'What else can I do on the signing page?', about: 'Questions and comments, Fix my name, pass it on, decline, finish later, stop reminders.' },
-  { id: 'phone', q: 'Can I sign on my phone? Which browsers work?', about: 'Yes, in the phone\'s browser, with no app and no account. Which browsers show the document.' },
-  { id: 'group-taken', q: 'It says a colleague has taken this on', about: 'A document sent to a group: the first who agreed has it. Only the sender can give it back.' },
-  { id: 'one-time-code', q: 'I was asked for a one-time code', about: 'A code sent to your email (or by text where this server sends texts). Only the sender can change where it goes.' },
-  { id: 'consent-wording', q: 'What do I agree to before I sign?', about: 'The exact words of the consent screen, with their version.' },
-  { id: 'cancel', q: 'How do I cancel?', about: 'Three ways: the Plan page, the stop link in payment emails, and two tools without logging in.' },
-  { id: 'refunds', q: 'Can I get a refund?', about: 'The refund rule, with no form and no approval.' },
-  { id: 'signatures', q: 'How do signatures work, and what is free?', about: 'Prices, what uses a signature, what is always free.' },
-  { id: 'code', q: 'I was given a code', about: 'A code that makes the monthly plan free, entered at sign-up or on the Plan page.' },
-  { id: 'after-cancel', q: 'What happens to my documents when I cancel?', about: 'Nothing is deleted or locked. Export is free.' },
-  { id: 'close', q: 'How do I close my account?', about: 'Closing, the days to undo it, what is deleted and what is kept.' },
-  { id: 'fix-after-sending', q: 'I sent a document with a mistake', about: 'Correct an envelope in place without voiding it.' },
-  { id: 'not-received', q: 'The recipient says they never got the email', about: 'What the envelope shows, copying the link, reminding one person, correcting the address.' },
-  { id: 'bounced', q: 'An envelope says &quot;Could not be delivered&quot; or &quot;Marked as spam&quot;', about: 'What those words mean and what to do. Only on a server connected to its mail provider.' },
-  { id: 'checking-signers', q: 'How can I check who is signing?', about: 'Access codes and one-time codes, and what each proves.' },
-  { id: 'witness', q: 'Can a signature be witnessed here?', about: 'A witness for one signer. GrowSigning records what the witness states and cannot check it.' },
-  { id: 'stamps', q: 'Can a company stamp or seal go next to a signature?', about: 'A picture of a stamp printed like ink. Not an electronic seal and not stamp duty.' },
-  { id: 'reminders', q: 'Are people reminded by themselves?', about: 'Reminders by default, and where to change them.' },
-  { id: 'enough', q: 'Is this signature enough for my document?', about: 'What a simple electronic signature is, and when to check first. Not legal advice.' },
-  { id: 'outside-us', q: 'Signing outside the United States, and documents that should not be signed here', about: 'Documents not to sign here without checking, the check before sending, notes by country.' },
-  { id: 'language', q: 'Which language do my signers see?', about: 'English for now. The document can be in any language.' },
-  { id: 'cannot-open', q: 'My signer says the page will not open where they are', about: 'Send them the PDF yourself. A signature collected that way is outside GrowSigning.' },
-  { id: 'no-email', q: 'My signer has no email address, or does not read it', about: '"I will send the link myself": a name and no address.' },
-  { id: 'patient-information', q: 'Can I use it for patient forms or other health information?', about: 'No. There is no HIPAA business associate agreement.' },
-  { id: 'payment-link', q: 'Can someone pay a deposit when they sign?', about: 'GrowSigning takes no payments. A trusted account can show a link to its own payment page after Finish.' },
-  { id: 'signing-groups', q: 'Can I send to a team, where anyone in it can sign?', about: 'Signing groups, made by admins under Contacts.' },
-  { id: 'template-access', q: 'Who can use and change a template, and what does a locked wording mean?', about: 'Who can use a template, who can change it, and locking its wording.' },
-  { id: 'cannot-send', q: 'Why can I not send?', about: 'An unconfirmed address, the daily limit, a fake payment notice, a pause, a short access code, no signatures left.' },
-  { id: 'locked-out', q: 'I cannot log in', about: 'Password reset, Google or Microsoft logins, a lost authenticator phone, a team.' },
-  { id: 'unknown-charge', q: 'I see a charge I do not recognise', about: 'Find my subscription with each address, then write to a person with the date and amount.' },
-  { id: 'after-writing', q: 'What happens after I write?', about: 'A reference, a person who has it, every answer by email with a private link.' },
-  { id: 'lost-link', q: 'I wrote to you and cannot find the email with the link', about: 'The links to your help requests are emailed again.' },
-];
-
-// ---- What is not in it ---------------------------------------------------------------------------------------
-// README "What is not in it", one entry for each bullet, in its order. `lead` is how the bullet starts there.
-export const NOT_IN_IT: { lead: string; text: string }[] = [
-  { lead: 'Certificate-based digital signatures.', text: 'PDFs are not signed with a PKI certificate (PAdES). These are simple electronic signatures with an audit trail, not "advanced" or "qualified" signatures under eIDAS.' },
-  { lead: 'A security monitoring service.', text: 'Settings, Security keeps a record of sign-ins and changes and sends five alerts by email. Nobody watches it, and nothing is pushed to syslog or a log platform: a security system pulls it with an admin key or takes the security.event webhook.' },
-  { lead: 'Records management beyond the retention rule.', text: 'One retention period per account and per template, then a purge: no review queue, no transfer to an archive, no BagIt export, no records officer role, and the certificate of destruction is a CSV. Holds go on one envelope or one folder. A hold is a rule of this software and does not reach the backups of the people who run the server.' },
-  { lead: 'Electronic seals.', text: 'A company stamp is a picture of a stamp put on the page by a person. Nothing checks that they may use it. It is not an electronic seal, pays no stamp duty, and is not an e-stamp certificate or an e-meterai.' },
-  { lead: 'Languages other than English.', text: LANGUAGE_NOTE },
-  { lead: 'ID verification', text: 'No check of government ID, no knowledge-based questions, no checks by phone call. A one-time code by email or text shows that someone can read a mailbox or holds a phone, not who they are.' },
-  { lead: 'Remote online notarisation.', text: 'No notary step. Payments are not collected: a trusted account can show a link to its own payment page after Finish, and the money never passes through GrowSigning.' },
-  { lead: 'A HIPAA business associate agreement', text: 'Not at any price. US healthcare providers must not put patient information through it.' },
-  { lead: 'Google Docs and cloud drives', text: 'Download a Google Doc as Word or PDF first. Word, Excel, PowerPoint, OpenDocument, RTF, text, web page and TIFF files are turned into a PDF on upload only where the people who run the server set up a converter; elsewhere, save them as PDF first. Where they are converted, the PDF is what people sign and can look different from the file, so check every page. Documents cannot be edited in GrowSigning.' },
-  { lead: 'Contract lifecycle management', text: 'No contract management, no AI contract analysis, no document generation. The help chat does not read documents.' },
-  { lead: 'Single sign-on', text: 'No SAML, and a team cannot make everyone sign in one way. No native mobile apps. Signing in with Google or Microsoft and two-step login with an authenticator app are in, where the server has them. No passkeys or security keys.' },
-  { lead: 'Signing without a connection.', text: 'Opening the document and Finish need a connection.' },
-  { lead: 'Ready-made integrations', text: 'None (Salesforce, Google Drive and so on). The API and webhooks are the way in.' },
-  { lead: 'A security certification', text: 'No certification. The database is not encrypted by the app itself; stored files are, when the operator switches that on.' },
-  { lead: 'Staffed support.', text: 'The software gives everyone a way to reach a person and publishes a response time. Someone still has to read the queue and answer.' },
-  { lead: 'Replying to a support email.', text: 'Answers are read and written on the request\'s own page, through the link in every email, not by replying to the email.' },
-  { lead: 'A helper that acts.', text: 'The help chat answers questions and points to the tools. It cannot see or change a document, an account or a payment, and it never says whether a signature is enough or valid.' },
-];
+// The questions and their anchors come from the page itself (helpTopics()). These are a few words on what each one
+// covers, by anchor, for the model; a note whose topic is no longer on the page is not used.
+export const TOPIC_NOTES: Record<string, string> = {
+  'find-documents': 'Find my documents emails a link to every document sent to an address. Links do not wear out.',
+  'real': 'Type the 12 character security code from the email into Check an email.',
+  'unexpected': 'You do not have to sign. Report it from the email, from Check an email, or from the signing page.',
+  'not-me': '"I did not sign this, or this was not me" marks it as disputed. What we give out and to whom.',
+  'more-time': 'Open the link anyway: a passed deadline offers to ask the sender for more time.',
+  'copy': 'The completion email links to the signed document. Find my documents sends it again.',
+  'while-signing': 'Questions and comments, Fix my name, pass it on, decline, finish later, stop reminders.',
+  'phone': 'Yes, in the phone\'s browser, with no app and no account. Which browsers show the document.',
+  'group-taken': 'A document sent to a group: the first who agreed has it. Only the sender can give it back.',
+  'one-time-code': 'A code sent to your email (or by text where this server sends texts). Only the sender can change where it goes.',
+  'consent-wording': 'The exact words of the consent screen, with their version.',
+  'cancel': 'Three ways: the Plan page, the stop link in payment emails, and two tools without logging in.',
+  'refunds': 'The refund rule, with no form and no approval.',
+  'signatures': 'Prices, what uses a signature, what is always free.',
+  'code': 'A code that makes the monthly plan free, entered at sign-up or on the Plan page.',
+  'after-cancel': 'Nothing is deleted or locked. Export is free.',
+  'close': 'Closing, the days to undo it, what is deleted and what is kept.',
+  'fix-after-sending': 'Correct an envelope in place without voiding it.',
+  'not-received': 'What the envelope shows, copying the link, reminding one person, correcting the address.',
+  'bounced': 'What those words mean and what to do. Only on a server connected to its mail provider.',
+  'checking-signers': 'Access codes and one-time codes, and what each proves.',
+  'witness': 'A witness for one signer. GrowSigning records what the witness states and cannot check it.',
+  'stamps': 'A picture of a stamp printed like ink. Not an electronic seal and not stamp duty.',
+  'reminders': 'Reminders by default, and where to change them.',
+  'enough': 'What a simple electronic signature is, and when to check first. Not legal advice.',
+  'outside-us': 'Documents not to sign here without checking, the check before sending, notes by country.',
+  'language': 'English for now. The document can be in any language.',
+  'cannot-open': 'Send them the PDF yourself. A signature collected that way is outside GrowSigning.',
+  'no-email': '"I will send the link myself": a name and no address.',
+  'patient-information': 'No. There is no HIPAA business associate agreement.',
+  'payment-link': 'GrowSigning takes no payments. A trusted account can show a link to its own payment page after Finish.',
+  'signing-groups': 'Signing groups, made by admins under Contacts.',
+  'template-access': 'Who can use a template, who can change it, and locking its wording.',
+  'cannot-send': 'An unconfirmed address, the daily limit, a fake payment notice, a pause, a short access code, no signatures left.',
+  'locked-out': 'Password reset, Google or Microsoft logins, a lost authenticator phone, a team.',
+  'unknown-charge': 'Find my subscription with each address, then write to a person with the date and amount.',
+  'after-writing': 'A reference, a person who has it, every answer by email with a private link.',
+  'lost-link': 'The links to your help requests are emailed again.',
+};
 
 // ---- Frequent questions --------------------------------------------------------------------------------------
 // The built-in answers. Each has the words that pick it, the answer, and the tool buttons that go with it. The answer
@@ -92,7 +72,7 @@ const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 export const FAQ: Faq[] = [
   { id: 'not-me', words: ['did not sign', "didn't sign", 'never signed', 'not me', 'forged', 'dispute', 'someone signed', 'in my name'],
     answer: () => 'If you are named on a document you did not sign, open it and choose Report this request, then "I did not sign this, or this was not me". Or type the security code from our email into Check an email and choose the same. The document is then marked as disputed wherever it is shown, the sender and the people who run GrowSigning are told, and nothing is deleted. We cannot tell who really signed. If it is a legal matter, ask a lawyer, or the police if you think a crime was committed.' },
-  { id: 'refund', words: ['refund', 'money back', 'charged twice', 'double charge', 'overcharged'],
+  { id: 'refund', words: ['refund', 'money back', 'charged twice', 'double charge', 'overcharged', 'charged after', 'charged me after', 'after i cancel', 'still charged', 'still being charged', 'charged again'],
     answer: () => `${refundRuleText(refundDays())} Open Settings, then Plan: your latest payment is offered at the top. A charge after you cancelled, a second charge for the plan, or more than the reminder said is refunded by the software by itself. Anything outside this rule goes to a person: choose Talk to a person.` },
   { id: 'cancel', words: ['cancel', 'stop paying', 'stop billing', 'unsubscribe', 'end my plan', 'stop the plan'],
     answer: () => 'There are three ways. In the app: Settings, then Plan, then Cancel plan (owners and admins). From your inbox: every email about a payment while a plan renews has a link that stops it, without logging in. Without logging in: Find my subscription emails every paid plan tied to an address with a stop link, and Stop billing with my card works with the last four digits of the card. The plan runs to the end of the month already paid for. Nothing is deleted, and the signatures you have can be used until their own dates: what is left of the month expires when it ends, top-ups keep theirs.' },
@@ -114,7 +94,7 @@ export const FAQ: Faq[] = [
     answer: () => 'When everyone has finished, each person gets a completion email that links to the signed document, with the PDF attached when it is small enough. Lost it? Find my documents sends the link again, also months later. To be safe, download the PDF and keep it.' },
   { id: 'agree', words: ['agree', 'agreeing', 'consent', 'what am i signing', 'electronic records'],
     answer: () => `Before any field opens you are shown these words and asked to tick a box: "${consentWording('the sender', true).legal}" You can decline instead, or ask the sender for a paper copy. The help page prints the full wording with its version.` },
-  { id: 'legal', words: ['legal', 'legally', 'valid', 'binding', 'enforceable', 'hold up', 'court', 'lawyer', 'law'],
+  { id: 'legal', words: ['legal', 'legally', 'is it valid', 'is this valid', 'is that valid', 'signature valid', 'valid signature', 'still valid', 'valid in', 'binding', 'enforceable', 'hold up', 'stand up', 'court', 'lawyer', 'law', 'should i sign', 'safe to sign', 'qualified', 'eidas'],
     answer: () => 'GrowSigning makes a simple electronic signature: the signer\'s name or mark on the page and a record of when and from where they signed. It does not check identity documents and has no notary step. Whether that is enough depends on the country and the kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature. The helper gives no legal advice: ask a lawyer, and see "Is this signature enough for my document?" on the help page.' },
   { id: 'locked', words: ['log in', 'login', 'sign in', 'password', 'locked out', 'two-step', '2fa', 'authenticator', 'reset', 'lost my phone', 'lost the phone', 'recovery code'],
     answer: () => `Forgot the password? Use Forgot password on the sign-in page: the link works for one hour. Made your login with Google or Microsoft? Use that button. Lost the phone with your authenticator app? Type one of your recovery codes in place of the code. Without them, a team admin can switch it off, or you can start a reset by email after your password, which takes effect after ${TWO_STEP_EMAIL_RESET_DAYS} days. "I cannot log in" on the help page has every case. A person can help too, and the contact form works without signing in.` },
@@ -166,6 +146,18 @@ export function builtInAnswer(question: string): { id: string | null; reply: str
 // ---- The system prompt -----------------------------------------------------------------------------------------
 
 const lines = (xs: string[]) => xs.map((x) => `- ${x}`).join('\n');
+/** The topics of /help as the page has them now, each with its note where there is one. */
+function topicLines(): string {
+  const topics = helpTopics();
+  if (!topics) return '- The list of topics could not be read on this server. Point people to the help page (/help), which lists every topic.';
+  return lines(topics.map((t) => `"${t.q}" (/help#${t.id})${TOPIC_NOTES[t.id] ? `: ${TOPIC_NOTES[t.id]}` : ''}`));
+}
+/** README "What is not in it", as it is now. */
+function notInItLines(): string {
+  const list = notInIt();
+  if (!list) return '- This list could not be read on this server. If someone asks whether something exists that the facts here do not mention, say you do not know and offer a person.';
+  return lines(list);
+}
 
 /** Everything the model is told, for one question asked on one kind of screen. */
 export function systemPrompt(screen: ChatScreen, env: Record<string, string | undefined> = process.env): string {
@@ -242,10 +234,10 @@ ${lines(WHO_CAN_SEE.map((w) => `${w.who} ${w.what}`))}
 - ${LANGUAGE_NOTE}
 
 === TOPICS ON THE HELP PAGE (/help, each at /help#id) ===
-${lines(HELP_TOPICS.map((t) => `"${t.q.replace(/&quot;/g, '"')}" (/help#${t.id}): ${t.about}`))}
+${topicLines()}
 
 === WHAT GROWSIGNING DOES NOT HAVE ===
-${lines(NOT_IN_IT.map((n) => `${n.lead.replace(/\.$/, '')}: ${n.text}`))}
+${notInItLines()}
 
 === FREQUENT QUESTIONS, WITH THE ANSWERS OUR PAGES GIVE ===
 ${lines(FAQ.filter((f) => f.id !== 'person').map((f) => f.answer()))}

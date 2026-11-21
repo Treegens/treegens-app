@@ -35,23 +35,17 @@ export const INKS = ['blue', 'red', 'purple', 'black', 'green'] as const;
 export type Ink = (typeof INKS)[number];
 /**
  * Stamp pad inks at full strength: dull, dark colours, as a pad prints them, not screen colours. Printed at
- * STAMP_OPACITY over white they land on blue-violet about (40,44,128), carmine (170,30,48), violet (80,40,120),
- * blue-black (35,36,48) and a dull green.
+ * STAMP_OPACITY over white they land on blue-violet about (40,44,128), a warm dull red towards vermilion (about
+ * 188,46,40, as seal paste and red pad ink print, not a pink carmine), a dull red-violet (85,40,110), blue-black
+ * (35,36,48) and a dull green. One colour per ink: where a stamp is short of ink it prints less of it (the paper
+ * shows through), never a paler or cooler tint of it.
  */
 export const INK_RGB: Record<Ink, [number, number, number]> = {
   blue: [33, 37, 124],
-  red: [167, 23, 42],
-  purple: [75, 33, 116],
+  red: [182, 40, 34],
+  purple: [80, 34, 104],
   black: [29, 30, 42],
   green: [24, 88, 56],
-};
-/** The same inks where they are thin or short of ink: a little lighter and cooler, as real pad ink is. */
-const THIN_RGB: Record<Ink, [number, number, number]> = {
-  blue: [58, 66, 152],
-  red: [184, 44, 60],
-  purple: [98, 60, 146],
-  black: [56, 60, 80],
-  green: [40, 104, 84],
 };
 export const INK_WORD: Record<Ink, string> = { blue: 'Blue', red: 'Red', purple: 'Purple', black: 'Black', green: 'Green' };
 export const isInk = (s: any): s is Ink => (INKS as readonly string[]).includes(s);
@@ -93,12 +87,14 @@ export function rng(seed: number): () => number {
   };
 }
 export const validSeed = (n: any): boolean => Number.isInteger(n) && n >= 1 && n <= 2147483646;
-/** The natural tilt for a seed: between -4 and 4 degrees, in tenths, never quite straight. */
+/** The smallest natural tilt a seed gives: a hand never sets a stamp down quite straight. */
+export const TILT_MIN = 1.5;
+/** The natural tilt for a seed: between 1.5 and 4 degrees either way, in tenths. */
 export function tiltFor(seed: number): number {
   const r = rng(seed ^ 0x5bd1e995);
   r();
-  const t = Math.round((r() * 2 - 1) * TILT_MAX * 10) / 10;
-  return Math.abs(t) < 0.6 ? (t < 0 ? -0.6 : 0.6) * (1 + Math.round(r() * 4)) : t;
+  const t = Math.round((TILT_MIN + r() * (TILT_MAX - TILT_MIN)) * 10) / 10;
+  return r() < 0.5 ? -t : t;
 }
 /**
  * The settings a new impression starts with. Given what was found in the picture: a photo leaves out marks in other
@@ -617,19 +613,30 @@ export function offSheet(dist: Float32Array, w: number, h: number, floor: number
 }
 
 /**
- * A photo, not a clean design: the paper has grain or noise, or the light on it changes across the picture. A design
- * exported from a program has paper of one flat colour.
+ * A photo, not a clean design: the paper has grain or noise, or the light on it changes across the picture, or it is
+ * simply not of one flat colour. A design exported from a program has paper of exactly one colour almost everywhere;
+ * even a clean photo of glossy or smooth paper, with little grain, has paper that varies by a few steps, and a glare
+ * or a shadow across it.
  */
 export function isPhoto(img: Rgba, paper: Uint8ClampedArray, dist: Float32Array): boolean {
   const { width: w, height: h, data: d } = img;
   let n = 0, s = 0;
+  const hist = new Uint32Array(256);
   for (let y = 0; y < h; y += 2)
     for (let x = 0; x < w - 1; x += 2) {
       const p = y * w + x;
       if (dist[p] >= 0.04 || dist[p + 1] >= 0.04) continue;
-      s += Math.abs(lum(d[p * 4], d[p * 4 + 1], d[p * 4 + 2]) - lum(d[p * 4 + 4], d[p * 4 + 5], d[p * 4 + 6]));
+      const l = lum(d[p * 4], d[p * 4 + 1], d[p * 4 + 2]);
+      hist[Math.round(l)]++;
+      s += Math.abs(l - lum(d[p * 4 + 4], d[p * 4 + 5], d[p * 4 + 6]));
       n++;
     }
+  // How much of the paper is within a step or two of its most common shade.
+  let mode = 0;
+  for (let i = 1; i < 256; i++) if (hist[i] > hist[mode]) mode = i;
+  let flat = 0;
+  for (let i = Math.max(0, mode - 2); i <= Math.min(255, mode + 2); i++) flat += hist[i];
+  if (n > 200 && flat < n * 0.6) return true;
   const L: number[] = [];
   for (let p = 0; p < w * h; p += 97) L.push(lum(paper[p * 3], paper[p * 3 + 1], paper[p * 3 + 2]));
   L.sort((a, b) => a - b);
@@ -694,25 +701,203 @@ export function ruledLines(dist: Float32Array, w: number, h: number): Rule[] {
   return lines.map((l) => ({ cos: Math.cos(bestA), sin: Math.sin(bestA), rho: l.rho, half: l.half }));
 }
 
+/** Every pixel within `T` of a line (in normal form, bent by `off` along it): its place along the line and across it. */
+function alongLine(l: Rule, w: number, h: number, T: number, off: (s: number) => number, fn: (x: number, y: number, s: number, t: number) => void) {
+  const nx = -l.sin, ny = l.cos, ux = l.cos, uy = l.sin;
+  if (Math.abs(ny) >= Math.abs(nx)) {
+    for (let x = 0; x < w; x++) {
+      // y where the line crosses this column, then the rows within T across it.
+      const s0 = x * ux + ((l.rho - x * nx) / ny) * uy;
+      const yc = (l.rho + off(s0) - x * nx) / ny;
+      const reach = T / Math.abs(ny) + 1;
+      for (let y = Math.max(0, Math.floor(yc - reach)); y <= Math.min(h - 1, Math.ceil(yc + reach)); y++) {
+        const s = x * ux + y * uy, t = x * nx + y * ny - l.rho - off(s);
+        if (Math.abs(t) <= T) fn(x, y, s, t);
+      }
+    }
+  } else {
+    for (let y = 0; y < h; y++) {
+      const s0 = ((l.rho - y * ny) / nx) * ux + y * uy;
+      const xc = (l.rho + off(s0) - y * ny) / nx;
+      const reach = T / Math.abs(nx) + 1;
+      for (let x = Math.max(0, Math.floor(xc - reach)); x <= Math.min(w - 1, Math.ceil(xc + reach)); x++) {
+        const s = x * ux + y * uy, t = x * nx + y * ny - l.rho - off(s);
+        if (Math.abs(t) <= T) fn(x, y, s, t);
+      }
+    }
+  }
+}
+
 /**
- * The picture with the ruled lines painted out: each pixel on a line takes the colour between the pixels just above
- * and just below it. On paper that is paper; where a line crossed the stamp it is the stamp's ink, so no pale band or
- * spur is left in the ring.
+ * The picture with long thin lines painted out (the ruled lines of lined paper, the crease of a fold) without taking
+ * any of the stamp's ink with them. Each line's own profile across it is measured where it runs over paper: how much
+ * light it takes away (or adds, on the bright side of a crease) at each distance from its middle, in each colour,
+ * following the line where it runs a little off straight. Every pixel on the line is then divided by that profile.
+ * Paper under a line comes back as paper. Ink that crosses a line, runs along it or touches it comes back as ink,
+ * because only the line's own share of the light is given back: the bar of an E lying on a rule and a ring running
+ * along one stay whole, and a stroke crossing it has no gap.
  */
 export function unrule(img: Rgba, rules: Rule[]): Rgba {
   const { width: w, height: h } = img;
-  const d = new Uint8ClampedArray(img.data);
-  for (const l of rules)
-    for (let x = 0; x < w; x++) {
-      const yc = (l.rho + x * l.sin) / l.cos;
-      const y0 = Math.floor(yc - l.half - 1.5), y1 = Math.ceil(yc + l.half + 1.5);
-      if (y0 < 0 || y1 >= h) continue;
-      for (let y = y0 + 1; y < y1; y++) {
-        const f = (y - y0) / (y1 - y0);
-        for (let c = 0; c < 3; c++) d[(y * w + x) * 4 + c] = d[(y0 * w + x) * 4 + c] * (1 - f) + d[(y1 * w + x) * 4 + c] * f;
+  const src = img.data;
+  const d = new Uint8ClampedArray(src);
+  const at = (x: number, y: number, c: number) => {
+    const x0 = Math.max(0, Math.min(w - 2, Math.floor(x))), y0 = Math.max(0, Math.min(h - 2, Math.floor(y)));
+    const tx = Math.max(0, Math.min(1, x - x0)), ty = Math.max(0, Math.min(1, y - y0));
+    const i = (y0 * w + x0) * 4 + c;
+    return (src[i] * (1 - tx) + src[i + 4] * tx) * (1 - ty) + (src[i + w * 4] * (1 - tx) + src[i + w * 4 + 4] * tx) * ty;
+  };
+  for (const l of rules) {
+    const nx = -l.sin, ny = l.cos, ux = l.cos, uy = l.sin;
+    const T = Math.ceil(l.half) + 3;
+    const ss = [[0, 0], [w, 0], [0, h], [w, h]].map(([x, y]) => x * ux + y * uy);
+    const s0 = Math.floor(Math.min(...ss)), s1 = Math.ceil(Math.max(...ss)), ns = s1 - s0 + 1;
+    const inside = (x: number, y: number) => x >= 0 && y >= 0 && x <= w - 1 && y <= h - 1;
+    // The paper on either side at each point along the line, and whether both sides are paper alike.
+    const ref = new Float32Array(ns * 3), ok = new Uint8Array(ns);
+    const refAt = (k: number, off: number) => {
+      const s = s0 + k, cx = (l.rho + off) * nx + s * ux, cy = (l.rho + off) * ny + s * uy;
+      const ax = cx + T * nx, ay = cy + T * ny, bx = cx - T * nx, by = cy - T * ny;
+      if (!inside(ax, ay) || !inside(bx, by)) return false;
+      const A = [0, 1, 2].map((c) => at(ax, ay, c)), B = [0, 1, 2].map((c) => at(bx, by, c));
+      const la = lum(A[0], A[1], A[2]), lb = lum(B[0], B[1], B[2]);
+      for (let c = 0; c < 3; c++) ref[k * 3 + c] = (A[c] + B[c]) / 2;
+      return Math.abs(la - lb) < 0.07 * Math.max(la, lb) && Math.min(la, lb) > 30;
+    };
+    for (let k = 0; k < ns; k++) ok[k] = refAt(k, 0) ? 1 : 0;
+    // Following the line: in stretches of 32 pixels, where its darkness is centred, then one straight fit.
+    const xs: number[] = [], ys: number[] = [], ws: number[] = [];
+    for (let k0 = 0; k0 < ns; k0 += 32) {
+      let sum = 0, mid = 0;
+      for (let k = k0; k < Math.min(ns, k0 + 32); k++) {
+        if (!ok[k]) continue;
+        const s = s0 + k, lr = lum(ref[k * 3], ref[k * 3 + 1], ref[k * 3 + 2]);
+        for (let t = -T + 1; t <= T - 1; t += 0.5) {
+          const x = (l.rho + t) * nx + s * ux, y = (l.rho + t) * ny + s * uy;
+          if (!inside(x, y)) continue;
+          const dk = Math.max(0, 1 - lum(at(x, y, 0), at(x, y, 1), at(x, y, 2)) / lr);
+          (sum += dk), (mid += dk * t);
+        }
       }
+      if (sum > 0.5) (xs.push(s0 + k0 + 16), ys.push(mid / sum), ws.push(sum));
     }
+    let fa = 0, fb = 0;
+    for (let pass = 0; pass < 2 && xs.length >= 3; pass++) {
+      let W = 0, Sx = 0, Sy = 0, Sxx = 0, Sxy = 0;
+      xs.forEach((x, i) => {
+        if (pass && Math.abs(ys[i] - (fa + fb * x)) > 1) return;
+        (W += ws[i]), (Sx += ws[i] * x), (Sy += ws[i] * ys[i]), (Sxx += ws[i] * x * x), (Sxy += ws[i] * x * ys[i]);
+      });
+      const den = W * Sxx - Sx * Sx;
+      if (W <= 0 || Math.abs(den) < 1e-9) break;
+      fb = (W * Sxy - Sx * Sy) / den;
+      fa = (Sy - fb * Sx) / W;
+    }
+    const off = (s: number) => Math.max(-T, Math.min(T, fa + fb * s));
+    for (let k = 0; k < ns; k++) ok[k] = refAt(k, off(s0 + k)) ? 1 : 0;
+    // The line's profile: the share of the paper's light at each quarter pixel across it, in each colour, the middle
+    // value over the whole length where it runs over paper.
+    const BIN = 4, nb = 2 * T * BIN + 1;
+    const vals: number[][][] = [0, 1, 2].map(() => Array.from({ length: nb }, () => []));
+    alongLine(l, w, h, T, off, (x, y, s, t) => {
+      const k = Math.round(s - s0);
+      if (k < 0 || k >= ns || !ok[k]) return;
+      const b = Math.round((t + T) * BIN), i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) vals[c][b].push(src[i + c] / Math.max(1, ref[k * 3 + c]));
+    });
+    const prof = vals.map((ch) => ch.map((a) => (a.length >= 12 ? a.sort((p, q) => p - q)[a.length >> 1] : 1)));
+    const f = (c: number, t: number) => {
+      const x = Math.max(0, Math.min(nb - 1, (t + T) * BIN)), i = Math.min(nb - 2, Math.floor(x)), u = x - i;
+      return prof[c][i] * (1 - u) + prof[c][i + 1] * u;
+    };
+    alongLine(l, w, h, T, off, (x, y, s, t) => {
+      if (Math.abs(t) > T - 0.5) return;
+      const fs = [f(0, t), f(1, t), f(2, t)];
+      if (fs.every((v) => Math.abs(v - 1) < 0.015)) return;
+      const i = (y * w + x) * 4, k = Math.round(s - s0);
+      const o = fs.map((v, c) => Math.min(255, src[i + c] / Math.max(0.05, v)));
+      // What is left that is as light as the paper beside it is paper: the paper itself, not a faint trace.
+      if (k >= 0 && k < ns && ok[k]) {
+        const lr = lum(ref[k * 3], ref[k * 3 + 1], ref[k * 3 + 2]), lo = lum(o[0], o[1], o[2]);
+        if (Math.abs(1 - lo / Math.max(1, lr)) < 0.07) for (let c = 0; c < 3; c++) o[c] = ref[k * 3 + c];
+      }
+      for (let c = 0; c < 3; c++) d[i + c] = o[c];
+    });
+  }
   return { width: w, height: h, data: d };
+}
+
+/**
+ * The crease of a folded sheet in a photo: a long, thin, straight line at any angle that is not ink. It is grey (paper
+ * in shadow takes light away from every colour alike), thin across its own direction, lighter than print, nearly
+ * unbroken, and runs across most of the picture, often with a bright line beside it. A line of the stamp (the frame of
+ * a box stamp) ends where the stamp does, and a row of printed text is as tall as its letters, so neither is taken for
+ * one. Painted out with the ruled lines (unrule).
+ */
+export function creases(img: Rgba, paper: Uint8ClampedArray, dist: Float32Array): Rule[] {
+  const { width: w, height: h, data: d } = img;
+  const r = Math.max(3, Math.round(Math.max(w, h) / 400));
+  const cand = new Uint8Array(w * h);
+  const pts: number[] = [];
+  const dirs = [[r, 0], [0, r], [r, r], [r, -r]];
+  for (let y = r; y < h - r; y++)
+    for (let x = r; x < w - r; x++) {
+      const p = y * w + x, v = dist[p];
+      if (v < 0.05 || v > 0.6) continue;
+      let mx = 0, mn = 1;
+      for (let c = 0; c < 3; c++) {
+        const tk = Math.max(0, 1 - d[p * 4 + c] / Math.max(24, paper[p * 3 + c]));
+        (mx = Math.max(mx, tk)), (mn = Math.min(mn, tk));
+      }
+      if (mx - mn > 0.3 * mx + 0.02) continue;
+      if (!dirs.some(([dx, dy]) => dist[p + dy * w + dx] < v * 0.5 && dist[p - dy * w - dx] < v * 0.5)) continue;
+      cand[p] = 1;
+      pts.push(x, y);
+    }
+  const big = Math.max(w, h);
+  if (pts.length < big * 0.4) return [];
+  const step = Math.max(1, Math.floor(pts.length / 2 / 60000));
+  const NA = 360, diag = Math.ceil(Math.hypot(w, h)), R = 2 * diag + 1;
+  const acc = new Int32Array(NA * R);
+  const cs = Array.from({ length: NA }, (_, a) => Math.cos((a * Math.PI) / NA)), sn = Array.from({ length: NA }, (_, a) => Math.sin((a * Math.PI) / NA));
+  for (let i = 0; i < pts.length; i += 2 * step) {
+    const x = pts[i], y = pts[i + 1];
+    for (let a = 0; a < NA; a++) acc[a * R + Math.round(y * cs[a] - x * sn[a]) + diag]++;
+  }
+  // The strongest lines, one at a time, each checked along its whole length.
+  const found: Rule[] = [];
+  const need = (big * 0.35) / step;
+  for (let round = 0; round < 8; round++) {
+    let best = 0, at = -1;
+    for (let i = 0; i < acc.length; i++) if (acc[i] > best) (best = acc[i], at = i);
+    if (best < need) break;
+    const a = Math.floor(at / R), rho = (at % R) - diag;
+    // Votes near this line are used up, whatever the check says.
+    for (let da = -6; da <= 6; da++)
+      for (let dr = -8; dr <= 8; dr++) {
+        const aa = (a + da + NA) % NA, rr = (da + a < 0 || da + a >= NA ? -rho : rho) + dr + diag;
+        if (rr >= 0 && rr < R) acc[aa * R + rr] = 0;
+      }
+    const l: Rule = { cos: cs[a], sin: sn[a], rho, half: 2 };
+    const nx = -l.sin, ny = l.cos, ux = l.cos, uy = l.sin;
+    const ss = [[0, 0], [w, 0], [0, h], [w, h]].map(([x, y]) => x * ux + y * uy);
+    let first = Infinity, last = -Infinity, hits = 0;
+    const thinHere = (x: number, y: number) => {
+      const xi = Math.round(x), yi = Math.round(y);
+      if (xi < 6 || yi < 6 || xi >= w - 6 || yi >= h - 6) return false;
+      const v = dist[yi * w + xi];
+      if (v < 0.05 || v > 0.6) return false;
+      const o1 = dist[Math.round(y + 5 * ny) * w + Math.round(x + 5 * nx)], o2 = dist[Math.round(y - 5 * ny) * w + Math.round(x - 5 * nx)];
+      return o1 < v * 0.5 && o2 < v * 0.5;
+    };
+    for (let s = Math.floor(Math.min(...ss)); s <= Math.max(...ss); s++) {
+      let hit = false;
+      for (let t = -2; t <= 2 && !hit; t++) hit = thinHere(rho * nx + s * ux + t * nx, rho * ny + s * uy + t * ny);
+      if (hit) (hits++, (first = Math.min(first, s)), (last = Math.max(last, s)));
+    }
+    if (last - first >= big * 0.55 && hits >= (last - first) * 0.6) found.push(l);
+  }
+  return found;
 }
 
 /**
@@ -901,11 +1086,12 @@ export function findInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, ph
  * red margin line. The colour kept is that of the ink chosen, when the picture has marks in it (a blue stamp on a
  * brown desk keeps the blue even if the desk's brown is the larger colour), or else the main colour found. Never for
  * black: black ink cannot be told apart from black print.
- * Two repairs after that. A light, nearly colourless pixel within about a millimetre of kept ink is faint ink of the
- * stamp (thin faint strokes lose their colour in a photo), so it stays; print is dark, so it does not come back that
- * way. And where printed text crossed a stroke of the stamp, the strong mark left
- * out has kept ink on both sides of it, along a row or a column: it is filled in at the strength of the ink beside it,
- * so the stroke has no bite out of it.
+ * Two repairs after that. A light, nearly colourless pixel right beside kept ink (within about half a millimetre) is
+ * faint ink of the stamp (thin faint strokes lose their colour in a photo), so it stays; print is dark, so it does not
+ * come back that way, and neither does the grey edge of a printed letter. And where printed text crossed a stroke of
+ * the stamp, the stroke is drawn on through it: along the direction of the stroke (a row, a column or a diagonal),
+ * only across print, never across paper, and only where the stroke is as wide on both sides of the print, so the I
+ * of RECEIVED stays an I and two letters beside each other are never joined.
  */
 export function onlyInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, found: InkFound, ink?: Ink): Plane {
   const chosen = ink ? found.colours?.find((c) => c.ink === ink && c.hue != null && c.share >= 0.06) : null;
@@ -926,32 +1112,64 @@ export function onlyInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, fo
   }
   const kept = new Float32Array(v.length);
   for (let p = 0; p < v.length; p++) kept[p] = v[p] > 0.3 && !pale[p] ? 1 : 0;
-  const near = extremePlane(kept, w, h, Math.max(2, Math.round(Math.max(w, h) * 0.012)), true);
-  for (let p = 0; p < v.length; p++) {
-    if (!pale[p] || !near[p]) continue;
-    // How dark the pixel is against its paper, whatever the cut: print is dark, faint ink is not.
+  const near = extremePlane(kept, w, h, Math.max(2, Math.round(Math.max(w, h) * 0.005)), true);
+  // Print left out: a strong mark that is not the ink. A pale pixel right beside print is the edge of a letter.
+  const takeOf = (p: number) => {
     let take = 0;
     for (let c = 0; c < 3; c++) take = Math.max(take, 1 - d[p * 4 + c] / Math.max(24, paper[p * 3 + c]));
-    if (take < 0.45) v[p] = Math.max(v[p], before[p]);
+    return take;
+  };
+  const print = new Float32Array(v.length);
+  for (let p = 0; p < v.length; p++) print[p] = before[p] >= 0.5 && keep[p] < 0.3 ? 1 : 0;
+  const byPrint = extremePlane(print, w, h, 2, true);
+  for (let p = 0; p < v.length; p++) {
+    if (!pale[p] || !near[p] || byPrint[p]) continue;
+    // How dark the pixel is against its paper, whatever the cut: print is dark, faint ink is not.
+    if (takeOf(p) < 0.45) v[p] = Math.max(v[p], before[p]);
   }
-  const r = Math.max(3, Math.round(Math.max(w, h) * 0.004));
+  // The stroke drawn on through print that crossed it.
+  const R = Math.max(4, Math.round(Math.max(w, h) * 0.012)), widest = R;
+  const isKept = (q: number) => keep[q] >= 0.5 && v[q] >= 0.5;
   const filled = new Float32Array(v);
+  const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+  // How far the kept ink at (x, y) runs across the direction (dx, dy), each way.
+  const across = (x: number, y: number, dx: number, dy: number) => {
+    const run = (sx: number, sy: number) => {
+      let k = 0;
+      for (; k < widest; k++) {
+        const nx = x + sx * (k + 1), ny = y + sy * (k + 1);
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h || !isKept(ny * w + nx)) break;
+      }
+      return k;
+    };
+    return [run(-dy, dx), run(dy, -dx)];
+  };
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
       const p = y * w + x;
-      if (before[p] < 0.5 || keep[p] >= 0.3) continue;
-      const side = (dx: number, dy: number) => {
-        for (let k = 1; k <= r; k++) {
-          const nx = x + dx * k, ny = y + dy * k;
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) return -1;
-          const q = ny * w + nx;
-          if (keep[q] >= 0.5 && v[q] >= 0.5) return v[q];
-        }
-        return -1;
-      };
-      for (const [dx, dy] of [[1, 0], [0, 1]]) {
-        const a = side(dx, dy), b = side(-dx, -dy);
-        if (a > 0 && b > 0) filled[p] = Math.max(filled[p], Math.min(before[p], (a + b) / 2));
+      if (!print[p]) continue;
+      for (const [dx, dy] of dirs) {
+        // The nearest kept ink each way along the direction, reached across print only.
+        const side = (sx: number, sy: number): [number, number, number] | null => {
+          for (let k = 1; k <= R; k++) {
+            const nx = x + sx * k, ny = y + sy * k;
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) return null;
+            const q = ny * w + nx;
+            if (isKept(q)) return [nx, ny, k];
+            if (!print[q] && before[q] < 0.3) return null;
+          }
+          return null;
+        };
+        const A = side(dx, dy), B = side(-dx, -dy);
+        if (!A || !B || A[2] + B[2] > R + 1) continue;
+        const [a1, a2] = across(A[0], A[1], dx, dy), [b1, b2] = across(B[0], B[1], dx, dy);
+        const wa = a1 + a2 + 1, wb = b1 + b2 + 1;
+        if (wa >= widest || wb >= widest || Math.abs(wa - wb) > 0.5 * Math.max(wa, wb) + 2) continue;
+        // The stroke lies the same way across the line on both sides: it is one stroke going on, not two.
+        const tol = 0.35 * Math.max(wa, wb) + 2;
+        if (Math.abs(a1 - b1) > tol || Math.abs(a2 - b2) > tol) continue;
+        filled[p] = Math.max(filled[p], Math.min(before[p], (v[A[1] * w + A[0]] + v[B[1] * w + B[0]]) / 2));
+        break;
       }
     }
   return { width: w, height: h, v: filled };
@@ -1091,6 +1309,72 @@ export function mainMarks(pl: Plane): Plane {
 }
 
 /**
+ * In a photo, what has the stamp's colour but is not the stamp: specks under about 0.2 mm across (dust, the coloured
+ * edge of a printed letter that was left out) and thin flecks (the fibres of recycled paper), under about 0.16 mm wide
+ * and 3 mm long, that do not touch the stamp's larger marks. Fibres of grey paper would otherwise print as dashes of
+ * ink all round the seal.
+ */
+export function dropFlecks(pl: Plane, pxmm: number): Plane {
+  const { width: w, height: h, v } = pl;
+  const on = new Uint8Array(w * h);
+  for (let p = 0; p < on.length; p++) on[p] = v[p] > 0.3 ? 1 : 0;
+  const { label, size } = pieces(on, w, h);
+  const deep = insideDistance(on, w, h);
+  const L = size.length;
+  const thick = new Float32Array(L), x0 = new Int32Array(L).fill(w), x1 = new Int32Array(L).fill(-1), y0 = new Int32Array(L).fill(h), y1 = new Int32Array(L).fill(-1);
+  for (let p = 0; p < on.length; p++) {
+    const l = label[p];
+    if (!l) continue;
+    const x = p % w, y = (p - x) / w;
+    thick[l] = Math.max(thick[l], deep[p]);
+    (x0[l] = Math.min(x0[l], x)), (x1[l] = Math.max(x1[l], x)), (y0[l] = Math.min(y0[l], y)), (y1[l] = Math.max(y1[l], y));
+  }
+  const area = (mm: number) => mm * mm * pxmm * pxmm;
+  const big = new Float32Array(w * h);
+  for (let p = 0; p < on.length; p++) if (label[p] && size[label[p]] >= area(1)) big[p] = 1;
+  const nearBig = extremePlane(big, w, h, Math.max(1, Math.round(0.3 * pxmm)), true);
+  const touches = new Uint8Array(L);
+  for (let p = 0; p < on.length; p++) if (label[p] && nearBig[p] && !big[p]) touches[label[p]] = 1;
+  const drop = new Uint8Array(L);
+  for (let l = 1; l < L; l++) {
+    if (size[l] >= area(1) || touches[l]) continue;
+    const long = Math.hypot(x1[l] - x0[l] + 1, y1[l] - y0[l] + 1);
+    if (size[l] < area(0.2) || (2 * thick[l] < 0.16 * pxmm + 1 && long < 3 * pxmm)) drop[l] = 1;
+  }
+  if (!drop.some((x) => x)) return pl;
+  const gone = new Float32Array(w * h);
+  for (let p = 0; p < on.length; p++) if (drop[label[p]]) gone[p] = 1;
+  const around = extremePlane(gone, w, h, 1, true);
+  const out = new Float32Array(v);
+  for (let p = 0; p < on.length; p++) if (gone[p] || (around[p] && !label[p])) out[p] = 0;
+  return { width: w, height: h, v: out };
+}
+
+/**
+ * Gaps of a pixel or two across a stroke closed: where the edge of a hard shadow crossed a ring, or a crossing line
+ * was painted out, a hairline cut would be left.
+ */
+export function closeGaps(pl: Plane): Plane {
+  const { width: w, height: h, v } = pl;
+  const closed = extremePlane(extremePlane(v, w, h, 1, true), w, h, 1, false);
+  const out = new Float32Array(v.length);
+  for (let p = 0; p < v.length; p++) out[p] = Math.max(v[p], closed[p]);
+  return { width: w, height: h, v: out };
+}
+
+/**
+ * How faint the ink of a photo is, from 0 (an ordinary impression) to 1 (very faint): from how far the strongest of
+ * its strokes are from their paper. A faint stamp stays somewhat faint, rather than being brought up to full ink.
+ */
+export function faintness(dist: Float32Array, pl: Plane): number {
+  const vals: number[] = [];
+  for (let p = 0; p < pl.v.length; p += 3) if (pl.v[p] > 0.5) vals.push(dist[p]);
+  if (vals.length < 50) return 0;
+  vals.sort((a, b) => a - b);
+  return smooth(0.42, 0.2, vals[Math.floor(vals.length * 0.9)]);
+}
+
+/**
  * Whether the outline of the ink is an oval, as a round seal is in a photo taken at a slant: from the middle of the
  * box, the outermost ink in every direction lies on one ellipse. Gives how much wider than tall it is, or null for
  * any other shape (a box stamp, a logo, a seal that is already round).
@@ -1197,82 +1481,140 @@ export function shrinkPlane(pl: Plane, maxSide: number): Plane {
 
 // ---- 4. Rubber -----------------------------------------------------------------------------------------------
 
-/** Smooth noise from 0 to 1 over cells of `cell` pixels, from a seed. */
-function valueNoise(w: number, h: number, cell: number, r: () => number): Float32Array {
-  const gw = Math.ceil(w / cell) + 2, gh = Math.ceil(h / cell) + 2;
+/**
+ * Smooth noise from 0 to 1 over cells of `cell` pixels, from a seed. With `across` the cells are that many pixels the
+ * other way, turned by `angle` radians, so the noise runs along a direction, as the fibres of paper do.
+ */
+function valueNoise(w: number, h: number, cell: number, r: () => number, across = cell, angle = 0): Float32Array {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (const [x, y] of [[0, 0], [w, 0], [0, h], [w, h]]) {
+    const u = (x * c + y * s) / cell, v = (-x * s + y * c) / across;
+    (u0 = Math.min(u0, u)), (u1 = Math.max(u1, u)), (v0 = Math.min(v0, v)), (v1 = Math.max(v1, v));
+  }
+  const ou = Math.floor(u0), ov = Math.floor(v0);
+  const gw = Math.floor(u1) - ou + 3, gh = Math.floor(v1) - ov + 3;
   const g = new Float32Array(gw * gh);
   for (let i = 0; i < g.length; i++) g[i] = r();
   const out = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) {
-    const fy = y / cell, y0 = Math.floor(fy), ty = fy - y0, sy = ty * ty * (3 - 2 * ty);
+  for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
-      const fx = x / cell, x0 = Math.floor(fx), tx = fx - x0, sx = tx * tx * (3 - 2 * tx);
-      const a = g[y0 * gw + x0] * (1 - sx) + g[y0 * gw + x0 + 1] * sx;
-      const b = g[(y0 + 1) * gw + x0] * (1 - sx) + g[(y0 + 1) * gw + x0 + 1] * sx;
-      out[y * w + x] = a * (1 - sy) + b * sy;
+      const fu = (x * c + y * s) / cell - ou, fv = (-x * s + y * c) / across - ov;
+      const iu = Math.floor(fu), iv = Math.floor(fv), tu = fu - iu, tv = fv - iv;
+      const su = tu * tu * (3 - 2 * tu), sv = tv * tv * (3 - 2 * tv);
+      const k = iv * gw + iu;
+      const a = g[k] * (1 - su) + g[k + 1] * su, b = g[k + gw] * (1 - su) + g[k + gw + 1] * su;
+      out[y * w + x] = a * (1 - sv) + b * sv;
     }
-  }
   return out;
 }
 
 /**
- * A rubber stamp's impression: how much ink each pixel holds (v), how close it is to the edge of its stroke, where
- * ink squeezed out under the rubber prints darker (rim, 0 to 1), and how short of ink its part of the stamp is, where
- * the ink is lighter and cooler (starved, 0 to 1).
+ * The same field with its values spread evenly from 0 to 1 by rank, over the pixels where `on` is set: a cut at `s`
+ * then leaves out a share `s` of them, whatever the noise looked like.
  */
-export type Inked = Plane & { rim: Float32Array; starved: Float32Array };
+function evenOut(f: Float32Array, on: Uint8Array): Float32Array {
+  const B = 4096;
+  let lo = Infinity, hi = -Infinity;
+  for (let p = 0; p < f.length; p++) if (on[p]) (lo = Math.min(lo, f[p])), (hi = Math.max(hi, f[p]));
+  const out = new Float32Array(f.length);
+  if (!(hi > lo)) return out.fill(0.5);
+  const at = (x: number) => Math.min(B - 1e-3, Math.max(0, ((x - lo) / (hi - lo)) * B));
+  const below = new Float64Array(B + 1);
+  let total = 0;
+  for (let p = 0; p < f.length; p++) if (on[p]) (below[Math.floor(at(f[p])) + 1]++, total++);
+  for (let i = 1; i <= B; i++) below[i] += below[i - 1];
+  for (let p = 0; p < f.length; p++) {
+    const x = at(f[p]), i = Math.floor(x);
+    out[p] = (below[i] + (below[i + 1] - below[i]) * (x - i)) / total;
+  }
+  return out;
+}
+
+/** A value from a plane between its pixels, 0 outside it. */
+function sample(v: Float32Array, w: number, h: number, x: number, y: number): number {
+  const x0 = Math.floor(x), y0 = Math.floor(y), tx = x - x0, ty = y - y0;
+  const at = (xx: number, yy: number) => (xx < 0 || yy < 0 || xx >= w || yy >= h ? 0 : v[yy * w + xx]);
+  return (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty) + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
+}
+
+/** 1-D smooth noise round a circle: `cells` values, read at an angle in radians. */
+function ringNoise(cells: number, r: () => number): (a: number) => number {
+  const n = Math.max(3, Math.round(cells));
+  const g = Array.from({ length: n }, () => r());
+  return (a: number) => {
+    const f = (((a / (2 * Math.PI)) % 1) + 1) % 1 * n, i = Math.floor(f) % n, t = f - Math.floor(f), s = t * t * (3 - 2 * t);
+    return g[i] * (1 - s) + g[(i + 1) % n] * s;
+  };
+}
+
+/**
+ * A rubber stamp's impression: how much ink each pixel holds (v, the coverage), and how much darker than the ink's
+ * own colour it prints there (dark, from 0: ink squeezed to the rims of strokes, and pad ink that varies a little).
+ */
+export type Inked = Plane & { dark: Float32Array };
 
 /**
  * The texture of ink from a hand-pressed rubber stamp, from the seed, by `amount` from 0 (even ink) to 1 (a
  * well-worn stamp). Everything is sized in millimetres at the size the stamp prints (`mm` across its longer side),
- * not in pixels of the stored picture, so it still shows at 150 pixels on a screen and in a PDF at 150 or 300 dots
- * to the inch. At the default setting (0.5):
- *  - Rough edges with a little ink spread: the edge of each stroke moves by about 0.03 to 0.09 mm, a touch outwards.
- *  - One side pressed harder: full ink there, about 58 percent on the far side, and on most seeds a short arc of the
- *    outer edge that hardly printed, as when a stamp rocks.
- *  - Two or three patches 3 to 8 mm across where the pad ran short (35 to 60 percent), mottling 2 to 6 mm across,
- *    and paper grain 0.1 to 0.3 mm across over the whole body of the ink.
- *  - About 40 small voids 0.15 to 0.6 mm across on a 40 mm seal, never wider than nine tenths of the stroke they are in.
- *  - Ink squeezed to the edges: the middle of a wide solid (a star, a filled disc) about 15 percent lighter, the rims
- *    darker (rim, used by colourise).
- * The cores of strokes still reach full ink, and no part of a stroke falls below about two fifths of it outside the
- * faint arc, so the words stay readable at the size they are printed. A photo's own unevenness (the real impression
- * it shows) is kept under all of this.
+ * not in pixels of the stored picture. Ink short of the pad is lost coverage, not a paler tint: wherever a stamp is
+ * short of ink, the paper shows through in grain and specks with hard edges, and the ink that does land stays near
+ * full strength, so no light area fades smoothly. At the default setting (0.5):
+ *  - The rubber is not the design: its edges are warped by a few hundredths of a millimetre over 1 to 3 mm (no
+ *    perfect circle or straight frame survives), edges wander by about 0.05 to 0.1 mm, a design spreads a faint
+ *    0.05 to 0.1 mm of ink outwards, and a few nicks 0.2 to 0.5 mm across bite into the edges.
+ *  - One side pressed harder: about 15 percent darker than the other side, not more. On the light side the outer
+ *    ring or frame (never the words) prints thinner, broken into grain, with a few short stretches of its outer edge
+ *    that did not print, with crisp ends.
+ *  - Two or three patches 4 to 9 mm across where the pad ran short, and paper grain everywhere: both lose coverage
+ *    through a fine fibre-like noise (0.07 to 0.4 mm), so they break up into speckle.
+ *  - Salt-like voids 0.1 to 0.3 mm across, more of them in wide solids (a star, a filled disc) than in thin strokes,
+ *    and a narrow darker rim about 0.1 mm wide on every stroke, where ink squeezes to the edge.
+ *  - Words keep at least about 70 percent of their ink in every part of them. Thin strokes (under about 0.4 mm) and
+ *    small stamps (under 20 mm) get less of all of it, so a hairline stays whole and complex characters stay dense.
+ * A photo's own unevenness (the real impression it shows) is kept as grain and as a slightly lighter tone, a faint
+ * photo (`faint` from 0 to 1) stays somewhat faint, and a photo's strokes are not spread again: they already are.
  */
-export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number; photo?: boolean } = {}): Inked {
+export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number; photo?: boolean; faint?: number } = {}): Inked {
   const t = clamp01(amount);
   const { width: w, height: h } = pl;
   const n = w * h;
-  const rim = new Float32Array(n), starved = new Float32Array(n);
-  if (t <= 0) return { width: w, height: h, v: new Float32Array(pl.v), rim, starved };
+  const dark = new Float32Array(n);
+  if (t <= 0) return { width: w, height: h, v: new Float32Array(pl.v), dark };
   const r = rng(seed);
-  const pxmm = Math.max(w, h) / (o.mm || STAMP_DEFAULT_MM);
+  const size = o.mm || STAMP_DEFAULT_MM;
+  const pxmm = Math.max(w, h) / size;
   const mm = (x: number) => x * pxmm;
-  const A = t / DEFAULT_TEXTURE, A1 = Math.min(1, A), A2 = Math.min(1.5, A);
-  const noise = (cellMm: number) => valueNoise(w, h, Math.max(1.2, mm(cellMm)), r);
+  const A = t / DEFAULT_TEXTURE, A1 = Math.min(1, A), A2 = Math.min(1.6, A);
+  const photo = !!o.photo, faint = clamp01(o.faint || 0);
+  const noise = (cellMm: number, alongMm = cellMm, angle = 0) => valueNoise(w, h, Math.max(1.2, mm(alongMm)), r, Math.max(1.2, mm(cellMm)), angle);
 
-  // Rough edges with a little ink spread: the plane softened by about 0.07 mm, then cut again where a field of
-  // noise says, so the edge wanders. A hairline is never broken by it: the cut stays below its own peak.
-  const b = blurPlane(pl.v, w, h, Math.max(0.6, mm(0.07)));
+  // The rubber is not the design: the picture is read through a gentle warp, long waves of about 2 mm and short
+  // ones of about 0.35 mm, so a ring is never a perfect circle and a frame never perfectly straight.
+  const wa = noise(2.2), wb = noise(2.2), wc = noise(0.35), wd = noise(0.35);
+  const amp1 = mm(0.07 * A2), amp2 = mm(0.03 * A2);
+  const warped = new Float32Array(n);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const p = y * w + x;
+      warped[p] = sample(pl.v, w, h, x + (wa[p] - 0.5) * 2 * amp1 + (wc[p] - 0.5) * 2 * amp2, y + (wb[p] - 0.5) * 2 * amp1 + (wd[p] - 0.5) * 2 * amp2);
+    }
+  // Rough edges: softened a little, then cut again where a field of noise says, so the edge wanders. A design's
+  // cut sits a little outside the middle of its edge (ink spreads into the paper); a photo's sits in the middle, as
+  // its strokes already spread when they were pressed. A hairline is never broken by it: the cut stays below its
+  // own peak.
+  const b = blurPlane(warped, w, h, Math.max(0.6, mm(photo ? 0.05 : 0.07)));
   const peak = extremePlane(b, w, h, Math.max(1, Math.round(mm(0.12))), true);
-  const e1 = noise(0.1), e2 = noise(0.4);
+  const e1 = noise(0.09), e2 = noise(0.3);
+  const cut0 = photo ? 0.5 : 0.44 - 0.04 * A1;
   const shape = new Float32Array(n);
   for (let p = 0; p < n; p++) {
     if (b[p] <= 0.01) continue;
-    const thr = Math.min(0.7 * peak[p], Math.max(0.2, 0.42 - 0.12 * A1 + (0.6 * e1[p] + 0.4 * e2[p] - 0.5) * 0.4 * A2));
-    shape[p] = smooth(thr - 0.08, thr + 0.08, b[p]) * smooth(0.08, 0.28, peak[p]);
-  }
-  // A photo's own unevenness: how strong the ink is, on average, around each pixel of a stroke.
-  let own: Float32Array | null = null;
-  if (o.photo) {
-    const inkOn = new Float32Array(n);
-    for (let p = 0; p < n; p++) inkOn[p] = pl.v[p] > 0.3 ? 1 : 0;
-    const m1 = blurPlane(pl.v, w, h, mm(0.25)), m2 = blurPlane(inkOn, w, h, mm(0.25));
-    own = new Float32Array(n);
-    for (let p = 0; p < n; p++) own[p] = 0.55 + 0.45 * smooth(0.3, 0.92, m1[p] / Math.max(0.05, m2[p]));
+    const thr = Math.min(0.62 * peak[p], Math.max(0.18, cut0 + (0.6 * e1[p] + 0.4 * e2[p] - 0.5) * 0.45 * A2));
+    shape[p] = smooth(thr - 0.06, thr + 0.06, b[p]) * smooth(0.08, 0.25, peak[p]);
   }
 
-  // Where each pixel is in its stroke: how far from the edge, in millimetres.
+  // Where each pixel is in its stroke: how far from the edge, and how wide the stroke around it is.
   const on = new Uint8Array(n);
   let inkPx = 0, cx = 0, cy = 0;
   for (let p = 0; p < n; p++)
@@ -1282,12 +1624,37 @@ export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number
       cx += p % w;
       cy += Math.floor(p / w);
     }
-  if (!inkPx) return { width: w, height: h, v: shape, rim, starved };
+  if (!inkPx) return { width: w, height: h, v: shape, dark };
   cx /= inkPx;
   cy /= inkPx;
   const deep = insideDistance(on, w, h);
+  const half = extremePlane(deep, w, h, Math.max(1, Math.round(mm(0.3))), true);
+  // The ring or frame round a stamp (a mark that reaches across much of it) against everything else: the words, a
+  // star, a logo. Only a border may print broken; the words never lose more than about 30 percent of their ink.
+  const { label, size: pieceSize } = pieces(on, w, h);
+  const bx0 = new Int32Array(pieceSize.length).fill(w), bx1 = new Int32Array(pieceSize.length).fill(-1);
+  const by0 = new Int32Array(pieceSize.length).fill(h), by1 = new Int32Array(pieceSize.length).fill(-1);
+  for (let p = 0; p < n; p++) {
+    const l = label[p];
+    if (!l) continue;
+    const x = p % w, y = (p - x) / w;
+    (bx0[l] = Math.min(bx0[l], x)), (bx1[l] = Math.max(bx1[l], x)), (by0[l] = Math.min(by0[l], y)), (by1[l] = Math.max(by1[l], y));
+  }
+  const isBorder = pieceSize.map((_, l) => l > 0 && Math.max(bx1[l] - bx0[l], by1[l] - by0[l]) >= 0.45 * Math.max(w, h));
+  // How far the outer edge of the border reaches from the middle, in every direction.
+  const BINS = 720;
+  const binOf = (x: number, y: number) => Math.floor(((Math.atan2(y - cy, x - cx) + Math.PI) / (2 * Math.PI)) * BINS) % BINS;
+  const reach = new Float32Array(BINS);
+  const anyBorder = isBorder.some((x) => x);
+  for (let p = 0; p < n; p++)
+    if (on[p] && (!anyBorder || isBorder[label[p]])) {
+      const x = p % w, y = (p - x) / w;
+      const k = binOf(x, y);
+      reach[k] = Math.max(reach[k], Math.hypot(x - cx, y - cy));
+    }
 
-  // Pressed harder on one side: from full ink on the heavy side to about 58 percent on the far side.
+  // Pressed harder on one side. The tone falls by about 15 percent towards the far side, along a direction bent
+  // by broad noise, so it is no straight ramp; the rest of the lighter side is in its outer few millimetres.
   const ang = r() * Math.PI * 2, dx = Math.cos(ang), dy = Math.sin(ang);
   let lo = Infinity, hi = -Infinity;
   for (let p = 0; p < n; p++)
@@ -1295,108 +1662,136 @@ export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number
       const q = (p % w) * dx + Math.floor(p / w) * dy;
       (lo = Math.min(lo, q)), (hi = Math.max(hi, q));
     }
-  const g = Math.min(0.6, 0.42 * A);
-  // A short arc of the outer edge that hardly printed, on the light side, on most seeds.
-  const BINS = 180;
-  const reach = new Float32Array(BINS);
-  for (let p = 0; p < n; p++)
-    if (on[p]) {
-      const x = (p % w) - cx, y = Math.floor(p / w) - cy;
-      const k = Math.floor(((Math.atan2(y, x) + Math.PI) / (2 * Math.PI)) * BINS) % BINS;
-      reach[k] = Math.max(reach[k], Math.hypot(x, y));
-    }
-  const arcOn = r() < 0.6;
-  const arcAt = ang + ((r() * 2 - 1) * 40 * Math.PI) / 180, arcHalf = ((15 + r() * 15) * Math.PI) / 180, arcDepth = (0.55 + 0.25 * r()) * A1;
-  // Patches where the pad ran short: two or three, 3 to 8 mm across, centred on ink.
+  const bend = noise(7), mottle = noise(3);
+  // Patches where the pad ran short: two or three, 4 to 9 mm across, centred on ink, with ragged outlines.
   const patches: { x: number; y: number; rad: number; depth: number }[] = [];
   const count = 2 + (r() < 0.5 ? 1 : 0);
-  for (let k = 0, tries = 0; k < count && tries < 200; tries++) {
+  for (let k = 0, tries = 0; k < count && tries < 300; tries++) {
     const x = Math.floor(r() * w), y = Math.floor(r() * h);
     if (!on[y * w + x]) continue;
-    patches.push({ x, y, rad: mm(1.5 + r() * 2.5), depth: (0.4 + 0.25 * r()) * A1 });
+    patches.push({ x, y, rad: mm(2 + r() * 2.5), depth: (0.2 + 0.2 * r()) * A1 });
     k++;
   }
-  const pn = noise(0.9), mottle = noise(3.5), g1 = noise(0.15), g2 = noise(0.3);
+  const ragged = noise(1.1);
+  // The light side's outer edge: how much of the border's width did not print, round the stamp. Mostly a thinner
+  // stroke; on most seeds also a few short stretches where none of it printed, with crisp ends.
+  const thinAt = ringNoise((2 * Math.PI * Math.max(...reach)) / mm(3.5), r);
+  const gapAt = ringNoise((2 * Math.PI * Math.max(...reach)) / mm(2.2), r);
+  const gaps = r() < 0.65;
+  // Paper grain and ink short of the pad: a fine noise that runs a little along the paper's fibres. Voids: a
+  // coarser one, its brightest few percent, in clusters.
+  const fa = r() * Math.PI;
+  const f1 = noise(0.07, 0.14, fa), f2 = noise(0.16, 0.26, fa), f3 = noise(0.4);
+  const fib = new Float32Array(n);
+  for (let p = 0; p < n; p++) fib[p] = 0.45 * f1[p] + 0.33 * f2[p] + 0.22 * f3[p];
+  const N = evenOut(fib, on);
+  const v1 = noise(0.12), v2 = noise(0.3), clump = noise(2);
+  const vf = new Float32Array(n);
+  for (let p = 0; p < n; p++) vf[p] = 0.6 * v1[p] + 0.4 * v2[p];
+  const NV = evenOut(vf, on);
+  // A photo's own unevenness: how strong the ink is, on average, around each pixel of a stroke, against its best.
+  let own: Float32Array | null = null;
+  if (photo) {
+    const inkOn = new Float32Array(n);
+    for (let p = 0; p < n; p++) inkOn[p] = pl.v[p] > 0.3 ? 1 : 0;
+    const m1 = blurPlane(pl.v, w, h, mm(0.25)), m2 = blurPlane(inkOn, w, h, mm(0.25));
+    own = new Float32Array(n);
+    for (let p = 0; p < n; p++) own[p] = smooth(0.3, 0.92, m1[p] / Math.max(0.05, m2[p]));
+  }
+  // Small stamps and thin strokes get less of everything, so a 15 mm seal keeps dense characters.
+  const small = 0.4 + 0.6 * smooth(12, 28, size);
+  const drift = valueNoise(w, h, Math.max(4, Math.max(w, h) / 3), r);
+  const pressure = photo ? 0.4 : 1;
 
   const v = new Float32Array(n);
+  // What of each stroke printed at all, before grain and voids: the edge of the ink, where a design spreads a little.
+  const kept = new Float32Array(n);
   for (let p = 0; p < n; p++) {
     if (shape[p] <= 0) continue;
-    const x = p % w, y = Math.floor(p / w);
-    // Even pressure over the heavier third or so, then falling away towards the far side.
-    const lean = smooth(0.3, 1, ((x * dx + y * dy) - lo) / Math.max(1, hi - lo));
-    let macro = 1 - g * lean;
+    const x = p % w, y = (p - x) / w;
+    const lean = clamp01(((x * dx + y * dy) - lo) / Math.max(1, hi - lo) + 0.35 * (bend[p] - 0.5));
+    const light = smooth(0.3, 1, lean) * pressure;
+    const dmm = deep[p] / pxmm, wmm = (2 * half[p]) / pxmm;
+    const border = on[p] && isBorder[label[p]];
+    const thin = 0.3 + 0.7 * smooth(0.12, 0.45, wmm);
+    // Wide solids (a star, a filled disc) print dense, with salt-like voids rather than grain.
+    const solid = smooth(0.25, 0.6, dmm);
+    // How short of ink this part of the stamp is, as a share of its coverage lost.
+    let s = 0.035 * A2 + 0.18 * A1 * light * light + 0.1 * A2 * Math.max(0, (mottle[p] - 0.55) / 0.45);
     for (const pt of patches) {
-      const dd = (Math.hypot(x - pt.x, y - pt.y) / pt.rad) * (0.75 + 0.5 * pn[p]);
-      if (dd < 1) macro *= 1 - pt.depth * smooth(1, 0.35, dd);
+      const dd = (Math.hypot(x - pt.x, y - pt.y) / pt.rad) * (0.7 + 0.6 * ragged[p]);
+      if (dd < 1) s += pt.depth * smooth(1, 0.45, dd);
     }
-    macro *= 1 - 0.16 * A2 * Math.max(0, (mottle[p] - 0.5) / 0.5);
-    const grain = 1 - 0.24 * A2 * Math.max(0, (0.65 * g1[p] + 0.35 * g2[p] - 0.55) / 0.45);
-    // Never so light that a stroke stops reading: all of this together keeps at least 38 percent of the ink.
-    macro = Math.max(0.38, macro * (own ? own[p] : 1) * grain);
-    if (arcOn) {
-      let da = Math.atan2(y - cy, x - cx) - arcAt;
-      da = Math.atan2(Math.sin(da), Math.cos(da));
-      const k = Math.floor(((Math.atan2(y - cy, x - cx) + Math.PI) / (2 * Math.PI)) * BINS) % BINS;
-      const fromEdge = (reach[k] - Math.hypot(x - cx, y - cy)) / pxmm;
-      macro *= 1 - arcDepth * smooth(arcHalf, arcHalf * 0.4, Math.abs(da)) * smooth(1.2, 0.35, fromEdge);
+    const k = binOf(x, y);
+    const fromEdge = (reach[k] - Math.hypot(x - cx, y - cy)) / pxmm;
+    if (border) s += 0.4 * A1 * smooth(2.5, 0.2, fromEdge) * smooth(0.45, 1, light);
+    if (own) s += 0.5 * (1 - own[p]) + 0.12 * faint;
+    // Ink squeezed to the rims keeps them inked longest; thin strokes and small stamps lose less.
+    s *= (0.5 + 0.5 * smooth(0.04, 0.16, dmm)) * (1 - 0.75 * solid) * thin * small;
+    s = Math.min(s, border ? 0.55 : 0.26);
+    let cov = smooth(s - 0.04, s + 0.04, N[p]);
+    // Salt: voids 0.1 to 0.3 mm, more in wide solids, in clusters.
+    const pv = Math.min(0.07, (0.012 + 0.03 * solid) * A2 * (0.35 + 1.3 * clump[p]) * thin * small);
+    cov *= 1 - smooth(1 - pv - 0.015, 1 - pv + 0.015, NV[p]);
+    // The outer edge of the border on the light side: a thinner stroke, here and there not printed at all.
+    let edge = 1;
+    if (border && fromEdge < wmm * 1.2 && light > 0.3) {
+      const a = Math.atan2(y - cy, x - cx);
+      let frac = smooth(0.3, 1, light) * (0.08 + 0.32 * thinAt(a)) * A1 * small;
+      if (gaps && wmm >= 0.3 && light > 0.55) frac = Math.max(frac, 1.25 * smooth(0.82, 0.84, gapAt(a)));
+      edge = smooth(-0.5, 0.5, (fromEdge - frac * wmm) * pxmm);
     }
-    // Ink squeezed to the edges of a stroke: the middle of a wide solid prints lighter, the rim darker.
-    const dmm = deep[p] / pxmm;
-    rim[p] = 1 - smooth(0.08, 0.22, dmm);
-    const inner = 1 - (0.08 + 0.08 * A1) * smooth(0.25, 0.9, dmm);
-    starved[p] = 1 - macro;
-    v[p] = shape[p] * macro * inner;
+    kept[p] = shape[p] * edge;
+    cov *= edge;
+    const tone = Math.min(1, 1 - 0.14 * A1 * light - 0.06 * A2 * (mottle[p] - 0.5)) * (own ? 0.85 + 0.15 * own[p] : 1) * (1 - 0.15 * faint);
+    v[p] = shape[p] * cov * tone;
+    // A narrow darker rim, about 0.1 mm, where ink squeezes to the edge; pad ink a little darker or lighter here
+    // and there; the heavy side a touch fuller.
+    dark[p] = clamp01((0.16 * A1 * (1 - smooth(0.03, 0.13, dmm)) + 0.05 * (1 - light) + 0.06 * (drift[p] - 0.5)) * (on[p] ? 1 : 0.5));
   }
-
-  // Voids: small spots where the ink did not take, never wider than nine tenths of the stroke they are in.
-  const voids = Math.min(140, Math.round(40 * A2 * (inkPx / (pxmm * pxmm)) / 400));
-  for (let k = 0, tries = 0; k < voids && tries < voids * 40; tries++) {
-    const sx = r() * w, sy = r() * h;
-    const c = Math.floor(sy) * w + Math.floor(sx);
-    if (!on[c]) continue;
+  // Nicks: a few bites 0.2 to 0.5 mm across out of the edges, never more than two fifths of a thin stroke.
+  const nicks = Math.round((3 + 5 * r()) * A1 * (inkPx / (pxmm * pxmm)) / 250);
+  const nickShape = noise(0.12);
+  for (let k = 0, tries = 0; k < nicks && tries < nicks * 60 + 60; tries++) {
+    const sx = Math.floor(r() * w), sy = Math.floor(r() * h), c = sy * w + sx;
+    if (!on[c] || deep[c] > 1.5) continue;
+    const wpx = 2 * half[c];
+    if (wpx < mm(0.25)) continue;
     k++;
-    let rad = mm(0.075 + 0.225 * Math.pow(r(), 1.6));
-    let half = 0;
-    const look = Math.ceil(rad + mm(0.15));
-    for (let yy = Math.max(0, Math.floor(sy) - look); yy <= Math.min(h - 1, Math.floor(sy) + look); yy++)
-      for (let xx = Math.max(0, Math.floor(sx) - look); xx <= Math.min(w - 1, Math.floor(sx) + look); xx++) half = Math.max(half, deep[yy * w + xx]);
-    rad = Math.min(rad, 0.9 * half);
-    if (rad < 0.6) continue;
-    const depth = (0.8 + 0.2 * r()) * (half * 2 < mm(0.22) ? 0.5 : 1);
-    const ax = 1 + (r() - 0.5) * 0.5, turn = r() * Math.PI, ca = Math.cos(turn), sa = Math.sin(turn);
-    for (let yy = Math.max(0, Math.floor(sy - rad * 1.3)); yy <= Math.min(h - 1, Math.ceil(sy + rad * 1.3)); yy++)
-      for (let xx = Math.max(0, Math.floor(sx - rad * 1.3)); xx <= Math.min(w - 1, Math.ceil(sx + rad * 1.3)); xx++) {
-        const ux = xx + 0.5 - sx, uy = yy + 0.5 - sy;
-        const dd = Math.hypot((ux * ca + uy * sa) * ax, (-ux * sa + uy * ca) / ax) / rad;
-        if (dd < 1) v[yy * w + xx] *= 1 - depth * smooth(1, 0.6, dd);
+    const rad = Math.min(mm(0.1 + 0.15 * r()), (isBorder[label[c]] ? 0.6 : 0.4) * wpx);
+    const reachPx = Math.ceil(rad * 1.5);
+    for (let yy = Math.max(0, sy - reachPx); yy <= Math.min(h - 1, sy + reachPx); yy++)
+      for (let xx = Math.max(0, sx - reachPx); xx <= Math.min(w - 1, sx + reachPx); xx++) {
+        const q = yy * w + xx;
+        const dd = (Math.hypot(xx - sx, yy - sy) / rad) * (0.75 + 0.5 * nickShape[q]);
+        if (dd < 1.1) (v[q] *= smooth(0.9, 1.1, dd)), (kept[q] *= smooth(0.9, 1.1, dd));
       }
   }
-  return { width: w, height: h, v, rim, starved };
+  // A design's ink spreads a little into the paper: a faint fringe 0.05 to 0.1 mm wide. A photo already has its own.
+  if (!photo) {
+    const spread = blurPlane(kept, w, h, Math.max(0.5, mm(0.06)));
+    for (let p = 0; p < n; p++) if (shape[p] < 0.5) v[p] = Math.max(v[p], 0.3 * A1 * smooth(0.04, 0.45, spread[p]));
+  }
+  return { width: w, height: h, v, dark };
 }
 
 // ---- 6. Colour -----------------------------------------------------------------------------------------------
 
 /**
- * The impression as pixels, as see-through as the ink is faint. The colour is the ink's, varied a little the way pad
- * ink varies: darker and fuller at the rims of strokes and where the ink is heavy, lighter and a touch cooler where
- * the stamp was short of ink or the ink is thin, and drifting slightly across the stamp. One flat colour with only
- * its strength changing would look like a picture.
+ * The impression as pixels, as see-through as the ink is thin. One colour, the ink's, as a stamp pad has: darker at
+ * the rims of strokes, where ink squeezes out, and varying a little in how dark it prints, never in its hue. One flat
+ * colour with only its strength changing would look like a picture; a paler or cooler tint would look like a screen.
  */
-export function colourise(pl: Plane | Inked, ink: Ink, seed = 1): Rgba {
+export function colourise(pl: Plane | Inked, ink: Ink, _seed = 1): Rgba {
   const { width: w, height: h, v } = pl;
-  const full = INK_RGB[ink], thin = THIN_RGB[ink];
-  const rim = 'rim' in pl ? pl.rim : null, starved = 'starved' in pl ? pl.starved : null;
-  const drift = rim ? valueNoise(w, h, Math.max(4, Math.max(w, h) / 3), rng(seed ^ 0x2545f491)) : null;
+  const full = INK_RGB[ink];
+  const dark = 'dark' in pl ? pl.dark : null;
   const data = new Uint8ClampedArray(w * h * 4);
   for (let p = 0; p < v.length; p++) {
     const a = clamp01(v[p]);
     if (a <= 0) continue;
-    let k = 0, dark = 0;
-    if (rim && starved && drift) {
-      k = clamp01(0.6 * starved[p] + 0.3 * (1 - a) + 0.18 * (drift[p] - 0.5));
-      dark = 0.16 * rim[p] * a;
-    }
-    for (let c = 0; c < 3; c++) data[p * 4 + c] = (full[c] * (1 - k) + thin[c] * k) * (1 - dark);
+    const d = dark ? dark[p] : 0;
+    for (let c = 0; c < 3; c++) data[p * 4 + c] = full[c] * (1 - d);
     data[p * 4 + 3] = Math.round(a * 255);
   }
   return { width: w, height: h, data };
@@ -1416,6 +1811,8 @@ export type Prepared = {
   cut: Cut;
   /** How many ruled lines of lined paper were painted out. */
   ruled: number;
+  /** How many creases of a folded sheet were painted out. */
+  creased: number;
 };
 
 export function prepare(picture: Rgba): Prepared {
@@ -1423,13 +1820,15 @@ export function prepare(picture: Rgba): Prepared {
   const paper = paperOf(img);
   let dist = inkDistance(img, paper);
   const photo = isPhoto(img, paper, dist);
-  let ruled = 0;
+  let ruled = 0, creased = 0;
   if (photo) {
     const rules = ruledLines(dist, img.width, img.height);
-    if (rules.length) {
-      img = unrule(img, rules);
+    const folds = creases(img, paper, dist);
+    if (rules.length || folds.length) {
+      img = unrule(img, [...rules, ...folds]);
       dist = inkDistance(img, paper);
       ruled = rules.length;
+      creased = folds.length;
     }
     // Sensor noise would turn into grain along every edge: each pixel takes the middle value of its neighbours.
     dist = median3(dist, img.width, img.height);
@@ -1442,7 +1841,7 @@ export function prepare(picture: Rgba): Prepared {
   // A design prints every mark that is clearly there, however light its colour.
   if (!photo) cut.base = Math.min(cut.base, 0.22);
   const found = findInk(img, paper, dropEdgeMarks(strengthOf(dist, img.width, img.height, DEFAULT_PAPER, cut), photo), photo);
-  return { img, paper, dist, found, photo, cut, ruled };
+  return { img, paper, dist, found, photo, cut, ruled, creased };
 }
 
 export type Impression = {
@@ -1480,15 +1879,30 @@ export function impression(p: Prepared, look: Look, maxSide = STAMP_OUT_MAX_SIDE
   let box = inkBox(pl);
   if (!box) return nothing(found);
   // Pixels to a millimetre in the picture as it was taken: the stamp is `mm` across its longer side.
-  const pxmm = Math.max(box.w, box.h) / mm;
+  let pxmm = Math.max(box.w, box.h) / mm;
   if (look.gaps && !p.photo && found.several) pl = colourGaps(img, paper, pl, Math.max(2, Math.round(0.22 * pxmm)));
-  if (p.photo) pl = mainMarks(despeckle(pl, Math.max(4, (0.15 * pxmm) ** 2)));
+  let faint = 0;
+  if (p.photo) {
+    pl = mainMarks(despeckle(pl, Math.max(4, (0.15 * pxmm) ** 2)));
+    // Specks and fibres over the whole sheet made the box too large: measured again on what is left, twice.
+    for (let k = 0; k < 2; k++) {
+      const b = inkBox(pl);
+      if (!b) return nothing(found);
+      pxmm = Math.max(b.w, b.h) / mm;
+      pl = mainMarks(dropFlecks(pl, pxmm));
+    }
+    pl = closeGaps(pl);
+    faint = faintness(dist, pl);
+  }
   box = inkBox(pl);
   if (!box) return nothing(found);
-  pl = cropPlane(pl, box.x, box.y, box.w, box.h);
+  // A hand never sets a stamp down in the exact middle of where it aims: the ink sits a little off the middle of its
+  // picture, by the seed, within the margin.
+  const off = rng(look.seed ^ 0x6a09e667), side = Math.max(box.w, box.h);
+  pl = cropPlane(pl, box.x + Math.round((off() * 2 - 1) * 0.014 * side), box.y + Math.round((off() * 2 - 1) * 0.014 * side), box.w, box.h);
   const oval = ovalOf(pl);
   if (look.round && oval && Math.abs(Math.log(oval.ratio)) > 0.025 && Math.abs(Math.log(oval.ratio)) < 0.35) pl = makeRound(pl, oval.ratio);
   pl = shrinkPlane(pl, maxSide);
-  const inked = rubber(pl, look.seed, look.texture, { mm, photo: p.photo });
+  const inked = rubber(pl, look.seed, look.texture, { mm, photo: p.photo, faint });
   return { image: colourise(inked, look.ink, look.seed), empty: false, found, oval };
 }

@@ -22,10 +22,12 @@ import { commentsText } from './comments.ts';
 import { forgetCommentHooks } from './commentrules.ts';
 import { attachedFiles, forgetClickwraps } from './clickwrap.ts';
 import { rememberGoneMail } from './bounces.ts';
+import { forgetArchiveCopies } from './archivemail.ts';
 import { stampExport, pruneStampImages } from './stamps.ts';
 import { record, securityExport, securityWords } from './seclog.ts';
 import { originalShas } from './converted.ts';
 import { assertMayClose, forgetRetentionLog } from './records.ts';
+import { customCsv } from './customfields.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -153,7 +155,10 @@ route('GET', '/export', (c) => {
   record('export.made', { c, details: { everything: !only.length && !bulk, whose: c.admin ? 'account' : 'own', envelopes: rows.length } });
 
   function* entries(): Generator<ZipEntry> {
-    const index = [csv(['envelope_id', 'subject', 'status', 'sent_at', 'completed_at', 'recipients', 'signed_pdf_sha256', 'file'])];
+    const head = ['envelope_id', 'subject', 'status', 'sent_at', 'completed_at', 'recipients', 'signed_pdf_sha256', 'file'];
+    // A column for each custom field these envelopes have, by its name (customfields.ts).
+    const custom = customCsv(rows.map((e) => e.id), head);
+    const index = [csv([...head, ...custom.head])];
     let bytes = 0, files = 0, skipped = 0;
     // A signed PDF whose stored copy fails its check (src/server/filestore.ts) is left out and named in README.txt,
     // so one damaged file never breaks the ZIP of everything else, and nothing damaged is put in it.
@@ -192,7 +197,7 @@ route('GET', '/export', (c) => {
       // The questions and comments in full, private ones included: this export is the sender's side (comments.ts).
       const said = files < ZIP_MAX_FILES - 3 ? commentsText(e) : '';
       if (said) (files++, yield { name: `comments/${base}.txt`, data: Buffer.from(said) });
-      index.push(csv([e.id, e.subject, e.status, e.sent_at, e.completed_at, people.map((p) => `${p.name} <${p.email}> (${p.role}: ${p.status})`).join('; '), e.final_sha256 || e.purged_sha256, file]));
+      index.push(csv([e.id, e.subject, e.status, e.sent_at, e.completed_at, people.map((p) => `${p.name} <${p.email}> (${p.role}: ${p.status})`).join('; '), e.final_sha256 || e.purged_sha256, file, ...custom.cells(e.id)]));
     }
     yield { name: 'envelopes.csv', data: Buffer.from('﻿' + index.join('\r\n')) };
     // The team's own stamps (Settings, Stamps), each picture with its name and settings (stamps.ts).
@@ -207,7 +212,7 @@ route('GET', '/export', (c) => {
       'comments/      the questions and comments on an envelope, in full, where anyone wrote any. They are not part of what was signed.',
       ...(stamps.length ? ['stamps/        the stamps your team keeps under Settings, Stamps, as pictures, with their names and settings in stamps/index.csv'] : []),
       ...(c.admin ? [`security/      the security record of the account as it stands now (Settings, Security), oldest first. ${securityWords()}`] : []),
-      'envelopes.csv  one row per envelope',
+      `envelopes.csv  one row per envelope${custom.head.length ? ', with a column for each custom field' : ''}`,
       '', `Check any signed PDF at ${baseUrl()}/verify. It must be the exact file from this export.`,
       ...(skipped ? ['', `${skipped} signed document(s) did not fit in one ZIP file. Export again with fewer envelopes selected to get them.`] : []),
       ...(unreadable.length ? ['', `${unreadable.length} signed document(s) could not be read from storage and are not in this file. Their stored copy failed its check, so nothing damaged was put in. Their audit trails are here. The people who run this server have been told and can put the files back from a backup; export again later. Not included:`, ...unreadable.map((u) => `  ${u}`)] : []),
@@ -279,6 +284,7 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
     // News from the mail provider about these emails (a spam complaint) still counts against the account (bounces.ts).
     if (owner) rememberGoneMail(eid, owner);
     run(`DELETE FROM emails WHERE envelope_id=?${account ? '' : ` AND ${NOT_WAITING}`}`, eid);
+    forgetArchiveCopies(eid); // our stored copies for the archive addresses (archivemail.ts)
     run('DELETE FROM retired_tokens WHERE envelope_id=? OR recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?)', eid, eid);
     if (account) run('DELETE FROM abuse_reports WHERE envelope_id=?', eid);
   }

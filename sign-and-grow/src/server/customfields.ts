@@ -168,10 +168,10 @@ const pairOf = (x: any, i: number, where: string): { name: string; value: any } 
   if (!x || typeof x !== 'object' || Array.isArray(x) || typeof x.name !== 'string') throw bad(`${where}: item ${i + 1} has to be an object with a "name" and a "value", like {"name": "Case number", "value": "2026/114"}. Nothing was saved.`);
   return { name: x.name, value: x.value };
 };
-const asPairs = (v: any, where: string): { name: string; value: any }[] => {
+const asPairs = (v: any, where: string, map = false): { name: string; value: any }[] => {
   if (Array.isArray(v)) return v.map((x, i) => pairOf(x, i, where));
   // A bulk row may name them as an object, column name to value, the way a spreadsheet gives them.
-  if (v && typeof v === 'object') return Object.entries(v).map(([name, value]) => ({ name, value }));
+  if (map && v && typeof v === 'object') return Object.entries(v).map(([name, value]) => ({ name, value }));
   throw bad(`${where} has to be a list of {"name", "value"} objects, written with square brackets. Nothing was saved.`);
 };
 
@@ -183,7 +183,7 @@ const asPairs = (v: any, where: string): { name: string; value: any }[] => {
  * before that change can still be saved. `merge`: the names given are set and the rest are kept (a template that
  * is used); without it the list replaces what there was, like "recipients" and "fields" do.
  */
-export function readCustom(accountId: string, e: any | null, b: any, o: { merge?: boolean; where?: string } = {}): Plan | null {
+export function readCustom(accountId: string, e: any | null, b: any, o: { merge?: boolean; where?: string; map?: boolean } = {}): Plan | null {
   const where = o.where || '"custom_fields"';
   const plan: Plan = { merge: !!o.merge, clear: [], changes: [] };
   if (b?.custom_fields !== undefined && b.custom_fields !== null) {
@@ -192,12 +192,17 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
     const seen = new Set<string>();
     const out: Row[] = [];
     const problems: string[] = [];
-    for (const p of asPairs(b.custom_fields, where)) {
+    // An envelope that was sent keeps each field under the name and certificate choice it went out with, also when
+    // its value is put right after the field was renamed: it is found by its old name or its new one.
+    const sent = !!e && e.kind === 'envelope' && e.status !== 'draft';
+    for (const p of asPairs(b.custom_fields, where, o.map)) {
       const key = customKey(p.name);
-      if (seen.has(key)) throw bad(`${where} names "${str(p.name, 60)}" twice. Give each field once. Nothing was saved.`);
-      seen.add(key);
-      const def = defs.find((d) => d.name_key === key);
-      const was = stored.get(key);
+      let def = defs.find((d) => d.name_key === key);
+      const was = stored.get(key) || (def ? [...stored.values()].find((r) => r.def_id === def!.id) : undefined);
+      if (!def && was?.def_id) def = defs.find((d) => d.id === was.def_id);
+      const ident = was?.name_key || def?.name_key || key;
+      if (seen.has(ident)) throw bad(`${where} names "${str(p.name, 60)}" twice. Give each field once. Nothing was saved.`);
+      seen.add(ident);
       const same = was && p.value != null && typeof p.value !== 'object' && String(p.value).trim() === was.value;
       if (same) {
         out.push(was);
@@ -209,8 +214,8 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
       }
       const v = readValue(def, p.value);
       if ('problem' in v) problems.push(v.problem);
-      else if (v.value) out.push({ def_id: def.id, name: def.name, name_key: def.name_key, value: v.value, on_certificate: def.on_certificate, position: def.position });
-      else plan.clear.push(key);
+      else if (v.value) out.push(sent && was ? { ...was, value: v.value } : { def_id: def.id, name: def.name, name_key: def.name_key, value: v.value, on_certificate: def.on_certificate, position: def.position });
+      else plan.clear.push(ident);
     }
     if (problems.length) throw bad(`${problems.join(' ')} Nothing was saved.`);
     plan.values = out;
@@ -225,6 +230,9 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
     if (e && plan.changes.length) {
       if (e.status === 'completed') throw bad('This envelope is completed, so its custom fields are fixed: they are part of its record and its certificate. Nothing was changed.', 409);
       if (e.status !== 'draft' && e.status !== 'sent') throw bad(`This envelope is ${e.status}, so its custom fields can no longer be changed. Nothing was changed.`, 409);
+      // A field the account requires stays filled in on an envelope that is out: it went out with a value.
+      const needed = e.status === 'sent' ? defs.filter((d) => d.required && gone.some((r) => r.def_id === d.id || r.name_key === d.name_key)).map((d) => d.name) : [];
+      if (needed.length) throw bad(`Your account asks for ${quoted(needed)} on every envelope, so it can be changed and not emptied. Nothing was changed.`);
       // On an envelope that is out, new words for the certificate go through the same filter as anything else the
       // sender adds to what recipients get (fakeNotice in envelopes.ts), for the accounts it applies to.
       if (e.status === 'sent') {
@@ -257,7 +265,8 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
 
 /** Writes what readCustom() answered. On an envelope that is out, every change is a line in its audit trail. */
 export function writeCustom(envelopeId: string, plan: Plan | null, by?: Actor) {
-  if (!plan) return;
+  // Without values to write, a save may still have taken a document off: its pairs go with it.
+  if (!plan) return void pruneDocs(envelopeId);
   tx(() => {
     const e = get('SELECT id, status FROM envelopes WHERE id=?', envelopeId);
     if (!e) return;
@@ -288,9 +297,6 @@ const putRow = (envelopeId: string, documentId: string, r: Row) =>
     envelopeId, documentId, r.def_id, r.name, r.name_key, r.value, customKey(r.value), r.on_certificate ? 1 : 0, r.position);
 // The pairs of a document that is no longer on the envelope go with it.
 const pruneDocs = (envelopeId: string) => run("DELETE FROM custom_values WHERE envelope_id=? AND document_id!='' AND document_id NOT IN (SELECT id FROM documents WHERE envelope_id=?)", envelopeId, envelopeId);
-
-/** After a save that may have changed which documents an envelope has (PUT /envelopes/:id). */
-export const customAfterSave = (envelopeId: string) => pruneDocs(envelopeId);
 
 /**
  * Called by copyEnvelope(): a template's values are the starting values of what is made from it, and a copy keeps
@@ -359,18 +365,18 @@ export function formCustomProblem(tpl: any): string | null {
 function rowPlan(accountId: string, tpl: any, row: any, i: number): Plan | null {
   if (row?.custom_fields === undefined || row.custom_fields === null) return null;
   try {
-    return readCustom(accountId, tpl, { custom_fields: row.custom_fields }, { merge: true, where: `Row ${i + 1}: "custom_fields"` });
+    return readCustom(accountId, tpl, { custom_fields: row.custom_fields }, { merge: true, map: true, where: `Row ${i + 1}: "custom_fields"` });
   } catch (err: any) {
     throw bad(`Row ${i + 1}: ${String(err.message).replace(/ Nothing was saved\.$/, '')} Nothing was sent.`);
   }
 }
 /** Why a bulk send of these rows would be refused for its custom fields, or null. Writes nothing. */
-export function bulkCustomRefusal(accountId: string, tpl: any, rows: any[]): string | null {
+export function bulkCustomRefusal(accountId: string, tpl: any, rows: any[]): { status: number; message: string } | null {
   try {
     assertBulkCustom(accountId, tpl, rows);
     return null;
   } catch (err: any) {
-    return String(err?.message || err);
+    return { status: err?.status || 400, message: String(err?.message || err) };
   }
 }
 /** Every row is checked before anything is sent, so a batch never stops half way for a custom field. */

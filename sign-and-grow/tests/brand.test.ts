@@ -134,8 +134,16 @@ test('the logo keeps its proportions and is never squeezed: it is drawn at a fix
   assert.match(brand, /export function Mark\(\{[^}]*label = 'GrowSigning'/);
   // At 20 px, on the narrowest phone bar, the logo is 131 px wide: room is left for Help and Menu at 320 px.
   assert.ok(Math.round((20 * LOGO.width) / LOGO.height) <= 131);
-  // The logo links are 44 px targets.
-  assert.match(read('src/app/styles/brand.css'), /\.logo, \.side \.brand, \.mobilebar-logo \{ min-height: 44px;/);
+  // The logo links are 44 px targets, the logo shrinks to 20 px (never below 16) on a 320 px phone so the menu button is
+  // not pushed off the screen, and the keyboard's focus ring shows on the deep green bars (light leaf, 6.2 to 1).
+  const css = read('src/app/styles/brand.css');
+  assert.match(css, /\.logo, \.side \.brand, \.mobilebar-logo \{ min-height: 44px;/);
+  assert.match(css, /@media \(max-width: 359px\) \{\s*\.pub-head \.logo svg \{ height: 20px; width: auto; \}/);
+  assert.match(css, /\.side :focus-visible, \.mobilebar :focus-visible \{ outline-color: #9ed88f; \}/);
+  // A signing link that did not open has no subject: the bar then shows the drawn logo, not the mark and typed name.
+  const parts = read('src/components/sign/parts.tsx');
+  assert.match(parts, /data\?\.envelope\?\.subject \? title : <Logo height=\{20\}/);
+  assert.match(parts, /: data\?\.envelope\?\.subject && <Mark size=\{24\}/);
 });
 
 // ---- 1. The email header ---------------------------------------------------------------------------------------------
@@ -147,6 +155,11 @@ test('an email without a sender brand shows the GrowSigning logo picture from AP
   assert.deepEqual([logo.width, logo.height], [288, 44], 'drawn at twice the size it is shown, so it is sharp on a phone');
   // No email has a dark header, so the logo for dark grounds is never put on the light one.
   assert.doesNotMatch(html, /email-logo-dark/);
+  // The picture's address is the same in every email, with nothing about the reader in it, so loading it cannot tell
+  // anyone who opened which email (it is not a read receipt).
+  const other = renderMail({ to: 'someone.else@example.com', subject: 'Other', heading: 'Other', lines: [], envelopeId: 'env_x', recipientId: 'rec_y', code: 'ABCD2345' });
+  const srcs = [html, other].map((h) => [...h.matchAll(/<img src="([^"]*email-logo[^"]*)"/g)].map((m) => m[1]));
+  assert.deepEqual(srcs, [['http://test.local/brand/email-logo.png'], ['http://test.local/brand/email-logo.png']]);
 });
 
 test("a sender's own logo or name still comes first in the header, escaped, and ours is then not shown", () => {

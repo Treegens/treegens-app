@@ -149,7 +149,7 @@ CREATE INDEX IF NOT EXISTS credit_draws_credit ON credit_draws(credit_id);
 CREATE INDEX IF NOT EXISTS credit_draws_lot ON credit_draws(lot_id);
 CREATE TABLE IF NOT EXISTS credit_holds (
   account_id TEXT NOT NULL, key TEXT NOT NULL, lot_id INTEGER REFERENCES credit_lots(id) ON DELETE SET NULL,
-  since TEXT NOT NULL, PRIMARY KEY (account_id, key)
+  since TEXT NOT NULL, rid TEXT, PRIMARY KEY (account_id, key)
 );
 CREATE INDEX IF NOT EXISTS credit_holds_lot ON credit_holds(lot_id);
 CREATE TABLE IF NOT EXISTS retired_tokens (token TEXT PRIMARY KEY, recipient_id TEXT NOT NULL, retired_at TEXT NOT NULL);
@@ -563,6 +563,27 @@ CREATE TABLE IF NOT EXISTS custom_values (
 );
 CREATE INDEX IF NOT EXISTS custom_values_find ON custom_values(name_key, value_key);
 CREATE INDEX IF NOT EXISTS custom_values_def ON custom_values(def_id);
+-- Archive addresses (src/server/archivemail.ts, routes-archive.ts): the addresses an admin named to get a copy of
+-- every email the account sends about its documents. confirm_hash: the SHA-256 of the link that confirms it, until
+-- confirm_until. confirmed_at: since when copies go there. bounces: copies that came back for good since the last
+-- one that arrived; at ARCHIVE_BOUNCES_TO_PAUSE, or when one is marked as spam, paused_at and paused_why ('bounced',
+-- 'spam') stop copies until the address is confirmed again, and missed counts the copies that did not go meanwhile.
+-- archive_asked: one line for each email that asked an address to confirm, for the daily limits. archive_refused:
+-- an address whose reader said "this was not me", which that account cannot ask again until "until".
+CREATE TABLE IF NOT EXISTS archive_addresses (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, email TEXT NOT NULL COLLATE NOCASE,
+  added_by TEXT, added_by_name TEXT, added_at TEXT NOT NULL, confirm_hash TEXT, confirm_sent_at TEXT, confirm_until TEXT, confirmed_at TEXT,
+  bounces INTEGER NOT NULL DEFAULT 0, last_bounce_at TEXT, paused_at TEXT, paused_why TEXT, missed INTEGER NOT NULL DEFAULT 0,
+  copies INTEGER NOT NULL DEFAULT 0, last_copy_at TEXT, problem TEXT, problem_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS archive_addresses_one ON archive_addresses(account_id, email);
+CREATE INDEX IF NOT EXISTS archive_addresses_hash ON archive_addresses(confirm_hash);
+CREATE TABLE IF NOT EXISTS archive_asked (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, email TEXT NOT NULL COLLATE NOCASE, at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS archive_asked_account ON archive_asked(account_id, at);
+CREATE TABLE IF NOT EXISTS archive_refused (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, email TEXT NOT NULL COLLATE NOCASE, at TEXT NOT NULL, until TEXT NOT NULL,
+  token_hash TEXT, added_by TEXT, added_by_name TEXT, added_at TEXT, PRIMARY KEY (account_id, email)
+);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -620,6 +641,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // 1 when this signer is the sender signing their own document (free), 0 when the signature is paid for. Decided
   // when the request goes out, so a later change of sender or of the sender's own address cannot flip it.
   ['recipients', 'free', 'INTEGER'],
+  // The recipient a held signature is for (credits.ts), so a hold is kept for the moment between their Finish and
+  // the "signature used" line, and the signature is taken from the lot it was held in.
+  ['credit_holds', 'rid', 'TEXT'],
   ['users', 'tz', 'TEXT'],
   // The time zone a signer's device reported when they agreed and when they finished (an IANA name like
   // "Asia/Kolkata"). The date they sign on is the calendar day there, the certificate prints their local time, and
@@ -950,6 +974,11 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['users', 'two_step_reset_stopped_at', 'TEXT'],
   ['users', 'two_step_paused_mail_at', 'TEXT'],
   ['sessions', 'two_step_device', 'TEXT'],
+  // The 6-digit code in the confirmation email, typed in the tab the person signed up in (src/server/confirmcode.ts):
+  // a keyed hash of it, when it was sent, and the wrong codes typed in all (never reset).
+  ['users', 'verify_code_hash', 'TEXT'],
+  ['users', 'verify_code_at', 'TEXT'],
+  ['users', 'verify_code_wrong', 'INTEGER NOT NULL DEFAULT 0'],
   // A witness for one signer (src/server/witness.ts, rules in src/lib/witness.ts). witness_for: the recipient they
   // witness. named_by_signer: that signer names them on the signing page. signer_named_at: when the signer named the
   // person who is in the place now (empty when the sender chose them), witness_names how often a name was given.
@@ -1076,6 +1105,13 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // certificate it was made with. NULL for a file without a seal, such as every one completed before seals were set up.
   ['envelopes', 'seal_level', 'TEXT'],
   ['envelopes', 'seal_cert', 'TEXT'],
+  // Archive copies (src/server/archivemail.ts). emails.archive_draft: on an email about a document, the copy for the
+  // account's archive addresses (JSON, links and codes already taken out), until that email has left. archive_to: on
+  // a copy, and on the email that asks an address to confirm, the archive_addresses row it goes to. archive_envelope:
+  // on a copy, the envelope it is about. Its envelope_id stays empty, so a copy is never one of the envelope's emails.
+  ['emails', 'archive_draft', 'TEXT'],
+  ['emails', 'archive_to', 'TEXT'],
+  ['emails', 'archive_envelope', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

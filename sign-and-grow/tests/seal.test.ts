@@ -326,7 +326,7 @@ test('a time-stamp that does not check out is never used: the seal goes out at B
     ['old answer', (req) => tsaAnswer(req, tsa, [tsaRoot], { nonce: 12345n }), {}, /nonce/],
     ['other imprint', (req) => tsaAnswer(req, tsa, [tsaRoot], { imprint: crypto.randomBytes(32) }), {}, /not over our signature/],
     ['server error', () => 503, {}, /HTTP 503/],
-    ['garbage', () => Buffer.from('<html>hello</html>'), {}, /cannot read|could not be checked/],
+    ['garbage', () => Buffer.from('<html>hello</html>'), {}, /not a time-stamp this server can read|could not be checked/],
     ['not a TSA certificate', (req) => tsaAnswer(req, noEku, [tsaRoot]), {}, /not meant for time-stamping/],
     ['outside the trust list', (req) => tsaAnswer(req, tsa, [tsaRoot]), { TSA_TRUST: write('other-trust.pem', otherRoot.pem) }, /does not lead to one in TSA_TRUST/],
   ];
@@ -364,16 +364,217 @@ test('several services are tried in order; the first that answers well gives the
   }
 });
 
-test('a service that never answers is given up after 10 seconds, and the seal goes out at B-B', async () => {
-  settings({ ...pemSettings(), TSA_URL: 'https://slow.test/ts' });
+test('a service that never answers is given up after 10 seconds, and all of them together after 20: the seal goes out at B-B', async () => {
+  settings({ ...pemSettings(), TSA_URL: 'https://slow.test/ts,https://slower.test/ts,https://never.test/ts' });
   const stub = stubTsa(() => 'hang');
   try {
     const t0 = Date.now();
     const { id } = await complete();
-    assert.ok(Date.now() - t0 >= 9_500, 'it waited for the timeout');
+    const took = Date.now() - t0;
+    assert.ok(took >= 19_000 && took < 30_000, `the last Finish waited ${took} ms for time-stamps`);
+    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['slow.test', 'slower.test'], 'the third is not asked once the 20 seconds are used up');
     assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-B');
-    assert.match(s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).detail, /did not answer within 10 seconds/);
+    const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).detail;
+    assert.match(line, /slow\.test: it did not answer within 10 seconds/);
+    assert.match(line, /never\.test\/ts: not asked, because the 20 seconds for time-stamps were used up/);
   } finally {
     stub.restore();
+  }
+});
+
+// ---- /verify ---------------------------------------------------------------------------------
+
+const verify = async (pdf: Uint8Array, ip = '192.0.2.77') => {
+  const c = new Client();
+  c.ip = ip;
+  const f = new FormData();
+  f.append('file', new Blob([pdf], { type: 'application/pdf' }), 'x.pdf');
+  const r = await c.call('POST', '/public/verify', f);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  return r.data;
+};
+
+test('/verify matches the sealed file byte for byte and also says its seal holds; a changed or added-to file is told apart', async () => {
+  settings(pemSettings());
+  const { id, pdf } = await complete();
+  const ok = await verify(pdf);
+  assert.equal(ok.match, true, 'the stored SHA-256 is of the sealed file');
+  assert.equal(ok.envelope.id, id);
+  assert.equal(ok.hash, crypto.createHash('sha256').update(pdf).digest('hex'));
+  assert.deepEqual({ intact: ok.seal.intact, whole: ok.seal.whole_file, ours: ok.seal.ours, level: ok.seal.level, name: ok.seal.name }, { intact: true, whole: true, ours: true, level: 'B-B', name: 'Example Operator Seal' });
+  assert.ok(ok.seal.sealed_at);
+  // A PDF reader saved something into it afterwards: no byte-for-byte match, but the sealed part is that document.
+  const added = Buffer.concat([pdf, Buffer.from('\n9999 0 obj\n<< /Note (added later) >>\nendobj\n')]);
+  const a = await verify(added);
+  assert.equal(a.match, false);
+  assert.equal(a.seal.intact, true);
+  assert.equal(a.seal.whole_file, false);
+  assert.equal(a.seal.sealed_part.envelope_id, id);
+  // One byte changed inside: no match, and the seal does not hold.
+  const r = byteRange(pdf);
+  const changed = Buffer.from(pdf);
+  changed[r[1] - 20] ^= 0x20;
+  const b = await verify(changed);
+  assert.equal(b.match, false);
+  assert.equal(b.seal.intact, false);
+  assert.equal(b.seal.sealed_part, null);
+  assert.match(b.seal.why, /does not match the file/);
+  // A file with no seal: "seal" is null, and the answer is as it always was.
+  settings({});
+  const plain = await complete();
+  const p = await verify(plain.pdf);
+  assert.equal(p.match, true);
+  assert.equal(p.seal, null);
+});
+
+test('a seal made with another certificate is not called ours; one made with an earlier key of this server still is', async () => {
+  const stranger = makeCert({ cn: 'Stranger Seal', issuer: inter });
+  settings(pemSettings(stranger));
+  const plan = seal.sealPlan()!;
+  const d = await PDFDocument.create();
+  d.addPage().drawText('Sealed somewhere else', { x: 50, y: 700 });
+  const theirs = await seal.sealPdf(await d.save(), plan);
+  // An earlier key of ours: an envelope sealed with it, then the key is changed.
+  const earlier = makeCert({ cn: 'Earlier Operator Seal', issuer: inter });
+  settings(pemSettings(earlier));
+  const old = await complete();
+  settings(pemSettings());
+  const v1 = await verify(theirs.bytes);
+  assert.equal(v1.match, false);
+  assert.equal(v1.seal.intact, true);
+  assert.equal(v1.seal.ours, false);
+  const v2 = await verify(old.pdf);
+  assert.equal(v2.match, true);
+  assert.equal(v2.seal.ours, true);
+  assert.equal(v2.seal.name, 'Earlier Operator Seal');
+});
+
+// ---- What is never sealed ------------------------------------------------------------------
+
+test('an envelope completed before the seal was set up is never sealed afterwards: its fingerprint stays the one people were emailed', async () => {
+  settings({});
+  const { id, pdf } = await complete();
+  const sha = s.db.get('SELECT final_sha256 FROM envelopes WHERE id=?', id).final_sha256;
+  const mailed = s.db.all("SELECT html FROM emails WHERE subject LIKE 'Completed:%' AND html LIKE ?", `%${sha}%`);
+  assert.ok(mailed.length >= 1, 'the fingerprint went out in the completion email');
+  settings(pemSettings());
+  assert.equal(await s.env.buildFinal(id), true);
+  assert.equal(s.db.get('SELECT final_sha256 FROM envelopes WHERE id=?', id).final_sha256, sha);
+  assert.deepEqual(s.env.finalPdf(s.env.loadEnvelope(id)), pdf);
+  await s.cron.tick?.();
+  assert.equal(s.db.get('SELECT final_sha256, seal_level FROM envelopes WHERE id=?', id).final_sha256, sha);
+  assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, null);
+});
+
+test('a voided envelope is not an agreement: a signer\'s copy of it carries no seal, and its first page says so', async () => {
+  settings(pemSettings());
+  n++;
+  const c = await signUp(`Voider ${n}`, `voider${n}@example.com`, `198.51.100.${n}`);
+  const file = await (await import('./helpers.ts')).upload(c, 1);
+  const r = await c.post('/envelopes', {
+    subject: 'Two people',
+    documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'a', role: 'signer', name: 'Ann First', email: `ann${n}@example.com`, routing_order: 1 }, { id: 'b', role: 'signer', name: 'Bo Second', email: `bo${n}@example.com`, routing_order: 2 }],
+    fields: [{ id: 'f1', document_id: 'd', recipient_id: 'a', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }, { id: 'f2', document_id: 'd', recipient_id: 'b', type: 'signature', page: 0, x: 0.1, y: 0.7, w: 0.3, h: 0.06 }],
+    ordered: true,
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const id = r.data.envelope.id;
+  assert.equal((await c.post(`/envelopes/${id}/send`)).status, 200);
+  assert.equal((await signAll(id, `ann${n}@example.com`)).status, 200);
+  assert.equal((await c.post(`/envelopes/${id}/void`, { reason: 'Wrong terms' })).status, 200);
+  const tok = s.db.get('SELECT token FROM recipients WHERE envelope_id=? AND email=?', id, `ann${n}@example.com`).token;
+  const dl = await new Client().get(`/sign/${tok}/download`);
+  assert.equal(dl.status, 200);
+  const copy = Buffer.from(dl.data);
+  assert.ok(!copy.toString('latin1').includes('/ByteRange'), 'no seal on a voided copy');
+  assert.equal(seal.checkSeal(copy), null);
+  if (PDFTOTEXT) assert.match(text(copy), /carries no digital seal/);
+});
+
+test('an uploaded PDF that already carries signatures is said to lose them in the signed copy, by the API and the editor', async () => {
+  settings(pemSettings());
+  const { pdf } = await complete();
+  n++;
+  const c = await signUp(`Uploader ${n}`, `uploader${n}@example.com`, `198.51.100.${n}`);
+  const up = async (bytes: Uint8Array) => {
+    const f = new FormData();
+    f.append('file', new Blob([bytes], { type: 'application/pdf' }), 'Signed elsewhere.pdf');
+    const r = await c.call('POST', '/files', f);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    return r.data;
+  };
+  const signed = await up(pdf);
+  assert.equal(signed.existing_signatures, 1);
+  assert.match(signed.existing_signatures_note, /already carries a digital signature\. It does not survive here/);
+  const plain = await up(await (await import('./helpers.ts')).samplePdf(1));
+  assert.equal(plain.existing_signatures, undefined);
+  assert.equal(plain.existing_signatures_note, undefined);
+  // The signed copy made from it indeed has no signature of its own left, only ours.
+  assert.equal(await seal.existingSignatures(await s.env.buildPdf({ ...s.env.loadEnvelope((await simple(c, `x${n}@example.com`, { documents: [{ id: 'd', file_id: signed.id }] })).id) }, false)), 0);
+});
+
+// ---- Attacks -----------------------------------------------------------------------------------
+
+test('a crafted file never trips /verify: a fake seal is "damaged", a stranger with our certificate\'s name is not ours, and the reason says it is no person\'s signature', async () => {
+  settings(pemSettings());
+  const { pdf } = await complete();
+  assert.match(pdf.toString('latin1'), /\/Reason \(Sealed by the server when the document was completed\. Not a signature of a person who signed\.\)/);
+  // The Contents replaced by noise of the same length.
+  const r = byteRange(pdf);
+  const noise = Buffer.from(pdf);
+  noise.write(crypto.randomBytes((r[2] - r[1] - 2) / 2).toString('hex'), r[1] + 1, 'latin1');
+  const v = await verify(noise, '192.0.2.88');
+  assert.equal(v.match, false);
+  assert.equal(v.seal.intact, false);
+  assert.match(v.seal.why, /damaged|does not/);
+  // A ByteRange that points outside the file is not taken for a seal at all.
+  const wild = Buffer.from(pdf.toString('latin1').replace(/\/ByteRange \[[^\]]*\]/, (m) => '/ByteRange [0 10 99999999 5]'.padEnd(m.length, ' ')), 'latin1');
+  assert.equal(seal.checkSeal(wild), null);
+  // The same name on a certificate of someone else's (self-signed here) is not ours.
+  const self = makeCert({ cn: 'Example Operator Seal' });
+  settings({ SEAL_KEY_PEM: write('self-key.pem', self.keyPem), SEAL_CERT_PEM: write('self-cert.pem', self.pem) });
+  const plan = seal.sealPlan()!;
+  assert.ok(plan, 'a self-signed certificate is accepted for sealing (Acrobat then says the validity is unknown)');
+  const d = await PDFDocument.create();
+  d.addPage().drawText('Not from us', { x: 50, y: 700 });
+  const fake = await seal.sealPdf(await d.save(), plan);
+  settings(pemSettings());
+  const f = await verify(fake.bytes, '192.0.2.89');
+  assert.equal(f.seal.intact, true);
+  assert.equal(f.seal.name, 'Example Operator Seal');
+  assert.equal(f.seal.ours, false, 'the name alone does not make a seal ours');
+});
+
+test('key material pasted into a setting is never repeated in a log line, the record or the operators\' alert', async () => {
+  const secretish = leaf.keyPem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+  settings({ SEAL_KEY_PEM: secretish, SEAL_CERT_PEM: leaf.pem });
+  const st = sealkey.sealState();
+  assert.equal(st.on, false);
+  assert.match((st as any).why, /neither a path to a file nor PEM text/);
+  assert.ok(!(st as any).why.includes(secretish.slice(0, 40)));
+  assert.equal(s.db.get('SELECT COUNT(*) n FROM support_requests WHERE message LIKE ?', `%${secretish.slice(0, 40)}%`).n, 0);
+});
+
+test('the seal is appended to any file the renderer may make: a form already in it, a classic cross-reference table, several pages', async () => {
+  settings(pemSettings());
+  const plan = seal.sealPlan()!;
+  for (const objectStreams of [true, false]) {
+    const d = await PDFDocument.create();
+    for (let i = 0; i < 3; i++) d.addPage().drawText(`Page ${i + 1}`, { x: 50, y: 700 });
+    d.getForm().createTextField('kept.field').addToPage(d.getPage(0), { x: 50, y: 600, width: 200, height: 20 });
+    const before = Buffer.from(await d.save({ useObjectStreams: objectStreams }));
+    const { bytes } = await seal.sealPdf(before, plan);
+    assert.ok(bytes.subarray(0, before.length).equals(before), 'not one byte of the rendered file changes: the seal is appended');
+    const back = await PDFDocument.load(bytes);
+    assert.equal(back.getPageCount(), 3);
+    const names = back.getForm().getFields().map((f) => f.getName()).sort();
+    assert.deepEqual(names, ['Seal', 'kept.field'], 'the form keeps its field and gains the seal');
+    assert.equal(seal.checkSeal(bytes)!.intact, true);
+    if (PDFSIG) {
+      const out = pdfsig(write(`form-${objectStreams}.pdf`, bytes));
+      assert.match(out, /Total document signed/);
+      assert.match(out, /Signature is Valid/);
+    }
   }
 });

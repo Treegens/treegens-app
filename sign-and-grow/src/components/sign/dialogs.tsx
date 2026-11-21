@@ -47,9 +47,12 @@ function Confirmed({ children, onClose, label = 'Close' }: { children: ReactNode
 
 export type MenuItem = { key: string; label: string; hint?: string; icon?: string; href?: string; download?: boolean; danger?: boolean; onClick?: () => void };
 
-export function MenuDialog({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
+// The list has no descriptions and a fixed order (src/components/sign/actions.ts). `when` is the deadline in the
+// person's own time, `doc` the way the document is shown (on the document only), `onHelp` the dialog's own Help.
+export function MenuDialog({ items, onClose, when, doc, onHelp, back = 'Back to the document' }: { items: MenuItem[]; onClose: () => void; when?: string; doc?: ReactNode; onHelp?: () => void; back?: string }) {
   return (
     <Dialog title="Other actions" onClose={onClose}>
+      {when && <p className="sg-menu-when">{when}</p>}
       <ul className="sg-menu">
         {items.map((it) => {
           const inner = (
@@ -67,7 +70,11 @@ export function MenuDialog({ items, onClose }: { items: MenuItem[]; onClose: () 
           );
         })}
       </ul>
-      <div className="actions"><button type="button" className="btn" onClick={onClose}>Back to the document</button></div>
+      {doc}
+      <div className="actions sg-menu-foot">
+        {onHelp && <button type="button" className="btn" aria-haspopup="dialog" onClick={onHelp}>Help</button>}
+        <button type="button" className="btn" onClick={onClose}>{back}</button>
+      </div>
     </Dialog>
   );
 }
@@ -169,7 +176,7 @@ export function ReassignDialog({ base, sender, onClose, onDone }: { base: string
   const [form, setForm] = useState({ name: '', email: '', reason: '' });
   const { busy, error, setError, send } = useSend();
   return (
-    <Dialog title="Assign to someone else" onClose={onClose}>
+    <Dialog title="Pass to someone else" onClose={onClose}>
       <form onSubmit={async (e) => {
         e.preventDefault();
         if (!form.name.trim() || !form.email.trim()) return setError('Enter the name and email of the person who should sign instead.');
@@ -178,14 +185,14 @@ export function ReassignDialog({ base, sender, onClose, onDone }: { base: string
         <p className="muted">Not the right person to sign? Pass it on. They get their own link by email, yours stops working, and {sender.name} is told.</p>
         {/* A hand-over passes on nothing, also to someone at the same address (reassignRecipient), so that is said
             before it happens, with the way to keep everything for someone who only wants their name spelled right. */}
-        <p className="muted">Nothing you filled in or signed goes with it: they start with an empty document. If this is you and only your name is spelled wrong, go back instead. You can fix your name when you check the document before you finish.</p>
+        <p className="muted">Nothing you filled in or signed goes with it: they start with an empty document. If this is you and only your name is spelled wrong, go back instead. You can fix your name when you make your signature.</p>
         <label className="f"><span>Their name</span><input dir="auto" data-autofocus autoComplete="off" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="f"><span>Their email</span><input type="email" autoComplete="off" autoCapitalize="off" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
         <label className="f"><span>Reason <span className="hint">(optional)</span></span><input dir="auto" value={form.reason} maxLength={300} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></label>
         <Problem>{error}</Problem>
         <div className="actions">
           <button type="button" className="btn" onClick={onClose}>Go back</button>
-          <button className="btn primary" disabled={busy}>{busy ? 'Assigning' : 'Assign'}</button>
+          <button className="btn primary" disabled={busy}>{busy ? 'Passing it on' : 'Pass it on'}</button>
         </div>
       </form>
     </Dialog>
@@ -214,7 +221,7 @@ export function SignedFieldDialog({ kind, image, onChange, onClear, onClose }: {
 // A signer whose name was typed wrong by the sender can put it right themselves. It is logged and the sender is told.
 // A name that reads like a different person's is not changed: the sender is asked instead, and onRename hands back
 // the words that say so. They stay on screen in place of the form.
-function FixName({ name, onRename }: { name: string; onRename: (name: string) => Promise<string | void> }) {
+export function FixName({ name, onRename }: { name: string; onRename: (name: string) => Promise<string | void> }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(name);
   const [busy, setBusy] = useState(false);

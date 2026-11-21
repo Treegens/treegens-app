@@ -6,7 +6,10 @@
   "scripts": {
     "postinstall": "node scripts/copy-assets.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/sbom.mjs",
     "build": "next build",
+    "sbom": "node scripts/sbom.mjs",
+    "backup": "node scripts/backup.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "i18n:check": "node --experimental-strip-types --no-warnings scripts/i18n-check.mjs",

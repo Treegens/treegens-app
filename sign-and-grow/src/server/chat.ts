@@ -12,10 +12,12 @@ import { addressKey } from './clickwrap.ts';
 import { chatProvider, chatDailyLimit, type ChatProvider } from '../lib/chatprovider.ts';
 import {
   CHAT_PER_ADDRESS_MINUTE, CHAT_PER_ADDRESS_DAY, CHAT_PER_LINK_DAY, CHAT_PER_ACCOUNT_DAY, CHAT_TIMEOUT_SECONDS, CHAT_KEEP_MESSAGES,
-  CHAT_MESSAGE_CHARS, CHAT_ATTACH_LINES, CHAT_ATTACH_CHARS, redact, handOverReason, toolsFor, limitText,
+  CHAT_MESSAGE_CHARS, CHAT_ATTACH_LINES, CHAT_ATTACH_CHARS, CHAT_ANSWER_CHARS, redact, handOverReason, toolsFor, limitText,
   type ChatLimit, type ChatScreen, type ChatTurn, type HandOver, type Removed, type AttachedLine,
 } from '../lib/chat.ts';
+import { chatModelOn } from '../lib/chatprovider.ts';
 import { systemPrompt, builtInAnswer } from './chatkb.ts';
+import { backstop } from './chatguard.ts';
 
 /** Kimi K3 thinks before it answers, and those tokens count: a small ceiling ends in an empty answer. */
 export const MAX_COMPLETION_TOKENS = 1200;
@@ -23,11 +25,14 @@ export const MAX_COMPLETION_TOKENS = 1200;
 export const CHAT_TIMING = { ms: CHAT_TIMEOUT_SECONDS * 1000 };
 
 // ---- Answers the helper gave, recognised later -----------------------------------------------------------------
-// Every answer goes out with a signature made with the server's secret. The page sends it back with the conversation,
-// so an answer typed into the page by hand is not passed to the model as ours, and the people who answer a help
-// request can tell what the helper really said from what was typed into the page.
-export const signAnswer = (text: string) => hmac(`chat-answer:${text}`).slice(0, 32);
-const signed = (text: string, sig: any) => typeof sig === 'string' && sig.length === 32 && safeEqual(sig, signAnswer(text));
+// Every answer goes out with a signature made with the server's secret, over the answer exactly as the page shows it
+// and the question it answered (as the server read it: cut and redacted, see questionKey). The page sends it back
+// with the conversation, so an answer typed into the page by hand is not passed to the model as ours, an answer
+// copied from another conversation under a different question is not either, and the people who answer a help
+// request can tell what the helper really said in reply to the line above it from what was typed into the page.
+export const questionKey = (raw: string) => redact(String(raw ?? '').slice(0, CHAT_MESSAGE_CHARS).trim()).text;
+export const signAnswer = (text: string, question: string) => hmac(`chat-answer:${hmac(`chat-question:${question}`)}:${text}`).slice(0, 32);
+const signed = (text: string, question: string, sig: any) => typeof sig === 'string' && sig.length === 32 && safeEqual(sig, signAnswer(text, question));
 
 // ---- The conversation as it arrives ----------------------------------------------------------------------------
 export type Cleaned = { turns: ChatTurn[]; removed: Removed[]; question: string };
@@ -36,16 +41,20 @@ export function cleanConversation(raw: unknown): Cleaned | null {
   if (!Array.isArray(raw) || !raw.length || raw.length > 200) return null;
   const removed = new Set<Removed>();
   const turns: ChatTurn[] = [];
+  // The question an answer replied to: the latest one before it. An answer with none before it in what was sent
+  // cannot be checked, and is left out.
+  let asked: string | null = null;
   for (const m of raw.slice(-CHAT_KEEP_MESSAGES)) {
     if (!m || typeof m !== 'object') return null;
     const role = (m as any).role, content = (m as any).content;
     if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') return null;
     if (role === 'assistant') {
-      if (signed(content, (m as any).sig)) turns.push({ role, content: content.slice(0, 4000) });
+      if (asked !== null && content.length <= CHAT_ANSWER_CHARS + 1000 && signed(content, asked, (m as any).sig)) turns.push({ role, content: content.slice(0, 4000) });
       continue;
     }
     const r = redact(content.slice(0, CHAT_MESSAGE_CHARS).trim());
     r.removed.forEach((k) => removed.add(k));
+    asked = r.text;
     if (r.text) turns.push({ role, content: r.text });
   }
   const last = turns[turns.length - 1];
@@ -106,23 +115,14 @@ export function extrasFor(c: Cleaned, answer = ''): Extras {
 /** The built-in answer, as the route sends it. `why` says why it is not the model. */
 export function builtIn(c: Cleaned, why: 'off' | 'limit' | 'down' | 'slow' | 'empty', note?: string) {
   const { reply } = builtInAnswer(c.question);
-  return { mode: 'builtin' as const, why, reply, sig: signAnswer(reply), ...(note ? { note } : {}), ...extrasFor(c, reply) };
+  return { mode: 'builtin' as const, why, reply, sig: signAnswer(reply, c.question), ...(note ? { note } : {}), ...extrasFor(c, reply) };
 }
 
-// What a model may never say, whatever it was asked or told, put right at the end of its answer. It writes in the
-// person's language and these checks read English, so they are a backstop for the instructions, not a guarantee.
-const SAYS_VALID = /\b(is|are|will be|would be)\s+(legally\s+)?(valid|binding|enforceable)\b|\bwill\s+(definitely\s+)?hold\s+up\b|\blegally\s+binding\b/i;
-const NOT_BEFORE = /\b(not|never|no one can say|cannot say|can't say|whether)\b[^.]{0,40}$/i;
-const PROMISES_REFUND = /\b(you will|you'll|we will|we'll|i will|i'll)\s+(get|receive|be given|issue|send you|refund)\b[^.]{0,30}\brefund|\brefund (is|has been) (approved|guaranteed|on its way)\b/i;
-export const CORRECT_VALID = 'To be clear: the helper cannot say whether a signature is valid or will hold up. That depends on the law where you are and on the kind of document. A lawyer can tell you.';
-export const CORRECT_REFUND = 'To be clear: the helper cannot promise a refund. The refund rule on the help page is what counts, and anything outside it is for a person to decide.';
-export function backstop(answer: string): string[] {
-  const out: string[] = [];
-  const m = SAYS_VALID.exec(answer);
-  if (m && !NOT_BEFORE.test(answer.slice(Math.max(0, m.index - 60), m.index))) out.push(CORRECT_VALID);
-  if (PROMISES_REFUND.test(answer)) out.push(CORRECT_REFUND);
-  return out;
-}
+// What a model may never say, whatever it was asked or told, put right at the end of its answer: that a signature or
+// a document is valid, binding or enforceable or will hold up, and a refund promised. The model is told not to; this
+// catches it when it does anyway. The phrasings are English, with the common ones in French, German, Spanish,
+// Portuguese and Italian, so they are a backstop for the instructions, not a guarantee (src/server/chatguard.ts).
+export { CORRECT_VALID, CORRECT_REFUND, backstop } from './chatguard.ts';
 // Em dashes never reach the page, whatever the model writes.
 const plain = (s: string) => s.replace(/\s*\u2014\s*/g, ', ');
 
@@ -156,7 +156,9 @@ function callModel(p: ChatProvider, screen: ChatScreen, turns: ChatTurn[], tuned
  */
 export async function answer(c: Cleaned, screen: ChatScreen, who: Who): Promise<Response | (ReturnType<typeof builtIn> & { limit?: { which: ChatLimit; until: string } })> {
   const p = chatProvider();
-  if (!p || !(process.env[p.keyVar] || '').trim()) return builtIn(c, 'off');
+  // No provider, no key, or SUPPORT_CHAT_DAILY_LIMIT=0: no model answers on this server at all, which is not a limit
+  // that was reached. The dialog says the same (GET /public/chat answers ai: false).
+  if (!p || !chatModelOn()) return builtIn(c, 'off');
   const ok = admit(who);
   if (!ok.ok) {
     const until = `${ok.until.toISOString().slice(11, 16)} UTC`;
@@ -206,17 +208,34 @@ function relay(upstream: Response, c: Cleaned, finish: () => void, late: () => b
       };
       const first = extrasFor(c);
       send({ open: true, mode: 'ai', ...first });
-      let buffer = '', lastThink = 0, broke = false;
+      let buffer = '', lastThink = 0, broke = false, full = false;
+      // A host that ignores max_tokens is not relayed for ever: past CHAT_ANSWER_CHARS the answer stops there, the
+      // model is stopped (nothing more is paid for) and the end says it was cut short.
       const take = (piece: string) => {
-        const clean = plain(piece);
+        let clean = plain(piece);
+        if (!clean || full) return;
+        if (text.length + clean.length > CHAT_ANSWER_CHARS) (clean = clean.slice(0, CHAT_ANSWER_CHARS - text.length)), (full = true);
         if (!clean) return;
         text += clean;
         send({ d: clean });
       };
       try {
         for (;;) {
+          if (full) {
+            abort.abort();
+            reader.cancel().catch(() => {});
+            break;
+          }
           const { done, value } = await reader.read();
           if (done) break;
+          // One JSON object instead of a stream (or a stream line that never ends) is read whole, but not past what
+          // any answer could be.
+          if (buffer.length > CHAT_ANSWER_CHARS * 8) {
+            abort.abort();
+            reader.cancel().catch(() => {});
+            broke = true;
+            break;
+          }
           buffer += decoder.decode(value, { stream: true });
           if (asJson) continue;
           const parts = buffer.split('\n');
@@ -259,9 +278,14 @@ function relay(upstream: Response, c: Cleaned, finish: () => void, late: () => b
         const b = builtIn(c, late() ? 'slow' : broke ? 'down' : 'empty');
         send({ fallback: b });
       } else {
-        for (const line of backstop(text)) take(`\n\n${line}`);
+        // The corrections always fit: they are added past the cap if they must.
+        for (const line of backstop(text)) {
+          const add = plain(`\n\n${line}`);
+          text += add;
+          send({ d: add });
+        }
         const tools = toolsFor(c.question, text);
-        send({ done: true, sig: signAnswer(text), tools, ...(late() || broke ? { cut: true } : {}) });
+        send({ done: true, sig: signAnswer(text, c.question), tools, ...(late() || broke || full ? { cut: true } : {}) });
       }
       try {
         controller.close();
@@ -287,15 +311,29 @@ export function attachedChat(raw: unknown): AttachedLine[] | null {
   if (!Array.isArray(raw) || !raw.length) return null;
   const out: AttachedLine[] = [];
   let size = 0;
-  for (const m of raw.slice(-CHAT_ATTACH_LINES)) {
+  const lineOf = (m: any) => ({
+    from: m?.from === 'helper' ? ('helper' as const) : m?.from === 'you' ? ('you' as const) : null,
+    // As the page had it, up to the longest answer the helper gives: the signature covers it exactly, so a new line
+    // at the start (models often begin with one after thinking) does not make a real answer look made up.
+    raw: typeof m?.text === 'string' ? m.text.slice(0, CHAT_ANSWER_CHARS + 1000) : str(m?.text, 4000),
+  });
+  const start = Math.max(0, raw.length - CHAT_ATTACH_LINES);
+  // The question the first answer kept replied to may sit just before what is kept.
+  let asked: string | null = null;
+  for (let i = start - 1; i >= Math.max(0, start - 10) && asked === null; i--) {
+    const l = lineOf(raw[i]);
+    if (l.from === 'you') asked = questionKey(l.raw);
+  }
+  for (const m of raw.slice(start)) {
     if (!m || typeof m !== 'object') continue;
-    const from = (m as any).from === 'helper' ? 'helper' : (m as any).from === 'you' ? 'you' : null;
-    const text0 = str((m as any).text, 4000).trim();
-    if (!from || !text0) continue;
-    const text = from === 'you' ? redact(text0).text : text0;
+    const l = lineOf(m);
+    if (l.from === 'you') asked = questionKey(l.raw);
+    const text0 = l.raw.slice(0, l.from === 'helper' ? CHAT_ANSWER_CHARS + 1000 : 4000).trim();
+    if (!l.from || !text0) continue;
+    const text = l.from === 'you' ? redact(text0).text : text0;
     if (size + text.length > CHAT_ATTACH_CHARS) break;
     size += text.length;
-    out.push({ from, text, checked: from === 'helper' && signed(text0, (m as any).sig) });
+    out.push({ from: l.from, text, checked: l.from === 'helper' && asked !== null && signed(l.raw, asked, (m as any).sig) });
   }
   return out.length ? out : null;
 }

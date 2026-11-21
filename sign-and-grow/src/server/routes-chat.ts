@@ -4,7 +4,7 @@ import { bad, rateLimit, str, HttpError } from './util.ts';
 import { addressKey } from './clickwrap.ts';
 import { answer, cleanConversation } from './chat.ts';
 import { chatProvider, chatModelOn } from '../lib/chatprovider.ts';
-import { chatScreen, CHAT_AI_NOTE, CHAT_BUILTIN_NOTE, CHAT_DO_NOT_TYPE, CHAT_KEPT, CHAT_PER_ADDRESS_MINUTE, CHAT_PER_ADDRESS_DAY, CHAT_PER_LINK_DAY, CHAT_PER_ACCOUNT_DAY } from '../lib/chat.ts';
+import { chatScreen, CHAT_AI_NOTE, CHAT_BUILTIN_NOTE, CHAT_DO_NOT_TYPE, CHAT_KEPT, CHAT_PER_ADDRESS_MINUTE, CHAT_PER_ADDRESS_DAY, CHAT_PER_LINK_DAY, CHAT_PER_ACCOUNT_DAY, CHAT_BODY_BYTES } from '../lib/chat.ts';
 
 // The help chat (src/server/chat.ts). These two routes are for the app's own help dialog and are NOT part of the
 // public API: they are left out of src/server/openapi.ts on purpose, an API key is refused, and their shape may
@@ -28,6 +28,35 @@ function fromOurPage(c: Ctx) {
   if (!/^application\/json\b/i.test(c.req.headers.get('content-type') || '')) throw bad('Send the question as JSON.', 415);
 }
 
+// The question with its conversation is a few kilobytes; the dialog never sends more than CHAT_BODY_BYTES. The route is
+// open to anyone, so a larger body is refused while it is read, before it is parsed or kept in memory whole.
+const TOO_LONG = 'This conversation is too long to send. Choose Start again and ask your question on its own, or choose Talk to a person.';
+async function smallBody(c: Ctx): Promise<any> {
+  const declared = Number(c.req.headers.get('content-length') || 0);
+  if (declared > CHAT_BODY_BYTES) throw bad(TOO_LONG, 413);
+  const reader = c.req.body?.getReader();
+  if (!reader) throw bad('Send a JSON body.');
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > CHAT_BODY_BYTES) {
+      reader.cancel().catch(() => {});
+      throw bad(TOO_LONG, 413);
+    }
+    parts.push(value);
+  }
+  try {
+    const b = JSON.parse(Buffer.concat(parts).toString('utf8'));
+    if (!b || typeof b !== 'object') throw 0;
+    return b;
+  } catch {
+    throw bad('Send a JSON body.');
+  }
+}
+
 // What the dialog shows before anything is typed: whether a model answers here, and the limits in numbers.
 route('GET', '/public/chat', (c) => {
   if (c.auth?.via === 'api_key') throw new HttpError(403, 'An API key cannot use the help chat. It is for people, in the app and on our pages.');
@@ -49,7 +78,7 @@ route('POST', '/public/chat', async (c) => {
   } catch {
     throw bad(FLOOD, 429);
   }
-  const b = await c.body();
+  const b = await smallBody(c);
   const conv = cleanConversation(b.messages);
   if (!conv) throw bad('Type a question first.');
   const token = str(b.link, 200);

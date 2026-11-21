@@ -20,7 +20,7 @@ export type CustomDef = { id: string; name: string; kind: CustomKind; choices: s
 /** The heading of the block on the certificate of completion. */
 export const CERT_HEADING = 'Details given by the sender (their words)';
 /** Said under it, once: what these lines are and what they are not. */
-export const CERT_NOTE = 'The sender typed these for their own records. Nobody who signed was shown them, and they were not checked.';
+export const CERT_NOTE = 'The sender typed these for their own records. They were not on the signing page, and nobody checked them.';
 
 /**
  * The same name or value whatever the letter case, the width of its characters and the spaces around it: "Case

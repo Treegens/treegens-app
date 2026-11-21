@@ -125,6 +125,8 @@ export function Editor({ id }: { id: string }) {
       // A witness: whose signature, and whether that signer names them (editor/WitnessChoice.tsx).
       ...(r.role === 'witness' ? { witness_for: r.witness_for || null, named_by_signer: !!r.named_by_signer } : {}) })),
     fields: flds,
+    // The account's custom fields (editor/CustomFieldsStep.tsx). On an envelope that is out they are saved on their own.
+    ...(correcting ? {} : { custom_fields: env.custom_fields }),
   });
   latest.current = env && body();
   live.current = { docs, rcps };
@@ -241,7 +243,7 @@ export function Editor({ id }: { id: string }) {
           patch({ state: 'uploading', size: sizeOf(ready) });
           const f = await uploadFile(ready.length > 1 ? ready : ready[0], (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }));
           setUploads((u) => u.filter((x) => x.key !== key));
-          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted || null }]);
+          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted || null, existing_signatures_note: f.existing_signatures_note }]);
           setEnv((e: any) => (e.subject ? e : { ...e, subject: e.kind === 'template' ? f.name : `Please sign: ${f.name}` }));
           dirty();
         } catch (e: any) {
@@ -269,7 +271,7 @@ export function Editor({ id }: { id: string }) {
       const ready = await shrinkPhoto(file);
       if (precheck(ready)) return toast(precheck(ready), true);
       const f = await uploadFile(ready, () => {});
-      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted || null } : x)));
+      setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted || null, existing_signatures_note: f.existing_signatures_note } : x)));
       fields.set((l) => l.map((x) => (x.document_id === did && x.page >= f.pages ? { ...x, page: f.pages - 1 } : x)), { record: false });
       dirty();
       toast('File replaced. Your fields are where you left them. Check they still line up.');

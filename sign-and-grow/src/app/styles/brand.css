@@ -37,6 +37,9 @@
 .logo, .side .brand, .mobilebar-logo { min-height: 44px; display: inline-flex; align-items: center; }
 .mobilebar-logo { flex: none; text-decoration: none; }
 .side .brand { display: flex; padding: 0 10px 12px; }
+/* On the deep green of the side bar and the phone's top bar the forest focus ring was 1.67 to 1 against its ground,
+   too faint to find with the keyboard. Light leaf there is 6.2 to 1. */
+.side :focus-visible, .mobilebar :focus-visible { outline-color: #9ed88f; }
 
 /* The narrowest phones (under 360 px, down to 320) have the logo, "Start free" and the menu button in one row of the
    public header. The logo drops to 20 px tall (the brand kit's smallest is 16) and keeps its shape, and the menu button

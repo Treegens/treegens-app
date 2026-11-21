@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/components/ui';
+import { sayConfirmed } from '@/components/ConfirmEmail';
 
 // People open this link from an email, often on a phone: every control is at least 44 pixels tall.
 const TAP = { minHeight: 44 };
@@ -17,7 +18,8 @@ export default function VerifyEmail() {
   const confirm = (pw?: string) => {
     setBusy(true);
     return api('/auth/verify', { body: { token: new URLSearchParams(window.location.search).get('token'), ...(pw ? { password: pw } : {}) } })
-      .then(() => setState('ok'))
+      // The tab the person signed up in hears it and drops its banner by itself (ConfirmEmail.tsx).
+      .then(() => (setState('ok'), sayConfirmed()))
       .catch((e) => {
         if (e.code === 'password_needed') (setState('password'), setWrong(pw ? e.message : ''));
         else if (e.code === 'sign_in_first') setState('signin');

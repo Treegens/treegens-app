@@ -9,6 +9,8 @@ import { BatchView } from '@/components/sender/BatchView';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { headerFor, readRecipients, MAX_ROWS, type BulkRow, type Role } from '@/components/sender/csv';
 import { readFieldColumns, fillableColumns } from '@/components/sender/fieldColumns';
+// Columns named like one of the account's custom fields fill it for that row (customColumns.ts).
+import { readCustomColumns } from '@/components/sender/customColumns';
 import { dayTime, explain, plural } from '@/components/sender/lib';
 import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 import { reminderText } from '@/lib/policy';
@@ -53,6 +55,10 @@ function BulkSend({ preset }: { preset: string }) {
   const reading = useMemo(() => readRecipients(csv, roles), [csv, roles]);
   // Columns named like a field of the template fill that field in each row's envelope (fieldColumns.ts).
   const fieldCols = useMemo(() => readFieldColumns(csv, loaded?.fields, reading.header), [csv, loaded, reading.header]);
+  const [customs] = useLoad<any>(() => api('/custom-fields'));
+  const customCols = useMemo(() => readCustomColumns(csv, (customs?.fields || []).map((f: any) => f.name), reading.header), [csv, customs, reading.header]);
+  // A row as it is sent: its people, the fields of the template its columns fill, and the custom fields they fill.
+  const rowBody = (x: BulkRow) => ({ ...x.cells, ...(fieldCols.byRow.has(x.row) ? { fields: fieldCols.byRow.get(x.row) } : {}), ...(customCols.byRow.has(x.row) ? { custom_fields: customCols.byRow.get(x.row) } : {}) });
   const ready = reading.missing.length ? [] : reading.rows.filter((r) => !r.problems.length);
   const stuck = reading.rows.filter((r) => r.problems.length);
   const tooMany = reading.rows.length > MAX_ROWS;
@@ -61,7 +67,7 @@ function BulkSend({ preset }: { preset: string }) {
   // (POST /bulk/check), with the function the send is held to, so the answer comes before the Send button and the
   // two cannot disagree. `asked` moves when the balance may have changed.
   const [asked, setAsked] = useState(0);
-  const { check, failed: checkFailed } = useBatchCheck(tid, listOk ? ready : [], asked);
+  const { check, failed: checkFailed } = useBatchCheck(tid, listOk ? ready.map((x) => ({ ...x, cells: rowBody(x) as any })) : [], asked);
   // The server would refuse the whole batch, and the notice above the button says why and what to do about it.
   const wouldRefuse = !!check && ((check.counted && check.short > 0) || !!check.refusal);
   // Addresses in the list that bounced before: from the check, or from a refusal that came after it. The dialog
@@ -124,7 +130,7 @@ function BulkSend({ preset }: { preset: string }) {
   const sendKey = useRef<{ sig: string; key: string } | null>(null);
   async function send(rows: BulkRow[], anyway = false) {
     // "send_anyway": the sender has seen which addresses bounced before and chose to send (src/lib/mailnews.ts).
-    const body = { template_id: tid, name: name.trim() || undefined, rows: rows.map((x) => (fieldCols.byRow.has(x.row) ? { ...x.cells, fields: fieldCols.byRow.get(x.row) } : x.cells)), ...(anyway ? { send_anyway: true } : {}) };
+    const body = { template_id: tid, name: name.trim() || undefined, rows: rows.map(rowBody), ...(anyway ? { send_anyway: true } : {}) };
     const sig = JSON.stringify(body);
     if (sendKey.current?.sig !== sig) sendKey.current = { sig, key: `bulk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` };
     const r = await api('/bulk', { body, headers: { 'Idempotency-Key': sendKey.current.key } });
@@ -171,7 +177,7 @@ function BulkSend({ preset }: { preset: string }) {
               {fileNote && <span className="small muted" role="status">{fileNote}</span>}
             </div>
             <p className="muted small" id="sn-csv-help">
-              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.{fillableColumns(loaded?.fields).size ? ` A column named like a field of the template (${[...fillableColumns(loaded?.fields).values()].slice(0, 4).join(', ')}) fills that field in each envelope, as if you had typed it in, and anything that depends on it shows or hides from the start.` : ''}
+              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.{fillableColumns(loaded?.fields).size ? ` A column named like a field of the template (${[...fillableColumns(loaded?.fields).values()].slice(0, 4).join(', ')}) fills that field in each envelope, as if you had typed it in, and anything that depends on it shows or hides from the start.` : ''}{customs?.fields?.length ? ` A column named like one of your account's custom fields (${customs.fields.slice(0, 4).map((f: any) => f.name).join(', ')}) fills it for that envelope, in place of the template's value.${customs.fields.some((f: any) => f.required) ? ' Every envelope needs a value for the required ones, from a column or from the template.' : ''}` : ''}
               {' '}No header row? Then use exactly that order.
             </p>
 
@@ -187,7 +193,8 @@ function BulkSend({ preset }: { preset: string }) {
                       {reading.header ? 'We matched your columns by their names.' : `No header row found, so we read the columns in this order: ${header.replace(/,/g, ', ')}.`}
                       {reading.swapped ? ' The names and emails looked swapped, so we put them the right way round.' : ''}
                       {fieldCols.names.length ? ` These columns fill fields of the template, as if you had typed the value in: ${fieldCols.names.join(', ')}.` : ''}
-                      {reading.ignored.filter((c) => !fieldCols.names.includes(c)).length ? ` Not used: ${reading.ignored.filter((c) => !fieldCols.names.includes(c)).join(', ')}.` : ''}
+                      {customCols.names.length ? ` These columns fill custom fields of your account: ${customCols.names.join(', ')}.` : ''}
+                      {reading.ignored.filter((c) => !fieldCols.names.includes(c) && !customCols.names.includes(c)).length ? ` Not used: ${reading.ignored.filter((c) => !fieldCols.names.includes(c) && !customCols.names.includes(c)).join(', ')}.` : ''}
                     </span>
                   </p>
                 )}

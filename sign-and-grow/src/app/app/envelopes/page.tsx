@@ -8,6 +8,8 @@ import { Dialog } from '@/components/sender/Dialog';
 import { fail } from '@/components/sender/feedback';
 import { cap, exportUrl, howLong, joinNames, neverOpened, waitingOn } from '@/components/sender/lib';
 import { remindedText } from '@/components/sender/MailNews';
+// A custom field to filter by and to show as a column (sender/CustomFieldFilter.tsx).
+import { CustomFieldFilter, customValue } from '@/components/sender/CustomFieldFilter';
 
 const BOXES: [string, string][] = [['all', 'All'], ['drafts', 'Drafts'], ['waiting', 'Waiting for others'], ['completed', 'Completed'], ['closed', 'Declined, voided, expired']];
 // For admins only: what a sender deleted from their own lists after somebody had signed. It is in no other tab, and
@@ -24,8 +26,8 @@ function closedWhy(e: any): string {
   return 'Nobody. It was voided';
 }
 
-type View = { box: string; q: string; folder: string; sender: string };
-const START: View = { box: 'all', q: '', folder: '', sender: '' };
+type View = { box: string; q: string; folder: string; sender: string; field: string; value: string; col: string };
+const START: View = { box: 'all', q: '', folder: '', sender: '', field: '', value: '', col: '' };
 
 // The last tab and search are remembered, so opening an envelope and coming back does not lose your place.
 function restore(): View {
@@ -75,8 +77,8 @@ export default function Envelopes() {
 
   const change = (patch: Partial<View>) => (setView((v) => ({ ...(v || START), ...patch })), setPicked(new Set()));
   const [data, reload, error] = useLoad<any>(
-    () => (view ? api(`/envelopes?box=${view.box}&q=${encodeURIComponent(view.q)}&folder=${encodeURIComponent(view.folder)}&sender=${encodeURIComponent(view.sender)}&limit=${PAGE}`) : Promise.resolve(null)),
-    [view?.box, view?.q, view?.folder, view?.sender],
+    () => (view ? api(`/envelopes?box=${view.box}&q=${encodeURIComponent(view.q)}&folder=${encodeURIComponent(view.folder)}&sender=${encodeURIComponent(view.sender)}&field=${encodeURIComponent(view.field)}&value=${encodeURIComponent(view.value)}&limit=${PAGE}`) : Promise.resolve(null)),
+    [view?.box, view?.q, view?.folder, view?.sender, view?.field, view?.value],
   );
 
   // A remembered folder or sender that no longer exists would hide everything with no way to see why.
@@ -92,7 +94,7 @@ export default function Envelopes() {
   const pickable = useMemo(() => (view?.box === REMOVED ? [] : rows.filter((e) => e.status !== 'draft').map((e) => e.id as string)), [rows, view?.box]);
   const chosen = pickable.filter((id) => picked.has(id));
   const allPicked = pickable.length > 0 && chosen.length === pickable.length;
-  const filtered = !!view && (view.q !== '' || view.folder !== '' || view.sender !== '' || view.box !== 'all');
+  const filtered = !!view && (view.q !== '' || view.folder !== '' || view.sender !== '' || view.box !== 'all' || view.field !== '');
   const toggle = (id: string) => setPicked((p) => {
     const n = new Set(p);
     if (n.has(id)) n.delete(id);
@@ -181,6 +183,7 @@ export default function Envelopes() {
             <option value="">Sent by anyone</option>{data.senders.map((s: any) => <option key={s.id} value={s.id}>{s.id === me.user.id ? 'Sent by me' : `Sent by ${s.name}`}</option>)}
           </select>
         )}
+        {view && <CustomFieldFilter view={view} onChange={change} />}
       </div>
 
       <div className="sn-selbar" aria-live="polite">
@@ -219,7 +222,7 @@ export default function Envelopes() {
                     <label className="sn-check"><input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(pickable))} aria-label={allPicked ? 'Clear selection' : `Select all ${pickable.length} sent envelopes in this list`} /></label>
                   )}
                 </th>
-                <th>Subject</th><th className="hide-sm">Status</th><th className="hide-sm">Waiting on</th><th className="hide-sm">Folder</th><th className="hide-sm">Updated</th><th className="hide-sm"><span className="sn-vh">Actions</span></th>
+                <th>Subject</th><th className="hide-sm">Status</th><th className="hide-sm">Waiting on</th><th className="hide-sm">Folder</th>{view?.col && <th className="hide-sm">{view.col}</th>}<th className="hide-sm">Updated</th><th className="hide-sm"><span className="sn-vh">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -246,6 +249,7 @@ export default function Envelopes() {
                         <Status s={e.status} />
                         {e.status === 'sent' && <span className="small">Waiting on {waitingText}</span>}
                         <span className="muted small">{fmtDate(e.updated_at)}</span>
+                        {view?.col && customValue(e, view.col) && <span className="small cf-col">{view.col}: {customValue(e, view.col)}</span>}
                       </div>
                       {e.bulk_id && <Link href={`/app/bulk?batch=${e.bulk_id}`} className="small sn-batchlink" onClick={(ev) => ev.stopPropagation()}>Part of a bulk send</Link>}
                       <div className="sn-only-sm sn-inlineactions" onClick={(ev) => ev.stopPropagation()}>
@@ -258,6 +262,7 @@ export default function Envelopes() {
                     <td className="hide-sm"><Status s={e.status} /></td>
                     <td className="hide-sm small sn-waiting">{waitingText}</td>
                     <td className="hide-sm muted small">{e.folder || ''}</td>
+                    {view?.col && <td className="hide-sm small cf-col">{customValue(e, view.col)}</td>}
                     <td className="hide-sm muted small" style={{ whiteSpace: 'nowrap' }}>{fmtDate(e.updated_at)}</td>
                     <td className="hide-sm sn-rowactions" onClick={(ev) => ev.stopPropagation()}>
                       {e.status === 'sent' && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}

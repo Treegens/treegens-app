@@ -13,6 +13,7 @@ import { SESSION_DAYS, SESSION_MAX_DAYS, SESSION_TOUCH_MINUTES } from '../lib/po
 import { smsProvider } from '../lib/checks.ts';
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver, deliveryView, MAX_WEBHOOKS, KEEP_BODIES } from './webhooks.ts';
+import { webhookHostsRule } from '../lib/outside.ts';
 import { billingEnabled, verifyChain, notifyPrefs, closingText } from './envelopes.ts';
 import { nameRefusal, hasNotPaid, inviteRefusal, noteInvited } from './envelopes.ts';
 import { grant, creditSummary, findFreeCode, sameEmail } from './credits.ts';
@@ -23,27 +24,38 @@ import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed }
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
 import { forgottenFile, disputeFacts } from './evidence.ts';
+import { sealForVerify } from './seal.ts';
 import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe, sessionMade, passwordChanged } from './twostep.ts';
 // The security record of each account: one line where something happens (seclog.ts).
 import { record, signedIn, signInFailed, settingsChanged } from './seclog.ts';
 import { converterOn } from './convert.ts';
+import { newConfirmCode, confirmWithCode, codesOpen } from './confirmcode.ts';
+import { showCode, CONFIRM_CODE_HOURS } from '../lib/confirm.ts';
 
 // `c`: with an API key, two_step is left out, because no key reads anything of two-step login (twostep.ts).
-export const publicUser = (u: any, c?: Ctx) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, has_password: hasPassword(u), ...(c?.auth?.via === 'api_key' ? {} : { two_step: twoStepOn(u) }), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
+export const publicUser = (u: any, c?: Ctx) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, ...(u.email_verified ? {} : { confirm_by_code: codesOpen(u) }), has_password: hasPassword(u), ...(c?.auth?.via === 'api_key' ? {} : { two_step: twoStepOn(u) }), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
 
 // `via` names the provider when the login was made by signing in with Google or Microsoft and the provider did not
 // stand behind the address. Whoever reads the email is then told how the login came about, so someone who did not
 // make it knows not to confirm it. The email does not repeat the name the login was made under: anyone can sign up
 // with anyone's address, and a name is words a stranger typed.
+// The email is short (50 words or fewer, research/ux-charter.md quick win 1): the 6-digit code to type in the tab the
+// person signed up in (confirmcode.ts), and the button for anyone who prefers it. What the button does in another
+// browser (it asks for the password) is said on that page when it happens, not here. Each email has a new code, which
+// replaces the one before; once too many wrong codes were typed, the email has the button only.
 export async function sendVerification(u: any, via?: string) {
+  const code = newConfirmCode(u.id);
   await sendMail({
-    to: u.email, subject: 'Confirm your email for GrowSigning', heading: 'Confirm your email',
-    lines: ['Someone signed up for GrowSigning with this email address. Confirm it so documents sent to you show up in your inbox, and so you can send.',
-      `Only confirm if you signed up for GrowSigning yourself just now. The link works in the browser you signed up in. Anywhere else ${hasPassword(u) ? 'it asks for the password that was chosen at sign-up' : `you are asked to sign in first${via ? ` with ${via}` : ''}`}, so nobody else can confirm the login for you.`,
-      via ? `This GrowSigning login was made by someone who signed in with ${via} and gave this address. If it was not you, do not confirm: without that, the login cannot send anything and sees nothing that was sent to you.`
-        : 'If you did not sign up, ignore this email. Without your confirmation that login cannot send anything and sees nothing that was sent to you.'],
+    to: u.email, subject: 'Confirm your email for GrowSigning', heading: 'Confirm your email', brief: true,
+    lines: [
+      ...(code ? [`Your code is ${showCode(code)}.`, `Type it where you signed up, or press the button. It works for ${CONFIRM_CODE_HOURS} hours.`] : ['Press the button to confirm your email.']),
+      via ? `Someone signed in with ${via} and gave this address. If it was not you, do not confirm.`
+        : 'Did not sign up? Ignore this email. Without it, that login cannot send or see what was sent to you.',
+    ],
     cta: { label: 'Confirm email', url: `${baseUrl()}/verify-email?token=${u.verify_token}` },
+    // A try that is late because the mail server would not take it is not made once the code has run out.
+    ...(code ? { expiresAt: new Date(Date.now() + CONFIRM_CODE_HOURS * 3600_000).toISOString() } : {}),
   });
 }
 
@@ -228,6 +240,14 @@ route('POST', '/auth/verify', async (c) => {
   run('UPDATE users SET email_verified=1 WHERE id=?', u.id);
   return { ok: true };
 }, 'public');
+
+// The 6-digit code from the confirmation email, typed in a browser signed in to the login (confirmcode.ts).
+route('POST', '/auth/verify-code', async (c) => {
+  const b = await c.body();
+  if (c.auth?.via !== 'session') throw bad('Type the code in GrowSigning, in the browser where you are signed in to this login.', 403);
+  confirmWithCode(c.user, b.code);
+  return { ok: true };
+});
 
 route('POST', '/auth/resend-verification', async (c) => {
   rateLimit(`verify:${c.user.id}`, 5, 3600_000);
@@ -454,7 +474,7 @@ route('POST', '/account/invites', async (c) => {
   // An invitation is an email to an address the inviter typed, under names the inviter chose. So it has the rules an
   // envelope has: a confirmed address first, then the pause, the check on the names it prints and a daily limit of
   // its own (inviteRefusal). Without them it was a way to mail any words to anyone from a login one minute old.
-  if (!c.user.email_verified) throw bad('Confirm your email address before you invite anyone. We emailed you a link when you signed up, and you can resend it from the banner at the top of the app.', 403);
+  if (!c.user.email_verified) throw bad('Confirm your email address before you invite anyone. Type the 6-digit code from our email in the banner at the top of the app, or press the button in that email. The banner can send a new one.', 403);
   const no = inviteRefusal(c.account, c.user, email);
   if (no) throw bad(no.message, no.status);
   run('DELETE FROM invites WHERE account_id=? AND email=? AND accepted_at IS NULL', c.account.id, email);
@@ -690,6 +710,9 @@ route('GET', '/webhooks', (c) => {
   const secrets = c.auth?.via !== 'api_key' || c.auth.scope === 'admin';
   return {
     events: WEBHOOK_EVENTS,
+    // null: any public https address. A list: the only hosts the operator allows (OUTSIDE_CALLS, WEBHOOK_ALLOW_HOSTS);
+    // empty: no webhook can be added or sent on this server (src/lib/outside.ts).
+    allowed_hosts: webhookHostsRule(),
     webhooks: all('SELECT id, url, events, active, secret, created_at FROM webhooks WHERE account_id=?', c.account.id).map((w) => (secrets ? w : { ...w, secret: null })),
     deliveries: page.map(deliveryView),
     next_before: rows.length > DELIVERY_PAGE ? page[page.length - 1].id : null,
@@ -699,7 +722,7 @@ route('POST', '/webhooks', async (c) => {
   const b = await c.body();
   // A webhook hears about every document of the account. Until the address of the login is confirmed, the login may
   // be a stranger's made in somebody else's name, waiting for that person to arrive and send (reclaim.ts).
-  if (!c.user.email_verified) throw bad('Confirm your email address before you add a webhook. We emailed you a link when you signed up, and you can resend it from the banner at the top of the app.', 403);
+  if (!c.user.email_verified) throw bad('Confirm your email address before you add a webhook. Type the 6-digit code from our email in the banner at the top of the app, or press the button in that email. The banner can send a new one.', 403);
   try {
     await assertPublicUrl(str(b.url, 500));
   } catch (e: any) {
@@ -772,17 +795,21 @@ route('POST', '/public/verify', async (c) => {
   const file = form?.get('file');
   if (!file || typeof file === 'string') throw bad('Choose a PDF to verify.');
   if (file.size > 40_000_000) throw bad('That file is too large.');
-  const hash = sha256(new Uint8Array(await file.arrayBuffer()));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const hash = sha256(bytes);
+  // The digital seal inside the file, when it carries one (src/server/seal.ts): said beside the byte-for-byte answer.
+  const seal = sealForVerify(bytes);
   const e = get("SELECT e.id, e.subject, e.completed_at, e.sheets, e.disputed_at, u.name sender FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.final_sha256=? AND e.status='completed'", hash);
   // A file of a completed document whose sender deleted it with their account: we kept its fingerprint, its id and
   // its day, nothing else (keepFingerprint in evidence.ts). "match" stays for a document we still hold.
-  if (!e) return { match: false, hash, deleted: forgottenFile({ sha256: hash }) };
+  if (!e) return { match: false, hash, deleted: forgottenFile({ sha256: hash }), seal };
   const chain = verifyChain(e.id);
   const mask = (email: string) => email.replace(/^(.).*(@.*)$/, '$1***$2');
   return {
     // disputed_at: when a person named on it first said they did not sign it, or that it was not them (evidence.ts).
     match: true, hash, envelope: { id: e.id, subject: e.subject, completed_at: e.completed_at, sender: e.sender, disputed_at: e.disputed_at || null, ...(e.disputed_at ? disputeFacts(e.id) : {}) }, chain,
     signers: all("SELECT name, email, role, completed_at FROM recipients WHERE envelope_id=? AND role != 'cc' ORDER BY routing_order, position", e.id).map((r) => ({ ...r, email: mask(r.email) })),
+    seal,
   };
 }, 'public');
 
@@ -801,7 +828,9 @@ route('GET', '/dev/outbox', (c) => {
   if (!devOutbox()) throw new HttpError(404, 'Not found');
   if (c.q.get('id')) {
     const m = get('SELECT html FROM emails WHERE id=?', Number(c.q.get('id')));
-    return new Response(m?.html || 'Not found', { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'" } });
+    // Pictures from this server too ('self'), so the GrowSigning logo in an email (/brand/email-logo.png) shows here as
+    // it will in a mail program. Nothing from anywhere else, and the preview frame stays sandboxed.
+    return new Response(m?.html || 'Not found', { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; img-src data: 'self'; style-src 'unsafe-inline'" } });
   }
   // Text messages land here too on a machine without a provider (SMS_DEV_OUTBOX=1), with the number masked.
   // delivered_at, bounced_at (with its kind and reason) and complained_at: what the mail provider said afterwards.

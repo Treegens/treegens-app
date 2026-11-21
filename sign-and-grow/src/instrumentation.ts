@@ -4,6 +4,17 @@ export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   const g = globalThis as any;
   if (g.__tscron) return;
+  // Before anything else reads a setting or opens a connection: OUTSIDE_CALLS (src/lib/outside.ts). In mode none the
+  // settings of every service that needs an outside host are taken away here, so those features are simply absent;
+  // in listed and none the guard in src/server/outside.ts refuses other hosts. The list is logged either way.
+  const { applyOutsideCalls, outsideStartLines } = await import('./lib/outside');
+  applyOutsideCalls();
+  const { installOutsideGuard } = await import('./server/outside');
+  installOutsideGuard();
+  for (const line of outsideStartLines()) console.log(line);
+  const { securityContactWarning } = await import('./lib/selfhost');
+  const contact = securityContactWarning();
+  if (contact) console.error(contact);
   // Said once, loudly, when a production server starts with nobody set up to receive help requests.
   const { supportWarning } = await import('./lib/policy');
   const warning = supportWarning();

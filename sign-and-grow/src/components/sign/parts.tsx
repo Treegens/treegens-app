@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Mark, SentWith } from '@/components/Brand';
+import { Logo, Mark, SentWith } from '@/components/Brand';
 import { fmtNum, fmtTrees } from '@/lib/impact';
 import { jumpRatherThanGlide } from '@/components/pdfMemory';
 
@@ -78,8 +78,12 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
     <div className="sg-shell">
       <a className="sg-skip" href="#sg-main">Skip to the main part</a>
       <header className="signbar sg-bar" style={style}>
-        {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || 'Sender logo'} /> : <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
-        {titleIsHeading ? <h1 className="sg-title grow truncate">{title}</h1> : <div className="sg-title grow truncate">{title}</div>}
+        {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || 'Sender logo'} /> : data?.envelope?.subject && <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
+        {/* With no subject to show (a link that did not open), the bar shows the drawn logo, never the mark beside the typed name. */}
+        {(() => {
+          const shown = data?.envelope?.subject ? title : <Logo height={20} tone={brand?.brand_color ? 'mono' : 'dark'} style={{ display: 'block' }} />;
+          return titleIsHeading ? <h1 className="sg-title grow truncate">{shown}</h1> : <div className="sg-title grow truncate">{shown}</div>;
+        })()}
         {bar}
       </header>
       <main id="sg-main" className="signwrap" tabIndex={-1}>{children}</main>

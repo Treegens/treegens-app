@@ -27,6 +27,10 @@ export const CHAT_MESSAGE_CHARS = 1500;
 /** The most of a conversation that can be attached to a help request. */
 export const CHAT_ATTACH_LINES = 40;
 export const CHAT_ATTACH_CHARS = 16000;
+/** The longest answer relayed to the page. 1200 tokens is far less; a host that ignores that is cut off here. */
+export const CHAT_ANSWER_CHARS = 8000;
+/** The largest question the server reads, in bytes, with the conversation that goes with it. */
+export const CHAT_BODY_BYTES = 512 * 1024;
 
 export type ChatLimit = 'address_minute' | 'address_day' | 'link_day' | 'account_day' | 'daily';
 
@@ -76,7 +80,7 @@ export const CHAT_STARTERS: Record<ChatScreen, string[]> = {
 
 // ---- What the person is told before they type ---------------------------------------------------------------
 /** Said at the top of the chat, always. */
-export const CHAT_DO_NOT_TYPE = 'Do not type passwords, card numbers, signing links or the codes from our emails. Anything that looks like one is taken out before your question is sent.';
+export const CHAT_DO_NOT_TYPE = 'Do not type passwords, card numbers, signing links or the codes from our emails. We take out what looks like one before your question is sent, but we cannot catch everything.';
 /** What is kept of a chat, said at the top and on /security. True of the code: see src/server/chat.ts. */
 export const CHAT_KEPT = 'We keep nothing of this chat. Only a count of questions is kept, under a fingerprint of your internet address (and of the signing link or the account, where there is one), for up to two days, to hold the limits. If you send the chat to a person, it becomes part of your help request.';
 /** The same, for /security and /security/processing. */
@@ -109,6 +113,18 @@ const luhn = (digits: string) => {
 const PRIVATE_PATH = /\/(sign|help\/request|reset|billing\/stop|verify-email|change-email|two-step-reset|agree)\b/i;
 const KEYLIKE = /[A-Za-z0-9_-]{16,}/;
 const keyish = (s: string) => KEYLIKE.test(s) && /\d/.test(s) && /[A-Za-z]/.test(s);
+// Everyday words that follow "password" in a question about it ("my password is not working", "password reset
+// email"), so they are not taken for the password itself.
+const COMMON_AFTER_PASSWORD = new Set(`a about after again all also an and any anymore are aren't as at be because been before being blank
+blocked both box boxes but button by can can't cannot case change changed changes changing characters correct could did didn't different
+do does doesn't don't either email emails empty entered error errors etc every expired expires expiry fails failed failing field fields
+for forgot forgotten form from had has have he help here hidden hint hints how i if in incorrect invalid is isn't it its just keeps kept
+length letters link links locked log login long lost mail manager managers me missing my name needed never new no nor not now number
+numbers of ok okay old on once only or our page passcode password passwords phone pin please pw pwd policy problem problems prompt protected protection recovery refused rejected
+required requirement requirements reset resets right rule rules safe same saved screen secure security sent set setting settings she
+short should shown sign since so some still strength strong symbols than thanks thank that the their then there these they this those
+though to today too twice typed until update updated username visible was wasn't we weak were what when where which while who why will
+with without won't would wrong yes yesterday you your`.split(/\s+/));
 
 export function redact(input: string): { text: string; removed: Removed[] } {
   const removed = new Set<Removed>();
@@ -130,26 +146,48 @@ export function redact(input: string): { text: string; removed: Removed[] } {
     const d = m.replace(/\D/g, '');
     return d.length === 15 || d.length === 16 || luhn(d) ? take('card', 'card number') : m;
   });
+  // The same with full stops between the groups (4242.4242.4242.4242, or 3782.822463.10005). Amounts are written in
+  // groups of three, never four, so they stay.
+  t = t.replace(/(?<![\d.,])(?:\d{4}(?:\.\d{4}){2}\.\d{1,7}|\d{4}\.\d{6}\.\d{4,5})(?![.,]?\d)/g, (m) => {
+    const d = m.replace(/\D/g, '');
+    return d.length >= 13 && (d.length === 15 || d.length === 16 || luhn(d)) ? take('card', 'card number') : m;
+  });
   // The three digits on the back of a card.
   t = t.replace(/\b(cvv2?|cvc2?|csc)\b(\s*(?:is|:|=|-)?\s*)\d{3,4}\b/gi, (_m, w, sep) => `${w}${sep}${take('card', 'card security code')}`);
   // The security code from our emails: 12 characters of the alphabet nobody can misread, as typed or in groups of 4.
   // In groups split by spaces it is taken only when it has a digit, so three shouted words stay.
   t = t.replace(new RegExp(`\\b[${CODE_CH}]{4}([- ]?)[${CODE_CH}]{4}\\1[${CODE_CH}]{4}\\b`, 'g'), (m, sep) => (sep !== ' ' || /\d/.test(m) ? take('code', 'code') : m));
   t = t.replace(new RegExp(`\\b[${CODE_CH}]{4}-[${CODE_CH}]{4}-[${CODE_CH}]{4}\\b`, 'gi'), () => take('code', 'code'));
+  // The same typed in lower case, run together or in groups of four: taken when it mixes letters and digits, so an
+  // ordinary twelve-letter word stays.
+  t = t.replace(new RegExp(`\\b[${CODE_CH}]{4}( ?)[${CODE_CH}]{4}\\1[${CODE_CH}]{4}\\b`, 'gi'), (m) => (/\d/.test(m) && /[a-z]/i.test(m) ? take('code', 'code') : m));
   // Recovery codes of two-step login (five and five, lower case, with a digit in them) and one-time codes (six digits).
   t = t.replace(/\b[a-hj-np-z2-9]{5}-[a-hj-np-z2-9]{5}\b/gi, (m) => (/\d/.test(m) ? take('code', 'code') : m));
   t = t.replace(/(?<![\d.,$€£+]|\d[ -])\b\d{3}[ -]?\d{3}\b(?![.,]\d|[ -]\d)/g, (m) => (/^\d{6}$/.test(m) || /\bcode\b/i.test(t) ? take('code', 'code') : m));
-  // A password, an access code or a PIN after the word that names it: only a value that reads like one (it has a
-  // digit, a sign or a capital inside, or comes after a colon, an equals sign or in quotes), so "my password is not
-  // working" stays as it is.
+  // A login written out as "name / password" (the name may already be taken out above).
+  t = t.replace(/\b(log ?in|user ?name|user|e-?mail|account)(\s*(?:is|:|=)?\s*)(\[email address removed\]|[^\s/,|[\]]+)(\s*[/|]\s*)([^\s"'”’]+)/gi, (m, w, s1, name, s2, v) => {
+    const core = v.replace(/[.,!?;)]+$/, ''), tail = v.slice(core.length);
+    return core && !/^\[/.test(core) && !COMMON_AFTER_PASSWORD.has(core.toLowerCase()) ? `${w}${s1}${name}${s2}${take('password', 'password')}${tail}` : m;
+  });
+  // A password, an access code or a PIN after the word that names it. A value that reads like one (it has a digit, a
+  // sign or a capital inside, or comes after a colon, an equals sign or in quotes) always goes. After "password" and
+  // its kin, a plain word goes too ("my password is sunshine"), unless it is an everyday word that says something
+  // about the password, so "my password is not working" and "password reset" stay as they are.
   t = t.replace(/\b(pass(?:word|code|phrase)?|pwd|pw|access code|pin)\b(\s*(?:is|was|:|=)?\s*)(["'“‘]?)([^\s"'”’]+)\3/gi, (m, w, sep, q, v) => {
-    if (/removed\]/.test(v)) return m;
+    // Something already taken out above ("[code removed]") is not a password.
+    if (/removed\]/.test(v) || /^\[/.test(v)) return m;
     // Full stops and commas at the end belong to the sentence, not to the value.
     const core = v.replace(/[.,!?;)]+$/, ''), tail = v.slice(core.length);
     if (!core) return m;
+    const everyday = COMMON_AFTER_PASSWORD.has(core.toLowerCase()) || /^work\w*$/i.test(core);
     const strong = /[:=]/.test(sep) || !!q || /\d/.test(core) || /[^A-Za-z]/.test(core) || /[a-z][A-Z]|[A-Z]{2}/.test(core);
-    return strong && !/^(is|was|not|for|to|the|a|an|and|or|reset|link|again|work\w*|wrong|field|box|page|screen)$/i.test(core) ? `${w}${sep}${take('password', 'password')}${!q && /^[.,]$/.test(tail) ? tail : ''}` : m;
+    const named = /^(password|passcode|passphrase|pwd)$/i.test(w) && /^[A-Za-z]{3,}$/.test(core);
+    return (strong || named) && !everyday ? `${w}${sep}${take('password', 'password')}${!q && /^[.,]$/.test(tail) ? tail : ''}` : m;
   });
+  // Anything else that reads like a strong password: a word of 8 or more characters that mixes small letters with
+  // capitals or digits and a sign such as ! # $ or %.
+  t = t.replace(/(?<![\w[/.:#=&?-])[A-Za-z0-9!#$%^&*?~+=_@]{8,64}(?![\w\]/:=&-]|\.\w)/g, (m) =>
+    /[a-z]/.test(m) && /[A-Z0-9]/.test(m) && /[!#$%^&*?~+=_]/.test(m.slice(0, -1)) && !/@[\w-]+\./.test(m) ? take('password', 'password') : m);
   return { text: t, removed: [...removed] };
 }
 /** "We took out what looked like a card number and a code before sending." */
@@ -165,9 +203,16 @@ const SIGNS: [HandOver, RegExp][] = [
   ['security', /\b(hack\w*|phish\w*|scam\w*|breach\w*|stolen|compromised|suspicious|fraud\w*|malware|virus|someone (?:got|logged|signed) into|security (?:problem|issue|hole|bug|flaw)|vulnerab\w*|leak(?:ed)?)\b/],
   ['locked', /\b(locked out|lock(?:ed)? me out|(?:cannot|can ?not|can'?t|unable to|could ?n[o']?t) (?:log|sign) ?in|lost (?:my )?(?:phone|authenticator|recovery codes?)|two[- ]step|2fa|account (?:is |was |got )?(?:locked|blocked|suspended|paused|closed)|reset (?:link|email) (?:does ?n[o']?t|never|did ?n[o']?t))\b/],
   ['money', /\b(refund\w*|charged|overcharg\w*|double[- ]?charg\w*|chargeback|billed|money back|my money|owe[sd]?|i paid|we paid|paid for|unknown charge|(?:a|the|this|that) charge|charge on my|taken from my|took my money)\b/],
-  ['legal', /\b(legal\w*|lawyer\w*|attorney\w*|court\w*|sue|suing|lawsuit|enforceab\w*|binding|hold up|stand up in|admissible|validity|(?:signature|document|contract|agreement|it|this|that) (?:is |be |still )?valid|gdpr|hipaa|notar\w*|liab\w*|jurisdiction)\b/],
+  ['legal', /\b(legal\w*|lawyer\w*|attorney\w*|court\w*|sue|suing|lawsuit|enforceab\w*|binding|hold up|stand up|admissible|validity|(?:signature|document|contract|agreement|it|this|that) (?:is |be |still )?valid|gdpr|hipaa|notar\w*|liab\w*|jurisdiction)\b/],
+  // Advice on whether to sign, or on what a document says, is legal advice too.
+  ['legal', /\b(should (?:i|we) (?:sign|accept|agree)|(?:is it|would it be) (?:safe|wise|ok|okay|a good idea|smart|risky) to (?:sign|accept|agree)|(?:do|would) you (?:recommend|advise)|qualified (?:electronic )?signatures?|advanced (?:electronic )?signatures?|eidas|esign act|ueta|what does (?:this|the|that|my) (?:clause|contract|nda|agreement|term|section) mean|(?:nda|contract|agreement|clause|terms) (?:is |look |looks |seem |seems )?(?:fair|safe|standard|normal|ok|okay)\b)/],
   ['person', /\b(human|real person|someone real|(?:human|live|support|real) agent|representative|(?:talk|speak|chat) (?:to|with) (?:someone|somebody|a person|a human|you|support)|customer service|support team|call me)\b/],
   ['upset', /\b(angry|furious|ridiculous|terrible|horrible|awful|worst|useless|pathetic|disgust\w*|unacceptable|fed up|sick of|outrage\w*|wtf|damn|shit\w*|fuck\w*|crap|stupid|hate|scammed)\b|!!|\?\?\?/],
+  // The most common words for the same in French, German, Spanish, Portuguese and Italian. Other languages, and other
+  // words, rely on the model, which is told the same list.
+  ['not_me', /(?<!\p{L})(pas sign\p{L}*|jamais sign\p{L}*|nicht unterschrieben|nie unterschrieben|no (?:he|lo|la) firmad[oa]|nunca firm\p{L}*|não assinei|nunca assinei|non ho firmato|mai firmato|falsifi\p{L}*|gefälscht)(?!\p{L})/u],
+  ['money', /(?<!\p{L})(rembours\p{L}*|(?:rück)?erstattung|geld zurück|abgebucht|reembols\p{L}*|rimbors\p{L}*|cobr(?:ó|o|aron|ado|ada)|prélev\p{L}*|débit(?:é|ée))(?!\p{L})/u],
+  ['legal', /(?<!\p{L})(valables?|valides?|juridique\p{L}*|avocat\p{L}*|tribunal|tribunaux|contraignant\p{L}*|gültig|rechtsgültig|rechtlich\p{L}*|rechtsverbindlich|verbindlich|anwalt|anwältin|gericht\p{L}*|válid[ao]s?|valid[ao]s?|legalmente|jur[ií]dic\p{L}*|abogad[ao]s?|advogad[ao]s?|avvocat[oi]|tribunale|vinculante|vincolante|dois-je signer|soll ich unterschreiben|debo firmar|devo assinar|devo firmare)(?!\p{L})/u],
 ];
 const NOT_HELPED = /\b(did ?n[o']?t help|not help\w*|does ?n[o']?t (?:help|work)|did ?n[o']?t work|still (?:not|does|doesn|can|cannot|have|the same|no)|not what i (?:asked|meant)|wrong|no[,.!]? (?:that|it)|that'?s not|you (?:do not|don'?t) (?:understand|get it)|not (?:true|right|correct)|again)\b/;
 export type ChatTurn = { role: 'user' | 'assistant'; content: string };
@@ -196,7 +241,7 @@ export const HAND_OVER_TEXT: Record<HandOver, string> = {
   security: 'A security problem goes to a person. Tell them what you saw. Do not send passwords or codes, not even to us.',
   locked: 'Being locked out is something a person can sort out with you. The form works without signing in.',
   money: 'Money is something a person should check. The helper cannot see or change payments. A person can, and they answer in writing.',
-  legal: 'The helper gives no legal advice and cannot say whether a signature is enough for your document. A person can tell you what GrowSigning does. A lawyer can tell you what that means where you are.',
+  legal: 'The helper gives no legal advice: it cannot say whether you should sign something, or whether a signature is enough for your document. A person can tell you what GrowSigning does. A lawyer can tell you what that means where you are.',
   person: 'Of course. A person reads every message and answers by email.',
   upset: 'Sorry this has been hard. A person can take it from here.',
   again: 'This is not getting you anywhere, sorry. A person can take it from here.',

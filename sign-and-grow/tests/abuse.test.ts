@@ -360,7 +360,7 @@ test('a support message is shown only to the person who wrote it, and the form m
   // browser, or the link with the password anywhere else. Then they see what was sent from the address.
   assert.equal((await visitor().post('/auth/verify', { ...link, password: 'correct horse battery' })).status, 200);
   assert.equal((await squatter.get('/support/mine')).data.requests.length, 2);
-  assert.match(mailTo('victim@support.test').find((m) => m.subject === 'Confirm your email for GrowSigning')!.html, /Only confirm if you signed up for GrowSigning yourself just now\./);
+  assert.match(mailTo('victim@support.test').find((m) => m.subject === 'Confirm your email for GrowSigning')!.html, /Did not sign up\? Ignore this email\. Without it, that login cannot send or see what was sent to you\./);
   assert.ok(!mailTo('victim@support.test').find((m) => m.subject === 'Confirm your email for GrowSigning')!.html.includes('Not Vic'), 'and the email does not repeat a name a stranger typed');
 
   // Signed in and writing from your own confirmed address: you get your copy.

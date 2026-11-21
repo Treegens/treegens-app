@@ -100,6 +100,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
           <ConvertNotes d={d} />
           {scanWarning(d) && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{scanWarning(d)}</p>}
           {phoneWeight(d) && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{phoneWeight(d)}</p>}
+          {/* Signatures already in the uploaded PDF do not survive in the signed copy (POST /files, src/lib/seal.ts). Said in the session that uploaded it. */}
+          {d.existing_signatures_note && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{d.existing_signatures_note}</p>}
           </div>
         ))}
         {docs.length >= MAX_DOCS && <p className="muted small" style={{ margin: '10px 0 0' }}>An envelope can hold up to {MAX_DOCS} documents. Remove one to add another.</p>}

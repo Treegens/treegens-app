@@ -111,7 +111,8 @@ function findSeals(bytes: Buffer): { range: [number, number, number, number]; m:
     // The dictionary around it: from the "<<" before it to the end of its /Contents.
     const start = text.lastIndexOf('<<', m.index);
     const dict = text.slice(Math.max(0, start), Math.min(text.length, m.index + 400));
-    if (!/\/SubFilter\s*\/ETSI\.CAdES\.detached/.test(text.slice(Math.max(0, start), Math.min(text.length, r[2] + 400)))) continue;
+    // The dictionary runs past its /Contents (at most a few hundred kilobytes); a stranger's file is never scanned further.
+    if (start < 0 || r[2] - start > 600_000 || !/\/SubFilter\s*\/ETSI\.CAdES\.detached/.test(text.slice(start, Math.min(text.length, r[2] + 400)))) continue;
     if (r[0] !== 0 || r[1] <= 0 || r[2] <= r[1] || r[2] + r[3] > bytes.length || bytes[r[1]] !== 0x3c || bytes[r[2] - 1] !== 0x3e) continue;
     out.push({ range: r, m: /\/M\s*\((D:[^)]*)\)/.exec(dict)?.[1] || null });
   }
@@ -187,3 +188,15 @@ export async function existingSignatures(pdf: Uint8Array): Promise<number> {
   }
 }
 
+
+/**
+ * What /verify says about the seal in a dropped file. When the seal holds but more was saved into the file after it,
+ * `sealed_part` names the completed envelope whose signed PDF the sealed part is, byte for byte (only its ID and day,
+ * as for a deleted one): whoever holds this file holds that one inside it.
+ */
+export function sealForVerify(bytes: Uint8Array): (SealCheck & { sealed_part: { envelope_id: string; completed_at: string | null } | null }) | null {
+  const c = checkSeal(bytes);
+  if (!c) return null;
+  const e = c.intact && c.sealed_part_sha256 ? get("SELECT id, completed_at FROM envelopes WHERE final_sha256=? AND status='completed'", c.sealed_part_sha256) : null;
+  return { ...c, sealed_part: e ? { envelope_id: e.id, completed_at: e.completed_at } : null };
+}

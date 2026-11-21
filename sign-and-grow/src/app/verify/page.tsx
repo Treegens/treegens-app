@@ -5,6 +5,7 @@ import { api, fmtDate } from '@/components/ui';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { MATCH_MEANS, NO_MATCH_CAUSES } from '@/lib/evidence';
 import { ById } from './ById';
+import { SealResult } from './SealResult';
 
 // A day as people say it, in the reader's own calendar: "20 November 2026".
 // What is kept after a deletion is a day (2026-11-20), which is a day in UTC: shown as that day wherever the reader is.
@@ -60,6 +61,7 @@ export default function Verify() {
             <h2>{res.envelope.subject}</h2>
             <div className="muted">Sent by {res.envelope.sender}. Completed {fmtDate(res.envelope.completed_at, true)}.</div>
             <p className="small" style={{ margin: '10px 0 0' }}>{MATCH_MEANS}</p>
+            <SealResult seal={res.seal} />
             {res.envelope.disputed_at && <div className="notice warn" style={{ marginTop: 12 }}><b>Disputed.</b> On {fmtDate(res.envelope.disputed_at, true)}, a person named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that, and this page cannot tell you who is right. Ask the sender.{res.envelope.dispute_in_error_on ? ` On ${longDay(res.envelope.dispute_in_error_on)} a person at GrowSigning looked into it and found that it was filed in error.` : ''}</div>}
             <table className="t" style={{ marginTop: 12 }}>
               <caption className="pub-vh">Who took part</caption>
@@ -86,6 +88,7 @@ export default function Verify() {
             ) : (
               <>
             <p>Its sender has since deleted it, together with their account, on {longDay(res.deleted.deleted_at)}. We deleted what we knew about it too: the document, the names on it and its audit trail{res.deleted.disputed_on ? ', apart from the alert our team works from while the dispute is open' : ''}. So we cannot tell you anything about who signed it. The certificate inside the file is what is left: read it with <Link href="/security/certificate">How to read a GrowSigning certificate</Link>.</p>
+            <SealResult seal={res.seal} />
             <p className="muted small">We keep only this fingerprint, the envelope ID and the day it was completed, until {longDay(res.deleted.kept_until)}{res.deleted.disputed_on ? ', and that it is disputed and since when, until the dispute is closed' : ''}. After that this check answers &ldquo;no match&rdquo; for this file.</p>
               </>
             )}
@@ -95,6 +98,8 @@ export default function Verify() {
         {res && !res.match && !res.deleted && (
           <div ref={result} tabIndex={-1} role="status" className="card pub-verdict bad pub-focus" style={{ marginTop: 18 }}>
             <span className="badge declined">No match</span>
+            {/* What the seal inside the file shows comes first: it can name the document the file was made from. */}
+            <SealResult seal={res.seal} />
             <p style={{ margin: '10px 0 6px' }}><b>{res.name}</b> does not match any completed document we hold. That can have several causes:</p>
             <ul className="pub-list small">{NO_MATCH_CAUSES.map((x) => <li key={x}>{x}</li>)}</ul>
             <p className="muted small">What to do: ask the sender or a signer for the file exactly as it was downloaded or emailed, and choose that one. A printed or scanned copy cannot be checked this way: look it up by its envelope ID below instead.</p>

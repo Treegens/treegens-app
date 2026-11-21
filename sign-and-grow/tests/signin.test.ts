@@ -221,7 +221,7 @@ test('a new person signs up with Microsoft: known by organization and object id,
   // Our own confirmation email, as after a sign-up with a password. It says how the login came about.
   const [confirm] = mailTo('mo@contoso.example').filter((m) => /Confirm your email/.test(m.subject));
   assert.ok(confirm);
-  assert.match(confirm.html, /made by someone who signed in with Microsoft and gave this address/);
+  assert.match(confirm.html, /Someone signed in with Microsoft and gave this address\./);
   assert.match(confirm.html, /If it was not you, do not confirm/);
   assert.equal(r.note.confirm, true);
   assert.match(signInNotice(r.note), /We emailed you a link to confirm your address/);

@@ -19,6 +19,9 @@ import './styles/stamps.css';
 import './styles/chat.css';
 import './styles/seclog.css';
 import './styles/retention.css';
+import './styles/customfields.css';
+import './styles/simplesign.css';
+import './styles/start.css';
 // After globals.css, so its --serif (Lora first) wins. Keep it the last style import.
 import './styles/brand.css';
 import type { Metadata, Viewport } from 'next';

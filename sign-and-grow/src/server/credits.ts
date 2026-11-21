@@ -191,18 +191,29 @@ export const holdKey = (ref: string) => createHash('sha256').update(String(ref))
 // Each signature held right now is held in one lot: the soonest-expiring one that was free when its envelope went
 // out. One that is let go (voided, declined, out of time, another person put in) goes back to its lot, and if that
 // lot's date has passed by then it expires with it instead of coming back.
+// A person who has just pressed Finish is no longer "held" by the time their "signature used" line is written (the
+// two are a moment apart, with other work in between): their hold is kept for that moment (HOLD_GRACE_MS), so the
+// line takes the signature that was held for it, also from a lot whose date has passed, instead of it expiring.
+const HOLD_GRACE_MS = 10 * 60_000;
+const FINISHING = `FROM recipients r JOIN envelopes e ON e.id=r.envelope_id JOIN users u ON u.id=e.sender_id
+      WHERE e.account_id=? AND e.kind='envelope' AND r.status='completed' AND r.completed_at > ? AND e.powerform_id IS NULL
+        AND (r.role = 'inperson' OR (r.role = 'signer' AND (r.free = 0 OR (r.free IS NULL AND r.email != u.email))))
+        AND NOT EXISTS (SELECT 1 FROM credits c WHERE c.account_id = e.account_id AND c.reason = 'signature'
+          AND c.ref = r.id || '|' || lower(r.email) || CASE WHEN COALESCE(r.person_gen, 0) > 0 THEN '|' || r.person_gen ELSE '' END)`;
 function syncHolds(accountId: string) {
-  const want = new Map<string, string>();
-  for (const r of all(`SELECT r.id, r.email, r.person_gen, COALESCE(e.sent_at, ?) since ${HELD}`, now(), accountId)) want.set(holdKey(sigRef(r)), r.since);
+  const want = new Map<string, { since: string; rid: string }>();
+  const grace = new Date(Date.now() - HOLD_GRACE_MS).toISOString();
+  for (const r of [...all(`SELECT r.id, r.email, r.person_gen, COALESCE(e.sent_at, ?) since ${HELD}`, now(), accountId),
+    ...all(`SELECT r.id, r.email, r.person_gen, COALESCE(e.sent_at, ?) since ${FINISHING}`, now(), accountId, grace)]) want.set(holdKey(sigRef(r)), { since: r.since, rid: r.id });
   const have = all('SELECT key FROM credit_holds WHERE account_id=?', accountId);
   for (const h of have) if (!want.has(h.key)) run('DELETE FROM credit_holds WHERE account_id=? AND key=?', accountId, h.key);
   const had = new Set(have.map((h) => h.key));
-  const fresh = [...want].filter(([k]) => !had.has(k)).sort((x, y) => x[1].localeCompare(y[1]));
+  const fresh = [...want].filter(([k]) => !had.has(k)).sort((x, y) => x[1].since.localeCompare(y[1].since));
   if (!fresh.length) return;
   const lots = loadLots(accountId).sort(soonest);
-  for (const [key, since] of fresh) {
+  for (const [key, { since, rid }] of fresh) {
     const l = lots.find((x) => liveAt(x, since) && freeIn(x) > 0);
-    run('INSERT OR REPLACE INTO credit_holds (account_id, key, lot_id, since) VALUES (?,?,?,?)', accountId, key, l?.id ?? null, since);
+    run('INSERT OR REPLACE INTO credit_holds (account_id, key, lot_id, since, rid) VALUES (?,?,?,?,?)', accountId, key, l?.id ?? null, since, rid);
     if (l) l.held++;
   }
 }

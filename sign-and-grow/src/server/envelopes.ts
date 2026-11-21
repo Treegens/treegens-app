@@ -38,10 +38,13 @@ import { ruleOf, logicKey } from '../lib/logic.ts';
 import { closedFormStart, closedStartText } from './formstart.ts';
 import { finalsDue, finalFailed, finalMadeLate } from './finalretry.ts';
 import { finishPdf, sealStored } from './finalpipe.ts';
+import { notSealedLines } from '../lib/seal.ts';
 // A stamp next to a signature: a recipient's own, or the sender's, printed like ink (stamps.ts).
 import { isSenderStamp, printedStamp, stampOnSave, copyStamps, stampProblem, stampsSent, stampsFinished, senderStampChange } from './stamps.ts';
 import { convertedSent, convertedAdded } from './converted.ts';
 import { convertedOf } from '../lib/convert.ts';
+// The account's own custom fields on envelopes and templates, and name and value pairs per document (customfields.ts).
+import { customView, copyCustom, assertCustomFields, customWords } from './customfields.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson', 'witness'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike', 'stamp'];
@@ -121,6 +124,8 @@ export function loadEnvelope(envelopeId: string): any {
 export function publicEnvelope(e: any) {
   return {
     ...e,
+    // custom_fields, and each document with its own "fields" (customfields.ts).
+    ...customView(e),
     // publicCheck: the check a sender asked for before the document opens, as words, without the server's own columns.
     // device_hash and witness_saw are the server's own, for the witness's "same device" yes or no (witness.ts).
     recipients: e.recipients.map(({ token: _t, signature_png, initials_png, user_agent: _u, device_hash: _d, witness_saw: _s, ...r }: any) => publicCheck({ ...r, has_signature: !!signature_png }, _t)),
@@ -949,6 +954,8 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
     }
     // The sender's own stamp goes with every copy, with the picture it has (stamps.ts).
     copyStamps(src, fmap);
+    // Custom fields go with every copy: a template's values are what is made from it starts with (customfields.ts).
+    copyCustom(src, eid, dmap);
     // Who may use and change a template, and the lock on its wording, go with every copy (tplroles.ts).
     carryRules(src, eid, o.kind);
     // "Only show when" and formulas go with the copy, and a bulk send row may fill fields they depend on (logic.ts).
@@ -1049,7 +1056,9 @@ function fakeNotice(e: any, account: any, sender: any, extra: any[] = []): strin
   const lure = lureIn([e.subject, e.message, ...e.recipients.map((r: any) => r.note), ...e.documents.map((d: any) => d.name), ...(e.fields || []).flatMap((f: any) => [senderText(f), f.label, f.formula]),
     ...shared.map((r: any) => r.name), sender?.name, account?.name, ...extra,
     // The name of a group is printed in every member's email, and a member's name on the other members' screens.
-    ...groupWords(e)]);
+    ...groupWords(e),
+    // The custom fields printed on the certificate are the sender's words too (customfields.ts).
+    ...customWords(e)]);
   return lure ? lureText(lure) : null;
 }
 
@@ -1186,13 +1195,15 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
   if (!e || e.kind !== 'envelope') throw bad('Envelope not found.', 404);
   if (e.status !== 'draft') throw bad('This envelope has already been sent.');
   assertSendable(e);
+  // A custom field the account requires has a value, and every value fits its field as it is now (customfields.ts).
+  assertCustomFields(e);
   const account = get('SELECT * FROM accounts WHERE id=?', e.account_id);
   const sender = senderOf(e);
   // Nothing new goes out from an account that is being closed, by any path: the app, a key, a bulk row, a public form.
   if (account.closing_at) throw bad(closingText(account, 'Nothing new can be sent from it'), 403);
   // These checks exist to keep scammers from using the service to send convincing fakes: a confirmed address, then
   // the pause, the fake-notice filter and the daily limit, which every other path that emails a recipient shares.
-  if (!sender?.email_verified) throw bad('Confirm your email address before you send. We emailed you a link when you signed up, and you can resend it from the banner at the top of the app.', 403);
+  if (!sender?.email_verified) throw bad('Confirm your email address before you send. Type the 6-digit code from our email in the banner at the top of the app, or press the button in that email. The banner can send a new one.', 403);
   assertCodes(e.recipients);
   // A check by one-time code can work for everyone it was asked for, and the account may text whom it asks to text.
   assertChecks(e);
@@ -1492,6 +1503,7 @@ export function notCompletedNotice(e: any, r: any, asSigned = false): { title: s
           : `The pages show the document as it stood when it was closed, after the change, with what ${r.name} had filled in and what others who had finished by then had filled in.${ACTS(r.role) ? ` The signature ${r.name} gave is not on them.` : ''} It has no certificate of completion.`,
         ...(e.last_change ? [`What ${sender?.name || 'the sender'} changed last: ${e.last_change}`] : []),
       ] : [`This copy is for ${r.name}. It shows the document as it stood when it was closed: what ${r.name} ${finishedHow(r)} on ${ts(r.completed_at)}, and what others who had finished by then had filled in. It has no certificate of completion.`]),
+      ...notSealedLines(), // when this server seals completed PDFs: this one is not sealed (src/lib/seal.ts)
       `Questions go to ${sender ? `${sender.name} <${sender.email}>` : 'the sender'}. Envelope ${e.id}.`,
     ],
   };
@@ -1519,6 +1531,7 @@ export async function earlierCopy(e: any, r: any, closed: boolean): Promise<Uint
       `This copy is for ${r.name}. It shows "${e.subject}" exactly as ${r.name} ${finishedHow(r)} it on ${ts(first)}.`,
       `After that, ${sender?.name || 'the sender'} changed the document and asked ${r.name} to ${ACTS(r.role) ? 'sign' : r.role === 'approver' ? 'approve' : 'confirm'} again. What ${r.name} ${finishedHow(r)} then no longer counts, and it is kept on record together with the change. This copy is that record. It is not the document as it is now, and it is not a finished agreement.`,
       ...(e.last_change ? [`What ${sender?.name || 'the sender'} changed last: ${e.last_change}`] : []),
+      ...notSealedLines(), // when this server seals completed PDFs: this one is not sealed (src/lib/seal.ts)
       `Questions go to ${sender ? `${sender.name} <${sender.email}>` : 'the sender'}. Envelope ${e.id}.`,
     ],
   };

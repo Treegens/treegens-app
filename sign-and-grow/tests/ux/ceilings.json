@@ -1,0 +1,14 @@
+{
+  "_about": "The ceilings of the core flows, per profile (research/ux-charter.md, section 3). tests/ux/flows.cjs reads them and breaks the run (exit 3) when a number is over. A batch that lowers a number writes the new one here in the same change (UX_RECORD=1 does it, and fills flows that have none). Nothing here is ever raised.",
+  "default": {
+    "a-send-first": { "actions": 19, "screens": 10, "choices_seen": 193, "max_choices": 42, "words": 3751, "notices": 2 },
+    "b-sign-phone": { "actions": 8, "screens": 6, "choices_seen": 48, "max_choices": 13, "words": 751, "notices": 0 },
+    "b-sign-desktop": { "actions": 8, "screens": 6, "choices_seen": 48, "max_choices": 13, "words": 761, "notices": 0 },
+    "c-template-send": { "actions": 5, "screens": 4, "choices_seen": 92, "max_choices": 34, "words": 666, "notices": 1 },
+    "d-find-download": { "actions": 4, "screens": 3, "choices_seen": 99, "max_choices": 43, "words": 739, "notices": 0 },
+    "e-settings-name": { "actions": 3, "screens": 2, "choices_seen": 68, "max_choices": 36, "words": 487, "notices": 0 },
+    "f-signer-help": { "actions": 7, "screens": 5, "choices_seen": 42, "max_choices": 10, "words": 927, "notices": 2 }
+  },
+  "everything": {},
+  "government": {}
+}

@@ -10,6 +10,7 @@ import { audit, assertMayEmail, loadEnvelope, notifyRecipient, notifySender, rep
 import { find, look } from './routes-sign.ts';
 import { bouncedMember, complainedMember, memberWantsMail, holderBounceLine } from './groups.ts';
 import { welcomeMark } from './routes-trust.ts';
+import { archiveNews } from './routes-archive.ts';
 import { record } from './seclog.ts';
 import {
   mailEventsAuth, readEvents, bounceWhy, softBounceDays, forgetSoftDays, noteBounced, forgetBounced, mailStop, mailStopText, sameAddress as same, type MailEvent,
@@ -295,6 +296,8 @@ export async function applyMailEvent(ev: MailEvent, notes: { unknown_id: number;
   const at = when(ev.at);
   if ('gone' in f) return goneNews(f.gone, ev, at);
   const m = f.m;
+  // A copy for an archive address, or the email asking one to confirm: it counts for that address alone (routes-archive.ts).
+  if (m.archive_to) return archiveNews(m, ev, at);
   if (ev.type === 'delivered') return delivered(m, at);
   if (ev.type === 'complaint') return complaint(m, at);
   if (ev.type === 'soft_bounce') return softBounce(m, at, ev.reason);

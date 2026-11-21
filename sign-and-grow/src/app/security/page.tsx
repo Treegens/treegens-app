@@ -13,9 +13,11 @@ import { MAIL_COPY_DAYS } from '@/lib/policy';
 import { IN_PERSON_LOCK, IN_PERSON_LIMITS } from '@/lib/phone';
 import { QR_SHOW_SECONDS } from '@/lib/qrlink';
 import { WhereYourDataIs } from './DataPlace';
+import { WhatItConnectsTo } from './Outside';
 import { BY_SENDER_LINE } from '@/lib/bysender';
 import { encryptedFilesPoint, notEncryptedPoint } from '@/lib/storedfiles';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '@/lib/evidence';
+import { sealSet, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/seal';
 import { DEVICE_COOKIE_WORDS } from '@/lib/witness';
 import { chatPrivacyPoint } from '@/lib/chatprovider';
 
@@ -51,6 +53,8 @@ export default function Security() {
   // Whether this server encrypts the files it stores (FILE_ENCRYPTION_KEY). The sentences are in src/lib/storedfiles.ts.
   const encrypted = encryptedFilesPoint();
   const notEncrypted = notEncryptedPoint();
+  // Whether the operator of this server has set a seal key (src/server/seal.ts). When not, nothing here speaks of one.
+  const sealed = sealSet();
   return (
     <div className="pub">
       <PublicNav />
@@ -66,6 +70,7 @@ export default function Security() {
             <a href="#who">Who can see your documents</a>
             <a href="#privacy">Privacy and AI</a>
             <a href="#data">Where your data is</a>
+            <a href="#outside">What this server connects to</a>
             <a href="#access">Accounts and access</a>
             <a href="#not">What this is not</a>
           </nav>
@@ -105,6 +110,7 @@ export default function Security() {
           <Point title="The audit trail is hash chained, and what that does not stop.">{CHAIN_TRUTH}</Point>
           <Point title="Completed documents come with a certificate.">A document everyone has finished includes a certificate of completion with the full audit trail. A voided, declined or expired one has none, and its copies say so on the first page and across every page. On the certificate, read the names, times and places for what they are. {WHO_WHEN_WHERE} <Link href="/security/certificate">How to read a GrowSigning certificate</Link> goes through every line. For every signer it says how they were checked before the document opened: a one-time code with the masked address or number it went to and the time it was typed in, an access code, or &ldquo;Link sent by email only&rdquo; when there was no check, so nobody reads more into it than happened.</Point>
           <Point title="Anyone can verify a signed PDF.">Drop the file on <Link href="/verify">Verify a document</Link>. We compare its SHA-256 fingerprint with the one recorded when signing finished. One changed byte and it no longer matches. A match shows that the file is unchanged since then, not who was behind each signature. No account is needed, and the file is not kept. When a sender deletes their account, the fingerprint of each completed document is kept for one more year with its envelope ID and its day, so the check can still say that the file was completed here and has been deleted since. A printed copy can be looked up by the envelope ID at the foot of each page.</Point>
+          {sealed && <Point title="A digital seal inside each completed PDF.">{SEAL_TRUTH} {SEAL_TIME} {SEAL_TRUST} {SEAL_LIMITS} <Link href="/verify">Verify a document</Link> checks the seal of a file too, and <Link href="/security/certificate#seal">How to read a GrowSigning certificate</Link> says what its line on the certificate means.</Point>}
         </Block>
 
         <Block id="your-documents" title="Your documents stay yours">
@@ -137,6 +143,7 @@ export default function Security() {
 
         {/* Where the server is and who else handles data, read from the settings this server runs on. */}
         <WhereYourDataIs />
+        <WhatItConnectsTo />
 
         <Block id="access" title="Accounts and access">
           <Point title="Passwords are never stored as written.">Only a salted scrypt hash is kept. Password reset links work once and for one hour.</Point>
@@ -158,7 +165,9 @@ export default function Security() {
         </Block>
 
         <Block id="not" title="What this is not" lead="Being straight about the limits, so you can decide whether this fits." not>
-          <Point title="Not certificate-based digital signatures.">A signed PDF is not sealed with a cryptographic certificate inside the file. Its integrity rests on the recorded fingerprint, the audit trail and the verify page.</Point>
+          {sealed
+            ? <Point title="Not certificate-based signatures of the people who sign.">The digital seal in a completed PDF is this server&apos;s own, made with the certificate of whoever runs it. The people who sign do not sign with certificates of their own, and the seal does not show who stood behind each signature.</Point>
+            : <Point title="Not certificate-based digital signatures.">A signed PDF is not sealed with a cryptographic certificate inside the file. Its integrity rests on the recorded fingerprint, the audit trail and the verify page.</Point>}
           <Point title="Not advanced or qualified signatures.">These are standard electronic signatures with an audit trail. If a law or the other party requires an advanced or a qualified signature, use a service that provides those. For high-stakes documents, ask a lawyer whether a standard electronic signature fits your case and country. <Link href="/help#outside-us">What we know about signing outside the United States, and which documents not to sign here</Link>.</Point>
           <Point title="Not translated yet.">{LANGUAGE_NOTE} That includes the text every signer agrees to before signing, and the certificate.</Point>
           <Point title="No check of identity documents.">We do not look at a passport, an identity card or a face. A signer is known by access to their email inbox, plus an access code or a one-time code {textsOn ? 'by email or by text message' : 'by email'} if the sender asks for one. What each of those proves is said under <a href="#signers">For people who sign</a>.</Point>
@@ -172,7 +181,7 @@ export default function Security() {
           <Point title={notEncrypted.title}>{notEncrypted.text}</Point>
         </Block>
 
-        <p className="muted" style={{ marginTop: 20 }}>Found a security problem, or something on this page that is not true? <Link href="/help?topic=other#contact">Tell us</Link>. A person reads every message.</p>
+        <p className="muted" style={{ marginTop: 20 }}>Found a security problem? <Link href="/security/disclosure">How to report a weakness</Link>. Something on this page that is not true? <Link href="/help?topic=other#contact">Tell us</Link>. A person reads every message.</p>
       </main>
       <PublicFooter />
     </div>

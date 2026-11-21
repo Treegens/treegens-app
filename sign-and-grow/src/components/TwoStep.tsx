@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { api } from './ui';
 import { QrCode } from './QrCode';
+import { ConfirmCode } from './ConfirmEmail';
 import { qrSvg } from '@/lib/qr';
 import { TWO_STEP_API_KEYS, TWO_STEP_LOST, TWO_STEP_RECOVERY_CODES, TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES } from '@/lib/policy';
 
@@ -184,10 +185,12 @@ export function TwoStepRequired({ me }: { me: any }) {
     <main className="authbox" style={{ maxWidth: 560 }}>
       <div className="card twostep">
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>Confirm your email address first</h1>
-        <p>{me.account.name} asks everyone on the team to sign in with two-step login, and it can only be switched on for a confirmed address. Open the link we sent to {me.user.email}, in this browser, then come back here to set it up.</p>
+        <p>{me.account.name} asks everyone on the team to sign in with two-step login, and it can only be switched on for a confirmed address. Type the 6-digit code we sent to {me.user.email}, or press the button in that email in this browser.</p>
+        {me.user.confirm_by_code !== false && <ConfirmCode email={me.user.email} onConfirmed={() => window.location.reload()} />}
         {resent && <p className="notice" role="status">{resent}</p>}
         <div className="row wrap" style={{ gap: 8 }}>
-          <button className="btn primary" onClick={() => api('/auth/resend-verification', { method: 'POST' }).then(() => setResent(`We sent the link again to ${me.user.email}. It can take a few minutes, and may land among spam.`)).catch((e: any) => setResent(e?.message || 'We could not send it. Try again in a minute.'))}>Send the link again</button>
+          {/* With the code box, its own "Send a new code" sends the email again. */}
+          {me.user.confirm_by_code === false && <button className="btn primary" onClick={() => api('/auth/resend-verification', { method: 'POST' }).then(() => setResent(`We sent the link again to ${me.user.email}. It can take a few minutes, and may land among spam.`)).catch((e: any) => setResent(e?.message || 'We could not send it. Try again in a minute.'))}>Send the link again</button>}
           <button className="btn" onClick={() => window.location.reload()}>I have confirmed it</button>
           <button className="btn" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => window.location.assign('/'))}>Sign out</button>
         </div>

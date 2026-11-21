@@ -5,6 +5,8 @@ import net from 'node:net';
 import { all, get, run } from './db.ts';
 import { hmac, now, id, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
+import { webhookRefusal, webhookMayBePrivate } from '../lib/outside.ts';
+import { webhookCustom } from './customfields.ts';
 
 // envelope.updated: something about an envelope changed that is none of the others. Today that is news about an
 // email to one of its recipients (it came back, it was marked as spam, the sender had it tried again): the delivery
@@ -47,10 +49,15 @@ export async function resolvePublic(raw: string): Promise<Target> {
   const open = process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
   if (u.protocol !== 'https:' && !(open && u.protocol === 'http:')) throw new Error('Webhook URLs must use https.');
   const host = u.hostname.replace(/^\[|\]$/g, '');
+  // With OUTSIDE_CALLS listed or none, only to the hosts the operator listed in WEBHOOK_ALLOW_HOSTS, at saving and at
+  // every delivery (src/lib/outside.ts). An exact name listed there may lead into the operator's own network.
+  const ruled = webhookRefusal(host);
+  if (ruled) throw new Error(ruled);
+  const listedPrivate = webhookMayBePrivate(host);
   // A name server that never answers must not hold a delivery up for longer than a server that never answers.
   const slow = () => new Promise<never>((_, no) => setTimeout(no, TIMEOUT_MS).unref());
   const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await Promise.race([dns.lookup(host, { all: true }), slow()]).catch(() => []);
-  if (!addrs.length || (!open && addrs.some((a) => isPrivate(a.address)))) throw new Error(REFUSED);
+  if (!addrs.length || (!open && !listedPrivate && addrs.some((a) => isPrivate(a.address)))) throw new Error(REFUSED);
   return { url: u, addresses: addrs.map((a) => ({ address: a.address, family: a.family })) };
 }
 export async function assertPublicUrl(raw: string) {
@@ -154,6 +161,7 @@ export function fireWebhooks(accountId: string, event: string, envelopeId: strin
   const e = get('SELECT id, status, subject, sent_at, completed_at FROM envelopes WHERE id=?', envelopeId);
   // "text" is a one-line summary for chat tools and no-code automations that only want a message to show.
   // "id" is unique per event and stays the same when a delivery is sent again, so receivers can ignore repeats.
-  const body = JSON.stringify({ id: id('evt'), event, created_at: now(), envelope: e, ...extra, text: `${e?.subject || 'Envelope'}: ${event.replace('.', ' ')}` });
+  // The envelope's custom fields and each document's own name and value pairs go with it (customfields.ts).
+  const body = JSON.stringify({ id: id('evt'), event, created_at: now(), envelope: e && { ...e, ...webhookCustom(envelopeId) }, ...extra, text: `${e?.subject || 'Envelope'}: ${event.replace('.', ' ')}` });
   for (const h of hooks) void deliver(h, event, envelopeId, body).catch(() => {});
 }

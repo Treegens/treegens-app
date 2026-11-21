@@ -30,6 +30,8 @@ type Status = { ai: boolean; note: string; do_not_type: string; kept: string };
 // to sign does not show them the host's chat.
 const memory = new Map<string, Msg[]>();
 
+/** In place of an answer that was on its way when the dialog closed. */
+const STOPPED = 'The answer was stopped when you closed the help, so it is not shown. Ask again, or talk to a person.';
 const WHY_NOTE: Record<string, string> = {
   down: 'The AI helper could not be reached just now, so this answer comes from our built-in help.',
   slow: 'The AI helper took too long, so this answer comes from our built-in help.',
@@ -95,6 +97,22 @@ export function HelpChat({ screen, link, code, onClose }: {
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs, key]);
 
+  // Closing the dialog while an answer is on its way stops it: the request is cancelled, so the server stops the
+  // model and nothing more is paid for. What is kept for the next time the help opens is the question and, in place
+  // of the answer, a plain note. The part that had arrived is not kept: it was not finished and the server did not
+  // sign it, so it would not count as the helper's anyway.
+  const pending = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    const ctl = pending.current;
+    if (!ctl) return;
+    pending.current = null;
+    ctl.abort();
+    const l = memory.get(key) || [];
+    const last = l[l.length - 1];
+    if (last?.role === 'assistant' && !last.sig && last.mode !== 'error')
+      memory.set(key, [...l.slice(0, -1), { role: 'assistant', content: STOPPED, mode: 'error' }]);
+  }, [key]);
+
   // Read out what arrives, a sentence at a time, so a screen reader does not start again at every word.
   const said = useRef(0);
   const speak = (text: string, final: boolean) => {
@@ -115,6 +133,8 @@ export function HelpChat({ screen, link, code, onClose }: {
     setInput('');
     const asked: Msg = { role: 'user', content: r.text, removed: r.removed };
     const history = [...msgs.filter((m) => m.mode !== 'error'), asked].slice(-CHAT_KEEP_MESSAGES);
+    // An answer goes along only with the question it answered (the server checks the two together).
+    while (history.length > 1 && history[0].role === 'assistant') history.shift();
     setMsgs((l) => [...l, asked, { role: 'assistant', content: '' }]);
     said.current = 0;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -123,9 +143,11 @@ export function HelpChat({ screen, link, code, onClose }: {
     }
     setBusy(true);
     setSpoken('The helper is answering.');
+    const ctl = new AbortController();
+    pending.current = ctl;
     try {
       const res = await fetch('/api/public/chat', {
-        method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+        method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, signal: ctl.signal,
         body: JSON.stringify({ screen, ...(link ? { link } : {}), messages: history.map((m) => ({ role: m.role, content: m.content, ...(m.sig ? { sig: m.sig } : {}) })) }),
       });
       if ((res.headers.get('content-type') || '').includes('text/event-stream') && res.body) {
@@ -178,12 +200,17 @@ export function HelpChat({ screen, link, code, onClose }: {
         }
       }
     } catch {
+      // Stopped because the dialog closed: what is kept was written when it closed, and there is no one to tell.
+      if (ctl.signal.aborted) return;
       const words = 'We could not reach GrowSigning, so nothing was sent. Check your connection and ask again.';
       update(() => ({ role: 'assistant', content: words, mode: 'error' }));
       setSpoken(words);
     } finally {
-      setBusy(false);
-      boxRef.current?.focus({ preventScroll: true });
+      if (pending.current === ctl) pending.current = null;
+      if (!ctl.signal.aborted) {
+        setBusy(false);
+        boxRef.current?.focus({ preventScroll: true });
+      }
     }
   }
 

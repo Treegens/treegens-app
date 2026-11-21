@@ -21,6 +21,7 @@ import { hiddenOf } from './logic.ts';
 // A company stamp on the page, printed like ink (src/server/stamps.ts). Not the large "VOIDED" mark of stamp.ts.
 import { BlendMode } from 'pdf-lib';
 import { stampPng, stampCertLines, senderStampCertLines, stampCertNote } from './stamps.ts';
+import { drawSenderDetails } from './customfields.ts';
 import { sealLineFor } from './seal.ts';
 import { STAMP_OPACITY, stampTurn } from '../lib/stamps.ts';
 // The logo in the certificate's header and the "Signed with growsigning" stamp at the foot of pages (brandpdf.ts).
@@ -371,6 +372,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   s.kv('Signing order', e.ordered ? 'Sequential' : 'Everyone at once');
   // The sender's own stamp: which one, where, and the fingerprint of its picture (stamps.ts).
   for (const [k, v] of senderStampCertLines(e)) s.kv(k, known(v));
+  // The custom fields the account prints on the certificate, in the sender's words (customfields.ts).
+  drawSenderDetails(s, e, iso, MUTED);
 
   s.h2('Documents');
   for (const d of e.documents) {

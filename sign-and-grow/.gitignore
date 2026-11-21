@@ -4,6 +4,8 @@ node_modules
 data
 public/pdfjs
 public/fonts
+public/security
+backups
 assets/fonts
 next-env.d.ts
 *.tsbuildinfo

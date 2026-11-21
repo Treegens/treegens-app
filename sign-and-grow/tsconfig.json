@@ -58,7 +58,15 @@
     ".next-build-ds-sec-log/types/**/*.ts",
     ".next-build-ds-sec-log/dev/types/**/*.ts",
     ".next-build-brand-wire/types/**/*.ts",
-    ".next-build-brand-wire/dev/types/**/*.ts"
+    ".next-build-brand-wire/dev/types/**/*.ts",
+    ".next-build-simplify-signing/types/**/*.ts",
+    ".next-build-simplify-signing/dev/types/**/*.ts",
+    ".next-build-simplify-start/types/**/*.ts",
+    ".next-build-simplify-start/dev/types/**/*.ts",
+    ".next-uxrev/types/**/*.ts",
+    ".next-uxrev/dev/types/**/*.ts",
+    ".next-build-ds-custom-fields/types/**/*.ts",
+    ".next-build-ds-custom-fields/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

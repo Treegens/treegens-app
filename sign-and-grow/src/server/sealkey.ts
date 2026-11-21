@@ -31,7 +31,8 @@ const pemOrFile = (v: string, what: string): string => {
   try {
     return fs.readFileSync(v, 'utf8');
   } catch {
-    throw new Refused(`${what} names a file that cannot be read: ${v}.`);
+    // A value that is not a short path may be key material pasted without its BEGIN line: it is never repeated.
+    throw new Refused(v.length <= 300 && !/\s/.test(v) ? `${what} names a file that cannot be read: ${v}.` : `${what} is neither a path to a file nor PEM text (PEM starts with "-----BEGIN").`);
   }
 };
 

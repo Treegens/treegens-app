@@ -120,6 +120,15 @@ export function momentText(iso: string | Date | null | undefined, tz?: string | 
 }
 
 /**
+ * A moment on a signer's own screen, by the clock of their own device: "20 March 2027 at 22:33, your time". Only for
+ * the zone the device itself reports (deviceZone): anywhere else the zone is named, with momentText.
+ */
+export function yourMoment(iso: string | Date | null | undefined, deviceTz?: string | null): string {
+  const c = iso ? clockIn(iso, deviceTz) : null;
+  return c ? `${c.d} ${MONTH_NAMES[c.m]} ${c.y} at ${pad(c.hh)}:${pad(c.mm)}, your time` : '';
+}
+
+/**
  * The same moment for an email: always in UTC, and in the reader's own zone too once we know it. "20 March 2027 at
  * 16:40 UTC, which is 21 March 2027 at 05:40 Pacific/Auckland time (UTC+13:00)".
  */

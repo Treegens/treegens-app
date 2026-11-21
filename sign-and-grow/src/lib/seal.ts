@@ -35,3 +35,15 @@ export const SEAL_TIME = 'With a time-stamp service set up, the seal also carrie
 
 /** What it is not, for the "not" lists. */
 export const SEAL_LIMITS = 'The seal does not carry what is needed to check it after its certificate has expired or been revoked (long-term validation), and files completed before the seal was set up are never sealed afterwards: their fingerprint is in emails people hold, and sealing them would change the file.';
+
+/** On the first page of a copy that is not a finished agreement (voided, declined, expired, signed before a change). */
+export const NOT_SEALED_LINE = 'This copy carries no digital seal: only a document everyone completed is sealed, so a PDF reader shows no seal for it.';
+export const notSealedLines = (env: Env = process.env): string[] => (sealSet(env) ? [NOT_SEALED_LINE] : []);
+
+/**
+ * Said when an uploaded PDF already carries signed signature fields (existingSignatures in src/server/seal.ts). The
+ * signed copy is built from the pages as they look (flatPages in src/server/pdf.ts), so those signatures do not
+ * survive in it. Shown by the editor and returned by POST /files.
+ */
+export const signaturesLost = (n: number) =>
+  `This PDF already carries ${n === 1 ? 'a digital signature' : `${n} digital signatures`}. ${n === 1 ? 'It does' : 'They do'} not survive here: the signed copy is made from the pages as they look, so in it ${n === 1 ? 'that signature is' : 'those signatures are'} only a picture and can no longer be checked. If ${n === 1 ? 'it' : 'they'} must stay checkable, keep the file as it is and do not send it for signing here.`;
