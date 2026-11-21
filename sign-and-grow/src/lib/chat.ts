@@ -115,7 +115,7 @@ const luhn = (digits: string) => {
 };
 // A path or a query that carries a secret: the pages whose address is a key (a signing link, a help request's
 // private link, a password reset, a stop link, an email confirmation), or any piece that reads like a random key.
-const PRIVATE_PATH = /\/(sign|help\/request|reset|billing\/stop|verify-email|change-email|two-step-reset|agree)\b/i;
+const PRIVATE_PATH = /\/(sign|help\/request|reset|billing\/stop|verify-email|change-email|two-step-reset|archive-confirm|agree)\b/i;
 const KEYLIKE = /[A-Za-z0-9_-]{16,}/;
 const keyish = (s: string) => KEYLIKE.test(s) && /\d/.test(s) && /[A-Za-z]/.test(s);
 // Everyday words that follow "password" in a question about it ("my password is not working", "password reset

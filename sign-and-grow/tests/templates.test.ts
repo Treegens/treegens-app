@@ -818,7 +818,8 @@ test('the pages promise what the repaired code keeps: copies, the lock on notes 
   const add = read('src/components/editor/PersonMore.tsx');
   assert.match(add, /const kept = wording\?\.people\?\.\[r\.id\];/);
   assert.match(add, /readOnly=\{!!kept\?\.note\}/);
-  assert.match(add, /keepCode=\{!!kept\?\.verify\}/);
+  // (repair-simplify-editor: the check is one list now, CheckPick.tsx; what the template asks for is left out of it.)
+  assert.match(read('src/components/editor/CheckPick.tsx'), /keepVerify: !!kept\?\.verify, keepCode: !!kept\?\.code/);
   assert.match(add, /\{kept && <LockedLine>\{keptLine\(kept, wording!\.ask\)\}<\/LockedLine>\}/);
   assert.match(read('src/components/sender/CheckFields.tsx'), /\{\(!keepCode \|\| verify === 'none'\) && <option value="none">/);
   const { keptLine } = await import('../src/lib/tplroles.ts');

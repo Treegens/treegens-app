@@ -22,6 +22,7 @@ import { clickwrapPaths } from './openapi-clickwrap.ts';
 import { stampPaths, stampSchema } from './openapi-stamps.ts';
 import { seclogPaths, securityEventSchema } from './openapi-seclog.ts';
 import { retentionPaths } from './openapi-retention.ts';
+import { archivePaths } from './openapi-archive.ts';
 import { impactPaths } from './openapi-impact.ts';
 import { customFieldPaths, customFieldsProp, documentFieldsProp, customListParams, webhookCustomProps } from './openapi-customfields.ts';
 import { localeProp, rowLanguageProp, localePaths } from './openapi-locales.ts';
@@ -371,6 +372,8 @@ export function openapi() {
       '/seal': { get: { summary: 'Whether completed PDFs are sealed on this server (admins)', description: 'Read-only: the seal key and the time-stamp service are settings of the server (SEAL_P12 or SEAL_KEY_PEM, TSA_URL). "set" false: the server has no seal settings. "set" true with "on" false: a seal is set but cannot be used right now (an expired certificate, for example), so documents completed now are made without it; the reason is told to the people who run the server, not here. "on" true: every document completed from now on carries an invisible PAdES signature made with the certificate named in "by" (issued by "issuer", valid until "until"), with a time-stamp from a time-stamp service when "time_stamp" is true ("time_stamp_trusted": that service is checked against the certificates in TSA_TRUST; false means nobody checks whose service answers, and nothing calls the time stamp trusted). It is a seal of the server, not a signature of the people who signed, and documents completed earlier are never sealed afterwards.', responses: ok({ type: 'object', properties: { set: { type: 'boolean' }, on: { type: 'boolean' }, by: str, issuer: str, time_stamp: { type: 'boolean' }, time_stamp_trusted: { type: 'boolean' }, until: time } }) } },
       // Keeping closed envelopes for a set time, and legal holds (src/server/openapi-retention.ts).
       ...retentionPaths(),
+      // Addresses that get a copy of every email about the account's documents (src/server/openapi-archive.ts).
+      ...archivePaths(),
       // Trees: what the signing page and the envelope page may say, and the account's switch (src/server/openapi-impact.ts).
       ...impactPaths(),
       // The account's custom fields, such as a case number (src/server/openapi-customfields.ts).

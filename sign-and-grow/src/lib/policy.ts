@@ -434,6 +434,7 @@ export const NO_BAA_AFTER = 'None of that exists today, and this page will say s
 // it says so in so many words. Before changing a line, find the code that makes it true:
 //   the link         src/server/routes-sign.ts (every signing route is authorised by the token in the link alone)
 //   members, admins  mine() in src/server/routes-envelopes.ts
+//   archive addresses  src/server/archivemail.ts and routes-archive.ts (the number is ARCHIVE_MAX_ADDRESSES in src/lib/archivemail.ts)
 //   the operator     GET /operator/queue in src/server/routes-trust.ts, forOperator() in src/server/routes-support.ts
 //                    and the card lookup in the payment routes: no route there returns a document, a signed PDF, a
 //                    signature, an answer or an audit trail
@@ -450,6 +451,9 @@ export const WHO_CAN_SEE: { who: string; what: string }[] = [
     what: 'They see the document, what each person filled in, the signatures, the audit trail, and whether each email left and each person opened it.' },
   { who: 'The owner and the admins of the sender\'s account.',
     what: 'On a team, the owner and every admin can open every envelope, template and bulk send of every member. A member sees only what they sent themselves, and every template. If you send from a team, its admins can read what you send.' },
+  // Archive addresses: src/server/archivemail.ts takes the links and codes out of each copy, routes-archive.ts confirms each address first.
+  { who: 'Archive addresses the sender\'s account chose.',
+    what: 'The admins of an account can name up to 5 email addresses, a records office say, that get a copy of every email the account sends about its documents, with the completed PDF attached where the email had it. Each address is confirmed from its own inbox before it gets anything. Every copy has the signing link and the codes taken out, so nobody can open or sign a document from one. Signers are not told about these addresses. Most accounts have none.' },
   { who: 'The people who run this server.',
     what: 'Inside the app they work a queue of help requests and reports. There they see what somebody wrote to them. For a reported document they see its subject, the sender\'s message, the sender\'s name and address and who reported it. For an account they see its name, its age, its plan and whether it renews or ends and when, a free code it uses, its last payment, a card dispute, how many signatures it has left, the names and addresses of its owner and admins, and whether it is paused or marked as trusted. The queue has no screen and no function that opens a document, a signed PDF, a signature, an answer typed into a field or an audit trail. Outside the app it is different: the software adds no encryption of its own to the database, and the key to the stored files, where it encrypts them, is in the server\'s settings, so whoever has the disk, the database and the settings of the server can read everything on them. The rule for that is: only to answer a help request or a report about that document, or to repair the service, and never for anything else. That rule is a promise by the people who run the server. Software cannot enforce it.' },
   { who: WHO_CARRIES,

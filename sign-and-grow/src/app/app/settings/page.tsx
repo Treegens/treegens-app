@@ -19,6 +19,7 @@ import { EmailAddressCard } from '@/components/EmailProblem';
 // The team's company stamps (src/components/stamps/StampSettings.tsx).
 import { StampSettings } from '@/components/stamps/StampSettings';
 import { RetentionSettings } from '@/components/settings/RetentionSettings';
+import { ArchiveSettings } from '@/components/settings/ArchiveSettings';
 import { SealStatus } from '@/components/settings/SealStatus';
 import { TreesOnRecord } from '@/components/settings/TreesOnRecord';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
@@ -955,6 +956,7 @@ export default function Settings() {
       {tab === 'team' && <Team />}
       {tab === 'billing' && <Billing />}
       {tab === 'data' && <RetentionSettings />}
+      {tab === 'data' && <ArchiveSettings />}
       {tab === 'data' && <SealStatus />}
       {tab === 'data' && <YourData />}
       {tab === 'developers' && <Developers />}

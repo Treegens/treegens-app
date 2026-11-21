@@ -20,6 +20,7 @@ import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '@/lib/evidence';
 import { sealSet, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/seal';
 import { DEVICE_COOKIE_WORDS } from '@/lib/witness';
 import { chatPrivacyPoint } from '@/lib/chatprovider';
+import { mailTlsPoint } from '@/lib/mailtls';
 
 export const metadata = { title: 'Security and trust', description: 'What GrowSigning does to protect signers, senders and documents, in plain words. And what it does not do.' };
 
@@ -55,6 +56,8 @@ export default function Security() {
   const notEncrypted = notEncryptedPoint();
   // Whether the operator of this server has set a seal key (src/server/seal.ts). When not, nothing here speaks of one.
   const sealed = sealSet();
+  // Whether an email leaves this server only over an encrypted connection (SMTP_REQUIRE_TLS), and what that does not cover.
+  const mailTls = mailTlsPoint();
   return (
     <div className="pub">
       <PublicNav />
@@ -123,6 +126,7 @@ export default function Security() {
           <Point title="Templates are shared, not up for grabs.">Everyone on a team can use a template unless it is set to admins only or to chosen members, and then nobody else sees it at all. Only the person it belongs to and the admins can change it, unless they let chosen members or the team change it as well, and only they can delete it or change who may. A template can lock its wording, so whoever may not change it can fill in names and addresses but cannot send an altered version. Members see their own envelopes, folders and bulk sends, and admins see all of them.</Point>
           <Point title="A signing link opens the document for whoever holds it.">So do the sender&apos;s login and the logins of the owner and admins of the sender&apos;s account. The whole list, with what the people who run this server can see, is under <a href="#who">Who can see your documents</a>. A recipient cannot open a document before their turn. On a public form, typing someone else&apos;s email address never opens their document: an unfinished one is only given back to the browser that started it.</Point>
           {encrypted && <Point title={encrypted.title}>{encrypted.text}</Point>}
+          {mailTls && !mailTls.not && <Point title={mailTls.title}>{mailTls.text}</Point>}
           <Point title="A QR code is the link.">The app can show a signing link or the link of a public form as a QR code. The code is drawn in your browser from the link, by our own code: the link is not sent to another service to be turned into a picture. Whoever scans the code, or a photo of it, holds the link. A code for one person&apos;s signing link is taken off the screen again after {QR_SHOW_SECONDS / 60} minutes. A code can do no more than its link: once an address is corrected the old code no longer opens the document, a voided envelope cannot be signed from it, and the code of a paused or deleted form opens a page that says the form is not available.</Point>
         </Block>
 
@@ -168,6 +172,7 @@ export default function Security() {
           {sealed
             ? <Point title="Not certificate-based signatures of the people who sign.">The digital seal in a completed PDF is this server&apos;s own, made with the certificate of whoever runs it. The people who sign do not sign with certificates of their own, and the seal does not show who stood behind each signature.</Point>
             : <Point title="Not certificate-based digital signatures.">A signed PDF is not sealed with a cryptographic certificate inside the file. Its integrity rests on the recorded fingerprint, the audit trail and the verify page.</Point>}
+          {mailTls?.not && <Point title={mailTls.title}>{mailTls.text}</Point>}
           <Point title="Not advanced or qualified signatures.">These are standard electronic signatures with an audit trail. If a law or the other party requires an advanced or a qualified signature, use a service that provides those. For high-stakes documents, ask a lawyer whether a standard electronic signature fits your case and country. <Link href="/help#outside-us">What we know about signing outside the United States, and which documents not to sign here</Link>.</Point>
           <Point title="Not translated yet.">{LANGUAGE_NOTE} That includes the text every signer agrees to before signing, and the certificate.</Point>
           <Point title="No check of identity documents.">We do not look at a passport, an identity card or a face. A signer is known by access to their email inbox, plus an access code or a one-time code {textsOn ? 'by email or by text message' : 'by email'} if the sender asks for one. What each of those proves is said under <a href="#signers">For people who sign</a>.</Point>

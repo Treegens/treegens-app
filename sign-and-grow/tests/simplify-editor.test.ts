@@ -398,3 +398,199 @@ test('nothing a sender could do before is gone, the pages say where things are n
   // Pages and components never import the server.
   for (const f of ['PersonMore.tsx', 'FileRow.tsx', 'ReviewParts.tsx']) assert.doesNotMatch(read(`src/components/editor/${f}`), /from '[^']*server\//, f);
 });
+
+// ---- 6. After the skeptic and the simplicity review (repair-simplify-editor) ------------------------------------------
+
+// The words a person reads in a source file: comments out, so "the envelope" in a comment is not counted.
+const shown = (f: string) => read(f).replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+
+test('nobody is ever called "Unnamed", and only a template says an address is filled in later', () => {
+  assert.equal(personLabel({ name: ' Ana ' }, 0), 'Ana');
+  assert.equal(personLabel({ name: '', role_name: 'Client' }, 0), 'Client');
+  assert.equal(personLabel({ name: '', email: 'a@b.co' }, 3), 'a@b.co');
+  assert.equal(personLabel({ name: '', email: '' }, 1), 'Person 2 (no name yet)');
+  assert.equal(personLabel(null, -1), 'Person 1 (no name yet)');
+  assert.equal(personInSentence({ name: '', email: '' }), 'this person');
+  assert.equal(personInSentence({ name: 'Ana' }), 'Ana');
+  assert.equal(noAddressWords({}, true), 'Filled in when the template is used');
+  assert.equal(noAddressWords({}, false), 'No email address yet. Add it in step 1.');
+  assert.match(noAddressWords({ link_by_sender: true }, false), /^No email from us\. You send them the link yourself/);
+  const review = read('src/components/editor/StepReview.tsx'), fieldsStep = read('src/components/editor/StepFields.tsx'), add = read('src/components/editor/StepAdd.tsx');
+  assert.match(review, /<b className="ed-break">\{personLabel\(r, ed\.rcps\.indexOf\(r\)\)\}<\/b>/);
+  assert.match(review, /r\.email \|\| noAddressWords\(r, isTpl\)\}/);
+  for (const f of [review, fieldsStep, add]) assert.doesNotMatch(f, /'Unnamed'|Filled in when the template is used/);
+  // Step 2 offers nobody an empty row: a row nobody typed into is not a person to place fields for.
+  assert.match(fieldsStep, /const l = rcps\.filter\(\(r\) => SIGNS\(r\) && r\.role !== 'witness' && !ed\.isIdle\(r\)\);/);
+  assert.doesNotMatch(fieldsStep, /\bwho\(/);
+  // A screen reader hears "More options for this person", not "for Unnamed".
+  assert.match(add, /aria-label=\{`More options for \$\{personInSentence\(r\)\}`\}/);
+  assert.match(add, /aria-label=\{`Remove \$\{personInSentence\(r\)\}`\}/);
+  // The list above Send names the person the same way and says which step puts it right.
+  const editor = read('src/components/Editor.tsx');
+  assert.match(editor, /const name = personLabel\(r, rcps\.indexOf\(r\)\);/);
+  assert.match(editor, /has no name or email yet\. Add them in step 1\./);
+  assert.match(editor, /needs a valid email address\. \$\{String\(r\.email \|\| ''\)\.trim\(\) \? 'Check it' : 'Add it'\} in step 1\./);
+});
+
+test('Next with no file or nobody typed in stays on step 1 and says so in place, once, until it is put right', () => {
+  assert.equal(NUDGE.file, 'Add a file first. Choose one here.');
+  assert.equal(NUDGE.person, 'Add at least one person: a name and an email address.');
+  const editor = read('src/components/Editor.tsx'), add = read('src/components/editor/StepAdd.tsx');
+  // Only a new document is asked for a person: not a template (its roles), not one that is out, not a locked wording.
+  assert.match(editor, /if \(step === 1 && n > 1 && !isTpl && !correcting && !wording && rcps\.every\(\(r\) => isIdle\(r\)\)\) \{\s*setNudge\('person'\);/);
+  assert.match(editor, /setNudge\('file'\);\s*setStep\(1\);/);
+  // Not a toast that stacks and outstays the file: a line that is there only while it is true.
+  assert.doesNotMatch(editor, /Add a file first/);
+  assert.match(add, /\{ed\.nudge === 'file' && !docs\.length && !uploading && <p className="notice warn small" role="alert"/);
+  assert.match(add, /\{ed\.nudge === 'person' && !isTpl && rcps\.every\(\(r\) => ed\.isIdle\(r\)\) && <p className="notice warn small" role="alert"/);
+  // The cursor goes to the first name box.
+  assert.match(add, /aria-label="Name" data-ed-name /);
+  assert.match(editor, /input\[data-ed-name\]/);
+});
+
+test('the editor says document, file and person: never envelope or recipient, in what is read or read out', () => {
+  const files = ['src/components/Editor.tsx', ...fs.readdirSync('src/components/editor').filter((f) => f.endsWith('.tsx')).map((f) => `src/components/editor/${f}`)];
+  const banned = /\b(?:an|this|that|the|one|every|each) (?:envelope|recipient)\b|\benvelope (?:page|can|is|uses|stays)\b|Remove recipient|open recipient|Recipient (?:name|email)|aria-label="Document name"|Voiding/i;
+  for (const f of files) {
+    const hit = shown(f).split('\n').find((l) => banned.test(l));
+    assert.equal(hit, undefined, `${f}: ${hit?.trim().slice(0, 160)}`);
+  }
+  const editor = read('src/components/Editor.tsx');
+  assert.match(editor, /yes: `Remove \$\{isTpl \? 'role' : 'person'\}`, no: r\?\.name \? `Keep \$\{r\.name\}` : 'Keep them'/);
+  assert.match(editor, /`One document can hold up to \$\{MAX_DOCS\} files\. Remove one to add this file\.`/);
+  assert.match(editor, /If you leave now, the document stays exactly as it was and nobody is told anything\./);
+  assert.match(editor, /<b>This document is already out\.<\/b>/);
+  assert.match(read('src/components/editor/FileRow.tsx'), /aria-label="File name"/);
+  // The words for giving signatures back name the button the document's page really has.
+  assert.match(read('src/components/editor/StepReview.tsx'), /Cancelling a document you no longer need \(Void, on its page\)/);
+  assert.match(read('src/app/app/envelopes/[id]/page.tsx'), />Void<\/button>/);
+});
+
+test('"Check who signs" is one list; a code by text only where texts are sent; what a locked template asks for cannot be picked away', () => {
+  const labels = (o: any = {}) => checkChoices(o).map((c) => c.label);
+  assert.deepEqual(labels(), ['None', 'Access code (a code you tell them)', 'Code by email', 'Access code and a code by email']);
+  assert.deepEqual(labels({ textsOn: true }).slice(4), ['Code by text', 'Access code and a code by text']);
+  // Set earlier on a server that no longer sends texts: still listed, so it can be seen and taken off.
+  assert.ok(labels({ current: 'sms_code' }).includes('Code by text'));
+  assert.ok(!labels({ current: 'sms_code' }).includes('Access code and a code by text'));
+  // A locked template's one-time code and access code stay.
+  assert.deepEqual(checkChoices({ keepVerify: true }).map((c) => c.value), ['email_code', 'code+email_code']);
+  assert.deepEqual(checkChoices({ keepCode: true }).map((c) => c.value), ['code', 'code+email_code']);
+  assert.deepEqual(checkChoices({ keepCode: true, keepVerify: true }).map((c) => c.value), ['code+email_code']);
+  // Which one is set, and what picking one changes.
+  assert.equal(checkValue({}), 'none');
+  assert.equal(checkValue({ access_code: ' ' }), 'none');
+  assert.equal(checkValue({ access_code: '4242' }), 'code');
+  assert.equal(checkValue({ verify: 'email_code' }), 'email_code');
+  assert.equal(checkValue({ verify: 'sms_code', access_code: '4242' }), 'code+sms_code');
+  assert.equal(checkValue({ verify: 'nonsense' }), 'none');
+  assert.equal(checkValue({}, true), 'code', 'the box shows before the code is typed');
+  assert.deepEqual(checkPatch('none'), { verify: 'none', access_code: '' });
+  assert.deepEqual(checkPatch('email_code'), { verify: 'email_code', access_code: '' });
+  assert.deepEqual(checkPatch('code+email_code'), { verify: 'email_code' }, 'a typed code is kept');
+  assert.deepEqual(checkPatch('made up'), { verify: 'none', access_code: '' });
+  assert.equal(checkHasCode('code'), true);
+  assert.equal(checkHasCode('email_code'), false);
+  // The line of the More says the same words as the list.
+  for (const [r, said] of [[{ role: 'signer' }, 'None'], [{ role: 'signer', access_code: '4242', verify: 'email_code' }, 'Access code and a code by email'], [{ role: 'signer', verify: 'sms_code' }, 'Code by text']] as const)
+    assert.equal(moreLines(r).find((l) => l.key === 'check')!.value, said);
+  assert.equal(NO_CHECK_SAYS, 'With no check, the document opens for whoever has the link.');
+  const pick = read('src/components/editor/CheckPick.tsx');
+  assert.equal(pick.slice(pick.indexOf('export function CheckPick'), pick.indexOf('export function TextLink')).match(/<select /g)?.length, 1, 'one list');
+  assert.match(pick, /\{code && <label className="f"/, 'the code box only with a choice that has a code');
+  assert.ok(!pick.includes(String.fromCharCode(0x2014)) && !/from '[^']*server\//.test(pick));
+});
+
+test('"How they get it" holds what its line names: Email or the link sent by the sender, and the text message where texts are on', () => {
+  const keys = (r: any, o: any = {}) => moreLines(r, o).map((l) => l.key);
+  // Zero setup: as before.
+  assert.deepEqual(keys({ role: 'cc' }), ['role', 'check', 'note']);
+  assert.deepEqual(keys({ role: 'signer' }, { isTpl: true }), ['role', 'check', 'sign', 'note']);
+  // Texts on: the line is there for everyone a link can be texted to, a template's role too.
+  assert.ok(keys({ role: 'signer' }, { isTpl: true, texts: true }).includes('deliver'));
+  assert.ok(keys({ role: 'cc' }, { texts: true }).includes('deliver'));
+  assert.ok(!keys({ role: 'inperson' }, { texts: true }).includes('deliver'), 'nobody is texted a link to the sender\'s own device');
+  // Set earlier, texts off now: the line stays so the tick can be taken off.
+  assert.ok(keys({ role: 'cc', text_link: 1 }).includes('deliver'));
+  for (const role of [...ROLE_CHOICES, 'inperson']) assert.ok(moreLines({ role, text_link: 1, verify: 'sms_code' }, { languages: 5, texts: true }).length <= MORE_CAP.everything, role);
+  const more = read('src/components/editor/PersonMore.tsx');
+  assert.match(more, /<TextLink r=\{r\} textsOn=\{!!me\.text_messages\} open=\{isTpl && !r\.email\} onChange=\{patch\} \/>/);
+  const pick = read('src/components/editor/CheckPick.tsx');
+  assert.match(pick, /if \(!on && \(!textsOn \|\| r\.role === 'inperson' \|\| r\.link_by_sender\)\) return null;/);
+  // Two choices in the words of the line, and going back to Email returns the address that was typed.
+  const mine = read('src/components/editor/SendMyself.tsx');
+  assert.equal(mine.match(/type="radio"/g)?.length, 2);
+  assert.match(mine, /<span>Email<\/span>/);
+  assert.match(mine, /onChange\(\{ link_by_sender: false, email: r\.email_before_tick \|\| '' \}\)/);
+});
+
+test('opening a person\'s More puts the keyboard inside it, so the next Tab stop is not Remove', () => {
+  const more = read('src/components/editor/PersonMore.tsx');
+  assert.match(more, /useEffect\(\(\) => \{\s*panel\.current\?\.querySelector<HTMLElement>\('\.ed-line-btn'\)\?\.focus\(\{ preventScroll: true \}\);\s*\}, \[\]\);/);
+  assert.match(more, /<div id=\{morePanelId\(r\.id\)\} ref=\{panel\} className="ed-more"/);
+});
+
+test('the line next to step 3\'s More options says reminders, and the rest only when it differs or matters', () => {
+  const d = { expireDays: 120, dateFormat: 'D MMM YYYY' };
+  assert.equal(reviewSummary({ reminderDays: 3, expireDays: 120, dateFormat: 'D MMM YYYY', defaults: d, dateExample: '21 Nov 2026' }), 'Reminder every 3 days');
+  assert.equal(reviewSummary({ reminderDays: 1, expireDays: 120, defaults: d }), 'Reminder every 1 day');
+  assert.equal(reviewSummary({ reminderDays: 0, expireDays: 120, defaults: d }), 'No automatic reminders');
+  assert.equal(reviewSummary({ reminderDays: 3, expireDays: 30, dateFormat: 'YYYY-MM-DD', defaults: d, dateExample: '2026-11-21' }), 'Reminder every 3 days · closes after 30 days · dates written like 2026-11-21');
+  // A payment link signers will see is said, so one that came with a template is not a surprise.
+  assert.equal(reviewSummary({ reminderDays: 3, expireDays: 120, defaults: d, payLink: true }), 'Reminder every 3 days · payment link shown after signing');
+  // "Sign now": nobody is invited or reminded, so nothing is promised about reminders.
+  assert.equal(reviewSummary({ reminderDays: 3, expireDays: 120, defaults: d, signNow: true }), '');
+  assert.equal(reviewSummary({ reminderDays: 3, expireDays: 30, defaults: d, signNow: true }), 'Closes after 30 days');
+  // A document that is out says when it closes.
+  assert.equal(reviewSummary({ reminderDays: 0, closesOn: '3 Dec 2026, 14:00', defaults: d }), 'No automatic reminders · closes on 3 Dec 2026, 14:00');
+  const parts = read('src/components/editor/ReviewParts.tsx');
+  assert.match(parts, /signNow: ed\.signNow, payLink: payShown,/);
+  // A link nobody is shown is said outside the closed More, with why.
+  assert.match(parts, /\{payHidden && !open && <div className="notice warn" role="status"/);
+  assert.match(parts, /const payShown = !!pay\?\.pay_link && pay\.may && !pay\.host_why;/);
+  assert.match(read('src/components/editor/PayLinkChoice.tsx'), /onChange\?\.\(\{ pay_link: r\.pay_link, host_why: null \}\);/);
+  // The date choices are examples, without format codes, on a day that cannot be read as a month.
+  assert.match(parts, /<option key=\{f\} value=\{f\}>\{formatDate\(today, f, zone\)\}<\/option>/);
+  assert.equal(dateExampleDay(new Date(2026, 4, 5)).getDate(), 25);
+  assert.equal(dateExampleDay(new Date(2026, 10, 21)).getDate(), 21);
+  assert.equal(dateExampleDay(new Date(2026, 1, 12)).getMonth(), 1, 'the 25th exists in every month');
+  // "Sign now": a title, and no message to nobody.
+  assert.match(parts, /\{!alone && <label className="f" style=\{\{ marginBottom: 0 \}\}><span>Message /);
+});
+
+test('step 2: a field\'s More options closes for every other field, and "Place fields for me" answers once', () => {
+  const step = read('src/components/editor/StepFields.tsx');
+  assert.match(step, /useEffect\(\(\) => setFieldMore\(false\), \[sel\]\);/);
+  assert.doesNotMatch(step, /toast\(`Added \$\{plural\(fresh\.length/);
+  assert.match(step, /<p className="small ed-status" role="status">/);
+});
+
+test('the drop area says it in one line each, and the narrowest phones still name the step', async () => {
+  const { uploadLimitsShort, uploadLimits } = await import('../src/lib/convert.ts');
+  assert.equal(uploadLimitsShort(false), 'PDF, PNG or JPEG. Up to 25 MB and 500 pages each.');
+  assert.match(uploadLimitsShort(true), /which we turn into a PDF\. Up to 25 MB and 500 pages each\.$/);
+  assert.ok(uploadLimits(false, 6).startsWith(uploadLimitsShort(false)), 'the same limits as the long line');
+  const add = read('src/components/editor/StepAdd.tsx');
+  assert.match(add, /<span className="ed-fine">Choose a file or drop it here<\/span>/);
+  assert.match(add, /\{uploadLimitsShort\(!!me\.converts\)\}/);
+  // How long a large file takes on a phone is still said, on the row of a file that is large.
+  assert.match(read('src/components/editor/FileRow.tsx'), /if \(phoneWeight\(d\)\) notes\.push\(/);
+  assert.match(read('src/components/Editor.tsx'), /<p className="ed-stepname muted small" aria-hidden="true">Step \{step\} of 3: \{steps\[step - 1\]\}<\/p>/);
+  assert.match(read('src/app/styles/editor.css'), /\.ed-stepname \{ display: none;[^}]*\}\s*@media \(max-width: 350px\) \{ \.ed-stepname \{ display: block; \} \}/);
+});
+
+test('Sign now through the sender\'s own API key gives the link; a colleague\'s key gives none and the owner is emailed', async () => {
+  const who = { name: 'Kay Owner', email: 'kay.key@example.com' };
+  const c = await signUp(who.name, who.email, ip());
+  const key = (await c.post('/api-keys', { name: 'mine' })).data.key;
+  assert.ok(key, 'a key');
+  const viaKey = (key: string, url: string, body: any) => Object.assign(new Client(), { ip: ip() }).call('POST', url, body, { authorization: `Bearer ${key}` });
+  const e = await ownDraft(c, who);
+  const before = mailTo(who.email).length;
+  const r = await viaKey(key, `/envelopes/${e.id}/send`, { sign_now: true });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.match(String(r.data.sign_url || ''), /\/sign\//, 'the owner of the key is the sender: the link comes back, as the API description says');
+  assert.equal(mailTo(who.email).length, before, 'and no invitation is written');
+  assert.equal(signNowFor({ recipients: [{ role: 'signer', email: who.email }] }, { email: who.email }, 'someone.else@example.com', true), null);
+  assert.equal(signNowFor({ recipients: [{ role: 'signer', email: who.email }] }, { email: who.email }, null, true), null);
+});

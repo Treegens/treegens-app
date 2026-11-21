@@ -1,4 +1,4 @@
-// Archive addresses: Settings, Account (src/components/settings/ArchiveSettings.tsx), the page an address confirms on
+// Archive addresses: Settings, Records and data (src/components/settings/ArchiveSettings.tsx), the page an address confirms on
 // (src/app/archive-confirm/page.tsx), and what the mail provider says about the copies. The copies themselves are made
 // in mail.ts with archivemail.ts; the rules and the words are in src/lib/archivemail.ts.
 //
@@ -22,7 +22,7 @@ import { record } from './seclog.ts';
 import { mailEventsOn } from '../lib/policy.ts';
 import {
   ARCHIVE_MAX_ADDRESSES, ARCHIVE_BOUNCES_TO_PAUSE, ARCHIVE_CONFIRM_DAYS, ARCHIVE_ASKS_PER_DAY, ARCHIVE_ASKS_PER_ADDRESS_DAY,
-  ARCHIVE_REFUSED_DAYS, ARCHIVE_UNDO_MINUTES, ARCHIVE_WHAT, ARCHIVE_LIMITS, archiveMoment,
+  ARCHIVE_REFUSED_DAYS, ARCHIVE_UNDO_MINUTES, ARCHIVE_WHAT, ARCHIVE_LIMITS, ARCHIVE_ADDED, archiveMoment,
 } from '../lib/archivemail.ts';
 
 const DAY = 864e5;
@@ -91,7 +91,8 @@ async function askToConfirm(c: Ctx, a: any): Promise<{ delivery: string; until: 
       `To stop the copies later, ask ${str(account.name, 120)} to remove this address in their settings.`,
     ],
     cta: { label: 'Open the request', url: `${baseUrl()}/archive-confirm?token=${tok}` },
-    expiresAt: until, ...(isEmail(c.user?.email) ? { replyTo: c.user.email } : {}),
+    // To someone who may never have heard of us: the footer is the help address, with nothing that sells.
+    expiresAt: until, brief: true, ...(isEmail(c.user?.email) ? { replyTo: c.user.email } : {}),
   });
   // Marked as this address's email, so news about it from the mail provider counts for the address (archiveNews)
   // and the timer asks archiveCheck before it tries again.
@@ -130,7 +131,7 @@ route('POST', '/account/archive-addresses', async (c) => {
     ok: true, address: view(get('SELECT * FROM archive_addresses WHERE id=?', a.id)), delivery: sent.delivery,
     message: sent.delivery === 'failed'
       ? `${email} is added, but our mail server would not take the email that asks it to confirm just now. It is tried again by itself. Nothing is sent there until it is confirmed.`
-      : `We emailed ${email} a link to confirm. Nothing is sent there until someone with that inbox presses Confirm. The link works until ${archiveMoment(sent.until)}.`,
+      : ARCHIVE_ADDED,
   };
 }, 'admin');
 
@@ -142,7 +143,7 @@ route('DELETE', '/account/archive-addresses/:id', async (c) => {
   record('settings.changed', { c, about: ['archive_address', a.id], details: { settings: { archive_addresses: { changed: true } }, change: 'removed' } });
   if (a.confirmed_at) await tellAdmins(c.account.id, `No more copies go to ${a.email}`, 'An archive address was removed', [
     `${str(c.user?.name, 120) || 'An admin'} removed ${a.email} from the archive addresses of ${c.account.name}. From now on it gets no copies of the team's emails about its documents. Copies that were waiting to go there are not sent.`,
-    'If this was not meant, an admin can add it again under Settings, Account. It has to be confirmed from that inbox again.',
+    'If this was not meant, an admin can add it again in Settings, under "Copies of every email". It has to be confirmed from that inbox again.',
   ]);
   return { ok: true, message: `${a.email} is removed. It gets no more copies, also none that were waiting.` };
 }, 'admin');
@@ -190,7 +191,7 @@ route('POST', '/public/archive-confirm', async (c) => {
   record('settings.changed', { accounts: a.account_id, by: { type: 'system' }, about: ['archive_address', a.id], details: { settings: { archive_addresses: { changed: true } }, change: again ? 'confirmed again, copies resume' : 'confirmed, copies start' } });
   await tellAdmins(a.account_id, `Copies of your team's emails now go to ${a.email}`, 'An archive address was confirmed', [
     `${a.email} was ${again ? 'confirmed again' : 'confirmed'} from its own inbox. From now on it gets a copy of every email ${a.account_name} sends about its documents, with signing links, security codes and one-time codes taken out.${a.added_by_name ? ` ${a.added_by_name} added it.` : ''}`,
-    'If nobody on your team meant this, remove it under Settings, Account at once: copies carry the names, messages and signed PDFs of your documents.',
+    'If nobody on your team meant this, remove it in Settings, under "Copies of every email", at once: copies carry the names, messages and signed PDFs of your documents.',
   ]);
   return { ok: true, state: 'confirmed', message: `Confirmed. From now on ${a.email} gets a copy of every email ${a.account_name} sends about its documents. Copies of emails sent before now do not come.` };
 }, 'public');
@@ -214,7 +215,7 @@ function undoRefusal(tok: any) {
 
 async function tellAdmins(accountId: string, subject: string, heading: string, lines: string[]) {
   for (const u of admins(accountId))
-    await sendMail({ to: u.email, subject, heading, lines, cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=account` } }).catch((e) => console.error('[archive] could not tell an admin', e?.message));
+    await sendMail({ to: u.email, subject, heading, lines, cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=data` } }).catch((e) => console.error('[archive] could not tell an admin', e?.message));
 }
 
 async function pause(a: any, why: 'bounced' | 'spam') {
@@ -224,7 +225,7 @@ async function pause(a: any, why: 'bounced' | 'spam') {
     why === 'spam'
       ? `Whoever reads ${a.email} marked one of the copies of your team's emails as spam, so no more copies go there.`
       : `${ARCHIVE_BOUNCES_TO_PAUSE} copies of your team's emails to ${a.email} came back, with none arriving in between, so no more copies go there. The address may be mistyped, full or closed.`,
-    `Emails about ${account?.name || 'your'} documents are not copied there while it is paused, and they are not sent later. Check the address with whoever reads it, then choose "Send the link again" under Settings, Account. Copies start again once it is confirmed from that inbox.`,
+    `Emails about ${account?.name || 'your'} documents are not copied there while it is paused, and they are not sent later. Check the address with whoever reads it, then choose "Send the link again" in Settings, under "Copies of every email". Copies start again once it is confirmed from that inbox.`,
   ]);
 }
 

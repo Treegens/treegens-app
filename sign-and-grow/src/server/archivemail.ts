@@ -88,6 +88,8 @@ export function archiveMail(m: Mail, s: Secrets): Mail {
       ...(m.code ? [`Security code: ${ARCHIVE_CODE_REMOVED}`] : []),
     ],
     ...(m.footnote ? { footnote: x(m.footnote) } : {}),
+    // A record for a mailbox that asked for nothing else: the footer is the help address, with no line that sells.
+    brief: true,
     ...(m.brand ? { brand: m.brand } : {}),
     ...(m.fromName ? { fromName: m.fromName } : {}),
     ...(m.replyTo ? { replyTo: m.replyTo } : {}),

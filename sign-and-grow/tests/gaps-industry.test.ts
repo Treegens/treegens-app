@@ -79,8 +79,8 @@ test('what the people who run the server see in the app is what "Who can see you
   assert.equal((await sender.get('/operator/queue')).status, 404);
 
   const who = policy.WHO_CAN_SEE.map((w) => w.who);
-  assert.deepEqual(who, ['The people it was sent to, and anyone they pass their link to.', 'The person who sent it.', 'The owner and the admins of the sender\'s account.', 'The people who run this server.', 'The companies that carry it.', 'Nobody else.']);
-  const operator = policy.WHO_CAN_SEE[3].what;
+  assert.deepEqual(who, ['The people it was sent to, and anyone they pass their link to.', 'The person who sent it.', 'The owner and the admins of the sender\'s account.', 'Archive addresses the sender\'s account chose.', 'The people who run this server.', 'The companies that carry it.', 'Nobody else.']);
+  const operator = policy.WHO_CAN_SEE[4].what;
   assert.match(operator, /no screen and no function that opens a document/);
   assert.match(operator, /adds no encryption of its own/, 'and it says that the disk is another matter');
   assert.match(operator, /promise by the people who run the server/, 'a rule the software cannot enforce is called a promise');
@@ -91,7 +91,7 @@ test('what the people who run the server see in the app is what "Who can see you
   assert.deepEqual(Object.keys(disputed).sort(), ['admins', 'dispute_at', 'free_with', 'id', 'name', 'plan', 'signatures'], 'if this list grows, the sentence has to grow with it');
   for (const [field, words] of [['plan', /its plan/], ['free_with', /a free code it uses/], ['dispute_at', /a card dispute/], ['signatures', /how many signatures it has left/], ['admins', /names and addresses of its owner and admins/], ['trusted_at', /marked as trusted/], ['suspended_at', /paused/], ['last_payment', /its last payment/], ['renews_at', /renews or ends and when/]] as [string, RegExp][])
     assert.match(operator, words, `the page names ${field}`);
-  const nobody = policy.WHO_CAN_SEE[5].what;
+  const nobody = policy.WHO_CAN_SEE[6].what;
   for (const re of [/no advertising/, /sold/, /AI service/]) assert.match(nobody, re);
   // The block is printed from the one list, on the security page.
   const page = read('src/app/security/page.tsx');

@@ -22,10 +22,10 @@ export const ARCHIVE_REFUSED_DAYS = 30;
 /** How long "this was not me" can be undone from the same page. */
 export const ARCHIVE_UNDO_MINUTES = 60;
 
-/** What stands in a copy where a link was. */
-export const ARCHIVE_LINK_REMOVED = '[link removed in the archive copy]';
+/** What stands in a copy where a link was (the designer's words, research/ux-notes.json, "ds-mail-records"). */
+export const ARCHIVE_LINK_REMOVED = '(link removed in this copy)';
 /** What stands in a copy where a security code or a one-time code was. */
-export const ARCHIVE_CODE_REMOVED = '[code removed in the archive copy]';
+export const ARCHIVE_CODE_REMOVED = '(code removed in this copy)';
 /** The start of the subject of every copy, so a mailbox rule can file them. */
 export const ARCHIVE_SUBJECT = 'Archive copy: ';
 
@@ -34,6 +34,11 @@ export const archiveMoment = (iso: string): string => {
   const d = new Date(iso);
   return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })} at ${d.toISOString().slice(11, 16)} UTC`;
 };
+
+/** The one line of the card in Settings about what a copy leaves out. */
+export const ARCHIVE_ONE_LINE = 'Each copy has the signing link taken out.';
+/** What an admin reads after adding an address. */
+export const ARCHIVE_ADDED = 'We sent a link to confirm it. Copies start once it is confirmed.';
 
 /** The first line of every copy. */
 export const archiveFirstLine = (to: string, at: string): string => `Archive copy of an email sent to ${to} on ${archiveMoment(at)}.`;

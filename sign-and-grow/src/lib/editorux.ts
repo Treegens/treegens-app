@@ -181,6 +181,8 @@ export const checkHasCode = (value: string) => !!CHECK_LIST.find((x) => x.value 
 
 /** Said under the list when there is no check at all. */
 export const NO_CHECK_SAYS = 'With no check, the document opens for whoever has the link.';
+/** Said under the list for an access code alone. A one-time code has its own sentence (src/lib/checks.ts). */
+export const ACCESS_CODE_SAYS = 'You tell them the code yourself, so it is as strong as the way you pass it on.';
 
 // ---- Step 3: what is said next to More options ---------------------------------------------------------------------
 

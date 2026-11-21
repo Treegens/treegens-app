@@ -63,8 +63,10 @@
     ".next-build-simplify-start/dev/types/**/*.ts",
     ".next-dragdrop/types/**/*.ts",
     ".next-dragdrop/dev/types/**/*.ts",
-    ".next-verify-simplify-start/types/**/*.ts",
-    ".next-verify-simplify-start/dev/types/**/*.ts"
+    ".next-verify-impact/types/**/*.ts",
+    ".next-verify-impact/dev/types/**/*.ts",
+    ".next-repair-simplify-editor/types/**/*.ts",
+    ".next-repair-simplify-editor/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

@@ -759,11 +759,11 @@ async function flowA(f, pdf) {
 
   await f.press(byRole(box, 'link', /send (for signature|a document)|new envelope|send your first/i), 'Send for signature', () => box.waitForURL(/\/edit/));
   await f.screen('Editor, step 1 (Add)');
-  await f.file(box.locator('input[type=file]').first(), pdf, 'the PDF, from the drop zone', () => box.getByLabel(/document name/i).first().waitFor());
+  await f.file(box.locator('input[type=file]').first(), pdf, 'the PDF, from the drop zone', () => box.getByLabel(/^(document|file) name$/i).first().waitFor());
   await f.state('Editor, step 1, after the upload');
-  if (!(await visible(box.getByLabel(/recipient name/i)).count())) await f.press(byRole(box, 'button', /add (a )?recipient|add (a )?person|add signer/i), 'Add recipient');
-  await f.type(visible(box.getByLabel(/recipient name/i)).first(), SIGNER_PHONE.name, 'recipient name');
-  await f.type(visible(box.getByLabel(/recipient email/i)).first(), SIGNER_PHONE.email, 'recipient email');
+  if (!(await visible(box.getByLabel(/^(recipient )?name$/i)).count())) await f.press(byRole(box, 'button', /add (a )?recipient|add (a )?person|add signer/i), 'Add recipient');
+  await f.type(visible(box.getByLabel(/^(recipient )?name$/i)).first(), SIGNER_PHONE.name, 'recipient name');
+  await f.type(visible(box.getByLabel(/^(recipient )?email$/i)).first(), SIGNER_PHONE.email, 'recipient email');
   // The subject is on step 1 in the baseline, and on step 3 since simplify-editor moved it there.
   const subject = visible(box.getByLabel(/subject/i)).first();
   if (await subject.count()) {
@@ -1259,10 +1259,10 @@ async function inventory(browser, page, ids) {
   const { envelope } = await apiIn(page, '/envelopes', { body: { kind: 'envelope' } });
   await page.goto(`${BASE}/app/envelopes/${envelope.id}/edit`);
   await page.locator('input[type=file]').first().setInputFiles(ids.pdf);
-  await page.getByLabel(/document name/i).first().waitFor();
-  if (!(await visible(page.getByLabel(/recipient name/i)).count())) await byRole(page, 'button', /add recipient/i).click();
-  await visible(page.getByLabel(/recipient name/i)).first().fill('Ivy Inventory');
-  await visible(page.getByLabel(/recipient email/i)).first().fill(`ivy-${STAMP}@example.org`);
+  await page.getByLabel(/^(document|file) name$/i).first().waitFor();
+  if (!(await visible(page.getByLabel(/^(recipient )?name$/i)).count())) await byRole(page, 'button', /add recipient/i).click();
+  await visible(page.getByLabel(/^(recipient )?name$/i)).first().fill('Ivy Inventory');
+  await visible(page.getByLabel(/^(recipient )?email$/i)).first().fill(`ivy-${STAMP}@example.org`);
   const more = byRole(page, 'button', /more options/i);
   if (await more.count()) await more.click();
   const order = page.getByText(/signing order/i).first();

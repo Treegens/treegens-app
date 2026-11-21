@@ -1,7 +1,7 @@
 'use client';
 import { useId, useState } from 'react';
 import { CHECK_PROVES, PHONE_HOW, normalPhone } from '@/lib/checks';
-import { checkChoices, checkHasCode, checkPatch, checkValue, NO_CHECK_SAYS } from '@/lib/editorux';
+import { checkChoices, checkHasCode, checkPatch, checkValue, ACCESS_CODE_SAYS, NO_CHECK_SAYS } from '@/lib/editorux';
 import type { KeptForPerson } from '@/lib/tplroles';
 
 // Two pickers of a person's More in step 1 (PersonMore.tsx). "Check who signs" is one list, so nobody has to put an
@@ -47,7 +47,8 @@ export function CheckPick({ r, name, kept, textsOn, open, onChange }: { r: any; 
       {code && <label className="f" style={{ margin: '10px 0 0' }}><span>Access code <span className="hint">{kept?.code ? '(from the template: you can change it, not take it off)' : '(at least 4 characters, a code you tell them yourself)'}</span></span><input value={r.access_code || ''} maxLength={50} required onChange={(e) => onChange({ access_code: e.target.value })} /></label>}
       {verify === 'sms_code' && !open && <PhoneBox r={r} onChange={onChange} />}
       <p id={saysId} className="muted small ed-check-says" aria-live="polite">
-        {value === 'none' ? NO_CHECK_SAYS : [code ? says('access_code') : '', verify !== 'none' ? `${says(verify)} Nothing is sent until they open the link and ask for the code.` : ''].filter(Boolean).join(' ')}
+        {/* One short note: what a one-time code shows and does not show, or what an access code rests on. */}
+        {value === 'none' ? NO_CHECK_SAYS : verify !== 'none' ? `${says(verify)} Nothing is sent until they open the link and ask for the code.` : ACCESS_CODE_SAYS}
       </p>
       {verify === 'sms_code' && open && <p className="muted small ed-check-says">{TPL_PHONE}</p>}
       {verify === 'sms_code' && !textsOn && <p className="notice warn small ed-check-says" role="status">{NO_TEXTS} Choose a code by email or no check.</p>}

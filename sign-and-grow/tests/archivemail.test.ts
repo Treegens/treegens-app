@@ -80,7 +80,7 @@ test('an address gets nothing until someone with its inbox confirms it, and only
   assert.equal(added.status, 200, JSON.stringify(added.data));
   assert.equal(added.data.address.email, records);
   assert.equal(added.data.address.state, 'waiting');
-  assert.match(added.data.message, /Nothing is sent there until someone with that inbox presses Confirm/);
+  assert.equal(added.data.message, 'We sent a link to confirm it. Copies start once it is confirmed.');
   const ask = db.get('SELECT * FROM emails WHERE to_email=? ORDER BY id DESC LIMIT 1', records);
   assert.match(ask.subject, /^Confirm: copies of emails from/);
   assert.ok(ask.expires_at, 'the link in it runs out');
@@ -229,7 +229,7 @@ test('the copy takes out links and codes, keeps the rest, and says what it is', 
   assert.equal(all.includes('TOKENabcdefghijklmnop1234'), false);
   assert.equal(all.includes('ABCD'), false);
   assert.equal(all.includes('482913'), false);
-  assert.match(m.heading, new RegExp(`^${ARCHIVE_CODE_REMOVED.replace(/[[\]]/g, '\\$&')} is your code$`));
+  assert.match(m.heading, new RegExp(`^${ARCHIVE_CODE_REMOVED.replace(/[()]/g, '\\$&')} is your code$`));
   assert.ok(m.lines.includes(`Review and sign: ${ARCHIVE_LINK_REMOVED}`));
   assert.ok(m.lines.includes(`Lease (from Jo): ${ARCHIVE_LINK_REMOVED}`));
   assert.ok(m.lines.includes(`Security code: ${ARCHIVE_CODE_REMOVED}`));
@@ -338,10 +338,10 @@ test('every kind of email about an envelope is copied to each confirmed address,
   }
   // The one-time code itself, and the link in the request: gone, said so.
   const codeCopy = copiesTo(A).find((x) => x.subject.startsWith('Archive copy: Your code to open'))!;
-  assert.match(codeCopy.html, /\[code removed in the archive copy\] is your code/);
+  assert.match(codeCopy.html, /\(code removed in this copy\) is your code/);
   const request = copiesTo(A).find((x) => x.subject === 'Archive copy: Parking permit')!;
-  assert.match(JSON.parse(request.payload).text, /Review and sign: \[link removed in the archive copy\]/);
-  assert.match(request.html, /Security code: \[code removed in the archive copy\]/);
+  assert.match(JSON.parse(request.payload).text, /Review and sign: \(link removed in this copy\)/);
+  assert.match(request.html, /Security code: \(code removed in this copy\)/);
   // Nothing about an envelope of another account, and no copy of a copy.
   assert.equal(db.get(`SELECT COUNT(*) n FROM emails WHERE to_email IN (?,?) AND archive_envelope IS NOT NULL AND archive_envelope NOT IN (${ids.map(() => '?').join(',')})`, A, B, ...ids).n, 0);
   assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE subject LIKE 'Archive copy: Archive copy:%'").n, 0);
@@ -653,4 +653,89 @@ test('/security says what the encryption on the way to the mail provider covers,
     assert.doesNotMatch(p.text, /encrypted end to end|end-to-end encrypted/i);
   }
   assert.match(mailTlsPoint({ SMTP_URL: 'smtp://relay.example:587?tls.rejectUnauthorized=false', SMTP_REQUIRE_TLS: '1' })!.text, /does not check the mail provider's certificate/);
+});
+
+// ---- 5. The words and the screens say what the code does, in the designer's words ----------------------------------
+
+test('the copy, the card, /security, the API description and the README use the same words and numbers', async () => {
+  const fs = await import('node:fs');
+  const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+  const lib = await import('../src/lib/archivemail.ts');
+  // The designer's correction (research/ux-notes.json, "ds-mail-records"): these exact words.
+  assert.equal(ARCHIVE_LINK_REMOVED, '(link removed in this copy)');
+  assert.equal(lib.ARCHIVE_ONE_LINE, 'Each copy has the signing link taken out.');
+  assert.equal(lib.ARCHIVE_ADDED, 'We sent a link to confirm it. Copies start once it is confirmed.');
+  const en = JSON.parse(read('src/locales/en.json'));
+  assert.equal(en['settings.archive.title'], 'Copies of every email');
+
+  // The card: on the Records and data page of Settings, marked as this feature's, one line of explanation, no
+  // expander and no filled button (the page has its one main button already), and never the words to avoid.
+  const page = read('src/app/app/settings/page.tsx');
+  assert.match(page, /\{tab === 'data' && <ArchiveSettings \/>\}/);
+  const card = read('src/components/settings/ArchiveSettings.tsx');
+  assert.match(card, /'data-feature': 'ds-mail-records'/);
+  assert.match(card, /'data-item': 'card'/);
+  assert.match(card, /ARCHIVE_ONE_LINE/);
+  assert.doesNotMatch(card, /btn primary|<details|data-more/);
+  assert.doesNotMatch(card, /from '@\/server|\.\.\/server/);
+  const words = Object.entries(en).filter(([k]) => k.startsWith('settings.archive.')).map(([, v]) => String(v)).join(' ');
+  assert.doesNotMatch(`${words} ${lib.ARCHIVE_ONE_LINE} ${lib.ARCHIVE_ADDED}`, /\bBCC\b|journal|\bTLS\b|—/i);
+  // Every key the card asks for is there, also the ones chosen by a condition.
+  for (const m of card.matchAll(/'(settings\.archive\.[a-z_]+)'/g)) assert.ok(en[m[1]], `${m[1]} is in en.json`);
+  // Nothing of this is on a sender's daily path or a signer's screen.
+  for (const f of ['src/components/Editor.tsx', 'src/app/sign/[token]/page.tsx', 'src/app/app/envelopes/[id]/page.tsx']) assert.doesNotMatch(read(f), /archive-addresses|ArchiveSettings/, f);
+
+  // The page the link opens asks before anything changes: it reads with GET and changes only on a press.
+  const view = read('src/app/archive-confirm/ConfirmView.tsx');
+  assert.match(view, /api\(`\/public\/archive-confirm\?token=/);
+  assert.match(view, /onClick=\{\(\) => answer\('yes'\)\}/);
+  assert.equal((view.match(/btn primary/g) || []).length, 1);
+  assert.doesNotMatch(view, /from '@\/server|—/);
+
+  // /security lists archive addresses under "Who can see your documents", with the number the server enforces.
+  const policy = await import('../src/lib/policy.ts');
+  const who = policy.WHO_CAN_SEE.find((w) => /Archive addresses/.test(w.who))!;
+  assert.ok(who, 'archive addresses are on the list');
+  assert.match(who.what, new RegExp(`up to ${ARCHIVE_MAX_ADDRESSES} email addresses`));
+  assert.match(who.what, /confirmed from its own inbox before it gets anything/);
+  assert.match(who.what, /signing link and the codes taken out/);
+  assert.match(who.what, /Signers are not told/);
+  const security = read('src/app/security/page.tsx');
+  assert.match(security, /mailTlsPoint\(\)/);
+  assert.match(security, /mailTls && !mailTls\.not && <Point/);
+  assert.match(security, /mailTls\?\.not && <Point/);
+
+  // The API description, the settings file and the README name what exists.
+  const { openapi } = await import('../src/server/openapi.ts');
+  const paths = (openapi() as any).paths;
+  assert.ok(paths['/account/archive-addresses'].get && paths['/account/archive-addresses'].post);
+  assert.ok(paths['/account/archive-addresses/{id}'].delete);
+  assert.match(paths['/account/archive-addresses'].get.description, /\(link removed in this copy\)/);
+  assert.match(read('.env.example'), /^# SMTP_REQUIRE_TLS=1$/m);
+  const readme = read('README.md');
+  assert.match(readme, /^\| `SMTP_REQUIRE_TLS` \|/m);
+  assert.match(readme, /\(link removed in this copy\)/);
+  for (const text of [readme, read('.env.example'), security, JSON.stringify(policy.WHO_CAN_SEE)]) assert.doesNotMatch(text, /(emails?|copies) (are|is) encrypted end to end|end-to-end encrypted email/i);
+});
+
+test('a link that was answered works for nobody else, a member cannot add or remove, and a copy is never copied again', async () => {
+  const owner = await person('Ana Admin', 'ana@parish.example');
+  const added = await owner.post('/account/archive-addresses', { email: 'clerk@parish.example' });
+  const tok = confirmToken('clerk@parish.example');
+  assert.equal((await browser().post('/public/archive-confirm', { token: tok, answer: 'yes' })).status, 200);
+  // The same link a second time, from a forwarded email say: it confirms and refuses nothing any more.
+  assert.equal((await browser().get(`/public/archive-confirm?token=${tok}`)).status, 404);
+  assert.equal((await browser().post('/public/archive-confirm', { token: tok, answer: 'no' })).status, 404);
+  assert.equal((await owner.get('/account/archive-addresses')).data.addresses[0].state, 'confirmed');
+  // Someone who is not signed in to the account reads and changes nothing.
+  const stranger = await person('Sy Stranger', 'sy@elsewhere.example');
+  assert.equal((await stranger.call('DELETE', `/account/archive-addresses/${added.data.address.id}`)).status, 404);
+  assert.equal((await stranger.get('/account/archive-addresses')).data.addresses.length, 0);
+  assert.equal((await browser().get('/account/archive-addresses')).status, 401);
+  // A copy is an email about no envelope, so it is never copied in turn, however many addresses there are.
+  await confirmed(owner, 'second@parish.example');
+  const e = await simple(owner, 'pat@resident.example', { send: true, subject: 'Hall hire' });
+  const all = db.all('SELECT to_email, subject FROM emails WHERE archive_envelope=?', e.id);
+  assert.equal(all.length, 2 * originals([e.id]).length);
+  assert.equal(all.some((m: any) => m.subject.startsWith('Archive copy: Archive copy: ')), false);
 });
