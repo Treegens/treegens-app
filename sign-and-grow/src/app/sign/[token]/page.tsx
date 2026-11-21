@@ -23,7 +23,6 @@ import { docUrl, allOnScreen } from '@/components/sign/fields';
 import { strikeClass } from '@/lib/strike';
 import { pageBoxes } from '@/components/sign/pdfText';
 import { NoViewer } from '@/components/sign/NoViewer';
-import { ZoomControl } from '@/components/sign/Zoom';
 import { isConnectionError, isAlreadyFinished, finishLanded, finishNotSent, finishUnknown, saveNotSent, keepAnswers, readAnswers, dropAnswers, FINISH_RETRY_MS } from '@/components/sign/offline';
 import { CANNOT_REACH, sameFieldAgain } from '@/components/sign/stuck';
 import { SIGNING_ONLINE } from '@/lib/mobile';
@@ -42,12 +41,13 @@ import { StampDialog } from '@/components/stamps/StampDialog';
 import { stampTurn, turnStyle } from '@/lib/stamps';
 import { layers } from '@/lib/stacked';
 // The page made simpler: Other actions in one order, Finish that signs unless something needs a look, Next that opens.
-import { otherActions, lookAgain, nextOpens, laterAtConsent, GUIDE_NEXT, GUIDE_FINISH, type ActionKey } from '@/components/sign/actions';
+import { otherActions, lookAgain, nextOpens, nameDiffers, laterAtConsent, GUIDE_NEXT, GUIDE_FINISH, FLAG_MARGIN, type ActionKey } from '@/components/sign/actions';
 import { FixName } from '@/components/sign/dialogs';
+import { MoreButton, MoreDialog } from '@/components/sign/More';
 import { yourMoment } from '@/lib/dates';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
-type Open = '' | 'menu' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback' | 'help';
+type Open = '' | 'menu' | 'more' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback' | 'help';
 const SAVE_TEXT: Record<Save, string> = { idle: 'Saves as you go', pending: 'Saving', saving: 'Saving', saved: 'Saved', error: 'Not saved yet' };
 const FLAG: Record<string, string> = { signature: 'Sign here', initials: 'Initial here', checkbox: 'Tick here', radio: 'Choose one', dropdown: 'Choose here', attachment: 'Attach here', stamp: 'Stamp here' };
 // Phones, and anything else used mainly by touch, get a sheet with a large input instead of typing into the page.
@@ -858,8 +858,21 @@ export default function SignPage() {
   const go = (o: Open) => () => setOpen(o);
   const declineLabel = me.role === 'approver' ? 'Decline to approve' : 'Decline to sign';
   // One list in one order, no descriptions, never more than six (src/components/sign/actions.ts). Gone from it, not
-  // from the page: Download and the view (below, on the document), Help (the dialog's own button), "Change my
-  // signature" (tap the signature itself) and "Stop reminder emails" (the note after Finish later, and every reminder).
+  // from the page: Download and the view (the toolbar's More, sign/More.tsx), Help (the dialog's own button), "Change
+  // my signature" (tap the signature itself) and "Stop reminder emails" (the note after Finish later, and every
+  // reminder). Under the list, on the document: the name this person signs as, with "Fix my name".
+  const rename = async (name: string) => {
+    // A name that reads like a different person's is not changed: the sender is asked instead, and the
+    // answer says so in words. Those words are handed back to be shown under the name.
+    const r = await api(`${base}/name`, { body: { name } });
+    if (r?.applied === false) return String(r.message || 'We did not change it, and asked the sender instead.');
+    // A new spelling is a newer version of the envelope. This page made the change and shows it, so it
+    // carries on with that version. Anyone else who has the page open is asked to look again.
+    if (r?.version != null) version.current = r.version;
+    who.current = r?.name || name; // the same person under a corrected spelling: their marks in this tab stay
+    setData((d: any) => (d ? { ...d, version: r?.version ?? d.version, recipient: { ...d.recipient, name: r?.name || name } } : d));
+    return '';
+  };
   const finishLater = async () => {
     const ok = await flush();
     setOpen('');
@@ -890,21 +903,10 @@ export default function SignPage() {
     help: { key: 'help', label: 'Help', icon: 'mail', onClick: go('help') },
   };
   const menu: MenuItem[] = otherActions(me, { stage, deadline: !!env.expires_at }).map((k) => ACTION[k]);
-  // How the document is shown, and its download: in Other actions, so the pages start near the top of a phone.
-  const docTools = stage === 'sign' ? (
-    <div className="sg-menu-doc" role="group" aria-labelledby="sg-menu-doc-h">
-      <h3 id="sg-menu-doc-h">The document</h3>
-      <div className="sg-seg" role="group" aria-label="How to read the document">
-        <button type="button" aria-pressed={view === 'doc'} onClick={() => (chooseView('doc'), setOpen(''))}>Document</button>
-        <button type="button" aria-pressed={view === 'text'} onClick={() => (chooseView('text'), setOpen(''))}>Text view</button>
-      </div>
-      {view === 'doc' && <ZoomControl zoom={zoom} onZoom={(z) => (setOpen(''), setZoom(z))} />}
-      <a className="btn" href={downloadUrl}><Icon name="download" /> Download</a>
-    </div>
-  ) : undefined;
   const other = <button type="button" className="btn sm sg-other" aria-haspopup="dialog" onClick={go('menu')}>Other actions</button>;
   const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} when={env.expires_at ? `Open until ${yourMoment(env.expires_at, deviceZone())}.` : undefined}
-    doc={docTools} onHelp={me.role === 'witness' ? undefined : go('help')} back={stage === 'consent' ? 'Back' : 'Back to the document'} />;
+    onHelp={me.role === 'witness' ? undefined : go('help')} back={stage === 'consent' ? 'Back' : 'Back to the document'}
+    foot={stage === 'sign' && me.role !== 'viewer' ? <p className="sg-menu-as">You are {me.role === 'approver' ? 'approving' : 'signing'} as <b><bdi>{me.name}</bdi></b>. <FixName name={me.name} onRename={rename} /></p> : undefined} />;
   // After Finish later: the way back, and the one place on the page to stop reminder emails. Someone with no address
   // gets no reminder emails, so there is nothing for them to stop.
   const laterNote = later && (
@@ -920,21 +922,22 @@ export default function SignPage() {
     const wording = consentWording(sender.name, acts);
     // The sender, named once. The account's name only when it says something more ("at Acme Ltd"), never the
     // "Rosa Gardener's workspace" every new account is called.
-    const org = data.brand?.name && !String(data.brand.name).toLowerCase().includes(String(sender.name).toLowerCase()) ? data.brand.name : '';
+    const org = data.brand?.name && !/['’]s workspace$/i.test(String(data.brand.name).trim()) && !String(data.brand.name).toLowerCase().includes(String(sender.name).toLowerCase()) ? data.brand.name : '';
     return (
-      <Shell data={data} bar={other} footer={report} helpInNewTab>
+      <Shell data={data} bar={other} footer={report} helpInNewTab plainBar>
         {notice}
         {laterNote}
         <div className="card sg-consent">
           {ask && <p className="sg-kicker">{ask}</p>}
           <h1 className="serif" id="sg-h1" tabIndex={-1}>{env.subject}</h1>
           <p className="sg-from">From <b>{sender.name}</b>{org ? <> at {org}</> : null}, <a href={`mailto:${sender.email}`}>{sender.email}</a></p>
-          <p className="muted small sg-for">{me.link_by_sender ? <>For {me.name}. {sender.name} sent you this link themselves.</> : <>For {me.name}, {myEmail}.</>} Not expecting it? Do not sign, and <button type="button" className="sg-link" onClick={go('report')}>report it</button>.</p>
+          {/* "Report this request" is in the footer of every screen, so it is not said a second time here. */}
+          <p className="muted small sg-for">{me.link_by_sender ? <>For {me.name}. {sender.name} sent you the link themselves, not by email from us.</> : <>For {me.name}, {myEmail}.</>}</p>
           {data.message && <div className="sg-quote"><span className="muted small">Message from {sender.name}</span>{data.message}</div>}
           {data.note && <div className="notice sg-gap"><b>Private note for you:</b> {data.note}</div>}
           {me.role === 'inperson' && <div className="notice warn sg-gap">In-person signing. Hand this device to <b>{me.name}</b> now. {SIGNING_ONLINE}</div>}
           {/* One way to read it first: the PDF in a new tab, where it can be saved or printed. */}
-          <p className="sg-read"><a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="download" /> Download or print<span className="sg-vh"> (opens in a new tab)</span></a></p>
+          <p className="sg-read"><a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="download" /> Download or print<span className="sg-vh"> (new tab)</span></a></p>
           {/* The words come from src/lib/policy.ts with a version, and the version goes back with the agreement, so the
               audit trail says which wording this person was shown. */}
           <div id="sg-legal">
@@ -985,6 +988,7 @@ export default function SignPage() {
           <div><b>{count}</b><span aria-hidden="true"> · {SAVE_TEXT[save]}</span></div>
         </div>
       )}
+      <span className="sg-wide"><MoreButton open={open === 'more'} onOpen={go('more')} /></span>
       {other}
       <span className="sg-wide">{mainButton(false)}</span>
     </>
@@ -992,6 +996,7 @@ export default function SignPage() {
   const bottom = (
     <>
       {acts && <div className="sg-bottom-info"><b>{count}</b><span aria-hidden="true">{SAVE_TEXT[save]}</span></div>}
+      <MoreButton open={open === 'more'} onOpen={go('more')} className="btn sg-morebtn" />
       {mainButton(true)}
     </>
   );
@@ -1093,7 +1098,9 @@ export default function SignPage() {
   const flagSide: FlagSide = !nextField ? 'above' : (() => {
     const p = printed?.key === flagKey ? printed : null;
     const others = [...data.others, ...fields].filter((g: any) => g.id !== nextField.id && g.document_id === nextField.document_id && g.page === nextField.page);
-    return placeFlag(nextField, p ? { w: 104 / p.w, h: 27 / p.h } : { w: 0.3, h: 0.045 }, p ? { x: 10 / p.w, y: 8 / p.h } : { x: 0.025, y: 0.012 }, [...(p?.boxes || []), ...others]);
+    // Room is kept around the printed words too (FLAG_MARGIN in actions.ts), so the pointer never stands right beside a label.
+    return placeFlag(nextField, p ? { w: 104 / p.w, h: 27 / p.h } : { w: 0.3, h: 0.045 }, p ? { x: 10 / p.w, y: 8 / p.h } : { x: 0.025, y: 0.012 }, [...(p?.boxes || []), ...others],
+      p ? { x: FLAG_MARGIN.x / p.w, y: FLAG_MARGIN.y / p.h } : undefined);
   })();
   const flagAt = (f: any) => (flagSide === 'right' ? { left: `${(f.x + f.w) * 100}%`, top: `${(f.y + f.h / 2) * 100}%` }
     : flagSide === 'left' ? { left: `${f.x * 100}%`, top: `${(f.y + f.h / 2) * 100}%` }
@@ -1183,8 +1190,8 @@ export default function SignPage() {
         {!allShown && !hasNext && <> The document is still loading: you can {acts ? 'finish' : me.role === 'approver' ? 'approve' : 'confirm'} as soon as its pages are on your screen. If they do not appear, reload this page.</>}
       </p>
       {laterNote}
-      {/* The view, the size of the pages, Download and Questions and comments are in Other actions, so the pages start
-          near the top of a phone. Someone on a keyboard or a screen reader meets the text view right here, before the
+      {/* The view, the size of the pages and Download are in the toolbar's More (sign/More.tsx), and Questions and
+          comments in Other actions, so the pages start near the top of a phone. Someone on a keyboard or a screen reader meets the text view right here, before the
           pages, which are pictures: this button shows itself when it has the focus, like the skip link. */}
       {view === 'doc' && <button type="button" className="sg-skip sg-skip-text" onClick={() => chooseView('text')}>The pages below are pictures. Read the document as text instead</button>}
 
@@ -1206,7 +1213,8 @@ export default function SignPage() {
           others={(docId, page, near) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} senderName={sender.name} near={near} />} />
       )}
       {/* No impact figure here: one tree line at most, by Finish, and the Done screen (research/ux.json, "ux:check"). */}
-      <p className="muted small center sg-envelope">Envelope {env.id}{env.expires_at ? ` · open until ${yourMoment(env.expires_at, deviceZone())}` : ''}</p>
+      {/* No internal number either: a signer who writes to us is known by the code in their email (help_code). */}
+      {env.expires_at && <p className="muted small center sg-envelope">Open until {yourMoment(env.expires_at, deviceZone())}</p>}
 
       {sheetField && (
         <FieldSheet field={sheetField} dateFormat={env.date_format} value={values[sheetField.id] || ''} onChange={(v) => set(sheetField.id, v)} onDone={() => setSheet(null)} onNext={sheetTarget ? () => sheetNext(sheetField.id) : undefined} />
@@ -1217,30 +1225,22 @@ export default function SignPage() {
           onChange={() => { setSignedField(null); changeMark(signed.type); }} />
       )}
       {menuDialog}
+      {open === 'more' && <MoreDialog view={view} onView={chooseView} zoom={zoom} onZoom={setZoom} downloadUrl={downloadUrl} onClose={() => setOpen('')} />}
       {dialogs}
       {open === 'review' && (
         <ReviewDialog me={me} sender={sender} items={items} sig={sig} ini={ini} approving={me.role === 'approver'} busy={busy} error={finishError}
-          note={<>{questions > 0 ? <OpenQuestion sender={sender.name} onShow={go('ask')} /> : null}<WitnessName me={me} base={base} onNamed={load} /></>}
+          note={<>{nameDiffers(typedName, me.name) && <div className="notice warn sg-problem" role="status"><b>Check your name.</b> Your typed signature reads <bdi>{typedName}</bdi>, and this document is for <bdi>{me.name}</bdi>. If your name is spelled wrong on the document, choose Fix my name above. If the signature is what you want, finish as it is.</div>}
+            {questions > 0 ? <OpenQuestion sender={sender.name} onShow={go('ask')} /> : null}<WitnessName me={me} base={base} onNamed={load} /></>}
           usesSig={fields.some((f) => f.type === 'signature' && filled(f))} usesIni={fields.some((f) => f.type === 'initials' && filled(f))}
           onChangeSig={changeMark} onBack={() => setOpen('')} onFinish={complete}
           printCheck={() => api(`${base}/print-check`, { body: { values } })}
-          onRename={async (name) => {
-            // A name that reads like a different person's is not changed: the sender is asked instead, and the
-            // answer says so in words. Those words are handed back to be shown under the name.
-            const r = await api(`${base}/name`, { body: { name } });
-            if (r?.applied === false) return String(r.message || 'We did not change it, and asked the sender instead.');
-            // A new spelling is a newer version of the envelope. This page made the change and shows it, so it
-            // carries on with that version. Anyone else who has the page open is asked to look again.
-            if (r?.version != null) version.current = r.version;
-            who.current = r?.name || name; // the same person under a corrected spelling: their marks in this tab stay
-            setData((d: any) => (d ? { ...d, version: r?.version ?? d.version, recipient: { ...d.recipient, name: r?.name || name } } : d));
-            return '';
-          }} />
+          onRename={rename} />
       )}
       {adopt && (
         <AdoptSignature kind={adopt.kind} name={me.name} saved={adopt.saved} onClose={() => setAdopt(null)}
-          onDone={(png) => {
-            if (adopt.kind === 'signature') setSig(png);
+          onDone={(png, typed) => {
+            // A typed signature under another name than the one on the document: looked at once more at Finish.
+            if (adopt.kind === 'signature') (setSig(png), setTypedName(typed ?? null));
             else setIni(png);
             // Made, or looked at and confirmed, in this tab: from here on a tap puts it on a field directly.
             setSeen((s) => ({ ...s, [adopt.kind]: true }));

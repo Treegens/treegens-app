@@ -201,8 +201,11 @@ const overlap = (a: Box, b: Box) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) -
  * that stays on the page and covers nothing wins, where `taken` is everything it must not sit on: the printed lines
  * of the page and the other fields. When every side covers something, the one that covers least is used. All
  * numbers are fractions of the page; `flag` is the pointer's own size and `gap` the space between it and the field.
+ * `margin` is the room kept clear around everything in `taken`: a pointer that stands right beside a printed label,
+ * on the same line, reads as that label's answer ("Date: Sign here"), so that counts as covering it too.
  */
-export function placeFlag(field: Box, flag: { w: number; h: number }, gap: { x: number; y: number }, taken: Box[]): FlagSide {
+export function placeFlag(field: Box, flag: { w: number; h: number }, gap: { x: number; y: number }, taken: Box[], margin: { x: number; y: number } = { x: 0, y: 0 }): FlagSide {
+  if (margin.x || margin.y) taken = taken.map((t) => ({ x: t.x - margin.x, y: t.y - margin.y, w: t.w + 2 * margin.x, h: t.h + 2 * margin.y }));
   const x = Math.max(0, Math.min(field.x, 1 - flag.w));
   const mid = field.y + field.h / 2 - flag.h / 2;
   const spots: [FlagSide, Box][] = [

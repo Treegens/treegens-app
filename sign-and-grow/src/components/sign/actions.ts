@@ -100,3 +100,11 @@ export const laterAtConsent = (bySender: boolean): string =>
 /** The guide above the document, in one short sentence. */
 export const GUIDE_NEXT = 'Choose Next to go to each place that needs you.';
 export const GUIDE_FINISH = 'Everything needed is filled in. Choose Finish to sign and send it.';
+
+// ---- The "Sign here" pointer ---------------------------------------------------------------------------------------
+
+/**
+ * Room kept clear around the printed words of the page when the pointer is placed (placeFlag in fields.ts), in CSS
+ * pixels: 18 across, so it never stands right beside a label on the same line, and 3 up and down.
+ */
+export const FLAG_MARGIN = { x: 18, y: 3 };

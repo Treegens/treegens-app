@@ -303,7 +303,7 @@ export const consentAuditNote = (version: string, stated = true, language: strin
   `${stated ? `Wording ${version}` : `The screen did not say which wording it showed. The wording in use was ${version}`}, in ${languageWords(language)}, as printed on the help page under "What do I agree to before I sign?".${named ? '' : ' The screen named a language this wording does not exist in, so this names the English wording.'}`;
 /** The language an audit line written by consentAuditNote names, or English for a line from before languages were recorded. */
 export const consentLanguageOf = (detail: unknown): string => normalizeLocale(/, in [^(),]*\(([A-Za-z0-9-]{2,35})\), as printed/.exec(String(detail ?? ''))?.[1]) || SOURCE_LOCALE;
-/** The line under "Adopt and sign". It says what the mark is, not what a court will make of it. */
+/** The line next to "Sign" in the signature dialog. It says what the mark is, not what a court will make of it. */
 export const adoptLine = (word: 'signature' | 'initials'): string => `I agree that this mark stands for my ${word}.`;
 
 // ---- Language ----------------------------------------------------------------------------------------

@@ -5,7 +5,8 @@ import { Icon } from '@/components/sign/parts';
 
 // The toolbar's More on the signing page (research/ux-charter.md, 2.6): how the document is shown, the size of its
 // pages, and its download. They used to stand in a row above the document and took the top of a phone screen.
-// Never more than six lines (tests/ux/flows.cjs counts them): two views, three sizes, one download. Questions and
+// Never more than six lines (tests/ux/flows.cjs counts them): two views, three sizes, one download. The dialog's
+// own Close is the way back, so there is no seventh. Questions and
 // comments is in Other actions, once (src/components/sign/actions.ts).
 
 /** The button. `data-more="screen"` marks it as this screen's one More, closed until it is pressed. */
@@ -40,7 +41,6 @@ export function MoreDialog({ view, onView, zoom, onZoom, downloadUrl, onClose }:
         )}
         <a className="btn" href={downloadUrl}><Icon name="download" /> Download the document</a>
       </div>
-      <div className="actions"><button type="button" className="btn" onClick={onClose}>Back to the document</button></div>
     </Dialog>
   );
 }

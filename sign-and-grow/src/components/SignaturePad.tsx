@@ -109,7 +109,11 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Point[]) {
 
 // `saved` is a stored signature the person may want to use again. It is never put on the page by itself: it is
 // shown here first, as the first choice, and only used when the person confirms it with the button.
-export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: 'signature' | 'initials'; name: string; saved?: SavedMark | null; onDone: (png: string) => void; onClose: () => void }) {
+// The dialog is called "Your signature" and its button "Sign" (research/ux-charter.md, section 4: no "adopt").
+// `doneLabel` is the button where nothing is signed, such as "Save" in Settings. `onDone` also gets the name that was
+// typed, when the signature was typed: the signing page compares it with the name on the document.
+export function AdoptSignature({ kind, name, saved, onDone, onClose, doneLabel }: { kind: 'signature' | 'initials'; name: string; saved?: SavedMark | null; onDone: (png: string, typedText?: string) => void; onClose: () => void; doneLabel?: string }) {
+  const sign = doneLabel || (kind === 'signature' ? 'Sign' : 'Add initials');
   const initials = name.split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 4).toUpperCase();
   const word = kind === 'signature' ? 'signature' : 'initials';
   const TABS: [Tab, string][] = saved ? [['saved', 'Saved'], ...MAKE] : MAKE;
@@ -249,7 +253,7 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
       image = photo;
     }
     if (!image) return setError(`Choose Type, Draw or Upload to make your ${word}.`);
-    onDone(image);
+    onDone(image, tab === 'type' ? text.trim() : undefined);
   }
 
   function upload(file?: File) {
@@ -284,7 +288,7 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
   }
 
   return (
-    <Dialog title={kind === 'signature' ? 'Adopt your signature' : 'Adopt your initials'} onClose={onClose} wide variant="field">
+    <Dialog title={kind === 'signature' ? 'Your signature' : 'Your initials'} onClose={onClose} wide variant="field">
       <div className="tabs sg-sigtabs" role="tablist" aria-label={`How to make your ${word}`} onKeyDown={tabKey}>
         {TABS.map(([t, label]) => (
           <button key={t} type="button" role="tab" id={`${ids}-${t}`} aria-selected={tab === t} aria-controls={`${ids}-panel`} tabIndex={tab === t ? 0 : -1} className={tab === t ? 'on' : ''} onClick={() => (setTab(t), setError(''))}>{label}</button>
@@ -352,11 +356,11 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose }: { kind: '
       <div className="sg-adopt-foot">
         {error && <div className="notice err sg-problem" role="alert">{error}</div>}
         <p className="muted small sg-siglegal">
-          By choosing {tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}, {adoptLine(word)}
+          By choosing {tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : sign}, {adoptLine(word)}
         </p>
         <div className="actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn primary" onClick={adopt}>{tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : 'Adopt and sign'}</button>
+          <button type="button" className="btn primary" onClick={adopt}>{tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : sign}</button>
         </div>
       </div>
     </Dialog>

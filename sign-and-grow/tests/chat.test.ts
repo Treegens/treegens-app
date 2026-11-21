@@ -969,7 +969,7 @@ test('what someone who signs most often asks has a built-in answer that names th
     ['Where do I sign?', 'how-sign', /press Next.*Type, Draw or Upload.*Finish/],
     ['How do I draw my signature?', 'how-sign', /Type, Draw or Upload/],
     ['The Finish button does not work', 'finish-stuck', /Press Next.*Talk to a person/],
-    ['I cannot see the document', 'cannot-see', /Text view.*Download/],
+    ['I cannot see the document', 'cannot-see', /choose More.*Text view.*Download the document/],
     ['I signed by mistake', 'signed-mistake', /neither you nor the helper can take a signature back.*Write to the sender/],
     ['Stop sending me reminders', 'stop-reminders', /Stop reminder emails/],
     ['What happens after I finish?', 'after-finish', /the sender is told/],
@@ -1033,7 +1033,7 @@ test('what someone who sends most often asks has a built-in answer that names th
 });
 
 test('every control the helper names is on the screen it names it for, read from the source of that screen', () => {
-  const sign = fs.readFileSync('src/app/sign/[token]/page.tsx', 'utf8') + fs.readFileSync('src/components/sign/dialogs.tsx', 'utf8');
+  const sign = ['src/app/sign/[token]/page.tsx', 'src/components/sign/dialogs.tsx', 'src/components/sign/More.tsx'].map((f) => fs.readFileSync(f, 'utf8')).join('\n');
   const A = screens.SIGN_ACTIONS, L = screens.SIGN_LABELS;
   assert.ok(sign.includes(`label: '${A.later!.label}'`));
   assert.ok(sign.includes('`Ask ${sender.name} for more time`'), 'the page puts the sender\'s name where the helper says "the sender"');
@@ -1051,6 +1051,9 @@ test('every control the helper names is on the screen it names it for, read from
   assert.match(fs.readFileSync('src/components/sign/actions.ts', 'utf8'), /not built yet: always false/);
   assert.ok(!kb.systemPrompt('signing').includes('Sign on paper instead'));
   for (const label of [L.menu, L.report, L.textView, L.download, L.stopReminders, L.fixName, L.check]) assert.ok(sign.includes(label), label);
+  assert.ok(sign.includes(`>${L.more}</button>`), 'More');
+  // The view and the download are in More, not in Other actions, and the helper says so.
+  assert.match(kb.builtInAnswer('I cannot see the document', 'signing').reply, /^On this page, with the document open, choose More\. It has Text view/);
   assert.match(sign, /\{finis|>Finish</, 'Finish');
   assert.ok(/>Next<|'Next'|Next\b/.test(sign));
   for (const [k, v] of Object.entries(screens.APP_LABELS)) assert.ok(fs.readFileSync(v.where, 'utf8').includes(v.label), `${k}: "${v.label}" in ${v.where}`);
@@ -1122,5 +1125,5 @@ test('a page that goes away before the model has begun to answer stops the model
   await pending.catch(() => {});
   assert.equal(aborted, true, 'the call to the model was stopped when the page left');
   // Leaving early does not get a question past the limits: it was counted before the model was asked.
-  assert.ok(db.prepare('SELECT n FROM chat_counts WHERE key=?').get(chat.countKey('ip', '198.51.200.9')), 'the question was counted');
+  assert.ok(db.get('SELECT n FROM chat_counts WHERE key=?', chat.countKey('ip', '198.51.200.9')), 'the question was counted');
 });

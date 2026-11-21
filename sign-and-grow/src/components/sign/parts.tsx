@@ -57,7 +57,7 @@ function inkOn(hex?: string | null): string | undefined {
 export const helpHref = (data?: any, anchor = 'signing') =>
   `/help?topic=signing${data?.help_code ? `&code=${encodeURIComponent(data.help_code)}` : data?.envelope?.id ? `&envelope=${encodeURIComponent(data.envelope.id)}` : ''}#${anchor}`;
 
-export function Shell({ data, children, bar, bottom, footer, titleIsHeading, live, helpInNewTab }: {
+export function Shell({ data, children, bar, bottom, footer, titleIsHeading, live, helpInNewTab, plainBar }: {
   data?: any;
   children: ReactNode;
   /** Controls on the right of the top bar. */
@@ -70,18 +70,21 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
   /** Read out politely by screen readers when it changes. */
   live?: string;
   helpInNewTab?: boolean;
+  /** The bar shows our logo and not the document's name: for a screen whose own heading is that name (the consent). */
+  plainBar?: boolean;
 }) {
   const brand = data?.brand;
   const title = data?.envelope?.subject || 'GrowSigning';
+  const named = !!data?.envelope?.subject && !plainBar;
   const style = brand?.brand_color ? ({ ['--brand' as any]: brand.brand_color, ['--sg-bar-ink' as any]: inkOn(brand.brand_color) }) : undefined;
   return (
     <div className="sg-shell">
       <a className="sg-skip" href="#sg-main">Skip to the main part</a>
       <header className="signbar sg-bar" style={style}>
-        {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || 'Sender logo'} /> : data?.envelope?.subject && <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
+        {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || 'Sender logo'} /> : named && <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
         {/* With no subject to show (a link that did not open), the bar shows the drawn logo, never the mark beside the typed name. */}
         {(() => {
-          const shown = data?.envelope?.subject ? title : <Logo height={20} tone={brand?.brand_color ? 'mono' : 'dark'} style={{ display: 'block' }} />;
+          const shown = named ? title : <Logo height={20} tone={brand?.brand_color ? 'mono' : 'dark'} style={{ display: 'block' }} />;
           return titleIsHeading ? <h1 className="sg-title grow truncate">{shown}</h1> : <div className="sg-title grow truncate">{shown}</div>;
         })()}
         {bar}

@@ -75,7 +75,7 @@ function Profile() {
       <SignInWays />
       <TwoStepCard />
       <SignedIn />
-      {adopt &&<AdoptSignature kind={adopt} name={me.user.name} onClose={() => setAdopt('')} onDone={(png) => (save({ [`${adopt}_png`]: png }), setAdopt(''))} />}
+      {adopt &&<AdoptSignature kind={adopt} name={me.user.name} doneLabel="Save" onClose={() => setAdopt('')} onDone={(png) => (save({ [`${adopt}_png`]: png }), setAdopt(''))} />}
     </div>
   );
 }

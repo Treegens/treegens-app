@@ -2039,8 +2039,8 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
     // So nobody finishes as signed with a mark on the page and no picture behind it, whatever the browser claimed.
     applyValues(e, r, body.values || {}, true, (hidden) => {
       const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !hidden.has(f.id));
-      if (mine.some((f: any) => f.type === 'signature' && (f.required || f.value)) && !okImage(body.signature_png)) throw bad('Adopt a signature before finishing.');
-      if (mine.some((f: any) => f.type === 'initials' && (f.required || f.value)) && !okImage(body.initials_png)) throw bad('Adopt your initials before finishing.');
+      if (mine.some((f: any) => f.type === 'signature' && (f.required || f.value)) && !okImage(body.signature_png)) throw bad('Your signature is missing. Make it on the page, then finish again.');
+      if (mine.some((f: any) => f.type === 'initials' && (f.required || f.value)) && !okImage(body.initials_png)) throw bad('Your initials are missing. Add them on the page, then finish again.');
     });
     run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(body.signature_png) ? body.signature_png : null, okImage(body.initials_png) ? body.initials_png : null, r.id);
   }); } catch (x) {

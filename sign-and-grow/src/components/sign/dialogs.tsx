@@ -48,8 +48,8 @@ function Confirmed({ children, onClose, label = 'Close' }: { children: ReactNode
 export type MenuItem = { key: string; label: string; hint?: string; icon?: string; href?: string; download?: boolean; danger?: boolean; onClick?: () => void };
 
 // The list has no descriptions and a fixed order (src/components/sign/actions.ts). `when` is the deadline in the
-// person's own time, `doc` the way the document is shown (on the document only), `onHelp` the dialog's own Help.
-export function MenuDialog({ items, onClose, when, doc, onHelp, back = 'Back to the document' }: { items: MenuItem[]; onClose: () => void; when?: string; doc?: ReactNode; onHelp?: () => void; back?: string }) {
+// person's own time, `foot` a quiet line under the list (the name this person signs as), `onHelp` the dialog's own Help.
+export function MenuDialog({ items, onClose, when, foot, onHelp, back = 'Back to the document' }: { items: MenuItem[]; onClose: () => void; when?: string; foot?: ReactNode; onHelp?: () => void; back?: string }) {
   return (
     <Dialog title="Other actions" onClose={onClose}>
       {when && <p className="sg-menu-when">{when}</p>}
@@ -70,7 +70,7 @@ export function MenuDialog({ items, onClose, when, doc, onHelp, back = 'Back to 
           );
         })}
       </ul>
-      {doc}
+      {foot}
       <div className="actions sg-menu-foot">
         {onHelp && <button type="button" className="btn" aria-haspopup="dialog" onClick={onHelp}>Help</button>}
         <button type="button" className="btn" onClick={onClose}>{back}</button>
