@@ -23,6 +23,15 @@ textarea.cf-textarea { width: 100%; }
 .cf-filter { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .cf-filter select, .cf-filter input { min-height: 44px; max-width: 100%; }
 .cf-filter input { width: 14em; }
+.btn.cf-more { min-height: 44px; }
+.cf-details summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; }
+.cf-details summary { list-style: none; gap: 6px; }
+.cf-details summary::-webkit-details-marker { display: none; }
+.cf-details summary::before { content: '▸'; }
+.cf-details[open] summary::before { content: '▾'; }
+.cf-details dl { margin: 4px 0 0; }
+.cf-details dt { font-weight: 600; margin-top: 8px; overflow-wrap: anywhere; }
+.cf-details dd { margin: 0; overflow-wrap: anywhere; }
 .cf-col { overflow-wrap: anywhere; max-width: 16em; }
 @media (max-width: 520px) {
   .cf-filter { width: 100%; }

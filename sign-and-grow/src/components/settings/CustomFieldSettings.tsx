@@ -116,7 +116,7 @@ export function CustomFieldSettings() {
       )}
       {admin && (full ? <p className="muted small">{t(ui, 'customfields.full', { max: MAX_CUSTOM_FIELDS })}</p> : (
         <div className="row wrap" style={{ marginTop: 10, alignItems: 'center' }}>
-          <button type="button" className="btn primary" style={TALL} onClick={() => open(EMPTY)}>{t(ui, 'customfields.add')}</button>
+          <button type="button" className="btn" style={TALL} onClick={() => open(EMPTY)}>{t(ui, 'customfields.add')}</button>
           <span className="muted small">{t(ui, 'customfields.count', { count: fields.length, max: MAX_CUSTOM_FIELDS })}</span>
         </div>
       ))}

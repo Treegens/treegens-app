@@ -67,7 +67,7 @@ test('admins define up to 20 fields: text or a list, required or not, on the cer
   // A name that is there already, whatever its letter case, width or spaces, is refused and says which.
   const twice = await own.post('/custom-fields', { name: 'CASE  NUMBER' });
   assert.equal(twice.status, 409);
-  assert.match(twice.data.error, /already a custom field called "Case number"/);
+  assert.match(twice.data.error, /already a detail called "Case number"/);
   // Names in any script are kept as typed and told apart.
   assert.equal((await own.post('/custom-fields', { name: 'رقم الملف' })).status, 200);
   assert.equal((await own.post('/custom-fields', { name: 'የጉዳይ ቁጥር' })).status, 200);
@@ -97,7 +97,7 @@ test('admins define up to 20 fields: text or a list, required or not, on the cer
   for (let i = list.fields.length; i < MAX_CUSTOM_FIELDS; i++) assert.equal((await own.post('/custom-fields', { name: `Code ${i}` })).status, 200);
   const over = await own.post('/custom-fields', { name: 'One too many' });
   assert.equal(over.status, 400);
-  assert.match(over.data.error, /up to 20 custom fields.*Delete one you no longer use/);
+  assert.match(over.data.error, /up to 20 details.*Delete one you no longer use/);
   // A change keeps what it does not name; a field that is gone says so.
   const ward = w.data.field.id;
   const ch = await patch(own, `/custom-fields/${ward}`, { required: false });
@@ -179,7 +179,7 @@ test('the sender gives values on a draft; a required one is checked when sending
   const before = envCount('owner@cf2a.example');
   for (const [cf, re] of [
     [[{ name: 'Ward', value: 'West' }], /"West" is not one of the choices for "Ward". Pick one of: North, South/],
-    [[{ name: 'Grant code', value: 'G1' }], /no custom field called "Grant code"/],
+    [[{ name: 'Grant code', value: 'G1' }], /no detail called "Grant code"/],
     [[{ name: 'Case number', value: 'x'.repeat(101) }], /101 characters long, and the most is 100/],
     [[{ name: 'Case number', value: '1' }, { name: 'case  NUMBER', value: '2' }], /names "case {2}NUMBER" twice/],
     [{ name: 'Case number' }, /item 1 has to be an object|has to be a list/],
@@ -195,7 +195,7 @@ test('the sender gives values on a draft; a required one is checked when sending
   // Create and send, without the required one: refused in words that say where to fill it in, and nothing is left.
   const noValue = await draftWith(own, 'sam@cf2a.example', { send: true, custom_fields: [{ name: 'Ward', value: 'north' }] });
   assert.equal(noValue.status, 400);
-  assert.match(noValue.data.error, /asks for the custom field "Case number" on every envelope, and it has no value here. Fill it in on the last step of the editor, under Details for your records \(in the API: "custom_fields"\)/);
+  assert.match(noValue.data.error, /asks for "Case number" on every envelope, and it has no value here. Fill it in on the last step of the editor, under Details \(in the API: "custom_fields"\)/);
   assert.equal(envCount('owner@cf2a.example'), before);
   // A draft keeps its values; a choice is kept in the spelling of the list.
   const d = (await draftWith(own, 'sam@cf2a.example', { custom_fields: [{ name: 'Ward', value: ' north ' }] })).data.envelope;
@@ -313,7 +313,7 @@ test('an envelope that is out: a value can be put right, with a line in its audi
   const fix = await own.put(`/envelopes/${e.id}/custom-fields`, { custom_fields: [{ name: 'Case number', value: '2026/114' }, { name: 'Ward', value: 'South' }] });
   assert.equal(fix.status, 200, JSON.stringify(fix.data));
   assert.deepEqual(fix.data.custom_fields.map((x: any) => x.value), ['2026/114', 'South']);
-  const line = auditOf(e.id).find((a) => a.action === 'Custom fields changed');
+  const line = auditOf(e.id).find((a) => a.action === 'Details changed');
   assert.ok(line, 'written to the audit trail');
   assert.match(line.detail, /Case number: "2026\/113" became "2026\/114"\./);
   // A field that is not printed on the certificate is named without its values: the trail is printed on it.
@@ -321,7 +321,7 @@ test('an envelope that is out: a value can be put right, with a line in its audi
   assert.ok(!line.detail.includes('South'));
   // The same list again is no change and no line.
   assert.equal((await own.put(`/envelopes/${e.id}/custom-fields`, { custom_fields: fix.data.custom_fields })).status, 200);
-  assert.equal(auditOf(e.id).filter((a) => a.action === 'Custom fields changed').length, 1);
+  assert.equal(auditOf(e.id).filter((a) => a.action === 'Details changed').length, 1);
   // A required one can be changed and not emptied: the account asks for it on every envelope.
   const empty = await own.put(`/envelopes/${e.id}/custom-fields`, { custom_fields: [{ name: 'Ward', value: 'South' }] });
   assert.equal(empty.status, 400);
@@ -329,7 +329,7 @@ test('an envelope that is out: a value can be put right, with a line in its audi
   assert.equal((await signAll(e.id, 'sam@cf2e.example')).status, 200);
   const late = await own.put(`/envelopes/${e.id}/custom-fields`, { custom_fields: [{ name: 'Case number', value: '2026/999' }] });
   assert.equal(late.status, 409);
-  assert.match(late.data.error, /completed, so its custom fields are fixed/);
+  assert.match(late.data.error, /completed, so its details are fixed/);
   // Sending the values it has is fine (an integration that sends what it read).
   assert.equal((await own.put(`/envelopes/${e.id}/custom-fields`, { custom_fields: fix.data.custom_fields })).status, 200);
 });
@@ -343,7 +343,7 @@ test('bulk send: a column named like a field fills it for each row; a row withou
   ];
   const check = await own.post('/bulk/check', { template_id: tpl.id, rows: [...rows, { Grantee: { name: 'Cy Three', email: 'cy@cf2f.example' } }] });
   assert.equal(check.status, 200);
-  assert.match(check.data.refusal.message, /^Row 3: Your account asks for the custom field "Case number" on every envelope.*Add a column named like the field to the list, or give the template a value for it/);
+  assert.match(check.data.refusal.message, /^Row 3: Your account asks for "Case number" on every envelope.*Add a column named like the field to the list, or give the template a value for it/);
   const before = envCount('owner@cf2f.example');
   const refused = await own.post('/bulk', { template_id: tpl.id, rows: [...rows, { Grantee: { name: 'Cy Three', email: 'cy@cf2f.example' } }] });
   assert.equal(refused.status, 400);
@@ -354,7 +354,7 @@ test('bulk send: a column named like a field fills it for each row; a row withou
   assert.match(wrong.data.error, /^Row 1: "West" is not one of the choices for "Ward"/);
   const unknown = await own.post('/bulk', { template_id: tpl.id, rows: [{ Grantee: { name: 'Di Four', email: 'di@cf2f.example' }, custom_fields: { 'Case number': 'B-4', Colour: 'Red' } }] });
   assert.equal(unknown.status, 400);
-  assert.match(unknown.data.error, /^Row 1: There is no custom field called "Colour"/);
+  assert.match(unknown.data.error, /^Row 1: There is no detail called "Colour"/);
   const sent = await own.post('/bulk', { template_id: tpl.id, rows });
   assert.equal(sent.status, 200, JSON.stringify(sent.data));
   assert.equal(sent.data.sent, 2);
@@ -367,7 +367,7 @@ test('a public form uses the template\'s values; a required one the template lac
   const bare = await template(own);
   const no = await own.post('/powerforms', { template_id: bare.id, name: 'Apply for a grant' });
   assert.equal(no.status, 400);
-  assert.match(no.data.error, /A visitor of a public form cannot fill custom fields in, so the template needs a value for each.*The form was not made\./);
+  assert.match(no.data.error, /A visitor of a public form cannot fill details in, so the template needs a value for each.*The form was not made\./);
   const tpl = await template(own, { custom_fields: [{ name: 'Case number', value: 'FORM-2026' }] });
   const pf = await own.post('/powerforms', { template_id: tpl.id, name: 'Apply for a grant' });
   assert.equal(pf.status, 200, JSON.stringify(pf.data));
@@ -444,7 +444,7 @@ test('the export: envelopes.csv has a column for each custom field, and a value 
   const rowOf = (eid: string) => lines.find((l) => l.startsWith(`"${eid}"`))!;
   assert.ok(rowOf(a.id).endsWith(`"'=HYPERLINK(""http://x.example"")","South"`), rowOf(a.id));
   assert.ok(rowOf(b.id).endsWith('"2026/7",""'));
-  assert.match(zip['README.txt'].toString('utf8'), /envelopes\.csv  one row per envelope, with a column for each custom field/);
+  assert.match(zip['README.txt'].toString('utf8'), /envelopes\.csv  one row per envelope, with a column for each detail your account keeps on envelopes/);
   // The selected envelopes only, with the columns they have.
   const one = unzip((await own.get(`/export?ids=${b.id}`)).data)['envelopes.csv'].toString('utf8').split('\r\n');
   assert.ok(one[0].endsWith('"file","Case number"'));
@@ -610,4 +610,36 @@ test('the API description has the custom fields: their routes, the envelope\'s a
   const { listRoutes } = await import('../src/server/router.ts');
   const ours = listRoutes().filter((r) => r.path.includes('custom-fields')).map((r) => `${r.method} ${r.path} ${r.level}`).sort();
   assert.deepEqual(ours, ['DELETE /custom-fields/:id admin', 'GET /custom-fields user', 'PATCH /custom-fields/:id admin', 'POST /custom-fields admin', 'PUT /envelopes/:id/custom-fields user']);
+});
+
+// ---- After the checkpoint: purges, the export's header --------------------------------------------------------------
+
+test('a purge that removes personal details takes the values too, also out of the audit trail; a lower level keeps them', async () => {
+  const { own } = await account('cf6a');
+  const rec = await import('../src/server/records.ts');
+  const make = async (email: string) => {
+    const e = (await draftWith(own, email, { custom_fields: [{ name: 'Case number', value: 'Maria Lopez 113' }], send: true })).data.envelope;
+    assert.equal((await own.put(`/envelopes/${e.id}/custom-fields`, { custom_fields: [{ name: 'Case number', value: 'Maria Lopez 114' }] })).status, 200);
+    assert.equal((await signAll(e.id, email)).status, 200);
+    return e;
+  };
+  const kept = await make('s1@cf6a.example');
+  const gone = await make('s2@cf6a.example');
+  assert.equal(rec.purgeEnvelope(kept.id, 'values', { name: 'test', why: 'test' }), true);
+  assert.deepEqual((await own.get(`/envelopes/${kept.id}`)).data.envelope.custom_fields.map((x: any) => x.value), ['Maria Lopez 114'], 'still found by its reference');
+  assert.equal(rec.purgeEnvelope(gone.id, 'personal', { name: 'test', why: 'test' }), true);
+  assert.deepEqual((await own.get(`/envelopes/${gone.id}`)).data.envelope.custom_fields, []);
+  assert.equal(db.get('SELECT COUNT(*) n FROM custom_values WHERE envelope_id=?', gone.id).n, 0);
+  assert.ok(!JSON.stringify(auditOf(gone.id)).includes('Maria Lopez'), 'the line about the change lost both values');
+  assert.equal((await own.get(`/envelopes?field=${encodeURIComponent('Case number')}&value=${encodeURIComponent('Maria Lopez 114')}`)).data.envelopes.length, 1);
+  const { LEVEL_REMOVES } = await import('../src/lib/retention.ts');
+  assert.match(LEVEL_REMOVES.personal.join(' '), /the details your account keeps on it, such as a case number/);
+});
+
+test('the export: a field whose name starts like a formula cannot run as one in the header row', async () => {
+  const { own } = await account('cf6b');
+  assert.equal((await own.post('/custom-fields', { name: '=HYPERLINK("http://x.example")' })).status, 200);
+  assert.equal((await draftWith(own, 's@cf6b.example', { custom_fields: [{ name: 'Case number', value: '1' }, { name: '=HYPERLINK("http://x.example")', value: 'v' }], send: true })).status, 200);
+  const head = unzip((await own.get('/export')).data)['envelopes.csv'].toString('utf8').split('\r\n')[0];
+  assert.ok(head.endsWith(`"'=HYPERLINK(""http://x.example"")"`), head);
 });

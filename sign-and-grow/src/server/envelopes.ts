@@ -6,11 +6,11 @@ import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
-import { STANDING_PAYMENT, personGen } from './credits.ts';
+import { STANDING_PAYMENT, personGen, lastExpiry } from './credits.ts';
 import { DATE_FORMATS, momentText, momentForEmail, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
-import { PAID_TRUST_DAYS, paidTrustText, TEAM_INVITES_PER_DAY } from '../lib/policy.ts';
+import { PAID_TRUST_DAYS, paidTrustText, TEAM_INVITES_PER_DAY, expiryMoment } from '../lib/policy.ts';
 import { posesAs, lureIn } from './fakenotice.ts';
 import { saveChecks, copyCheck, assertChecks, checkBits, alsoText, textWaiting, passCheckOn, withCheckLines, publicCheck } from './signercode.ts';
 import { sendWarnings, PAPER_AUDIT_ACTION } from './warnings.ts';
@@ -974,7 +974,10 @@ export function outOfSignatures(account: any, need: number, have: number): strin
   const how = account.plan === 'grove'
     ? `Top up on the Plan page: $${PRICING.topUpUsd} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`
     : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`;
-  return `${short} ${how} Nothing is charged unless you choose it. Signing your own documents stays free.`;
+  // When the number is low because some expired (credits.ts), say so and when: nobody should have to guess.
+  const gone = lastExpiry(account.id);
+  const why = gone ? ` ${gone.n} signature${gone.n === 1 ? '' : 's'} you had not used expired on ${expiryMoment(gone.at)}; the Plan page shows every date.` : '';
+  return `${short}${why} ${how} Nothing is charged unless you choose it. Signing your own documents stays free.`;
 }
 
 // ---- Keeping scammers and strangers out ----------------------------------------------------

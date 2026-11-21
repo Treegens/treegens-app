@@ -1,5 +1,5 @@
 'use client';
-// The envelope list: narrow it to one value of a custom field ("Case number" is 2026/114), and show one custom field
+// The envelope list, behind its "More options": narrow it to one value of a custom field ("Case number" is 2026/114), and show one custom field
 // as a column (src/server/customfields.ts, GET /envelopes?field=&value=). Names that only older envelopes still carry,
 // because their field was deleted since, can be filtered by too. With no custom fields anywhere, nothing is shown.
 import { useEffect, useState } from 'react';
@@ -16,6 +16,7 @@ export const customValue = (row: any, name: string): string => (name ? (row.cust
 export function CustomFieldFilter({ view, onChange }: { view: CustomView; onChange: (p: Partial<CustomView>) => void }) {
   const [data] = useLoad<any>(() => api('/custom-fields'), []);
   const [typed, setTyped] = useState(view.value);
+  const [open, setOpen] = useState(false);
   useEffect(() => setTyped(view.value), [view.value]);
   // Typing waits a moment before the list is asked again, like the search box.
   useEffect(() => {
@@ -27,6 +28,9 @@ export function CustomFieldFilter({ view, onChange }: { view: CustomView; onChan
   const past: string[] = data.past_names || [];
   if (!defs.length && !past.length) return null;
   const def = defs.find((d) => customKey(d.name) === customKey(view.field));
+  // Behind the list's "More options", closed until asked for. A filter or column that is on is never hidden.
+  const shown = open || !!view.field || !!view.col;
+  if (!shown) return <button type="button" className="btn sm ghost cf-more" aria-expanded={false} onClick={() => setOpen(true)}>{t(ui, 'customfields.filter.more')}</button>;
   return (
     <div className="cf-filter" role="group" aria-label={t(ui, 'customfields.filter.group')}>
       <select value={view.field} onChange={(e) => onChange({ field: e.target.value, value: '' })} aria-label={t(ui, 'customfields.filter.field')}>

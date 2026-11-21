@@ -83,5 +83,5 @@ route('POST', '/public/chat', async (c) => {
   if (!conv) throw bad('Type a question first.');
   const token = str(b.link, 200);
   const signer = token ? get('SELECT id FROM recipients WHERE token=?', token) : null;
-  return answer(conv, chatScreen(b.screen), { ip: c.ip, link: signer?.id || null, account: c.account?.id || null });
+  return answer(conv, chatScreen(b.screen), { ip: c.ip, link: signer?.id || null, account: c.account?.id || null, gone: c.req.signal });
 }, 'public');

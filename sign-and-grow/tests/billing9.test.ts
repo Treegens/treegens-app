@@ -75,8 +75,11 @@ function invoice(p: Person, inv: string, days: number, over: any = {}) {
 }
 async function subscribe(p: Person, days: number, inv = `in9_${p.k}_1`) {
   Object.assign(stripe.sub(p.sub), { customer: p.cus, status: 'active', metadata: { sg_account: p.id }, current_period_end: unix(days) });
+  // One reading of the clock for both: the subscription's period ends when the invoice's does.
+  const paid = invoice(p, inv, days);
+  stripe.sub(p.sub).current_period_end = paid.lines.data[0].period.end;
   await event('checkout.session.completed', { id: `cs9_${p.k}`, mode: 'subscription', client_reference_id: p.id, customer: p.cus, subscription: p.sub, payment_status: 'paid' });
-  await event('invoice.paid', invoice(p, inv, days));
+  await event('invoice.paid', paid);
 }
 async function topUp(p: Person, id: string, k: number) {
   stripe.charges.unshift({ id: `ch_${id}`, payment_intent: `pi_${id}`, paid: true, refunded: false, amount: k * 100, currency: 'usd', customer: p.cus, last4: '4242', created: unix(0) });
@@ -134,7 +137,10 @@ test('a month of the plan: its unused signatures expire when the period ends, wi
   assert.deepEqual(sig(p), { balance: 12, held: 0, available: 12 });
   let st = state(p);
   assert.deepEqual({ left: st.period!.left, of: st.period!.of, fresh: st.period!.fresh }, { left: 9, of: 9, fresh: 'renewal' });
-  assert.equal(st.period!.resets_at, new Date(unix(20) * 1000).toISOString());
+  // The end of the period the payment itself names (read back from the provider: asking the clock again here could
+  // land in the next second).
+  assert.equal(st.period!.resets_at, new Date(stripe.invoices[`in9_${p.k}_1`].lines.data[0].period.end * 1000).toISOString());
+  assert.equal(st.period!.resets_at, lot(p, 'plan').expires_at);
   await used(p, 2, 'm');
   assert.equal(state(p).period!.left, 7, 'the soonest to expire (this month) is used first');
   balanced(p);
@@ -214,6 +220,40 @@ test('the 3 signatures of a new account expire 30 days after it was made', async
   travel(0.2);
   assert.equal(sig(p).available, 0);
   assert.match(history(p, 'expired')[0].detail, /^3 of the 3 signatures every new account gets, 30 days after the account was made .* expired unused\.$/);
+  balanced(p);
+  // Someone who comes back after the 30 days and tries to send is told why they have none, when it happened and what
+  // to do next, and nothing is sent.
+  await again(p);
+  const e = await simple(p.c, 'late', { recipients: [{ id: 'r', role: 'signer', name: 'Late Signer', email: `late-${p.k}@signers.example` }] });
+  const r = await p.c.post(`/envelopes/${e.id}/send`);
+  assert.equal(r.status, 402);
+  assert.equal(r.data.error, `This needs 1 signature and you have 0 left. 3 signatures you had not used expired on ${expiryMoment(lot(p, 'welcome').expires_at)}; the Plan page shows every date. The monthly plan is $9 for 9 signatures, and every dollar plants 10 mangrove trees. Nothing is charged unless you choose it. Signing your own documents stays free.`);
+  // Once something new has arrived, the sentence about the old expiry is gone.
+  await subscribe(p, 30);
+  assert.equal(credits.lastExpiry(p.id), null);
+});
+
+test('putting another person in after the date: the signature stays held for that envelope, one for one, and nothing comes back to send with', async () => {
+  const p = await person('Swap');
+  const one = await send(p, `s1-${p.k}@signers.example`);
+  await send(p, `s2-${p.k}@signers.example`);
+  await send(p, `s3-${p.k}@signers.example`);
+  travel(31);
+  await again(p);
+  assert.deepEqual(sig(p), { balance: 3, held: 3, available: 0 });
+  // An honest sender who typed the wrong person is not punished for the date: the envelope is still out, and what
+  // was held for it is held for the right person now.
+  const sw = await p.c.post(`/envelopes/${one.id}/correct`, { recipient_id: one.rid, name: 'Somebody Else', email: `else-${p.k}@signers.example` });
+  assert.equal(sw.status, 200, JSON.stringify(sw.data));
+  assert.deepEqual(sig(p), { balance: 3, held: 3, available: 0 }, 'one for one: nothing to send with appeared');
+  assert.deepEqual([lot(p, 'welcome').held, lot(p, 'welcome').left, lot(p, 'welcome').expired], [3, 0, 0]);
+  // It is no way to send to someone new: a fourth envelope is refused.
+  const e = await simple(p.c, 'fourth', { recipients: [{ id: 'r', role: 'signer', name: 'Fourth Signer', email: `s4-${p.k}@signers.example` }] });
+  assert.equal((await p.c.post(`/envelopes/${e.id}/send`)).status, 402);
+  assert.deepEqual(sig(p), { balance: 3, held: 3, available: 0 });
+  // The new person signs: used from the trial, after its date, as the held one always could be.
+  assert.equal((await signAll(one.id, `else-${p.k}@signers.example`)).status, 200);
+  assert.deepEqual([lot(p, 'welcome').used, lot(p, 'welcome').held], [1, 2]);
   balanced(p);
 });
 
@@ -447,6 +487,8 @@ test('the Plan page says how many are left this month and when they reset, and l
   const src = readFileSync('src/app/app/settings/page.tsx', 'utf8');
   assert.match(src, /This month of the plan: \{b\.period\.left\} of \{b\.period\.of\} left<\/b>, \{b\.period\.fresh === 'none'/);
   assert.match(src, /they reset on \{expiryMoment\(b\.period\.resets_at\)\}/);
+  // The long rules are closed until someone asks (research/ux-notes.json "expiry"): the dates are what stays in sight.
+  assert.match(src, /<details className="card">\s*<summary[^>]*>How signatures work<\/summary>\s*<ul className="rules"[^>]*>[\s\S]*\{b\.expiry_rule\}[\s\S]*\{b\.held_rule\}[\s\S]*<\/details>/);
   assert.deepEqual(st.topups.map((l: any) => [l.of, l.left, l.expires_at]), [[4, 4, lot(p, 'topup').expires_at]]);
   assert.ok(st.lots.some((l: any) => l.source === 'welcome' && l.left === 3 && l.expires_at === lot(p, 'welcome').expires_at), 'the trial is listed with its date too');
   // The page that stops a renewal without logging in says the dates too, never "they stay yours".

@@ -30,6 +30,7 @@ import { forgetArchiveCopies } from './archivemail.ts';
 import { forgetCommentHooks } from './commentrules.ts';
 import { disputeOpen } from './evidence.ts';
 import { record } from './seclog.ts';
+import { purgeCustom } from './customfields.ts';
 import type { Ctx } from './router.ts';
 import { dataPlace } from '../lib/dataplace.ts';
 import {
@@ -548,6 +549,7 @@ function removePersonal(e: any, gone: string): string[] {
   run(`DELETE FROM emails WHERE envelope_id=? AND ${NOT_WAITING}`, e.id);
   forgetArchiveCopies(e.id); // and our stored copies for the archive addresses (archivemail.ts)
   run('DELETE FROM webhook_deliveries WHERE envelope_id=?', e.id);
+  note(...purgeCustom(e.id)); // the account's own details on it, such as a case number (customfields.ts)
   return found;
 }
 

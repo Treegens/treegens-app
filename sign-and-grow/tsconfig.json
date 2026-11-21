@@ -65,8 +65,14 @@
     ".next-build-simplify-start/dev/types/**/*.ts",
     ".next-uxrev/types/**/*.ts",
     ".next-uxrev/dev/types/**/*.ts",
-    ".next-build-ds-custom-fields/types/**/*.ts",
-    ".next-build-ds-custom-fields/dev/types/**/*.ts"
+    ".next-finish-ux-revise/types/**/*.ts",
+    ".next-finish-ux-revise/dev/types/**/*.ts",
+    ".next-finish-expiry/types/**/*.ts",
+    ".next-finish-expiry/dev/types/**/*.ts",
+    ".next-finish-chat/types/**/*.ts",
+    ".next-finish-chat/dev/types/**/*.ts",
+    ".next-finish-simplify-signing/types/**/*.ts",
+    ".next-finish-simplify-signing/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

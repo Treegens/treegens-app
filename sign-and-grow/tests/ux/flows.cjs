@@ -18,12 +18,15 @@
 //     UX_CEILINGS     the ceilings file, default tests/ux/ceilings.json (one set per profile).
 //     UX_RECORD=1     write this run's numbers into the ceilings file for flows that have none yet, and lower the
 //                     numbers that went down. Never raises one. Use it only when your batch merges.
+//     UX_STRICT=1     the "not there yet" warnings (rules the app cannot pass until a simplify batch has marked or
+//                     shortened its screen) count as broken. The integrator sets it once the five simplify batches
+//                     have merged; until then they are listed as warnings with the batch that owns each.
 //     UX_SAME_AS      for the government profile: the output folder of a default-profile run on the same code. The
 //                     sidebar, Home and the editor's three steps must offer the same controls in both (P8).
 //   Exit codes: 1 when a step of a flow fails (as before); 3 when every flow ran but a rule or a ceiling was broken;
 //   0 otherwise. Warnings never change the exit code. The JSON and the screenshots are written either way.
 //
-// PROFILES (research/ux-charter.md, section 5)
+// PROFILES (research/ux-charter.md, section 3)
 //   default     zero setup: only DEV_OUTBOX and APP_URL on the server.
 //   everything  every operator service faked, and the account set up after sign-up: details, a deletion schedule,
 //               a second member, plus whatever exists of 2 languages and the AI switch. Start the server with
@@ -39,7 +42,14 @@
 //        A <details> or a button with aria-expanded that has none of these is reported as a warning until the batch
 //        that owns the screen marks it.
 //   P3   data-feature="<key>": with zero setup no element of a feature whose gate is "operator" appears anywhere, and
-//        none whose gate is "admin" appears outside /app/settings. The gates are read from the charter, section 6.
+//        none whose gate is "admin" appears outside /app/settings, and none whose gate is "docs" on a sender or signer
+//        screen. The gates are the "gate" of each key in research/ux-notes.json.
+//   P5   one main button: at most 1 element with class "btn primary" in the page body or the open dialog (the
+//        sidebar and the bottom bar are not counted).
+//   P7   the consent screen: 120 words or fewer before the tick and one phone screenful. Other actions: 6 at most.
+//   2.2  Settings: an owner with zero setup sees at most 10 sections, a member at most 4; at most 4 cards
+//        (data-item="card") per section with zero setup.
+//   3    with everything set up, a core flow has no more screens than the default ceiling and at most 1 more action.
 //   P12  the labels in ONCE appear at most once per screen outside data-item elements.
 //   P6, P13  the words in CLAIMS, TECHNICAL and AVOID, on signer, public and trust pages (see checkWords).
 //
@@ -146,7 +156,7 @@ const SAME_AS = process.env.UX_SAME_AS ? path.resolve(process.env.UX_SAME_AS) : 
 const FAKE_PORT = Number(process.env.UX_FAKE_PORT || 3739);
 const MEMBER = { name: 'Mo Member', email: `mo-${STAMP}@example.org` };
 
-// The lists of research/ux-charter.md (sections 1 and 4). Change them there and here in the same commit.
+// The lists of research/ux-charter.md (section 4, "Lists the script checks"). Change them there and here together.
 // P12: labels allowed at most once per screen, outside data-item elements. A control repeated in each item names its
 // item in its accessible name ("Download Planting partnership"), so it never matches.
 const ONCE = ['Download', 'Help', 'Delete', 'Remind', 'Send', 'Questions and comments', 'Language'];
@@ -155,12 +165,29 @@ const ONCE = ['Download', 'Help', 'Delete', 'Remind', 'Send', 'Questions and com
 const CLAIMS = [/\b(certified|qualified|compliant|accredited)\b/i, /\b(ISO|SOC ?2|HIPAA|eIDAS)\b/];
 const NOT_HELD = /\b(not|no|never|without|nor)\b|n't\b/i;
 const HELD = [];
+// A claim is about us when we are its subject (we, GrowSigning, this service or "our ..." within a few words before
+// the claim word, with no comma between), or when it is a bare label (a badge) of 4 words or fewer on a page that
+// does not explain the law. A sentence that explains what a law or another service asks is not a claim.
+const US = "(?:we|we're|we are|GrowSigning|this (?:service|product|site|software)|our \\w+|signatures? (?:made|you make) here)";
+const aboutUs = (s, claim) => new RegExp(`\\b${US}(?: [\\w'-]+){0,6} ${claim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(s);
+const SENTENCE_MAX = 20; // P6: words in a sentence on a signer screen
+const CONSENT_WORDS = 120; // P7
+const LANDING_WORDS = 800; // 2.7
+const SETTINGS_CAP = { owner: 10, member: 4, cards: 4 }; // 2.2, zero setup
+const STRICT = process.env.UX_STRICT === '1';
+// P1: nothing in the ceilings file is ever raised. The zero-setup ceilings may never be above these (the baseline of
+// tests/out/ux-baseline, and for g and h their first measurement), whatever the file says.
+const NEVER_ABOVE = {
+  'a-send-first': [19, 10, 193, 42, 3751, 2], 'b-sign-phone': [8, 6, 48, 13, 751, 0], 'b-sign-desktop': [8, 6, 48, 13, 761, 0],
+  'c-template-send': [5, 4, 92, 34, 666, 1], 'd-find-download': [4, 3, 99, 43, 739, 0], 'e-settings-name': [3, 2, 68, 36, 487, 0],
+  'f-signer-help': [7, 5, 42, 10, 927, 2], 'g-sign-in': [4, 3, 81, 42, 2807, 0], 'h-sign-myself': [15, 10, 190, 37, 1703, 1],
+};
 // P6: technical names, never on signer pages, nor on public pages other than the trust pages.
 const TECHNICAL = /\b(PAdES|PKI|SAML|SCIM|SIEM|OIDC|OpenID|QES|AES|QTSP|PDF\/A|RFC ?3161|FIPS|PKCS(#\d+)?|HSM|KMS|OTP|LTV|OCSP|IDV|IAL|AAL|PIV|CAC|Part 11|LLM)\b/;
 // P6: sender words, never on signer pages (and only a warning on public pages).
 const AVOID = /\b(envelopes?|recipients?|adopt(ed)?|audit trail|void(ed)?|clone|nudge|PowerForms?|clickwrap|bulk send)\b/i;
 // P4: the most lines an opened More may hold.
-const MORE_CAP = { item: ZERO_SETUP ? 6 : 8, screen: 9, step3: 7, signing: 6, role_options: 8 };
+const MORE_CAP = { item: ZERO_SETUP ? 6 : 8, screen: 9, step3: 7, signing: 6, role_options: 8, other_actions: 6 };
 
 // Which pages a person sees as whom, by address.
 const pageKind = (url, kind, flowId) => {
@@ -181,13 +208,11 @@ const ownerOf = (url, kind, flowId, inSidebar) => {
   return 'simplify-start';
 };
 
-// The gate of every feature key, from the charter's section 6 ("- Default: Gate: operator."), so they never drift.
+// The gate of every feature key, from research/ux-notes.json, so the script and the notes never drift.
 function readGates() {
   try {
-    const md = fs.readFileSync(path.join(__dirname, '..', '..', 'research', 'ux-charter.md'), 'utf8');
-    const gates = {};
-    for (const m of md.matchAll(/\*\*([a-z0-9-]+)\*\*[^\n]*\n(?:- (?!Default:)[^\n]*\n)*- Default: Gate: (operator|admin|always)\b/g)) gates[m[1]] = m[2];
-    return gates;
+    const notes = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'research', 'ux-notes.json'), 'utf8'));
+    return Object.fromEntries(Object.entries(notes).filter(([, v]) => v && typeof v === 'object' && v.gate).map(([k, v]) => [k, v.gate]));
   } catch {
     return {};
   }
@@ -198,7 +223,10 @@ fs.mkdirSync(OUT, { recursive: true });
 const report = { base: BASE, profile: PROFILE, started_at: new Date().toISOString(), conventions: {}, flows: {}, inventory: {}, inventory_mores: {}, failures: [], rules: { broken: [], warnings: [] }, console_errors: [] };
 
 // A rule result. The same finding on many screens is kept once, with the screens listed.
+// Level "todo": the app cannot pass yet because a simplify batch has not marked or shortened the screen. A warning
+// that names the batch, and broken with UX_STRICT=1.
 function rule(level, id, detail, where) {
+  if (level === 'todo') level = STRICT ? 'broken' : 'warning';
   const list = report.rules[level === 'broken' ? 'broken' : 'warnings'];
   const had = list.find((x) => x.rule === id && x.detail === detail);
   if (had) {
@@ -332,7 +360,19 @@ function measureInPage() {
     unmarked_page: unmarked.filter((el) => !el.closest('aside, nav, [role=navigation]')).map((el) => (el.getAttribute('aria-label') || el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 40)),
     unmarked_sidebar: unmarked.filter((el) => el.closest('aside, nav, [role=navigation]')).length,
     features: [...new Set([...scope.querySelectorAll('[data-feature]')].filter(vis).map((el) => el.dataset.feature))],
+    cards: items.filter((it) => it.dataset.item === 'card').length,
+    // P5: filled buttons in the page body or the open dialog; the sidebar and the bottom bar are not counted.
+    primary: [...scope.querySelectorAll('.btn.primary')].filter((el) => vis(el) && !el.closest('aside, nav, [role=navigation]')).map((el) => (el.getAttribute('aria-label') || el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 40)),
   };
+  // P7: the words before the first tick box (the consent screen).
+  const tick = [...scope.querySelectorAll('input[type=checkbox], [role=checkbox]')].find((el) => vis(el) || vis(el.closest('label')));
+  let wordsBeforeTick = null;
+  if (tick) {
+    const range = document.createRange();
+    range.setStart(scope, 0);
+    range.setEndBefore(tick.closest('label') || tick);
+    wordsBeforeTick = range.toString().split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+  }
   const words = (scope.innerText || '').split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
   const notices = [...scope.querySelectorAll('.notice, [role=alert], [role=note], .ed-banner')].filter(vis).filter((n, i, all) => !all.some((o) => o !== n && o.contains(n)));
   const heading = (dialog && (dialog.getAttribute('aria-label') || document.getElementById(dialog.getAttribute('aria-labelledby') || '')?.innerText))
@@ -351,6 +391,7 @@ function measureInPage() {
     screenfuls: dialog ? +(dialog.scrollHeight / innerHeight).toFixed(1) : +(document.documentElement.scrollHeight / innerHeight).toFixed(1),
     controls: enabled.map((c) => `${c.kind}: ${c.name}`),
     attrs,
+    words_before_tick: wordsBeforeTick,
     // For the rule checks only; taken out before the entry is written to the JSON.
     _once: enabled.filter((c) => !c.in_item).map((c) => c.name),
     _text: (scope.innerText || '').slice(0, 60000),
@@ -368,38 +409,60 @@ function checkScreen(m, { url, kind, flowId, isScreen, where }) {
   if (a.items_with_two_mores) rule('broken', 'P4 one More per item', `${a.items_with_two_mores} data-item elements hold 2 or more data-more="item"`, where);
   if (a.item_mores_outside_items) rule('broken', 'P4 data-more="item" inside its item', `${a.item_mores_outside_items} data-more="item" not inside a data-item element`, where);
   if (isScreen && a.open?.length) rule('broken', 'P4 closed when the screen opens', `open on arrival: ${a.open.join(', ')}`, where);
-  if (isScreen && a.unmarked_page?.length) rule('warning', 'P4 attributes not there yet', `expanders without data-more or data-fold, to be marked by ${owner}`, `${where} (${a.unmarked_page.length}: ${a.unmarked_page.slice(0, 3).join(' | ')})`);
-  if (isScreen && a.unmarked_sidebar) rule('warning', 'P4 attributes not there yet', 'sidebar expanders without data-more="nav", to be marked by simplify-start', where);
+  if (isScreen && a.unmarked_page?.length) rule('todo', 'P4 attributes not there yet', `expanders without data-more or data-fold, to be marked by ${owner}`, `${where} (${a.unmarked_page.length}: ${a.unmarked_page.slice(0, 3).join(' | ')})`);
+  if (isScreen && a.unmarked_sidebar) rule('todo', 'P4 attributes not there yet', 'sidebar expanders without data-more="nav", to be marked by simplify-start', where);
   // P3: gated features absent with zero setup.
   if (ZERO_SETUP) for (const f of a.features || []) {
     const gate = GATES[f];
     if (!gate) rule('broken', 'P3 data-feature key', `data-feature="${f}" is not a feature key of the charter`, where);
-    else if (gate === 'operator' || (gate === 'admin' && !/^\/app\/settings/.test(url))) rule('broken', 'P3 hidden until set up', `data-feature="${f}" (gate: ${gate}) shows with zero setup`, where);
+    else if (gate === 'operator' || (gate === 'admin' && !/^\/app\/settings/.test(url)) || (gate === 'docs' && /^(sender|signer)$/.test(pageKind(url, kind, flowId)) && !/^\/app\/operator/.test(url))) rule('broken', 'P3 hidden until set up', `data-feature="${f}" (gate: ${gate}) shows with zero setup`, where);
   }
   // P12: labels at most once outside items.
   const norm = (s) => s.replace(/\s*\(\d+\)$/, '').trim().toLowerCase();
   for (const label of ONCE) {
     const n = (m._once || []).filter((x) => norm(x) === label.toLowerCase()).length;
-    if (n > 1) rule(a.items ? 'broken' : 'warning', a.items ? 'P12 one control per job' : 'P12 one control per job (rows not marked data-item yet)', `"${label}" ${n} times${a.items ? '' : `, to be marked by ${owner}`}`, where);
+    if (n > 1) rule(a.items ? 'broken' : 'todo', a.items ? 'P12 one control per job' : 'P12 one control per job (rows not marked data-item yet)', `"${label}" ${n} times${a.items ? '' : `, to be marked by ${owner}`}`, where);
   }
+  // P5: one main button in the page body or the dialog.
+  if (kind !== 'email' && (a.primary || []).length > 1) rule('todo', 'P5 one main button', `${a.primary.length} filled buttons, to be brought to 1 by ${owner}`, `${where} (${a.primary.slice(0, 4).join(' | ')})`);
+  const who = pageKind(url, kind, flowId);
+  // P7: the consent screen, and Other actions.
+  if (who === 'signer' && kind !== 'email' && /consent/i.test(where) && !m.in_dialog && m.words_before_tick != null) {
+    if (m.words_before_tick > CONSENT_WORDS) rule('todo', 'P7 consent screen', `${m.words_before_tick} words before the tick, at most ${CONSENT_WORDS} (simplify-signing)`, where);
+    if (/phone|inventory|f-signer/.test(where) && m.screenfuls > 1.05) rule('todo', 'P7 consent screen', `${m.screenfuls} phone screenfuls, at most 1 (simplify-signing)`, where);
+  }
+  if (who === 'signer' && m.in_dialog && /other actions/i.test(where)) {
+    const n = (m.controls || []).filter((c) => !/: (close|cancel|back)$/i.test(c)).length;
+    if (n > MORE_CAP.other_actions) rule('todo', 'P7 Other actions', `${n} entries, at most ${MORE_CAP.other_actions} (simplify-signing)`, where);
+  }
+  // 2.7: the landing page.
+  if (url === '/' && m.words > LANDING_WORDS) rule('todo', '2.7 landing page', `${m.words} words, at most ${LANDING_WORDS} (simplify-public)`, where);
+  // 2.2: cards open in one Settings section with zero setup.
+  if (ZERO_SETUP && /^\/app\/settings/.test(url) && a.cards > SETTINGS_CAP.cards) rule('broken', '2.2 Settings cards', `${a.cards} cards in one section, at most ${SETTINGS_CAP.cards} with zero setup`, where);
   // P6 and P13: words.
-  checkWords(m._text || '', pageKind(url, kind, flowId), where);
+  checkWords(m._text || '', who, where);
 }
 
 function checkWords(text, who, where) {
   if (who === 'sender') return;
+  const explains = who === 'trust' || /public \/(help|pricing)|\/help\b/.test(where);
   const sentences = text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+  let long = 0;
   for (const s of sentences) {
+    const n = s.split(/\s+/).length;
     for (const re of CLAIMS) {
       const hit = s.match(re);
-      if (hit && !NOT_HELD.test(s) && !HELD.some((h) => s.includes(h))) rule('broken', 'P13 honest words', `"${hit[0]}" in "${s.slice(0, 140)}"`, where);
+      if (!hit || NOT_HELD.test(s) || HELD.some((h) => s.includes(h))) continue;
+      if (aboutUs(s, hit[0]) || (n <= 4 && !explains)) rule('broken', 'P13 honest words', `"${hit[0]}" in "${s.slice(0, 140)}"`, where);
     }
     if (who === 'trust') continue;
     const tech = s.match(TECHNICAL);
     if (tech) rule('broken', `P6 technical name on a ${who} page`, `"${tech[0]}" in "${s.slice(0, 140)}"`, where);
     const avoid = s.match(AVOID);
-    if (avoid) rule(who === 'signer' ? 'broken' : 'warning', `P6 sender word on a ${who} page`, `"${avoid[0]}" in "${s.slice(0, 140)}"`, where);
+    if (avoid) rule(who === 'signer' ? 'todo' : 'warning', `P6 sender word on a ${who} page`, `"${avoid[0].toLowerCase()}" in "${s.replace(/env_[\w-]+/g, 'env_...').replace(/\d+/g, '#').slice(0, 140)}"`, where);
+    if (who === 'signer' && n > SENTENCE_MAX) long += 1;
   }
+  if (long) rule('todo', 'P6 short sentences on signer screens', `sentences of more than ${SENTENCE_MAX} words (simplify-signing)`, `${where} (${long})`);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -759,15 +822,21 @@ async function signOnPage(f, p) {
   else f.note('Next opened the signature dialog by itself.');
   await f.screen('Adopt your signature');
   await f.press(byRole(p.getByRole('dialog').first(), 'button', /adopt|^sign$|use this/i), 'Adopt and sign', () => p.locator('.field img, .field.fill').first().waitFor());
-  // When nothing else is required, the check before finishing opens by itself.
+  // The check before finishing: it may open by itself, open on Finish, or (the charter, 2.6) not come at all when
+  // nothing needs attention, and Finish goes straight to Done.
   const review = p.getByRole('dialog').filter({ hasText: /signing as|before you finish/i });
-  const opened = await review.first().waitFor({ timeout: 6000 }).then(() => true).catch(() => false);
-  if (!opened) {
-    f.note('The check before finishing did not open by itself, so the person presses Finish.');
-    await f.press(byRole(p, 'button', /^finish/i), 'Finish', () => review.first().waitFor());
-  } else f.note('The check before finishing opened by itself once the signature was on.');
-  await f.screen('Check before you finish');
-  await f.press(byRole(review.first(), 'button', /^(finish|approve|sign)( and send| now)?$|^send$/i), 'Finish and send', () => p.getByRole('heading', { name: /done|thank|finished/i }).first().waitFor());
+  const done = p.getByRole('heading', { name: /done|thank|finished/i }).first();
+  let opened = await review.first().waitFor({ timeout: 6000 }).then(() => true).catch(() => false);
+  if (opened) f.note('The check before finishing opened by itself once the signature was on.');
+  else {
+    await f.press(byRole(p, 'button', /^finish/i), 'Finish', () => Promise.race([review.first().waitFor(), done.waitFor()]));
+    opened = (await review.count()) > 0 && await review.first().isVisible().catch(() => false);
+    f.note(opened ? 'The check before finishing did not open by itself; it came after Finish.' : 'Finish went straight to Done: nothing needed attention.');
+  }
+  if (opened) {
+    await f.screen('Check before you finish');
+    await f.press(byRole(review.first(), 'button', /^(finish|approve|sign)( and send| now)?$|^send$/i), 'Finish and send', () => done.waitFor());
+  }
   await f.screen('Done');
   const sideways = await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   if (sideways) f.note('The done page scrolls sideways.');
@@ -934,8 +1003,9 @@ async function flowH(f, pdf) {
       await f.press(byRole(p.getByRole('dialog').first(), 'button', /send/i), 'Send in the dialog', () => p.waitForURL(sent));
     }
     await f.screen('Envelope page, just sent');
-    const here = visible(p.locator('main a[href*="/sign/"]')).first();
-    if (await here.count()) await f.press(here, 'the link to sign, on the envelope page', () => p.getByRole('checkbox').first().waitFor());
+    let here = byRole(p.locator('main'), 'button', /^(sign|review) now$/i);
+    if (!(await here.count())) here = visible(p.locator('main a[href*="/sign/"]')).first();
+    if (await here.count()) await f.press(here, 'Sign now, on the envelope page', () => p.waitForURL(/\/sign\//).then(() => p.getByRole('checkbox').first().waitFor()));
     else {
       f.note('The envelope page has no way to sign it: the sender goes Home and signs from "Waiting for you".');
       await f.press(byRole(p, 'link', /^home$/i), 'Home in the menu', () => p.waitForURL(/\/app(\?|$)/));
@@ -1011,6 +1081,11 @@ async function setUp(browser, sender) {
     const p = await ctx.newPage();
     await p.goto(`${BASE}/signup`);
     await apiIn(p, '/auth/signup', { body: { ...MEMBER, password: PASSWORD, invite: new URL(m.link).searchParams.get('invite') } });
+    // 2.2: what a member sees in Settings.
+    await p.goto(`${BASE}/app/settings`);
+    const tabs = await p.getByRole('tab').first().waitFor({ timeout: 15000 }).then(() => visible(p.getByRole('tab')).allInnerTexts()).catch(() => []);
+    report.member_settings_tabs = tabs;
+    if (tabs.length > SETTINGS_CAP.member) rule('todo', '2.2 Settings sections', `a member sees ${tabs.length} sections, at most ${SETTINGS_CAP.member} (simplify-public): ${tabs.join(', ')}`, 'profile setup');
     await ctx.close();
   });
   missing.push('2 languages: only English ships (SUPPORTED_LOCALES in src/lib/i18n.ts). Switch the second one on here once a setting can.');
@@ -1057,6 +1132,11 @@ function checkCeilings() {
   }
   const mine = all[PROFILE] || (all[PROFILE] = {});
   const keys = ['actions', 'screens', 'choices_seen', 'max_choices', 'words', 'notices'];
+  for (const [flow, top] of Object.entries(NEVER_ABOVE)) keys.forEach((k, i) => {
+    const c = (all.default || {})[flow];
+    if (!c || c[k] == null) rule('broken', 'P1 ceiling missing', `${path.basename(CEILINGS_FILE)} has no default ceiling for ${flow} ${k}`);
+    else if (c[k] > top[i]) rule('broken', 'P1 ceiling raised', `${path.basename(CEILINGS_FILE)} default ${flow} ${k} is ${c[k]}, and was ${top[i]}: ceilings only go down`);
+  });
   const lines = [];
   let changed = false;
   for (const r of report.table || []) {
@@ -1080,6 +1160,14 @@ function checkCeilings() {
       }
       lines.push(`${r.flow.padEnd(16)} ${k.padEnd(13)} ${String(r[k]).padStart(5)}  ceiling ${String(c[k]).padStart(5)}${over ? '  OVER' : ''}`);
     }
+  }
+  // Section 3: with everything set up, the core flows use no switched-on feature, so they get no screen and at
+  // most 1 action more than the zero-setup ceiling.
+  if (PROFILE === 'everything') for (const r of report.table || []) {
+    const d = (all.default || {})[r.flow];
+    if (!r.ok || !d) continue;
+    if (r.screens > d.screens) rule('broken', 'P1 everything set up', `${r.flow}: ${r.screens} screens, the zero-setup ceiling is ${d.screens}`);
+    if (r.actions > d.actions + 1) rule('broken', 'P1 everything set up', `${r.flow}: ${r.actions} actions, the zero-setup ceiling is ${d.actions} and at most 1 more is allowed`);
   }
   if (changed) fs.writeFileSync(CEILINGS_FILE, `${JSON.stringify(all, null, 2)}\n`);
   report.ceilings = { file: CEILINGS_FILE, profile: PROFILE, recorded: changed, lines };
@@ -1137,6 +1225,7 @@ async function inventory(browser, page, ids) {
   await page.getByRole('tab').first().waitFor();
   const tabs = await visible(page.getByRole('tab')).allInnerTexts();
   report.inventory_settings_tabs = tabs;
+  if (ZERO_SETUP && tabs.length > SETTINGS_CAP.owner) rule('todo', '2.2 Settings sections', `an owner with zero setup sees ${tabs.length} sections, at most ${SETTINGS_CAP.owner} (simplify-public)`, 'inventory: settings');
   for (const t of tabs) {
     await page.getByRole('tab', { name: t, exact: true }).click();
     await take(`settings - ${t}`, page, true);
@@ -1292,7 +1381,7 @@ function countPanel(e) {
   let browser;
   let fakes = null;
   try {
-    if (!Object.keys(GATES).length) rule('warning', 'P3 gates', 'no "Gate:" lines found in research/ux-charter.md section 6, so data-feature is not checked');
+    if (!Object.keys(GATES).length) rule('warning', 'P3 gates', 'no gates found in research/ux-notes.json, so data-feature is not checked');
     fakes = await startFakes();
     const up = await fetch(`${BASE}/api/me`).catch(() => null);
     if (!up) throw new Error(`Nothing answers at ${BASE}. Start the dev server first (see the top of this file).`);

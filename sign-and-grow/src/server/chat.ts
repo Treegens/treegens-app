@@ -69,7 +69,8 @@ const fp = (kind: string, v: string) => `${kind}:${hmac(`chat-limit:${kind}:${v}
 /** The key a count is kept under: 'ip' with an internet address, 'link' with a recipient's id, 'account' with an account's. */
 export const countKey = (kind: 'ip' | 'link' | 'account', v: string) => fp(kind, kind === 'ip' ? addressKey(v) : v);
 type Bucket = { which: ChatLimit; key: string; slot: string; max: number; until: Date };
-export type Who = { ip: string; link?: string | null; account?: string | null };
+/** `gone` is the request's own signal: it fires when the page that asked goes away (the dialog closed, the tab too). */
+export type Who = { ip: string; link?: string | null; account?: string | null; gone?: AbortSignal | null };
 function bucketsFor(who: Who, t = new Date()): Bucket[] {
   const day = `d:${t.toISOString().slice(0, 10)}`, minute = `m:${t.toISOString().slice(0, 16)}`;
   const nextMinute = new Date(Math.floor(t.getTime() / 60_000) * 60_000 + 60_000);
@@ -113,8 +114,8 @@ export function extrasFor(c: Cleaned, answer = ''): Extras {
   return { person: handOverReason(c.turns), tools: toolsFor(c.question, answer), removed: c.removed };
 }
 /** The built-in answer, as the route sends it. `why` says why it is not the model. */
-export function builtIn(c: Cleaned, why: 'off' | 'limit' | 'down' | 'slow' | 'empty', note?: string) {
-  const { reply } = builtInAnswer(c.question);
+export function builtIn(c: Cleaned, why: 'off' | 'limit' | 'down' | 'slow' | 'empty', note?: string, screen: ChatScreen = 'public') {
+  const { reply } = builtInAnswer(c.question, screen);
   return { mode: 'builtin' as const, why, reply, sig: signAnswer(reply, c.question), ...(note ? { note } : {}), ...extrasFor(c, reply) };
 }
 
@@ -158,15 +159,19 @@ export async function answer(c: Cleaned, screen: ChatScreen, who: Who): Promise<
   const p = chatProvider();
   // No provider, no key, or SUPPORT_CHAT_DAILY_LIMIT=0: no model answers on this server at all, which is not a limit
   // that was reached. The dialog says the same (GET /public/chat answers ai: false).
-  if (!p || !chatModelOn()) return builtIn(c, 'off');
+  if (!p || !chatModelOn()) return builtIn(c, 'off', undefined, screen);
   const ok = admit(who);
   if (!ok.ok) {
     const until = `${ok.until.toISOString().slice(11, 16)} UTC`;
-    return { ...builtIn(c, 'limit', limitText(ok.which, until)), limit: { which: ok.which, until: ok.until.toISOString() } };
+    return { ...builtIn(c, 'limit', limitText(ok.which, until), screen), limit: { which: ok.which, until: ok.until.toISOString() } };
   }
   const abort = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => ((timedOut = true), abort.abort()), CHAT_TIMING.ms);
+  // The page went away (the dialog closed, the tab too): stop the model now, so nothing more is paid for, also
+  // while it has not started to answer. Once the answer streams, the stream's own cancel does the same (relay).
+  if (who.gone?.aborted) abort.abort();
+  else who.gone?.addEventListener('abort', () => abort.abort(), { once: true });
   let res: Response;
   try {
     res = await callModel(p, screen, c.turns, true, abort.signal);
@@ -176,19 +181,19 @@ export async function answer(c: Cleaned, screen: ChatScreen, who: Who): Promise<
     }
   } catch {
     clearTimeout(timer);
-    return builtIn(c, timedOut ? 'slow' : 'down');
+    return builtIn(c, timedOut ? 'slow' : 'down', undefined, screen);
   }
   if (!res.ok || !res.body) {
     clearTimeout(timer);
     // The status only: never what was asked.
     console.warn(`[chat] ${p.name} answered ${res.status}. The built-in answers took over.`);
     res.body?.cancel().catch(() => {});
-    return builtIn(c, 'down');
+    return builtIn(c, 'down', undefined, screen);
   }
-  return relay(res, c, () => clearTimeout(timer), () => timedOut, abort);
+  return relay(res, c, screen, () => clearTimeout(timer), () => timedOut, abort);
 }
 
-function relay(upstream: Response, c: Cleaned, finish: () => void, late: () => boolean, abort: AbortController): Response {
+function relay(upstream: Response, c: Cleaned, screen: ChatScreen, finish: () => void, late: () => boolean, abort: AbortController): Response {
   const reader = upstream.body!.getReader();
   const asJson = (upstream.headers.get('content-type') || '').includes('application/json');
   const decoder = new TextDecoder();
@@ -275,7 +280,7 @@ function relay(upstream: Response, c: Cleaned, finish: () => void, late: () => b
       }
       if (!text.trim()) {
         // Nothing came: the built-in answer in its place, said as such.
-        const b = builtIn(c, late() ? 'slow' : broke ? 'down' : 'empty');
+        const b = builtIn(c, late() ? 'slow' : broke ? 'down' : 'empty', undefined, screen);
         send({ fallback: b });
       } else {
         // The corrections always fit: they are added past the cap if they must.

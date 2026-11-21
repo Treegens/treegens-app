@@ -189,8 +189,11 @@ export function reserved(accountId: string): number {
 export const holdKey = (ref: string) => createHash('sha256').update(String(ref)).digest('hex').slice(0, 32);
 
 // Each signature held right now is held in one lot: the soonest-expiring one that was free when its envelope went
-// out. One that is let go (voided, declined, out of time, another person put in) goes back to its lot, and if that
-// lot's date has passed by then it expires with it instead of coming back.
+// out. One that is let go (voided, declined, out of time) goes back to its lot, and if that lot's date has passed by
+// then it expires with it instead of coming back. When another person is put in on an envelope that is still out,
+// the signature held for the old person is held for the new one in the same step (their hold dates from when the
+// envelope went out), also after the lot's date: it is held for the envelope, one for one, and nothing that could be
+// sent with comes back (tests/billing9.test.ts, "putting another person in after the date").
 // A person who has just pressed Finish is no longer "held" by the time their "signature used" line is written (the
 // two are a moment apart, with other work in between): their hold is kept for that moment (HOLD_GRACE_MS), so the
 // line takes the signature that was held for it, also from a lot whose date has passed, instead of it expiring.
@@ -529,6 +532,16 @@ export function stillLive(accountId: string, reason: string, ref: string): numbe
   const line = get('SELECT id FROM credits WHERE account_id=? AND reason=? AND ref=?', accountId, reason, ref);
   if (!line) return 0;
   return Number(get('SELECT COALESCE(SUM(d.n),0) n FROM credit_draws d JOIN credit_lots l ON l.id=d.lot_id WHERE d.credit_id=? AND (l.expires_at IS NULL OR l.expires_at > ?)', line.id, now()).n) || 0;
+}
+// For the sentence someone reads when they have too few to send with: the signatures that expired most recently, when
+// nothing has been added since. So a person whose free ones or whose month ran out is told why the number is lower
+// than they remember, and when it happened. Null when nothing expired, or when something arrived after it.
+export function lastExpiry(accountId: string): { n: number; at: string } | null {
+  if (!creditsEnabled()) return null;
+  const x = get("SELECT -delta n, at FROM credits WHERE account_id=? AND reason='expired' ORDER BY at DESC, id DESC LIMIT 1", accountId);
+  if (!x || x.n <= 0) return null;
+  const same = get("SELECT COALESCE(SUM(-delta),0) n FROM credits WHERE account_id=? AND reason='expired' AND at=?", accountId, x.at).n;
+  return get('SELECT 1 x FROM credits WHERE account_id=? AND delta > 0 AND at > ?', accountId, x.at) ? null : { n: Number(same) || x.n, at: x.at };
 }
 // Writes down that a lot's expiry email for `stage` (days before) went out, so it goes once.
 export const markWarned = (lotId: number, stage: string) => {

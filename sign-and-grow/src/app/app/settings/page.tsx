@@ -570,7 +570,7 @@ function Billing() {
           )}
           <p className="plan-line">
             One signature is one person signing one envelope. {s.held > 0 ? <>{s.held} more {s.held === 1 ? 'is' : 'are'} held for people who have been asked and have not signed yet. </> : ''}
-            A signature is only used when somebody actually signs, and the one that expires soonest is always used first. If you void an envelope, or someone declines or runs out of time, the ones held for people who had not signed yet come straight back. {b.held_rule} One that was already used stays used.
+            A signature is only used when somebody actually signs, and the one that expires soonest is always used first. The rest is under &quot;How signatures work&quot; below.
           </p>
           {s.available < 0 && <div className="notice warn">You are {n(b.short)} short. {s.held > 0 ? 'More envelopes are out than you have signatures for, and people can still sign them. ' : ''}Whatever you add next covers those {b.short} first, so add more than that before sending to someone new. Signing your own documents stays free.</div>}
         </div>
@@ -705,9 +705,10 @@ function Billing() {
         </div>
       )}
 
-      <div className="card">
-        <h2 style={{ marginBottom: 10 }}>The rules</h2>
-        <ul className="rules">
+      {/* Every rule, closed until someone wants it (research/ux-charter.md, Plan): the dates above are what people need daily. */}
+      <details className="card">
+        <summary style={{ padding: '11px 0', cursor: 'pointer', fontWeight: 600, fontSize: 18 }}>How signatures work</summary>
+        <ul className="rules" style={{ marginTop: 10 }}>
           <li><b>{price} a month adds {n(P.monthlySignatures)}.</b> Extra signatures are ${P.topUpUsd} each. Every dollar plants {P.treesPerUsd} mangrove trees.</li>
           <li><b>When signatures expire.</b> {b.expiry_rule}</li>
           <li><b>You only use one when somebody signs.</b> When an envelope is voided, declined or expires, the signatures held for people who had not signed yet come back. {b.held_rule} One that was already used stays used. Correcting a sent envelope and sending reminders are free.</li>
@@ -725,7 +726,7 @@ function Billing() {
           <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is always free.</li>
           <li><b>Locked out?</b> While a plan is renewing, every email about a payment has a link that stops it without logging in. <Link href="/help">The help page</Link> can also stop it with the card alone: the last four digits plus the date and amount of a charge.</li>
         </ul>
-      </div>
+      </details>
 
       <div className="grid g2">
         <div className="card pad0">

@@ -40,7 +40,7 @@ export const LEVEL_REMOVES: Record<PurgeLevel, string[]> = {
   ],
   personal: [
     'Names, email addresses, phone numbers, internet addresses and browsers, on the envelope and in its audit trail. Each is replaced by "Removed on" and the day.',
-    'The message to its recipients, and names in its subject.',
+    'The message to its recipients, names in its subject, and the details your account keeps on it, such as a case number.',
     'Our stored copies of the emails about it, the record of its text messages and its webhook log.',
   ],
 };

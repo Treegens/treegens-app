@@ -37,7 +37,7 @@ function readDef(accountId: string, b: any, old?: Def) {
   const wrong = nameProblem(clean);
   if (wrong) throw bad(`${wrong} Nothing was saved.`);
   const taken = defsOf(accountId).find((d) => d.name_key === customKey(clean) && d.id !== old?.id);
-  if (taken) throw bad(`There is already a custom field called "${taken.name}". Give this one another name, or change that one. Nothing was saved.`, 409);
+  if (taken) throw bad(`There is already a detail called "${taken.name}". Give this one another name, or change that one. Nothing was saved.`, 409);
   const kind = b.kind === undefined || b.kind === null || b.kind === '' ? old?.kind ?? 'text' : b.kind;
   if (!(CUSTOM_KINDS as readonly string[]).includes(kind)) throw bad(`"kind" is "${str(kind, 40)}", and it has to be "text" or "list". Nothing was saved.`);
   let choices: string[] = old?.kind === 'list' ? old.choices : [];
@@ -82,7 +82,7 @@ function notesAfter(d: Def): string[] {
 
 export function createDef(c: Ctx, b: any) {
   const have = defsOf(c.account.id);
-  if (have.length >= MAX_CUSTOM_FIELDS) throw bad(`An account can have up to ${MAX_CUSTOM_FIELDS} custom fields, and this one has ${have.length}. Delete one you no longer use first. Envelopes that were sent keep their values.`);
+  if (have.length >= MAX_CUSTOM_FIELDS) throw bad(`An account can have up to ${MAX_CUSTOM_FIELDS} details, and this one has ${have.length}. Delete one you no longer use first. Envelopes that were sent keep their values.`);
   const d = readDef(c.account.id, b);
   const fid = id('cfd');
   const t = now();
@@ -95,7 +95,7 @@ export function createDef(c: Ctx, b: any) {
 
 function mineDef(c: Ctx, defId: string): Def {
   const r = get('SELECT * FROM custom_field_defs WHERE id=? AND account_id=?', defId, c.account.id);
-  if (!r) throw bad('That custom field does not exist any more. Someone may have deleted it. Reload the page to see the fields as they are now.', 404);
+  if (!r) throw bad('That detail does not exist any more. Someone may have deleted it. Reload the page to see the fields as they are now.', 404);
   return toDef(r);
 }
 
@@ -209,7 +209,7 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
         continue;
       }
       if (!def) {
-        problems.push(`There is no custom field called "${str(p.name, 60)}" in this account. An admin can add it under Settings, Account, or it may have been deleted a moment ago: reload to see the fields as they are now.`);
+        problems.push(`There is no detail called "${str(p.name, 60)}" in this account. An admin can add it under Settings, Account, or it may have been deleted a moment ago: reload to see the fields as they are now.`);
         continue;
       }
       const v = readValue(def, p.value);
@@ -228,8 +228,8 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
     }
     for (const r of gone) plan.changes.push(r.on_certificate ? `${r.name}: "${r.value}" taken off.` : `The value of "${r.name}" (not printed on the certificate) was taken off.`);
     if (e && plan.changes.length) {
-      if (e.status === 'completed') throw bad('This envelope is completed, so its custom fields are fixed: they are part of its record and its certificate. Nothing was changed.', 409);
-      if (e.status !== 'draft' && e.status !== 'sent') throw bad(`This envelope is ${e.status}, so its custom fields can no longer be changed. Nothing was changed.`, 409);
+      if (e.status === 'completed') throw bad('This envelope is completed, so its details are fixed: they are part of its record and its certificate. Nothing was changed.', 409);
+      if (e.status !== 'draft' && e.status !== 'sent') throw bad(`This envelope is ${e.status}, so its details can no longer be changed. Nothing was changed.`, 409);
       // A field the account requires stays filled in on an envelope that is out: it went out with a value.
       const needed = e.status === 'sent' ? defs.filter((d) => d.required && gone.some((r) => r.def_id === d.id || r.name_key === d.name_key)).map((d) => d.name) : [];
       if (needed.length) throw bad(`Your account asks for ${quoted(needed)} on every envelope, so it can be changed and not emptied. Nothing was changed.`);
@@ -273,11 +273,11 @@ export function writeCustom(envelopeId: string, plan: Plan | null, by?: Actor) {
     if (plan.values) {
       // The envelope can have closed while the request was being worked on (a correction emails people first).
       if (plan.changes.length && e.status !== 'draft' && e.status !== 'sent')
-        throw bad(`This envelope was ${e.status} in the moment your change arrived, so its custom fields were not changed. Everything else you saved stays saved.`, 409);
+        throw bad(`This envelope was ${e.status} in the moment your change arrived, so its details were not changed. Everything else you saved stays saved.`, 409);
       if (!plan.merge) run("DELETE FROM custom_values WHERE envelope_id=? AND document_id=''", envelopeId);
       for (const k of plan.clear) run("DELETE FROM custom_values WHERE envelope_id=? AND document_id='' AND name_key=?", envelopeId, k);
       for (const r of plan.values) putRow(envelopeId, '', r);
-      if (e.status === 'sent' && plan.changes.length) audit(envelopeId, by || { name: 'API' }, 'Custom fields changed', plan.changes.join(' '));
+      if (e.status === 'sent' && plan.changes.length) audit(envelopeId, by || { name: 'API' }, 'Details changed', plan.changes.join(' '));
     }
     if (plan.docs) {
       const docs = all('SELECT id FROM documents WHERE envelope_id=? ORDER BY position', envelopeId).map((d) => d.id as string);
@@ -335,8 +335,8 @@ function sendProblems(e: any, over?: { set: Map<string, string>; clear: string[]
   return { missing, misfit };
 }
 const missingText = (missing: string[], how: string) =>
-  `Your account asks for ${missing.length === 1 ? 'the custom field' : 'the custom fields'} ${quoted(missing)} on every envelope, and ${missing.length === 1 ? 'it has' : 'they have'} no value here. ${how}`;
-const EDITOR_HOW = 'Fill it in on the last step of the editor, under Details for your records (in the API: "custom_fields"), then send again.';
+  `Your account asks for ${quoted(missing)} on every envelope, and ${missing.length === 1 ? 'it has' : 'they have'} no value here. ${how}`;
+const EDITOR_HOW = 'Fill it in on the last step of the editor, under Details (in the API: "custom_fields"), then send again.';
 
 /** Called by sendEnvelope(), before anything is sent. */
 export function assertCustomFields(e: any) {
@@ -352,13 +352,26 @@ export function assertCustomFields(e: any) {
 /** The words a recipient can be shown: the names and values printed on the certificate. Read by fakeNotice. */
 export const customWords = (e: any): string[] => rowsOf(e.id).filter((r) => r.on_certificate).flatMap((r) => [r.name, r.value]);
 
+/**
+ * Called by a purge at the level that removes personal details (records.ts removePersonal): the values are the
+ * sender's own words and can name a person, so they go, also each document's pairs. Answers the texts to take out
+ * of the audit trail too.
+ */
+export function purgeCustom(envelopeId: string): string[] {
+  const values = all('SELECT value FROM custom_values WHERE envelope_id=?', envelopeId).map((r) => r.value as string);
+  run('DELETE FROM custom_values WHERE envelope_id=?', envelopeId);
+  // A line about a changed value also holds the value from before, which is kept nowhere else: the line's words go.
+  const lines = all("SELECT detail FROM audit WHERE envelope_id=? AND action='Details changed'", envelopeId).map((r) => r.detail as string);
+  return [...values, ...lines];
+}
+
 // ---- Public forms and bulk send ----------------------------------------------------------------------------------
 
 /** Why a public form on this template cannot take anyone: a required field the template has no value for. */
 export function formCustomProblem(tpl: any): string | null {
   const { missing, misfit } = sendProblems(tpl);
   if (!missing.length && !misfit.length) return null;
-  return [...(missing.length ? [missingText(missing, 'A visitor of a public form cannot fill custom fields in, so the template needs a value for each: open the template, and fill it in on the last step of its editor.')] : []), ...misfit].join(' ');
+  return [...(missing.length ? [missingText(missing, 'A visitor of a public form cannot fill details in, so the template needs a value for each: open the template, and fill it in on the last step of its editor.')] : []), ...misfit].join(' ');
 }
 
 /** A bulk row's own values ("custom_fields": {"Case number": "2026/114"}), checked; a column named like a field fills it. */
@@ -430,7 +443,7 @@ export function customCsv(envelopeIds: string[], taken: string[]): { head: strin
   const values = new Map<string, Map<string, string>>();
   for (const r of rows) values.set(r.envelope_id, (values.get(r.envelope_id) || new Map()).set(r.name_key, r.value));
   return {
-    head: keys.map((k) => (own.has(k) ? `custom: ${names.get(k)!.name}` : names.get(k)!.name)),
+    head: keys.map((k) => safeCell(own.has(k) ? `custom: ${names.get(k)!.name}` : names.get(k)!.name)),
     cells: (eid) => keys.map((k) => safeCell(values.get(eid)?.get(k) || '')),
   };
 }

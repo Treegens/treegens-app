@@ -173,14 +173,17 @@ export function redact(input: string): { text: string; removed: Removed[] } {
   // sign or a capital inside, or comes after a colon, an equals sign or in quotes) always goes. After "password" and
   // its kin, a plain word goes too ("my password is sunshine"), unless it is an everyday word that says something
   // about the password, so "my password is not working" and "password reset" stay as they are.
-  t = t.replace(/\b(pass(?:word|code|phrase)?|pwd|pw|access code|pin)\b(\s*(?:is|was|:|=)?\s*)(["'“‘]?)([^\s"'”’]+)\3/gi, (m, w, sep, q, v) => {
+  // The word for a password in German, French, Spanish and Portuguese counts too, for a value that reads like one.
+  // In double quotes it may be several words ("my password is "blue sky at night"").
+  t = t.replace(/(?<![\p{L}\d])(pass(?:word|code|phrase|wort)?|pwd|pw|kennwort|mot de passe|contraseña|contrasena|senha|clave)(?![\p{L}\d])(\s*(?:(?:ist|is|was|war|est|es|é|è)(?=\s)|:|=)?\s*)["“][^"“”\n]{1,80}["”]/giu, (_m, w, sep) => `${w}${sep}${take('password', 'password')}`);
+  t = t.replace(/(?<![\p{L}\d])(pass(?:word|code|phrase|wort)?|pwd|pw|access code|pin|kennwort|mot de passe|contraseña|contrasena|senha|clave)(?![\p{L}\d])(\s*(?:(?:ist|is|was|war|est|es|é|è)(?=\s)|:|=)?\s*)(["'“‘]?)([^\s"'”’]+)\3/giu, (m, w, sep, q, v) => {
     // Something already taken out above ("[code removed]") is not a password.
     if (/removed\]/.test(v) || /^\[/.test(v)) return m;
     // Full stops and commas at the end belong to the sentence, not to the value.
     const core = v.replace(/[.,!?;)]+$/, ''), tail = v.slice(core.length);
     if (!core) return m;
     const everyday = COMMON_AFTER_PASSWORD.has(core.toLowerCase()) || /^work\w*$/i.test(core);
-    const strong = /[:=]/.test(sep) || !!q || /\d/.test(core) || /[^A-Za-z]/.test(core) || /[a-z][A-Z]|[A-Z]{2}/.test(core);
+    const strong = /[:=]/.test(sep) || !!q || /\d/.test(core) || /[^\p{L}]/u.test(core) || /[a-z][A-Z]|[A-Z]{2}/.test(core);
     const named = /^(password|passcode|passphrase|pwd)$/i.test(w) && /^[A-Za-z]{3,}$/.test(core);
     return (strong || named) && !everyday ? `${w}${sep}${take('password', 'password')}${!q && /^[.,]$/.test(tail) ? tail : ''}` : m;
   });
@@ -272,7 +275,7 @@ export const CHAT_TOOLS: ChatTool[] = [
     words: /\b(scam\w*|real|genuine|phish\w*|suspicious|fake|security code|is this (?:email|request)|really from|did not expect|unexpected)\b/ },
   { id: 'verify', label: 'Verify a document', href: '/verify', what: 'tells whether a PDF is unchanged since signing finished here, or looks up a printed copy by its envelope ID. It does not say who was behind each signature.',
     words: /\b(verify|unchanged|tamper\w*|authentic|fingerprint|original|changed since|printed copy|envelope id)\b/ },
-  { id: 'fix-name', label: 'Fix my name', href: '/help#while-signing', what: 'on the signing page, in the review before Finish: "Not spelled right? Fix my name". A small slip is corrected at once; anything more is sent to the sender to confirm.',
+  { id: 'fix-name', label: 'Fix my name', href: '/help#while-signing', what: 'on the signing page, in "Check before you finish", which opens at Finish when the name typed for the signature is not the name on the document: "Not spelled right? Fix my name". A small slip is corrected at once; anything more is sent to the sender to confirm.',
     words: /\b(my name|name (?:is )?(?:wrong|spelled|misspel\w*)|misspel\w*|typo in my name|spelling)\b/ },
   { id: 'more-time', label: 'Ask for more time', href: '/help#more-time', what: 'on the signing page: "Ask the sender for more time", under Other actions, or on the page a passed deadline shows. The sender decides.',
     words: /\b(expired|deadline|more time|ran out|too late|extend\w*|extension|closed before)\b/ },

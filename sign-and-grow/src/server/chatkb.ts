@@ -19,6 +19,7 @@ import { expiryRuleText, HELD_EXPIRY_TEXT } from '../lib/policy.ts';
 import { PRICING, usd, CURRENCY_NOTE } from '../lib/impact.ts';
 import { CHAT_SCREENS, CHAT_TOOLS, type ChatScreen } from '../lib/chat.ts';
 import { helpTopics, notInIt } from './chatsources.ts';
+import { SIGNER_FAQ, SENDER_FAQ, screenFacts, sending, nameFix, moreTimeForSigner, moreTimeForSender, mistakeWhileSigning, APP_LABELS, type Faq } from './chatscreens.ts';
 
 // ---- The topics of /help -------------------------------------------------------------------------------------
 // The questions and their anchors come from the page itself (helpTopics()). These are a few words on what each one
@@ -67,7 +68,8 @@ export const TOPIC_NOTES: Record<string, string> = {
 // ---- Frequent questions --------------------------------------------------------------------------------------
 // The built-in answers. Each has the words that pick it, the answer, and the tool buttons that go with it. The answer
 // texts are built from policy.ts where a rule is quoted. The model is given the same list, so the two say the same.
-type Faq = { id: string; words: string[]; answer: () => string };
+// What a signer and a sender ask about their own screen is in src/server/chatscreens.ts, and an answer may depend on
+// the screen the person is on (`screen`), so it can say "on this page".
 const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 export const FAQ: Faq[] = [
   { id: 'not-me', words: ['did not sign', "didn't sign", 'never signed', 'not me', 'forged', 'dispute', 'someone signed', 'in my name'],
@@ -87,16 +89,16 @@ export const FAQ: Faq[] = [
   { id: 'verify', words: ['verify', 'unchanged', 'tampered', 'authentic', 'fingerprint', 'original', 'printed copy', 'envelope id'],
     answer: () => 'Verify a document tells you whether a PDF is unchanged since signing finished here. It does not show who was behind each signature. With only a printed copy, type the envelope ID from the foot of a page: you see its status, day, pages and the fingerprint of the signed file, never a name or an address. The file you check is not stored.' },
   { id: 'more-time', words: ['expired', 'deadline', 'more time', 'ran out', 'too late', 'extend', 'extension'],
-    answer: () => 'Open your link anyway. If the deadline has passed, the page has a button that asks the sender for more time, and before the deadline it is under Other actions on the signing page. Only the sender can reopen it. When they do, the same link works again and anyone who already signed does not sign again.' },
+    answer: (s) => (sending(s) ? moreTimeForSender(s) : moreTimeForSigner(s)) },
   { id: 'name', words: ['my name', 'misspelled', 'spelled wrong', 'spelling', 'typo', 'wrong name', 'name is wrong'],
-    answer: () => 'On the signing page, the review before Finish shows your name with "Not spelled right? Fix my name". A small slip (a letter, the spacing, a hyphen or a dot) is corrected at once, and the sender is told. A name that could be someone else\'s, or one in another alphabet, is not changed: it goes to the sender to confirm, and they can correct it for you.' },
-  { id: 'copy', words: ['copy', 'download', 'signed pdf', 'get my document', 'keep a copy'],
-    answer: () => 'When everyone has finished, each person gets a completion email that links to the signed document, with the PDF attached when it is small enough. Lost it? Find my documents sends the link again, also months later. To be safe, download the PDF and keep it.' },
+    answer: (s) => (sending(s) ? `Your own name is under ${APP_LABELS.settings.label}, then ${APP_LABELS.profile.label}. A signer's name on an envelope you sent is corrected on the envelope's page, without voiding it. Your name on a document you were sent to sign: ` : '') + `${nameFix()} A small slip (a letter, the spacing, a hyphen or a dot) is corrected at once, and the sender is told. A name that could be someone else's, or one in another alphabet, is not changed: it goes to the sender to confirm, and they can correct it for you.` },
+  { id: 'copy', words: ['copy', 'download', 'signed pdf', 'signed document', 'completed document', 'finished document', 'get my document', 'find my document', 'where is my document', 'keep a copy', 'certificate', 'audit trail'],
+    answer: (s) => (sending(s) ? `If you sent it: open ${APP_LABELS.envelopes.label}, choose the completed envelope, then ${APP_LABELS.download.label}. If someone else sent it to you: ` : '') + 'When everyone has finished, each person gets a completion email that links to the signed document, with the PDF attached when it is small enough. Lost it? Find my documents sends the link again, also months later. To be safe, download the PDF and keep it.' },
   { id: 'agree', words: ['agree', 'agreeing', 'consent', 'what am i signing', 'electronic records'],
     answer: () => `Before any field opens you are shown these words and asked to tick a box: "${consentWording('the sender', true).legal}" You can decline instead, or ask the sender for a paper copy. The help page prints the full wording with its version.` },
   { id: 'legal', words: ['legal', 'legally', 'is it valid', 'is this valid', 'is that valid', 'signature valid', 'valid signature', 'still valid', 'valid in', 'binding', 'enforceable', 'hold up', 'stand up', 'court', 'lawyer', 'law', 'should i sign', 'safe to sign', 'qualified', 'eidas'],
     answer: () => 'GrowSigning makes a simple electronic signature: the signer\'s name or mark on the page and a record of when and from where they signed. It does not check identity documents and has no notary step. Whether that is enough depends on the country and the kind of document, and some documents need a handwritten, witnessed, notarised or qualified signature. The helper gives no legal advice: ask a lawyer, and see "Is this signature enough for my document?" on the help page.' },
-  { id: 'locked', words: ['log in', 'login', 'sign in', 'password', 'locked out', 'two-step', '2fa', 'authenticator', 'reset', 'lost my phone', 'lost the phone', 'recovery code'],
+  { id: 'locked', words: ['log in', 'login', 'sign in', 'password', 'locked out', 'two-step', '2fa', 'authenticator', 'reset', 'lost my phone', 'lost the phone', 'recovery code', 'cannot sign in', "can't sign in", 'cannot log in', "can't log in"],
     answer: () => `Forgot the password? Use Forgot password on the sign-in page: the link works for one hour. Made your login with Google or Microsoft? Use that button. Lost the phone with your authenticator app? Type one of your recovery codes in place of the code. Without them, a team admin can switch it off, or you can start a reset by email after your password, which takes effect after ${TWO_STEP_EMAIL_RESET_DAYS} days. "I cannot log in" on the help page has every case. A person can help too, and the contact form works without signing in.` },
   { id: 'close', words: ['close my account', 'delete my account', 'delete everything', 'remove my data', 'close account', 'deleted'],
     answer: () => `Settings, then Your data, then Close my account. Any subscription stops at once. You have ${CLOSE_GRACE_DAYS} days to undo it by signing in again, and ${CLOSING_REMINDER_DAYS} days before the end we email you. Export first if you want copies. Some things are kept after deleting, such as the record of payments without your name: the help page and Security and trust list exactly what.` },
@@ -111,7 +113,7 @@ export const FAQ: Faq[] = [
   { id: 'cannot-send', words: ['cannot send', "can't send", 'can i not send', 'not able to send', 'send button', 'limit', 'paused', 'blocked'],
     answer: () => `The usual reasons: your email address is not confirmed yet; the account reached its daily limit (an account that has not paid can newly email ${newAccountDailyRecipients()} people a day in its first week and ${unpaidDailyRecipients()} after that, until a payment is ${PAID_TRUST_DAYS} days old); the document reads like a fake payment notice; sending is paused after reports; an access code is too short; or there are no signatures left. The message on screen says which. "Why can I not send?" on the help page explains each.` },
   { id: 'fix-sent', words: ['mistake', 'wrong address', 'wrong email', 'correct', 'after sending', 'change after sending', 'edit sent', 'fix a document'],
-    answer: () => 'You do not need to void it. Open the envelope and correct it in place: a name, an email address, fields, people. Signatures already collected stay. Once someone has finished, a change to the pages themselves is saved only if you choose to ask them to sign again, and you are asked first.' },
+    answer: (s) => s === 'signing' ? mistakeWhileSigning(s) : 'You do not need to void it. Open the envelope and correct it in place: a name, an email address, fields, people. Signatures already collected stay. Once someone has finished, a change to the pages themselves is saved only if you choose to ask them to sign again, and you are asked first.' },
   { id: 'not-received', words: ['did not get the email', "didn't get the email", 'never got the email', 'never received', 'not received', 'recipient', 'spam folder'],
     answer: () => 'Open the envelope: it shows whether each email left our server and whether the person opened the document. You can copy their signing link and send it yourself, show it as a QR code, remind just that person, or correct their address without voiding anything.' },
   { id: 'after-cancel', words: ['documents after cancel', 'documents when i cancel', 'happens to my documents', 'lose my documents', 'export', 'download everything', 'keep my documents'],
@@ -123,24 +125,33 @@ export const FAQ: Faq[] = [
   { id: 'code', words: ['one-time code', 'verification code', 'code did not arrive', 'access code', 'code'],
     answer: () => `A one-time code has ${SIGNER_CODE_DIGITS} digits, works for ${SIGNER_CODE_MINUTES} minutes and for ${SIGNER_CODE_TRIES} tries, and only the newest one works. A code by email goes to the same mailbox as the link, so look in the spam folder. "I do not get the code" on the same screen tells the sender. An access code is set by the sender, who tells it to you: it is never in our email, and after ${ACCESS_CODE_TRIES} wrong tries it freezes until the sender sets a new one. Never pass a code on to anyone, us included.` },
   { id: 'reminders', words: ['reminder', 'reminders', 'remind'],
-    answer: () => `A new account reminds whoever has not finished every ${DEFAULT_REMINDER_DAYS} days by default. You see and change it on the last step before every send, and each person can stop the reminders to themselves.` },
+    answer: () => `A new account reminds whoever has not finished every ${DEFAULT_REMINDER_DAYS} days by default. You see and change it on the last step before every send, and each person can stop the reminders to themselves. To remind someone now, open the envelope and choose ${APP_LABELS.remind.label}.` },
   { id: 'groups', words: ['group', 'team signs', 'anyone in the team'],
     answer: () => GROUP_RULE },
+  ...SIGNER_FAQ,
+  ...SENDER_FAQ,
   { id: 'person', words: ['person', 'human', 'someone', 'support', 'contact', 'talk to', 'email you'],
     answer: () => 'Choose Talk to a person under this answer. It opens our contact form with this chat attached, which you can take off. It works without an account and without logging in, gives you a reference at once, and a person answers by email.' },
 ];
 export const NO_MATCH = 'I could not find that in our help pages, and I would rather not guess. Choose Talk to a person: a person reads every message and answers by email. The help page also lists every topic.';
 
 /** The built-in answer for a question: the frequent question whose words fit best, or the honest "not found". */
-export function builtInAnswer(question: string): { id: string | null; reply: string } {
-  const q = ` ${String(question || '').toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, ' ')} `;
+export function builtInAnswer(question: string, screen: ChatScreen = 'public'): { id: string | null; reply: string } {
+  // Lower case, one kind of apostrophe, and the marks of a sentence as spaces, so "app?" is the word "app".
+  const q = ` ${String(question || '').toLowerCase().replace(/[’‘]/g, "'").replace(/[?!.,;:()"“”]+/g, ' ').replace(/\s+/g, ' ').trim()} `;
   let best: Faq | null = null, bestScore = 0;
   for (const f of FAQ) {
     let score = 0;
-    for (const w of f.words) if (q.includes(w)) score += w.includes(' ') ? 3 : w.length > 4 ? 2 : 1;
+    // A word inside a longer one that also fits ("remind" in "reminders") counts once, as the longer one.
+    const counted: string[] = [];
+    for (const w of f.words.filter((x) => q.includes(x)).sort((a, b) => b.length - a.length)) {
+      if (counted.some((c) => c.includes(w.trim()))) continue;
+      counted.push(w);
+      score += w.trim().includes(' ') ? 3 : w.trim().length > 4 ? 2 : 1;
+    }
     if (score > bestScore) (best = f), (bestScore = score);
   }
-  return best ? { id: best.id, reply: best.answer() } : { id: null, reply: NO_MATCH };
+  return best ? { id: best.id, reply: best.answer(screen) } : { id: null, reply: NO_MATCH };
 }
 
 // ---- The system prompt -----------------------------------------------------------------------------------------
@@ -176,9 +187,13 @@ How you answer:
 - Offer a person yourself, in one sentence, when: money was taken or is owed; someone says they did not sign something, or there is a dispute; there is a security problem; the person is locked out; anything legal; the person is upset; or your last answer did not help.
 - Answer in the language the person writes in. When they write in a language other than English, say once that GrowSigning's screens and emails are in English for now.
 - Plain text only: no Markdown, no tables, no headings, no bold. Short, kind sentences. Two to six sentences unless the person asks for detail. Never use em dashes. Do not make up web addresses; you may name pages like the help page, Check an email or Verify a document.
+- When someone asks how to do something, name the control that does it on the screen they are on, by its exact label from WHAT IS ON THE SCREENS below, and say where it is. Never name a button that is not in the facts below.
 - If a question is not about GrowSigning, say you can only help with GrowSigning.
 
 The person is on ${CHAT_SCREENS[screen]}.
+
+=== WHAT IS ON THE SCREENS ===
+${screenFacts()}
 
 === TOOLS THAT EXIST (the person uses them; you never do) ===
 ${lines(CHAT_TOOLS.map((t) => `${t.label} (${t.href}): ${t.what}`))}
@@ -240,7 +255,7 @@ ${topicLines()}
 ${notInItLines()}
 
 === FREQUENT QUESTIONS, WITH THE ANSWERS OUR PAGES GIVE ===
-${lines(FAQ.filter((f) => f.id !== 'person').map((f) => f.answer()))}
+${lines(FAQ.filter((f) => f.id !== 'person').map((f) => f.answer(screen)))}
 
 === TALKING TO A PERSON ===
 - The "Talk to a person" button under every answer opens the contact form with this chat attached; the person sees what is attached and can take it off. It works without an account and without logging in, and gives a reference at once.${reachable ? `\n- ${replyPromise(supportFirstReplyHours(env), supportUrgentReplyHours(env))}` : '\n- No response time is promised on this server.'}

@@ -924,3 +924,198 @@ test('closing the dialog mid-answer cancels the request and leaves a plain note,
   assert.match(ui, /content: STOPPED, mode: 'error'/, 'what is kept says the answer was stopped');
   assert.match(ui, /The answer was stopped when you closed the help, so it is not shown\. Ask again, or talk to a person\./);
 });
+
+// ---- What a signer and a sender ask about their own screen (research/ux.json, flow f-signer-help) ----------------------
+
+const screens = await import('../src/server/chatscreens.ts');
+
+test('"I cannot sign this today. What can I do?" on the signing page is answered with Finish later and Ask for more time, on this page', async () => {
+  provider('none');
+  stub(() => assert.fail('no request may leave without a key'));
+  const v = visitor();
+  const r = await ask(v, 'I cannot sign this today. What can I do?', { screen: 'signing' });
+  assert.equal(r.status, 200);
+  assert.notEqual(r.data.reply, kb.NO_MATCH);
+  assert.match(r.data.reply, /^On this page, choose Other actions, then Finish later\./);
+  assert.match(r.data.reply, /Ask the sender for more time/);
+  assert.match(r.data.reply, /saved/);
+  assert.equal(r.data.sig, chat.signAnswer(r.data.reply, 'I cannot sign this today. What can I do?'));
+  // Asked anywhere else, the same answer says how to get to the control instead of "on this page".
+  const h = await ask(v, 'I cannot sign this today. What can I do?', { screen: 'help' });
+  assert.match(h.data.reply, /^Open your signing link\. On the signing page, choose Other actions, then Finish later\./);
+  // "I need more time", the starter on the signing page, names both controls there, and the sender's own on theirs.
+  assert.match(kb.builtInAnswer('I need more time', 'signing').reply, /On this page, choose Other actions.*Ask the sender for more time.*Finish later/);
+  assert.match(kb.builtInAnswer('I need more time', 'app').reply, /Open Envelopes, choose the envelope, then Give more time/);
+  // The model's stand-in after a failure knows the screen too.
+  provider('openrouter');
+  stub(() => new Response('no', { status: 503 }));
+  const down = await ask(visitor(), 'Can I sign later?', { screen: 'signing' });
+  assert.equal(down.data.why, 'down');
+  assert.match(down.data.reply, /^On this page, choose Other actions, then Finish later/);
+});
+
+test('what someone who signs most often asks has a built-in answer that names the control on the signing page', () => {
+  const cases: [string, string, RegExp][] = [
+    ['Can I sign later?', 'later', /Finish later/],
+    ['I am not ready to sign', 'later', /Finish later/],
+    ['I do not want to sign this', 'decline', /Decline to sign.*closes the document for everyone/],
+    ['How do I decline?', 'decline', /Decline to sign/],
+    ['Can someone else sign instead of me?', 'pass', /Pass to someone else/],
+    ['Wrong person, this is not for me', 'pass', /Pass to someone else/],
+    ['I have a question for the sender', 'ask-sender', /Questions and comments/],
+    ['I do not understand this document', 'ask-sender', /Questions and comments.*cannot see your document/],
+    ['The contract is wrong', 'ask-sender', /Questions and comments/],
+    ['Can I sign on paper instead?', 'paper', /no button for signing on paper.*Questions and comments/],
+    ['Where do I sign?', 'how-sign', /press Next.*Type, Draw or Upload.*Finish/],
+    ['How do I draw my signature?', 'how-sign', /Type, Draw or Upload/],
+    ['The Finish button does not work', 'finish-stuck', /Press Next.*Talk to a person/],
+    ['I cannot see the document', 'cannot-see', /Text view.*Download/],
+    ['I signed by mistake', 'signed-mistake', /neither you nor the helper can take a signature back.*Write to the sender/],
+    ['Stop sending me reminders', 'stop-reminders', /Stop reminder emails/],
+    ['What happens after I finish?', 'after-finish', /the sender is told/],
+    ['Is this safe?', 'safe', /Check an email.*cannot say whether you should sign/],
+    ['Does it work on my phone?', 'phone', /no app to install/],
+    ['I made a mistake in a field', 'fix-sent', /tap any field to change/],
+    ['My name is spelled wrong', 'name', /Check before you finish.*Fix my name/],
+  ];
+  for (const [q, id, words] of cases) {
+    const b = kb.builtInAnswer(q, 'signing');
+    assert.equal(b.id, id, q);
+    assert.match(b.reply, words, q);
+    assert.ok(!b.reply.includes('—'), q);
+  }
+  // Nothing here promises what the page does not do: no answer names signing on paper as a button, and none says a
+  // signature is valid.
+  for (const f of screens.SIGNER_FAQ) for (const s of ['signing', 'help', 'public'] as const) {
+    assert.ok(!/Sign on paper instead/.test(f.answer(s)), f.id);
+    assert.deepEqual(chat.backstop(f.answer(s)), [], `${f.id} on ${s}`);
+  }
+  // Words that only look alike go where they belong: logging in, a refused card, a withdrawn contract.
+  assert.equal(kb.builtInAnswer('I cannot sign in', 'public').id, 'locked');
+  assert.equal(kb.builtInAnswer("I can't log in", 'public').id, 'locked');
+  assert.notEqual(kb.builtInAnswer('My card was rejected', 'plan').id, 'decline');
+  assert.notEqual(kb.builtInAnswer('Is the contract binding?', 'signing').id, 'status');
+  assert.equal(kb.builtInAnswer('Is it safe to sign?', 'signing').id, 'legal');
+  // A word inside a longer one that also fits counts once: "reminders" does not outvote the signer's own question.
+  assert.equal(kb.builtInAnswer('Please stop the reminders', 'signing').id, 'stop-reminders');
+  assert.equal(kb.builtInAnswer('Are people reminded by themselves? How do reminders work?', 'app').id, 'reminders');
+});
+
+test('what someone who sends most often asks has a built-in answer that names the control in the app', () => {
+  const cases: [string, string, RegExp][] = [
+    ['How do I send a document?', 'send', /^On Home, choose Send for signature\./],
+    ['How do I add a second signer?', 'add-signer', /editor's first step.*Set signing order/],
+    ['Has everyone signed yet?', 'status', /^Open Envelopes and choose the envelope\..*Send reminder.*Copy link/],
+    ['How do I void an envelope?', 'void', /^Open Envelopes, choose the envelope, then Void\./],
+    ['Can I use a template?', 'template', /New template.*Save as template/],
+    ['Can I send to many people at once?', 'bulk', /^Open Bulk send/],
+    ['How do I add my team?', 'team', /^Open Settings, then Team\..*Invite by email/],
+    ['Where do I change my notifications?', 'settings', /^Open Settings\. Profile has your name, Notifications/],
+    ['How do I set a deadline?', 'deadline', /Give more time.*under Deadline/],
+    ['Where is my signed document?', 'copy', /^If you sent it: open Envelopes, choose the completed envelope, then Download with certificate\./],
+    ['How do I change my name?', 'name', /^Your own name is under Settings, then Profile\./],
+    ['How do I remind someone?', 'reminders', /open the envelope and choose Send reminder/],
+  ];
+  for (const [q, id, words] of cases) {
+    const b = kb.builtInAnswer(q, 'app');
+    assert.equal(b.id, id, q);
+    assert.match(b.reply, words, q);
+  }
+  // In the editor the answer is about the editor; signed out, it says to log in first.
+  assert.match(kb.builtInAnswer('How do I send a document?', 'editor').reply, /^Here in the editor there are three steps/);
+  assert.match(kb.builtInAnswer('How do I send a document?', 'public').reply, /^Log in, and on Home, choose Send for signature/);
+  assert.match(kb.builtInAnswer('How do I void an envelope?', 'help').reply, /^Log in and open Envelopes/);
+  // The older answers still win for what they are about.
+  assert.equal(kb.builtInAnswer('How do I cancel?', 'app').id, 'cancel');
+  assert.equal(kb.builtInAnswer('Why can I not send?', 'editor').id, 'cannot-send');
+  assert.equal(kb.builtInAnswer('I sent it to the wrong address', 'app').id, 'fix-sent');
+  for (const f of screens.SENDER_FAQ) for (const s of ['app', 'editor', 'public'] as const) assert.deepEqual(chat.backstop(f.answer(s)), [], `${f.id} on ${s}`);
+});
+
+test('every control the helper names is on the screen it names it for, read from the source of that screen', () => {
+  const sign = fs.readFileSync('src/app/sign/[token]/page.tsx', 'utf8') + fs.readFileSync('src/components/sign/dialogs.tsx', 'utf8');
+  const A = screens.SIGN_ACTIONS, L = screens.SIGN_LABELS;
+  assert.ok(sign.includes(`label: '${A.later!.label}'`));
+  assert.ok(sign.includes('`Ask ${sender.name} for more time`'), 'the page puts the sender\'s name where the helper says "the sender"');
+  assert.equal(A.time!.label, 'Ask the sender for more time');
+  assert.ok(sign.includes('label: `Hand back to ${me.group?.name}`'));
+  assert.equal(A.handback!.label, 'Hand back to the group');
+  assert.ok(sign.includes(`label: '${A.reassign!.label}'`));
+  assert.ok(sign.includes(`label: '${A.ask!.label}'`));
+  assert.ok(sign.includes(`'${A.decline!.label}'`));
+  // Signing on paper is a key of the page's list that nobody is shown yet, so the helper never names it.
+  assert.equal(A.paper, null);
+  assert.match(fs.readFileSync('src/components/sign/actions.ts', 'utf8'), /not built yet: always false/);
+  assert.ok(!kb.systemPrompt('signing').includes('Sign on paper instead'));
+  for (const label of [L.menu, L.report, L.textView, L.download, L.stopReminders, L.fixName, L.check]) assert.ok(sign.includes(label), label);
+  assert.match(sign, /\{finis|>Finish</, 'Finish');
+  assert.ok(/>Next<|'Next'|Next\b/.test(sign));
+  for (const [k, v] of Object.entries(screens.APP_LABELS)) assert.ok(fs.readFileSync(v.where, 'utf8').includes(v.label), `${k}: "${v.label}" in ${v.where}`);
+  // Type, Draw or Upload, as the signature dialog offers them.
+  assert.match(fs.readFileSync('src/components/SignaturePad.tsx', 'utf8'), /\['type', 'Type'\], \['draw', 'Draw'\], \['upload', 'Upload'\]/);
+});
+
+test('the model is told what is on the screens, with the answers for the screen the person is on', () => {
+  const p = kb.systemPrompt('signing');
+  assert.match(p, /=== WHAT IS ON THE SCREENS ===/);
+  assert.match(p, /one menu, "Other actions", on both screens\. Its entries, in this order: "Finish later" \(always, also on the first screen before agreeing\); "Ask the sender for more time" \(only when the document has a deadline/);
+  assert.match(p, /name the control that does it on the screen they are on, by its exact label/);
+  assert.match(p, /Never name a button that is not in the facts below/);
+  assert.match(p, /There is no way to sign on paper in GrowSigning/);
+  assert.match(p, /- On this page, choose Other actions, then Finish later\./, 'the frequent answers are the ones for this screen');
+  assert.match(kb.systemPrompt('app'), /- On Home, choose Send for signature\./);
+  assert.match(kb.systemPrompt('help'), /- Open your signing link\. On the signing page, choose Other actions, then Finish later\./);
+  assert.equal(screens.screenFacts().includes('—'), false);
+});
+
+// ---- More of what a model must not say, and of what must not be sent ----------------------------------------------------
+
+test('the backstop also corrects a judge, "good in court", "counts as" and "legal in"; a code or a link that "is valid for 10 minutes" is left alone', () => {
+  for (const s of [
+    'Your signature is perfectly fine legally and any judge would accept it.',
+    'This counts as a real signature in every country.',
+    'Yes, that signature is good in court.',
+    'Electronic signatures are legal in the US under the ESIGN Act.',
+    'The signature is valid for a lease.',
+    'Your signature is valid for 10 years.',
+  ]) assert.deepEqual(chat.backstop(s), [chat.CORRECT_VALID], s);
+  assert.deepEqual(chat.backstop('The money will be back on your card in 5 days.'), [chat.CORRECT_REFUND]);
+  for (const s of [
+    'Your code is valid for 10 minutes.',
+    'The link is valid for as long as the document is open.',
+    'A one-time code is valid for 10 minutes and for 5 tries.',
+    'The reset link is valid for one hour.',
+    'Nobody can say whether it is legal in your country.',
+  ]) assert.deepEqual(chat.backstop(s), [], s);
+});
+
+test('a password named in German, French, Spanish or Portuguese, and one of several words in quotes, are taken out; words about a password stay', () => {
+  for (const [typed, kept] of [
+    ['mein Passwort ist Geheim123', 'mein Passwort ist [password removed]'],
+    ['mot de passe: soleil', 'mot de passe: [password removed]'],
+    ['mi contraseña es Perro2024', 'mi contraseña es [password removed]'],
+    ['minha senha é abc12345', 'minha senha é [password removed]'],
+    ['my password is "blue sky at night" ok', 'my password is [password removed] ok'],
+    ['password isabel99', 'password [password removed]'],
+  ]) assert.equal(lib.redact(typed).text, kept, typed);
+  for (const same of ['mot de passe oublié', 'Passwort vergessen', 'the password field says "required"', 'my password is not working', 'the spin class', 'compass is broken'])
+    assert.equal(lib.redact(same).text, same, same);
+});
+
+test('a page that goes away before the model has begun to answer stops the model too', async () => {
+  provider('openrouter');
+  let aborted = false, started: () => void = () => {};
+  const begun = new Promise<void>((r) => (started = r));
+  stub((c) => new Promise<Response>((_res, rej) => {
+    started();
+    c.signal!.addEventListener('abort', () => ((aborted = true), rej(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
+  }));
+  const { handle } = await import('../src/server/router.ts');
+  const gone = new AbortController();
+  const pending = handle(new Request('http://test.local/api/public/chat', { method: 'POST', signal: gone.signal, headers: { 'content-type': 'application/json', 'x-forwarded-for': '198.51.200.9' }, body: JSON.stringify({ screen: 'help', messages: [{ role: 'user', content: 'How do I cancel?' }] }) }));
+  await begun;
+  assert.equal(aborted, false);
+  gone.abort();
+  await pending.catch(() => {});
+  assert.equal(aborted, true, 'the call to the model was stopped when the page left');
+});

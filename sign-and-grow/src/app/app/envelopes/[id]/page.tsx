@@ -19,6 +19,7 @@ import { ownLink } from '@/components/sender/OwnLink';
 import { Disputed } from '@/components/sender/Disputed';
 import { EnvelopeComments } from '@/components/sender/Comments';
 import { RetentionCard } from '@/components/sender/Retention';
+import { CustomDetails } from '@/components/sender/CustomDetails';
 import { redactedNote } from '@/lib/retention';
 import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
 
@@ -281,6 +282,9 @@ export default function EnvelopeDetail() {
 
       {/* How long it is kept, holds, Keep it, Purge now, and what a purge left (src/components/sender/Retention.tsx). */}
       {!isTpl && <RetentionCard envelopeId={e.id} r={data.retention} onChanged={reload} />}
+
+      {/* The account's own details on this envelope, such as a case number, folded (src/components/sender/CustomDetails.tsx). */}
+      <CustomDetails envelope={e} editHref={mayChange ? editHref : null} />
 
       {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
       <PayLinkNote envelopeId={e.id} closed={!isTpl && e.status !== 'draft' && e.status !== 'sent'} />

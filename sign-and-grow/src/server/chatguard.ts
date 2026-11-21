@@ -32,6 +32,11 @@ const VALID_CLAIMS: RegExp[] = [
   // "a court will accept it", "courts would recognise it", "it will be accepted in court"
   new RegExp(String.raw`\bcourts?\s+(?:will|would|must|shall|can)\s+${ADV}(?:accept|recogni[sz]e|uphold|enforce)\b`, 'giu'),
   new RegExp(String.raw`\b(?:will|would)\s+be\s+${ADV}(?:accepted|recogni[sz]ed|upheld|enforced)\s+(?:by|in)\s+(?:a\s+|any\s+|the\s+)?courts?\b`, 'giu'),
+  // "any judge would accept it", "good in court", "counts as a real signature", "signatures are legal in the US"
+  new RegExp(String.raw`\bjudges?\s+(?:will|would|must|shall|can)\s+${ADV}(?:accept|recogni[sz]e|uphold|enforce)\b`, 'giu'),
+  /\b(?:good|fine|ok|okay|accepted|recogni[sz]ed)\s+in\s+(?:a\s+|any\s+|the\s+)?courts?\b/giu,
+  /\bcounts?\s+as\s+(?:a\s+)?(?:real|legal|proper|valid|binding|handwritten|wet)\b/giu,
+  new RegExp(String.raw`\b${IS}\s+${ADV}(?:legal|lawful)\s+(?:in|under|everywhere|worldwide|across|throughout)\b`, 'giu'),
   // "has the same legal effect as a handwritten signature"
   /\b(?:has|have|carries|carry)\s+(?:the\s+)?(?:same|full)\s+legal\s+(?:effect|force|standing|weight|validity)\b/giu,
   // French
@@ -61,8 +66,8 @@ const REFUND_CLAIMS: RegExp[] = [
   // "I have issued a refund", "we've refunded you"
   new RegExp(String.raw`\b(?:i|we)\s*(?:have|['’]ve)\s+${ADV}(?:issued|processed|sent|started|initiated|approved|made|arranged|requested)\s+(?:a|the|your)\s+(?:\w+\s+)?refund`, 'giu'),
   new RegExp(String.raw`\b(?:i|we)\s*(?:have|['’]ve)\s+${ADV}(?:refunded|reimbursed|credited)\b`, 'giu'),
-  // "your money will be returned", "the money has been sent back"
-  new RegExp(String.raw`\bmoney\s+(?:will\s+be|is\s+being|has\s+been)\s+${ADV}(?:returned|refunded|sent\s+back)\b`, 'giu'),
+  // "your money will be returned", "the money has been sent back", "the money will be back on your card"
+  new RegExp(String.raw`\bmoney\s+(?:will\s+be|is\s+being|has\s+been)\s+${ADV}(?:returned|refunded|sent\s+back|back\b)`, 'giu'),
   // French, German, Spanish, Portuguese, Italian: "vous serez remboursé", "wir erstatten", "le reembolsaremos"
   new RegExp(String.raw`${NOT_L}(?:vous\s+serez\s+(?:intégralement\s+)?rembours|nous\s+vous\s+rembourserons|vous\s+recevrez\s+(?:un\s+)?remboursement|remboursement\s+(?:est|a\s+été)\s+(?:effectué|approuvé|validé|accordé))`, 'giu'),
   new RegExp(String.raw`${NOT_L}(?:wir\s+erstatten|sie\s+erhalten\s+(?:ihr\s+geld|eine\s+(?:volle\s+)?(?:rück)?erstattung)|wird\s+(?:ihnen\s+)?(?:vollständig\s+)?(?:zurück)?erstattet|erstattung\s+(?:ist|wurde)\s+(?:genehmigt|veranlasst|bearbeitet))`, 'giu'),
@@ -79,6 +84,13 @@ const SAYS_YES = /\bno\s+(?:doubt|question|problem|worries|worry)\b/giu;
 // Where a part of a sentence begins.
 const CLAUSE_START = /[.;:!?,\n]|\b(?:but|however|although|aber|mais|pero|mas|ma|però|doch)\b/giu;
 
+// "Your code is valid for 10 minutes" and "the link is valid until the document closes" say how long something works,
+// not what a signature is worth in law. "Is valid" is left alone when its subject, just before it, is one of these and
+// nothing legal is named with it. "It is valid for a lease" has no such subject and is corrected.
+const WORKS_FOR = String.raw`(?:link|links|code|codes|address|addresses|card|cards|password|passwords|voucher|coupon|offer|price|prices|session|invitation|invitations|reset)`;
+const ABOUT_THING = new RegExp(String.raw`\b${WORKS_FOR}\b[^.;:!?\n]{0,40}$`, 'iu');
+const LEGAL_THING = /\b(?:signatures?|signed|documents?|contracts?|agreements?|courts?|legal\w*|law|binding|enforceable|hold|stand)\b/iu;
+
 function claimed(answer: string, list: RegExp[]): boolean {
   for (const re of list) {
     re.lastIndex = 0;
@@ -87,7 +99,10 @@ function claimed(answer: string, list: RegExp[]): boolean {
       let from = 0;
       for (const b of before.matchAll(CLAUSE_START)) from = b.index + b[0].length;
       const clause = `${before.slice(from)}${m[0]}`.replace(SAYS_YES, ' ');
-      if (!TAKES_BACK.test(clause)) return true;
+      if (TAKES_BACK.test(clause)) continue;
+      const head = before.slice(from);
+      if (/valid$/iu.test(m[0]) && ABOUT_THING.test(head) && !LEGAL_THING.test(`${head} ${m[0]}`)) continue;
+      return true;
     }
   }
   return false;
