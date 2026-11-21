@@ -594,7 +594,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   signing page, how to get there anywhere else. They are chosen by the words typed, in English only. It says it is an AI
   and can be wrong, that the rules on the pages count, gives no legal advice, never judges whether a signature is valid or enough for a
   document, never promises a refund, answers in the person's language and says the screens are English. An
-  answer that still reads as saying a signature is valid, binding or enforceable or will hold up, or as promising a
+  answer that still reads as saying a signature is valid, binding or enforceable or sure to stand in a dispute, or as promising a
   refund, gets a correcting line at its end (`src/server/chatguard.ts`), unless the words just before the claim
   take it back ("not", "whether"), or the sentence is about how long a link or a code works ("your code is valid
   for 10 minutes"). It knows English and the common phrasings in French, German, Spanish,

@@ -139,6 +139,16 @@ export function momentForEmail(iso: string | Date | null | undefined, tz?: strin
   return utc && zone && zone !== 'UTC' && !(byOffset(zone) && clockIn(iso!, zone)?.offset === 'UTC') ? `${utc}, which is ${momentText(iso, zone)}` : utc;
 }
 
+/**
+ * A deadline in an email to the person who has to meet it: in their own time, with the zone named, once their device
+ * has told us which that is ("20 March 2027 at 22:10 Asia/Kolkata time (UTC+05:30)"). Until then we do not know it,
+ * and the email says the moment in UTC and says that it is UTC.
+ */
+export function momentForReader(iso: string | Date | null | undefined, tz?: string | null): string {
+  const zone = validZone(tz);
+  return iso && zone ? momentText(iso, zone) : momentText(iso);
+}
+
 /** For the certificate, next to the UTC time: "2026-11-21 05:40 UTC+13:00, Pacific/Auckland". Empty without a zone. */
 export function localStamp(iso: string | null | undefined, tz?: string | null): string {
   const zone = validZone(tz);

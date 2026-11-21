@@ -142,8 +142,10 @@ test('the logo keeps its proportions and is never squeezed: it is drawn at a fix
   assert.match(css, /\.side :focus-visible, \.mobilebar :focus-visible \{ outline-color: #9ed88f; \}/);
   // A signing link that did not open has no subject: the bar then shows the drawn logo, not the mark and typed name.
   const parts = read('src/components/sign/parts.tsx');
-  assert.match(parts, /data\?\.envelope\?\.subject \? title : <Logo height=\{20\}/);
-  assert.match(parts, /: data\?\.envelope\?\.subject && <Mark size=\{24\}/);
+  // (simplify-signing: also on the consent screen, whose own heading is the subject, so it is not said twice.)
+  assert.match(parts, /const named = !!data\?\.envelope\?\.subject && !plainBar;/);
+  assert.match(parts, /named \? title : <Logo height=\{20\}/);
+  assert.match(parts, /: named && <Mark size=\{24\}/);
 });
 
 // ---- 1. The email header ---------------------------------------------------------------------------------------------

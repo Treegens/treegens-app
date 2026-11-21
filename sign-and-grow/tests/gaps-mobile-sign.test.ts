@@ -454,7 +454,7 @@ test('the adopt dialog keeps its buttons, the sentence and any problem on screen
   const pad = read('src/components/SignaturePad.tsx');
   const foot = pad.slice(pad.indexOf('<div className="sg-adopt-foot">'), pad.indexOf('</Dialog>'));
   assert.ok(foot.includes('role="alert">{error}</div>'), 'the problem is read out, and shown next to the buttons');
-  assert.ok(foot.includes('sg-siglegal') && foot.includes('{sign}</button>') && foot.includes('>Cancel</button>'));
+  assert.ok(foot.includes('sg-siglegal') && foot.includes(': sign}</button>') && foot.includes('>Cancel</button>'));
   assert.ok(!pad.slice(0, pad.indexOf('<div className="sg-adopt-foot">')).includes('role="alert"'), 'only one place for the problem');
   const css = read('src/app/styles/signphone.css');
   assert.match(css, /\.sg-adopt-foot \{ position: sticky; bottom: calc\(-1 \* var\(--sg-dpb\)\);/);

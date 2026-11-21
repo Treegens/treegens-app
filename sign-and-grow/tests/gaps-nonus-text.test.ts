@@ -502,7 +502,8 @@ test('emails give a deadline with its time in UTC, and in the signer\'s own zone
   assert.equal((await c.post(`/envelopes/${e.id}/remind`)).data.reminded, 1);
   const reminder = mailTo('ravi-deadline@example.com').pop()!;
   assert.match(reminder.subject, /^Reminder: /);
-  assert.ok(reminder.html.includes(`This request closes on ${momentText(closes)}, which is ${momentText(closes, 'Asia/Kolkata')}.`), reminder.html.slice(-900));
+  // (simplify-signing: once the zone is known the email says the person's own time, with the zone and its offset, and no longer UTC first.)
+  assert.ok(reminder.html.includes(`This request closes on ${momentText(closes, 'Asia/Kolkata')}.`), reminder.html.slice(-900));
   // The signing page is given the moment itself and words it in the device's zone (momentText, tested above).
   assert.equal((await rc.get(`/sign/${tok}`)).data.envelope.expires_at, closes);
   // More time: the audit line names the new moment, not only its day.

@@ -7,7 +7,7 @@ import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
 import { STANDING_PAYMENT, personGen, lastExpiry } from './credits.ts';
-import { DATE_FORMATS, momentText, momentForEmail, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
+import { DATE_FORMATS, momentText, momentForEmail, momentForReader, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { PAID_TRUST_DAYS, paidTrustText, TEAM_INVITES_PER_DAY, expiryMoment } from '../lib/policy.ts';
@@ -1339,12 +1339,12 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
   const whatChanged = e.last_change ? [`What changed: ${e.last_change}`] : [];
   const verb = r.role === 'witness' ? witnessVerb(e, r) : r.role === 'cc' ? 'sent you a copy of' : r.role === 'viewer' ? 'sent you a document to view:' : r.role === 'approver' ? 'asked you to approve' : 'sent you a document to sign:';
   const to = r.role === 'inperson' ? sender.email : r.email;
-  // A deadline is a moment: it is said with its time in UTC, and in this person's own time zone as well once their
-  // device has told us which that is, so the email and the signing page name the same moment.
+  // A deadline is a moment: it is said in this person's own time, with the zone named, once their device has told us
+  // which that is, so the email and the signing page name the same moment. Until then it is said in UTC.
   // Someone who has signed or approved and asks for their link again ("Email me the current link") is not asked to
   // sign: the email says what the link opens now, and its button says "view".
   const done = r.status === 'completed' && (r.role === 'signer' || r.role === 'approver' || r.role === 'witness');
-  const deadline = e.expires_at && r.role !== 'cc' && !done ? momentForEmail(e.expires_at, r.tz) : '';
+  const deadline = e.expires_at && r.role !== 'cc' && !done ? momentForReader(e.expires_at, r.tz) : '';
   const shared = (e.recipients || []).some((x: any) => x.id !== r.id && x.email.toLowerCase() === r.email.toLowerCase());
   const mailed = await sendMail({
     to,

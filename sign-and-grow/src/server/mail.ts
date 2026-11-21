@@ -106,22 +106,21 @@ export function renderMail(m: Mail): string {
     ${m.cta ? `<p style="margin:24px 0 8px"><a href="${esc(m.cta.url)}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;font-weight:600;padding:13px 26px;border-radius:10px;font-size:15px">${esc(m.cta.label)}</a></p>` : ''}
     ${m.footnote ? `<p style="font-size:12px;color:#6b776f;margin:18px 0 0;line-height:1.5">${esc(m.footnote)}</p>` : ''}
   </div>
-  ${m.code ? `<div style="background:#fff;border:1px solid #e4dfd3;border-radius:14px;padding:16px 20px;margin-top:12px;font-size:13px;line-height:1.55;color:#1c2a22">
-    <b>Not sure this email is real?</b> Do not click anything. Type <b>${esc(baseUrl().replace(/^https?:\/\//, ''))}/check</b> into your browser yourself and enter this security code:
-    <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:18px;letter-spacing:1px;font-weight:700;margin:8px 0 4px">${esc(fmtCode(m.code))}</div>
-    We will tell you who sent it and open the document for you. GrowSigning never asks for a password, a card number or a payment by email.
-    <div style="margin-top:8px">Did not expect this, or does it look wrong? <a href="${esc(reportUrl(m.code))}" style="color:#1c2a22;font-weight:600">Report this email</a>. That opens our check page with this code filled in. You do not have to open the document to report it.</div>
-  </div>` : ''}
   <p style="font-size:12px;color:#6b776f;line-height:1.6;padding:16px 4px 0">
-    ${m.brief ? '' : m.help ? 'Sent by the people who answer help requests at GrowSigning.' : m.envelopeId || m.links
+    ${m.code
+    // One short footer on an email with a signing link (research/ux-charter.md, quick win 12): how to check that the
+    // email is real without clicking anything in it, how to report it, and the link itself when the button fails.
+    ? `<b style="color:#1c2a22">Not sure this email is real?</b> Type <b style="color:#1c2a22">${esc(baseUrl().replace(/^https?:\/\//, ''))}/check</b> into your browser and enter <b style="font-family:ui-monospace,Menlo,Consolas,monospace;color:#1c2a22;white-space:nowrap;letter-spacing:1px">${esc(fmtCode(m.code))}</b>. We never ask for a password or a payment by email. <a href="${esc(reportUrl(m.code))}" style="color:#1c2a22;font-weight:600">Report this email</a><br>`
+    : ''}
+    ${m.cta && !m.brief ? `If the button does not work, copy this link: ${esc(m.cta.url)}<br>` : ''}
+    ${m.askForPdf ? `${esc(cannotOpenLine(m.askForPdf))}<br>` : ''}
+    ${m.code ? 'The link is personal to you. Do not forward this email.<br>' : ''}
+    ${m.code ? `<a href="${esc(helpUrl(m.code))}" style="color:#6b776f;font-weight:600">Get help with this document</a>` : `Need a hand? ${esc(baseUrl())}/help`}
+    ${m.brief ? '' : m.help ? '<br>Sent by the people who answer help requests at GrowSigning.' : m.envelopeId || m.links
     // Emails about a document go to people who only came to sign. The pages promise them no marketing, so these end
     // with where the email came from and nothing that sells. Emails to an account's own people keep the full line.
-    ? 'Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning.'
-    : `Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`}
-    ${m.cta && !m.brief ? `<br>If the button does not work, copy this link: ${esc(m.cta.url)}` : ''}
-    ${m.askForPdf ? `<br>${esc(cannotOpenLine(m.askForPdf))}` : ''}
-    ${m.code ? '<br>Do not forward this email. The link is personal to you.' : ''}
-    <br>Need a hand? ${m.code ? `<a href="${esc(helpUrl(m.code))}" style="color:#6b776f;font-weight:600">Get help with this document</a>. The link opens our help page and tells us which document you mean. Or go to ${esc(baseUrl())}/help yourself.` : `${esc(baseUrl())}/help`}
+    ? `<br>${m.code ? '' : 'Signed digitally, so no paper, no printer and no courier. '}Sent with GrowSigning.`
+    : `<br>Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning, where every dollar plants ${PRICING.treesPerUsd} mangrove trees with Treegens.`}
   </p>
 </div></body></html>`;
 }

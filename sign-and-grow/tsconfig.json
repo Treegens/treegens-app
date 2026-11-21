@@ -70,7 +70,9 @@
     ".next-verify-brand-wire-b/types/**/*.ts",
     ".next-verify-brand-wire-b/dev/types/**/*.ts",
     ".next-ux-chat/types/**/*.ts",
-    ".next-ux-chat/dev/types/**/*.ts"
+    ".next-ux-chat/dev/types/**/*.ts",
+    ".next-verify-ds-custom-fields/types/**/*.ts",
+    ".next-verify-ds-custom-fields/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

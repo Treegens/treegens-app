@@ -747,7 +747,7 @@ test('a signature and answers stay with the person who made them: another person
   assert.equal((await full(kim, a.id)).envelope.recipients[0].progress.filled, 0, 'and the sender sees nothing filled in');
   const fin = await b.c.post(`/sign/${a.token}/complete`, { values: Object.fromEntries(b.v.fields.map((f: any) => [f.id, f.type === 'text' ? 'Blair 1' : '1'])), version: b.v.version });
   assert.equal(fin.status, 400);
-  assert.match(fin.data.error, /Adopt a signature/);
+  assert.match(fin.data.error, /Your signature is missing/);
   assert.match((await full(kim, a.id)).audit.find((x: any) => x.action === 'Recipient corrected').detail, /another person at the same address, so nothing that Alex Rivera had agreed to, filled in or signed was kept/);
 
   // A browser tab both of them use keeps its copy under the name it was made for, and never hands it to the other.
