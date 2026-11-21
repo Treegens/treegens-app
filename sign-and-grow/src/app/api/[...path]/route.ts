@@ -22,6 +22,7 @@ import '@/server/routes-retention';
 import '@/server/routes-selfhost';
 import '@/server/routes-archive';
 import '@/server/routes-customfields';
+import '@/server/routes-seal';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

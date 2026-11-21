@@ -13,8 +13,9 @@ import { boot, signUp, Client, PNG, tokenFor } from './helpers.ts';
 const server = await boot();
 const { renderMail } = await import('../src/server/mail.ts');
 const { readPng, decodePng } = await import('../src/server/png.ts');
-const { siteBase, webManifest, OG_ALT, PRODUCT } = await import('../src/lib/site.ts');
+const { siteBase, webManifest, OG_ALT, PRODUCT, SITE_TITLE } = await import('../src/lib/site.ts');
 const { LOGO, COLORS } = await import('../src/lib/brandMark.ts');
+const { PAGE_STAMP_W } = await import('../src/server/brandpdf.ts');
 const manifest = (await import('../src/app/manifest.ts')).default;
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -43,12 +44,12 @@ test('the layout loads the brand styles last, has no data URI icon, and takes it
 });
 
 test('the preview address is APP_URL when it is an http or https address, else this machine, and never takes a page down', () => {
-  assert.equal(siteBase('https://growsigner.com').href, 'https://growsigner.com/');
-  assert.equal(siteBase('https://growsigner.com/some/path?x=1').href, 'https://growsigner.com/', 'only the origin');
+  assert.equal(siteBase('https://growsigning.com').href, 'https://growsigning.com/');
+  assert.equal(siteBase('https://growsigning.com/some/path?x=1').href, 'https://growsigning.com/', 'only the origin');
   assert.equal(siteBase('  http://localhost:3700/ ').href, 'http://localhost:3700/');
   // A mistyped or hostile APP_URL gives previews a harmless address instead of a page that will not render.
   assert.equal(siteBase(undefined).href, 'http://test.local/', 'no argument: APP_URL itself');
-  for (const bad of ['', 'growsigner.com', 'not a url', 'javascript:alert(1)', 'file:///etc/passwd', 'ftp://growsigner.com', 'http://'])
+  for (const bad of ['', 'growsigning.com', 'not a url', 'javascript:alert(1)', 'file:///etc/passwd', 'ftp://growsigning.com', 'http://'])
     assert.equal(siteBase(bad).href, 'http://localhost:3000/', String(bad));
 });
 
@@ -143,18 +144,57 @@ test('the logo keeps its proportions and is never squeezed: it is drawn at a fix
   // A signing link that did not open has no subject: the bar then shows the drawn logo, not the mark and typed name.
   const parts = read('src/components/sign/parts.tsx');
   // (simplify-signing: also on the consent screen, whose own heading is the subject, so it is not said twice.)
-  assert.match(parts, /const named = !!data\?\.envelope\?\.subject && !plainBar;/);
-  assert.match(parts, /named \? title : <Logo height=\{20\}/);
-  assert.match(parts, /: named && <Mark size=\{24\}/);
+  // Only what matters is pinned here, so a tidy-up of the signing bar does not fail this test: the bar can draw the
+  // whole logo at 20 px and the mark at 24 px, and never types the product's name beside a leaf.
+  assert.match(parts, /<Logo height=\{20\}/);
+  assert.match(parts, /<Mark size=\{24\}/);
+  assert.doesNotMatch(parts, /<(?:Mark|Leaf)\b[^>]*\/>\s*(?:\{' '\})?\s*GrowSigning/);
+});
+
+test('pages a person reaches from an email, and an address that does not exist, show whose site it is', () => {
+  // A confirmation or reset link is where people check that the page is the real one: the same logo as on sign in.
+  for (const f of ['src/app/verify-email/page.tsx', 'src/app/change-email/page.tsx', 'src/app/two-step-reset/ResetView.tsx', 'src/app/login/two-step/TwoStepForm.tsx', 'src/components/AuthForm.tsx']) {
+    const text = read(f);
+    const boxes = (text.match(/<div className="authbox">/g) || []).length;
+    assert.ok(boxes > 0, f);
+    assert.equal((text.match(/<div className="authbox">\s*(?:\{\/\*[^]*?\*\/\}\s*)?<Link href="\/" className="logo"[^>]*><Logo height=\{26\} \/><\/Link>/g) || []).length, boxes, `${f}: every card on it has the logo above it`);
+  }
+  // A mistyped address gets our own page with the public header (logo, Help, Sign in) and ways on, not the framework's.
+  const nf = read('src/app/not-found.tsx');
+  assert.match(nf, /<PublicNav \/>/);
+  assert.match(nf, /<PublicFooter \/>/);
+  for (const href of ['/', '/login', '/help', '/help#find-documents']) assert.ok(nf.includes(`href="${href}"`), href);
+  assert.doesNotMatch(nf, /404|error/i, 'plain words, no code numbers');
+  // It never prints the address that was asked for, so a made-up address cannot put words of a stranger's choosing on our page.
+  assert.doesNotMatch(nf, /usePathname|useSearchParams|location\.|headers\(/);
+});
+
+test('the title of every page and link preview says what the price list says, not that signing plants trees', () => {
+  // Trees come from dollars paid; a free account's signatures plant none (brand/README.md, "Never promise").
+  assert.match(SITE_TITLE, /^GrowSigning · /);
+  assert.match(SITE_TITLE, /every dollar plants mangroves/);
+  assert.match(read('src/app/layout.tsx'), /title: \{ default: SITE_TITLE, template: '%s · GrowSigning' \}/);
+  for (const f of ['src/app/layout.tsx', 'src/lib/site.ts', 'README.md', 'package.json', 'public/security/sbom.json', 'src/app/opengraph-image.alt.txt'])
+    assert.doesNotMatch(read(f), /signatures that plant trees|every signature (plants|saves)/i, f);
 });
 
 // ---- 1. The email header ---------------------------------------------------------------------------------------------
 
 test('an email without a sender brand shows the GrowSigning logo picture from APP_URL, with its alt text', () => {
   const html = renderMail({ to: 'x@example.com', subject: 's', heading: 'Hello', lines: ['A line'] });
-  assert.match(html, /<img src="http:\/\/test\.local\/brand\/email-logo\.png" width="144" height="22" alt="GrowSigning" style="display:block;border:0;width:144px;height:22px;/);
-  const logo = readPng(bytes('public/brand/email-logo.png'))!;
-  assert.deepEqual([logo.width, logo.height], [288, 44], 'drawn at twice the size it is shown, so it is sharp on a phone');
+  assert.match(html, /<img src="http:\/\/test\.local\/brand\/email-logo\.png" width="156" height="32" alt="GrowSigning" style="display:block;border:0;width:156px;height:32px;/);
+  const logo = decodePng(bytes('public/brand/email-logo.png'), 1_000_000)!;
+  assert.deepEqual([logo.width, logo.height], [312, 64], 'drawn at twice the size it is shown, so it is sharp on a phone');
+  // The picture stands on a tile of the email's own ground colour. On the light email the tile cannot be seen; where a
+  // mail program darkens the ground and leaves pictures alone, the dark word "signing" still has light under it.
+  const ground = /<body style="margin:0;background:(#[0-9a-f]{6});/.exec(html)![1];
+  assert.equal(ground, '#f4f1ea');
+  const at = (x: number, y: number) => [...logo.data.slice((y * logo.width + x) * 4, (y * logo.width + x) * 4 + 4)];
+  for (const [x, y] of [[20, 6], [156, 4], [300, 32], [156, 60]]) assert.deepEqual(at(x, y), [0xf4, 0xf1, 0xea, 255], `the tile at ${x},${y} is the email's ground, not see-through`);
+  assert.equal(at(0, 0)[3], 0, 'its corners are rounded');
+  let dark = 0;
+  for (let x = 150; x < 300; x++) for (let y = 10; y < 54; y++) { const [r, g, b] = at(x, y); if (r + g + b < 200) dark++; }
+  assert.ok(dark > 500, `the word "signing" is drawn in ink on the tile: ${dark} pixels`);
   // No email has a dark header, so the logo for dark grounds is never put on the light one.
   assert.doesNotMatch(html, /email-logo-dark/);
   // The picture's address is the same in every email, with nothing about the reader in it, so loading it cannot tell
@@ -244,15 +284,34 @@ test('every page of a signed copy carries the stamp at its foot, on the left, wh
   assert.ok(pages.length >= 5, 'four pages and the certificate');
   for (const [i, img] of pages.slice(0, 4).entries()) {
     const H = img.height / 2, W = img.width / 2;
-    // The stamp: 14 pt tall, about 89 pt wide, 12 pt from the left and 8 pt above the bottom, in muted ink.
-    const foot = inked(img, 12, H - 22, 102, H - 8);
-    assert.ok(foot > 600, `page ${i + 1} (turned ${[0, 90, 180, 270][i]}) has the stamp at its foot: ${foot} pixels`);
-    assert.equal(inked(img, W - 102, H - 22, W - 12, H - 8), 0, `page ${i + 1}: nothing in the bottom right corner`);
-    assert.equal(inked(img, 12, 2, 102, 6), 0, `page ${i + 1}: the stamp is not at the top`);
+    // The stamp: 12 pt tall, about 76 pt wide, 12 pt from the left and 5 pt above the bottom, in muted ink.
+    const foot = inked(img, 12, H - 17, 12 + PAGE_STAMP_W, H - 5);
+    assert.ok(foot > 450, `page ${i + 1} (turned ${[0, 90, 180, 270][i]}) has the stamp at its foot: ${foot} pixels`);
+    // The envelope ID line stands beside it, where every page that speaks of it says it is: at the foot.
+    const line = inked(img, 12 + PAGE_STAMP_W + 4, H - 17, 12 + PAGE_STAMP_W + 200, H - 5);
+    assert.ok(line > 150, `page ${i + 1}: the envelope ID line is beside the stamp: ${line} pixels`);
+    // Everything we print on a page of somebody's document stays in its lowest 17 pt, the strip desk printers leave
+    // blank: nothing above it at the left (where a document's own footer would be), nothing at the top any more.
+    assert.equal(inked(img, 0, H - 40, 300, H - 18.5), 0, `page ${i + 1}: nothing of ours above the lowest strip`);
+    assert.equal(inked(img, 0, 0, W, 30), 0, `page ${i + 1}: nothing of ours at the top`);
+    assert.equal(inked(img, W - 102, H - 22, W - 12, H - 2), 0, `page ${i + 1}: nothing in the bottom right corner`);
   }
   // A stamp is drawn, not written: the words a program pulls out of the page are what they were.
   assert.doesNotMatch(text, /Signed with growsigning|growsigning/, 'no words were added');
-  assert.equal((text.match(new RegExp(`GrowSigning Envelope ID: ${id}`, 'g')) || []).length, 4, 'the envelope ID line is still on every page');
+  assert.equal((text.match(new RegExp(`GrowSigning Envelope ID: ${id}`, 'g')) || []).length, 4, 'the envelope ID line is on every page, as words a program can read');
+});
+
+test('on a narrow page the envelope ID line is made smaller, so it is whole and inside the page', { skip: !havePoppler && 'pdftoppm is not installed' }, async () => {
+  const d = await PDFDocument.create();
+  d.addPage([230, 320]).drawText('A narrow slip', { x: 20, y: 250, size: 10 });
+  const owner = await signUp('Nia Narrow', 'nia.narrow@example.com', newIp());
+  const { id, pdf } = await signedCopy(owner, await d.save(), 'narrow.signer@example.com');
+  const { pages, text } = drawPages(pdf);
+  const img = pages[0], H = img.height / 2, W = img.width / 2;
+  assert.equal(Math.round(W), 230);
+  assert.ok(inked(img, 12 + PAGE_STAMP_W + 4, H - 17, W - 12, H - 5) > 80, 'the line is there, beside the stamp');
+  assert.equal(inked(img, W - 11, H - 20, W, H), 0, 'and ends before the right edge of the page');
+  assert.ok(text.includes(`GrowSigning Envelope ID: ${id}`), 'the whole ID is on the page');
 });
 
 test('the certificate has the deep green band with the logo, its title, and the stamp at the foot of each of its pages', { skip: !havePoppler && 'pdftoppm is not installed' }, async () => {
@@ -284,12 +343,13 @@ test('the certificate has the deep green band with the logo, its title, and the 
 
 // Built from pieces so this file does not find itself.
 const OLD_NAME = new RegExp(['Sign ?(&|&amp;|and) ?Grow', 'Sign' + 'AndGrow', 'sign' + 'grow', 'Sign-and-Grow'].join('|'), 'i');
-const WRONG_ADDRESS = new RegExp('grow' + 'signing\\.(com|app|io|net|org)\\b', 'i');
+// The address is growsigning.com (the owner attached it on 2026-11-21). The one used before it is the wrong one now.
+const WRONG_ADDRESS = new RegExp('grow' + 'signer\\.(com|app|io|net|org)\\b', 'i');
 
 test('the old name and a wrong web address appear nowhere a person or a program reads them', () => {
   // The patterns find what they are for.
-  for (const old of ['Sign' + '&Grow', 'Sign &amp; ' + 'Grow', 'Sign and ' + 'Grow', 'Sign' + 'AndGrow', 'sign' + 'grow-help', 'www.grow' + 'signing.com']) assert.ok(OLD_NAME.test(old) || WRONG_ADDRESS.test(old), old);
-  for (const fine of ['GrowSigning', 'growsigner.com', 'growsigning.apps.google.test', 'sg_restored']) assert.ok(!OLD_NAME.test(fine) && !WRONG_ADDRESS.test(fine), fine);
+  for (const old of ['Sign' + '&Grow', 'Sign &amp; ' + 'Grow', 'Sign and ' + 'Grow', 'Sign' + 'AndGrow', 'sign' + 'grow-help', 'www.grow' + 'signer.com', 'https://Grow' + 'Signer.app/x']) assert.ok(OLD_NAME.test(old) || WRONG_ADDRESS.test(old), old);
+  for (const fine of ['GrowSigning', 'growsigning.com', 'www.growsigning.com', 'growsigning.apps.google.test', 'sg_restored']) assert.ok(!OLD_NAME.test(fine) && !WRONG_ADDRESS.test(fine), fine);
   const found: string[] = [];
   const look = (f: string, text: string) => {
     for (const [i, line] of text.split('\n').entries()) {

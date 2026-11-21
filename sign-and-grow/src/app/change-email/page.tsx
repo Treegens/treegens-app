@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/components/ui';
+import { Logo } from '@/components/Brand';
 
 // The link in the email that moves a login to a new address (POST /me/email/confirm, src/server/routes-bounces.ts).
 // It works only in a browser that is signed in to that login, so a stranger who gets the email can do nothing with it.
@@ -20,6 +21,8 @@ export default function ChangeEmail() {
   const next = typeof window === 'undefined' ? '/app' : `${window.location.pathname}${window.location.search}`;
   return (
     <div className="authbox">
+      {/* People land here from an email and look for whose page it is: the same logo as on the sign-in page. */}
+      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
       <div className="card center">
         <h1 className="serif" style={{ fontSize: 24 }}>{state === 'wait' ? 'Changing your address…' : state === 'signin' ? 'Sign in first' : 'ok' in state ? 'Your address is changed' : 'That did not work'}</h1>
         <p className="muted" role="status" style={{ margin: '10px 0 16px' }}>

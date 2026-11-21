@@ -1,5 +1,5 @@
 import { refundRuleText, PRICE_NOTICE_DAYS, LANGUAGE_NOTE } from '@/lib/policy';
-import { expiryRuleText, HELD_EXPIRY_TEXT } from '@/lib/policy';
+import { expiryShortText } from '@/lib/policy';
 import Link from 'next/link';
 import { Mark } from '@/components/Brand';
 import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/Public';
@@ -185,9 +185,9 @@ export default function Landing() {
             <h3>The rules</h3>
             <ul>
               <li><b>What a signature is.</b> One person signing one envelope. An envelope can hold several documents, and that is still one signature for each signer.</li>
-              <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back by themselves. {HELD_EXPIRY_TEXT}</li>
+              <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back, unless their own date has passed by then.</li>
               <li><b>What is always free.</b> Signing your own documents. Approvers, viewers and people who get a copy. Corrections, reminders and more time. And signing, for everyone you send to.</li>
-              <li id="expiry"><b>When signatures expire.</b> {expiryRuleText()}</li>
+              <li id="expiry"><b>When signatures expire.</b> {expiryShortText()} <Link href="/help#expiry">How signatures expire</Link>.</li>
               <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at {usd(P.topUpUsd)} a signature, with the total shown before you pay. There are no overage charges.</li>
               <li><b>Month to month.</b> {P.planName} is {usd(P.monthlyUsd)} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
               <li><b>Refunds are automatic.</b> {refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>

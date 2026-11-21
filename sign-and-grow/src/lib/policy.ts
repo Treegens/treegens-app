@@ -29,9 +29,25 @@ export const TOPUP_WARN_DAYS: number[] = [30, 3];
  * of the provider, the welcome and receipt emails and every renewal reminder quote it, so they cannot disagree.
  */
 export const expiryRuleText = (): string =>
-  `The ${PRICING.monthlySignatures} signatures that come with each month of ${PRICING.planName} belong to that month (with a free code, the calendar month in UTC): the ones not used by its end (the renewal, or the end of the paid month after you cancel) expire, and the next month brings a fresh ${PRICING.monthlySignatures}. Top-up signatures expire ${TOPUP_EXPIRY_MONTHS} months after the payment that bought them, and we email you ${TOPUP_WARN_DAYS[0]} and ${TOPUP_WARN_DAYS[1]} days before if any are unused. The ${PRICING.welcomeSignatures} free signatures of a new account expire ${WELCOME_EXPIRY_DAYS} days after it is made. The one that expires soonest is always used first, and one held for an envelope that is out does not expire while held. Every date is on the Plan page. Every dollar still plants ${PRICING.treesPerUsd} mangroves, used or not.`;
+  `The ${PRICING.monthlySignatures} signatures of each month of the monthly plan last until that month ends: at the renewal, or at the end of the paid month if you cancel. Unused ones expire then, and the next month brings a fresh ${PRICING.monthlySignatures}. With a free code the month is the calendar month in UTC. Top-up signatures last ${TOPUP_EXPIRY_MONTHS} months from their payment, and we email you ${TOPUP_WARN_DAYS[0]} and ${TOPUP_WARN_DAYS[1]} days before if any are unused. The ${PRICING.welcomeSignatures} free signatures of a new account last ${WELCOME_EXPIRY_DAYS} days. The one that ends soonest is always used first. Every date is on the Plan page. Every dollar still plants ${PRICING.treesPerUsd} mangroves, used or not.`;
+/** The same rule in one line, for a price list; the page links to the full rule on /help#expiry next to it. */
+export const expiryShortText = (): string =>
+  `A month's ${PRICING.monthlySignatures} signatures last for that month, top-ups last ${TOPUP_EXPIRY_MONTHS} months, and every date is on your Plan page.`;
+/**
+ * Said where someone sees that they have none left because some expired (the Plan card, Home, step 3 of the editor):
+ * "Your 3 free signatures expired on 11 November 2026 at 07:58 UTC." `x` is last_expiry of GET /billing.
+ */
+export const expiredWords = (x: { n: number; at: string; source?: string } | null | undefined): string => {
+  if (!x || !(x.n > 0)) return '';
+  const one = x.n === 1;
+  const what = x.source === 'welcome' ? `Your ${x.n} free signature${one ? '' : 's'}`
+    : x.source === 'plan' || x.source === 'code' ? `${x.n} unused signature${one ? '' : 's'} of your last plan month`
+    : x.source === 'topup' ? `${x.n} unused top-up signature${one ? '' : 's'}`
+    : `${x.n} unused signature${one ? '' : 's'}`;
+  return `${what} expired on ${expiryMoment(x.at)}.`;
+};
 /** What happens to a held signature whose date passes, for every place that explains holds. */
-export const HELD_EXPIRY_TEXT = 'A signature held for an envelope that is out does not expire while it is held. If that envelope is then voided, declined or runs out of time after the signature\'s own date has passed, that signature is gone instead of coming back.';
+export const HELD_EXPIRY_TEXT = 'A signature held for an envelope that is out does not expire while it is held. If that envelope is then voided, declined or runs out of time after the signature\'s own date has passed, that signature is gone instead of coming back. It is held for the person and the documents that were sent: putting another person in, or other documents, after its date takes a signature you can send with that day.';
 /** A moment a signature expires, the same way everywhere: "3 December 2026 at 14:00 UTC". */
 export const expiryMoment = (iso: string | null | undefined): string => {
   if (!iso) return '';
@@ -231,9 +247,12 @@ export const SUPPORT_KEEP_DAYS = 90;
 // `language` is the language of the words returned, which the audit line records.
 export type ConsentWording = { version: string; legal: string; practical: string; agree: string; language: string; note: string };
 type ConsentWords = Omit<ConsentWording, 'version' | 'language' | 'note'>;
-// 2026-11-20: the same meaning in fewer words, so the consent screen fits one phone screen (research/ux-charter.md,
-// P7: 120 words or fewer before the tick). The IP address is said in the first sentence instead of the last.
-export const CONSENT_VERSION = '2026-11-20';
+// 2026-11-20: fewer words, so the consent screen fits one phone screen (research/ux-charter.md, P7: 120 words or
+// fewer before the tick). It dropped two things the wording before it said: that a copy can be downloaded before and
+// after, and that each step is recorded. It was shown for one day and is kept for the people who agreed to it.
+// 2026-11-21: says both again, in short sentences ("now or later": before agreeing, and afterwards from the same link). Someone who only reads or approves is no longer told "You can
+// decline": a person asked only to read has no Decline to press, so their words name what they can do.
+export const CONSENT_VERSION = '2026-11-21';
 /**
  * The wording the signing screen showed before versions were recorded (until 20 November 2026). Its audit lines
  * name no version, only the person, so an evidence pack prints this one for them and says how it knows. It is
@@ -260,10 +279,19 @@ const CONSENT_WORDINGS: Record<string, Record<string, (sender: string, signs: bo
       : `What you do here is recorded electronically, with the time and your IP address, not on paper. The rules differ by country and by kind of document, and some need a handwritten, witnessed, notarised or qualified signature. GrowSigning does not know which kind this document is. If in doubt, ask ${sender} or a lawyer before you continue.`,
     practical: `You can decline, or ask ${sender} for a paper copy instead.`,
     agree: 'I agree to use electronic records and signatures.',
+  }) },  '2026-11-21': { en: (sender, signs) => ({
+    legal: signs
+      ? `This is a simple electronic signature: your name or mark. We record the time, your IP address and each step. The rules differ by country and by kind of document, and some need a handwritten, witnessed, notarised or qualified signature. GrowSigning does not know which kind this document is. If in doubt, ask ${sender} or a lawyer before you sign. By continuing, you accept this electronic method as a valid way for you and the other parties to sign this document.`
+      : `What you do here is recorded electronically, not on paper. We record the time, your IP address and each step. The rules differ by country and by kind of document, and some need a handwritten, witnessed, notarised or qualified signature. GrowSigning does not know which kind this document is. If in doubt, ask ${sender} or a lawyer before you continue.`,
+    practical: signs
+      ? `You can download a copy now or later, decline, or ask ${sender} for a paper copy instead.`
+      : `You can download a copy now or later. You do not have to agree: ask ${sender} for a paper copy instead.`,
+    agree: 'I agree to use electronic records and signatures.',
   }) },
 };
 /** Every wording ever shown, newest first, with the day it was first shown: /help prints them all, because an audit line names one. */
 export const CONSENT_HISTORY: { version: string; from: string }[] = [
+  { version: '2026-11-21', from: '21 November 2026' },
   { version: '2026-11-20', from: '20 November 2026' },
   { version: '2026-11', from: '20 November 2026' },
 ];

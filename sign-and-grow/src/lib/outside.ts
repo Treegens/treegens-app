@@ -73,14 +73,25 @@ export function isLoopback(host: string): boolean {
   return h === 'localhost' || h.endsWith('.localhost') || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h) || h === '::1' || h === '0:0:0:0:0:0:0:1' || /^::ffff:127\./.test(h);
 }
 
-/** A list setting: host names separated by commas or spaces. "*.example.org" means any name under example.org. */
+/**
+ * A list setting: host names separated by commas (or by spaces, inside one comma-separated part). "*.example.org"
+ * means any name under example.org. A part that holds anything that is not a host name is left out whole, so
+ * "bad host!" adds neither "bad" nor "host": a list that allows connections must not grow by accident.
+ */
 export function hostList(raw: string | undefined): string[] {
-  return [...new Set(clean(raw).split(/[\s,]+/).map((s) => {
+  const one = (s: string) => {
     const t = s.trim().toLowerCase();
     // An address pasted whole ("https://hooks.example.org/x") counts as its host.
     if (/^[a-z]+:\/\//.test(t)) return hostOfUrl(t);
     return t.replace(/\/.*$/, '').replace(/:\d+$/, '').replace(/\.$/, '');
-  }).filter((s) => /^(\*\.)?[a-z0-9.:_-]+$/.test(s)))];
+  };
+  const ok = (s: string) => /^(\*\.)?[a-z0-9]([a-z0-9.:_-]*[a-z0-9])?$/.test(s);
+  const out: string[] = [];
+  for (const part of clean(raw).split(',')) {
+    const names = part.trim().split(/\s+/).filter(Boolean).map(one);
+    if (names.length && names.every(ok)) out.push(...names);
+  }
+  return [...new Set(out)];
 }
 
 /** Whether a host is on a list made by hostList. "*.example.org" matches a.example.org and a.b.example.org, not example.org. */
@@ -119,7 +130,7 @@ export function outsideServices(env: Env = process.env): OutsideService[] {
   out.push({ id: 'sms', name: 'Text message provider', purpose: 'Sends one-time codes and signing links by text message, when a sender asks for that.', settings: sms === 'hook' ? ['SMS_WEBHOOK_URL', 'SMS_WEBHOOK_TOKEN'] : ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SMS_WEBHOOK_URL'],
     on: sms === 'twilio' || sms === 'hook', hosts: sms === 'twilio' ? ['api.twilio.com'] : sms === 'hook' ? [hostOfUrl(clean(env.SMS_WEBHOOK_URL))].filter(Boolean) : [] });
   const tsa = tsaHosts(env);
-  out.push({ id: 'tsa', name: 'Time-stamp service', purpose: 'Adds a trusted time to the digital seal of a signed PDF. Without it the seal carries the server\'s own time only.', settings: ['TSA_URL', 'TSA_URLS'], on: tsa.length > 0, hosts: tsa });
+  out.push({ id: 'tsa', name: 'Time-stamp service', purpose: 'Adds a time stamp from that service to the digital seal of a signed PDF. Without it the seal carries the server\'s own time only. It is sent a fingerprint of the seal, never the document.', settings: ['TSA_URL', 'TSA_URLS'], on: tsa.length > 0, hosts: tsa });
   const chat = chatProvider(env);
   const chatOn = !!chat && chatModelOn(env);
   out.push({ id: 'chat', name: 'AI model for the help chat', purpose: 'Writes the help chat\'s answers from what a person types into the chat. Never a document.', settings: [chat?.keyVar || 'SUPPORT_CHAT_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY'].filter((v, i, a) => a.indexOf(v) === i),

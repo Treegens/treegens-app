@@ -644,6 +644,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // The recipient a held signature is for (credits.ts), so a hold is kept for the moment between their Finish and
   // the "signature used" line, and the signature is taken from the lot it was held in.
   ['credit_holds', 'rid', 'TEXT'],
+  // How many signatures of this lot were held when its date passed and have been let go since, not yet written off
+  // as expired (credits.ts, letGo): the plan history then says so, with the moment they were let go.
+  ['credit_lots', 'late', 'INTEGER DEFAULT 0'],
   ['users', 'tz', 'TEXT'],
   // The time zone a signer's device reported when they agreed and when they finished (an IANA name like
   // "Asia/Kolkata"). The date they sign on is the calendar day there, the certificate prints their local time, and
@@ -1105,6 +1108,8 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // certificate it was made with. NULL for a file without a seal, such as every one completed before seals were set up.
   ['envelopes', 'seal_level', 'TEXT'],
   ['envelopes', 'seal_cert', 'TEXT'],
+  // seal_tsa: for a seal with a time stamp, 'trusted' when the service's certificate led to TSA_TRUST, else 'unchecked'.
+  ['envelopes', 'seal_tsa', 'TEXT'],
   // Archive copies (src/server/archivemail.ts). emails.archive_draft: on an email about a document, the copy for the
   // account's archive addresses (JSON, links and codes already taken out), until that email has left. archive_to: on
   // a copy, and on the email that asks an address to confirm, the archive_addresses row it goes to. archive_envelope:

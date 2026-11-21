@@ -1,16 +1,16 @@
 'use client';
 import Link from 'next/link';
 import { ROLE_LABEL, fmtDate, api, useLoad, oops } from '../ui';
-import { Mark } from '../Brand';
+// The sentence for "none left because some expired" (plain words, no environment).
+import { expiredWords } from '@/lib/policy';
 import { useMe } from '../AppShell';
-import { fmtNum, sheetsSaved, impactOf, fmtTrees, PRICING, mangrovesFor } from '@/lib/impact';
-import { formatDate, momentText, deviceZone } from '@/lib/dates';
+import { PRICING, mangrovesFor } from '@/lib/impact';
 import { scanWarning } from '@/lib/scans';
 import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
 import { PaperCheck, EnoughLink } from './PaperCheck';
-import { ReminderChoice } from './ReminderChoice';
-import { PayLinkChoice } from './PayLinkChoice';
+// The subject and message, the step's one More options (reminders, deadline, dates, payment link) and the saving of this document.
+import { SendWords, ReviewMore, SavingBox } from './ReviewParts';
 import { PrintCheck } from './PrintCheck';
 import { LabelCheck } from './LabelCheck';
 import { LogicCheck } from './FieldLogic';
@@ -65,13 +65,13 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
     const pay = (path: string, body?: any) => api(path, { method: 'POST', body }).then((r) => { window.location.href = r.url; }).catch(oops);
     return (
       <div className="notice warn" role="alert">
-        <b>This needs {each(need)} and you have {have} ready.</b> Nothing is charged unless you choose it, and your work here is saved. You can:
+        <b>This needs {each(need)} and you have {have} ready.</b> {b.renewal_pending ? `Your new month's ${PRICING.monthlySignatures} arrive when the renewal payment goes through, usually within the hour. ` : have === 0 && expiredWords(b.last_expiry) ? `${expiredWords(b.last_expiry)} ` : ''}Nothing is charged unless you choose it, and your work here is saved. You can:
         <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
           {b.plan === 'grove'
             ? <li><b>Top up {each(short)} for ${short * PRICING.topUpUsd}.</b> One payment, nothing recurring, and it plants {mangrovesFor(short * PRICING.topUpUsd)} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>
             : <li><b>Start the monthly plan:</b> ${PRICING.monthlyUsd} a month for {PRICING.monthlySignatures} signatures, month to month, and every dollar plants {PRICING.treesPerUsd} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>}
           {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Voiding an envelope you no longer need gives its signatures back at once, unless their own date has passed (then they expire instead).</li>}
-          {next && b.plan === 'grove' && <li><b>Wait.</b> The next {each(PRICING.monthlySignatures)} arrive on {fmtDate(next)}.</li>}
+          {next && !b.renewal_pending && Date.parse(next) > Date.now() && b.plan === 'grove' && <li><b>Wait.</b> The next {each(PRICING.monthlySignatures)} arrive on {fmtDate(next)}.</li>}
           <li><b>Send to fewer people now.</b> Signing your own copy, approvers, viewers and copies are always free.</li>
         </ul>
         <div className="row wrap" style={{ marginTop: 10 }}>
@@ -82,11 +82,9 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
       </div>
     );
   }
-  return (
-    <div className="notice">
-      <b>{correcting ? 'These changes hold' : 'Sending holds'} {each(need)}</b> of the {have} you have ready, one for each person who signs. A signature is only used when that person actually signs. If you void the envelope, or they decline or run out of time, it comes straight back.
-    </div>
-  );
+  // Enough are left: nothing to decide here, so nothing is said (research/ux-notes.json "expiry"). The count is under
+  // the account name and on Home, and the rules are on the Plan page.
+  return null;
 }
 
 // Two people on one envelope with the same address: allowed (couples often share one), but worth saying.
@@ -109,13 +107,14 @@ function SharedInbox({ rcps }: { rcps: any[] }) {
 // Step 3: one last look. For a draft that means "send"; for an envelope that is already out it spells out what
 // saving will do to each person before anything happens.
 export function StepReview({ ed, problems, busy, changed, error, conflict, closed, result, onSubmit, onRestore, onSignAgain, onDiscard }: ReviewProps) {
-  const { env, isTpl, correcting, docs, rcps } = ed;
+  const { env, isTpl, correcting, docs } = ed;
+  // The empty row of step 1 that nobody typed into is not a person on the document (Editor.tsx isIdle).
+  const rcps = ed.rcps.filter((r) => !ed.isIdle(r));
   const fields = ed.fields.value;
   const pages = docs.reduce((n, d) => n + d.pages, 0);
-  const impact = impactOf(sheetsSaved(pages, rcps.length));
   const sorted = [...rcps].sort((a, b) => (env.ordered ? a.routing_order - b.routing_order : 0));
   const blocked = busy || problems.length > 0 || !!closed || conflict.length > 0 || (correcting && !changed);
-  const label = isTpl ? 'Save template' : correcting ? (busy ? 'Saving…' : 'Save changes') : busy ? 'Sending…' : 'Send';
+  const label = isTpl ? 'Save template' : correcting ? (busy ? 'Saving…' : 'Save changes') : busy ? (ed.signNow ? 'Opening…' : 'Sending…') : ed.signNow ? 'Sign now' : 'Send';
 
   return (
     <div className="main stack ed-narrow ed-review">
@@ -152,23 +151,12 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {!closed && <PrintCheck subject={env.subject || ''} docs={docs} rcps={rcps} fields={fields} />}
       {!closed && <PaperCheck envelopeId={env.id} subject={env.subject || ''} docs={docs} sending={!isTpl && !correcting} />}
 
-      <div className="card">
-        <h2>{env.subject || '(no subject)'}</h2>
-        {env.message && <p className="muted" style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{env.message}</p>}
-        <div className="muted small" style={{ marginTop: 8 }}>
-          {plural(docs.length, 'document')}, {plural(pages, 'page')} · {env.ordered ? 'signed in order' : 'everyone at once'} · {env.reminder_days ? `reminder every ${plural(env.reminder_days, 'day')}` : 'no automatic reminders'}
-          {correcting ? (env.expires_at ? ` · closes on ${momentText(env.expires_at, deviceZone())}` : '') : ` · expires after ${plural(env.expire_days, 'day')}`} · dates written like {formatDate(new Date(), env.date_format, deviceZone())}
-        </div>
-      </div>
+      {/* The subject and the message, typed where the Send button is. */}
+      {!closed && <SendWords ed={ed} />}
+      {closed && <div className="card"><h2>{env.subject || '(no subject)'}</h2></div>}
 
-      {/* Reminders are on for a new account without anyone having chosen that, so the choice stands by the Send button. */}
-      {!closed && <ReminderChoice days={env.reminder_days} isTpl={isTpl} bySender={!isTpl && rcps.some((r) => r.link_by_sender)} onChange={(n) => ed.patchEnv({ reminder_days: n })} />}
-      {/* A link to the sender's own payment page, shown to signers after Finish. Absent for an account that may not show one. */}
-      {/* The payment link comes with a template's wording, so it is not offered where that wording is locked (tplroles.ts). */}
-      {!closed && !ed.wording && <PayLinkChoice envelopeId={env.id} isTpl={isTpl} />}
-      {/* The account's own references, such as a case number. Absent when the account has none (CustomFieldsStep.tsx). */}
+      {/* The account's own references, such as a case number. Right under the title, so a required one is in view. Absent when the account has none (CustomFieldsStep.tsx). */}
       {!closed && <CustomFieldsStep ed={ed} />}
-
       {correcting && result ? (
         <div className="card">
           <h2>What happens when you save</h2>
@@ -193,7 +181,8 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
         </div>
       ) : (
         <div className="card">
-          <h2 style={{ marginBottom: 4 }}>{isTpl ? 'Roles' : 'Recipients'}</h2>
+          <h2 style={{ marginBottom: 4 }}>{isTpl ? 'Roles' : 'Who gets it'}</h2>
+          <p className="muted small" style={{ margin: 0 }}>{plural(docs.length, 'file')}, {plural(pages, 'page')} · {env.ordered ? 'signed in order' : 'everyone at once'}</p>
           <ul className="ed-people">
             {sorted.map((r) => {
               const n = fields.filter((f) => f.recipient_id === r.id).length;
@@ -214,15 +203,10 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
         </div>
       )}
 
-      {!isTpl && !correcting && pages > 0 && (
-        <div className="card row" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>
-          <Mark size={26} label="" />
-          <div>
-            <b>Sending this digitally saves about {fmtNum(impact.sheets)} sheets of paper</b>
-            <div className="small" style={{ marginTop: 2 }}>That is {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e not used, or {fmtTrees(impact.trees)} of a tree. Printing, couriers and filing cabinets not included.</div>
-          </div>
-        </div>
-      )}
+      {/* Reminders, the deadline, how dates are written and a payment link: asked once, here, and closed until asked for. */}
+      <ReviewMore ed={ed} closed={!!closed} />
+
+      {!isTpl && !correcting && pages > 0 && <SavingBox pages={pages} people={rcps.length} />}
 
       <div className="row wrap ed-actions">
         {correcting && <button type="button" className="btn ghost" onClick={onDiscard}>Discard changes</button>}

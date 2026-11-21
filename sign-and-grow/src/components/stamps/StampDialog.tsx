@@ -12,9 +12,18 @@ import { INK_WORD } from '@/lib/stampink';
 
 export type PutStamp = { value: string; image_url: string; turn?: number; stamp: { name: string | null; ink: string | null; from: string | null } };
 
-export function StampDialog({ base, field, current, version, onClose, onPut, onTakeOff, onChanged }: {
+/** The stamp this signer already put on another of their stamp fields of this document, to offer it again. */
+export type SameStamp = { field_id: string; image_url: string; turn: number };
+export function sameStampOf(fields: any[], field: any, urlOf: (f: any) => string | null, turns: Record<string, number>): SameStamp | null {
+  const f = fields.find((x) => x.type === 'stamp' && x.id !== field.id && urlOf(x));
+  return f ? { field_id: f.id, image_url: urlOf(f)!, turn: turns[f.id] ?? stampTurn(f.stamp_meta) } : null;
+}
+
+export function StampDialog({ base, field, current, same, version, onClose, onPut, onTakeOff, onChanged }: {
   base: string;
   field: any;
+  /** The stamp they already put on another field of this document: offered first, so it is not made twice. */
+  same?: SameStamp | null;
   /** The stamp on the field now, if there is one. */
   current: { image_url: string; name?: string | null; turn?: number } | null;
   version: number | null;
@@ -31,12 +40,15 @@ export function StampDialog({ base, field, current, version, onClose, onPut, onT
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [replace, setReplace] = useState(!current);
+  // "Use another picture" on the offer of the stamp they already put on.
+  const [another, setAnother] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const camera = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let live = true;
-    api(`${base}/stamps`).then((r) => live && setSaved(r.stamps || [])).catch(() => live && setSaved([]));
+    // The first saved stamp is chosen to start with, so the main button always has something to use.
+    api(`${base}/stamps`).then((r) => live && (setSaved(r.stamps || []), setPick((p) => p || r.stamps?.[0]?.id || ''))).catch(() => live && setSaved([]));
     return () => {
       live = false;
     };
@@ -58,7 +70,7 @@ export function StampDialog({ base, field, current, version, onClose, onPut, onT
   const chosen = (from: 'upload' | 'camera') => (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     e.target.value = '';
-    if (f) (setFile({ f, from }), setMade(null), setPick(''), setError(''));
+    if (f) (setFile({ f, from }), setMade(null), setError(''));
   };
   const name = field.label || 'Stamp';
 
@@ -75,6 +87,28 @@ export function StampDialog({ base, field, current, version, onClose, onPut, onT
           <button type="button" className="btn" disabled={busy} onClick={async () => { setBusy(true); try { await onTakeOff(); } catch (e: any) { setError(e?.message || 'It could not be taken off. Try again.'); } finally { setBusy(false); } }}>Take it off</button>
           <button type="button" className="btn" onClick={() => setReplace(true)}>Change it</button>
           <button type="button" className="btn primary" data-autofocus onClick={onClose}>Keep it</button>
+        </div>
+      </Dialog>
+    );
+
+  if (same && !another)
+    return (
+      <Dialog title={`Put your stamp on: ${name}`} onClose={onClose}>
+        <div className="st-dialog">
+          <OnPaper className="st-same" label="The stamp you already put on this document, on a page of text">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="st-on st-ink" src={same.image_url} alt="" style={turnStyle(same.turn)} />
+          </OnPaper>
+          <p style={{ margin: 0 }}>This is the stamp you already put on this document.</p>
+          <p className="muted small st-honest">{STAMP_IS_YOU}</p>
+          <div className="st-foot">
+            {error && <div className="notice err" role="alert">{error}</div>}
+            <div className="actions sg-three">
+              <button type="button" className="btn" onClick={current ? () => setReplace(false) : onClose}>{current ? 'Back' : 'Cancel'}</button>
+              <button type="button" className="btn" onClick={() => (setAnother(true), setError(''))}>Use another picture</button>
+              <button type="button" className="btn primary" data-autofocus disabled={busy} onClick={() => put({ same_as: same.field_id })}>{busy ? 'Putting it on' : 'Use the same stamp'}</button>
+            </div>
+          </div>
         </div>
       </Dialog>
     );
@@ -115,16 +149,21 @@ export function StampDialog({ base, field, current, version, onClose, onPut, onT
           </>
         )}
         <p className="muted small st-honest">{STAMP_IS_YOU}</p>
-        {error && <div className="notice err" role="alert">{error}</div>}
-        <div className="actions">
-          <button type="button" className="btn" onClick={current ? () => setReplace(false) : onClose}>{current ? 'Back' : 'Cancel'}</button>
-          {file ? (
-            <button type="button" className="btn primary" disabled={!made || busy} onClick={() => made && put({ image: made.png, ink: made.look.ink, seed: made.look.seed, tilt: made.look.tilt, texture: made.look.texture, turn: made.look.tilt, from: made.from })}>
-              {busy ? 'Putting it on' : 'Put this stamp on the page'}
-            </button>
-          ) : (
-            <button type="button" className="btn primary" disabled={!pick || busy} onClick={() => put({ stamp_id: pick })}>{busy ? 'Putting it on' : 'Use this stamp'}</button>
-          )}
+        {/* The buttons stay in view at the bottom of the dialog. The main one is there only once it can do something:
+            a picture made into a stamp, or a saved stamp to use. Before that, Cancel alone. */}
+        <div className="st-foot">
+          {error && <div className="notice err" role="alert">{error}</div>}
+          <div className="actions">
+            <button type="button" className="btn" onClick={current ? () => setReplace(false) : onClose}>{current ? 'Back' : 'Cancel'}</button>
+            {file && made && (
+              <button type="button" className="btn primary" disabled={busy} onClick={() => put({ image: made.png, ink: made.look.ink, seed: made.look.seed, tilt: made.look.tilt, texture: made.look.texture, turn: made.look.tilt, from: made.from })}>
+                {busy ? 'Putting it on' : 'Put this stamp on the page'}
+              </button>
+            )}
+            {!file && !!saved?.length && !!pick && (
+              <button type="button" className="btn primary" disabled={busy} onClick={() => put({ stamp_id: pick })}>{busy ? 'Putting it on' : 'Use this stamp'}</button>
+            )}
+          </div>
         </div>
       </div>
     </Dialog>

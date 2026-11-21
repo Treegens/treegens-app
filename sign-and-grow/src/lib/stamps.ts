@@ -64,6 +64,19 @@ export const STAMP_NAME_MAX = 60;
 export const MM_PER_PT = 25.4 / 72;
 /** A field of `mm` millimetres square on a page of `pageW` by `pageH` points, as fractions of the page. */
 export const stampBox = (mm: number, pageW: number, pageH: number) => ({ w: Math.min(1, mm / MM_PER_PT / (pageW || 612)), h: Math.min(1, mm / MM_PER_PT / (pageH || 792)) });
+/**
+ * The field a stamp fills at its real size: `size_mm` across its longer side, in the proportions of its picture (a
+ * wide RECEIVED box is not square). Without a stamp, the square a new stamp field starts as.
+ */
+export function stampFieldBox(stamp: { size_mm?: number; width?: number; height?: number } | null | undefined, pageW: number, pageH: number): { w: number; h: number } {
+  const mm = Number(stamp?.size_mm) > 0 ? Number(stamp!.size_mm) : STAMP_DEFAULT_MM;
+  const pw = Number(stamp?.width) || 1, ph = Number(stamp?.height) || 1;
+  const k = Math.max(0.2, Math.min(5, pw / ph));
+  const across = stampBox(k >= 1 ? mm : mm * k, pageW, pageH).w, down = stampBox(k >= 1 ? mm / k : mm, pageW, pageH).h;
+  return { w: across, h: down };
+}
+/** Whether a field has the size of that box, to within a rounding. */
+export const sameBox = (f: { w: number; h: number }, b: { w: number; h: number }) => Math.abs(f.w - b.w) < 0.002 && Math.abs(f.h - b.h) < 0.002;
 /** How large a field is on the page, in whole millimetres. */
 export const fieldMm = (f: { w: number; h: number }, pageW: number, pageH: number) => ({ w: Math.round(f.w * (pageW || 612) * MM_PER_PT), h: Math.round(f.h * (pageH || 792) * MM_PER_PT) });
 

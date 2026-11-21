@@ -118,7 +118,7 @@ test('with no seal settings the signed PDF is byte for byte what the renderer ma
   assert.ok(!pdf.toString('latin1').includes('/ByteRange'), 'no signature in the file');
   assert.ok(!pdf.toString('latin1').includes('/AcroForm'), 'no form added to the file');
   assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, null);
-  assert.equal(s.db.get("SELECT COUNT(*) n FROM audit WHERE envelope_id=? AND action IN ('Digital seal applied', 'Not sealed')", id).n, 0);
+  assert.equal(s.db.get("SELECT COUNT(*) n FROM audit WHERE envelope_id=? AND (action LIKE 'Sealed by %' OR action='Not sealed')", id).n, 0);
   // finishPdf hands back exactly what the renderer made: the same bytes, untouched.
   const e = s.env.loadEnvelope(id);
   const fixed = await s.env.buildPdf(e, true);
@@ -147,7 +147,7 @@ test('a completed PDF is sealed over the whole file: pdfsig and openssl both say
   assert.match(t, /\/SubFilter \/ETSI\.CAdES\.detached/);
   assert.match(t, /\/M \(D:\d{14}Z\)/);
   assert.ok(!/\/Cert\b/.test(t), 'no Cert entry (PAdES)');
-  assert.equal(s.db.get("SELECT COUNT(*) n FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).n, 1);
+  assert.equal(s.db.get("SELECT COUNT(*) n FROM audit WHERE envelope_id=? AND action LIKE 'Sealed by %'", id).n, 1);
   if (PDFSIG) {
     const out = pdfsig(write('sealed.pdf', pdf));
     assert.match(out, /Signature Type: ETSI\.CAdES\.detached/);
@@ -177,7 +177,8 @@ test('a completed PDF is sealed over the whole file: pdfsig and openssl both say
   if (PDFTOTEXT) {
     const words = text(pdf);
     assert.match(words, /Digital seal/i);
-    assert.match(words, /This file carries a digital seal applied by Example Operator Seal/);
+    assert.match(words, /The signed PDF this certificate closes carries a digital seal applied by Example Operator Seal/);
+    assert.doesNotMatch(words, /PAdES|B-B|B-T/, 'no technical names on the certificate');
     assert.match(words, /not a signature of the people who signed/);
     assert.match(words, /this server's clock/);
   }
@@ -189,11 +190,11 @@ test('one changed byte inside the sealed part breaks the seal; a byte added afte
   const r = byteRange(pdf);
   const changed = Buffer.from(pdf);
   changed[Math.floor(r[1] / 2)] ^= 0x01;
-  const check = seal.checkSeal(changed)!;
+  const check = (await seal.checkSeal(changed))!;
   assert.equal(check.intact, false);
   assert.match(check.why!, /does not match the file/);
   const appended = Buffer.concat([pdf, Buffer.from('\n% one more line\n')]);
-  const a = seal.checkSeal(appended)!;
+  const a = (await seal.checkSeal(appended))!;
   assert.equal(a.intact, true, 'what the seal covers is unchanged');
   assert.equal(a.whole_file, false);
   assert.equal(a.sealed_part_sha256, crypto.createHash('sha256').update(pdf).digest('hex'));
@@ -223,7 +224,7 @@ test('the key can come from a .p12 file, as OpenSSL 3 writes it and as older sof
     assert.equal(st.key.cert.name, 'Example Operator Seal');
     assert.deepEqual(st.key.chain.map((x) => x.name), ['Example Operator Seal', 'Test Issuing CA', 'Test Root CA']);
     const { pdf } = await complete();
-    assert.ok(seal.checkSeal(pdf)!.intact);
+    assert.ok((await seal.checkSeal(pdf))!.intact);
     if (PDFSIG) assert.match(pdfsig(write(`p12-${legacy}.pdf`, pdf)), /Signature is Valid/);
     // A wrong password is said in words, and the file is made without a seal.
     settings({ SEAL_P12: out, SEAL_P12_PASSWORD: 'not it' });
@@ -241,7 +242,7 @@ test('an ECDSA P-256 key seals too, and pdfsig and openssl accept it', async () 
   assert.ok(st.on);
   assert.equal(st.key.signer.scheme, 'ecdsa-p256');
   const { pdf } = await complete();
-  assert.ok(seal.checkSeal(pdf)!.intact);
+  assert.ok((await seal.checkSeal(pdf))!.intact);
   if (PDFSIG) assert.match(pdfsig(write('ec.pdf', pdf)), /Signature is Valid/);
   if (OPENSSL) execFileSync('openssl', ['cms', '-verify', '-inform', 'DER', '-in', write('ec.der', cmsOf(pdf)), '-binary', '-content', write('ec.bin', covered(pdf)), '-CAfile', write('ecroot.pem', ecRoot.pem), '-purpose', 'any', '-out', os.devNull], { stdio: 'pipe' });
 });
@@ -296,14 +297,17 @@ test('with a time-stamp service the seal is B-T: the token is over the signature
     assert.equal(stub.calls.length, 1);
     assert.equal(stub.calls[0].auth, `Basic ${Buffer.from('seal-user:tsa pass').toString('base64')}`);
     assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-T');
-    const check = seal.checkSeal(pdf)!;
+    const check = (await seal.checkSeal(pdf))!;
     assert.equal(check.intact, true);
     assert.equal(check.level, 'B-T');
     assert.ok(check.timestamp_at);
     const { token, signature } = await tokenOf(pdf);
     assert.ok(token, 'the token is in the unsigned attributes');
-    assert.match(s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).detail, /PAdES B-T, with a time-stamp from tsa\.test/);
-    if (PDFTOTEXT) assert.match(text(pdf), /at level PAdES B-T.*carries a time-stamp from a time-stamp service/);
+    assert.match(s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action LIKE 'Sealed by %'", id).detail, /trusted time stamp from tsa\.test/);
+    if (PDFTOTEXT) assert.match(text(pdf), /The seal carries a trusted time stamp from a time-stamp service/);
+    assert.equal(s.db.get('SELECT seal_tsa FROM envelopes WHERE id=?', id).seal_tsa, 'trusted');
+    assert.ok(check.timestamp_at, 'with TSA_TRUST the time of the time stamp is shown');
+    assert.equal(check.timestamp_unchecked, false);
     if (PDFSIG) assert.match(pdfsig(write('bt.pdf', pdf)), /Signature is Valid/);
     if (OPENSSL) {
       const digest = crypto.createHash('sha256').update(signature).digest('hex');
@@ -321,12 +325,16 @@ test('with a time-stamp service the seal is B-T: the token is over the signature
 test('a time-stamp that does not check out is never used: the seal goes out at B-B at once, and the certificate and the record say so', async () => {
   const otherRoot = makeCert({ cn: 'Unrelated Root', ca: true });
   const noEku = makeCert({ cn: 'Not A TSA', issuer: tsaRoot });
+  // A service of its own making that lies about the time: its certificate has the right purpose and covers 2011.
+  const liar = makeCert({ cn: 'Liar TSA', ku: 0xc0, eku: [TIME_STAMPING], ekuCritical: true, from: new Date('2000-01-01'), to: new Date('2040-01-01') });
   const bad: [string, (req: Buffer) => Buffer | number, Record<string, string>, RegExp][] = [
     ['refused', (req) => tsaAnswer(req, tsa, [tsaRoot], { status: 2 }), {}, /refused \(status 2\)/],
     ['old answer', (req) => tsaAnswer(req, tsa, [tsaRoot], { nonce: 12345n }), {}, /nonce/],
     ['other imprint', (req) => tsaAnswer(req, tsa, [tsaRoot], { imprint: crypto.randomBytes(32) }), {}, /not over our signature/],
     ['server error', () => 503, {}, /HTTP 503/],
     ['garbage', () => Buffer.from('<html>hello</html>'), {}, /not a time-stamp this server can read|could not be checked/],
+    ['a time years off', (req) => tsaAnswer(req, liar, [], { time: new Date('2011-01-01T00:00:00Z') }), {}, /the time it gives \(2011-01-01T00:00:00\.000Z\) is more than 5 minutes from this server's clock/],
+    ['a time ten minutes ahead', (req) => tsaAnswer(req, tsa, [tsaRoot], { time: new Date(Date.now() + 10 * 60_000) }), { TSA_TRUST: write('trust-ahead.pem', tsaRoot.pem) }, /more than 5 minutes from this server's clock/],
     ['not a TSA certificate', (req) => tsaAnswer(req, noEku, [tsaRoot]), {}, /not meant for time-stamping/],
     ['outside the trust list', (req) => tsaAnswer(req, tsa, [tsaRoot]), { TSA_TRUST: write('other-trust.pem', otherRoot.pem) }, /does not lead to one in TSA_TRUST/],
   ];
@@ -336,14 +344,14 @@ test('a time-stamp that does not check out is never used: the seal goes out at B
     try {
       const { id, pdf } = await complete();
       assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-B', what);
-      const check = seal.checkSeal(pdf)!;
+      const check = (await seal.checkSeal(pdf))!;
       assert.equal(check.intact, true, what);
       assert.equal(check.level, 'B-B', what);
       assert.equal((await tokenOf(pdf)).token, null, `${what}: no token in the file`);
-      const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).detail;
-      assert.match(line, /B-B/, what);
+      const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action LIKE 'Sealed by %'", id).detail;
+      assert.match(line, /The time in the seal is this server's clock/, what);
       assert.match(line, why, what);
-      if (PDFTOTEXT) assert.match(text(pdf), /time-stamp service could not give a time-stamp|did not answer/, what);
+      if (PDFTOTEXT) assert.match(text(pdf), /time-stamp service could not give a time stamp|did not answer/, what);
       // Nobody waits: the signed PDF was there when the envelope completed.
       assert.ok(s.db.get('SELECT final_sha256 FROM envelopes WHERE id=?', id).final_sha256);
     } finally {
@@ -364,19 +372,19 @@ test('several services are tried in order; the first that answers well gives the
   }
 });
 
-test('a service that never answers is given up after 10 seconds, and all of them together after 20: the seal goes out at B-B', async () => {
+test('a service that never answers is given up after 3 seconds, and all of them together after 4, so the last signer never waits long: the seal goes out at B-B', async () => {
   settings({ ...pemSettings(), TSA_URL: 'https://slow.test/ts,https://slower.test/ts,https://never.test/ts' });
   const stub = stubTsa(() => 'hang');
   try {
     const t0 = Date.now();
     const { id } = await complete();
     const took = Date.now() - t0;
-    assert.ok(took >= 19_000 && took < 30_000, `the last Finish waited ${took} ms for time-stamps`);
-    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['slow.test', 'slower.test'], 'the third is not asked once the 20 seconds are used up');
+    assert.ok(took >= 3_500 && took < 9_000, `the last Finish waited ${took} ms for time-stamps`);
+    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['slow.test', 'slower.test'], 'the third is not asked once the 4 seconds are used up');
     assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-B');
-    const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Digital seal applied'", id).detail;
-    assert.match(line, /slow\.test: it did not answer within 10 seconds/);
-    assert.match(line, /never\.test\/ts: not asked, because the 20 seconds for time-stamps were used up/);
+    const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action LIKE 'Sealed by %'", id).detail;
+    assert.match(line, /slow\.test: it did not answer within 3 seconds/);
+    assert.match(line, /never\.test: not asked, because the 4 seconds for time-stamps were used up/);
   } finally {
     stub.restore();
   }
@@ -488,7 +496,7 @@ test('a voided envelope is not an agreement: a signer\'s copy of it carries no s
   assert.equal(dl.status, 200);
   const copy = Buffer.from(dl.data);
   assert.ok(!copy.toString('latin1').includes('/ByteRange'), 'no seal on a voided copy');
-  assert.equal(seal.checkSeal(copy), null);
+  assert.equal(await seal.checkSeal(copy), null);
   if (PDFTOTEXT) assert.match(text(copy), /carries no digital seal/);
 });
 
@@ -527,10 +535,13 @@ test('a crafted file never trips /verify: a fake seal is "damaged", a stranger w
   const v = await verify(noise, '192.0.2.88');
   assert.equal(v.match, false);
   assert.equal(v.seal.intact, false);
-  assert.match(v.seal.why, /damaged|does not/);
-  // A ByteRange that points outside the file is not taken for a seal at all.
+  assert.match(v.seal.why, /damaged|does not|not part of the seal/);
+  // A ByteRange that points outside the file: the seal is said not to hold.
   const wild = Buffer.from(pdf.toString('latin1').replace(/\/ByteRange \[[^\]]*\]/, (m) => '/ByteRange [0 10 99999999 5]'.padEnd(m.length, ' ')), 'latin1');
-  assert.equal(seal.checkSeal(wild), null);
+  const w = (await seal.checkSeal(wild))!;
+  assert.equal(w.intact, false, 'a seal whose range does not fit the file is never said to hold');
+  assert.equal(w.whole_file, false);
+  assert.match(w.why!, /not where it is/);
   // The same name on a certificate of someone else's (self-signed here) is not ours.
   const self = makeCert({ cn: 'Example Operator Seal' });
   settings({ SEAL_KEY_PEM: write('self-key.pem', self.keyPem), SEAL_CERT_PEM: write('self-cert.pem', self.pem) });
@@ -570,11 +581,301 @@ test('the seal is appended to any file the renderer may make: a form already in 
     assert.equal(back.getPageCount(), 3);
     const names = back.getForm().getFields().map((f) => f.getName()).sort();
     assert.deepEqual(names, ['Seal', 'kept.field'], 'the form keeps its field and gains the seal');
-    assert.equal(seal.checkSeal(bytes)!.intact, true);
+    assert.equal((await seal.checkSeal(bytes))!.intact, true);
     if (PDFSIG) {
       const out = pdfsig(write(`form-${objectStreams}.pdf`, bytes));
       assert.match(out, /Total document signed/);
       assert.match(out, /Signature is Valid/);
     }
   }
+});
+
+test('the screens: the history line says "Sealed by <name>" in plain words, the page of the document and the admins\' status line say the same, and nothing shows without settings', async () => {
+  // No settings: no status line, no "seal" on the page of a completed document.
+  settings({});
+  const plain = await complete();
+  assert.deepEqual((await plain.c.get('/seal')).data, { set: false });
+  assert.equal((await plain.c.get(`/envelopes/${plain.id}`)).data.seal, null);
+
+  settings(pemSettings());
+  const { id, c } = await complete();
+  const page = (await c.get(`/envelopes/${id}`)).data;
+  assert.deepEqual(page.seal, { by: 'Example Operator Seal', issuer: 'Test Issuing CA', time_stamp: false, time_stamp_trusted: false });
+  const line = page.audit.find((a: any) => a.action === 'Sealed by Example Operator Seal');
+  assert.ok(line, 'one history line, in the words of the charter');
+  assert.equal(page.audit.filter((a: any) => /^Sealed by /.test(a.action)).length, 1);
+  // The sender's daily path carries no technical names (charter P6).
+  assert.doesNotMatch(`${line.action} ${line.detail}`, /PAdES|PKI|CMS|RFC ?3161|B-B|B-T/);
+  assert.match(line.detail, /A PDF reader shows if the file changed after this/);
+  assert.equal(page.chain.ok, true, 'the line is part of the chained record');
+  // The earlier, unsealed one still says nothing, also now that a seal is set.
+  assert.equal((await plain.c.get(`/envelopes/${plain.id}`)).data.seal, null);
+
+  // The status line: for admins only, and never the reason a key is refused (it can name files on the server).
+  const st = (await c.get('/seal')).data;
+  assert.equal(st.set, true);
+  assert.equal(st.on, true);
+  assert.equal(st.by, 'Example Operator Seal');
+  assert.equal(st.issuer, 'Test Issuing CA');
+  assert.equal(st.time_stamp, false);
+  assert.ok(Date.parse(st.until) > Date.now());
+  const router = await import('../src/server/router.ts');
+  assert.equal((await router.handle(new Request('http://test.local/api/seal'))).status, 401);
+  const lv = router.listRoutes().find((r: any) => r.path === '/seal');
+  assert.equal(lv?.level, 'admin');
+  settings({ SEAL_KEY_PEM: '/nowhere/secret-place/key.pem', SEAL_CERT_PEM: '/nowhere/cert.pem' });
+  const off = (await c.get('/seal')).data;
+  assert.deepEqual(off, { set: true, on: false });
+  assert.ok(!JSON.stringify(off).includes('nowhere'));
+  settings({ ...pemSettings(), TSA_URL: 'https://tsa.test/key-in-the-path' });
+  assert.equal((await c.get('/seal')).data.time_stamp, true);
+  assert.ok(!JSON.stringify((await c.get('/seal')).data).includes('key-in-the-path'));
+});
+
+// ---- Repairs: forged files, time stamps nobody checked, the certificate on its own -----------------------------
+
+/** The seal's own bytes in a sealed file: [start of "<", end after ">"], the hex of the CMS without its padding. */
+const parts = (pdf: Buffer) => {
+  const [, a, b] = byteRange(pdf);
+  return { a, b, P: pdf.subarray(0, a), S: pdf.subarray(b), cmsHex: pdf.subarray(a + 1, b - 1).toString('latin1').replace(/(00)+$/, '') };
+};
+const EVIL = (() => {
+  const st = 'BT /F1 26 Tf 40 700 Td (FORGED: pay 1,000,000 to Mallory) Tj ET';
+  return `\n9990 0 obj\n<< /Length ${st.length} >>\nstream\n${st}\nendstream\nendobj\n9992 0 obj\n<< /Type /Page /Parent 9993 0 R /MediaBox [0 0 612 792] /Contents 9990 0 R >>\nendobj\n9993 0 obj\n<< /Type /Pages /Kids [9992 0 R] /Count 1 >>\nendobj\n9994 0 obj\n<< /Type /Catalog /Pages 9993 0 R >>\nendobj\ntrailer\n<< /Root 9994 0 R /Size 9995 >>\n`;
+})();
+
+test('forged: a file put together around a real seal (the seal moved, other pages put in its place) is never said to hold', async () => {
+  settings(pemSettings());
+  const { pdf } = await complete();
+  const { a, b, P, S, cmsHex } = parts(pdf);
+  const PS = Buffer.concat([P, S]);
+  // 1. The seal cut out and put back near the end with other objects and a second /ByteRange that names the new place.
+  const x = PS.lastIndexOf('startxref');
+  let gap = '';
+  for (let i = 0; i < 6; i++) {
+    const g = `<${cmsHex}>${EVIL}<< /SubFilter /ETSI.CAdES.detached /ByteRange [0 ${x} ${String(x + gap.length).padStart(12, ' ')} ${PS.length - x}] >`;
+    if (g.length === gap.length) {
+      gap = g;
+      break;
+    }
+    gap = g;
+  }
+  const moved = Buffer.concat([PS.subarray(0, x), Buffer.from(gap, 'latin1'), PS.subarray(x)]);
+  // What the seal covers is, byte for byte, what it covered: the old check said "holds, whole file, ours".
+  assert.equal(crypto.createHash('sha256').update(Buffer.concat([moved.subarray(0, x), moved.subarray(x + gap.length)])).digest('hex'), crypto.createHash('sha256').update(PS).digest('hex'));
+  const m = (await seal.checkSeal(moved))!;
+  assert.ok(m, 'the file is said to name a seal');
+  assert.equal(m.intact, false);
+  assert.equal(m.whole_file, false);
+  assert.match(m.why!, /not where it is|not part of the seal/);
+  const v = await verify(moved, '192.0.2.90');
+  assert.equal(v.match, false);
+  assert.equal(v.seal.intact, false, '/verify never vouches for it');
+
+  // 2. Other bytes hidden in the seal's own place, after the seal's data (same length as before).
+  const junk = `>${EVIL}`.padEnd(b - a - 2 - cmsHex.length, ' ');
+  const inplace = Buffer.concat([pdf.subarray(0, a + 1), Buffer.from(cmsHex + junk, 'latin1'), pdf.subarray(b - 1)]);
+  assert.equal(inplace.length, pdf.length);
+  const i2 = (await seal.checkSeal(inplace))!;
+  assert.equal(i2.intact, false);
+  assert.match(i2.why!, /not part of the seal/);
+  // 3. Hex digits that are not zeros after the seal's data: still nothing but the seal may sit there.
+  const tail = 'ab'.repeat((b - a - 2 - cmsHex.length) / 2);
+  const padded = Buffer.concat([pdf.subarray(0, a + 1), Buffer.from(cmsHex + tail, 'latin1'), pdf.subarray(b - 1)]);
+  assert.equal((await seal.checkSeal(padded))!.intact, false);
+  // 4. Whitespace in the hex (a PDF reader would skip it, and so could hide a shift): refused as well.
+  const spaced = Buffer.from(pdf);
+  spaced[b - 3] = 0x20;
+  assert.equal((await seal.checkSeal(spaced))!.intact, false);
+  // 5. A real seal lifted into another file, whose own bytes it does not cover.
+  const other = await PDFDocument.create();
+  other.addPage().drawText('Another agreement altogether', { x: 50, y: 700 });
+  const lifted = Buffer.concat([Buffer.from(await other.save()), Buffer.from(`\n77 0 obj\n<< /Type /Sig /SubFilter /ETSI.CAdES.detached /ByteRange [0 ${a} ${b} ${pdf.length - b}] /Contents <${cmsHex}> >>\nendobj\n`, 'latin1')]);
+  const l = (await seal.checkSeal(lifted))!;
+  assert.equal(l.intact, false);
+  // 6. The words "/ByteRange [..]" in a file with no seal dictionary at all say nothing about a seal.
+  const words = await PDFDocument.create();
+  words.addPage();
+  words.setTitle('/ByteRange [0 10 20 30]');
+  assert.equal(await seal.checkSeal(Buffer.concat([Buffer.from(await words.save({ useObjectStreams: false })), Buffer.from('\n% /ByteRange [0 10 20 30]\n')])), null);
+  // And the true file still holds, also for poppler.
+  const t = (await seal.checkSeal(pdf))!;
+  assert.deepEqual([t.intact, t.whole_file, t.ours], [true, true, true]);
+  if (PDFSIG) assert.doesNotMatch(pdfsig(write('moved.pdf', moved)), /Signature is Valid/);
+});
+
+test('a seal a PDF reader would not find is not said to hold over the whole file', async () => {
+  settings(pemSettings());
+  const { pdf } = await complete();
+  // The field is taken out of the form and off the page by turning the two names into others of the same length
+  // INSIDE the seal's range would break the fingerprint, so this can only be done by changing covered bytes: it must fail.
+  const text = pdf.toString('latin1');
+  const hidden = Buffer.from(text.replace('/FT /Sig', '/FT /Btn'), 'latin1');
+  assert.equal(hidden.length, pdf.length);
+  const h = (await seal.checkSeal(hidden))!;
+  assert.equal(h.intact, false);
+});
+
+/** Puts a time-stamp token into the unsigned attributes of the seal of `pdf`, as a stranger with a hex editor could. */
+function addToken(pdf: Buffer, tokenAnswer: (req: Buffer) => Buffer, tsaMod: typeof import('../src/server/tsa.ts'), cms: typeof import('../src/server/sealcms.ts')): Buffer {
+  const { a, b } = parts(pdf);
+  const raw = Buffer.from(pdf.subarray(a + 1, b - 1).toString('latin1'), 'hex');
+  const ci = derMod.read(raw);
+  const sd = cms.parseSignedData(raw.subarray(0, ci.end));
+  const imprint = crypto.createHash('sha256').update(sd.signers[0].signature).digest();
+  const ans = tokenAnswer(tsaMod.timeStampRequest(imprint, Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])));
+  const token = Buffer.from(derMod.whole(derMod.kids(derMod.read(ans))[1]));
+  const top = derMod.kids(ci);
+  const sdNode = derMod.kids(derMod.kids(top[1])[0]);
+  const si = derMod.kids(sdNode[sdNode.length - 1])[0];
+  const newSi = derMod.seq(derMod.content(si), derMod.tagged(1, cms.signatureTimeStampAttribute(token)));
+  const newSd = derMod.seq(...sdNode.slice(0, -1).map((k) => derMod.whole(k)), derMod.tlv(0x31, newSi));
+  const hex = derMod.seq(derMod.whole(top[0]), derMod.tagged(0, newSd)).toString('hex').padEnd(b - a - 2, '0');
+  assert.equal(hex.length, b - a - 2);
+  return Buffer.concat([pdf.subarray(0, a + 1), Buffer.from(hex, 'latin1'), pdf.subarray(b - 1)]);
+}
+
+test('a time stamp a stranger adds to our seal afterwards is never shown as a time, and never called trusted', async () => {
+  const tsaMod = await import('../src/server/tsa.ts');
+  const cms = await import('../src/server/sealcms.ts');
+  settings(pemSettings());
+  const { pdf } = await complete();
+  const anybody = makeCert({ cn: 'Anybody Time', ku: 0xc0, eku: [TIME_STAMPING], ekuCritical: true, from: new Date('2000-01-01'), to: new Date('2040-01-01') });
+  const forged = addToken(pdf, (req) => tsaAnswer(req, anybody, [], { time: new Date('2019-03-01T12:00:00Z') }), tsaMod, cms);
+  if (PDFSIG) assert.match(pdfsig(write('forged-time.pdf', forged)), /Signature is Valid/, 'the seal itself still holds: unsigned attributes are outside it');
+  // Without TSA_TRUST nothing can vouch for a time stamp: no time from it, only the seal's own (covered) time.
+  const v = await verify(forged, '192.0.2.91');
+  assert.equal(v.seal.intact, true);
+  assert.equal(v.seal.timestamp_at, null);
+  assert.equal(v.seal.timestamp_unchecked, true);
+  assert.ok(v.seal.sealed_at && !v.seal.sealed_at.startsWith('2019'));
+  assert.doesNotMatch(JSON.stringify(v.seal), /2019-03-01/);
+  // With TSA_TRUST set to the real service, the stranger's is still not under it.
+  settings({ ...pemSettings(), TSA_URL: 'https://tsa.test/stamp', TSA_TRUST: write('trust-b.pem', tsaRoot.pem) });
+  const v2 = await verify(forged, '192.0.2.92');
+  assert.equal(v2.seal.timestamp_at, null);
+  assert.equal(v2.seal.timestamp_unchecked, true);
+  // A token that is not over this seal's signature, or made by a certificate not meant for time-stamping: the same.
+  const notTsa = makeCert({ cn: 'No Purpose' });
+  for (const bad of [addToken(pdf, (req) => tsaAnswer(req, anybody, [], { imprint: crypto.randomBytes(32) }), tsaMod, cms), addToken(pdf, (req) => tsaAnswer(req, notTsa, []), tsaMod, cms)]) {
+    const c = (await seal.checkSeal(bad))!;
+    assert.equal(c.intact, true);
+    assert.equal(c.level, 'B-B');
+    assert.equal(c.timestamp_at, null);
+    assert.equal(c.timestamp_unchecked, true);
+  }
+  // The page says so in words, and never "trusted" for it.
+  const page = fs.readFileSync('src/app/verify/SealResult.tsx', 'utf8');
+  assert.match(page, /seal\.timestamp_at\s*\?[^:]*trusted time stamp/);
+  assert.match(page, /timestamp_unchecked \? <> It also carries a time stamp that this page has no way to check/);
+});
+
+test('without TSA_TRUST a time stamp is taken only near our clock and nothing calls it trusted: the record, the certificate, the screens and /verify', async () => {
+  settings({ ...pemSettings(), TSA_URL: 'https://tsa.test/stamp' });
+  const stub = stubTsa((req) => tsaAnswer(req, tsa, [tsaRoot]));
+  try {
+    const { id, pdf, c } = await complete();
+    const row = s.db.get('SELECT seal_level, seal_tsa FROM envelopes WHERE id=?', id);
+    assert.deepEqual([row.seal_level, row.seal_tsa], ['B-T', 'unchecked']);
+    const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action LIKE 'Sealed by %'", id).detail;
+    assert.match(line, /carries a time stamp from tsa\.test at /);
+    assert.match(line, /was not set up to check whose service that is, so nothing here calls the time stamp trusted/);
+    assert.doesNotMatch(line, /a trusted time stamp/);
+    if (PDFTOTEXT) {
+      const words = text(pdf);
+      assert.match(words, /carries a time stamp from a time-stamp service\. This server checked that it is over this seal and within five minutes of its own clock; it was not set up to check whose service it is/);
+      assert.doesNotMatch(words, /trusted time stamp/);
+    }
+    const page = (await c.get(`/envelopes/${id}`)).data;
+    assert.deepEqual([page.seal.time_stamp, page.seal.time_stamp_trusted], [true, false]);
+    const st = (await c.get('/seal')).data;
+    assert.deepEqual([st.time_stamp, st.time_stamp_trusted], [true, false]);
+    const v = await verify(pdf, '192.0.2.93');
+    assert.equal(v.match, true);
+    assert.equal(v.seal.level, 'B-T');
+    assert.equal(v.seal.timestamp_at, null, 'no time from a time stamp nobody checked');
+    assert.equal(v.seal.timestamp_unchecked, true);
+    // The words on the screens.
+    const en = JSON.parse(fs.readFileSync('src/locales/en.json', 'utf8'));
+    assert.doesNotMatch(en['seal.time.stamp_unchecked'], /trusted/);
+    for (const f of ['src/components/sender/FileChecks.tsx', 'src/components/settings/SealStatus.tsx']) assert.match(fs.readFileSync(f, 'utf8'), /time_stamp_trusted \? 'seal\.time\.stamp' : 'seal\.time\.stamp_unchecked'/, f);
+    // With TSA_TRUST the status line and a new envelope say trusted.
+    settings({ ...pemSettings(), TSA_URL: 'https://tsa.test/stamp', TSA_TRUST: write('trust-c.pem', tsaRoot.pem) });
+    assert.equal((await c.get('/seal')).data.time_stamp_trusted, true);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('the user name and password of the time-stamp service are never sent over plain http', async () => {
+  settings({ ...pemSettings(), TSA_URL: 'http://plain.test/ts,https://tsa.test/stamp', TSA_USER: 'seal-user', TSA_PASSWORD: 'tsa pass' });
+  const stub = stubTsa((req) => tsaAnswer(req, tsa, [tsaRoot]));
+  try {
+    const { id } = await complete();
+    assert.deepEqual(stub.calls.map((c) => new URL(c.url).host), ['tsa.test'], 'the http address is not asked at all');
+    assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-T');
+    stub.calls.length = 0;
+    // Without credentials a plain http service is asked: its answer is signed, and nothing secret goes out.
+    settings({ ...pemSettings(), TSA_URL: 'http://plain.test/ts' });
+    await complete();
+    assert.deepEqual(stub.calls.map((c) => [new URL(c.url).host, c.auth]), [['plain.test', null]]);
+    // Only http: with credentials nothing is asked, and the record says why.
+    settings({ ...pemSettings(), TSA_URL: 'http://plain.test/ts', TSA_USER: 'seal-user', TSA_PASSWORD: 'tsa pass' });
+    stub.calls.length = 0;
+    const only = await complete();
+    assert.equal(stub.calls.length, 0);
+    assert.match(s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action LIKE 'Sealed by %'", only.id).detail, /plain\.test: not asked, because its address is plain http/);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('the certificate on its own in an evidence pack carries no seal field and says nothing false; signed.pdf is the sealed file', async () => {
+  settings(pemSettings());
+  const { id, pdf, c } = await complete();
+  const ev = await import('../src/server/evidence.ts');
+  const env = await import('../src/server/envelopes.ts');
+  const pack = await ev.evidencePack(env.loadEnvelope(id), 'the test');
+  const file = (name: string) => Buffer.from(pack.entries.find((e) => e.name === name)!.data);
+  assert.ok(file('signed.pdf').equals(pdf));
+  const cert = file('certificate.pdf');
+  assert.doesNotMatch(cert.toString('latin1'), /\/ByteRange|ETSI\.CAdES|\/FT\s*\/Sig/, 'nothing of the seal is copied into the extract');
+  assert.equal(await seal.checkSeal(cert), null, '/verify says nothing about a seal for it');
+  if (PDFSIG) assert.doesNotMatch(pdfsig(write('certificate.pdf', cert)), /Signature #|not yet been verified|Not total document signed/);
+  if (PDFTOTEXT) {
+    const words = text(cert);
+    assert.match(words, /The signed PDF this certificate closes carries a digital seal/);
+    assert.doesNotMatch(words, /This file carries a digital seal/);
+  }
+  const readme = file('README.txt').toString();
+  assert.match(readme, /certificate\.pdf\s+the certificate of completion on its own, to read: an extract/);
+  assert.match(readme, /The digital seal is in signed\.pdf, not in this extract/);
+  // Without a seal the pack says nothing about one.
+  settings({});
+  const plain = await complete();
+  const p2 = await ev.evidencePack(env.loadEnvelope(plain.id), 'the test');
+  assert.doesNotMatch(Buffer.from(p2.entries.find((e) => e.name === 'README.txt')!.data).toString(), /digital seal/i);
+  void c;
+});
+
+test('with no seal key the public pages say nothing about a seal, and with one they never promise more than the code does', async () => {
+  const lib = await import('../src/lib/seal.ts');
+  const cert = fs.readFileSync('src/app/security/certificate/page.tsx', 'utf8');
+  // Every mention of the seal on the certificate page sits behind sealSet(), and the page is read on each request.
+  assert.match(cert, /export const dynamic = 'force-dynamic'/);
+  const outside = cert.replace(/\{sealSet\(\) && <>[\s\S]*?\n {8}<\/>\}/g, '').replace(/\{sealSet\(\) && <li>[\s\S]*?<\/li>\}/g, '').replace(/^import .*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\/\/.*$/gm, '');
+  assert.doesNotMatch(outside, /digital seal|time.stamp|SEAL_/i, 'nothing about the digital seal outside the gated parts');
+  // The table of outside services leaves the time-stamp row out without a seal key.
+  assert.match(fs.readFileSync('src/app/security/Outside.tsx', 'utf8'), /filter\(\(s\) => s\.id !== 'tsa' \|\| sealSet\(\)\)/);
+  assert.equal(lib.sealSet({}), false);
+  assert.equal(lib.sealSet({ TSA_URL: 'https://tsa.test' }), false, 'a time-stamp service alone is no seal');
+  // The public words: no technical names, the unsealed case is said, and "trusted" only with the operator's list.
+  for (const w of [lib.SEAL_TRUTH, lib.SEAL_TIME, lib.SEAL_TRUST, lib.SEAL_LIMITS, lib.sealCertificateLine({ name: 'A', issuer: 'B', level: 'B-T' }), lib.sealCertificateLine({ name: 'A', issuer: 'B', level: 'B-B' })])
+    assert.doesNotMatch(w, /PAdES|PKI|CMS|RFC ?3161|B-B|B-T|—/);
+  assert.match(lib.SEAL_TRUTH, /If the seal certificate cannot be used at that moment .* the file is made without a seal/);
+  assert.doesNotMatch(lib.SEAL_TRUTH, /Every PDF/);
+  assert.doesNotMatch(lib.sealCertificateLine({ name: 'A', issuer: 'B', level: 'B-T' }), /trusted/);
+  assert.match(lib.sealCertificateLine({ name: 'A', issuer: 'B', level: 'B-T', tsaTrusted: true }), /trusted time stamp/);
+  assert.match(lib.SEAL_TIME, /trusted time stamp only when the operator has also given the server the certificates/);
+  assert.doesNotMatch(JSON.stringify((await import('../src/lib/outside.ts')).outsideServices({}).find((x) => x.id === 'tsa')), /trusted/);
 });

@@ -184,6 +184,23 @@ export async function prepareSeal(pdf: Uint8Array, when: Date, contentsBytes = C
   return { bytes, byteRange, hexAt: hexStart, hexLength: placeholderHex.length };
 }
 
+/**
+ * Takes the signature fields off the pages of a loaded PDF, before pages are copied out of it into another file (the
+ * certificate on its own in an evidence pack). A copied page would otherwise carry the seal's field along, pointing
+ * at byte ranges of the file it was cut from, and a reader would show a broken signature on the extract.
+ */
+export function dropSignatureFields(doc: PDFDocument) {
+  for (const page of doc.getPages()) {
+    const annots = page.node.lookup(PDFName.of('Annots'));
+    if (!(annots instanceof PDFArray)) continue;
+    const keep = annots.asArray().filter((a) => {
+      const d = a instanceof PDFRef ? doc.context.lookup(a) : a;
+      return !(d instanceof PDFDict && d.get(PDFName.of('FT')) === PDFName.of('Sig'));
+    });
+    if (keep.length !== annots.size()) page.node.set(PDFName.of('Annots'), doc.context.obj(keep));
+  }
+}
+
 /** The bytes the seal covers: everything but the /Contents value. */
 export const coveredBytes = (bytes: Buffer, r: [number, number, number, number]) => Buffer.concat([bytes.subarray(r[0], r[0] + r[1]), bytes.subarray(r[2], r[2] + r[3])]);
 

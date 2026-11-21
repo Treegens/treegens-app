@@ -201,7 +201,7 @@ test('several pictures sent together become one document, a page for each, in th
   const up = await uploadFiles(c, [{ bytes: photo(6), name: 'IMG_4021.jpg' }, { bytes: photo(1), name: 'IMG_4022.JPG' }, { bytes: png, name: 'IMG_4023.png', type: 'image/png' }]);
   assert.equal(up.status, 200, JSON.stringify(up.data));
   assert.equal(up.data.pages, 3);
-  assert.equal(up.data.name, 'IMG_4021');
+  assert.equal(up.data.name, 'IMG 4021', 'the name is the file name in words (src/lib/docname.ts)');
   assert.deepEqual(up.data.page_sizes.map((p: any) => (p.w < p.h ? 'upright' : 'on its side')), ['upright', 'on its side', 'upright']);
   assert.deepEqual(up.data.scan_pages, [1, 2, 3], 'every page is a picture, and the sender is told so');
   assert.ok(up.data.size > 0 && up.data.size === (await content(c, up.data.id)).length);
@@ -211,7 +211,7 @@ test('several pictures sent together become one document, a page for each, in th
   // The other order gives the other document.
   const back = await uploadFiles(c, [{ bytes: photo(1), name: 'b.jpg' }, { bytes: photo(6), name: 'a.jpg' }]);
   assert.deepEqual(back.data.page_sizes.map((p: any) => (p.w < p.h ? 'upright' : 'on its side')), ['on its side', 'upright']);
-  assert.equal(back.data.name, 'b');
+  assert.equal(back.data.name, 'B');
 
   // It can be sent and signed like any document.
   const made = await c.post('/envelopes', {
@@ -790,7 +790,8 @@ test('a document large enough to be slow on a phone is pointed out with the time
 
   // The editor says it under the document in step 1 and again before sending, and the hint under the upload box
   // gives the same measured rate next to the limits of the server.
-  assert.match(read('src/components/editor/StepAdd.tsx'), /\{phoneWeight\(d\) && <p className="notice warn small" style=\{\{ margin: '6px 0 0' \}\}>\{phoneWeight\(d\)\}<\/p>\}/);
+  // (simplify-editor: the notes under a file are in FileRow.tsx.)
+  assert.match(read('src/components/editor/FileRow.tsx'), /if \(phoneWeight\(d\)\) notes\.push\(<p key="phone" className="notice warn small ed-file-note">\{phoneWeight\(d\)\}<\/p>\);/);
   assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && docs\.filter\(\(d\) => phoneWeight\(d\)\)\.map\(/);
   const { LIMITS } = await import('../src/components/editor/upload.ts');
   assert.equal(LIMITS, `PDF, PNG or JPEG. Up to 25 MB and 500 pages each. A signer on a phone waits about ${Math.round(PHONE_SECONDS_PER_MB)} seconds for each MB on a slow connection.`);

@@ -3,9 +3,12 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { PrintButton } from '../processing/PrintButton';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE, CERTIFICATE_PAGE_VERSION } from '@/lib/evidence';
-import { SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/seal';
+import { sealSet, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/seal';
 
 export const metadata = { title: 'How to read a GrowSigning certificate', description: 'Every line of a GrowSigning certificate of completion: where the software takes it from, what it shows and what it does not. Dated, for a lawyer to attach.' };
+
+// Read on every request, because the Digital seal part is only there on a server with a seal key (sealSet).
+export const dynamic = 'force-dynamic';
 
 // Written from drawCertificate() and renderEnvelopePdf() in src/server/pdf.ts as they are on CERTIFICATE_PAGE_VERSION,
 // and from where each value is set (src/server/envelopes.ts, src/lib/checks.ts). When the certificate changes, this page
@@ -78,9 +81,12 @@ export default function HowToReadACertificate() {
         <Line label="Characters this PDF could not print" from="Characters typed somewhere on the envelope for which the PDF has no font, listed by their Unicode number." shows="What was typed where the pages show a mark instead." />
         <Line label="Signed without paper" from="An estimate of the paper, water and CO2e not used, worked out from the number of pages." shows="An environmental estimate." not="Anything about the signatures." />
 
-        {/* The line drawCertificate prints from sealLineFor (src/server/seal.ts, words in src/lib/seal.ts). */}
-        <h2 id="seal">Digital seal</h2>
-        <Line label="Digital seal" from="Printed only by a server whose operator has set up a seal certificate, and only on a file that carries the seal: the name on the certificate it was made with, who issued that certificate, and the level. PAdES B-T: a time-stamp service gave a time-stamp over the seal. PAdES B-B: the time in the seal is the server's clock, and the line says whether a time-stamp service was asked and could not give one. The seal is added to the file right after the certificate is drawn, as an invisible signature over every byte of it." shows={<>{SEAL_TRUTH} {SEAL_TIME}</>} not={<>Who stood behind each signature, or that a signature is valid in law. {SEAL_TRUST} {SEAL_LIMITS}</>} />
+        {/* The line drawCertificate prints from sealLineFor (src/server/seal.ts, words in src/lib/seal.ts). Only on a
+            server whose operator has set a seal key: without one no certificate has the line, and nothing here speaks of it. */}
+        {sealSet() && <>
+          <h2 id="seal">Digital seal</h2>
+          <Line label="Digital seal" from="Printed only on the certificate of a signed PDF that carries the seal: the name on the certificate the seal was made with, who issued that certificate, and where the time in the seal comes from (this server's clock, or a time stamp from a time-stamp service, and whether that service's certificate was checked). The seal is added to the file right after the certificate is drawn, as an invisible signature over every byte of it. A certificate handed out on its own, as certificate.pdf in an evidence pack, is cut out of the signed PDF and carries no seal itself: the line speaks of the signed PDF." shows={<>{SEAL_TRUTH} {SEAL_TIME}</>} not={<>Who stood behind each signature, or that a signature is valid in law. {SEAL_TRUST} {SEAL_LIMITS}</>} />
+        </>}
 
         <h2>On the pages of the documents</h2>
         <Line label="GrowSigning Envelope ID at the foot of every page" from="The envelope ID above." shows="Which envelope the page belongs to, also on a printed copy." not="That the page was not swapped or changed: compare it with the signed file." />
@@ -90,7 +96,7 @@ export default function HowToReadACertificate() {
         <h2>Checking a certificate</h2>
         <ul className="pub-list">
           <li>The file: choose it on <Link href="/verify">Verify a document</Link>. A match means it is byte for byte the file stored when everyone finished.</li>
-          <li>The digital seal, when the certificate has a Digital seal line: open the file in Acrobat or another PDF reader that checks signatures and look at its signature panel. It says whether the file changed after it was sealed. <Link href="/verify">Verify a document</Link> checks the seal as well.</li>
+          {sealSet() && <li>The digital seal, when the certificate has a Digital seal line: open the signed PDF in a PDF reader that checks signatures, such as Acrobat, and look at its signature panel. It says whether the file changed after it was sealed. <Link href="/verify">Verify a document</Link> checks the seal as well.</li>}
           <li>A printed or scanned copy: look up its envelope ID on the same page and compare the pages, the number of pages and the fingerprint.</li>
           <li>The record after completion: the sender can download the evidence pack from the envelope page. Anyone named on the document can mark it as disputed: see <Link href="/help#not-me">I am named on a document I did not sign</Link>.</li>
         </ul>

@@ -23,5 +23,5 @@ export function scanWarning(d: ScanInfo): string {
     ? 'This looks like a scan or a photo: it is a picture of the pages with no real text.'
     : `${pageList(pages).replace(/^p/, 'P')} of this document ${one ? 'has' : 'have'} no real text: ${one ? 'it looks like a scan or a photo of a page' : 'they look like scans or photos of pages'}.`;
   const it = whole ? 'it' : one ? 'that page' : 'those pages';
-  return `${what} People who use a screen reader will not be able to have ${it} read to them, ${whole ? 'it' : one ? 'it' : 'they'} cannot be found by searching, and Find fields for me has nothing to work with there. If you have the original file, export a PDF from that and use Replace file.`;
+  return `${what} People who use a screen reader will not be able to have ${it} read to them, ${whole ? 'it' : one ? 'it' : 'they'} cannot be found by searching, and Place fields for me has nothing to work with there. If you have the original file, export a PDF from that and use Replace file.`;
 }

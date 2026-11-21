@@ -57,7 +57,7 @@ export default function Help() {
         <header className="pub-top">
           <h1 className="pub-h1">Help</h1>
           <p className="pub-lead">No login wall. {chatModelOn() ? 'An AI helper' : 'Our helper, with answers from this page,'} answers at once, and a person is one click away from every answer. Most things can be fixed right on this page. For everything else, write to us at the bottom and a person replies.</p>
-          <p><HelpChatButton className="btn primary hc-open">Ask for help</HelpChatButton></p>
+          <p><HelpChatButton className="btn primary hc-open">Ask a question</HelpChatButton></p>
         </header>
 
         <nav className="pub-jump" aria-label="On this page">
@@ -274,7 +274,7 @@ export default function Help() {
 
           <QA id="reminders" q="Are people reminded by themselves?">
             <p>On an account made today, yes. It starts with a reminder every {DEFAULT_REMINDER_DAYS} days: {reminderText(DEFAULT_REMINDER_DAYS).replace(/^Automatic reminders are on: /, '')}</p>
-            <p>You see the setting on the last step before every send and can change it there for that one envelope, or switch it off. An owner or admin sets what new envelopes start with under Settings, then Account. An account that was made before reminders were on by default keeps the number it had, which may be none: the last step before sending says which.</p>
+            <p>You see the setting on the last step before every send, next to More options, and can change it there for that one envelope, or switch it off. An owner or admin sets what new envelopes start with under Settings, then Account. An account that was made before reminders were on by default keeps the number it had, which may be none: the last step before sending says which.</p>
             <p>A reminder to someone who has filled in everything and only has to press Finish says exactly that, and the envelope page shows you who is at that point. Reminders are sent by the service&apos;s own timer, so one can arrive a little after it is due, and none go out while sending is paused on an account.</p>
           </QA>
 
@@ -291,7 +291,7 @@ export default function Help() {
 
           <QA id="payment-link" q="Can someone pay a deposit when they sign?">
             <p>GrowSigning does not take payments. What it can do is show a link to your own payment page, such as one from your card provider, right after a person presses Finish. {PAY_FOR_SENDER}</p>
-            <p>{payNotYet(PAID_TRUST_DAYS)} Once it is offered, it is on the last step of the editor, next to the Send button, and a template&apos;s link goes with every envelope made from it.</p>
+            <p>{payNotYet(PAID_TRUST_DAYS)} Once it is offered, it is on the last step of the editor, under More options, and a template&apos;s link goes with every envelope made from it.</p>
             <p>Addresses that hide where they lead are refused: a link shortener such as bit.ly, a forwarding page, and any name that leads into a private network, which is checked again each time the link would be shown. The audit trail and the certificate name the address by a fingerprint (the start of its SHA-256), so it never travels in an email, a certificate or an export. The envelope page shows the address, who was shown which address and who pressed it. If the person who set a link leaves your team, the link is taken off, because it leads to their own page.</p>
             <p>If you signed something and were shown a Pay button: your signature is complete whether you pay or not. The page names the person asking and the full address the button opens. GrowSigning does not check where that site sends you next, so look at the page before you pay. GrowSigning cannot confirm or refund a payment, so ask the sender about it, and if you did not expect to pay anything, do not pay and report the request from the signing page.</p>
           </QA>
@@ -309,7 +309,7 @@ export default function Help() {
 
           <QA id="cannot-send" q="Why can I not send?">
             <ul className="pub-list">
-              <li><b>Your email address is not confirmed yet.</b> We sent a link when you signed up. The banner at the top of the app sends it again.</li>
+              <li><b>Your email address is not confirmed yet.</b> We sent a 6-digit code when you signed up. Type it in the box at the top of the app, which can also send a new one.</li>
               <li><b>The account has reached its daily limit.</b> An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone you newly email counts, also people added or changed on a document that is already out and every row of a bulk send. A public form has the same limit of its own for the people who start it, counted for that form alone, and a team can invite {abuse.invitesPerDay} people a day. The limit looks at the last 24 hours, and the message says when there is room again. Paying does not lift it at once: it goes when a payment is {abuse.paidTrustDays} days old and was not refunded or disputed, and the message then gives the date. A person can lift it sooner: <a href="#contact" data-topic="sending">write to us</a>.</li>
               <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account cannot send those, or invite under such a name, until it has a payment that is {abuse.paidTrustDays} days old and was not refunded or disputed. We read what the emails print: the subject, the message, notes to recipients, document names, what you wrote on the pages, the reason for voiding, your name and the account name, and the name of a public form, which its page shows to anyone with the link. The message says which words set it off, so you can see whether it is a misreading. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a> and a person will clear your account.</li>
               <li><b>Sending is paused.</b> This happens when {abuse.reportsToPause} different recipients report documents from one account, or when our team pauses it. The message and the banner in the app give the reason. A person reviews every pause. Until then nothing you start is emailed to anyone: no new documents, no new or changed recipients, no reminders, no reopening, no team invitations and no email about a change you make, and people who are waiting further down a signing order are asked only once the pause is lifted. You can still open, download and export everything, give a document that is out more time, and void one (the people on it are told, without your reason). People who already have a document can still sign it. If it is a mistake, <a href="#contact" data-topic="sending">write to us</a>.</li>

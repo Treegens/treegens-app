@@ -14,7 +14,11 @@
 textarea.cf-textarea { width: 100%; }
 
 /* The last step of the editor. */
-.cf-step label.f input, .cf-step label.f select { width: 100%; min-height: 44px; }
+/* Written to win over the editor's own 40 px rule for a phone (.ed input:not(...):not(...) in editor.css). */
+.cf-step label.f.cf-box input:not([type='checkbox']):not([type='radio']), .cf-step label.f.cf-box select { width: 100%; min-height: 44px; }
+.cf-step .hint.cf-wrong { color: var(--red); }
+.cf-use { margin-top: 10px; }
+a.cf-link { display: inline-flex; align-items: center; min-height: 44px; }
 .cf-step .cf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 14px; }
 .cf-step .cf-req { color: var(--muted); font-weight: 400; }
 .cf-sent .cf-value { margin: 2px 0 8px; }
@@ -32,7 +36,9 @@ textarea.cf-textarea { width: 100%; }
 .cf-details dl { margin: 4px 0 0; }
 .cf-details dt { font-weight: 600; margin-top: 8px; overflow-wrap: anywhere; }
 .cf-details dd { margin: 0; overflow-wrap: anywhere; }
+/* A short value stays on one line ("North" is never broken); a long one without spaces still wraps. */
 .cf-col { overflow-wrap: anywhere; max-width: 16em; }
+td.cf-col { min-width: 10ch; }
 @media (max-width: 520px) {
   .cf-filter { width: 100%; }
   .cf-filter select, .cf-filter input { flex: 1 1 100%; width: 100%; }

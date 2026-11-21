@@ -197,8 +197,11 @@ export function ReplyRecord() {
 // Reaches a person. Open to everyone: signers, free users, former customers and people who cannot log in.
 // The help chat opens this same form (src/components/HelpChat.tsx) with its conversation attached (`chat`), a topic
 // and the document's security code: the writer sees what is attached and can take it off (`onDropChat`).
-export function ContactForm({ chat, onDropChat, topic: firstTopic, code: firstCode, message: firstMessage }: { chat?: ChatLine[] | null; onDropChat?: () => void; topic?: string; code?: string; message?: string } = {}) {
-  const [f, setF] = useState({ name: '', email: '', topic: firstTopic || 'signing', message: firstMessage || '' });
+// `who`: the name and address the page already knows (the signing page knows who the link is for). They are filled in
+// and not asked for again; "Use another address" brings the two boxes back.
+export function ContactForm({ chat, onDropChat, topic: firstTopic, code: firstCode, message: firstMessage, who }: { chat?: ChatLine[] | null; onDropChat?: () => void; topic?: string; code?: string; message?: string; who?: { name: string; email: string } | null } = {}) {
+  const [f, setF] = useState({ name: who?.name || '', email: who?.email || '', topic: firstTopic || 'signing', message: firstMessage || '' });
+  const [known, setKnown] = useState(!!who?.email);
   const [envelope, setEnvelope] = useState('');
   // Which document the message is about. The Help link on a signing page and in a signing email brings the security
   // code of that email along (?code=), and someone who came another way can type it. The server says which document
@@ -282,10 +285,12 @@ export function ContactForm({ chat, onDropChat, topic: firstTopic, code: firstCo
         }, (err) => err?.code === 'others_limit' ? err.message : explain(err, info.email ? `You have sent several messages, and we have them all. To add something now, use the link in a confirmation email we sent you, or write to ${info.email}.` : 'You have sent several messages, and we have them all. To add something, use the link in a confirmation email we sent you.'))
       }
     >
-      <div className="grid g2">
+      {known ? (
+        <p className="pub-replyto">We reply to <b><bdi>{f.email}</bdi></b>. <button type="button" className="sg-link" onClick={() => setKnown(false)}>Use another address</button></p>
+      ) : <div className="grid g2">
         <label className="f"><span>Your name</span><input value={f.name} onChange={set('name')} autoComplete="name" maxLength={120} /></label>
         <label className="f"><span>Email address <span className="hint">(we reply here)</span></span><input type="email" value={f.email} onChange={set('email')} required autoComplete="email" placeholder="you@example.com" /></label>
-      </div>
+      </div>}
       <label className="f"><span>What is it about?</span>
         <select value={topic} onChange={set('topic')} aria-describedby={replyHours > 0 ? 'contact-reply-time' : undefined}>
           {topics.map((t) => <option key={t} value={t}>{TOPIC_LABEL[t] || t}</option>)}
@@ -314,7 +319,7 @@ export function ContactForm({ chat, onDropChat, topic: firstTopic, code: firstCo
       {chat && chat.length > 0 && (
         <div className="notice pub-form-hint hc-attached" id="contact-chat">
           <p style={{ margin: 0 }}><b>Your chat with the helper is attached</b> ({chat.length} message{chat.length === 1 ? '' : 's'}). The person who answers reads it with your message. It is not passed to the sender of a document.</p>
-          <details><summary>See what is attached</summary>
+          <details data-fold><summary>See what is attached</summary>
             <ol className="hc-attached-list">{chat.map((l, i) => <li key={i}><b>{l.from === 'you' ? 'You' : 'Helper'}:</b> {l.text}</li>)}</ol>
           </details>
           {onDropChat && <p style={{ margin: '6px 0 0' }}><button type="button" className="pub-link" onClick={onDropChat}>Take the chat off</button></p>}

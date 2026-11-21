@@ -12,7 +12,10 @@
    and focus so it is still clear where to tap to change it. */
 .sg-doc .field.fill.stamp { background: rgba(255, 248, 214, 0.6); justify-content: center; }
 .sg-doc .field.fill.stamp.done { background: transparent; border-color: transparent; }
-.sg-doc .field.fill.stamp.done:hover, .sg-doc .field.fill.stamp.done:focus-visible { border-color: var(--green); border-style: dashed; }
+/* On hover only where a pointer really hovers: on a touch screen "hover" sticks after a tap and would leave a box
+   round the stamp. */
+.sg-doc .field.fill.stamp.done:focus-visible { border-color: var(--green); border-style: dashed; }
+@media (hover: hover) and (pointer: fine) { .sg-doc .field.fill.stamp.done:hover { border-color: var(--green); border-style: dashed; } }
 .sg-doc .field.fill.stamp .cta { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .field.edit.stamp { background: color-mix(in srgb, var(--fc, var(--green)) 7%, transparent); border-style: dashed; align-items: flex-start; }
 
@@ -47,8 +50,21 @@
 .sg-others img.st-thumb { max-height: 96px; }
 .st-check { min-height: 44px; align-items: flex-start; padding-top: 10px; }
 .st-check input { width: 20px; height: 20px; flex: none; }
-.st-edges { grid-column: 1 / -1; }
-.st-edges summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; font-size: 14px; }
+.st-edges { grid-column: 1 / -1; border: 0; padding: 0; margin: 8px 0 0; min-width: 0; display: grid; gap: 0 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.st-edges legend { font-weight: 600; font-size: 14px; padding: 0; }
+.st-edges > p { grid-column: 1 / -1; margin: 2px 0 6px; }
+/* Everything but the ink sits behind one closed fold: the defaults are meant to be right. */
+.st-adjust > summary, .st-how > summary { min-height: 44px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; font-size: 14px; list-style: none; }
+.st-adjust > summary::-webkit-details-marker, .st-how > summary::-webkit-details-marker { display: none; }
+.st-adjust > summary::before, .st-how > summary::before { content: ''; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform 0.12s; flex: none; margin-left: 2px; }
+.st-adjust[open] > summary::before, .st-how[open] > summary::before { transform: rotate(45deg); }
+.st-adjust > .st-controls { margin-top: 6px; }
+/* The buttons of a stamp dialog stay in view at its bottom while the rest scrolls under them (as .sg-adopt-foot). */
+.st-foot { position: sticky; bottom: calc(-1 * var(--sg-dpb, 24px)); z-index: 3; margin: 0 0 calc(-1 * var(--sg-dpb, 24px)); padding: 8px 0 var(--sg-dpb, 24px); background: #fff; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+/* The stamp already on the document, offered again: a lower page, so the buttons sit right under it. */
+.st-dialog > .st-paper.st-same { aspect-ratio: auto; height: 250px; }
+.st-same .st-on { left: 30%; top: 22%; width: 64%; height: 74%; }
+.st-foot .actions, .sg-dialog .st-foot .actions { margin-top: 0; }
 
 /* The signing page's dialog: saved stamps, then a picture or a photo. */
 .st-dialog { display: grid; gap: 12px; }
@@ -63,6 +79,7 @@
 .st-other { justify-self: start; }
 
 /* Settings, Stamps: the team's stamps as cards. */
+.st-how > p { margin: 0 0 6px; }
 .st-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-top: 12px; }
 .st-item { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; background: var(--surface); display: grid; gap: 8px; }
 .st-item .st-paper { aspect-ratio: auto; height: 150px; }

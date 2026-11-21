@@ -4,29 +4,18 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { api, toast, oops } from './ui';
 import { Logo } from './Brand';
-import { fmtNum, fmtTrees } from '@/lib/impact';
+import { fmtNum, totalWorthShowing } from '@/lib/impact';
 import { HandedOver, type Locked } from './HandedOver';
 import { EmailProblemBanner } from './EmailProblem';
 import { TwoStepRequired, TwoStepResetBanner } from './TwoStep';
 import { HelpChatButton } from './HelpChat';
 import { ConfirmBanner } from './ConfirmEmail';
+import { SideNav, TabBar } from './AppNav';
+import { navOn } from '@/lib/nav';
 
 type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; /** This server turns Word files and the like into PDF on upload (src/server/convert.ts). */ converts?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx)!;
-
-const NAV: [string, string, string?][] = [
-  ['/app', 'Home'],
-  ['/app/envelopes', 'Envelopes'],
-  ['/app/inbox', 'Inbox'],
-  ['/app/templates', 'Templates'],
-  ['/app/bulk', 'Bulk send'],
-  ['/app/powerforms', 'PowerForms'],
-  ['/app/contacts', 'Contacts'],
-  ['/app/reports', 'Reports'],
-  ['/app/impact', 'Our impact'],
-  ['/app/settings', 'Settings'],
-];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<any>(null);
@@ -96,44 +85,44 @@ export function AppShell({ children }: { children: ReactNode }) {
   const full = /^\/app\/(envelopes|templates)\/[^/]+\/edit/.test(path);
   if (full) return <MeCtx.Provider value={{ ...me, reload }}>{me.two_step?.reset_at && <div className="full-ts-reset"><TwoStepResetBanner me={{ ...me, reload }} /></div>}{children}</MeCtx.Provider>;
 
-  const on = (href: string) => (href === '/app' ? path === '/app' : path.startsWith(href));
   return (
     <MeCtx.Provider value={{ ...me, reload }}>
       <div className="mobilebar">
         <Link href="/app" className="row mobilebar-logo"><Logo height={20} tone="dark" /></Link>
         {/* With more than one workspace, a phone shows which one this is without opening the menu. */}
         {me.accounts?.length > 1 && <span className="truncate" style={{ flex: 1, minWidth: 0, margin: '0 10px', textAlign: 'right', fontSize: 12.5, opacity: 0.85 }} title="The workspace you are in">{me.account.name}</span>}
-        <HelpChatButton className="btn sm hc-open" label="Help: ask the helper or write to a person">Help</HelpChatButton>
-        <button className="btn sm" onClick={() => setOpen(!open)} aria-expanded={open}>Menu</button>
       </div>
       <div className="shell">
         <aside className={`side${open ? ' open' : ''}`}>
           <Link href="/app" className="brand"><Logo height={24} tone="dark" /></Link>
-          <Link href="/app/envelopes/new" className="btn" style={{ margin: '0 4px 10px', background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>New envelope</Link>
-          {NAV.map(([href, label]) => <Link key={href} href={href} className={`nav${on(href) ? ' on' : ''}`}>{label}</Link>)}
-          {/* Click-to-agree terms speak for the team's website, so only its owner and admins manage them. */}
-          {(me.role === 'owner' || me.role === 'admin') && <Link href="/app/agreements" className={`nav${on('/app/agreements') ? ' on' : ''}`}>Click-to-agree</Link>}
-          <HelpChatButton className="nav hc-open hc-nav">Ask for help</HelpChatButton>
-          <Link href="/help" className="nav">Help</Link>
-          {me.support_email && <a href={`mailto:${me.support_email}`} className="nav" style={{ fontSize: 12.5, paddingTop: 2 }} title={`Write to ${me.support_email}`}><span className="truncate">{me.support_email}</span></a>}
-          {me.operator && <Link href="/app/operator" className={`nav${on('/app/operator') ? ' on' : ''}`}>Review queue</Link>}
+          {/* Nine entries: the one start button, five pages, More, Settings and Help (src/lib/nav.ts). */}
+          <SideNav path={path} role={me.role} userId={me.user.id} onGo={() => setOpen(false)} />
+          {/* Help, once: it opens the helper, and the help page is the link inside it (components/HelpChat.tsx). */}
+          <HelpChatButton className="nav hc-open hc-nav">Help</HelpChatButton>
+          {me.operator && <Link href="/app/operator" className={`nav${navOn('/app/operator', path) ? ' on' : ''}`}>Operator</Link>}
           {me.outbox && <a className="nav" href="/dev/outbox" target="_blank">Dev outbox ↗</a>}
-          <button className="btn sm ghost" style={{ color: '#fff', display: open ? 'block' : 'none', marginTop: 8 }} onClick={() => setOpen(false)}>Close menu</button>
-          <div className="impact">
-            <b className="num">{impact ? fmtNum(impact.account.sheets) : '…'}</b>
-            sheets of paper saved by {me.account.name}
-            {impact && impact.account.sheets > 0 && <div style={{ marginTop: 4, color: '#a8c9b0' }}>{fmtTrees(impact.account.trees)} of a tree · {fmtNum(impact.account.litresWater)} L water</div>}
-          </div>
+          <button className="btn sm ghost side-close" style={{ color: '#fff', display: open ? 'block' : 'none', marginTop: 8 }} onClick={() => setOpen(false)}>Close menu</button>
+          {/* The account's total of paper saved, only once it is large enough to mean something (src/lib/impact.ts).
+              Until then, and while it loads, nothing stands here. The saving of one document is said where it is sent. */}
+          {impact && totalWorthShowing(impact.account.sheets)
+            ? <div className="impact"><b className="num">{fmtNum(impact.account.sheets)}</b>sheets of paper saved by {me.account.name}, by our estimate</div>
+            : <div className="side-gap" />}
           <div className="me">
             <div className="truncate" style={{ color: '#fff', fontWeight: 600 }}>{me.user.name}</div>
             <div className="truncate">{me.account.name}</div>
+            {/* The address of the people who run this server, when they gave one. */}
+            {me.support_email && <a href={`mailto:${me.support_email}`} className="side-support truncate" title={`Write to ${me.support_email}`}>{me.support_email}</a>}
+            {/* The usage line (research/ux-charter.md 2.1). Absent while payments are not connected: nothing is counted then. */}
+            {typeof me.billing?.signatures?.available === 'number' && (
+              <Link href="/app/settings?tab=billing" className="usage-line" onClick={() => setOpen(false)}>{Math.max(0, me.billing.signatures.available)} signature{Math.max(0, me.billing.signatures.available) === 1 ? '' : 's'} left</Link>
+            )}
             {me.accounts.length > 1 && (
               <select style={{ marginTop: 6, padding: '4px 6px', fontSize: 12.5 }} value={me.account.id} aria-label="Switch account"
                 onChange={(e) => api('/auth/switch', { body: { account_id: e.target.value } }).then(() => window.location.assign('/app')).catch(oops)}>
                 {me.accounts.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             )}
-            <button className="btn sm ghost" style={{ color: '#cfe2d3', padding: '4px 0', marginTop: 4 }} onClick={() => api('/auth/logout', { method: 'POST' }).then(() => window.location.assign('/'))}>Sign out</button>
+            <button className="btn sm ghost side-out" style={{ color: '#cfe2d3', padding: '4px 0', marginTop: 4 }} onClick={() => api('/auth/logout', { method: 'POST' }).then(() => window.location.assign('/'))}>Sign out</button>
           </div>
         </aside>
         <main className="main">
@@ -160,6 +149,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {children}
         </main>
       </div>
+      <TabBar path={path} menuOpen={open} onMenu={() => setOpen(!open)} />
     </MeCtx.Provider>
   );
 }

@@ -12,6 +12,10 @@ export const CUSTOM_VALUE_MAX = 100;
 export const CUSTOM_CHOICES_MAX = 50;
 /** How many name and value pairs one document can carry (documents[].fields, API only). */
 export const DOC_FIELDS_MAX = 20;
+/** The longest list of names and values one request may carry: every detail, and room for names only old envelopes have. */
+export const PAIRS_MAX = 100;
+/** The "code" of the refusal when a required detail has no value at send; its "missing" lists the names. */
+export const DETAILS_MISSING = 'details_missing';
 
 export const CUSTOM_KINDS = ['text', 'list'] as const;
 export type CustomKind = (typeof CUSTOM_KINDS)[number];
@@ -22,29 +26,43 @@ export const CERT_HEADING = 'Details given by the sender (their words)';
 /** Said under it, once: what these lines are and what they are not. */
 export const CERT_NOTE = 'The sender typed these for their own records. They were not on the signing page, and nobody checked them.';
 
-/**
- * The same name or value whatever the letter case, the width of its characters and the spaces around it: "Case
- * number", "case  number" and "ＣＡＳＥ number" are one name. Letters of every script are kept as they are.
- */
-export const customKey = (s: unknown): string => String(s ?? '').normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+// Characters nobody can see. Format characters (zero-width space, word joiner, soft hyphen, tags, text-turning
+// overrides and isolates), blank letters (Hangul fillers, the empty braille cell) and variation selectors. The few
+// format characters that are drawn as a sign of their own (Arabic and Syriac number signs) are not in here.
+const UNSEEN = /[\p{Cc}\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}\u{e0000}-\u{e0fff}]/gu;
+// The ones that are needed where they stand: a joiner or non-joiner between two letters (Persian and the scripts of
+// South Asia write with them), a joiner between two pictures, and a variation selector right after a picture or a
+// letter of a script that uses them (Mongolian).
+const NEEDED = /(?<=[\p{L}\p{M}])[\u200c\u200d](?=[\p{L}\p{M}])|(?<=[\p{Extended_Pictographic}\ufe0f])\u200d(?=\p{Extended_Pictographic})|(?<=\p{Extended_Pictographic})\ufe0f|(?<=\p{Script=Mongolian})[\u180b-\u180d\u180f]/gu;
+const PLACE = '\ue000';
+/** True when the text holds a character that cannot be seen and is not needed where it stands. */
+export const hasUnseen = (s: string): boolean => (UNSEEN.lastIndex = 0, UNSEEN.test(s.replace(NEEDED, PLACE)));
+/** The text without any character that cannot be seen, needed or not: what two look-alike texts have in common. */
+const seen = (s: string): string => s.replace(UNSEEN, '');
+/** True when nothing of the text can be seen: only spaces, unseen characters, or marks with no letter under them. */
+export const isBlank = (s: string): boolean => !seen(s).replace(/[\p{Z}\p{M}\s]/gu, '');
 
-// Characters that change how text around them is shown (right-to-left overrides and isolates) or that cannot be seen
-// at all: in a value they could make a certificate line read as something else. Joiners stay, because Persian and
-// the scripts of South Asia need them.
-const HIDDEN = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/u;
+/**
+ * The same name or value whatever the letter case, the width of its characters, the spaces around it and any
+ * character in it that cannot be seen: "Case number", "case  number", "ＣＡＳＥ number" and "Case number" with a
+ * zero-width space are one name. Letters of every script are kept as they are.
+ */
+export const customKey = (s: unknown): string => seen(String(s ?? '').normalize('NFKC')).trim().replace(/\s+/gu, ' ').toLowerCase();
 
 /** What is wrong with a piece of text that has to be one plain line, or null. `what` starts the sentence. */
 export function lineProblem(v: string, max: number, what: string): string | null {
   if (/[\r\n\u2028\u2029]/.test(v)) return `${what} has to be one line. Take out the line break.`;
-  if (HIDDEN.test(v)) return `${what} holds a character that cannot be seen or that turns text around. Type it again without it.`;
+  if (hasUnseen(v)) return `${what} holds a character that cannot be seen or that turns text around. Type it again without it.`;
   if ([...v].length > max) return `${what} is ${[...v].length} characters long, and the most is ${max}. Shorten it.`;
   return null;
 }
 
-/** What is wrong with the name of a field, or null. */
+/** What is wrong with the name of a detail, or null. */
 export function nameProblem(name: string): string | null {
-  if (!name.trim()) return 'Give the field a name, for example Case number.';
-  return lineProblem(name, CUSTOM_NAME_MAX, 'The name');
+  const wrong = lineProblem(name, CUSTOM_NAME_MAX, 'The name');
+  if (wrong) return wrong;
+  if (isBlank(name)) return 'Give the detail a name, for example Case number.';
+  return null;
 }
 
 /**
@@ -58,6 +76,8 @@ export function readValue(def: Pick<CustomDef, 'name' | 'kind' | 'choices'>, raw
   if (!v) return { value: '' };
   const wrong = lineProblem(v, CUSTOM_VALUE_MAX, `"${def.name}"`);
   if (wrong) return { problem: wrong };
+  // Nothing in it that anyone could read (a mark with no letter under it, say): that is no value.
+  if (isBlank(v)) return { value: '' };
   if (def.kind === 'list') {
     const hit = def.choices.find((c) => customKey(c) === customKey(v));
     if (!hit) return { problem: `"${v}" is not one of the choices for "${def.name}". Pick one of: ${def.choices.join(', ')}.` };

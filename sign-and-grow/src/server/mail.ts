@@ -90,15 +90,18 @@ export function renderMail(m: Mail): string {
   const color = /^#[0-9a-f]{6}$/i.test(m.brand?.color || '') ? m.brand!.color! : '#1f6f43';
   // The sender's logo, else the sender's name, else ours: the drawn logo as a picture loaded from APP_URL (until the app
   // is public, mail programs show its alt text, "GrowSigning"). Every email has a light header, so it is always the
-  // logo for light grounds; public/brand/email-logo-dark.png waits for an email with a dark header.
+  // logo for light grounds. The picture carries a tile of this email's ground colour (#f4f1ea, scripts/build-brand.mjs),
+  // which cannot be seen here; a mail program that darkens the ground and leaves pictures alone then shows the dark
+  // word "signing" on that light tile instead of dark on dark. public/brand/email-logo-dark.png is not used.
+  const ours = !m.brand?.logo?.startsWith('data:image/') && !m.brand?.name; // the tile's own edge is its padding
   const logo = m.brand?.logo?.startsWith('data:image/')
     ? `<img src="${esc(m.brand.logo)}" alt="${esc(m.brand?.name || '')}" style="max-height:40px;max-width:200px">`
     : m.brand?.name
       ? `<span style="font-size:18px;font-weight:700;color:${color}">${esc(m.brand.name)}</span>`
-      : `<img src="${esc(baseUrl())}/brand/email-logo.png" width="144" height="22" alt="GrowSigning" style="display:block;border:0;width:144px;height:22px;color:#1f6f43;font-size:18px;font-weight:700">`;
+      : `<img src="${esc(baseUrl())}/brand/email-logo.png" width="156" height="32" alt="GrowSigning" style="display:block;border:0;width:156px;height:32px;color:#1f6f43;font-size:18px;font-weight:700">`;
   return `<!doctype html><html><body style="margin:0;background:#f4f1ea;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2a22">
 <div style="max-width:560px;margin:0 auto;padding:32px 16px">
-  <div style="padding:0 4px 16px">${logo}</div>
+  <div style="padding:${ours ? '0 0 11px' : '0 4px 16px'}">${logo}</div>
   <div style="background:#fff;border-radius:14px;padding:32px;border:1px solid #e4dfd3">
     <h1 style="font-size:20px;margin:0 0 16px;line-height:1.3">${esc(m.heading)}</h1>
     ${m.lines.map((l) => `<p style="font-size:15px;line-height:1.55;margin:0 0 14px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word">${esc(l)}</p>`).join('')}

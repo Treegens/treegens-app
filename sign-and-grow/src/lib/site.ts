@@ -7,6 +7,10 @@ import { COLORS } from './brandMark.ts';
 /** The product's name as it is written in a sentence, a title or an email. The drawn logo writes it "growsigning". */
 export const PRODUCT = 'GrowSigning';
 
+/** The title of a page that has none of its own, and of a link preview. It says what the price list says (trees come
+ * from dollars paid) and not that signing alone plants trees: a free account's signatures plant none. */
+export const SITE_TITLE = 'GrowSigning · sign on screen, every dollar plants mangroves';
+
 /** Where link previews point. APP_URL when it is a usable http or https address, else this machine during development, so
  * a mistyped APP_URL gives previews with the wrong address instead of taking every page down with it. */
 export function siteBase(appUrl: string | undefined = process.env.APP_URL): URL {

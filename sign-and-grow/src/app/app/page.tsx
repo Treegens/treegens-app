@@ -1,10 +1,10 @@
 'use client';
 import { useState } from 'react';
 import Link from 'next/link';
-import { api, useLoad, Status, fmtDate, toast } from '@/components/ui';
+import { api, useLoad, fmtDate, toast } from '@/components/ui';
 import { Mark } from '@/components/Brand';
 import { useMe } from '@/components/AppShell';
-import { fmtNum, fmtTrees } from '@/lib/impact';
+import { NAV_START } from '@/lib/nav';
 import { AllowanceCard } from '@/components/sender/UsageMeter';
 import { useAllowance } from '@/components/sender/allowance';
 import { fail } from '@/components/sender/feedback';
@@ -15,10 +15,10 @@ const SHOWN = 5;
 export default function Home() {
   const me = useMe();
   const [rep] = useLoad(() => api('/reports/summary'));
-  const [recent] = useLoad(() => api('/envelopes?limit=6'));
+  // What was completed lately, newest first: the thing people come back for is the signed copy.
+  const [done] = useLoad(() => api('/envelopes?box=completed&limit=5'));
   const [out] = useLoad(() => api('/envelopes?box=waiting&limit=100'));
   const [inbox] = useLoad(() => api('/inbox'));
-  const [impact] = useLoad(() => api('/impact'));
   const [allowance] = useAllowance();
   const [nudging, setNudging] = useState('');
 
@@ -30,6 +30,10 @@ export default function Home() {
     .map((e: any) => ({ e, w: waitingOn(e.recipients.filter((r: any) => r.role === 'inperson' || r.email.toLowerCase() !== me.user.email.toLowerCase())) }))
     .filter((x: any) => x.w)
     .sort((a: any, b: any) => String(a.w.since || '').localeCompare(String(b.w.since || '')));
+
+  const completed: any[] = done?.envelopes || [];
+  // Every list has answered and all of them are empty: a new account.
+  const nothingYet = !!rep && !!done && !!out && !!inbox && !completed.length && !todo.length && !others.length && !(s.draft > 0) && !(s.sent > 0);
 
   async function nudge(e: any) {
     setNudging(e.id);
@@ -51,10 +55,6 @@ export default function Home() {
           <h1 className="serif">Hello, <bdi>{me.user.name}</bdi></h1>
           <div className="muted">Every document you send here is one that never gets printed.</div>
         </div>
-        <div className="row wrap">
-          <Link href="/app/envelopes/new?self=1" className="btn">Sign a document yourself</Link>
-          <Link href="/app/envelopes/new" className="btn primary">Send for signature</Link>
-        </div>
       </div>
 
       {/* A workspace that is paid for, or that more than one person works in, should never hang on one mailbox. */}
@@ -71,10 +71,10 @@ export default function Home() {
             <section className="card sn-wait you" aria-labelledby="sn-foryou-h">
               <h2 id="sn-foryou-h">Waiting for you</h2>
               <ul role="list">
-                {todo.map((i: any) => (
-                  <li key={i.id + i.token}>
+                {todo.map((i: any, n: number) => (
+                  <li key={i.id + i.token} data-item="row">
                     <div className="grow"><b>{i.subject}</b><div className="muted small">from {i.sender}{i.sent_at ? ` · ${howLong(i.sent_at)} ago` : ''}</div></div>
-                    <a className="btn sm primary" href={`/sign/${i.token}`} aria-label={`${i.role === 'approver' ? 'Review' : i.role === 'viewer' ? 'View' : 'Sign'} ${i.subject}`}>{i.role === 'approver' ? 'Review' : i.role === 'viewer' ? 'View' : 'Sign'}</a>
+                    <a className={`btn sm${n === 0 ? ' primary' : ''}`} href={`/sign/${i.token}`} aria-label={`${i.role === 'approver' ? 'Review' : i.role === 'viewer' ? 'View' : 'Sign'} ${i.subject}`}>{i.role === 'approver' ? 'Review' : i.role === 'viewer' ? 'View' : 'Sign'}</a>
                   </li>
                 ))}
               </ul>
@@ -87,7 +87,7 @@ export default function Home() {
                 {others.slice(0, SHOWN).map(({ e, w }: any) => {
                   const cold = e.recipients.some((r: any) => neverOpened(r));
                   return (
-                    <li key={e.id}>
+                    <li key={e.id} data-item="row">
                       <div className="grow">
                         <Link href={`/app/envelopes/${e.id}`} className="sn-subject">{e.subject}</Link>
                         <div className="small"><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{cold ? <span className="sn-cold"> · not opened</span> : null}</div>
@@ -102,41 +102,36 @@ export default function Home() {
         </div>
       )}
 
-      <div className="grid g4 keep2">
-        <Link href="/app/envelopes?box=drafts" className="stat sn-statlink"><div className="k">Drafts</div><div className="v num">{s.draft || 0}</div></Link>
-        <Link href="/app/envelopes?box=waiting" className="stat sn-statlink"><div className="k">Waiting for others</div><div className="v num">{s.sent || 0}</div></Link>
-        <Link href="/app/envelopes?box=completed" className="stat sn-statlink"><div className="k">Completed</div><div className="v num">{s.completed || 0}</div></Link>
-        <Link href="/app/impact" className="stat green sn-statlink">
-          <div className="k">Paper saved</div><div className="v num">{impact ? fmtNum(impact.account.sheets) : '…'}</div>
-          <div className="s">sheets, or {impact ? fmtTrees(impact.account.trees) : '…'} of a tree</div>
-        </Link>
-      </div>
+      {/* A draft somebody started and left is theirs to finish: one line, only when there is one. */}
+      {s.draft > 0 && <p className="sn-drafts">You have {s.draft} {s.draft === 1 ? 'draft' : 'drafts'} that {s.draft === 1 ? 'was' : 'were'} not sent. <Link href="/app/envelopes?box=drafts">Open {s.draft === 1 ? 'it' : 'them'}</Link></p>}
 
       <AllowanceCard allowance={allowance} canUpgrade={me.role === 'owner' || me.role === 'admin'} />
 
-      <section className="card pad0" aria-labelledby="sn-recent-h">
-        <div className="row between sn-cardhead"><h2 id="sn-recent-h">Recent envelopes</h2><Link href="/app/envelopes?box=all">See all</Link></div>
-        {recent && recent.envelopes.length === 0 ? (
-          <div className="empty"><Mark size={32} label="" /><h3 style={{ marginTop: 10 }}>Nothing sent yet</h3>Upload a PDF, add who needs to sign and place the fields. It takes about a minute.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new" className="btn primary">Send your first envelope</Link></div></div>
-        ) : (
-          <div className="tablewrap"><table className="t sn-list"><tbody>
-            {(recent?.envelopes || []).map((e: any) => {
-              const href = e.status === 'draft' ? `/app/envelopes/${e.id}/edit` : `/app/envelopes/${e.id}`;
-              const w = e.status === 'sent' ? waitingOn(e.recipients, me.user.email) : null;
-              return (
-                <tr key={e.id} className="click" onClick={() => (window.location.href = href)}>
-                  <td className="sn-main">
-                    <Link href={href} className="sn-subject" onClick={(ev) => ev.stopPropagation()}>{e.subject || 'Untitled draft'}</Link>
-                    <div className="muted small sn-to">{w ? <>Waiting on {w.label}{w.since ? ` for ${howLong(w.since)}` : ''}</> : <>To {e.recipients.map((r: any) => r.name).filter(Boolean).join(', ') || 'nobody yet'}</>}</div>
-                  </td>
-                  <td className="sn-fit"><Status s={e.status} /></td>
-                  <td className="muted small hide-sm sn-fit">{fmtDate(e.updated_at)}</td>
-                </tr>
-              );
-            })}
-          </tbody></table></div>
-        )}
-      </section>
+      {completed.length > 0 && (
+        <section className="card sn-wait sn-done" aria-labelledby="sn-done-h">
+          <div className="row between"><h2 id="sn-done-h">Recently completed</h2><Link href="/app/envelopes?box=completed" className="small">See all completed</Link></div>
+          <ul role="list">
+            {completed.map((e: any) => (
+              <li key={e.id} data-item="row">
+                <div className="grow">
+                  <Link href={`/app/envelopes/${e.id}`} className="sn-subject">{e.subject || 'Untitled'}</Link>
+                  <div className="muted small">Completed {fmtDate(e.completed_at || e.updated_at)}{e.recipients?.length ? ` · ${e.recipients.map((r: any) => r.name).filter(Boolean).join(', ')}` : ''}</div>
+                </div>
+                <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download ${e.subject || 'the signed document'}`}>Download</a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Nothing anywhere yet: one sentence that says where the one start button is. No second button here. */}
+      {nothingYet && (
+        <div className="card empty">
+          <Mark size={32} label="" />
+          <h2 style={{ marginTop: 10, fontSize: 18 }}>Nothing sent yet</h2>
+          <p>Press <b>{NAV_START.label}</b><span className="sn-where-wide"> on the left</span><span className="sn-where-phone"> (Send, in the bar at the bottom)</span>. Upload a PDF, add who needs to sign and place the fields. It takes about a minute.</p>
+        </div>
+      )}
     </div>
   );
 }

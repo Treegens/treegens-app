@@ -186,7 +186,7 @@ export function TwoStepRequired({ me }: { me: any }) {
       <div className="card twostep">
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>Confirm your email address first</h1>
         <p>{me.account.name} asks everyone on the team to sign in with two-step login, and it can only be switched on for a confirmed address. Type the 6-digit code we sent to {me.user.email}, or press the button in that email in this browser.</p>
-        {me.user.confirm_by_code !== false && <ConfirmCode email={me.user.email} onConfirmed={() => window.location.reload()} />}
+        {me.user.confirm_by_code !== false && <ConfirmCode main email={me.user.email} onConfirmed={() => window.location.reload()} />}
         {resent && <p className="notice" role="status">{resent}</p>}
         <div className="row wrap" style={{ gap: 8 }}>
           {/* With the code box, its own "Send a new code" sends the email again. */}

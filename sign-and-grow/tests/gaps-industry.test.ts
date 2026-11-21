@@ -192,7 +192,10 @@ test('"automatic nudges" is true: a new account reminds every 3 days, says so, a
   assert.match(policy.reminderText(3), /^Automatic reminders are on: whoever has not finished is emailed again every 3 days, until they finish or the deadline passes\./);
   assert.match(policy.reminderText(1), /every day,/);
   assert.match(policy.reminderText(0), /^Automatic reminders are off: nobody is reminded unless you send a reminder yourself\.$/);
-  assert.match(read('src/components/editor/StepReview.tsx'), /<ReminderChoice days=\{env\.reminder_days\}/, 'the choice is on the step with the Send button');
+  // (simplify-editor: reminders are asked once, under More options of the step with the Send button, and what is set stands next to that button.)
+  assert.match(read('src/components/editor/StepReview.tsx'), /<ReviewMore ed=\{ed\} closed=\{!!closed\} \/>/, 'the choice is on the step with the Send button');
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /<ReminderChoice days=\{env\.reminder_days\}/);
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /env\.reminder_days \? `Reminder every \$\{plural\(env\.reminder_days, 'day'\)\}` : 'No automatic reminders'/);
   assert.match(read('src/components/editor/ReminderChoice.tsx'), /reminderText\(n\)/);
   assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /id="sn-reminders">\{reminderText\(e\.reminder_days\)\}/, 'and on the envelope');
   assert.match(read('src/app/app/settings/page.tsx'), /id="set-reminders"><b>New envelopes start like this\.<\/b> \{reminderText\(f\.default_reminder_days\)\}/, 'and under Settings');
@@ -1058,7 +1061,9 @@ test('the screens show the payment link only where the rules say, and every page
   assert.match(pl.payNotUs('Gus'), /If you did not expect to pay Gus anything, do not pay/);
   // The sender's screens: next to the Send button, absent for an account that may not show one, and on the envelope.
   // Not offered on an envelope whose template wording is locked: the link is part of that wording (tests/templates.test.ts).
-  assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && !ed\.wording && <PayLinkChoice envelopeId=\{env\.id\} isTpl=\{isTpl\} \/>\}/);
+  // (simplify-editor: the payment link is under More options of the last step, which is absent once the envelope is closed.)
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /if \(closed\) return null;/);
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /\{!ed\.wording && <PayLinkChoice envelopeId=\{env\.id\} isTpl=\{isTpl\} \/>\}/);
   const choice = read('src/components/editor/PayLinkChoice.tsx');
   assert.match(choice, /if \(!envelopeId \|\| !st \|\| \(!st\.may && !st\.pay_link\)\) return null;/, 'no dead control for an account that may not');
   assert.match(choice, /<span>Address of your own payment page<\/span>/);

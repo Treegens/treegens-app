@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { sendMail, recordMail, deliverQueued, type Mail } from './mail.ts';
 import { billingEnabled, hasNotPaid } from './envelopes.ts';
 import { grant, creditSummary, available, findFreeCode, STANDING_PAYMENT, addMonths } from './credits.ts';
-import { lotsOf, lotOfPayment, ledgerSums, refundFromLot, takeBackLots, restoreTaken, stillLive, markWarned, expireSignatures, type LotView } from './credits.ts';
+import { lotsOf, lotOfPayment, ledgerSums, refundFromLot, takeBackLots, restoreTaken, stillLive, markWarned, expireSignatures, lastExpiry, renewalPending, type LotView } from './credits.ts';
 import { PRICING, mangrovesFor } from '../lib/impact.ts';
 import { refundDays, dormantStopDays, refundRuleText, newAccountDailyRecipients, unpaidDailyRecipients, PRICE_NOTICE_DAYS, priceRuleText, priceChangeDay, PAID_TRUST_DAYS } from '../lib/policy.ts';
 import { expiryRuleText, expiryMoment, HELD_EXPIRY_TEXT, TOPUP_WARN_DAYS, TOPUP_EXPIRY_MONTHS } from '../lib/policy.ts';
@@ -591,7 +591,7 @@ export const stopBillingFor = (acct: any): Promise<boolean> => serial(acct?.id, 
 
 const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', dispute: 'Card dispute', adjust: 'Adjustment', expired: 'Expired unused' };
 // What a lot is, for the Plan page and the emails.
-const LOT_LABEL: Record<string, string> = { welcome: 'Free signatures of a new account', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', adjust: 'Added by a person here' };
+const LOT_LABEL: Record<string, string> = { welcome: 'Your free signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', adjust: 'Added by a person here' };
 
 // The same as numbers, for the page that stops a renewal without logging in.
 function keepParts(accountId: string) {
@@ -700,6 +700,12 @@ export function billingState(acct: any, user?: any) {
     // when no new month follows (`fresh`: a renewal, the next month of a code, or none). `lots` lists every lot that
     // still has signatures left or held, soonest to expire first; `topups` is the same for top-ups alone.
     period: enabled ? periodOf(acct, lots) : null,
+    // The month has ended and the renewal payment has not arrived yet (the provider usually takes it within the
+    // hour): the new month's signatures come with it, and the page says so instead of showing nothing.
+    renewal_pending: enabled && renewalPending(acct),
+    // The signatures that expired most recently, when nothing has been added since: said where someone sees "0 left",
+    // so the reason comes with the news (expiredWords in src/lib/policy.ts writes the sentence).
+    last_expiry: enabled ? lastExpiry(acct.id) : null,
     lots: lots.filter((l) => l.left > 0 || l.held > 0).sort((x, y) => (x.expires_at || '9999').localeCompare(y.expires_at || '9999')).map(lotView),
     topups: lots.filter((l) => l.source === 'topup' && (l.left > 0 || l.held > 0)).sort((x, y) => (x.expires_at || '').localeCompare(y.expires_at || '')).map(lotView),
     // Every signature accounted for: bought or given = used + held + refunded + expired + adjusted + left.
@@ -1799,7 +1805,7 @@ async function remindRenewal(acct: any, cents?: number | null, currency = 'usd',
   const ofMonth = ending.reduce((n, l) => n + l.qty, 0);
   const total = `You have ${sigs(Math.max(0, available(a.id)))} to send with in all right now.`;
   const left = !ending.length ? total
-    : unused > 0 ? `${unused} of this month's ${sigs(ofMonth)} ${unused === 1 ? 'is' : 'are'} still unused. If ${unused === 1 ? 'it is' : 'they are'} not used by the renewal, ${unused === 1 ? 'it expires' : 'they expire'} then, on ${expiryMoment(ending[0].expires_at)}, and the renewal brings a fresh ${PRICING.monthlySignatures}.${heldNow ? ` The ${sigs(heldNow)} held for envelopes that are out do not expire while they are held.` : ''} ${total}`
+    : unused > 0 ? `${unused} of this month's ${sigs(ofMonth)} ${unused === 1 ? 'is' : 'are'} still unused. If ${unused === 1 ? 'it is' : 'they are'} not used by the renewal, ${unused === 1 ? 'it expires' : 'they expire'} then, and the renewal brings a fresh ${PRICING.monthlySignatures}.${heldNow ? ` The ${sigs(heldNow)} held for envelopes that are out ${heldNow === 1 ? 'does not expire while it is' : 'do not expire while they are'} held.` : ''} ${total}`
     : `None of this month's ${sigs(ofMonth)} will expire at the renewal: they are all used${heldNow ? ' or held for envelopes that are out (a held one does not expire while it is held)' : ''}. ${total}`;
   const out = 'To keep planting mangroves, do nothing. To stop, use the link below. It takes one click, needs no login, and works right up to the charge.';
   const went = raised && !due

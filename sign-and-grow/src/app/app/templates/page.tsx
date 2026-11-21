@@ -11,6 +11,7 @@ import { reminderText } from '@/lib/policy';
 import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 // Who can use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { AccessDialog, AccessMarks } from '@/components/templates/WhoCanUse';
+import { useTemplateDetails, draftNeedsDetails } from '@/components/sender/UseDetails';
 
 // With a waiver form for each state or client, one flat list stops working at about twenty. So the page has what
 // the envelope list has: a search (every word has to be found in the name, the folder, a role or the document), a
@@ -69,6 +70,8 @@ export default function Templates() {
   const [draftId, setDraftId] = useState('');
   // Addresses on it that bounced before (src/lib/mailnews.ts): said here, and the button becomes "Send anyway".
   const [dead, setDead] = useState<BouncedAddress[] | null>(null);
+  // Details the account requires that the template does not fill in, asked for in the dialog (sender/UseDetails.tsx).
+  const cf = useTemplateDetails(use?.id, !!draftId);
 
   async function start(t: any) {
     try {
@@ -87,6 +90,8 @@ export default function Templates() {
     if (send && !draftId) {
       const gap = use.open.find((r: any) => !fill[r.id]?.name.trim() || !looksLikeEmail((fill[r.id]?.email || '').trim()));
       if (gap) return setProblem(`Add a name and a full email address for ${gap.role_name || 'every recipient'} before sending. To finish it later, choose Review first.`);
+      const noDetail = cf.problem();
+      if (noDetail) return setProblem(noDetail);
     }
     setBusy(true);
     setProblem('');
@@ -95,7 +100,7 @@ export default function Templates() {
       // Two steps on purpose. If sending is refused, the draft is still there, we know which one it is, and trying
       // again sends that same draft instead of quietly making another.
       if (!id) {
-        id = (await api('/envelopes', { body: { template_id: use.id, recipients: fill } })).envelope.id as string;
+        id = (await api('/envelopes', { body: { template_id: use.id, recipients: fill, custom_fields: cf.pairs() } })).envelope.id as string;
         setDraftId(id);
       }
       if (!send) {
@@ -107,6 +112,9 @@ export default function Templates() {
       router.push(`/app/envelopes/${id}`);
     } catch (e: any) {
       if (e?.code === 'bounced_address' && !anyway) return setDead(e.data?.bounced || []);
+      // A required detail has no value: the draft opens on that box, instead of a button that can only fail again.
+      const fillIn = draftNeedsDetails(e, id);
+      if (fillIn) return toast(fillIn.words), router.push(fillIn.href);
       setProblem(id ? `${explain(e)} It is saved as a draft, so nothing you typed is lost.` : explain(e));
     } finally {
       setBusy(false);
@@ -203,6 +211,7 @@ export default function Templates() {
                 <label className="f"><span>Email</span><input type="email" value={fill[r.id]?.email || ''} readOnly={!!draftId} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], email: e.target.value } }))} autoComplete="off" /></label>
               </fieldset>
             ))}
+            {cf.boxes}
             {/* "Send now" skips the review step, so what it would show about reminders is said here. */}
             <p className="muted small" id="sn-use-reminders">{reminderText(use.reminder_days)} That comes from the template. To change it for this envelope, choose Review first.</p>
             {problem && <div className="notice err" role="alert">{problem}</div>}

@@ -7,6 +7,7 @@ import { api, useLoad, toast } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { Dialog } from '@/components/sender/Dialog';
 import { SOURCE_LOCALE, t } from '@/lib/i18n';
+import { PRINTED_SCRIPTS } from '@/lib/scripts';
 import { MAX_CUSTOM_FIELDS, CUSTOM_NAME_MAX, CUSTOM_VALUE_MAX, CUSTOM_CHOICES_MAX, nameProblem, lineProblem, customKey, type CustomDef } from '@/lib/customfields';
 
 // The sender's own screens are in English until they are translated, so their words are asked for in English.
@@ -90,7 +91,7 @@ export function CustomFieldSettings() {
   }
 
   return (
-    <section className="card" style={{ marginTop: 16 }} aria-labelledby="set-cf-h">
+    <section className="card" style={{ marginTop: 16 }} aria-labelledby="set-cf-h" data-item="card" data-feature="ds-custom-fields">
       <h2 id="set-cf-h" style={{ marginBottom: 6 }}>{t(ui, 'customfields.title')}</h2>
       <p className="muted small" style={{ marginTop: 0 }}>{t(ui, 'customfields.intro')}</p>
       {!admin && <p className="muted small">{t(ui, 'customfields.admins_only')}</p>}
@@ -142,7 +143,7 @@ export function CustomFieldSettings() {
             <label className="cf-check"><input type="checkbox" checked={form.required} onChange={(e) => setForm({ ...form, required: e.target.checked })} aria-describedby="cf-required-hint" /> {t(ui, 'customfields.required_choice')}</label>
             <p id="cf-required-hint" className="muted small cf-hint">{t(ui, 'customfields.required_hint')}</p>
             <label className="cf-check"><input type="checkbox" checked={form.on_certificate} onChange={(e) => setForm({ ...form, on_certificate: e.target.checked })} aria-describedby="cf-cert-hint" /> {t(ui, 'customfields.cert_choice')}</label>
-            <p id="cf-cert-hint" className="muted small cf-hint">{t(ui, 'customfields.cert_hint')}</p>
+            <p id="cf-cert-hint" className="muted small cf-hint">{t(ui, 'customfields.cert_hint', { scripts: PRINTED_SCRIPTS })}</p>
             {form.id && <p className="muted small">{t(ui, 'customfields.change_hint')}</p>}
             {error && <p className="notice err" role="alert">{error}</p>}
             <div className="actions">

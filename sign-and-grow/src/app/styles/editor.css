@@ -156,3 +156,54 @@
   .ed-sheetbody { display: none; margin-top: 12px; }
   .ed-settings.open .ed-sheetbody, .ed-sheetbody.always { display: block; }
 }
+
+/* ---- The three steps made simpler (research/ux-charter.md, 2.3) ------------------------------------------------ */
+/* A person's More, a file's More and a step's More options: one line for each choice, with what it is set to now. */
+.ed-more { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 6px; display: grid; gap: 2px; }
+.ed-line-btn { font: inherit; width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; background: none; border: 0; border-radius: 8px; cursor: pointer; text-align: left; color: var(--ink); }
+.ed-line-btn:hover { background: rgba(31, 111, 67, 0.06); }
+.ed-line-btn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.ed-line-btn > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.ed-line-go { color: var(--green); font-weight: 600; font-size: 13px; flex: none; }
+.ed-pick { padding: 4px 8px 12px; }
+.ed-pick .ed-check, .ed-pick .ed-myself, .ed-pick .ed-lang { margin-top: 10px; }
+.ed-pick .ed-check { border-top: 0; padding-top: 0; }
+.ed-pick select, .ed-pick input:not([type='checkbox']) { min-height: 44px; }
+.ed-person-says { margin-top: 6px; overflow-wrap: anywhere; }
+.ed-person .ed-email { min-width: 0; }
+.ed-file-more { gap: 8px; margin-top: 8px; }
+.ed-file-more .btn { min-height: 44px; }
+.ed-file-note { margin: 6px 0 0; }
+.ed-fold { margin-top: 6px; }
+.ed-fold > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 6px; color: var(--green); font-weight: 600; list-style: none; width: fit-content; }
+.ed-fold > summary::-webkit-details-marker { display: none; }
+.ed-fold > summary::before { content: '+'; display: inline-block; width: 1em; }
+.ed-fold[open] > summary::before { content: '−'; }
+.ed-fold > summary:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; border-radius: 6px; }
+#ed-step1-more { margin-top: 12px; padding-top: 10px; gap: 10px; justify-items: start; }
+#ed-step1-more label.check { min-height: 44px; }
+.ed-review-more { display: grid; gap: 12px; justify-items: start; }
+.ed-review-more > .stack { width: 100%; }
+.ed .palette .ed-morefields { background: none; border-style: dashed; color: var(--green); grid-column: 1 / -1; justify-content: center; }
+.ed-fieldmore { width: 100%; margin: 4px 0 8px; }
+#ed-field-more { margin-top: 0; border-top: 0; padding-top: 4px; display: block; }
+.ed-keys ul { margin: 0; }
+@media (max-width: 900px) {
+  .ed-person > input { flex: 1 1 100% !important; }
+  .ed-person > input[type='number'] { flex: 0 0 64px !important; }
+  .ed-person > .btn[data-more] { margin-left: auto; }
+  .ed .palette .ed-morefields { min-height: 44px; }
+}
+@media (max-width: 900px) {
+  /* The boxes of the new parts are as tall as a thumb as well. */
+  .ed .ed-pick input:not([type='checkbox']):not([type='radio']), .ed .ed-pick select, .ed .ed-words input:not([type='checkbox']):not([type='radio']), .ed .ed-review-more input:not([type='checkbox']):not([type='radio']), .ed .ed-review-more select,
+  .ed .ed-sheetbody input:not([type='checkbox']):not([type='radio']), .ed .ed-sheetbody select, .ed .ed-person > input:not([type='checkbox']):not([type='radio']), .ed .ed-doc > input:not([type='checkbox']):not([type='radio']) { min-height: 44px; }
+  .ed .ed-sheetbody label.check, .ed .ed-pick label.check { min-height: 44px; }
+}
+@media (max-width: 480px) {
+  /* "Files and people" is longer than "Add" was: smaller letters, and on the narrowest phones the number alone. */
+  .ed-top .steps button span:not(.n) { font-size: 12.5px; line-height: 1.15; text-align: left; }
+}
+@media (max-width: 350px) {
+  .ed-top .steps button span:not(.n) { display: none; }
+}

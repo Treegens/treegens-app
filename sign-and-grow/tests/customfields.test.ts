@@ -72,7 +72,7 @@ test('admins define up to 20 fields: text or a list, required or not, on the cer
   assert.equal((await own.post('/custom-fields', { name: 'رقم الملف' })).status, 200);
   assert.equal((await own.post('/custom-fields', { name: 'የጉዳይ ቁጥር' })).status, 200);
   for (const [b, re] of [
-    [{ name: '' }, /Give the field a name/],
+    [{ name: '' }, /Give the detail a name/],
     [{ name: 'x'.repeat(51) }, /51 characters long, and the most is 50/],
     [{ name: 'Two\nlines' }, /one line/],
     [{ name: 'Turned \u202eround' }, /cannot be seen or that turns text around/],
@@ -82,7 +82,7 @@ test('admins define up to 20 fields: text or a list, required or not, on the cer
     [{ name: 'Grant', kind: 'list', choices: 'A, B' }, /list of words/],
     [{ name: 'Grant', kind: 'list', choices: ['A', 'a'] }, /in the list twice/],
     [{ name: 'Grant', kind: 'list', choices: Array.from({ length: 51 }, (_, i) => `c${i}`) }, /up to 50 choices/],
-    [{ name: 'Grant', choices: ['A'] }, /only for a field of the kind "list"/],
+    [{ name: 'Grant', choices: ['A'] }, /only for a detail of the kind "list"/],
     [{ name: 'Grant', required: 'yes' }, /true or false/],
   ] as [any, RegExp][]) {
     const r = await own.post('/custom-fields', b);
@@ -195,7 +195,7 @@ test('the sender gives values on a draft; a required one is checked when sending
   // Create and send, without the required one: refused in words that say where to fill it in, and nothing is left.
   const noValue = await draftWith(own, 'sam@cf2a.example', { send: true, custom_fields: [{ name: 'Ward', value: 'north' }] });
   assert.equal(noValue.status, 400);
-  assert.match(noValue.data.error, /asks for "Case number" on every envelope, and it has no value here. Fill it in on the last step of the editor, under Details \(in the API: "custom_fields"\)/);
+  assert.match(noValue.data.error, /asks for "Case number" on every document, and it has no value here. Fill in what is missing under Details, on the last step of the editor, then send again\.$/);
   assert.equal(envCount('owner@cf2a.example'), before);
   // A draft keeps its values; a choice is kept in the spelling of the list.
   const d = (await draftWith(own, 'sam@cf2a.example', { custom_fields: [{ name: 'Ward', value: ' north ' }] })).data.envelope;
@@ -286,7 +286,7 @@ test('the API: custom_fields on envelopes and templates, and name and value pair
   for (const [docs, re] of [
     [[{ id: 'a', file_id: file.id, fields: [{ name: 'A', value: '1' }, { name: 'a', value: '2' }] }], /names "a" twice/],
     [[{ id: 'a', file_id: file.id, fields: Array.from({ length: 21 }, (_, i) => ({ name: `N${i}`, value: 'v' })) }], /21 name and value pairs.*the most is 20/],
-    [[{ id: 'a', file_id: file.id, fields: [{ name: '', value: '1' }] }], /Give the field a name/],
+    [[{ id: 'a', file_id: file.id, fields: [{ name: '', value: '1' }] }], /Give the detail a name/],
     [[{ id: 'a', file_id: file.id, fields: [{ name: 'Ref', value: 'x'.repeat(101) }] }], /the most is 100/],
     [[{ id: 'a', file_id: file.id, fields: 'Ref=1' }], /has to be a list/],
   ] as [any, RegExp][]) {
@@ -329,7 +329,7 @@ test('an envelope that is out: a value can be put right, with a line in its audi
   assert.equal((await signAll(e.id, 'sam@cf2e.example')).status, 200);
   const late = await own.put(`/envelopes/${e.id}/custom-fields`, { custom_fields: [{ name: 'Case number', value: '2026/999' }] });
   assert.equal(late.status, 409);
-  assert.match(late.data.error, /completed, so its details are fixed/);
+  assert.match(late.data.error, /completed, so its details can no longer be changed/);
   // Sending the values it has is fine (an integration that sends what it read).
   assert.equal((await own.put(`/envelopes/${e.id}/custom-fields`, { custom_fields: fix.data.custom_fields })).status, 200);
 });
@@ -343,7 +343,7 @@ test('bulk send: a column named like a field fills it for each row; a row withou
   ];
   const check = await own.post('/bulk/check', { template_id: tpl.id, rows: [...rows, { Grantee: { name: 'Cy Three', email: 'cy@cf2f.example' } }] });
   assert.equal(check.status, 200);
-  assert.match(check.data.refusal.message, /^Row 3: Your account asks for "Case number" on every envelope.*Add a column named like the field to the list, or give the template a value for it/);
+  assert.match(check.data.refusal.message, /^Row 3: Your account asks for "Case number" on every document.*Add a column named like the detail to the list, or give the template a value for it/);
   const before = envCount('owner@cf2f.example');
   const refused = await own.post('/bulk', { template_id: tpl.id, rows: [...rows, { Grantee: { name: 'Cy Three', email: 'cy@cf2f.example' } }] });
   assert.equal(refused.status, 400);
@@ -642,4 +642,181 @@ test('the export: a field whose name starts like a formula cannot run as one in 
   assert.equal((await draftWith(own, 's@cf6b.example', { custom_fields: [{ name: 'Case number', value: '1' }, { name: '=HYPERLINK("http://x.example")', value: 'v' }], send: true })).status, 200);
   const head = unzip((await own.get('/export')).data)['envelopes.csv'].toString('utf8').split('\r\n')[0];
   assert.ok(head.endsWith(`"'=HYPERLINK(""http://x.example"")"`), head);
+});
+
+// ---- After the review: what a skeptic and a busy person found ------------------------------------------------------
+
+const cp = (...n: number[]) => String.fromCodePoint(...n);
+// Characters nobody can see: zero-width space, word joiner, soft hyphen, Hangul filler, braille blank, the joiners on
+// their own, Mongolian vowel separator, a tag, a variation selector, the grapheme joiner, a right-to-left override.
+const UNSEEN = [0x200b, 0x2060, 0xad, 0x3164, 0x2800, 0x200c, 0x200d, 0x180e, 0xe0020, 0xfe0f, 0x34f, 0x115f, 0xffa0, 0x202e];
+
+test('a value nobody can see is no value: a required detail is not satisfied by an invisible character, on any way in', async () => {
+  const { own } = await account('cfr1');
+  const before = envCount('owner@cfr1.example');
+  for (const n of UNSEEN) {
+    const r = await draftWith(own, 'sam@cfr1.example', { send: true, custom_fields: [{ name: 'Case number', value: cp(n) }] });
+    assert.equal(r.status, 400, `U+${n.toString(16)} was taken as a value`);
+    assert.match(r.data.error, /cannot be seen|no value here/);
+  }
+  // Blank in other ways: a no-break space, an ideographic space, a mark with no letter under it.
+  for (const v of [cp(0xa0), cp(0x3000), cp(0x301), ` ${cp(0x301)} `]) {
+    const r = await draftWith(own, 'sam@cfr1.example', { send: true, custom_fields: [{ name: 'Case number', value: v }] });
+    assert.equal(r.status, 400, JSON.stringify(v));
+    assert.equal(r.data.code, 'details_missing');
+  }
+  // Hidden inside a value that can be read: refused too, so two values that look the same are the same.
+  const inside = await draftWith(own, 'sam@cfr1.example', { custom_fields: [{ name: 'Case number', value: `2026${cp(0x200b)}/114` }] });
+  assert.equal(inside.status, 400);
+  assert.match(inside.data.error, /"Case number" holds a character that cannot be seen/);
+  assert.equal(envCount('owner@cfr1.example'), before, 'nothing was left behind');
+  // On an envelope that is out, and in a bulk row.
+  const out = (await draftWith(own, 'sam@cfr1.example', { send: true, custom_fields: [{ name: 'Case number', value: 'A-1' }] })).data.envelope;
+  const put = await own.put(`/envelopes/${out.id}/custom-fields`, { custom_fields: [{ name: 'Case number', value: cp(0x2060) }] });
+  assert.equal(put.status, 400);
+  const tpl = await template(own);
+  const bulk = await own.post('/bulk', { template_id: tpl.id, rows: [{ Grantee: { name: 'Ana One', email: 'ana@cfr1.example' }, custom_fields: { 'Case number': cp(0x3164) } }] });
+  assert.equal(bulk.status, 400);
+  assert.match(bulk.data.error, /^Row 1: /);
+  // What writing needs stays: a non-joiner between Persian letters, a joiner in Devanagari, an emoji with its selector,
+  // and the Arabic number sign, which is drawn.
+  for (const v of [`${cp(0x645, 0x6cc)}${cp(0x200c)}${cp(0x62e, 0x648)}`, cp(0x915, 0x94d, 0x200d, 0x937), `ok ${cp(0x2764, 0xfe0f)}`, `${cp(0x600)}12`]) {
+    const r = await draftWith(own, 'sam@cfr1.example', { custom_fields: [{ name: 'Case number', value: v }] });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.envelope.custom_fields[0].value, v);
+  }
+});
+
+test('a name with an invisible character is refused, and cannot stand next to the name it looks like', async () => {
+  const { own } = await account('cfr2');
+  for (const n of [0x200b, 0x2060, 0xad, 0xfeff]) {
+    const r = await own.post('/custom-fields', { name: `Case${cp(n)} number` });
+    assert.equal(r.status, 400, `U+${n.toString(16)}`);
+    assert.match(r.data.error, /The name holds a character that cannot be seen/);
+  }
+  assert.match((await own.post('/custom-fields', { name: cp(0x301) })).data.error, /Give the detail a name/);
+  assert.equal(customKey(`Case${cp(0x200b)} number`), customKey('case NUMBER'), 'one key, so a list column or a filter with a stray character still finds it');
+  assert.equal((await own.get('/custom-fields')).data.fields.length, 2);
+  // A choice nobody can see is not a choice.
+  const list = await own.post('/custom-fields', { name: 'Team', kind: 'list', choices: [cp(0x301)] });
+  assert.equal(list.status, 400);
+  assert.match(list.data.error, /A list needs at least one choice/);
+});
+
+test('a refused send says it in plain words, with a code and the names for a screen and a hint for the API; no API name in the sentence', async () => {
+  const { own } = await account('cfr3');
+  const d = (await draftWith(own, 'sam@cfr3.example')).data.envelope;
+  const r = await own.post(`/envelopes/${d.id}/send`);
+  assert.equal(r.status, 400);
+  assert.equal(r.data.code, 'details_missing');
+  assert.deepEqual(r.data.missing, ['Case number']);
+  assert.match(r.data.api_hint, /"custom_fields"/);
+  assert.ok(!/custom_fields|API/.test(r.data.error), 'the sentence a person reads names no API property');
+  // A value that does not fit is another refusal: no code, so the screen shows the sentence as it is.
+  const ward = await own.put(`/envelopes/${d.id}`, { custom_fields: [{ name: 'Case number', value: 'A' }, { name: 'Ward', value: 'North' }] });
+  assert.equal(ward.status, 200);
+  const wardId = (await own.get('/custom-fields')).data.fields.find((f: any) => f.name === 'Ward').id;
+  assert.equal((await patch(own, `/custom-fields/${wardId}`, { choices: ['South'] })).status, 200);
+  const misfit = await own.post(`/envelopes/${d.id}/send`);
+  assert.equal(misfit.status, 400);
+  assert.equal(misfit.data.code, undefined);
+});
+
+test('using a template: the details it does not fill are asked for, and one typed value sends it', async () => {
+  const { own } = await account('cfr4');
+  const other = await person('Other Owner', 'owner@cfr4b.example');
+  const bare = await template(own);
+  const filled = await template(own, { custom_fields: [{ name: 'Case number', value: 'TPL-9' }] });
+  const needed = async (c: Client, id: string) => (await c.get(`/custom-fields?template=${id}`)).data.needed;
+  assert.deepEqual((await needed(own, bare.id)).map((f: any) => f.name), ['Case number'], 'only what is required and empty: Ward is optional');
+  assert.deepEqual(await needed(own, filled.id), []);
+  assert.deepEqual(await needed(other, bare.id), [], 'another account learns nothing about a template');
+  assert.equal((await own.get('/custom-fields')).data.needed, undefined);
+  // What the dialog sends: the typed value with the people, then send. No refusal and no second try.
+  const made = await own.post('/envelopes', { template_id: bare.id, recipients: { Grantee: { name: 'Gia Grantee', email: 'gia@cfr4.example' } }, custom_fields: [{ name: 'Case number', value: 'USE-1' }] });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  assert.equal((await own.post(`/envelopes/${made.data.envelope.id}/send`)).status, 200);
+  // Without it the refusal carries what the dialog needs to open the draft on the right box.
+  const draft = await own.post('/envelopes', { template_id: bare.id, recipients: { Grantee: { name: 'Gia Grantee', email: 'gia@cfr4.example' } } });
+  const no = await own.post(`/envelopes/${draft.data.envelope.id}/send`);
+  assert.equal(no.data.code, 'details_missing');
+  assert.deepEqual(no.data.missing, ['Case number']);
+});
+
+test('the list finds a text detail by the start of its value, and a list detail only by the whole choice', async () => {
+  const own = await person('Owner cfr5', 'owner@cfr5.example');
+  await own.post('/custom-fields', { name: 'Case number' });
+  await own.post('/custom-fields', { name: 'Ward', kind: 'list', choices: ['North', 'Northside'] });
+  const mk = async (i: number, cf: any[]) => (await draftWith(own, `s${i}@cfr5.example`, { custom_fields: cf })).data.envelope.id as string;
+  const a = await mk(1, [{ name: 'Case number', value: '2026/114' }, { name: 'Ward', value: 'North' }]);
+  const b = await mk(2, [{ name: 'Case number', value: '2026/115' }, { name: 'Ward', value: 'Northside' }]);
+  const c = await mk(3, [{ name: 'Case number', value: 'Ref 2026/114' }]);
+  const d = await mk(4, [{ name: 'Case number', value: '100%_done' }]);
+  const q = (field: string, value = '') => `/envelopes?field=${encodeURIComponent(field)}&value=${encodeURIComponent(value)}`;
+  assert.deepEqual(ids(await own.get(q('Case number', '2026'))), [a, b].sort(), 'part of a value finds what starts with it');
+  assert.deepEqual(ids(await own.get(q('Case number', '2026/114'))), [a]);
+  assert.deepEqual(ids(await own.get(q('Case number', 'REF'))), [c]);
+  assert.deepEqual(ids(await own.get(q('Case number', '114'))), [], 'not the middle of a value');
+  // The signs of a pattern are letters like any other.
+  assert.deepEqual(ids(await own.get(q('Case number', '%'))), []);
+  assert.deepEqual(ids(await own.get(q('Case number', '_'))), []);
+  assert.deepEqual(ids(await own.get(q('Case number', '100%_'))), [d]);
+  assert.deepEqual(ids(await own.get(q('Case number', '100\\'))), []);
+  // A choice is matched whole: North is not Northside.
+  assert.deepEqual(ids(await own.get(q('Ward', 'North'))), [a]);
+  assert.deepEqual(ids(await own.get(q('Ward', 'Nor'))), []);
+});
+
+test('a value of a deleted detail on an envelope that is out: it can be taken off, and the refusal to change it says why', async () => {
+  const own = await person('Owner cfr6', 'owner@cfr6.example');
+  const cn = (await own.post('/custom-fields', { name: 'Case number' })).data.field;
+  const out = (await draftWith(own, 'sam@cfr6.example', { send: true, custom_fields: [{ name: 'Case number', value: 'OLD-1' }] })).data.envelope;
+  assert.equal((await del(own, `/custom-fields/${cn.id}`)).status, 200);
+  const change = await own.put(`/envelopes/${out.id}/custom-fields`, { custom_fields: [{ name: 'Case number', value: 'NEW-1' }] });
+  assert.equal(change.status, 400);
+  assert.match(change.data.error, /"Case number" was deleted from your account after this was sent, so its value here can be taken off but not changed\. Nothing was saved\./);
+  assert.ok(!/An admin can add it/.test(change.data.error));
+  // Sent again as it is, it stays; an empty list takes it off.
+  assert.equal((await own.put(`/envelopes/${out.id}/custom-fields`, { custom_fields: [{ name: 'Case number', value: 'OLD-1' }] })).status, 200);
+  const off = await own.put(`/envelopes/${out.id}/custom-fields`, { custom_fields: [] });
+  assert.equal(off.status, 200);
+  assert.deepEqual(off.data.custom_fields, []);
+});
+
+test('a request that names thousands of details gets a short answer, and a bulk row is named once', async () => {
+  const { own } = await account('cfr7');
+  const many = await draftWith(own, 'sam@cfr7.example', { custom_fields: Array.from({ length: 5000 }, (_, i) => ({ name: `No such ${i}`, value: 'x' })) });
+  assert.equal(many.status, 400);
+  assert.match(many.data.error, /names 5000 details, and an account can have 20/);
+  assert.ok(many.data.error.length < 300, `the answer is ${many.data.error.length} characters`);
+  const some = await draftWith(own, 'sam@cfr7.example', { custom_fields: Array.from({ length: 60 }, (_, i) => ({ name: `No such ${i}`, value: 'x' })) });
+  assert.equal(some.status, 400);
+  assert.match(some.data.error, /And 55 more like these\. Nothing was saved\.$/);
+  assert.ok(some.data.error.length < 1500, `the answer is ${some.data.error.length} characters`);
+  const tpl = await template(own, { custom_fields: [{ name: 'Case number', value: 'T' }] });
+  const row = (cf: any) => ({ Grantee: { name: 'Ana One', email: 'ana@cfr7.example' }, custom_fields: cf });
+  const text = await own.post('/bulk', { template_id: tpl.id, rows: [row({ 'Case number': 'ok' }), row('2026/114')] });
+  assert.equal(text.status, 400);
+  assert.match(text.data.error, /^Row 2: "custom_fields" has to be a list/);
+  assert.ok(!/Row \d+: Row/.test(text.data.error), text.data.error);
+  // When the batch runs, a row that fails is named by its own number (applyRowCustom).
+  const { applyRowCustom } = await import('../src/server/customfields.ts');
+  const acc = db.get('SELECT account_id a FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email=?', 'owner@cfr7.example').a;
+  assert.throws(() => applyRowCustom(acc, { id: tpl.id, kind: 'template', status: 'draft' }, tpl.id, { custom_fields: { Colour: 'Red' } }, 6), /^Error: Row 7: There is no detail called "Colour"/);
+});
+
+test('a detail printed on the certificate in letters it cannot print: the admin and the sender are told before anything is signed', async () => {
+  const own = await person('Owner cfr8', 'owner@cfr8.example');
+  const eth = cp(0x1200, 0x1208, 0x1210); // Ethiopic, which the certificate has no font for
+  const made = await own.post('/custom-fields', { name: `Ref ${eth}` });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  assert.match(made.data.notes.join(' '), /The certificate cannot print these characters of "Ref .+": .*They show there as a replacement mark/);
+  // One that is not printed there needs no such note, and neither does a name the certificate can print.
+  assert.deepEqual((await own.post('/custom-fields', { name: `Own ${eth}`, on_certificate: false })).data.notes, []);
+  assert.deepEqual((await own.post('/custom-fields', { name: 'Case number' })).data.notes, []);
+  const e = (await draftWith(own, 'sam@cfr8.example', { custom_fields: [{ name: 'Case number', value: eth }, { name: `Own ${eth}`, value: eth }] })).data.envelope;
+  const page = (await own.get(`/envelopes/${e.id}`)).data;
+  const mine = page.print_problems.filter((p: any) => /under Details/.test(p.where));
+  assert.deepEqual(mine.map((p: any) => p.where), ['"Case number" under Details'], 'only what is printed on the certificate');
+  assert.equal([...mine[0].chars].length, 3);
 });

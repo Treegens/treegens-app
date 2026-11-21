@@ -494,7 +494,8 @@ test('emails give a deadline with its time in UTC, and in the signer\'s own zone
   const e = await sendTo(c, [{ name: 'Ravi Later', email: 'ravi-deadline@example.com' }], { expire_days: 30 });
   const closes = (await c.get(`/envelopes/${e.id}`)).data.envelope.expires_at;
   const first = mailTo('ravi-deadline@example.com').pop()!;
-  assert.ok(first.html.includes(`This request closes on ${momentText(closes)}.`), 'the invitation names the time and says UTC');
+  // (repair-simplify-signing: the footnote now starts "Open until", the words of the signing page, and says that the page shows the moment in the reader's own time.)
+  assert.ok(first.html.includes(`Open until ${momentText(closes)}. The signing page shows your own time.`), 'the invitation names the time and says UTC');
   assert.ok(!first.html.includes(`closes on ${closes.slice(0, 10)}`), 'and no longer a bare day');
   // Ravi opens it in India. From then on his emails name the same moment by his clock too.
   const rc = new Client(), tok = tokenFor(e.id, 'ravi-deadline@example.com');
@@ -503,7 +504,7 @@ test('emails give a deadline with its time in UTC, and in the signer\'s own zone
   const reminder = mailTo('ravi-deadline@example.com').pop()!;
   assert.match(reminder.subject, /^Reminder: /);
   // (simplify-signing: once the zone is known the email says the person's own time, with the zone and its offset, and no longer UTC first.)
-  assert.ok(reminder.html.includes(`This request closes on ${momentText(closes, 'Asia/Kolkata')}.`), reminder.html.slice(-900));
+  assert.ok(reminder.html.includes(`Open until ${momentText(closes, 'Asia/Kolkata')}.`), reminder.html.slice(-900));
   // The signing page is given the moment itself and words it in the device's zone (momentText, tested above).
   assert.equal((await rc.get(`/sign/${tok}`)).data.envelope.expires_at, closes);
   // More time: the audit line names the new moment, not only its day.

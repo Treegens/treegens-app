@@ -92,7 +92,7 @@ function ResendLink({ email, label }: { email: string; label: string }) {
  * The code box: type the 6 digits from the email, here, in the tab you signed up in. Six digits confirm by
  * themselves; Confirm does the same for anyone who prefers to press it. "Send a new code" emails a new one.
  */
-export function ConfirmCode({ email, onConfirmed, onClosed, compact = false }: { email: string; onConfirmed: () => void; onClosed?: () => void; compact?: boolean }) {
+export function ConfirmCode({ email, onConfirmed, onClosed, compact = false, main = false }: { email: string; onConfirmed: () => void; onClosed?: () => void; compact?: boolean; /** On a screen of its own, Confirm is the filled button. In the banner it is not: the page under it keeps its one main button. */ main?: boolean }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<{ text: string; err?: boolean } | null>(null);
@@ -152,7 +152,7 @@ export function ConfirmCode({ email, onConfirmed, onClosed, compact = false }: {
             }}
           />
         </label>
-        <button className="btn primary cc-go" disabled={busy}>{busy ? 'Checking…' : 'Confirm'}</button>
+        <button className={`btn${main ? ' primary' : ''} cc-go`} disabled={busy}>{busy ? 'Checking…' : 'Confirm'}</button>
         <button type="button" className="linklike cc-again" onClick={resend}>Send a new code</button>
       </div>
       {said && <p id="cc-said" className={`cc-said${said.err ? ' err' : ''}`} role={said.err ? 'alert' : 'status'}>{said.text}</p>}

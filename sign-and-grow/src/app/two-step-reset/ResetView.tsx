@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/components/ui';
+import { Logo } from '@/components/Brand';
 import { TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_RESET_BLOCK_DAYS } from '@/lib/policy';
 
 const moment = (s: string) => new Date(s).toLocaleString(undefined, { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -19,6 +20,8 @@ function StopView({ token }: { token: string }) {
   };
   return (
     <div className="authbox">
+      {/* People land here from an email and look for whose page it is: the same logo as on the sign-in page. */}
+      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
       <div className="card twostep">
         <h1 className="serif" style={{ fontSize: 24 }}>Stop the reset of two-step login</h1>
         {state === 'ask' || state === 'busy' ? (
@@ -62,6 +65,8 @@ export function ResetView() {
   if (stopToken) return <StopView token={stopToken} />;
   return (
     <div className="authbox">
+      {/* People land here from an email and look for whose page it is: the same logo as on the sign-in page. */}
+      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
       <div className="card twostep">
         <h1 className="serif" style={{ fontSize: 24 }}>Reset two-step login</h1>
         {state === 'ask' || state === 'busy' ? (

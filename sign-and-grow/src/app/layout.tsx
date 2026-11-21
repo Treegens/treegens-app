@@ -25,13 +25,13 @@ import './styles/start.css';
 // After globals.css, so its --serif (Lora first) wins. Keep it the last style import.
 import './styles/brand.css';
 import type { Metadata, Viewport } from 'next';
-import { siteBase } from '@/lib/site';
+import { siteBase, SITE_TITLE } from '@/lib/site';
 import { Toasts } from '@/components/ui';
 import { headers } from 'next/headers';
 import { chooseLocale, dir } from '@/lib/i18n';
 
 export const metadata: Metadata = {
-  title: { default: 'GrowSigning · e-signatures that plant trees', template: '%s · GrowSigning' },
+  title: { default: SITE_TITLE, template: '%s · GrowSigning' },
   description: 'Send, sign and manage documents without paper. Every dollar plants 10 mangrove trees with Treegens.',
   // The icons, the link preview picture and its alt text are files in src/app (favicon.ico, icon.svg, apple-icon.png,
   // opengraph-image.png, opengraph-image.alt.txt), copied from the brand kit by scripts/build-brand.mjs; Next writes

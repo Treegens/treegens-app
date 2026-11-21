@@ -836,13 +836,16 @@ test('a copy of the envelope keeps the choice, a template made from it does not,
 test('the screens offer the choice, hand the sender the link, and never promise an email to someone without an address', async () => {
   // Editor: the tick replaces the address, says what it means, and the same rule as the server stops Send.
   const tick = src('components/editor/SendMyself.tsx');
-  assert.match(tick, /export const canSendMyself = \(r: any, isTpl: boolean\) => !isTpl && !r\.group_id && \(r\.role === 'signer' \|\| r\.role === 'approver' \|\| r\.role === 'viewer'\);/);
+  // (simplify-editor: the rule is in src/lib/editorux.ts, where the lines of a person's More are decided; the tick is the picker of "How they get it".)
+  assert.match(src('lib/editorux.ts'), /export const canSendMyself = \(r: any, isTpl: boolean\) => !isTpl && !r\.group_id && \(r\.role === 'signer' \|\| r\.role === 'approver' \|\| r\.role === 'viewer'\);/);
+  assert.match(tick, /export \{ canSendMyself \};/);
   assert.match(tick, /<span>\{BY_SENDER_TICK\}/);
   assert.match(tick, /\{!!r\.link_by_sender && <p id=\{hint\} className="muted small">\{BY_SENDER_HOW\}<\/p>\}/);
   assert.match(tick, /return bySenderProblem\(r, \{ fields \}\);/);
   const add = src('components/editor/StepAdd.tsx');
   assert.match(add, /\{!\(r\.link_by_sender && !isTpl\) && <input placeholder="Email"/);
-  assert.match(add, /<SendMyself r=\{r\} isTpl=\{isTpl\} onChange=\{\(p\) => ed\.patchRcp\(r\.id, p\)\} \/>/);
+  assert.match(src('components/editor/PersonMore.tsx'), /if \(key === 'deliver'\) return <SendMyself r=\{r\} isTpl=\{isTpl\} onChange=\{patch\} \/>;/);
+  assert.match(add, /\{more === r\.id && <PersonMore ed=\{ed\} r=\{r\} \/>\}/);
   const editor = src('components/Editor.tsx');
   assert.match(editor, /link_by_sender: !isTpl && !!r\.link_by_sender/);
   assert.match(editor, /const no = sendMyselfTrouble\(r, name, fields\.value\);/);
@@ -866,7 +869,7 @@ test('the screens offer the choice, hand the sender the link, and never promise 
   assert.match(env_, /remindedText\(reminded, \(not_reminded \|\| \[\]\)\.filter\(\(x: any\) => x\.why !== 'link_by_sender'\)\)/);
   assert.match(env_, /For someone whose link you send yourself, the reminder comes to you instead\./);
   assert.match(src('components/editor/ReminderChoice.tsx'), /n > 0 && bySender \? ' For someone whose link you send yourself, the reminder comes to you instead\.' : ''/);
-  assert.match(src('components/editor/StepReview.tsx'), /bySender=\{!isTpl && rcps\.some\(\(r\) => r\.link_by_sender\)\}/);
+  assert.match(src('components/editor/ReviewParts.tsx'), /bySender=\{!isTpl && rcps\.some\(\(r\) => r\.link_by_sender\)\}/);
   // Correct can keep them without an address, or give them one, and says which happens.
   const fix = src('components/sender/dialogs.tsx');
   assert.match(fix, /if \(!\(own && !f\.email\.trim\(\)\) && !looksLikeEmail\(f\.email\.trim\(\)\)\)/);

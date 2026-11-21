@@ -4,7 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { boot, Client, signUp, mailTo } from './helpers.ts';
+import { boot, Client, signUp, mailTo, simple, signAll, samplePdf } from './helpers.ts';
+import { NAV_START, NAV_MAIN, NAV_MORE, NAV_END, NAV_ENTRIES, TAB_BAR, navOn, moreFor, insideMore, moreKey } from '../src/lib/nav.ts';
+import { nameFromFile } from '../src/lib/docname.ts';
+import { TOTALS_FROM, totalWorthShowing } from '../src/lib/impact.ts';
 import { CONFIRM_CODE_MAX_WRONG, CONFIRM_CODE_HOURS, CODE_REFUSED, cleanCode, showCode } from '../src/lib/confirm.ts';
 
 const { db } = await boot();
@@ -196,4 +199,208 @@ test('1. the code route is named in the API description as left out on purpose, 
   assert.equal(spec.paths?.['/auth/verify-code'], undefined, 'it is not part of the developer API');
   const gate = fs.readFileSync(new URL('../src/server/twostep.ts', import.meta.url), 'utf8');
   assert.match(gate, /verify-code/);
+});
+
+const read = (p: string) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+
+// ---- 2. One start button; Home shows what was completed, with Download ----------------------------------------------
+
+test('2. Home has no start button of its own, and the old three are gone', () => {
+  const home = read('src/app/app/page.tsx');
+  for (const gone of ['Send for signature', 'Send your first envelope', 'New envelope', 'Recent envelopes', 'Paper saved']) assert.ok(!home.includes(gone), gone);
+  // No link that starts a document, and no filled button besides the first document that waits for the person.
+  assert.equal(/href=["'{`]+\/app\/envelopes\/new/.test(home), false);
+  // "Sign a document yourself" is gone too: the editor's review step reads "Sign now" when the only person is the
+  // sender (the charter's order: that first, then this goes), and "Add me" in step 1 puts the sender on it.
+  assert.ok(!/self=1|Sign a document yourself/.test(home));
+  assert.match(read('src/components/editor/StepReview.tsx'), /'Sign now'/);
+  assert.match(read('src/components/editor/StepAdd.tsx'), /Add me|Add myself/);
+  assert.deepEqual(home.match(/btn[^"`]*primary/g) || [], ["btn sm${n === 0 ? ' primary"]);
+  // The empty Home says where the one start button is, by its name, for a wide screen and for a phone.
+  assert.match(home, /Press <b>\{NAV_START\.label\}<\/b><span className="sn-where-wide"> on the left<\/span><span className="sn-where-phone"> \(Send, in the bar at the bottom\)<\/span>/);
+  // No total of paper, no fraction of a tree and no "..." while something loads.
+  assert.ok(!/fmtTrees|of a tree|'…'/.test(home));
+  // The shell: the one start button has a class of its own and is not a filled button of the page.
+  const nav = read('src/components/AppNav.tsx');
+  assert.match(nav, /<Link href=\{NAV_START\.href\} className="btn side-start"/);
+  assert.equal(NAV_START.label, 'Send a document');
+  assert.equal(NAV_START.href, '/app/envelopes/new');
+});
+
+test('2. Recently completed: the newest completed documents of the account, each with a Download that names it and gives the signed PDF', async () => {
+  const c = await signUp('Hana Home', 'hana.home@start.test', '198.51.100.20');
+  const empty = await c.get('/envelopes?box=completed&limit=5');
+  assert.deepEqual(empty.data.envelopes, []);
+  const first = await simple(c, 'sam.one@start.test', { subject: 'First agreement', send: true });
+  const second = await simple(c, 'sam.two@start.test', { subject: 'Second agreement', send: true });
+  const open = await simple(c, 'sam.three@start.test', { subject: 'Still out', send: true });
+  assert.equal((await signAll(first.id, 'sam.one@start.test')).status, 200);
+  assert.equal((await signAll(second.id, 'sam.two@start.test')).status, 200);
+  const list = (await c.get('/envelopes?box=completed&limit=5')).data.envelopes;
+  assert.deepEqual(list.map((e: any) => e.subject).sort(), ['First agreement', 'Second agreement']);
+  assert.ok(!list.some((e: any) => e.id === open.id), 'a document that is still out is not listed as completed');
+  for (const e of list) assert.ok(e.completed_at, 'the row has the day it was completed');
+  // The Download of a row is this address.
+  const home = read('src/app/app/page.tsx');
+  assert.match(home, /api\('\/envelopes\?box=completed&limit=5'\)/);
+  assert.match(home, /<li key=\{e\.id\} data-item="row">[\s\S]*?href=\{`\/api\/envelopes\/\$\{e\.id\}\/download`\} aria-label=\{`Download \$\{e\.subject \|\| 'the signed document'\}`\}>Download<\/a>/);
+  const pdf = await c.call('GET', `/envelopes/${first.id}/download`);
+  assert.equal(pdf.status, 200);
+  assert.match(String(pdf.headers?.get?.('content-type') || pdf.res?.headers.get('content-type') || 'application/pdf'), /pdf/);
+  // Somebody else's account gets neither the row nor the file.
+  const other = await signUp('Olga Other', 'olga.other@start.test', '198.51.100.21');
+  assert.deepEqual((await other.get('/envelopes?box=completed&limit=5')).data.envelopes, []);
+  assert.ok([403, 404].includes((await other.call('GET', `/envelopes/${first.id}/download`)).status));
+});
+
+// ---- 3. The sidebar: nine entries, a closed More, one Help ----------------------------------------------------------
+
+test('3. the sidebar has nine entries in the charter\'s order and words, and More holds the five that moved', () => {
+  assert.equal(NAV_ENTRIES, 9);
+  assert.deepEqual(NAV_MAIN.map((n) => n.label), ['Home', 'Documents', 'To sign', 'Templates', 'Contacts']);
+  assert.deepEqual(NAV_MORE.map((n) => n.label), ['Send to many', 'Forms', 'Website terms', 'Reports', 'Trees planted']);
+  assert.deepEqual(NAV_END.map((n) => n.label), ['Settings']);
+  assert.deepEqual([...TAB_BAR], ['Home', 'Documents', 'Send', 'To sign', 'Menu']);
+  // Nothing vanished: every page the old sidebar reached is still reached, and each entry has a page.
+  const hrefs = [...NAV_MAIN, ...NAV_MORE, ...NAV_END].map((n) => n.href);
+  assert.deepEqual([...hrefs].sort(), ['/app', '/app/agreements', '/app/bulk', '/app/contacts', '/app/envelopes', '/app/impact', '/app/inbox', '/app/powerforms', '/app/reports', '/app/settings', '/app/templates'].sort());
+  for (const h of [...hrefs, NAV_START.href]) assert.ok(fs.existsSync(new URL(`../src/app${h}/page.tsx`, import.meta.url)), h);
+  // The old names are not in the navigation any more.
+  const drawn = read('src/components/AppShell.tsx') + read('src/components/AppNav.tsx') + read('src/lib/nav.ts');
+  for (const old of ["'Envelopes'", "'Inbox'", 'Bulk send', 'PowerForms', 'Click-to-agree', 'Our impact', 'New envelope', 'Ask for help', 'Review queue']) assert.ok(!drawn.includes(old), old);
+  // One Help, drawn once, after the pages.
+  const shell = read('src/components/AppShell.tsx');
+  assert.equal((shell.match(/<HelpChatButton/g) || []).length, 1);
+  assert.match(shell, /<SideNav [^\n]*\/>\s*\{\/\*[^*]*\*\/\}\s*<HelpChatButton className="nav hc-open hc-nav">Help<\/HelpChatButton>/);
+  // The phone's bar is drawn with the shell, and its Send is the same start as the sidebar's.
+  assert.match(shell, /<TabBar path=\{path\} menuOpen=\{open\} onMenu=\{\(\) => setOpen\(!open\)\} \/>/);
+  assert.equal((shell.match(/>Menu</g) || []).length, 0, 'one Menu on a phone: the one in the bar at the bottom');
+  const nav = read('src/components/AppNav.tsx');
+  assert.match(nav, /<nav className="tabbar" aria-label="Main">/);
+  assert.match(nav, /className="tab-send" aria-label=\{NAV_START\.label\}/);
+});
+
+test('3. More is marked as the navigation\'s own, closed until opened, open by itself on a page inside it, remembered per person', () => {
+  const nav = read('src/components/AppNav.tsx');
+  assert.match(nav, /<div data-more="nav">\s*\{\/\*[^*]*\*\/\}\s*<button type="button" className="nav nav-more-toggle" aria-expanded=\{open\} aria-controls=\{listId\}/);
+  assert.match(nav, /<div id=\{listId\} className="nav-more-list" hidden=\{!open\}>/);
+  assert.match(nav, /const open = kept \|\| inside;/);
+  assert.match(nav, /useState\(false\)/, 'closed until this browser says the person left it open');
+  assert.match(nav, /localStorage\.setItem\(moreKey\(userId\), '1'\)/);
+  assert.notEqual(moreKey('usr_a'), moreKey('usr_b'));
+  for (const p of ['/app/bulk', '/app/bulk/blk_1', '/app/powerforms', '/app/reports', '/app/impact']) assert.equal(insideMore(p, 'member'), true, p);
+  for (const p of ['/app', '/app/envelopes', '/app/envelopes/env_1', '/app/settings', '/app/inbox', '/app/bulky']) assert.equal(insideMore(p, 'owner'), false, p);
+  // Website terms speak for the team's website: members do not get the entry (the page and the API refuse them too).
+  assert.deepEqual(moreFor('member').map((n) => n.label), ['Send to many', 'Forms', 'Reports', 'Trees planted']);
+  assert.equal(moreFor('admin').length, 5);
+  assert.equal(moreFor('owner').length, 5);
+  assert.equal(insideMore('/app/agreements', 'member'), false);
+  assert.equal(insideMore('/app/agreements', 'admin'), true);
+  // Which entry is lit.
+  assert.equal(navOn('/app', '/app'), true);
+  assert.equal(navOn('/app', '/app/envelopes'), false);
+  assert.equal(navOn('/app/envelopes', '/app/envelopes/env_1'), true);
+  assert.equal(navOn('/app/envelopes', '/app/envelopes/new'), false, 'starting a document does not light Documents');
+  assert.equal(navOn('/app/inbox', '/app/inboxes'), false);
+});
+
+test('3. a member is refused Website terms by the server as well, so hiding the entry hides nothing they could use', async () => {
+  const owner = await signUp('Wim Owner', 'wim.owner@start.test', '198.51.100.30');
+  assert.equal((await owner.get('/clickwraps')).status, 200);
+  const inv = await owner.post('/account/invites', { email: 'mia.member@start.test', role: 'member' });
+  assert.equal(inv.status, 200, JSON.stringify(inv.data));
+  const token = db.get("SELECT token FROM invites WHERE email='mia.member@start.test'").token;
+  const mia = new Client();
+  mia.ip = '198.51.100.31';
+  const joined = await mia.post('/auth/signup', { name: 'Mia Member', email: 'mia.member@start.test', password: 'correct horse battery', invite: token });
+  assert.equal(joined.status, 200, JSON.stringify(joined.data));
+  assert.equal((await mia.get('/me')).data.role, 'member');
+  assert.equal((await mia.get('/clickwraps')).status, 403);
+});
+
+test('3. no total of paper while it is tiny or loading: nothing stands in the sidebar until 1,000 sheets', async () => {
+  assert.equal(TOTALS_FROM.sheets, 1000);
+  assert.equal(TOTALS_FROM.treesPlanted, 10);
+  for (const [n, shown] of [[0, false], [15, false], [999, false], [1000, true], [25000, true], [undefined, false], [null, false], ['abc', false]] as const) assert.equal(totalWorthShowing(n), shown, String(n));
+  const shell = read('src/components/AppShell.tsx');
+  assert.match(shell, /\{impact && totalWorthShowing\(impact\.account\.sheets\)\s*\? <div className="impact">/);
+  assert.ok(!/'…'|fmtTrees|of a tree/.test(shell));
+  assert.match(shell, /by our estimate/);
+  // What the shell reads is there, and a new account is far under the line.
+  const c = await signUp('Pia Paper', 'pia.paper@start.test', '198.51.100.32');
+  const impact = (await c.get('/impact')).data;
+  assert.equal(typeof impact.account.sheets, 'number');
+  assert.equal(totalWorthShowing(impact.account.sheets), false);
+});
+
+// ---- 4. Document names that read well -------------------------------------------------------------------------------
+
+test('4. a name from a file name: hyphens and underscores become spaces, a first small letter a capital, and nothing typed on purpose changes', () => {
+  const cases: [string, string][] = [
+    ['planting-partnership', 'Planting partnership'],
+    ['planting_partnership_2026', 'Planting partnership 2026'],
+    ['nda', 'Nda'],
+    ['NDA-acme', 'NDA acme'],
+    ['NDA', 'NDA'],
+    ['iPhone-lease', 'iPhone lease'],
+    ['Well-being policy', 'Well-being policy'],
+    ['contract 2026-03-01', 'Contract 2026-03-01'],
+    ['lease-2026-03-01', 'Lease-2026-03-01'],
+    ['Agreement', 'Agreement'],
+    ['  spaced   out  ', 'Spaced out'],
+    ['élan-vital', 'Élan vital'],
+    ['договор-аренды', 'Договор аренды'],
+    ['契約書', '契約書'],
+    ['___', ''],
+    ['', ''],
+  ];
+  for (const [from, to] of cases) assert.equal(nameFromFile(from), to, from);
+  // It never makes a name longer, and it adds no markup or line break of its own.
+  for (const nasty of ['<b>x</b>-y', 'a‮b-c', 'x'.repeat(200)]) {
+    const out = nameFromFile(nasty);
+    assert.ok(out.length <= nasty.length);
+    assert.equal(out.replace(/[-_ ]/g, '').toLowerCase(), nasty.replace(/[-_ ]/g, '').toLowerCase());
+  }
+});
+
+test('4. an uploaded file gets the readable name, and a name the sender types is kept as typed', async () => {
+  const c = await signUp('Nia Namer', 'nia.namer@start.test', '198.51.100.40');
+  const up = async (fileName: string) => {
+    const f = new FormData();
+    f.append('file', new Blob([await samplePdf(1)], { type: 'application/pdf' }), fileName);
+    const r = await c.call('POST', '/files', f);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    return r.data;
+  };
+  const file = await up('planting-partnership.pdf');
+  assert.equal(file.name, 'Planting partnership');
+  assert.equal((await up('Agreement.pdf')).name, 'Agreement');
+  assert.equal((await up('scan_0042.PDF')).name, 'Scan 0042');
+  assert.equal((await up('.pdf')).name, 'Document', 'a file with no name at all is still called something');
+  // The envelope's document takes the file's name unless the sender gave one, and theirs is never rewritten.
+  const env = await c.post('/envelopes', { subject: 'x', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'Sam', email: 'sam.namer@start.test' }], fields: [] });
+  assert.equal(env.status, 200, JSON.stringify(env.data));
+  assert.equal(env.data.envelope.documents[0].name, 'Planting partnership');
+  const typed = await c.post('/envelopes', { subject: 'x', documents: [{ id: 'd', file_id: file.id, name: 'my-own_name' }], recipients: [], fields: [] });
+  assert.equal(typed.data.envelope.documents[0].name, 'my-own_name');
+});
+
+test('1. an API key of the account cannot type the code: confirming is done by the person, in their own signed-in browser', async () => {
+  // An owner whose address is confirmed makes a key; then the address counts as unconfirmed again, as for a login
+  // that changed nothing else, and the key tries the code that the browser would be allowed to use.
+  const owner = await signUp('Kay Keyholder', 'kay.key@start.test', '198.51.100.50');
+  const made = await owner.post('/api-keys', { name: 'integration' });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const { newConfirmCode } = await import('../src/server/confirmcode.ts');
+  const u = db.get("SELECT id FROM users WHERE email='kay.key@start.test'");
+  db.run('UPDATE users SET email_verified=0 WHERE id=?', u.id);
+  const code = newConfirmCode(u.id)!;
+  const byKey = new Client();
+  byKey.ip = '198.51.100.51';
+  const r = await byKey.call('POST', '/auth/verify-code', { code }, { authorization: `Bearer ${made.data.key}` });
+  assert.ok([401, 403].includes(r.status), `${r.status} ${JSON.stringify(r.data)}`);
+  assert.equal(verified('kay.key@start.test'), false);
+  assert.equal(db.get('SELECT verify_code_wrong n FROM users WHERE id=?', u.id).n, 0, 'and it costs the person no guess');
+  assert.equal((await owner.post('/auth/verify-code', { code })).status, 200);
+  assert.equal(verified('kay.key@start.test'), true);
 });

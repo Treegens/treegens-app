@@ -108,3 +108,43 @@ export const GUIDE_FINISH = 'Everything needed is filled in. Choose Finish to si
  * pixels: 18 across, so it never stands right beside a label on the same line, and 3 up and down.
  */
 export const FLAG_MARGIN = { x: 18, y: 3 };
+
+// ---- The consent screen --------------------------------------------------------------------------------------------
+
+/** The most words the consent screen holds before its tick, with every option on (research/ux-charter.md, P7). */
+export const CONSENT_WORDS = 120;
+/** Words the way tests/ux/flows.cjs counts them: anything between spaces that holds a letter or a digit. */
+export const wordsIn = (text: string): number => String(text || '').split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+
+/** "Finish later" for someone who was only asked to read: there is nothing for them to finish. */
+export const laterLabel = (role: string): string => (role === 'viewer' ? 'Read it later' : 'Finish later');
+
+/**
+ * The title of the step that opens at Finish, by the first thing that needs a look, so it says why it came.
+ * "Check before you finish" is left for a Finish that did not get through, or a check that could not be made.
+ */
+export const reviewTitle = (why: LookAgain[], approving = false): string =>
+  why[0] === 'name' ? 'Check your name' : why[0] === 'question' ? 'One question is not answered' : why[0] === 'witness' ? 'Name your witness'
+    : why[0] === 'print' ? 'Some characters cannot be printed' : approving ? 'Approve this document' : 'Check before you finish';
+
+// ---- The Done screen -----------------------------------------------------------------------------------------------
+
+const plural = (n: number, one: string, many: string, digits = 0) => `${n.toLocaleString('en', { maximumFractionDigits: digits })} ${n === 1 ? one : many}`;
+
+/**
+ * "Signed without paper", in words that are true for one sheet too: "About 1 sheet of paper and 10 litres of water
+ * were not used." A figure that rounds to nothing is left out (never "0 kg of CO2e"), and the share of a tree is
+ * said only from a hundredth of a tree up.
+ */
+export function savedLine(impact: { sheets: number; litresWater?: number; kgCo2?: number; trees?: number }): { sheets: string; rest: string; verb: string; trees: boolean } {
+  const water = Math.round(Number(impact.litresWater) || 0);
+  const co2 = Math.round((Number(impact.kgCo2) || 0) * 100) / 100;
+  const more = [water > 0 ? plural(water, 'litre of water', 'litres of water') : '', co2 > 0 ? `${co2.toLocaleString('en', { maximumFractionDigits: 2 })} kg of CO2e` : ''].filter(Boolean);
+  const sheets = Math.round(Number(impact.sheets) || 0);
+  return {
+    sheets: plural(sheets, 'sheet of paper', 'sheets of paper'),
+    rest: more.length === 2 ? `, ${more[0]} and ${more[1]}` : more.length ? ` and ${more[0]}` : '',
+    verb: sheets === 1 && !more.length ? 'was' : 'were',
+    trees: (Number(impact.trees) || 0) >= 0.01,
+  };
+}

@@ -646,7 +646,8 @@ test('two signers on one address each get their own completion email with their 
   // email about the document is the one meant here.)
   assert.match(mailTo('alone@example.com').find((m) => m.subject === 'Just me')!.html, /Sent with GrowSigning\./);
   // An email to an account's own person about the account keeps it.
-  assert.match(mailTo('jo@example.com')[0].html, /every dollar plants/);
+  // (Not the short email about their login, which has only the help address under it: any other one.)
+  assert.ok(mailTo('jo@example.com').some((m) => /every dollar plants/.test(m.html)));
 });
 
 // ---- Promises that are only markup or styling ------------------------------------------------------------------------
@@ -690,7 +691,8 @@ test('the signing screens keep what they promise in markup: new tab, labels, rea
   const thumb = /\n\s*([^{}\n]*)\{ display: inline-flex; align-items: center; min-height: 44px; \}/.exec(css)?.[1] || '';
   for (const sel of ['.sg-foot-links .sg-link', '.sg-review .sg-link', '.sg-more']) assert.ok(thumb.split(',').map((s) => s.trim()).includes(sel), sel);
   // The scan warning is shown on reopening (it reads the stored flag) and once more at Review.
-  assert.match(read('components/editor/StepAdd.tsx'), /scanWarning\(d\) && <p className="notice warn small"/);
+  // (simplify-editor: the notes under a file are in FileRow.tsx.)
+  assert.match(read('components/editor/FileRow.tsx'), /if \(scanWarning\(d\)\) notes\.push\(<p key="scan" className="notice warn small/);
   assert.match(read('components/editor/StepReview.tsx'), /docs\.filter\(\(d\) => scanWarning\(d\)\)\.map/);
 });
 

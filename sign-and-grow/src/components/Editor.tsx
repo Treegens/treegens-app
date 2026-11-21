@@ -20,6 +20,8 @@ import { stackedFields } from '@/lib/stacked';
 import { WordingBanner, type WordingLock } from './templates/WhoCanUse';
 import { witnessProblem } from '@/lib/witness';
 import { HelpChatButton } from './HelpChat';
+import { detailsRefused, wantsDetails } from './sender/DetailBoxes';
+import { STEP_NAMES, isBlankPerson, onlyMe } from '@/lib/editorux';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -92,8 +94,12 @@ export function Editor({ id }: { id: string }) {
       setEnv(e);
       setBase(e);
       setDocs(e.documents);
-      setRcps(e.recipients);
+      // Step 1 opens with one empty person row, so nobody has to press a button before typing a name (it is saved
+      // once something is typed into it, or for a template as its first role).
+      setRcps(e.recipients.length || e.status !== 'draft' || e.wording_lock ? e.recipients : [newRcp([], e.kind === 'template')]);
       fields.reset(e.fields);
+      // "Change them in the editor" on a document's page opens the last step, where its details are (DetailBoxes.tsx).
+      if (wantsDetails() && e.documents.length && e.status === 'draft') setStep(3);
     }).catch((e) => {
       if (!on) return;
       toast(e?.status === 404 ? 'We could not find that envelope. It may have been deleted.' : friendly(e), true);
@@ -107,13 +113,18 @@ export function Editor({ id }: { id: string }) {
 
   // ---- What gets sent to the server --------------------------------------------------------------------------
 
+  // A new person starts in the account's default language (Settings, Account), or with none: their browser decides.
+  const newRcp = (list: any[], tpl: boolean, p: any = {}) => ({ id: newId('rcp'), role: 'signer', role_name: tpl ? `Signer ${list.length + 1}` : '', name: '', email: '', routing_order: list.length ? Math.max(...list.map((x) => x.routing_order)) + 1 : 1, access_code: '', note: '', locale: me.account?.default_locale || null, ...p });
+  // A row nobody typed into and nothing was set or placed for: it is on screen, and is neither saved nor sent nor
+  // counted as a problem. On an envelope that is already out every row counts, as before.
+  const isIdle = (r: any, flds: any[] = fields.value) => !correcting && isBlankPerson(r) && r.role === 'signer' && !r.role_name && !r.access_code && !r.note && !(r.verify && r.verify !== 'none') && !r.phone && !flds.some((f) => f.recipient_id === r.id);
   const body = (list: any[] = rcps, flds: any[] = fields.value) => ({
     subject: env.subject, message: env.message, ordered: env.ordered, reminder_days: env.reminder_days, expire_days: env.expire_days,
     ...(env.date_format ? { date_format: env.date_format } : {}),
     documents: docs.map((d) => ({ id: d.id, file_id: d.file_id, name: d.name })),
     // A draft is saved while people are still typing. A half-typed email would make the server turn the whole
     // save down, so it is left out until it is complete and everything else is kept safe meanwhile.
-    recipients: list.map((r) => ({ id: r.id, role: r.role, role_name: r.role_name, name: r.name, email: correcting || !r.email || validEmail(r.email) ? r.email : '', routing_order: r.routing_order, access_code: r.access_code, note: r.note,
+    recipients: list.filter((r) => !isIdle(r, flds)).map((r) => ({ id: r.id, role: r.role, role_name: r.role_name, name: r.name, email: correcting || !r.email || validEmail(r.email) ? r.email : '', routing_order: r.routing_order, access_code: r.access_code, note: r.note,
       // The language of our screens for this person, or null for their browser (editor/RecipientLanguage.tsx).
       locale: r.locale || null,
       // The check before the document opens, and the signing link by text message (see sender/CheckFields.tsx).
@@ -288,11 +299,15 @@ export function Editor({ id }: { id: string }) {
   }
 
   function addRcp(p: any = {}) {
-    // A new person starts in the account's default language (Settings, Account), or with none: their browser decides.
-    const r = { id: newId('rcp'), role: 'signer', role_name: isTpl ? `Signer ${rcps.length + 1}` : '', name: '', email: '', routing_order: rcps.length ? Math.max(...rcps.map((x) => x.routing_order)) + 1 : 1, access_code: '', note: '', locale: me.account?.default_locale || null, ...p };
-    setRcps((l) => [...l, r]);
+    // A group, or anyone who arrives filled in, takes the place of the empty row instead of standing under it.
+    setRcps((l) => {
+      const spare = Object.keys(p).length ? l.find((x) => isIdle(x)) : null;
+      return spare ? l.map((x) => (x === spare ? { ...newRcp(l, isTpl, p), id: x.id, routing_order: x.routing_order } : x)) : [...l, newRcp(l, isTpl, p)];
+    });
     dirty();
   }
+  // "Add me": the person who is sending, as someone who signs.
+  const addMe = () => addRcp({ name: me.user.name, email: me.user.email });
   const dropFieldsOf = (rid: string) => fields.set((l) => l.filter((f) => f.recipient_id !== rid), { record: false });
   function patchRcp(rid: string, p: any) {
     const apply = () => (setRcps((l) => l.map((r) => (r.id === rid ? { ...r, ...p } : r))), dirty());
@@ -316,10 +331,11 @@ export function Editor({ id }: { id: string }) {
   const pages = docs.reduce((n, d) => n + d.pages, 0);
   const problems = useMemo(() => {
     const p: string[] = [];
-    if (!docs.length) p.push('Add at least one document.');
-    if (!rcps.length) p.push('Add at least one recipient.');
-    for (const r of rcps) {
-      const name = r.name || r.role_name || 'A recipient';
+    const people = rcps.filter((r) => !isIdle(r));
+    if (!docs.length) p.push('Add at least one file.');
+    if (!people.length) p.push(isTpl ? 'Add at least one role.' : 'Add at least one person: a name and an email address in step 1.');
+    for (const r of people) {
+      const name = r.name || r.role_name || (r.email ? r.email : 'A person without a name');
       // Someone whose link the sender sends themselves needs a name and no address (editor/SendMyself.tsx).
       if (!isTpl && r.link_by_sender) {
         const no = sendMyselfTrouble(r, name, fields.value);
@@ -346,12 +362,14 @@ export function Editor({ id }: { id: string }) {
       const check = checkTrouble(r, !!me.text_messages, name, isTpl && !r.email);
       if (check) p.push(check);
     }
-    if (!isTpl && rcps.length > 0 && !rcps.some((r) => r.role !== 'cc')) p.push('Add at least one recipient who signs, approves or views.');
+    if (!isTpl && people.length > 0 && !people.some((r) => r.role !== 'cc')) p.push('Add at least one person who signs, approves or must open it. A copy alone cannot be sent.');
     // Two fields of one person on top of each other: on a phone only the top one can be tapped. The server refuses it too.
     p.push(...stackedFields(fields.value, rcps, docs));
     return [...new Set(p)];
   }, [docs, rcps, fields.value, isTpl, correcting, base, me.text_messages]);
 
+  // The only person on a new document is the sender: the main button reads "Sign now" (editorux.ts).
+  const signNow = !!env && !isTpl && !correcting && !!onlyMe(rcps.filter((r) => !isIdle(r)), me.user.email);
   const mine = { ordered: env?.ordered, date_format: env?.date_format, documents: docs, recipients: rcps, fields: fields.value };
   const changed = useMemo(() => !!base && correcting && fingerprint(env, mine) !== fingerprint(base, base), [base, correcting, env, docs, rcps, fields.value]); // eslint-disable-line react-hooks/exhaustive-deps
   const result = useMemo(() => (correcting && step === 3 ? outcomes(base, mine) : null), [correcting, step, base, env, docs, rcps, fields.value]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -376,7 +394,7 @@ export function Editor({ id }: { id: string }) {
   const home = correcting ? `/app/envelopes/${id}` : isTpl ? '/app/templates' : '/app/envelopes';
 
   async function go(n: number) {
-    if (n > 1 && !docs.length) return toast(uploads.some((u) => u.state !== 'error') ? 'Your document is still uploading. Give it a moment.' : 'Upload a document first.', true);
+    if (n > 1 && !docs.length) return toast(uploads.some((u) => u.state !== 'error') ? 'Your file is still uploading. Give it a moment.' : 'Add a file first. Choose one in step 1.', true);
     setError('');
     if (correcting) return setStep(n);
     try {
@@ -418,7 +436,14 @@ export function Editor({ id }: { id: string }) {
         return leave('/app/templates');
       }
       try {
-        await api(`/envelopes/${id}/send`, { method: 'POST', body: { send_anyway: anyway === true } });
+        // "Sign now": the only person on it is the sender. The server then writes no invitation email and answers
+        // with the signing page, which opens in this tab (src/lib/editorux.ts onlyMe, src/server/signnow.ts).
+        const r = await api(`/envelopes/${id}/send`, { method: 'POST', body: { send_anyway: anyway === true, ...(signNow ? { sign_now: true } : {}) } });
+        if (signNow && r?.sign_url) {
+          leaving.current = true;
+          window.location.assign(r.sign_url);
+          return;
+        }
       } catch (e: any) {
         // An address on it bounced before (src/lib/mailnews.ts). Nothing went out: the sender sees which address and
         // why, and decides. It is never refused for good.
@@ -429,7 +454,8 @@ export function Editor({ id }: { id: string }) {
       toast('Sent. No paper involved.');
       leave(`/app/envelopes/${id}?sent=1`);
     } catch (e) {
-      setError(friendly(e));
+      // A required detail without a value: its box is marked and takes the cursor (sender/DetailBoxes.tsx).
+      setError(detailsRefused(e) || friendly(e));
     } finally {
       setBusy(false);
     }
@@ -526,7 +552,7 @@ export function Editor({ id }: { id: string }) {
 
   const ed: Ed = {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, wording, docs, rcps, fields, contacts, uploads, color,
-    patchEnv, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
+    patchEnv, isIdle, addMe, signNow, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, addRcp, patchRcp, removeRcp,
     setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
     showField: (fid) => (setJump(fid), void go(2)), jump, clearJump: () => setJump(null),
   };
@@ -538,8 +564,7 @@ export function Editor({ id }: { id: string }) {
   };
   // Wrapped so a click never arrives as the answer to "ask them to sign again". Only that question says yes.
   const submit = correcting ? () => saveCorrection() : send;
-  const submitOff = busy || problems.length > 0 || !!closed || conflict.length > 0 || (correcting && !changed);
-  const steps = ['Add', 'Place fields', isTpl ? 'Review' : correcting ? 'Review and save' : 'Review and send'];
+  const steps = [STEP_NAMES[0], STEP_NAMES[1], isTpl ? 'Review' : correcting ? 'Review and save' : STEP_NAMES[2]];
   const status = correcting ? (changed ? 'Changes not saved yet' : 'No changes yet')
     : state === 'saved' ? 'All changes saved' : state === 'saving' ? 'Saving…' : state === 'stuck' ? 'Not saved yet' : 'Unsaved changes';
 
@@ -557,8 +582,8 @@ export function Editor({ id }: { id: string }) {
         <span className="muted small hide-sm" role="status">{status}</span>
         {/* Help opens beside the editor, so nothing that is being worked on is left behind. */}
         <HelpChatButton className="btn sm ghost hc-open" label="Help: ask the helper or write to a person"><span className="ed-only-sm" aria-hidden="true">?</span><span className="hide-sm">Help</span></HelpChatButton>
-        {step < 3 ? <button type="button" className="btn primary" onClick={() => go(step + 1)}>Next</button>
-          : <button type="button" className="btn primary hide-sm" disabled={submitOff} onClick={submit}>{isTpl ? 'Save template' : correcting ? 'Save changes' : 'Send'}</button>}
+        {/* One main button a screen: Next up here on steps 1 and 2, and on step 3 the button under the review itself. */}
+        {step < 3 && <button type="button" className="btn primary" onClick={() => go(step + 1)}>Next</button>}
       </div>
 
       {wording && <WordingBanner lock={wording} />}

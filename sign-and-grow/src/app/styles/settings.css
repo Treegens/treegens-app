@@ -24,3 +24,9 @@ ul.rules + .btn, ul.rules + .row { margin-top: 16px; }
 .plan-history { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
 .plan-history li { padding: 10px 16px; border-top: 1px solid var(--line); }
 .plan-history .ref { font-family: ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+
+/* The Plan tab on a phone: every button, link-button and box is at least 44 px tall (measured in tests/out/repair-expiry). */
+@media (max-width: 760px) {
+  .plan-tab .btn, .plan-tab .btn.sm, .plan-tab .linklike, .plan-tab input, .plan-tab summary { min-height: 44px; }
+  .plan-tab .linklike { display: inline-flex; align-items: center; }
+}

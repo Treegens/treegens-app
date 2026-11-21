@@ -522,14 +522,18 @@ test('the screens show the rule and the lock before anyone types, and the pages 
   assert.match(editor, /\{wording && <WordingBanner lock=\{wording\} \/>\}/);
   assert.match(editor, /const isLockedField = useCallback\(\(f: any\) => signedFields\.has\(f\.id\) \|\| !!wording/);
   const add = read('src/components/editor/StepAdd.tsx');
-  for (const part of [/\{!wording && \(\s*<label className=\{`drop ed-drop/, /aria-label="Document name" maxLength=\{200\} readOnly=\{!!wording\}/, /aria-label="Role" style=\{\{ flex: '0 1 170px' \}\} disabled=\{!!wording\}/,
-    /\{!wording && <button type="button" className="btn sm ghost danger" onClick=\{\(\) => ed\.removeRcp/, /\{!wording && <div className="row wrap"/, /maxLength=\{5000\} readOnly=\{!!wording\}/, /\{isTpl && <WhoCanUse templateId=\{env\.id\}/])
+  for (const part of [/\{!wording && \(\s*<label className=\{`drop ed-drop/,
+    /\{!wording && <button type="button" className="btn sm ghost danger" onClick=\{\(\) => ed\.removeRcp/, /\{!wording && <div className="row wrap"/, /\{isTpl && <WhoCanUse templateId=\{env\.id\}/])
     assert.match(add, part);
+  // (simplify-editor: the file's name, the role and the message are drawn by FileRow.tsx, PersonMore.tsx and ReviewParts.tsx.)
+  assert.match(read('src/components/editor/FileRow.tsx'), /aria-label="Document name" maxLength=\{200\} readOnly=\{!!ed\.wording\}/);
+  assert.match(read('src/components/editor/PersonMore.tsx'), /aria-label="Role" disabled=\{!!wording\}/);
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /maxLength=\{5000\} readOnly=\{!!wording\}/);
   const fieldsStep = read('src/components/editor/StepFields.tsx');
   assert.match(fieldsStep, /title=\{again\} disabled=\{!!ed\.wording\}/, 'no field is added');
   assert.match(fieldsStep, /disabled=\{!ready \|\| !!finding \|\| !active \|\| !!ed\.wording\}/, 'none is found and added');
   assert.match(fieldsStep, /<WordingField field=\{selected\} lock=\{ed\.wording\}/, 'a field left empty can be filled in, and the rest says why it stays');
-  assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && !ed\.wording && <PayLinkChoice/);
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /\{!ed\.wording && <PayLinkChoice/);
   // The words the screens use say what the server does.
   assert.match(LOCK_MEANS, /cannot change the documents, the fixed wording, the fields, the message, who signs in what order, or the private note and the checks the template gives each person\. The subject stays theirs to set\.$/);
   assert.equal(accessSentence({ use: 'team', change: 'owner', locked: false, owner: 'Maya Lopez' }), 'Everyone on the team can use it. Only Maya Lopez and admins can change it. Its wording is not locked: whoever uses it can change the envelope they make from it before sending. Only Maya Lopez and admins can change these rules or delete it.');
@@ -810,13 +814,15 @@ test('the pages promise what the repaired code keeps: copies, the lock on notes 
   assert.match(page, /: tplLocked \|\| tplHeld \? <div className="sn-now-actions"><button className="btn primary" disabled=\{busy\} onClick=\{\(\) => clone\('envelope'\)\}>Use<\/button><\/div>/);
   assert.match(page, /It keeps the rules of the template it came from\$\{r\.locked \? ', and its wording stays locked' : ''\}, so it belongs to \$\{r\.belongs_to\}\./);
   // The editor: the note from the template is read-only, "no check" is not offered, and a line says why.
-  const add = read('src/components/editor/StepAdd.tsx');
-  assert.match(add, /readOnly=\{!!wording\?\.people\?\.\[r\.id\]\?\.note\}/);
-  assert.match(add, /keepCode=\{!!wording\?\.people\?\.\[r\.id\]\?\.verify\}/);
-  assert.match(add, /<LockedLine>\{keptLine\(wording\.people\[r\.id\], wording\.ask\)\}<\/LockedLine>/);
+  // (simplify-editor: a person's note and check are in their More, PersonMore.tsx, where `kept` is wording.people[r.id].)
+  const add = read('src/components/editor/PersonMore.tsx');
+  assert.match(add, /const kept = wording\?\.people\?\.\[r\.id\];/);
+  assert.match(add, /readOnly=\{!!kept\?\.note\}/);
+  assert.match(add, /keepCode=\{!!kept\?\.verify\}/);
+  assert.match(add, /\{kept && <LockedLine>\{keptLine\(kept, wording!\.ask\)\}<\/LockedLine>\}/);
   assert.match(read('src/components/sender/CheckFields.tsx'), /\{\(!keepCode \|\| verify === 'none'\) && <option value="none">/);
   const { keptLine } = await import('../src/lib/tplroles.ts');
   assert.equal(keptLine({ note: 1, verify: 'email_code', code: 1 }, 'Maya Lopez or an admin of your team'), 'From the template, and it stays: the private note, a one-time code before the document opens (by email or by text message, but not none) and an access code (you can change it, not take it off). To change them, ask Maya Lopez or an admin of your team.');
   assert.match(lockedBanner('NDA', 'Maya Lopez or an admin of your team'), /and choose the subject\. .*the notes and checks it gives each person stay as the template has them\./);
-  for (const f of ['src/server/tplroles.ts', 'src/server/routes-templates.ts', 'src/lib/tplroles.ts', 'tests/templates.test.ts', 'src/app/help/page.tsx', 'src/components/editor/StepAdd.tsx', 'src/components/sender/CheckFields.tsx']) assert.doesNotMatch(read(f), /\u2014/, `${f}: no em dashes`);
+  for (const f of ['src/server/tplroles.ts', 'src/server/routes-templates.ts', 'src/lib/tplroles.ts', 'tests/templates.test.ts', 'src/app/help/page.tsx', 'src/components/editor/StepAdd.tsx', 'src/components/editor/PersonMore.tsx', 'src/components/sender/CheckFields.tsx']) assert.doesNotMatch(read(f), /\u2014/, `${f}: no em dashes`);
 });

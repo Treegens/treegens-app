@@ -22,9 +22,27 @@ export const now = () => new Date().toISOString();
 // Short code printed in every signing email. Typing it into /check proves the email is genuine without
 // clicking anything. No look-alike characters (0/O, 1/I/L).
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-export const checkCode = () => Array.from(crypto.randomBytes(12), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+// The alphabet has vowels, so a code can spell a word, and now and then a rude one. The code is printed in bold in the
+// footer of every signing email, so one that reads as an insult is drawn again. The list is short on purpose: what a
+// person would take as aimed at them, in English, with the digits people read as letters (3 as E, 5 as S and so on).
+// The alphabet has no I, L or O, so many words cannot come up at all. About one code in a hundred is drawn again,
+// which takes next to nothing away from how hard a code is to guess (a twelve-letter code keeps over 59 bits).
+const RUDE = /FUCK|FUK|FCUK|PHUK|CUNT|KUNT|TWAT|WANK|RAPE|KKK|ARSE|ASS|DAMN|CRAP|DYKE|FAG|SEX|ANUS|HATE|JEW|GAY|KYS|SUCK|SCUM|DEAD|DUMB|TURD|FART|BUTT|SPAZ|THUG|WTF|STFU/;
+const READ_AS: Record<string, string> = { '2': 'Z', '3': 'E', '4': 'A', '5': 'S', '6': 'G', '7': 'T', '8': 'B', '9': 'G', V: 'U' };
+/** Whether a code reads as a rude word, also across its dashes and with digits read as the letters they look like. */
+export const rudeCode = (code: string): boolean => {
+  const plain = String(code).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return RUDE.test(plain) || RUDE.test(plain.replace(/[2-9V]/g, (c) => READ_AS[c] || c));
+};
+const drawCode = (length: number): string => {
+  for (;;) {
+    const code = Array.from(crypto.randomBytes(length), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+    if (!rudeCode(code)) return code;
+  }
+};
+export const checkCode = () => drawCode(12);
 // A shorter code from the same alphabet, for a reference a person reads out or types back, such as a help request.
-export const shortCode = (length = 8) => Array.from(crypto.randomBytes(length), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+export const shortCode = (length = 8) => drawCode(length);
 // The same kind of code worked out from something that is already stored, for a record that was written without
 // one. It is the same every time for the same seed.
 export const codeFrom = (seed: string, length = 8) => Array.from(crypto.createHash('sha256').update(seed).digest().subarray(0, length), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');

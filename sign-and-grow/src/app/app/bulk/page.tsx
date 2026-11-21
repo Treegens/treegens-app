@@ -150,7 +150,7 @@ function BulkSend({ preset }: { preset: string }) {
   const first = roles[0];
   return (
     <div className="sn stack">
-      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Bulk send</h1><div className="muted">Send one template to a whole list. Everyone gets their own private copy to sign, and you follow them all as one batch.</div></div></div>
+      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Send to many</h1><div className="muted">Send one template to a whole list. Everyone gets their own private copy to sign, and you follow them all as one batch.</div></div></div>
 
       <section className="card" aria-labelledby="sn-bulk-new-h">
         <h2 id="sn-bulk-new-h" className="sn-vh">New bulk send</h2>

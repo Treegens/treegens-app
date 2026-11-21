@@ -73,6 +73,12 @@ export type Ed = {
   replaceDoc: (id: string, file: File | null | undefined) => void;
   moveDoc: (index: number, by: number) => void;
   addRcp: (p?: any) => void;
+  /** "Add me": the sender as someone who signs. */
+  addMe: () => void;
+  /** An empty row nobody typed into: on screen in step 1, and neither saved, sent nor listed (Editor.tsx). */
+  isIdle: (r: any) => boolean;
+  /** The only person on a new document is the sender, so the main button reads "Sign now" (src/lib/editorux.ts). */
+  signNow: boolean;
   patchRcp: (id: string, p: any) => void;
   removeRcp: (id: string) => void;
   /** Changes the fields and remembers the step so it can be undone. */

@@ -7,13 +7,15 @@ import { fmtDate } from '@/components/ui';
 export function SealResult({ seal }: { seal: any }) {
   if (!seal) return null;
   const by = seal.name ? <>the certificate of <b>{seal.name}</b>{seal.issuer ? <>, issued by {seal.issuer}</> : null}</> : 'a certificate';
-  const when = seal.level === 'B-T' && seal.timestamp_at
-    ? <> It carries a time-stamp from a time-stamp service: {fmtDate(seal.timestamp_at, true)}.</>
-    : seal.sealed_at ? <> Its time is the clock of the server that sealed it: {fmtDate(seal.sealed_at, true)}.</> : null;
+  // A time stamp is shown only when its service leads to a certificate this server was set up to trust: anyone can
+  // add a time stamp to a file after it was sealed, so one that nothing vouches for is named and not shown.
+  const when = seal.timestamp_at
+    ? <> It carries a trusted time stamp: {fmtDate(seal.timestamp_at, true)}.</>
+    : <>{seal.sealed_at ? <> Its time is the clock of the server that sealed it: {fmtDate(seal.sealed_at, true)}.</> : null}{seal.timestamp_unchecked ? <> It also carries a time stamp that this page has no way to check, so its time is not shown here.</> : null}</>;
   if (!seal.intact) {
     return (
       <div className="notice warn" style={{ marginTop: 12 }}>
-        <b>Its digital seal does not hold.</b> The file carries a digital seal{seal.ours ? ' made by this server' : ''}, but {seal.why || 'it does not check out'}. So the file was changed after it was sealed, or the seal itself is damaged. Ask for the file exactly as it was emailed or downloaded.
+        <b>Its digital seal does not hold.</b> The file carries a digital seal{seal.ours ? ' made by this server' : ''}, but {seal.why || 'it does not check out'}. So the file was changed after it was sealed, or put together around a seal taken from another file, or the seal itself is damaged. Do not rely on this file. Ask for the file exactly as it was emailed or downloaded.
       </div>
     );
   }
@@ -35,7 +37,7 @@ export function SealResult({ seal }: { seal: any }) {
   }
   return (
     <p className="small" style={{ margin: '10px 0 0' }}>
-      <b>Its digital seal holds too.</b> The file carries this server&apos;s digital seal (PAdES {seal.level}), made with {by}, and not a byte of it has changed since it was sealed.{when} Any PDF reader that checks signatures, such as Acrobat, can show the same without asking us. The seal is the server&apos;s, not a signature of the people who signed.
+      <b>Its digital seal holds too.</b> The file carries this server&apos;s digital seal, made with {by}, and nothing in it has changed since it was sealed.{when} A PDF reader that checks signatures can show the same without asking us. The seal is the server&apos;s, not a signature of the people who signed.
     </p>
   );
 }

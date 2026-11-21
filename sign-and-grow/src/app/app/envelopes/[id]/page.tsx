@@ -20,6 +20,7 @@ import { Disputed } from '@/components/sender/Disputed';
 import { EnvelopeComments } from '@/components/sender/Comments';
 import { RetentionCard } from '@/components/sender/Retention';
 import { CustomDetails } from '@/components/sender/CustomDetails';
+import { FileChecks } from '@/components/sender/FileChecks';
 import { redactedNote } from '@/lib/retention';
 import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
 
@@ -132,7 +133,7 @@ export default function EnvelopeDetail() {
     <div className="sn stack">
       <div className="pagehead" style={{ marginBottom: 0 }}>
         <div className="grow">
-          <Link href={isTpl ? '/app/templates' : '/app/envelopes'} className="small sn-back">← {isTpl ? 'Templates' : 'Envelopes'}</Link>
+          <Link href={isTpl ? '/app/templates' : '/app/envelopes'} className="small sn-back">← {isTpl ? 'Templates' : 'Documents'}</Link>
           <h1 className="serif sn-title">{e.subject || (isTpl ? 'Untitled template' : 'Untitled')}</h1>
           <div className="row wrap" style={{ marginTop: 6, rowGap: 4 }}>
             <Status s={e.status} label={isTpl ? 'Template' : undefined} />
@@ -284,7 +285,9 @@ export default function EnvelopeDetail() {
       {!isTpl && <RetentionCard envelopeId={e.id} r={data.retention} onChanged={reload} />}
 
       {/* The account's own details on this envelope, such as a case number, folded (src/components/sender/CustomDetails.tsx). */}
-      <CustomDetails envelope={e} editHref={mayChange ? editHref : null} />
+      <CustomDetails envelope={e} editHref={mayChange ? editHref : null} onSaved={reload} />
+      {/* What can be checked about the signed PDF, folded: today its digital seal, when it carries one (FileChecks.tsx). */}
+      <FileChecks seal={data.seal} />
 
       {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
       <PayLinkNote envelopeId={e.id} closed={!isTpl && e.status !== 'draft' && e.status !== 'sent'} />

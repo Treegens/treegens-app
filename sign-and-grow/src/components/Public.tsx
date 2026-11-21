@@ -9,9 +9,9 @@ import { HelpChatButton } from './HelpChat';
 
 // Shared frame of the public pages: the top navigation, the footer and the live impact numbers.
 
+// Help is one entry, the button that opens the helper (HelpChat.tsx). The help page is the link inside it, and in the footer.
 const LINKS: [string, string][] = [
   ['/impact', 'Impact'],
-  ['/help', 'Help'],
   ['/check', 'Check an email'],
   ['/security', 'Security'],
   ['/verify', 'Verify a document'],
@@ -48,7 +48,7 @@ export function PublicNav() {
           </nav>
           <div className="pub-actions">
             {/* The help chat: answers at once, with a person one click away (HelpChat.tsx). */}
-            <HelpChatButton className="btn sm hc-open">Ask for help</HelpChatButton>
+            <HelpChatButton className="btn sm hc-open">Help</HelpChatButton>
             <Link href="/login" className="btn sm pub-signin">Sign in</Link>
             <Link href="/signup" className="btn primary sm">Start free</Link>
             <button ref={menuButton} type="button" className="btn sm pub-menu-btn" aria-expanded={open} aria-controls="pub-menu" onClick={() => setOpen((o) => !o)}>
@@ -59,7 +59,7 @@ export function PublicNav() {
         </div>
         <nav id="pub-menu" className="pub-menu" aria-label="Menu" hidden={!open}>
           {/* On a phone the header has no room for the help chat's button, so it is the first thing in the menu. */}
-          <HelpChatButton className="hc-menu">Ask for help</HelpChatButton>
+          <HelpChatButton className="hc-menu">Help</HelpChatButton>
           {LINKS.map(([href, label]) => <Link key={href} href={href} {...current(href)} onClick={() => setOpen(false)}>{label}</Link>)}
           <Link href="/#pricing" onClick={() => setOpen(false)}>Pricing</Link>
           <Link href="/login" onClick={() => setOpen(false)}>Sign in</Link>
@@ -89,7 +89,7 @@ export function PublicFooter() {
         </nav>
         <nav aria-label="Help">
           <h2>Help</h2>
-          <Link href="/help">Help</Link>
+          <Link href="/help">The help page</Link>
           <Link href="/help#find-documents">Find my documents</Link>
           <Link href="/help#cancel">Stop a subscription</Link>
           <Link href="/help#contact">Contact a person</Link>
@@ -99,6 +99,7 @@ export function PublicFooter() {
           <Link href="/check">Check an email</Link>
           <Link href="/verify">Verify a document</Link>
           <Link href="/security">Security</Link>
+          <Link href="/security/disclosure">Report a weakness</Link>
         </nav>
       </div>
     </footer>

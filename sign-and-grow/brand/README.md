@@ -36,7 +36,7 @@ All in `brand/` unless said. Every SVG has its letters as paths, a `<title>`, no
 | `public/brand/icon-192.png`, `-512` | the tile, transparent corners | the web app manifest |
 | `public/brand/icon-maskable-512.png` | full bleed, leaf inside the 80% safe circle | the manifest, `purpose: maskable` (Android) |
 | `public/brand/apple-touch-icon.png` | 180 px, no transparency, iOS rounds it | iPhone and iPad home screens |
-| `public/brand/email-logo.png` | the logo 22 px tall at 2x (288 by 44), transparent | email headers, as `width="144" height="22"` |
+| `public/brand/email-logo.png` | the logo 22 px tall at 2x, on a rounded tile of the email's ground colour `#f4f1ea` (312 by 64) | email headers, as `width="156" height="32"`. The tile cannot be seen on the light email, and keeps "signing" readable where a mail program darkens the ground |
 | `public/brand/email-logo-dark.png` | the same for dark email | an email client's dark mode, if a `<picture>` is used |
 | `public/brand/og-image.png` | 1200 by 630, the logo and one line on paper | link previews |
 | `src/lib/brandMark.ts` | the paths and colours as strings | drawing the logo into a PDF, or inline |
@@ -87,7 +87,7 @@ Contrast ratios by the WCAG 2.1 formula. AA asks 4.5 for text and 3.0 for large 
 
 ## The stamp
 
-`stamp.svg`: the mark, "Signed with" in Lora Medium Italic and the wordmark, in a ruled box, one colour. It goes at the foot of the certificate and of every page of a signed copy, in muted ink (`rgb(0.42, 0.47, 0.44)` in `pdf.ts`), beside the envelope ID that the server writes. Never larger than the document's own text: 14 pt tall is right for a PDF.
+`stamp.svg`: the mark, "Signed with" in Lora Medium Italic and the wordmark, in a ruled box, one colour. It goes at the foot of the certificate and of every page of a signed copy, in muted ink (`rgb(0.42, 0.47, 0.44)` in `pdf.ts`), with the envelope ID line that the server writes beside it on its baseline. Never larger than the document's own text: 14 pt tall on our own sheets (the certificate), 12 pt on a page of somebody's document, where it and the ID line stay in the lowest 17 pt of the page (the strip desk printers leave blank) so they do not land on the document's own footer. Nothing of ours is printed at the top of a document's page (`drawPageFoot()` in `src/server/brandpdf.ts`).
 
 ## Things not to do
 
@@ -209,7 +209,7 @@ const logo = m.brand?.logo?.startsWith('data:image/')
   ? `<img src="${esc(m.brand.logo)}" alt="${esc(m.brand?.name || '')}" style="max-height:40px;max-width:200px">`
   : m.brand?.name
     ? `<span style="font-size:18px;font-weight:700;color:${color}">${esc(m.brand.name)}</span>`
-    : `<img src="${esc(baseUrl())}/brand/email-logo.png" width="144" height="22" alt="GrowSigning" style="display:block;border:0;width:144px;height:22px">`;
+    : `<img src="${esc(baseUrl())}/brand/email-logo.png" width="156" height="32" alt="GrowSigning" style="display:block;border:0;width:156px;height:32px">`;
 ```
 
 The image loads from `APP_URL`, so it shows once the app is public; until then mail clients show the alt text, "GrowSigning". The footer's "Sent with GrowSigning" becomes "Sent with GrowSigning" in the text pass.
@@ -236,12 +236,10 @@ this.page.drawSvgPath(STAMP.d, { x: this.L, y: 36, scale: ss, color: MUTED });
 this.page.drawText(this.footer, { x: this.L + STAMP.width * ss + 8, y: 26.8, size: 7, font: this.font, color: MUTED });
 ```
 
-**Foot of every page of a signed copy**, in `renderEnvelopePdf()`, in the `for (const page of pages)` loop beside the "Envelope ID" line (which sits at the top of the page):
+**Foot of every page of a signed copy**, in `renderEnvelopePdf()`, in the `for (const page of pages)` loop: `drawPageFoot()` in `src/server/brandpdf.ts` draws the stamp 12 pt tall, 5 pt above the bottom edge, and the "Envelope ID" line beside it on its baseline (as built on 21 November 2026; the line used to sit at the top of the page, while every screen said "at the foot"):
 
 ```ts
-const sh = 14, sc = sh / STAMP.height;
-const o = m.pt(12, m.H - 8 - sh); // the stamp's top left corner as the page is shown, 8 pt above its bottom edge
-page.drawSvgPath(STAMP.d, { x: o.x, y: o.y, scale: sc, rotate: m.rotate, color: MUTED });
+drawPageFoot(page, m, { line: `GrowSigning Envelope ID: ${e.id}`, font, color: MUTED });
 ```
 
 The rest of `pdf.ts` is text: "Signed via GrowSigning" under each signature, "GrowSigning Envelope ID", `setProducer` and `setCreator`.

@@ -2,26 +2,22 @@
 import { useState } from 'react';
 import { ROLE_LABEL, Status, fmtDate } from '../ui';
 import { useMe } from '../AppShell';
-import { DATE_FORMATS, DATE_FORMAT_CHOICES, formatDate, deviceZone, momentText } from '@/lib/dates';
-import { scanWarning } from '@/lib/scans';
-import { phoneWeight } from '@/lib/phone';
 import { Lock } from './parts';
-import { CheckFields } from '../sender/CheckFields';
-import { SendMyself } from './SendMyself';
 import { PAPER_HINT, fmtSize } from './upload';
 import { PHONE_SECONDS_PER_MB } from '@/lib/policy';
 import { acceptList, uploadLimits, checkingLabel } from '@/lib/convert';
-import { ConvertNotes } from './ConvertNotes';
-import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, plural, type Ed } from './shared';
+import { MAX_DOCS, MAX_RECIPIENTS, SIGNS, who, type Ed } from './shared';
 import { LockedLine, WhoCanUse } from '../templates/WhoCanUse';
-import { keptLine } from '@/lib/tplroles';
 import { GroupRow, AddGroup, useGroups, isGroupRow } from './GroupRecipient';
 import { WitnessChoice, signerNames } from './WitnessChoice';
-import { RecipientLanguage } from './RecipientLanguage';
+// A file's row and a person's More: everything that is not a name or an address (FileRow.tsx, PersonMore.tsx).
+import { FileRow } from './FileRow';
+import { PersonMore, PersonSummary, morePanelId } from './PersonMore';
 
 const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Has a copy', witness: 'Witnessed' };
 
-// Step 1: the documents, who gets them, and the message that goes with them.
+// Step 1, "Files and people": the files and who gets them. The subject, the message, reminders and the deadline
+// are on step 3, where the Send button is (research/ux-charter.md, 2.3).
 export function StepAdd({ ed }: { ed: Ed }) {
   const me = useMe();
   const { env, base, isTpl, correcting, anyLocked, lockedIds, lockedNames, docs, rcps, contacts, uploads } = ed;
@@ -29,11 +25,9 @@ export function StepAdd({ ed }: { ed: Ed }) {
   const wording = ed.wording;
   const [over, setOver] = useState(false);
   const [more, setMore] = useState<string | null>(null);
+  // The step's one More options: signing order and groups. Closed every time the step opens.
+  const [options, setOptions] = useState(false);
   const uploading = uploads.some((u) => u.state !== 'error');
-  const format = env.date_format || DATE_FORMATS[0];
-  const today = new Date();
-  // The example shows today's date where the sender is, which is how a signer's own day is found as well.
-  const zone = deviceZone();
   const was = (id: string) => (correcting ? base.recipients.find((r: any) => r.id === id) : null);
   // The account's signing groups: a recipient can be one of them instead of a person (editor/GroupRecipient.tsx).
   const groups = useGroups();
@@ -41,9 +35,9 @@ export function StepAdd({ ed }: { ed: Ed }) {
   return (
     <div className="main stack ed-narrow">
       <div className="card">
-        <h2 style={{ marginBottom: 12 }}>Documents</h2>
-        {anyLocked && <div className="notice warn ed-lockline" style={{ marginBottom: 10 }}><Lock size={16} /><span>{lockedNames} already finished. If you add, replace, remove or reorder a document, they have to sign again. You are asked before anything is saved. Renaming a document is always fine.</span></div>}
-        {wording && <LockedLine>The documents come from the template{wording.template ? ` "${wording.template}"` : ''} and stay as they are. To change them, ask {wording.ask}.</LockedLine>}
+        <h2 style={{ marginBottom: 12 }}>Files</h2>
+        {anyLocked && <div className="notice warn ed-lockline" style={{ marginBottom: 10 }}><Lock size={16} /><span>{lockedNames} already finished. If you add, replace, remove or reorder a file, they have to sign again. You are asked before anything is saved. Renaming a file is always fine.</span></div>}
+        {wording && <LockedLine>The files come from the template{wording.template ? ` "${wording.template}"` : ''} and stay as they are. To change them, ask {wording.ask}.</LockedLine>}
         {!wording && (
           <label className={`drop ed-drop${over ? ' over' : ''}`}
             onDragOver={(e) => (e.preventDefault(), setOver(true))} onDragLeave={() => setOver(false)}
@@ -78,40 +72,12 @@ export function StepAdd({ ed }: { ed: Ed }) {
           </ul>
         )}
 
-        {docs.map((d, i) => (
-          <div key={d.id}>
-          <div className="row ed-doc">
-            <input value={d.name} aria-label="Document name" maxLength={200} readOnly={!!wording} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
-            <span className="muted small" style={{ whiteSpace: 'nowrap' }}>{plural(d.pages, 'page')}</span>
-            {!wording && (
-              <>
-                <label className="btn sm ghost" title="Swap in a corrected version. Your fields stay where they are.">
-                  Replace file
-                  <input type="file" className="ed-sr" accept={acceptList(!!me.converts)} aria-label={`Replace the file for ${d.name || 'this document'}`} onChange={(e) => (ed.replaceDoc(d.id, e.target.files?.[0]), (e.target.value = ''))} />
-                </label>
-                <button type="button" className="btn sm ghost" disabled={i === 0} onClick={() => ed.moveDoc(i, -1)} aria-label={`Move ${d.name || 'document'} up`}>↑</button>
-                <button type="button" className="btn sm ghost" disabled={i === docs.length - 1} onClick={() => ed.moveDoc(i, 1)} aria-label={`Move ${d.name || 'document'} down`}>↓</button>
-                <button type="button" className="btn sm ghost danger" onClick={() => ed.removeDoc(d.id)} aria-label={`Remove ${d.name || 'document'}`}>Remove</button>
-              </>
-            )}
-          </div>
-          {/* The server keeps which pages are pictures with the file, so this is also said when a draft is opened again. */}
-          {/* Made from a Word file or the like: the PDF is what is signed, and what may look different (ConvertNotes.tsx). */}
-          <ConvertNotes d={d} />
-          {scanWarning(d) && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{scanWarning(d)}</p>}
-          {phoneWeight(d) && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{phoneWeight(d)}</p>}
-          {/* Signatures already in the uploaded PDF do not survive in the signed copy (POST /files, src/lib/seal.ts). Said in the session that uploaded it. */}
-          {d.existing_signatures_note && <p className="notice warn small" style={{ margin: '6px 0 0' }}>{d.existing_signatures_note}</p>}
-          </div>
-        ))}
-        {docs.length >= MAX_DOCS && <p className="muted small" style={{ margin: '10px 0 0' }}>An envelope can hold up to {MAX_DOCS} documents. Remove one to add another.</p>}
+        {docs.map((d, i) => <FileRow key={d.id} ed={ed} d={d} i={i} />)}
+        {docs.length >= MAX_DOCS && <p className="muted small" style={{ margin: '10px 0 0' }}>One document can hold up to {MAX_DOCS} files. Remove one to add another.</p>}
       </div>
 
       <div className="card">
-        <div className="row between wrap" style={{ marginBottom: 12 }}>
-          <h2>{isTpl ? 'Roles' : 'Recipients'}</h2>
-          <label className="check ed-tap"><input type="checkbox" checked={!!env.ordered} disabled={!!wording} onChange={(e) => ed.patchEnv({ ordered: e.target.checked ? 1 : 0 })} /> Set signing order</label>
-        </div>
+        <h2 style={{ marginBottom: 12 }}>{isTpl ? 'Roles' : 'People'}</h2>
         {isTpl && <p className="muted small">Leave name and email empty for roles you fill in each time you use the template.</p>}
         {wording && <LockedLine>Fill in each person&rsquo;s name and email address. Who signs, what each person does and the order come from the template and stay as they are.</LockedLine>}
         <datalist id="contact-emails">{contacts.map((c) => <option key={c.id} value={c.email}>{c.name}</option>)}</datalist>
@@ -132,40 +98,28 @@ export function StepAdd({ ed }: { ed: Ed }) {
               );
             if (isGroupRow(r)) return <GroupRow key={r.id} ed={ed} r={r} groups={groups} old={old} />;
             return (
-              <div key={r.id} className="rcpt" style={{ ['--fc' as any]: ed.color(r.id) }}>
-                <div className="row wrap">
+              <div key={r.id} className="rcpt" data-item="person" style={{ ['--fc' as any]: ed.color(r.id) }}>
+                <div className="row wrap ed-person">
                   {!!env.ordered && <input type="number" min={1} max={99} value={r.routing_order} aria-label="Signing order" style={{ width: 64 }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { routing_order: Number(e.target.value) || 1 })} />}
                   {isTpl && <input placeholder="Role, e.g. Client" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
                   {/* No name or address of the sender's for a witness the signer names (WitnessChoice.tsx, below). */}
                   {!signerNames(r) && <>
-                  <input placeholder="Full name" value={r.name} aria-label="Recipient name" autoComplete="off" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
-                  {/* No address for someone whose link the sender sends themselves (SendMyself.tsx, below). */}
-                  {!(r.link_by_sender && !isTpl) && <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Recipient email" autoComplete="off" style={{ flex: '1 1 170px' }}
+                  <input placeholder="Full name" value={r.name} aria-label="Recipient name" autoComplete="off" style={{ flex: '1 1 150px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
+                  {/* No address for someone whose link the sender sends themselves (SendMyself.tsx, in More). The box
+                      is wide enough to show a whole address. */}
+                  {!(r.link_by_sender && !isTpl) && <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Recipient email" autoComplete="off" className="ed-email" style={{ flex: '2 1 260px' }}
                     onChange={(e) => {
                       const c = contacts.find((x) => x.email.toLowerCase() === e.target.value.toLowerCase());
                       ed.patchRcp(r.id, { email: e.target.value, ...(c && !r.name ? { name: c.name } : {}) });
                     }} />}
                   </>}
-                  <select value={r.role} aria-label="Role" style={{ flex: '0 1 170px' }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { role: e.target.value })}>
-                    {Object.entries(ROLE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                  <button type="button" className="btn sm ghost" onClick={() => setMore(more === r.id ? null : r.id)} aria-expanded={more === r.id} aria-label={`More options for ${who(r)}`}>More</button>
+                  {/* What this person does, how they get it, the check and their note: one More, closed until asked for. */}
+                  <button type="button" className="btn sm ghost" data-more="item" onClick={() => setMore(more === r.id ? null : r.id)} aria-expanded={more === r.id} aria-controls={morePanelId(r.id)} aria-label={`More options for ${who(r)}`}>More</button>
                   {!wording && <button type="button" className="btn sm ghost danger" onClick={() => ed.removeRcp(r.id)} aria-label={`Remove ${who(r)}`}>✕</button>}
                 </div>
-                <SendMyself r={r} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
+                {more !== r.id && <PersonSummary r={r} />}
+                {more === r.id && <PersonMore ed={ed} r={r} />}
                 <WitnessChoice r={r} rcps={rcps} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
-                {more === r.id && (
-                  <div className="grid g2" style={{ marginTop: 10 }}>
-                    {/* What a locked template gave this person stays (wording.people, tplroles.ts): shown as such. */}
-                    <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">{wording?.people?.[r.id]?.code ? '(from the template: you can change it, not take it off)' : '(at least 4 characters, share it with them yourself)'}</span></span><input value={r.access_code || ''} maxLength={50} required={!!wording?.people?.[r.id]?.code} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>
-                    <label className="f" style={{ margin: 0 }}><span>Private note <span className="hint">{wording?.people?.[r.id]?.note ? '(from the template, locked)' : '(only they see it)'}</span></span><input value={r.note || ''} maxLength={1000} readOnly={!!wording?.people?.[r.id]?.note} onChange={(e) => ed.patchRcp(r.id, { note: e.target.value })} /></label>
-                  </div>
-                )}
-                {more === r.id && wording?.people?.[r.id] && <LockedLine>{keptLine(wording.people[r.id], wording.ask)}</LockedLine>}
-                {/* A one-time code before the document opens, and the signing link by text message: only what this
-                    server can do is offered (me.text_messages says whether its operator switched texts on). */}
-                {more === r.id && <CheckFields value={r} role={r.role} textsOn={!!me.text_messages} open={isTpl && !r.email} keepCode={!!wording?.people?.[r.id]?.verify} onChange={(p) => ed.patchRcp(r.id, p)} />}
-                {more === r.id && <RecipientLanguage value={r.locale} who={who(r)} onChange={(p) => ed.patchRcp(r.id, p)} />}
                 {r.role === 'inperson' && <div className="muted small" style={{ marginTop: 6 }}>You host the signing on your own device. The link is emailed to you. While they hold the device your account is locked in that browser, and you type your password to come back.</div>}
                 {correcting && (
                   <div className="muted small" style={{ marginTop: 6 }}>
@@ -180,36 +134,22 @@ export function StepAdd({ ed }: { ed: Ed }) {
           })}
         </div>
         {!wording && <div className="row wrap" style={{ marginTop: 12 }}>
-          <button type="button" className="btn" disabled={rcps.length >= MAX_RECIPIENTS} onClick={() => ed.addRcp()}>Add {isTpl ? 'role' : 'recipient'}</button>
-          {!isTpl && rcps.length < MAX_RECIPIENTS && !rcps.some((r) => r.email.toLowerCase() === me.user.email.toLowerCase()) && <button type="button" className="btn ghost" onClick={() => ed.addRcp({ name: me.user.name, email: me.user.email })}>Add myself</button>}
-          <AddGroup ed={ed} groups={groups} />
-          {rcps.length >= MAX_RECIPIENTS && <span className="muted small">An envelope can have up to {MAX_RECIPIENTS} recipients.</span>}
+          <button type="button" className="btn" disabled={rcps.length >= MAX_RECIPIENTS} onClick={() => ed.addRcp()}>Add another {isTpl ? 'role' : 'person'}</button>
+          {!isTpl && rcps.length < MAX_RECIPIENTS && !rcps.some((r) => r.email.toLowerCase() === me.user.email.toLowerCase()) && <button type="button" className="btn ghost" onClick={() => ed.addMe()}>Add me</button>}
+          {rcps.length >= MAX_RECIPIENTS && <span className="muted small">One document can go to up to {MAX_RECIPIENTS} people.</span>}
+          <span className="grow" />
+          {/* The step's one More options: what few documents need (research/ux-charter.md, P4). */}
+          <button type="button" className="btn ghost" data-more="screen" aria-expanded={options} aria-controls="ed-step1-more" onClick={() => setOptions(!options)}>More options</button>
         </div>}
+        {options && !wording && (
+          <div id="ed-step1-more" className="ed-more" role="group" aria-label="More options for this step">
+            <label className="check ed-tap"><input type="checkbox" checked={!!env.ordered} onChange={(e) => ed.patchEnv({ ordered: e.target.checked ? 1 : 0 })} /> <span>Set signing order<span className="muted">: number who goes first. Without it everyone gets the document at the same time.</span></span></label>
+            <AddGroup ed={ed} groups={groups} />
+          </div>
+        )}
         {!isTpl && rcps.length > 0 && !rcps.some(SIGNS) && <p className="muted small" style={{ margin: '10px 0 0' }}>Nobody signs yet. Fields can only be placed for people who sign.</p>}
       </div>
 
-      <div className="card">
-        <h2 style={{ marginBottom: 12 }}>{isTpl ? 'Template details' : 'Message'}</h2>
-        <label className="f"><span>{isTpl ? 'Template name and email subject' : 'Email subject'}</span><input value={env.subject} maxLength={200} onChange={(e) => ed.patchEnv({ subject: e.target.value })} /></label>
-        <label className="f"><span>Message <span className="hint">{wording ? '(from the template, locked)' : '(optional)'}</span></span><textarea value={env.message} maxLength={5000} readOnly={!!wording} onChange={(e) => ed.patchEnv({ message: e.target.value })} /></label>
-        <div className="grid g2">
-          <label className="f"><span>Remind every <span className="hint">(days, 0 for never)</span></span><input type="number" inputMode="numeric" min={0} max={60} value={env.reminder_days} onChange={(e) => ed.patchEnv({ reminder_days: Number(e.target.value) })} /></label>
-          {correcting
-            ? <div className="f ed-static"><span>Deadline</span><div className="muted">{env.expires_at ? `Closes on ${momentText(env.expires_at, zone)}. ` : ''}To give people more time, use the envelope page after you save.</div></div>
-            : <label className="f"><span>Expires after <span className="hint">(days)</span></span><input type="number" inputMode="numeric" min={1} max={365} value={env.expire_days} onChange={(e) => ed.patchEnv({ expire_days: Number(e.target.value) })} /></label>}
-          <div>
-            <label className="f" style={{ marginBottom: 6 }}><span>Date format <span className="hint">(for dates stamped on the document)</span></span>
-              <select value={format} disabled={anyLocked} aria-describedby="ed-date-example" onChange={(e) => ed.patchEnv({ date_format: e.target.value })}>
-                {DATE_FORMAT_CHOICES.map((f) => <option key={f} value={f}>{formatDate(today, f, zone)} ({f})</option>)}
-              </select>
-            </label>
-            <div id="ed-date-example" className="muted small" aria-live="polite">
-              {anyLocked ? `Dates are written like ${formatDate(today, format, zone)}. That is fixed, because ${lockedNames} already finished.`
-                : <>Every date on the document is written like <b style={{ color: 'var(--ink)' }}>{formatDate(today, format, zone)}</b>: the date each person signs on, and any date they pick in a date field. The date of signing is the calendar day where that person is, by the time zone of their device. The certificate gives the exact time in UTC as well. The format is never changed to another one.</>}
-            </div>
-          </div>
-        </div>
-      </div>
       {/* Who can use and change this template, and its lock: said in a sentence, changed by its owner and admins. */}
       {isTpl && <WhoCanUse templateId={env.id} name={env.subject || 'Untitled template'} access={env.access} />}
     </div>

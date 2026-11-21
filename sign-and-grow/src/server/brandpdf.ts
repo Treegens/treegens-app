@@ -37,11 +37,29 @@ export function drawSheetFoot(page: PDFPage, o: { L: number; footer: string; fon
   if (o.footer) page.drawText(o.footer, { x: o.L + STAMP_W + 8, y: 26.8, size: 7, font: o.font, color: o.color });
 }
 
+/** How tall the stamp is on a page of a signed copy, and how far its foot is above the bottom of the page, in points. */
+export const PAGE_STAMP_PT = 12;
+export const PAGE_STAMP_UP = 5;
+/** The stamp's width when it is PAGE_STAMP_PT tall. */
+export const PAGE_STAMP_W = (STAMP.width * PAGE_STAMP_PT) / STAMP.height;
+
 /**
- * The stamp at the foot of a page of a signed copy, 12 pt from the left and 8 pt above the bottom of the page as it is
- * shown, whichever way the page is turned. `pt` and `rotate` come from pdf.ts's mapper() for that page.
+ * The foot of a page of a signed copy: the stamp, 12 pt from the left, and the envelope ID line beside it on its
+ * baseline, whichever way the page is turned. `pt` and `rotate` come from pdf.ts's mapper() for that page.
+ *
+ * We print on somebody else's document and cannot see what is on it, so everything we add stays in one strip: the
+ * lowest 17 pt of the page, under the quarter inch (18 pt) that desk printers leave blank and that a document's own
+ * footer therefore stays above. Nothing is printed at the top of the page. A page that is one picture to its edges
+ * (a scan) still gets this strip printed over its lowest 17 pt. A line too long for a narrow page is made smaller,
+ * down to 4 pt, so the ID is never cut off.
  */
-export function drawPageStamp(page: PDFPage, m: { H: number; pt: (x: number, y: number) => { x: number; y: number }; rotate: Rotation }, c: Color) {
-  const o = m.pt(12, m.H - 8 - STAMP_PT); // the stamp's top left corner as the page is shown
-  page.drawSvgPath(STAMP.d, { x: o.x, y: o.y, scale: STAMP_PT / STAMP.height, rotate: m.rotate, color: c });
+export function drawPageFoot(page: PDFPage, m: { W: number; H: number; pt: (x: number, y: number) => { x: number; y: number }; rotate: Rotation }, o: { line: string; font: PDFFont; color: Color }) {
+  const top = m.pt(12, m.H - PAGE_STAMP_UP - PAGE_STAMP_PT); // the stamp's top left corner as the page is shown
+  page.drawSvgPath(STAMP.d, { x: top.x, y: top.y, scale: PAGE_STAMP_PT / STAMP.height, rotate: m.rotate, color: o.color });
+  if (!o.line) return;
+  const x = 12 + PAGE_STAMP_W + 6;
+  let size = 6.5;
+  while (size > 4 && o.font.widthOfTextAtSize(o.line, size) > m.W - x - 12) size -= 0.25;
+  const base = m.pt(x, m.H - PAGE_STAMP_UP - 4.1);
+  page.drawText(o.line, { x: base.x, y: base.y, size, font: o.font, color: o.color, rotate: m.rotate });
 }

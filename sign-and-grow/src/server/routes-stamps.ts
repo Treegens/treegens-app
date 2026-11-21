@@ -5,7 +5,7 @@ import { sameEmail } from './credits.ts';
 import { find, look } from './routes-sign.ts';
 import { mine } from './routes-envelopes.ts';
 import { notOpen, shownVersion, changedSince } from './envelopes.ts';
-import { accountStamps, accountStamp, publicStamp, createStamp, updateStamp, deleteStamp, saveStampImage, stampPng, pngResponse, lookOf, isSenderStamp, stampSize, type StampMeta } from './stamps.ts';
+import { accountStamps, accountStamp, publicStamp, createStamp, updateStamp, deleteStamp, saveStampImage, stampPng, pngResponse, lookOf, isSenderStamp, stampSize, metaOf, type StampMeta } from './stamps.ts';
 import { STAMP_IS_TEAM, STAMP_IS_YOU, STAMPS_PER_ACCOUNT, STAMP_UPLOADS_PER_LINK_HOUR, STAMP_UPLOADS_PER_ADDRESS_HOUR, stampTurn } from '../lib/stamps.ts';
 
 // Stamps (src/server/stamps.ts). The account's own stamps, kept by admins under Settings and used by everyone on the
@@ -86,7 +86,16 @@ route('POST', '/sign/:token/stamp', async (c) => {
   const f = e.fields.find((x: any) => x.id === b.field_id && x.recipient_id === r.id && x.type === 'stamp');
   if (!f) throw bad('That stamp field is not yours, or is no longer on the document. Load the page again to see it as it is now.', 404);
   let meta: StampMeta, sha: string, stampId: string | null = null;
-  if (b.stamp_id != null && b.stamp_id !== '') {
+  if (b.same_as != null && b.same_as !== '') {
+    // The stamp this person already put on another of their own stamp fields of this document: the same picture
+    // and settings again, so both prints are the same stamp. Nothing is uploaded, so it does not count as a picture.
+    const src = e.fields.find((x: any) => x.id === b.same_as && x.id !== f.id && x.recipient_id === r.id && x.type === 'stamp' && x.value);
+    const was = src ? metaOf(src) : null;
+    if (!src || !was) throw bad('The stamp you put on before is not on the document any more. Choose a picture of the stamp again.', 404);
+    sha = src.value;
+    stampId = src.stamp_id || null;
+    meta = { ...was, at: now(), by: actor.name };
+  } else if (b.stamp_id != null && b.stamp_id !== '') {
     const { why } = savedFor(c, r);
     if (why) throw bad(why === 'in person' ? 'Saved stamps are not offered on a device that is handed to someone to sign in person. Upload a picture of the stamp or take a photo of it instead.' : `Saved stamps come from the account you are signed in to, and only when it is signed in with the address this document was sent to (${r.email}). Upload a picture of the stamp or take a photo of it instead.`, 403);
     const s = accountStamp(c.account.id, b.stamp_id);

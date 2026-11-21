@@ -15,18 +15,18 @@ export default function Inbox() {
     <div className="sn">
       <div className="pagehead">
         <div>
-          <h1 className="serif">Inbox</h1>
+          <h1 className="serif">To sign</h1>
           <div className="muted">Documents other people sent to you.{waiting > 0 ? ` ${waiting} ${waiting === 1 ? 'is' : 'are'} waiting for you.` : ''}</div>
         </div>
       </div>
-      {data?.needs_verification && <div className="notice warn" style={{ marginBottom: 14 }}>Confirm your email address first, with the link we emailed you or the button in the banner above. Until then we cannot show documents sent to it.</div>}
+      {data?.needs_verification && <div className="notice warn" style={{ marginBottom: 14 }}>Confirm your email address first: type the 6-digit code from our email in the box at the top of this page. Until then we cannot show documents sent to it.</div>}
       <div className="card pad0">
         {error ? (
-          <div className="empty" role="alert"><h3>We could not load your inbox</h3>Check your connection, then try again.<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>Try again</button></div></div>
+          <div className="empty" role="alert"><h3>We could not load your documents</h3>Check your connection, then try again.<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>Try again</button></div></div>
         ) : !data ? (
           <div className="empty" role="status">Loading…</div>
         ) : items.length === 0 ? (
-          <div className="empty"><h3>Your inbox is empty</h3>When someone sends you a document through GrowSigning, it appears here as well as in your email.</div>
+          <div className="empty"><h3>Nothing to sign</h3>When someone sends you a document through GrowSigning, it appears here as well as in your email.</div>
         ) : (
           <div className="tablewrap"><table className="t sn-list">
             <thead><tr><th>Subject</th><th className="hide-sm">From</th><th className="hide-sm">Status</th><th className="hide-sm">Received</th><th><span className="sn-vh">Open</span></th></tr></thead>

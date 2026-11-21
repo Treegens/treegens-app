@@ -61,3 +61,10 @@
 /* The app's side menu: the button looks like the links next to it. */
 .side .hc-nav { display: flex; align-items: center; width: 100%; min-height: 44px; text-align: left; border: 0; background: none; color: #cfe2d3; padding: 8px 10px; border-radius: 9px; font: inherit; font-weight: 500; font-size: 14px; cursor: pointer; }
 .side .hc-nav:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+/* "What we keep" sits in the foot of the dialog, after the buttons. Open, it takes a line of its own. */
+.hc-foot .hc-kept { font-size: 13.5px; color: var(--muted); line-height: 1.45; }
+.hc-foot .hc-kept[open] { flex: 1 1 100%; max-height: 30vh; overflow-y: auto; }
+.hc-msg .hc-starters { margin-top: 8px; }
+/* On a small phone the conversation gets the room: the foot stays on one line of buttons and may scroll sideways
+   inside itself, never the page. */
+@media (max-height: 620px) { .hc { gap: 6px; } .hc-log { min-height: 160px; } }

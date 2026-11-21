@@ -153,12 +153,11 @@ export default function Envelopes() {
     <div className="sn">
       <div className="pagehead">
         <div>
-          <h1 className="serif">Envelopes</h1>
+          <h1 className="serif">Documents</h1>
           <div className="muted small" id="sn-export-note">Export everything is free on every plan and keeps working after you cancel.</div>
         </div>
         <div className="row wrap">
           <button className="btn" onClick={exportAll} disabled={busy === 'export'} aria-describedby="sn-export-note">{busy === 'export' ? 'Preparing…' : 'Export everything (ZIP)'}</button>
-          <Link href="/app/envelopes/new" className="btn primary">New envelope</Link>
         </div>
       </div>
 
@@ -207,11 +206,9 @@ export default function Envelopes() {
           <div className="empty" role="status">Loading…</div>
         ) : rows.length === 0 ? (
           <div className="empty">
-            <h3>{filtered ? 'Nothing matches' : 'No envelopes yet'}</h3>
-            {filtered ? 'No envelope fits this tab and search.' : 'Upload a PDF, add who needs to sign and place the fields. It takes about a minute.'}
-            <div style={{ marginTop: 14 }}>
-              {filtered ? <button className="btn" onClick={() => (setTyped(''), change({ ...START }))}>Show all envelopes</button> : <Link href="/app/envelopes/new" className="btn primary">Send your first envelope</Link>}
-            </div>
+            <h3>{filtered ? 'Nothing matches' : 'No documents yet'}</h3>
+            {filtered ? 'No envelope fits this tab and search.' : <>Press <b>Send a document</b> to start. Upload a PDF, add who needs to sign and place the fields. It takes about a minute.</>}
+            {filtered && <div style={{ marginTop: 14 }}><button className="btn" onClick={() => (setTyped(''), change({ ...START }))}>Show all documents</button></div>}
           </div>
         ) : (
           <div className="tablewrap"><table className="t sn-list">

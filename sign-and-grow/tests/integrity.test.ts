@@ -1042,7 +1042,7 @@ test('handing a request over to another person at the same address passes on not
   const dialog = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'components', 'sign', 'dialogs.tsx'), 'utf8');
   const reassign = dialog.slice(dialog.indexOf('export function ReassignDialog'), dialog.indexOf('export function SignedFieldDialog'));
   assert.ok(reassign.includes('Nothing you filled in or signed goes with it: they start with an empty document.'));
-  assert.ok(reassign.includes('only your name is spelled wrong, go back instead. Fix my name is under Other actions.'));
+  assert.ok(reassign.includes('only your name is spelled wrong, fix the name instead.</p>\n        {fixName}'));
 });
 
 // ---- 6 again. Every change is a newer version ---------------------------------------------------------------------

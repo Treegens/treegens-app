@@ -15,6 +15,7 @@ import { WitnessBlockButton } from './WitnessChoice';
 import { StampChoice, useStamps, editorStampSrc, editorStampTurn } from './StampChoice';
 import { stampBox, STAMP_DEFAULT_MM, turnStyle } from '@/lib/stamps';
 import { ConvertNotes } from './ConvertNotes';
+import { isCommonField } from '@/lib/editorux';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
@@ -33,10 +34,14 @@ export function StepFields({ ed }: { ed: Ed }) {
   const [finding, setFinding] = useState('');
   const [note, setNote] = useState<{ text: string; count: number } | null>(null); // what the last search found
   const [sheet, setSheet] = useState(false);
+  // "More fields": every kind beyond the six most documents need. And the selected field's More options.
+  const [allTypes, setAllTypes] = useState(false);
+  const [fieldMore, setFieldMore] = useState(false);
   // The team's stamps, for the sender's own stamp fields and their pictures on the page.
   const stamps = useStamps();
   const canvas = useRef<HTMLDivElement>(null);
   const reveal = useRef<{ id: string; focus: boolean } | null>(null);
+  const pulled = useRef(false); // a field was just dragged in from the list, so the click that follows is not a pick
   const pressed = useRef(false); // a press that started on a field must not count as a click on the page
 
   // Signers in the order they sign, which is also what {{signature2}} counts by.
@@ -154,6 +159,49 @@ export function StepFields({ ed }: { ed: Ed }) {
     add(type, doc, Number(b.el.dataset.page), 0.5, y, true);
   }
 
+  // Drag a kind of field from the list straight onto the page. A plain click still works as before.
+  // Touch is left out on purpose: a finger that lands on the list has to be able to scroll the page.
+  function pull(e: React.PointerEvent, type: string) {
+    if (e.pointerType === 'touch' || e.button !== 0) return;
+    const px = e.clientX, py = e.clientY;
+    let ghost: HTMLElement | null = null;
+    const over = (ev: PointerEvent) => document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>('[data-doc] .pdfpage') || null;
+    const move = (ev: PointerEvent) => {
+      if (!ghost) {
+        if (Math.hypot(ev.clientX - px, ev.clientY - py) < DRAG_START_PX) return;
+        ghost = document.createElement('div');
+        ghost.className = 'ed-ghost';
+        ghost.textContent = TLABEL[type];
+        ghost.style.setProperty('--fc', SENDER_MARK(type) || !active ? 'var(--green)' : color(active));
+        document.body.appendChild(ghost);
+        document.body.classList.add('ed-pulling');
+      }
+      ghost.style.left = `${ev.clientX}px`;
+      ghost.style.top = `${ev.clientY}px`;
+      ghost.classList.toggle('ok', !!over(ev));
+    };
+    const end = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      if (!ghost) return;
+      ghost.remove();
+      document.body.classList.remove('ed-pulling');
+      // The click that follows letting go must not also pick the field as a tool.
+      pulled.current = true;
+      setTimeout(() => (pulled.current = false), 0);
+      if (ev.type !== 'pointerup') return;
+      const pageEl = over(ev);
+      const doc = pageEl && docs.find((d) => d.id === pageEl.closest<HTMLElement>('[data-doc]')?.dataset.doc);
+      if (!pageEl || !doc) return;
+      const r = pageEl.getBoundingClientRect();
+      add(type, doc, Number(pageEl.dataset.page), (ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  }
+
   function drag(e: React.PointerEvent, f: any, mode: 'move' | 'resize') {
     e.stopPropagation();
     if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -254,7 +302,7 @@ export function StepFields({ ed }: { ed: Ed }) {
         const pages = await scanPdf(pdf, (n, total) => setFinding(total > 3 ? `Looking at page ${n} of ${total}` : 'Looking through your documents'));
         all.push(...findFields(pages).map((f) => ({ ...f, doc: d.id })));
       }
-      if (!all.length) return setFound('No blanks, form fields or tags found. Pick a field type and click where it goes.');
+      if (!all.length) return setFound('We found no blanks or form fields in this document. Pick a field and click where it goes.');
 
       const cur = fields.current();
       const fresh: any[] = [];
@@ -373,30 +421,33 @@ export function StepFields({ ed }: { ed: Ed }) {
         <div className="ed-row-b">
           <div className="ed-group ed-findbox">
             <button type="button" className="btn sm ed-find" disabled={!ready || !!finding || !active || !!ed.wording} onClick={findForMe} aria-describedby="ed-find-help">
-              <Wand /> {finding ? 'Looking' : 'Find fields for me'}
+              <Wand /> {finding ? 'Looking' : 'Place fields for me'}
             </button>
-            <p id="ed-find-help" className="muted small ed-hide-sm">Looks for form fields, labels such as &ldquo;Signature:&rdquo; with a blank after them, and tags such as {'{{signature}}'}.</p>
+            <p id="ed-find-help" className="muted small ed-hide-sm">Looks for form fields and for blanks after words such as &ldquo;Signature:&rdquo;.</p>
           </div>
           <div className="ed-group ed-palbox">
             <h3 id="ed-add">Add a field</h3>
             <div className="palette" role="group" aria-labelledby="ed-add">
-              {TYPES.map(([t, label]) => {
+              {TYPES.filter(([t]) => isCommonField(t) || allTypes || tool === t).map(([t, label]) => {
                 // Nothing is switched off once someone has finished. A new field or note then means they sign again,
                 // which is asked before the change is saved.
                 const again = anyLocked ? `${ed.lockedNames} already finished. Adding this means they have to sign again. You are asked before anything is saved.` : undefined;
                 return (
                   <button key={t} type="button" className={tool === t ? 'on' : ''} title={again} disabled={!!ed.wording}
-                    onClick={(e) => (e.detail === 0 ? addInView(t) : setTool(tool === t ? null : t))} aria-pressed={tool === t}>{label}</button>
+                    onPointerDown={(e) => pull(e, t)}
+                    onClick={(e) => (pulled.current ? undefined : e.detail === 0 ? addInView(t) : setTool(tool === t ? null : t))} aria-pressed={tool === t}>{label}</button>
                 );
               })}
+              {/* The six kinds most documents need are always there. Every other kind is behind this one button. */}
+              <button type="button" className="ed-morefields" data-fold aria-expanded={allTypes} onClick={() => setAllTypes(!allTypes)}>{allTypes ? 'Fewer fields' : 'More fields'}</button>
             </div>
           </div>
         </div>
         {/* The result stays until the fields change again, so it never describes something that is no longer true. */}
         <p className="small ed-status" role="status">{finding ? `${finding}…` : note && note.count === list.length ? note.text : ''}</p>
         <p className="muted small ed-hint">
-          {ed.wording ? `The wording is locked, so the fields stay as the template has them. Select a field to see it, and to fill in one the template left empty for you. To change the fields, ask ${ed.wording.ask}.` : tool ? `Click on the page to place the ${TLABEL[tool].toLowerCase()} field.` : 'Pick a field, then click where it goes.'}
-          {!ed.wording && <span className="ed-hide-sm">{tool ? '' : ' Drag to move, pull the corner to resize.'} Using the keyboard? Press Enter on a field type to drop it on the page in view, then move it with the arrow keys.</span>}
+          {ed.wording ? `The wording is locked, so the fields stay as the template has them. Select a field to see it, and to fill in one the template left empty for you. To change the fields, ask ${ed.wording.ask}.` : tool ? `Click on the page to place the ${TLABEL[tool].toLowerCase()} field.` : 'Drag a field onto the page, or pick one and click where it goes.'}
+          {!ed.wording && !tool && <span className="ed-hide-sm"> Drag to move, pull the corner to resize.</span>}
         </p>
       </div>
 
@@ -452,16 +503,21 @@ export function StepFields({ ed }: { ed: Ed }) {
         {!selected ? (
           <div className="muted small">
             <h3 style={{ color: 'var(--ink)', marginBottom: 8 }}>Field settings</h3>
-            Select a field to edit it.
-            <ul style={{ paddingLeft: 18, lineHeight: 1.7 }}>
-              <li>Fields line up with each other as you drag. Hold Alt to place one freely.</li>
-              <li>Alt or Option + drag makes a copy</li>
-              <li>Arrow keys nudge, Shift for bigger steps</li>
-              <li>Delete removes</li>
-              <li>Ctrl or ⌘ + D duplicates</li>
-              <li>Ctrl or ⌘ + Z undoes, add Shift to redo</li>
-              <li>Esc deselects</li>
-            </ul>
+            Select a field to change it.
+            {/* What the keyboard can do, for whoever asks. Closed until then. */}
+            <details data-fold className="ed-fold ed-keys">
+              <summary>Keyboard help</summary>
+              <ul style={{ paddingLeft: 18, lineHeight: 1.7 }}>
+                <li>Press Enter on a field type to drop it on the page in view</li>
+                <li>Arrow keys move the selected field, Shift for bigger steps</li>
+                <li>Fields line up with each other as you drag. Hold Alt to place one freely.</li>
+                <li>Alt or Option + drag makes a copy</li>
+                <li>Delete removes</li>
+                <li>Ctrl or ⌘ + D duplicates</li>
+                <li>Ctrl or ⌘ + Z undoes, add Shift to redo</li>
+                <li>Esc deselects</li>
+              </ul>
+            </details>
           </div>
         ) : (
           <div>
@@ -478,7 +534,7 @@ export function StepFields({ ed }: { ed: Ed }) {
                   : <div className="notice ed-lockline small"><Lock size={16} /><span>{who(rcps.find((r) => r.id === selected.recipient_id))} already finished, so this field stays where it is.</span></div>}
               </div>
             ) : (
-              <div className="ed-sheetbody">
+              <div className="ed-sheetbody" data-item="field">
                 <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{TLABEL[selected.type]}</h3>
                 {/* A strike-out has nothing to set: it is a line, it belongs to nobody, and its place is the whole of it. */}
                 {selected.type === 'strike' && <p className="muted small" id="ed-strike-help">{STRIKE_HELP}</p>}
@@ -496,24 +552,28 @@ export function StepFields({ ed }: { ed: Ed }) {
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
                 )}
                 {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
-                {PREFILL.includes(selected.type) && selected.formula == null && (
+                {/* What a note says is the note itself, so it stays in view. Everything else that is rarely needed is under More options. */}
+                {selected.type === 'note' && <label className="f"><span>Text</span><textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>}
+                {selected.type === 'dropdown' && <label className="f"><span>Options <span className="hint">(one per line)</span></span><textarea value={(selected.options || []).join('\n')} onChange={(e) => patchField(selected.id, { options: e.target.value.split('\n') })} onBlur={(e) => patchField(selected.id, { options: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} /></label>}
+                {selected.type === 'radio' && <label className="f"><span>Group <span className="hint">(one choice per group)</span></span><input value={selected.group_name || ''} onChange={(e) => patchField(selected.id, { group_name: e.target.value })} /></label>}
+                <button type="button" className="btn sm ed-fieldmore" data-more="item" aria-expanded={fieldMore} aria-controls="ed-field-more" onClick={() => setFieldMore(!fieldMore)}>More options</button>
+                {fieldMore && <div id="ed-field-more" className="ed-more">
+                {PREFILL.includes(selected.type) && selected.type !== 'note' && selected.formula == null && (
                   <>
                     {/* A date is picked, never typed: the server takes a real day as year-month-day (isDateValue). */}
-                    <label className="f"><span>{selected.type === 'note' ? 'Text' : 'Prefilled value'}</span>{selected.type === 'date'
+                    <label className="f"><span>Prefilled value</span>{selected.type === 'date'
                       ? <input type="date" style={{ minHeight: 44 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} />
                       : <textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} />}</label>
-                    {selected.type !== 'note' && <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.readonly} onChange={(e) => patchField(selected.id, { readonly: e.target.checked })} /> Read only</label>}
+                    <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.readonly} onChange={(e) => patchField(selected.id, { readonly: e.target.checked })} /> Read only</label>
                   </>
                 )}
                 {selected.type === 'text' && (
-                  <label className="f"><span>Validation</span>
+                  <label className="f"><span>Format</span>
                     <select value={selected.validation || ''} onChange={(e) => patchField(selected.id, { validation: e.target.value })}>
-                      <option value="">None</option><option value="email">Email</option><option value="number">Number</option><option value="phone">Phone</option>
+                      <option value="">Any text</option><option value="email">Email</option><option value="number">Number</option><option value="phone">Phone</option>
                     </select>
                   </label>
                 )}
-                {selected.type === 'dropdown' && <label className="f"><span>Options <span className="hint">(one per line)</span></span><textarea value={(selected.options || []).join('\n')} onChange={(e) => patchField(selected.id, { options: e.target.value.split('\n') })} onBlur={(e) => patchField(selected.id, { options: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} /></label>}
-                {selected.type === 'radio' && <label className="f"><span>Group <span className="hint">(one choice per group)</span></span><input value={selected.group_name || ''} onChange={(e) => patchField(selected.id, { group_name: e.target.value })} /></label>}
                 {/* "Only show when..." and "Calculate from...", each said back as a sentence (FieldLogic.tsx). */}
                 <FieldLogic key={selected.id} field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />
                 <div className="grid ed-size">
@@ -524,8 +584,10 @@ export function StepFields({ ed }: { ed: Ed }) {
                 <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
                   <button type="button" className="btn sm" onClick={() => dup(selected)}>Duplicate</button>
                   {docs.find((d) => d.id === selected.document_id)?.pages > 1 && <button type="button" className="btn sm" onClick={() => copyToEveryPage(selected)}>Copy to every page</button>}
-                  <button type="button" className="btn sm danger ed-hide-sm" onClick={() => remove(selected.id)}>Delete field</button>
                 </div>
+                </div>}
+                {/* On a phone Delete is in the bar above. The Delete key does the same. */}
+                <button type="button" className="btn sm danger ed-hide-sm" style={{ marginTop: 8, width: '100%' }} onClick={() => remove(selected.id)}>Delete field</button>
               </div>
             )}
           </div>

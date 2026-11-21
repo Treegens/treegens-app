@@ -444,10 +444,13 @@ async function buildExports() {
   // keeps the point of the nib, the leaf's farthest point from the centre, 199 px out: inside that 205 px circle.
   save('icon-maskable-512.png', await shoot(512, 512, `<div style="width:512px;height:512px;background:${COLORS.deep};display:grid;place-items:center">${img(icon, 360, 360)}</div>`, { transparent: false }));
 
-  // Email headers: the horizontal logo 22 px tall, drawn at 2x.
+  // Email headers: the horizontal logo 22 px tall, drawn at 2x. The one our emails use stands on a tile of the email's
+  // own ground colour (#f4f1ea in src/server/mail.ts), 6 px wider and 5 px taller on each side as shown, with rounded
+  // corners: on the light email the tile cannot be seen, and in a mail program that darkens the ground but leaves
+  // pictures alone the dark word "signing" keeps a light ground under it. Shown as width="156" height="32".
   const [lw, lh] = sizeOf(read('logo.svg'));
   const ew = Math.round((44 * lw) / lh);
-  save('email-logo.png', await shoot(ew, 44, img(dataUrl(read('logo.svg')), ew, 44)));
+  save('email-logo.png', await shoot(ew + 24, 64, `<div style="width:${ew + 24}px;height:64px;background:#f4f1ea;border-radius:12px;display:grid;place-items:center">${img(dataUrl(read('logo.svg')), ew, 44)}</div>`));
   save('email-logo-dark.png', await shoot(ew, 44, img(dataUrl(read('logo-dark.svg')), ew, 44)));
 
   // Social preview: quiet, on paper.

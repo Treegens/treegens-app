@@ -11,7 +11,7 @@ export default function Impact() {
   if (!d) return <div className="muted">Loading…</div>;
   return (
     <div className="stack">
-      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Our impact</h1><div className="muted">What {me.account.name} has kept out of the printer.</div></div></div>
+      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Trees planted</h1><div className="muted">What {me.account.name} has kept out of the printer.</div></div></div>
       <ImpactStats i={d.account} />
       <div className="card row between wrap" style={{ background: 'var(--green-deep)', color: '#fff', borderColor: 'var(--green-deep)' }}>
         <div style={{ maxWidth: 620 }}>

@@ -30,11 +30,41 @@ export function readPng(bytes: Uint8Array): PngInfo | null {
   return { width: h.readUInt32BE(0), height: h.readUInt32BE(4), bitDepth: h[8], colorType: h[9], interlace: h[12], chunks };
 }
 
-/** The same picture with only what draws it: the header, the palette and its transparency, the pixels, the end. */
-export function cleanPng(info: PngInfo, bytes: Uint8Array): Buffer {
-  const b = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const keep = info.chunks.filter((c) => ['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND'].includes(c.type));
-  return Buffer.concat([SIGNATURE, ...keep.map((c) => b.subarray(c.start, c.end))]);
+/** True when the bytes start as a PNG file does, whether or not the rest is whole. */
+export const looksLikePng = (bytes: Uint8Array): boolean => bytes.length >= 8 && Buffer.from(bytes.buffer, bytes.byteOffset, 8).equals(SIGNATURE);
+
+/**
+ * The same picture with only what draws it: a header, the pixel data and the end, written again. No other chunk is
+ * kept (no text, dates, camera notes, palette or stray transparency chunk), and neither is anything packed after the
+ * pixel data inside its compressed stream. For the kinds decodePng reads (8-bit, no palette, not interlaced); null
+ * for any other kind or when the pixel data does not add up.
+ */
+export function cleanPng(info: PngInfo, maxPixels = 4_000_000): Buffer | null {
+  const raw = scanlines(info, maxPixels);
+  if (!raw) return null;
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(info.width, 0);
+  ihdr.writeUInt32BE(info.height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = info.colorType;
+  return Buffer.concat([SIGNATURE, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+/** The filtered rows of an 8-bit PNG without a palette and not interlaced, exactly as long as the header says. */
+function scanlines(info: PngInfo, maxPixels: number): Buffer | null {
+  if (info.bitDepth !== 8 || info.interlace !== 0 || !(info.colorType in CHANNELS)) return null;
+  const { width: w, height: h } = info;
+  if (!w || !h || w * h > maxPixels) return null;
+  const need = (w * CHANNELS[info.colorType] + 1) * h;
+  let raw: Buffer;
+  try {
+    raw = inflateSync(Buffer.concat(info.chunks.filter((c) => c.type === 'IDAT').map((c) => c.data)), { maxOutputLength: need + 1 });
+  } catch {
+    return null;
+  }
+  if (raw.length < need) return null;
+  for (let y = 0; y < h; y++) if (raw[y * (need / h)] > 4) return null;
+  return raw.subarray(0, need);
 }
 
 const CHANNELS: Record<number, number> = { 0: 1, 2: 3, 4: 2, 6: 4 };

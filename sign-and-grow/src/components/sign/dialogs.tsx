@@ -172,7 +172,7 @@ export function DeclineDialog({ base, sender, title = 'Decline to sign', note, o
   );
 }
 
-export function ReassignDialog({ base, sender, onClose, onDone }: { base: string; sender: any; onClose: () => void; onDone: (name: string) => void }) {
+export function ReassignDialog({ base, sender, onClose, onDone, fixName }: { fixName?: ReactNode; base: string; sender: any; onClose: () => void; onDone: (name: string) => void }) {
   const [form, setForm] = useState({ name: '', email: '', reason: '' });
   const { busy, error, setError, send } = useSend();
   return (
@@ -185,7 +185,8 @@ export function ReassignDialog({ base, sender, onClose, onDone }: { base: string
         <p className="muted">Not the right person to sign? Pass it on. They get their own link by email, yours stops working, and {sender.name} is told.</p>
         {/* A hand-over passes on nothing, also to someone at the same address (reassignRecipient), so that is said
             before it happens, with the way to keep everything for someone who only wants their name spelled right. */}
-        <p className="muted">Nothing you filled in or signed goes with it: they start with an empty document. If this is you and only your name is spelled wrong, go back instead. Fix my name is under Other actions.</p>
+        <p className="muted">Nothing you filled in or signed goes with it: they start with an empty document. If this is you and only your name is spelled wrong, fix the name instead.</p>
+        {fixName}
         <label className="f"><span>Their name</span><input dir="auto" data-autofocus autoComplete="off" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="f"><span>Their email</span><input type="email" autoComplete="off" autoCapitalize="off" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
         <label className="f"><span>Reason <span className="hint">(optional)</span></span><input dir="auto" value={form.reason} maxLength={300} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></label>
@@ -257,7 +258,9 @@ export function FixName({ name, onRename }: { name: string; onRename: (name: str
   );
 }
 
-export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish, onRename, printCheck, note }: {
+const CANNOT_PRINT_TITLE = 'Some characters cannot be printed';
+
+export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, approving, busy, error, onChangeSig, onBack, onFinish, onRename, printCheck, note, title, checkFailed }: {
   me: any; sender: any; items: Item[]; sig: string | null; ini: string | null; usesSig: boolean; usesIni: boolean; approving?: boolean;
   /** Said above the buttons and never in their way: a question of this person's that is not answered yet (Comments.tsx). */
   note?: ReactNode;
@@ -265,12 +268,18 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
   onRename?: (name: string) => Promise<string | void>;
   /** Asks the server whether this person's name or answers hold a character the signed PDF cannot print. */
   printCheck?: () => Promise<{ problems?: { field_id: string | null; label: string; chars: string }[] }>;
+  /** Why this step opened, as its title (reviewTitle in actions.ts). */
+  title?: string;
+  /** The check of the characters could not be made when Finish was pressed: said, so nothing is signed unseen. */
+  checkFailed?: boolean;
 }) {
   // Said before the person finishes, never found out from the finished document. Asked again when the name changes.
   const [cannotPrint, setCannotPrint] = useState<{ field_id: string | null; label: string; chars: string }[]>([]);
+  // The check is asked again here. While it has not come through, the line about it stays.
+  const [unchecked, setUnchecked] = useState(!!checkFailed);
   useEffect(() => {
     let on = true;
-    printCheck?.().then((r) => on && setCannotPrint(r?.problems || [])).catch(() => {});
+    printCheck?.().then((r) => on && (setCannotPrint(r?.problems || []), setUnchecked(false))).catch(() => {});
     return () => {
       on = false;
     };
@@ -278,7 +287,7 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
   const filled = items.filter((i) => i.done).length;
   const optionalEmpty = items.filter((i) => !i.done && !i.required).length;
   return (
-    <Dialog title={approving ? 'Approve this document' : 'Check before you finish'} onClose={onBack}>
+    <Dialog title={title || (cannotPrint.length ? CANNOT_PRINT_TITLE : approving ? 'Approve this document' : 'Check before you finish')} onClose={onBack}>
       <dl className="sg-review">
         <div>
           <dt>{approving ? 'You are approving as' : 'You are signing as'}</dt>
@@ -313,7 +322,7 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
         )}
       </dl>
       <p className="muted small">
-        {approving ? `Choosing Approve and send records your approval and tells ${sender.name}.` : `Choosing Finish and send signs the document and tells ${sender.name}.`} You can still go back and change anything first.
+        {approving ? `Choosing Approve records your approval and tells ${sender.name}.` : `Choosing Finish signs the document and tells ${sender.name}.`} You can still go back and change anything first.
       </p>
       {cannotPrint.length > 0 && (
         <div className="notice warn sg-problem sg-cannot-print" role="status">
@@ -325,11 +334,16 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
           You can also finish as it is.
         </div>
       )}
+      {unchecked && cannotPrint.length === 0 && (
+        <div className="notice warn sg-problem" role="status">
+          <b>We could not check your answers just now.</b> Letters from some alphabets, and emoji, cannot be printed on the signed PDF. If you typed only ordinary letters and numbers, you can finish. Otherwise go back and try again in a moment.
+        </div>
+      )}
       {note}
       <Problem>{error}</Problem>
       <div className="actions">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>Go back</button>
-        <button type="button" className="btn primary" data-autofocus onClick={onFinish} disabled={busy}>{busy ? 'Sending' : approving ? 'Approve and send' : 'Finish and send'}</button>
+        <button type="button" className="btn primary" data-autofocus onClick={onFinish} disabled={busy}>{busy ? 'Sending' : approving ? 'Approve' : 'Finish'}</button>
       </div>
     </Dialog>
   );

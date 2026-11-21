@@ -12,7 +12,7 @@ const idParam = { name: 'id', in: 'path', required: true, schema: s };
 const def = {
   type: 'object',
   properties: {
-    id: { ...s, readOnly: true }, name: { ...s, maxLength: CUSTOM_NAME_MAX, description: 'One line. Unique in the account, whatever the letter case, the width of its characters and the spaces around it.' },
+    id: { ...s, readOnly: true }, name: { ...s, maxLength: CUSTOM_NAME_MAX, description: 'One line. Unique in the account, whatever the letter case, the width of its characters and the spaces around it. A character that cannot be seen (zero-width, format, blank filler) answers 400.' },
     kind: { type: 'string', enum: ['text', 'list'], default: 'text', description: `"text": any one line of up to ${CUSTOM_VALUE_MAX} characters. "list": one of "choices".` },
     choices: { type: 'array', items: { ...s, maxLength: CUSTOM_VALUE_MAX }, maxItems: CUSTOM_CHOICES_MAX, description: 'For a list only. Each once, whatever the letter case.' },
     required: { type: 'boolean', default: false, description: 'An envelope without a value is not sent (400, saying which). A public form needs the value in its template, and a bulk send in each row or the template, before anything is sent.' },
@@ -38,7 +38,7 @@ export const documentFieldsProp = () => ({
 /** The list's filter by a custom field. */
 export const customListParams = () => [
   { name: 'field', in: 'query', schema: s, description: 'The name of a custom field: only envelopes with a value for it. Also a name that only older envelopes carry, because its field was deleted since.' },
-  { name: 'value', in: 'query', schema: s, description: 'With "field": only that value, as a whole, in capitals or not. Each envelope in the answer carries "custom_fields".' },
+  { name: 'value', in: 'query', schema: s, description: 'With "field": only envelopes whose value starts with this, in capitals or not ("2026" finds "2026/114"). For a detail that is a list of choices: the whole choice. Each envelope in the answer carries "custom_fields".' },
 ];
 
 /** What a webhook delivery's "envelope" carries besides its id, status, subject and times. */
@@ -49,7 +49,7 @@ export const webhookCustomProps = () => ({
 
 export const customFieldPaths = () => ({
   '/custom-fields': {
-    get: { summary: 'The account\'s custom fields', description: `Everyone on the team and a "send" key. "past_names": names that only envelopes sent before their field was deleted still carry; the list can be filtered by them. Up to ${MAX_CUSTOM_FIELDS} fields.`, responses: ok({ type: 'object', properties: { fields: { type: 'array', items: def }, past_names: { type: 'array', items: s }, limits: { type: 'object' } } }) },
+    get: { summary: 'The account\'s custom fields', parameters: [{ name: 'template', in: 'query', schema: s, description: 'The id of a template: the answer also has "needed", the required fields that template has no value for.' }], description: `Everyone on the team and a "send" key. A send that is refused because a required field has no value answers 400 with "code": "details_missing", the names in "missing" and "api_hint". "past_names": names that only envelopes sent before their field was deleted still carry; the list can be filtered by them. Up to ${MAX_CUSTOM_FIELDS} fields.`, responses: ok({ type: 'object', properties: { fields: { type: 'array', items: def }, past_names: { type: 'array', items: s }, needed: { type: 'array', items: def, description: 'Only with ?template=.' }, limits: { type: 'object' } } }) },
     post: { summary: 'Add a custom field (admins)', description: `Up to ${MAX_CUSTOM_FIELDS} for an account; the next one answers 400. A name that is there already answers 409. It is in the account's security record.`, requestBody: body(def), responses: ok(answer) },
   },
   '/custom-fields/{id}': {
@@ -61,7 +61,7 @@ export const customFieldPaths = () => ({
     parameters: [idParam],
     put: {
       summary: 'Set the custom fields of one envelope or template',
-      description: 'The whole list as it should be, like "custom_fields" in PUT /envelopes/{id}. On an envelope that is out this puts a mistyped reference right: each change is a line in its audit trail (a field not printed on the certificate is named without its values), a required one can be changed and not emptied, new words for the certificate pass the same fake-notice filter as anything else the sender adds, and nobody is asked to sign again. Once it is completed the values are fixed (409); a declined, voided or expired one too.',
+      description: 'The whole list as it should be, like "custom_fields" in PUT /envelopes/{id}. On an envelope that is out this puts a mistyped reference right: each change is a line in its audit trail (a field not printed on the certificate is named without its values), a required one can be changed and not emptied, new words for the certificate pass the same fake-notice filter as anything else the sender adds, and nobody is asked to sign again. A value under a field that was deleted since can be taken off and not changed (400). Once it is completed the values can no longer be changed (409); a declined, voided or expired one too.',
       requestBody: body({ type: 'object', required: ['custom_fields'], properties: { custom_fields: customFieldsProp() } }),
       responses: ok({ type: 'object', properties: { custom_fields: customFieldsProp() } }),
     },

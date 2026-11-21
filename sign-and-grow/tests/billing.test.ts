@@ -160,7 +160,7 @@ test('a renewal adds the month\'s signatures, and a reminder comes before each r
   await event('invoice.upcoming', { customer: 'cus_1', amount_due: 900, currency: 'usd', next_payment_attempt: unix(3) });
   const m = mailTo('olive@example.com').find((x) => x.subject.startsWith('Heads up:'))!;
   assert.match(m.subject, /\$9\.00/);
-  assert.match(m.html, /belong to that month/);
+  assert.match(m.html, /last until that month ends/);
 
   // The link works with no session at all.
   const anon = new Client();

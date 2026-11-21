@@ -115,7 +115,9 @@ export async function backup({ dataDir, dest, env = process.env, now = new Date(
   try {
     source.exec('PRAGMA busy_timeout=10000');
     if (typeof sqliteBackup === 'function') {
-      await sqliteBackup(source, out, { rate: -1 });
+      // As many pages in one step as the function takes, so the copy is the database at one moment. (Node 24 refuses
+      // the -1 that SQLite itself reads as "all of it".)
+      await sqliteBackup(source, out, { rate: 2147483647 });
       method = 'sqlite-online-backup';
     } else {
       source.exec(`VACUUM INTO '${out.replace(/'/g, "''")}'`);
@@ -127,6 +129,10 @@ export async function backup({ dataDir, dest, env = process.env, now = new Date(
   const copy = new DatabaseSync(out);
   let check;
   try {
+    // The copy is one file that stands on its own: taken out of write-ahead mode, so nothing that reads it later
+    // (a check, a restore, a look with sqlite3) leaves -wal or -shm files next to it or changes a byte of it. The
+    // server puts its database back into write-ahead mode when it starts on a restored copy.
+    copy.exec('PRAGMA journal_mode=DELETE');
     check = copy.prepare('PRAGMA quick_check').get();
   } finally {
     copy.close();

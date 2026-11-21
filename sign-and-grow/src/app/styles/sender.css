@@ -21,6 +21,8 @@
 .sn-back { display: inline-flex; align-items: center; min-height: 28px; }
 .sn-title { margin-top: 2px; overflow-wrap: anywhere; }
 .sn-id { overflow-wrap: anywhere; }
+/* The title keeps room to be read: beside many buttons the buttons go to the next line, the title is not squeezed letter by letter. */
+.sn > .pagehead > .grow { flex: 1 1 320px; min-width: min(100%, 320px); }
 .sn-headactions { justify-content: flex-end; }
 .sn-cardhead { padding: 14px 16px; }
 .sn-cardhead p { margin: 4px 0 0; }
@@ -223,3 +225,8 @@ table.sn-batch tr.cont td { border-bottom: 0; padding-bottom: 2px; }
   .sn-rolefill { grid-template-columns: minmax(0, 1fr); }
   .sn-wait li { align-items: flex-start; }
 }
+
+/* Home, under the count: when the signatures reset, and one link to the rules on the Plan page. */
+.sn-usage-when { margin: 10px 0 0; font-size: 14px; }
+.sn-usage-when a { display: inline-block; padding: 12px 0; margin: -12px 0; }
+.sn-usage-when + .sn-usage-note { margin: 12px 0 0; }

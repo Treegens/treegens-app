@@ -1128,10 +1128,15 @@ export function onlyInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, fo
     if (takeOf(p) < 0.45) v[p] = Math.max(v[p], before[p]);
   }
   // The stroke drawn on through print that crossed it.
-  const R = Math.max(4, Math.round(Math.max(w, h) * 0.012)), widest = R;
+  // Print up to R pixels thick is crossed; the stroke itself may be wider than that (a heavy ring), up to `widest`.
+  const R = Math.max(4, Math.round(Math.max(w, h) * 0.012)), widest = Math.max(12, Math.round(Math.max(w, h) * 0.035));
   const isKept = (q: number) => keep[q] >= 0.5 && v[q] >= 0.5;
   const filled = new Float32Array(v);
   const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+  // Only print within reach of kept ink can lie across a stroke: the rest of a page of text is skipped.
+  const inkMask = new Float32Array(v.length);
+  for (let p = 0; p < v.length; p++) inkMask[p] = isKept(p) ? 1 : 0;
+  const byInk = extremePlane(inkMask, w, h, R, true);
   // How far the kept ink at (x, y) runs across the direction (dx, dy), each way.
   const across = (x: number, y: number, dx: number, dy: number) => {
     const run = (sx: number, sy: number) => {
@@ -1147,7 +1152,7 @@ export function onlyInk(img: Rgba, paper: Uint8ClampedArray, strength: Plane, fo
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
       const p = y * w + x;
-      if (!print[p]) continue;
+      if (!print[p] || !byInk[p]) continue;
       for (const [dx, dy] of dirs) {
         // The nearest kept ink each way along the direction, reached across print only.
         const side = (sx: number, sy: number): [number, number, number] | null => {
@@ -1423,7 +1428,7 @@ export function makeRound(pl: Plane, ratio: number): Plane {
  * The box around the ink, with a small margin. Rows and columns with almost no ink at the edges are left out, so a
  * speck of dust in a corner does not keep a whole empty strip. Null when there is no ink.
  */
-export function inkBox(pl: Plane, threshold = 0.08): { x: number; y: number; w: number; h: number } | null {
+export function inkBox(pl: Plane, threshold = 0.08, within = true): { x: number; y: number; w: number; h: number } | null {
   const { width: w, height: h, v } = pl;
   const rows = new Float32Array(h), cols = new Float32Array(w);
   let total = 0;
@@ -1444,6 +1449,12 @@ export function inkBox(pl: Plane, threshold = 0.08): { x: number; y: number; w: 
   while (y0 < y1 && rows[y0] < least) y0++;
   while (y1 > y0 && rows[y1] < least) y1--;
   const m = Math.max(3, Math.round(Math.max(x1 - x0 + 1, y1 - y0 + 1) * 0.025));
+  // `within` false: the whole margin on every side, also where the picture ends sooner (cropPlane fills what lies
+  // outside the picture with empty paper), so a design saved with its ink right at its border still gets its margin.
+  if (!within) {
+    const M = Math.max(4, Math.round(Math.max(x1 - x0 + 1, y1 - y0 + 1) * 0.032));
+    return { x: x0 - M, y: y0 - M, w: x1 - x0 + 1 + 2 * M, h: y1 - y0 + 1 + 2 * M };
+  }
   const bx = Math.max(0, x0 - m), by = Math.max(0, y0 - m);
   return { x: bx, y: by, w: Math.min(w, x1 + m + 1) - bx, h: Math.min(h, y1 + m + 1) - by };
 }
@@ -1699,7 +1710,7 @@ export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number
     for (let p = 0; p < n; p++) own[p] = smooth(0.3, 0.92, m1[p] / Math.max(0.05, m2[p]));
   }
   // Small stamps and thin strokes get less of everything, so a 15 mm seal keeps dense characters.
-  const small = 0.4 + 0.6 * smooth(12, 28, size);
+  const small = 0.3 + 0.7 * smooth(12, 30, size);
   const drift = valueNoise(w, h, Math.max(4, Math.max(w, h) / 3), r);
   const pressure = photo ? 0.4 : 1;
 
@@ -1724,26 +1735,26 @@ export function rubber(pl: Plane, seed: number, amount: number, o: { mm?: number
     }
     const k = binOf(x, y);
     const fromEdge = (reach[k] - Math.hypot(x - cx, y - cy)) / pxmm;
-    if (border) s += 0.4 * A1 * smooth(2.5, 0.2, fromEdge) * smooth(0.45, 1, light);
+    if (border) s += 0.3 * A1 * smooth(2.5, 0.2, fromEdge) * smooth(0.45, 1, light);
     if (own) s += 0.5 * (1 - own[p]) + 0.12 * faint;
     // Ink squeezed to the rims keeps them inked longest; thin strokes and small stamps lose less.
-    s *= (0.5 + 0.5 * smooth(0.04, 0.16, dmm)) * (1 - 0.75 * solid) * thin * small;
-    s = Math.min(s, border ? 0.55 : 0.26);
+    s *= (0.5 + 0.5 * smooth(0.04, 0.16, dmm)) * (1 - 0.85 * solid) * thin * small;
+    s = Math.min(s, border ? 0.42 : 0.26);
     let cov = smooth(s - 0.04, s + 0.04, N[p]);
     // Salt: voids 0.1 to 0.3 mm, more in wide solids, in clusters.
-    const pv = Math.min(0.07, (0.012 + 0.03 * solid) * A2 * (0.35 + 1.3 * clump[p]) * thin * small);
+    const pv = Math.min(0.055, (0.012 + 0.022 * solid) * A2 * (0.35 + 1.3 * clump[p]) * thin * small);
     cov *= 1 - smooth(1 - pv - 0.015, 1 - pv + 0.015, NV[p]);
     // The outer edge of the border on the light side: a thinner stroke, here and there not printed at all.
     let edge = 1;
     if (border && fromEdge < wmm * 1.2 && light > 0.3) {
       const a = Math.atan2(y - cy, x - cx);
-      let frac = smooth(0.3, 1, light) * (0.08 + 0.32 * thinAt(a)) * A1 * small;
-      if (gaps && wmm >= 0.3 && light > 0.55) frac = Math.max(frac, 1.25 * smooth(0.82, 0.84, gapAt(a)));
+      let frac = smooth(0.3, 1, light) * (0.05 + 0.25 * thinAt(a)) * A1 * small;
+      if (gaps && wmm >= 0.3 && light > 0.6) frac = Math.max(frac, 1.25 * smooth(0.86, 0.88, gapAt(a)));
       edge = smooth(-0.5, 0.5, (fromEdge - frac * wmm) * pxmm);
     }
     kept[p] = shape[p] * edge;
     cov *= edge;
-    const tone = Math.min(1, 1 - 0.14 * A1 * light - 0.06 * A2 * (mottle[p] - 0.5)) * (own ? 0.85 + 0.15 * own[p] : 1) * (1 - 0.15 * faint);
+    const tone = Math.min(1, 1 - (0.14 * A1 * light + 0.06 * A2 * (mottle[p] - 0.5)) * small) * (own ? 0.85 + 0.15 * own[p] : 1) * (1 - 0.15 * faint);
     v[p] = shape[p] * cov * tone;
     // A narrow darker rim, about 0.1 mm, where ink squeezes to the edge; pad ink a little darker or lighter here
     // and there; the heavy side a touch fuller.
@@ -1894,7 +1905,9 @@ export function impression(p: Prepared, look: Look, maxSide = STAMP_OUT_MAX_SIDE
     pl = closeGaps(pl);
     faint = faintness(dist, pl);
   }
-  box = inkBox(pl);
+  // The margin is the same on every side whatever the picture came with: a design cropped right at its outer ring
+  // would otherwise be cut flat along the edge of its picture once the ink is moved and spread below.
+  box = inkBox(pl, undefined, false);
   if (!box) return nothing(found);
   // A hand never sets a stamp down in the exact middle of where it aims: the ink sits a little off the middle of its
   // picture, by the seed, within the margin.

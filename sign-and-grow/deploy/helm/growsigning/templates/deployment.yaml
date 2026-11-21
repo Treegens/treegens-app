@@ -1,0 +1,97 @@
+{{- $secret := .Values.secret.existingSecret | default (printf "%s-keys" .Release.Name) -}}
+{{- if and (not .Values.secret.existingSecret) (not .Values.secret.create) }}
+{{- fail "Set secret.existingSecret to a Secret that holds APP_SECRET and FILE_ENCRYPTION_KEY (or secret.create=true to try the chart out)." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: growsigning
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  # One, always. SQLite has one writer (see values.yaml). Recreate stops the old pod before the new one starts.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: growsigning
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: growsigning
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: growsigning
+          image: {{ if .Values.image.digest }}{{ .Values.image.repository }}@{{ .Values.image.digest }}{{ else }}{{ .Values.image.repository }}:{{ .Values.image.tag }}{{ end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: APP_URL
+              value: {{ .Values.appUrl | quote }}
+            - name: TRUSTED_PROXY_HOPS
+              value: {{ .Values.trustedProxyHops | quote }}
+            - name: DATA_DIR
+              value: /data
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ $secret }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # 200 only when the database opens, /data can be written to, more than 1 GB is free, storing files is not
+          # stopped and the timer ran in the last 30 minutes. Readiness takes the pod out of the Service; liveness is
+          # left off on purpose, because restarting does not free a full disk.
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/.next/cache
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" .Release.Name) }}
+        # The framework's cache and temporary files: small, in memory, gone with the pod.
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+        - name: next-cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi

@@ -764,10 +764,13 @@ async function flowA(f, pdf) {
   if (!(await visible(box.getByLabel(/recipient name/i)).count())) await f.press(byRole(box, 'button', /add (a )?recipient|add (a )?person|add signer/i), 'Add recipient');
   await f.type(visible(box.getByLabel(/recipient name/i)).first(), SIGNER_PHONE.name, 'recipient name');
   await f.type(visible(box.getByLabel(/recipient email/i)).first(), SIGNER_PHONE.email, 'recipient email');
-  const subject = box.getByLabel(/subject/i).first();
-  if (!(await subject.inputValue().catch(() => ''))) await f.type(subject, `Please sign: ${DOC_NAME}`, 'email subject');
-  else f.note(`The email subject was filled in from the file name: "${await subject.inputValue()}".`);
-  report.first_subject = await subject.inputValue();
+  // The subject is on step 1 in the baseline, and on step 3 since simplify-editor moved it there.
+  const subject = visible(box.getByLabel(/subject/i)).first();
+  if (await subject.count()) {
+    if (!(await subject.inputValue().catch(() => ''))) await f.type(subject, `Please sign: ${DOC_NAME}`, 'email subject');
+    else f.note(`The email subject was filled in from the file name: "${await subject.inputValue()}".`);
+    report.first_subject = await subject.inputValue();
+  }
   await f.state('Editor, step 1, filled in');
 
   await f.press(byRole(box, 'button', /^(next|continue)$/i), 'Next', () => box.locator('.pdfpage canvas, canvas').first().waitFor());
@@ -781,6 +784,12 @@ async function flowA(f, pdf) {
   await f.state('Editor, step 2, signature placed');
   await f.press(byRole(box, 'button', /^(next|continue)$/i), 'Next', () => box.getByRole('button', { name: /^send( now)?$/i }).first().waitFor());
   await f.screen('Editor, step 3 (Review and send)');
+  if (!report.first_subject) {
+    const s3 = visible(box.getByLabel(/subject/i)).first();
+    if (!(await s3.inputValue().catch(() => ''))) await f.type(s3, `Please sign: ${DOC_NAME}`, 'email subject');
+    else f.note(`The email subject was filled in from the file name: "${await s3.inputValue()}".`);
+    report.first_subject = await s3.inputValue();
+  }
   await f.press(visible(box.getByRole('button', { name: /^send( now)?$/i })).last(), 'Send', async () => {
     // A question before sending (an address that bounced before) is answered and counted.
     const r = await Promise.race([box.waitForURL(/\/app\/envelopes\/env_[^/]+(\?|$)/).then(() => 'sent'), box.getByRole('dialog').first().waitFor().then(() => 'asked')]);
@@ -863,7 +872,21 @@ async function flowC(f, templateName) {
 async function flowD(f, subject) {
   const p = f.page;
   await p.goto(`${BASE}/app`);
+  // Home lists what was completed lately, each with a Download that names it: the shortest way, when it is there.
+  await p.getByRole('heading', { name: /recently completed/i }).first().waitFor({ timeout: 5000 }).catch(() => {});
   await f.screen('App home');
+  const onHome = byRole(p, 'link', new RegExp(`^download ${subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+  if (await onHome.count()) {
+    let got;
+    const arriving = p.waitForEvent('download', { timeout: 30000 });
+    await f.press(onHome, `"Download" on its row in Recently completed`, async () => {
+      got = await arriving;
+    });
+    const dest = path.join(f.dir, got.suggestedFilename());
+    await got.saveAs(dest);
+    f.note(`Downloaded ${got.suggestedFilename()}, ${fs.statSync(dest).size} bytes, from Home. A document that is not among the five completed last is found under Documents, as before.`);
+    return;
+  }
   await f.press(byRole(p, 'link', /^envelopes$|^documents$/i), 'Envelopes in the menu', () => p.waitForURL(/\/app\/envelopes(\?|$)/));
   await f.screen('Envelopes');
   await f.type(p.getByRole('searchbox').first(), DOC_NAME, 'the search box');
@@ -1250,7 +1273,10 @@ async function inventory(browser, page, ids) {
   // Select one field of each kind that has its own settings and list them.
   const pg = page.locator('.pdfpage').first();
   for (const [type, y] of [['Text', 0.3], ['Signature', 0.5], ['Dropdown', 0.7]]) {
-    await byRole(page.getByRole('group', { name: /add a field/i }).first(), 'button', new RegExp(`^${type}$`, 'i')).click();
+    const kinds = page.getByRole('group', { name: /add a field/i }).first();
+    // A kind beyond the six common ones is behind "More fields" (simplify-editor).
+    if (!(await byRole(kinds, 'button', new RegExp(`^${type}$`, 'i')).count())) await byRole(kinds, 'button', /^more fields$/i).click().catch(() => {});
+    await byRole(kinds, 'button', new RegExp(`^${type}$`, 'i')).click();
     const b = await pg.boundingBox();
     await page.mouse.click(b.x + b.width * 0.4, b.y + b.height * y);
     await sleep(300);

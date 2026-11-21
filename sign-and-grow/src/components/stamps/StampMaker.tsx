@@ -5,7 +5,8 @@ import { stampFileProblem, tooManyPixels, turnStyle, STAMP_WORK_SIDE, STAMP_UPLO
 
 // Turns a picture of a stamp into an impression that looks like ink, in this browser, on a canvas: the steps are in
 // src/lib/stampink.ts. Shows the picture as it came and the impression on a page of text side by side ("before" and
-// "after"), with a plain control for each step. Hands the finished PNG to its parent, which stores it. Drawing the
+// "after"), then the ink, and every other adjustment behind one closed fold ("Adjust the look"): the defaults are
+// meant to be right, so nobody has to pass them to finish. Hands the finished PNG to its parent, which stores it. Drawing the
 // picture onto a canvas and saving it again also leaves out what the file carried besides its pixels (the camera's
 // notes, the place a photo was taken).
 
@@ -48,9 +49,9 @@ function toPng(img: Rgba): string {
 }
 
 /** A short piece of a printed page, to see the stamp on. Words under the stamp show through it, as on paper. */
-export function OnPaper({ children, label }: { children?: React.ReactNode; label: string }) {
+export function OnPaper({ children, label, className }: { children?: React.ReactNode; label: string; className?: string }) {
   return (
-    <div className="st-paper" role="img" aria-label={label}>
+    <div className={`st-paper${className ? ` ${className}` : ''}`} role="img" aria-label={label}>
       <p>The goods listed in the schedule were delivered in full and in good condition. Payment is due within thirty days of the date below.</p>
       <p>Signed for and on behalf of the company:</p>
       <div className="st-sigline"><span className="st-sig">J. Mwangi</span></div>
@@ -77,7 +78,8 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
   const [busy, setBusy] = useState(true);
   const [result, setResult] = useState<{ png: string; empty: boolean; w: number; h: number; found: InkFound; oval: boolean } | null>(null);
   const [before, setBefore] = useState('');
-  const [edges, setEdges] = useState(false);
+  // The fold with every adjustment but the ink: closed each time a picture is read.
+  const [adjust, setAdjust] = useState(false);
   const made = useRef(onMade);
   made.current = onMade;
 
@@ -88,6 +90,7 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
     setResult(null);
     setProblem('');
     setBusy(true);
+    setAdjust(false);
     made.current(null);
     const said = stampFileProblem(file, true);
     if (said) return (setProblem(said), setBusy(false));
@@ -117,6 +120,8 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
       const oval = !!r.oval && Math.abs(Math.log(r.oval.ratio)) > 0.025 && Math.abs(Math.log(r.oval.ratio)) < 0.35;
       setResult({ png, empty: r.empty || prepared.found.empty, w: r.image.width, h: r.image.height, found: r.found, oval });
       setBusy(false);
+      // Nothing left at these settings: the controls that bring it back are shown.
+      if (r.empty && !prepared.found.empty) setAdjust(true);
       made.current(r.empty || prepared.found.empty ? null : { png, look, found: r.found, width: r.image.width, height: r.image.height, from });
     }, 90);
     return () => clearTimeout(t);
@@ -153,10 +158,10 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
       </div>
       <p className="muted small" role="status" aria-live="polite">{busy ? 'Making the stamp' : result?.empty ? '' : `Ready. ${sizeLabel || ''}`}</p>
       {f.empty && <div className="notice warn" role="alert">We could not find a stamp in this picture: it looks like blank paper. Choose a picture where the stamp is darker than the paper around it.</div>}
-      {!f.empty && result?.empty && <div className="notice warn" role="alert">Nothing is left at these settings. Move &ldquo;What counts as paper&rdquo; towards &ldquo;Keep faint marks&rdquo;, or cut less off the edges.</div>}
+      {!f.empty && result?.empty && <div className="notice warn" role="alert">Nothing is left at these settings. Under &ldquo;Adjust the look&rdquo;, move &ldquo;What counts as paper&rdquo; towards &ldquo;Keep faint marks&rdquo;, or cut less off the edges.</div>}
       {f.several && (
         <p className="notice small">
-          {design ? 'This picture has marks in more than one colour, like a logo.' : 'This photo has marks in other colours too, such as printed text or lines around the stamp.'} A real stamp prints in one ink, so {look.onlyInk && f.hue != null ? <>only the {keptWord} marks are kept, in the ink you choose. To keep every mark, untick &ldquo;Only the {keptWord} marks&rdquo; below.</> : <>every mark is printed in the ink you choose{design && look.gaps ? ', with a thin gap of paper where two colours meet so the shapes stay apart' : ''}.</>}
+          {design ? 'This picture has marks in more than one colour, like a logo.' : 'This photo has marks in other colours too, such as printed text or lines around the stamp.'} A real stamp prints in one ink, so {look.onlyInk && f.hue != null ? <>only the {keptWord} marks are kept, in the ink you choose. To keep every mark, untick &ldquo;Only the {keptWord} marks&rdquo; under &ldquo;Adjust the look&rdquo;.</> : <>every mark is printed in the ink you choose{design && look.gaps ? ', with a thin gap of paper where two colours meet so the shapes stay apart' : ''}.</>}
           {design && <> A logo made for screens often looks less like a real stamp than a design made for one ink. If you have the stamp itself, a photo of it pressed on paper works best.</>}
         </p>
       )}
@@ -172,6 +177,8 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
         ))}
       </fieldset>
 
+      <details className="st-adjust" data-fold open={adjust} onToggle={(e) => setAdjust((e.target as HTMLDetailsElement).open)}>
+      <summary>Adjust the look</summary>
       <div className="st-controls">
         <label className="f st-range">
           <span>What counts as paper</span>
@@ -209,8 +216,8 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
             <span>Make it round <span className="hint">(the stamp looks like an oval, as a round seal does in a photo taken at a slant)</span></span>
           </label>
         )}
-        <details className="st-edges" open={edges} onToggle={(e) => setEdges((e.target as HTMLDetailsElement).open)}>
-          <summary>Cut off the edges of the picture</summary>
+        <fieldset className="st-edges">
+          <legend>Cut off the edges of the picture</legend>
           <p className="muted small">For a photo with something else in it, such as other writing or the edge of a table.</p>
           {(['left', 'right', 'top', 'bottom'] as const).map((side) => (
             <label key={side} className="f st-range">
@@ -218,8 +225,9 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
               <input type="range" min={0} max={45} value={Math.round(crop[side] * 100)} onChange={(e) => set({ crop: { ...crop, [side]: Number(e.target.value) / 100 } })} />
             </label>
           ))}
-        </details>
+        </fieldset>
       </div>
+      </details>
     </div>
   );
 }

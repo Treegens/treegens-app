@@ -109,14 +109,16 @@ export function admit(who: Who): { ok: true } | { ok: false; which: ChatLimit; u
 }
 
 // ---- What every answer carries -----------------------------------------------------------------------------------
-export type Extras = { person: HandOver | null; tools: { id: string; label: string; href: string }[]; removed: Removed[] };
-export function extrasFor(c: Cleaned, answer = ''): Extras {
-  return { person: handOverReason(c.turns), tools: toolsFor(c.question, answer), removed: c.removed };
+// `acts`: on the signing page, the entries of Other actions that do what was asked ("Finish later"), by their key. The
+// dialog shows a button for each one the page says it has, with the page's own label; the helper itself does nothing.
+export type Extras = { person: HandOver | null; tools: { id: string; label: string; href: string }[]; removed: Removed[]; acts: string[] };
+export function extrasFor(c: Cleaned, answer = '', screen: ChatScreen = 'public'): Extras {
+  return { person: handOverReason(c.turns), tools: toolsFor(c.question, answer, screen), removed: c.removed, acts: builtInAnswer(c.question, screen).acts };
 }
 /** The built-in answer, as the route sends it. `why` says why it is not the model. */
 export function builtIn(c: Cleaned, why: 'off' | 'limit' | 'down' | 'slow' | 'empty', note?: string, screen: ChatScreen = 'public') {
-  const { reply } = builtInAnswer(c.question, screen);
-  return { mode: 'builtin' as const, why, reply, sig: signAnswer(reply, c.question), ...(note ? { note } : {}), ...extrasFor(c, reply) };
+  const { reply, id } = builtInAnswer(c.question, screen);
+  return { mode: 'builtin' as const, why, reply, id, sig: signAnswer(reply, c.question), ...(note ? { note } : {}), ...extrasFor(c, reply, screen) };
 }
 
 // What a model may never say, whatever it was asked or told, put right at the end of its answer: that a signature or
@@ -211,7 +213,7 @@ function relay(upstream: Response, c: Cleaned, screen: ChatScreen, finish: () =>
           gone = true;
         }
       };
-      const first = extrasFor(c);
+      const first = extrasFor(c, '', screen);
       send({ open: true, mode: 'ai', ...first });
       let buffer = '', lastThink = 0, broke = false, full = false;
       // A host that ignores max_tokens is not relayed for ever: past CHAT_ANSWER_CHARS the answer stops there, the
@@ -289,7 +291,7 @@ function relay(upstream: Response, c: Cleaned, screen: ChatScreen, finish: () =>
           text += add;
           send({ d: add });
         }
-        const tools = toolsFor(c.question, text);
+        const tools = toolsFor(c.question, text, screen);
         send({ done: true, sig: signAnswer(text, c.question), tools, ...(late() || broke || full ? { cut: true } : {}) });
       }
       try {

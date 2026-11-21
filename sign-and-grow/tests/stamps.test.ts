@@ -10,8 +10,9 @@ import fs from 'node:fs';
 import { PDFDocument, PDFName, PDFDict, PDFNumber, PDFArray } from 'pdf-lib';
 import { boot, Client, signUp, upload, PNG, type Server } from './helpers.ts';
 import * as ink from '../src/lib/stampink.ts';
-import { encodePng, decodePng, readPng } from '../src/server/png.ts';
-import { STAMP_IS, stampFileProblem, stampBox, stampTurn, STAMP_DEFAULT_MM, STAMPS_PER_ACCOUNT, STAMP_UPLOADS_PER_LINK_HOUR, STAMP_OPACITY } from '../src/lib/stamps.ts';
+import { encodePng, decodePng, readPng, crc32 } from '../src/server/png.ts';
+import { deflateSync, inflateSync } from 'node:zlib';
+import { STAMP_IS, stampFileProblem, stampBox, stampFieldBox, sameBox, stampTurn, STAMP_DEFAULT_MM, STAMPS_PER_ACCOUNT, STAMP_UPLOADS_PER_LINK_HOUR, STAMP_OPACITY } from '../src/lib/stamps.ts';
 
 let s: Server;
 let db: Server['db'];
@@ -95,6 +96,28 @@ function blobs(img: ink.Rgba, test: (p: number) => boolean): number[] {
   }
   return sizes;
 }
+/**
+ * Where a point of a picture() lands in its impression: the ring is the outermost ink, so the middle of the ink's box
+ * is the middle of the ring, whatever the margin and the small seeded offset are.
+ */
+function ringOrigin(img: ink.Rgba, pic: { width: number; height: number }, k = 1): { ox: number; oy: number } {
+  let x0 = img.width, x1 = -1, y0 = img.height, y1 = -1;
+  for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) if (img.data[(y * img.width + x) * 4 + 3] > 128) (x0 = Math.min(x0, x), x1 = Math.max(x1, x), y0 = Math.min(y0, y), y1 = Math.max(y1, y));
+  return { ox: Math.round(pic.width / 2 - (x0 + x1) / 2), oy: Math.round(pic.height / 2 + 10 * k - (y0 + y1) / 2) };
+}
+/** The corners of an impression of picture() are paper, and its ring is ink all the way round. */
+function ringWhole(img: ink.Rgba, what: string) {
+  // The corners of the box are paper, and the ring is ink all the way round.
+  for (const [x, y] of [[1, 1], [img.width - 2, 1], [1, img.height - 2], [img.width - 2, img.height - 2]]) assert.ok(alphaAt(img, x, y) < 30, `${what}: corner ${x},${y} is see-through`);
+  const cx = img.width / 2, cy = img.height / 2;
+  let weak = 0;
+  for (let a = 0; a < 360; a += 3) {
+    let most = 0;
+    for (let r = img.width * 0.38; r < img.width * 0.5; r += 0.5) most = Math.max(most, alphaAt(img, Math.round(cx + r * Math.cos((a * Math.PI) / 180)), Math.round(cy + r * Math.sin((a * Math.PI) / 180))));
+    if (most < 150) weak++;
+  }
+  assert.ok(weak <= 3, `${what}: the ring is whole, no pale bands across it (${weak} weak places)`);
+}
 const plain = (look: Partial<ink.Look> = {}): ink.Look => ({ ink: 'blue', seed: 7, tilt: 0, texture: 0, paper: 0.5, onlyInk: true, ...look });
 const alphaAt = (img: ink.Rgba, x: number, y: number) => img.data[(y * img.width + x) * 4 + 3];
 
@@ -122,23 +145,33 @@ test('paper goes, also where the light is uneven and the paper is grey or colour
   // One global cut would have lost this: on the dark side the paper is darker than the ink is on the bright side.
   const pic = picture({ dark: 0.55 });
   const r = ink.impression(ink.prepare(pic), plain());
-  const right = Array.from({ length: r.image.height }, (_, y) => alphaAt(r.image, r.image.width - 8, y)).filter((a) => a > 200).length;
+  // (The ring is 9 pixels thick behind a margin of 6, set down up to 3 pixels off the middle: column 11 from the edge is in it.)
+  const right = Array.from({ length: r.image.height }, (_, y) => alphaAt(r.image, r.image.width - 11, y)).filter((a) => a > 200).length;
   assert.ok(right > 10, 'the ring on the dark side is still ink');
 });
 
-test('one ink: every pixel in the colour of stamp pad ink, varied a little; a thin line stays thin; a tint in a design prints solid, as rubber does', () => {
+test('one ink: every pixel in the colour of stamp pad ink, darker and lighter but never another hue; a thin line stays thin; a tint in a design prints solid, as rubber does', () => {
   const p = ink.prepare(picture({ faint: 0.45 }));
   assert.equal(p.photo, false, 'a picture with flat paper and no grain is a design');
   const img = ink.impression(p, plain({ ink: 'red' })).image;
   const full = ink.INK_RGB.red, hue = hueOf(full);
-  const seen = new Set<string>();
-  for (let q = 0; q < img.width * img.height; q++) {
-    if (img.data[q * 4 + 3] < 128) continue;
-    const c = [img.data[q * 4], img.data[q * 4 + 1], img.data[q * 4 + 2]];
-    assert.ok(hueGap(hueOf(c), hue) < 14, `pad red, not pink or orange: ${c}`);
-    seen.add(c.join());
-  }
-  assert.ok(seen.size > 3, `the colour varies a little, as pad ink does (${seen.size} colours), not one flat colour`);
+  const colours = (im: ink.Rgba) => {
+    const seen = new Set<string>();
+    for (let q = 0; q < im.width * im.height; q++) {
+      if (im.data[q * 4 + 3] < 128) continue;
+      const c = [im.data[q * 4], im.data[q * 4 + 1], im.data[q * 4 + 2]];
+      assert.ok(hueGap(hueOf(c), hue) < 6, `pad red, not pink or orange: ${c}`);
+      seen.add(c.join());
+    }
+    return seen.size;
+  };
+  assert.equal(colours(img), 1, 'even ink (texture 0) is the ink colour and nothing else');
+  // With the texture of rubber the ink prints a little darker here and there (rims, the heavy side), in the same hue:
+  // one flat colour would look like a picture, and a paler or cooler tint like a screen.
+  const worn = ink.impression(p, plain({ ink: 'red', texture: ink.DEFAULT_TEXTURE })).image;
+  const n = colours(worn);
+  assert.ok(n > 3, `the colour varies a little in how dark it is (${n} colours)`);
+  for (let q = 0; q < worn.width * worn.height; q++) if (worn.data[q * 4 + 3]) for (let c = 0; c < 3; c++) assert.ok(worn.data[q * 4 + c] <= full[c], 'never lighter than the ink: thin ink is less ink, not a tint');
   // The darkest ink prints as dull carmine, not a light screen pink.
   let darkest = 255 * 3, at: number[] = [];
   for (let q = 0; q < img.width * img.height; q++) {
@@ -209,35 +242,65 @@ test('the same picture and seed give the same impression; another seed another; 
   assert.equal(Buffer.compare(Buffer.from(tilted.image.data), Buffer.from(flat.image.data)), 0, 'the same pixels, straight');
 });
 
-test('rubber: sized in millimetres at the printed size; full ink in the cores, a heavier side, voids, darker rims; still readable', () => {
+test('rubber: sized in millimetres at the printed size; ink short of the pad is lost coverage with hard edges, never a pale wash; words keep their ink; a heavier side, voids, darker rims', () => {
   // A seal 40 mm across, stored about 1000 pixels wide: 25 pixels to a millimetre.
   const p = ink.prepare(picture({ k: 4 }));
-  const flat = ink.impression(p, plain()).image;
+  // The same seed for both: the seed also says how far off the middle of its picture the ink sits.
   const look = plain({ texture: ink.DEFAULT_TEXTURE, seed: 99 });
+  const flat = ink.impression(p, { ...look, texture: 0 }).image;
   const worn = ink.impression(p, look).image;
   assert.equal(Buffer.compare(Buffer.from(worn.data), Buffer.from(ink.impression(p, look).image.data)), 0, 'the same seed, the same impression');
   const w = flat.width, h = flat.height;
-  assert.ok(Math.abs(worn.width - w) <= 2 && Math.abs(worn.height - h) <= 2);
+  assert.deepEqual([worn.width, worn.height], [w, h]);
   const pxmm = Math.max(w, h) / 40;
   // Even ink is even, and solid.
   const bar = (img: ink.Rgba, dy = 0) => { const y = Math.round(img.height / 2) + 10 + dy, out: number[] = []; for (let x = Math.round(img.width / 2) - 120; x < img.width / 2 + 120; x++) out.push(alphaAt(img, x, y)); return out; };
   assert.ok(new Set(bar(flat)).size <= 3 && Math.min(...bar(flat)) === 255, 'even ink is even and full');
-  // Where the flat stamp has solid ink, the worn one varies locally, and its cores still reach full ink: it is not
-  // a picture with its opacity turned down.
+  // Where the flat stamp has solid ink, the worn one has ink at full strength or (in grain, specks and voids) none:
+  // it is not a picture with its opacity turned down, and nothing in it fades smoothly.
   const core: number[] = [];
-  for (let q = 0; q < w * h; q++) if (flat.data[q * 4 + 3] === 255 && q % w > 2 && q % w < w - 3 && worn.data[q * 4 + 3] !== undefined) core.push(q);
-  const alphas = core.map((q) => worn.data[q * 4 + 3]).sort((a, b) => a - b);
+  for (let q = 0; q < w * h; q++) if (flat.data[q * 4 + 3] === 255) core.push(q);
+  const A = (img: ink.Rgba, q: number) => img.data[q * 4 + 3];
+  const alphas = core.map((q) => A(worn, q)).sort((a, b) => a - b);
   const pct = (k: number) => alphas[Math.floor(alphas.length * k)];
-  assert.ok(pct(0.97) >= 250, `the strongest ink is full ink (${pct(0.97)})`);
-  assert.ok(pct(0.1) < 200, `and much of it is not: one side lighter, patches short of ink (${pct(0.1)})`);
-  assert.ok(pct(0.1) >= 85, `but never so light that it stops reading (${pct(0.1)})`);
+  const share = (f: (a: number) => boolean) => alphas.filter(f).length / alphas.length;
+  assert.ok(pct(0.97) >= 250 && pct(0.5) >= 215, `the ink that lands is full ink (${pct(0.5)}, ${pct(0.97)})`);
+  const lost = share((a) => a <= 60), between = share((a) => a > 60 && a < 190);
+  assert.ok(lost > 0.04 && lost < 0.25, `some of it did not print at all: paper shows through (${lost.toFixed(3)})`);
+  assert.ok(between < 0.12, `and little is in between: hard edges, no pale wash (${between.toFixed(3)})`);
+  // The words of a stamp (here the bar: everything that is not its ring or frame) keep at least about 70 percent of
+  // their ink in every millimetre, for every seed; the ring may print thinner and broken on the light side, with a
+  // short stretch missing, but most of it is there.
+  const cy = Math.round(h / 2), cx = Math.round(w / 2), B = Math.round(pxmm);
+  for (const seed of [99, 7, 4242]) {
+    const f = seed === 99 ? flat : ink.impression(p, { ...look, seed, texture: 0 }).image, im = seed === 99 ? worn : ink.impression(p, { ...look, seed }).image;
+    let least = 1;
+    for (let x = cx - 150; x < cx + 150 - B; x += B) {
+      let sum = 0, n = 0;
+      for (let y = cy - 18; y < cy + 18; y++) for (let xx = x; xx < x + B; xx++) if (A(f, y * w + xx) === 255) (sum += A(im, y * w + xx), n++);
+      if (n > B * 10) least = Math.min(least, sum / n / 255);
+    }
+    assert.ok(least >= 0.65, `seed ${seed}: every millimetre of the bar keeps its ink (${least.toFixed(2)})`);
+    const sec = new Float64Array(36), secN = new Float64Array(36);
+    for (let q = 0; q < w * h; q++) {
+      if (A(f, q) !== 255) continue;
+      const x = (q % w) - w / 2, y = Math.floor(q / w) - h / 2;
+      if (Math.hypot(x, y) < w * 0.38) continue;
+      const k = Math.floor(((Math.atan2(y, x) + Math.PI) / (2 * Math.PI)) * 36) % 36;
+      (sec[k] += A(im, q) / 255), secN[k]++;
+    }
+    const kept = Array.from(sec, (v, k) => v / secN[k]);
+    assert.ok(kept.reduce((a, b) => a + b) / 36 >= 0.65, `seed ${seed}: most of the ring printed (${kept.map((v) => v.toFixed(1))})`);
+    assert.ok(kept.filter((v) => v < 0.4).length <= 4, `seed ${seed}: only a short stretch of the ring is missing (${kept.map((v) => v.toFixed(1))})`);
+  }
   // A heavier side: the ink of the heaviest third against the lightest third, across the stamp.
   const thirds = (img: ink.Rgba) => {
     let best = 0;
     for (let a = 0; a < 8; a++) {
       const dx = Math.cos((a * Math.PI) / 4), dy = Math.sin((a * Math.PI) / 4);
       const proj = core.map((q) => ((q % w) - w / 2) * dx + (Math.floor(q / w) - h / 2) * dy);
-      const lo = Math.min(...proj), hi = Math.max(...proj);
+      let lo = Infinity, hi = -Infinity;
+      for (const v of proj) (lo = Math.min(lo, v)), (hi = Math.max(hi, v));
       let s1 = 0, n1 = 0, s3 = 0, n3 = 0;
       core.forEach((q, i) => {
         const t = (proj[i] - lo) / (hi - lo);
@@ -248,30 +311,89 @@ test('rubber: sized in millimetres at the printed size; full ink in the cores, a
     }
     return best;
   };
-  assert.ok(thirds(worn) > 1.25, `one side pressed harder: ${thirds(worn).toFixed(2)} times the ink of the other`);
-  // Voids: small holes inside the solid ink, 0.15 to 0.6 mm across, a few dozen on a seal this size.
+  assert.ok(thirds(worn) > 1.15, `one side pressed harder: ${thirds(worn).toFixed(2)} times the ink of the other`);
+  // Voids and grain: gaps inside the solid ink from a tenth to seven tenths of a millimetre across, many of them.
   const holes = blobs(worn, (q) => flat.data[q * 4 + 3] === 255 && worn.data[q * 4 + 3] < 70);
   const sized = holes.filter((n) => n >= (0.1 * pxmm) ** 2 && n <= (0.7 * pxmm) ** 2 * 1.2);
-  assert.ok(sized.length >= 8 && sized.length <= 140, `voids sized in millimetres: ${sized.length} (${holes.length} holes in all)`);
-  // Darker rims: ink squeezed to the edge of the wide bar prints darker than its middle.
-  const lightness = (q: number) => onPaper(worn, q).reduce((a, b) => a + b, 0);
-  const mid = Math.round(h / 2) + 10, cx = Math.round(w / 2);
-  let top = -1;
-  for (let y = mid; y > 0; y--) if (flat.data[(y * w + cx) * 4 + 3] < 128) { top = y + 1; break; }
-  let rimL = 0, midL = 0, n = 0;
-  for (let x = cx - 100; x < cx + 100; x += 2) {
-    const r = worn.data[((top + 2) * w + x) * 4 + 3], m = worn.data[((top + 22) * w + x) * 4 + 3];
-    if (r < 200 || m < 120) continue;
-    rimL += lightness((top + 2) * w + x);
-    midL += lightness((top + 22) * w + x);
-    n++;
+  assert.ok(sized.length >= 60, `voids sized in millimetres: ${sized.length} (${holes.length} gaps in all)`);
+  // Darker rims: ink squeezed to the edge of the wide bar prints darker than its middle, in the ink's own colour.
+  const colourSum = (q: number) => worn.data[q * 4] + worn.data[q * 4 + 1] + worn.data[q * 4 + 2];
+  let mid = cy;
+  while (flat.data[(mid * w + cx - 60) * 4 + 3] < 128) mid++; // the bar, a little below the middle of the picture
+  let top = mid, bottom = mid;
+  while (flat.data[((top - 1) * w + cx - 60) * 4 + 3] >= 128) top--;
+  while (flat.data[((bottom + 1) * w + cx - 60) * 4 + 3] >= 128) bottom++;
+  mid = Math.round((top + bottom) / 2);
+  let rimC = 0, rimN = 0, midC = 0, midN = 0;
+  for (let x = cx - 110; x < cx + 110; x++) {
+    // The first full-ink pixel down from above the bar in this column is its rim.
+    for (let y = top - 6; y < top + 8; y++) if (worn.data[(y * w + x) * 4 + 3] >= 200) { (rimC += colourSum(y * w + x)), rimN++; break; }
+    for (const y of [mid - 2, mid, mid + 2]) if (worn.data[(y * w + x) * 4 + 3] >= 200) (midC += colourSum(y * w + x)), midN++;
   }
-  assert.ok(n > 20 && rimL / n < midL / n - 6, `the rim of a wide stroke prints darker than its middle (${(rimL / n).toFixed(0)} against ${(midL / n).toFixed(0)})`);
-  // The same stamp printed at 20 mm has texture half the size in its pixels: it is sized in millimetres.
+  assert.ok(rimN > 60 && midN > 60 && rimC / rimN < midC / midN - 8, `the rim of a wide stroke prints darker than its middle (${(rimC / rimN).toFixed(0)} against ${(midC / midN).toFixed(0)}, ${rimN} and ${midN} pixels, top ${top})`);
+  // The same stamp printed at 20 mm has texture twice the size in its pixels: it is sized in millimetres.
   const small = ink.impression(p, look, 1000, 20).image;
   const smallHoles = blobs(small, (q) => flat.data[q * 4 + 3] === 255 && small.data[q * 4 + 3] < 70);
   const avg = (v: number[]) => v.reduce((a, b) => a + b, 0) / Math.max(1, v.length);
   assert.ok(avg(smallHoles) > avg(holes) * 1.6, `voids are larger in pixels when the stamp prints smaller (${avg(smallHoles).toFixed(1)} against ${avg(holes).toFixed(1)})`);
+});
+
+test('the texture never takes a stroke away: read at screen size, phone size and in the PDF; a small seal stays dense; a wide solid prints dense with salt in it', () => {
+  // Area average of the alpha of an impression at `side` pixels across: what a screen or a printer makes of it.
+  const seenAt = (img: ink.Rgba, side: number) => {
+    const k = side / Math.max(img.width, img.height), tw = Math.max(1, Math.round(img.width * k)), th = Math.max(1, Math.round(img.height * k));
+    const sum = new Float64Array(tw * th), cnt = new Float64Array(tw * th);
+    for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
+      const t = Math.min(th - 1, Math.floor(y * k)) * tw + Math.min(tw - 1, Math.floor(x * k));
+      (sum[t] += img.data[(y * img.width + x) * 4 + 3] / 255), cnt[t]++;
+    }
+    return { w: tw, h: th, v: sum.map((v, i) => v / Math.max(1, cnt[i])) };
+  };
+  const p = ink.prepare(picture({ k: 4 }));
+  for (const seed of [11, 777, 4242]) {
+    const look = plain({ texture: ink.DEFAULT_TEXTURE, seed });
+    const flat = ink.impression(p, { ...look, texture: 0 }).image, worn = ink.impression(p, look).image;
+    // 96 dots to the inch (the page at real size), a phone page (3.4 pixels to a millimetre), a 150 dpi print.
+    for (const [what, pxmm] of [['screen', 96 / 25.4], ['phone', 3.4], ['print', 150 / 25.4]] as const) {
+      const a = seenAt(flat, Math.round(40 * pxmm)), b = seenAt(worn, Math.round(40 * pxmm));
+      let strokes = 0, lostWords = 0, lostRing = 0;
+      for (let y = 1; y < a.h - 1; y++) for (let x = 1; x < a.w - 1; x++) {
+        if (a.v[y * a.w + x] < 0.5) continue;
+        strokes++;
+        let most = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) most = Math.max(most, b.v[(y + dy) * a.w + x + dx]);
+        if (most >= 0.3) continue;
+        if (Math.hypot(x - a.w / 2, y - a.h / 2) < a.w * 0.38) lostWords++;
+        else lostRing++;
+      }
+      assert.equal(lostWords, 0, `seed ${seed}, ${what}: no part of the bar or of the thin line is gone`);
+      assert.ok(lostRing <= strokes * 0.04, `seed ${seed}, ${what}: the ring is there but for a short stretch (${lostRing} of ${strokes})`);
+    }
+    // The same design as a 15 mm personal seal: less of everything, so its strokes stay dense.
+    const tiny = ink.impression(p, look, 1000, 15).image;
+    let ink15 = 0, n = 0;
+    const cx = Math.round(flat.width / 2), cy = Math.round(flat.height / 2);
+    for (let y = cy - 200; y < cy + 200; y++) for (let x = cx - 170; x < cx + 170; x++) if (flat.data[(y * flat.width + x) * 4 + 3] === 255) (ink15 += tiny.data[(y * flat.width + x) * 4 + 3] / 255, n++);
+    assert.ok(ink15 / n >= 0.82, `seed ${seed}: a small seal keeps its strokes dense, rough edges and all (${(ink15 / n).toFixed(2)})`);
+  }
+  // A wide solid (the disc of a logo, a star): dense, with small voids, not a pale even wash and not a halftone.
+  const disc: Px = { width: 500, height: 500, data: new Uint8ClampedArray(500 * 500 * 4).fill(255) };
+  for (let y = 0; y < 500; y++) for (let x = 0; x < 500; x++) if (Math.hypot(x - 250, y - 250) < 230) disc.data.set([40, 60, 160, 255], (y * 500 + x) * 4);
+  const pd = ink.prepare(disc);
+  const dl = plain({ texture: ink.DEFAULT_TEXTURE, seed: 31 });
+  const dFlat = ink.impression(pd, { ...dl, texture: 0 }).image, dWorn = ink.impression(pd, dl, 1000, 20).image;
+  let kept = 0, between = 0, n = 0;
+  for (let q = 0; q < dFlat.width * dFlat.height; q++) {
+    const x = (q % dFlat.width) - dFlat.width / 2, y = Math.floor(q / dFlat.width) - dFlat.height / 2;
+    if (Math.hypot(x, y) > 200) continue;
+    const a = dWorn.data[q * 4 + 3];
+    (kept += a / 255), n++;
+    if (a > 60 && a < 190) between++;
+  }
+  assert.ok(kept / n >= 0.86 && kept / n <= 0.985, `a solid prints dense, with voids in it (${(kept / n).toFixed(3)})`);
+  assert.ok(between / n < 0.1, `and the voids have hard edges (${(between / n).toFixed(3)})`);
+  const salt = blobs(dWorn, (q) => Math.hypot((q % dFlat.width) - dFlat.width / 2, Math.floor(q / dFlat.width) - dFlat.height / 2) < 200 && dWorn.data[q * 4 + 3] < 70);
+  assert.ok(salt.length >= 30, `many small voids (${salt.length})`);
 });
 
 test('a design saved with a see-through background, a stamp that fills the whole picture, a dark table at the edge of a photo', () => {
@@ -305,18 +427,7 @@ test('a design saved with a see-through background, a stamp that fills the whole
 });
 
 test('photos: brown kraft and yellow copy paper, a desk all round the sheet, ruled lines, a hard shadow, sensor noise', () => {
-  const ringOk = (img: ink.Rgba, what: string) => {
-    // The corners of the box are paper, and the ring is ink all the way round.
-    for (const [x, y] of [[1, 1], [img.width - 2, 1], [1, img.height - 2], [img.width - 2, img.height - 2]]) assert.ok(alphaAt(img, x, y) < 30, `${what}: corner ${x},${y} is see-through`);
-    const cx = img.width / 2, cy = img.height / 2;
-    let weak = 0;
-    for (let a = 0; a < 360; a += 3) {
-      let most = 0;
-      for (let r = img.width * 0.38; r < img.width * 0.5; r += 0.5) most = Math.max(most, alphaAt(img, Math.round(cx + r * Math.cos((a * Math.PI) / 180)), Math.round(cy + r * Math.sin((a * Math.PI) / 180))));
-      if (most < 150) weak++;
-    }
-    assert.ok(weak <= 3, `${what}: the ring is whole, no pale bands across it (${weak} weak places)`);
-  };
+  const ringOk = ringWhole;
   // Coloured paper: kraft is about 45 percent saturated and canary copy paper about 37; both are paper.
   for (const [what, paper, colour, want] of [['kraft', [188, 148, 102], [38, 52, 140], 'blue'], ['canary', [250, 236, 158], [92, 44, 138], 'purple']] as const) {
     const p = ink.prepare(picture({ paper: [...paper], ink: [...colour], noise: 5, dark: 0.25 }));
@@ -376,8 +487,7 @@ test('photos: faint small print is kept; printed text is left out and the stroke
   const marks = [[112, 160], [120, 160], [128, 160], [136, 160], [168, 160], [176, 160]];
   for (const [x, y] of marks) mark(x, y);
   const r = ink.impression(ink.prepare(pic), plain());
-  // The impression is the ring's box with a margin of 5 pixels: a point of the picture moves by the ring's corner.
-  const ox = pic.width / 2 - 95, oy = pic.height / 2 + 10 - 95;
+  const { ox, oy } = ringOrigin(r.image, pic);
   const found = marks.filter(([x, y]) => {
     let most = 0;
     for (let dy = 0; dy < 7; dy++) for (let dx = -2; dx < 4; dx++) most = Math.max(most, alphaAt(r.image, x + dx - ox, y + dy - oy));
@@ -390,10 +500,11 @@ test('photos: faint small print is kept; printed text is left out and the stroke
   const ro = ink.impression(ink.prepare(over), plain({ onlyInk: true }));
   assert.ok(ro.image.width < 205, `the print is left out (${ro.image.width})`);
   // The ring crosses the row of the print 60 to 70 pixels across the picture.
-  const rowY = 151 - oy;
-  const ringAt = Math.max(...[60, 62, 64, 66, 68].map((x) => alphaAt(ro.image, x - ox, rowY)));
+  const at = ringOrigin(ro.image, over);
+  const rowY = 151 - at.oy;
+  const ringAt = Math.max(...[60, 62, 64, 66, 68].map((x) => alphaAt(ro.image, x - at.ox, rowY)));
   assert.ok(ringAt > 150, `and the ring is whole where the print crossed it (${ringAt})`);
-  assert.ok(alphaAt(ro.image, 100 - ox, rowY) < 30, 'the print inside the ring is gone too');
+  assert.ok(alphaAt(ro.image, 100 - at.ox, rowY) < 30, 'the print inside the ring is gone too');
   // A blue stamp beside more red print: "Only the ... marks" keeps the ink chosen, so the stamp stays.
   const two = picture({ w: 420, noise: 4 });
   for (let x = 8; x < 100; x += 12) fill(two, x, 60, x + 6, 220, [190, 40, 50]);
@@ -408,6 +519,77 @@ test('photos: faint small print is kept; printed text is left out and the stroke
   const cut = ink.impression(pt, plain({ ink: 'blue', crop: { left: 0.3, top: 0, right: 0, bottom: 0 } }));
   assert.equal(cut.found.ink, 'blue');
   assert.equal(cut.found.several, false);
+});
+
+test('photos: a stroke lying on a ruled line stays whole; a sharp crease is no ink; ink under a glare is kept; the fibres of recycled paper are not printed', () => {
+  // Lined paper with one rule running along the bar (inside it) and one touching the bottom of the ring: painting
+  // the rules out must not take the ink that lies on them.
+  const lined = picture({ w: 360, h: 300, noise: 4 });
+  const cx = 180, cy = 160;
+  for (let y = cy % 16; y < 300; y += 16) for (let x = 0; x < 360; x++) for (const yy of [y, y + 1]) {
+    const i = (yy * 360 + x) * 4;
+    lined.data[i] = Math.min(lined.data[i], 150), lined.data[i + 1] = Math.min(lined.data[i + 1], 172), lined.data[i + 2] = Math.min(lined.data[i + 2], 222);
+  }
+  const pl = ink.prepare(lined);
+  assert.ok(pl.ruled >= 8, `the ruled lines are found (${pl.ruled})`);
+  const rl = ink.impression(pl, plain()).image;
+  assert.ok(rl.width < 205 && rl.height < 205, `and painted out (${rl.width} by ${rl.height})`);
+  ringWhole(rl, 'a rule along a stroke');
+  const o = ringOrigin(rl, lined);
+  for (const x of [cx - 30, cx - 10, cx + 12, cx + 30]) for (let y = cy - 4; y <= cy + 4; y++) assert.ok(alphaAt(rl, x - o.ox, y - o.oy) > 150, `the bar under the rule is whole at ${x},${y}`);
+  // The rule at cy + 80 runs through the bottom of the ring (80 to 90 from the middle), nearly along it.
+  for (const x of [cx - 12, cx, cx + 12]) {
+    let inked = 0;
+    for (let y = cy + 78; y <= cy + 90; y++) if (alphaAt(rl, x - o.ox, y - o.oy) > 150) inked++;
+    assert.ok(inked >= 7, `the ring is whole where the rule ran along it (${inked} rows at ${x})`);
+  }
+  // A folded letter: a sharp crease from corner to corner, dark with a bright line beside it, across the stamp.
+  const folded = picture({ w: 400, h: 340, noise: 4, dark: 0.15 });
+  for (let x = 0; x < 400; x++) {
+    const yc = Math.round(60 + x * 0.55);
+    for (const [dy, f] of [[0, 0.72], [1, 0.72], [2, 1.05], [3, 1.05]] as const) {
+      const i = ((yc + dy) * 400 + x) * 4;
+      if (yc + dy < 340) for (let c = 0; c < 3; c++) folded.data[i + c] = Math.min(255, folded.data[i + c] * f);
+    }
+  }
+  const pf = ink.prepare(folded);
+  assert.ok(pf.creased >= 1, `the crease is found (${pf.creased})`);
+  const rf = ink.impression(pf, plain()).image;
+  assert.ok(rf.width < 205 && rf.height < 205, `the crease is not ink (${rf.width} by ${rf.height})`);
+  ringWhole(rf, 'a crease');
+  const pieces = blobs(rf, (q) => rf.data[q * 4 + 3] > 128).filter((n) => n > 3);
+  assert.ok(pieces.length <= 4, `only the ring, the bar and the line are left (${pieces.length} pieces)`);
+  // A clean phone photo of glossy paper: no grain, the paper a few steps lighter and darker in broad waves, and a
+  // glare across the stamp that washes its ink out by half. It is a photo, and the ink under the glare is kept.
+  const gloss = picture({ w: 360, h: 300 });
+  for (let y = 0; y < 300; y++) for (let x = 0; x < 360; x++) {
+    const i = (y * 360 + x) * 4;
+    const wave = 4 * Math.sin(x / 47) + 3 * Math.cos(y / 61);
+    const glare = 0.5 * Math.exp(-(((x - y * 0.4 - 150) / 26) ** 2));
+    for (let c = 0; c < 3; c++) gloss.data[i + c] = Math.min(255, gloss.data[i + c] * 0.93 + wave + (255 - gloss.data[i + c] * 0.93) * glare);
+  }
+  const pg = ink.prepare(gloss);
+  assert.equal(pg.photo, true, 'a clean photo is still a photo');
+  ringWhole(ink.impression(pg, plain()).image, 'a glare');
+  // Grey recycled paper with dark fibres all over it and a faint red stamp: the fibres are not printed.
+  const recycled = picture({ w: 400, h: 340, paper: [178, 175, 168], ink: [200, 70, 70], noise: 5 });
+  let seed = 4711;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296;
+  for (let k = 0; k < 220; k++) {
+    const x0 = Math.floor(rnd() * 390), y0 = Math.floor(rnd() * 335), len = 4 + Math.floor(rnd() * 7), down = rnd() < 0.5 ? 0 : rnd() < 0.5 ? 1 : -1, f = 0.55 + 0.25 * rnd();
+    for (let t = 0; t < len; t++) {
+      const x = x0 + t, y = y0 + Math.round((down * t) / 2);
+      if (x < 400 && y >= 0 && y < 340) for (let c = 0; c < 3; c++) recycled.data[(y * 400 + x) * 4 + c] *= f;
+    }
+  }
+  const pr = ink.prepare(recycled);
+  assert.equal(pr.found.ink, 'red');
+  const rr = ink.impression(pr, ink.lookFor(5, 'red', pr), 1000, 40).image;
+  const flecks = blobs(rr, (q) => rr.data[q * 4 + 3] > 128).filter((n) => n >= 3 && n < 40);
+  const all = ink.impression(pr, { ...ink.lookFor(5, 'red', pr), texture: 0 }).image;
+  assert.ok(all.width < 205 && all.height < 205, `only the stamp is left (${all.width} by ${all.height})`);
+  const stray = blobs(all, (q) => all.data[q * 4 + 3] > 128).filter((n) => n >= 3);
+  assert.ok(stray.length <= 5, `the fibres are not ink (${stray.length} pieces, ${flecks.length} small ones with texture)`);
 });
 
 test('a logo: every mark kept in one ink, with a thin gap where two colours meet; orange is a colour of its own, not red', () => {
@@ -965,6 +1147,194 @@ test('the evidence pack and the export carry the stamps; deleting an envelope ta
   ok(await c.post(`/envelopes/${lone.id}/void`, { reason: 'Wrong file' }));
   ok(await c.call('DELETE', `/envelopes/${lone.id}`));
   assert.equal(db.get('SELECT 1 x FROM stamp_images WHERE sha256=?', sha), null);
+});
+
+// ---- Repairs after the second check ---------------------------------------------------------------------------
+
+test('a design whose ink reaches the border of its picture is never cut flat at the edge of the impression, for any seed', () => {
+  // A framed box and a ring, each with its ink 5 pixels from the border of the file.
+  const box: Px = { width: 420, height: 210, data: new Uint8ClampedArray(420 * 210 * 4).fill(255) };
+  fill(box, 5, 5, 415, 205, [150, 20, 30]);
+  fill(box, 17, 17, 403, 193, [255, 255, 255]);
+  fill(box, 60, 80, 360, 130, [150, 20, 30]);
+  const ring: Px = { width: 310, height: 310, data: new Uint8ClampedArray(310 * 310 * 4).fill(255) };
+  for (let y = 0; y < 310; y++) for (let x = 0; x < 310; x++) {
+    const d = Math.hypot(x - 154.5, y - 154.5);
+    if ((d > 138 && d < 150) || (Math.abs(y - 155) < 12 && Math.abs(x - 155) < 80)) ring.data.set([30, 50, 150, 255], (y * 310 + x) * 4);
+  }
+  for (const [what, pic, mm] of [['a framed box', box, 52], ['a ring', ring, 40]] as const) {
+    const p = ink.prepare(pic);
+    assert.equal(p.photo, false);
+    for (let seed = 1; seed <= 24; seed++)
+      for (const texture of [0.5, 1]) {
+        const { width: w, height: h, data: d } = ink.impression(p, { ...ink.lookFor(seed, p.found.ink, p), texture, tilt: 0 }, 420, mm).image;
+        let edge = 0, inside = 0;
+        for (let x = 0; x < w; x++) edge += Number(d[x * 4 + 3] > 100) + Number(d[((h - 1) * w + x) * 4 + 3] > 100);
+        for (let y = 0; y < h; y++) edge += Number(d[y * w * 4 + 3] > 100) + Number(d[(y * w + w - 1) * 4 + 3] > 100);
+        for (let i = 3; i < d.length; i += 4) inside += Number(d[i] > 100);
+        assert.equal(edge, 0, `${what}, seed ${seed}, texture ${texture}: no ink on the last row or column of the picture`);
+        assert.ok(inside > w * h * 0.05, `${what}: the ink is there`);
+      }
+    // The margin is the same whatever the file came with: the same design with 60 pixels of paper round it.
+    const wide: Px = { width: pic.width + 120, height: pic.height + 120, data: new Uint8ClampedArray((pic.width + 120) * (pic.height + 120) * 4).fill(255) };
+    for (let y = 0; y < pic.height; y++) wide.data.set(pic.data.subarray(y * pic.width * 4, (y + 1) * pic.width * 4), ((y + 60) * wide.width + 60) * 4);
+    const a = ink.impression(p, plain({ ink: p.found.ink, onlyInk: false })).image, b = ink.impression(ink.prepare(wide), plain({ ink: p.found.ink, onlyInk: false })).image;
+    assert.ok(Math.abs(a.width - b.width) <= 2 && Math.abs(a.height - b.height) <= 2, `${what}: ${a.width}x${a.height} tight, ${b.width}x${b.height} with paper round it`);
+  }
+});
+
+test('only the pixel data of a stamp file is stored: no palette or stray chunk, nothing packed after the pixels; refusals name the real cause', async () => {
+  const owner = await person('Pat Pixels', 'pat@stamps-png.example');
+  const pix = decodePng(Buffer.from(stampPng(31).split(',')[1], 'base64'))!;
+  // A hand-made file: a palette and a transparency chunk full of other bytes, and bytes after the pixels inside the
+  // compressed stream.
+  const part = (type: string, data: Buffer) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.length, 0);
+    head.write(type, 4, 'latin1');
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])), 0);
+    return Buffer.concat([head, data, crc]);
+  };
+  const clean = encodePng(pix);
+  const info = readPng(clean)!;
+  const raw = inflateSync(Buffer.concat(info.chunks.filter((c) => c.type === 'IDAT').map((c) => c.data)));
+  const smuggled = Buffer.concat([
+    clean.subarray(0, 8), clean.subarray(info.chunks[0].start, info.chunks[0].end),
+    part('PLTE', Buffer.from('HIDDEN-IN-THE-PALETTE-27-BY')), part('tRNS', Buffer.from('HIDDEN-TRNS')), part('sPLT', Buffer.from('HIDDEN-SPLT')),
+    part('IDAT', Buffer.concat([deflateSync(raw), Buffer.from('HIDDEN-AFTER-THE-PIXELS')])), part('IEND', Buffer.alloc(0)), Buffer.from('HIDDEN-AFTER-THE-END'),
+  ]);
+  assert.ok(smuggled.includes('HIDDEN-AFTER-THE-PIXELS'), 'the test file really carries the bytes');
+  const kept = ok(await owner.post('/stamps', { name: 'Odd file', image: `data:image/png;base64,${smuggled.toString('base64')}` })).stamp;
+  const stored = Buffer.from(db.get('SELECT png FROM stamp_images WHERE sha256=?', kept.image_sha256).png);
+  assert.deepEqual(readPng(stored)!.chunks.map((c) => c.type), ['IHDR', 'IDAT', 'IEND'], 'a header, the pixels, the end, and nothing else');
+  assert.ok(!stored.includes('HIDDEN'), 'none of the planted bytes in the file');
+  const again = readPng(stored)!;
+  assert.ok(!inflateSync(Buffer.concat(again.chunks.filter((c) => c.type === 'IDAT').map((c) => c.data))).includes('HIDDEN'), 'and none inside its pixel data');
+  assert.equal(stored.length, again.chunks[again.chunks.length - 1].end, 'nothing after the end');
+  assert.deepEqual(decodePng(stored)!.data, pix.data, 'the pixels are exactly the same');
+  const served = await owner.get(`/stamps/${kept.id}/image`);
+  assert.equal(served.status, 200);
+
+  // More pixel data than the size says (rows of something else after the picture): refused, not stored.
+  const longer = Buffer.concat([clean.subarray(0, 8), clean.subarray(info.chunks[0].start, info.chunks[0].end), part('IDAT', deflateSync(Buffer.concat([raw, Buffer.from('HIDDEN-ROWS-AFTER-THE-PICTURE')]))), part('IEND', Buffer.alloc(0))]);
+  const tooMuch = await owner.post('/stamps', { name: 'Longer', image: `data:image/png;base64,${longer.toString('base64')}` });
+  assert.equal(tooMuch.status, 400);
+  assert.match(tooMuch.data.error, /is damaged: its pixel data does not match its size/);
+  // Something else sent as a PNG: said to be something else, not "cut short, send it again".
+  const svg = await owner.post('/stamps', { name: 'Drawing', image: `data:image/png;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'.padEnd(120)).toString('base64')}` });
+  assert.equal(svg.status, 400);
+  assert.match(svg.data.error, /is not a PNG picture: the file holds something else \(an SVG, a web page or another kind of picture, whatever its name says\)/);
+  assert.doesNotMatch(svg.data.error, /cut short/);
+  // A real PNG cut off part way: that one may have been cut short.
+  const cut = await owner.post('/stamps', { name: 'Cut', image: `data:image/png;base64,${clean.subarray(0, clean.length - 40).toString('base64')}` });
+  assert.match(cut.data.error, /is not a whole PNG picture\. It may have been cut short/);
+  // A whole file whose pixel data is shorter than its header says: damaged, and not told it is the wrong kind.
+  const short = Buffer.concat([clean.subarray(0, 8), clean.subarray(info.chunks[0].start, info.chunks[0].end), part('IDAT', deflateSync(raw.subarray(0, raw.length >> 1))), part('IEND', Buffer.alloc(0))]);
+  const damaged = await owner.post('/stamps', { name: 'Short', image: `data:image/png;base64,${short.toString('base64')}` });
+  assert.equal(damaged.status, 400);
+  assert.match(damaged.data.error, /is damaged: its pixel data does not match its size of \d+ by \d+, or cannot be unpacked\. Sending the same file again will not help\. Make the picture again/);
+  assert.doesNotMatch(damaged.data.error, /interlaced/);
+  assert.equal(db.get('SELECT COUNT(*) n FROM stamps s JOIN memberships m ON m.account_id=s.account_id JOIN users u ON u.id=m.user_id WHERE u.email=?', 'pat@stamps-png.example').n, 1, 'nothing else was saved');
+});
+
+test('a signer with two stamp fields puts the same stamp on the second without sending the picture again; never from a field that is not theirs', async () => {
+  const c = await person('Tess Twice', 'tess@stamps-twice.example');
+  const file = await upload(c, 1);
+  const e = ok(await c.post('/envelopes', {
+    subject: 'Two stamps', documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'r', role: 'signer', name: 'Rita Receiver', email: `rita.${++n}@buyer.example` }, { id: 'q', role: 'signer', name: 'Quin Other', email: `quin.${++n}@buyer.example` }],
+    fields: [
+      { id: 'sig', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.75, w: 0.25, h: 0.06 },
+      { id: 's1', document_id: 'd', recipient_id: 'r', type: 'stamp', label: 'First stamp', page: 0, x: 0.07, y: 0.07, ...stampBox(40, 612, 792) },
+      { id: 's2', document_id: 'd', recipient_id: 'r', type: 'stamp', label: 'Second stamp', page: 0, x: 0.5, y: 0.07, ...stampBox(40, 612, 792) },
+      { id: 'sig2', document_id: 'd', recipient_id: 'q', type: 'signature', page: 0, x: 0.6, y: 0.75, w: 0.25, h: 0.06 },
+      { id: 's3', document_id: 'd', recipient_id: 'q', type: 'stamp', label: 'Their stamp', page: 0, x: 0.5, y: 0.4, ...stampBox(40, 612, 792) },
+    ],
+  }), 'draft').envelope;
+  ok(await c.post(`/envelopes/${e.id}/send`), 'send');
+  const toks = db.all("SELECT token, name FROM recipients WHERE envelope_id=? AND role='signer'", e.id);
+  const tok = toks.find((x: any) => x.name === 'Rita Receiver').token, tokQ = toks.find((x: any) => x.name === 'Quin Other').token;
+  const rita = from(), quin = from();
+  ok(await rita.post(`/sign/${tok}/consent`));
+  ok(await quin.post(`/sign/${tokQ}/consent`));
+  const v = ok(await rita.get(`/sign/${tok}`));
+  const [f1, f2] = ['First stamp', 'Second stamp'].map((l) => v.fields.find((x: any) => x.label === l));
+  const f3 = ok(await quin.get(`/sign/${tokQ}`)).fields.find((x: any) => x.type === 'stamp');
+  // Nothing to copy yet: said in words, nothing put on.
+  const none = await rita.post(`/sign/${tok}/stamp`, { field_id: f2.id, same_as: f1.id });
+  assert.equal(none.status, 404);
+  assert.match(none.data.error, /The stamp you put on before is not on the document any more\. Choose a picture of the stamp again\./);
+  const first = ok(await rita.post(`/sign/${tok}/stamp`, { field_id: f1.id, image: stampPng(41, 'purple'), ink: 'purple', seed: 41, tilt: 2.5, texture: 0.6, turn: 2.5, from: 'upload' }));
+  const before = db.get('SELECT COUNT(*) n FROM stamp_images').n;
+  const second = ok(await rita.post(`/sign/${tok}/stamp`, { field_id: f2.id, same_as: f1.id }), 'the same stamp again');
+  assert.equal(second.value, first.value, 'the same picture');
+  assert.equal(second.turn, 2.5, 'turned the same way');
+  assert.deepEqual(second.stamp, { name: null, ink: 'purple', from: 'upload' });
+  assert.equal(db.get('SELECT COUNT(*) n FROM stamp_images').n, before, 'no second picture is kept');
+  const m1 = JSON.parse(db.get('SELECT stamp_meta m FROM fields WHERE id=?', f1.id).m), m2 = JSON.parse(db.get('SELECT stamp_meta m FROM fields WHERE id=?', f2.id).m);
+  assert.deepEqual({ ...m2, at: 0 }, { ...m1, at: 0 }, 'the same ink, seed, texture and turn');
+  // Itself, a field of someone else, a field that is not a stamp: none of them is a stamp of theirs to use again.
+  ok(await quin.post(`/sign/${tokQ}/stamp`, { field_id: f3.id, image: stampPng(42, 'red'), ink: 'red', seed: 42, from: 'upload' }));
+  for (const src of [f2.id, f3.id, v.fields.find((x: any) => x.type === 'signature').id, 'nope'])
+    assert.equal((await rita.post(`/sign/${tok}/stamp`, { field_id: f2.id, same_as: src })).status, 404, `same_as ${src}`);
+  assert.equal((await quin.post(`/sign/${tokQ}/stamp`, { field_id: f3.id, same_as: f1.id })).status, 404, 'another signer cannot take it either');
+  assert.equal(db.get('SELECT value FROM fields WHERE id=?', f2.id).value, first.value, 'and the second field keeps what it had');
+  // Both are recorded when they finish.
+  const done = await rita.post(`/sign/${tok}/complete`, { values: { [v.fields.find((x: any) => x.type === 'signature').id]: '1' }, signature_png: PNG });
+  assert.equal(done.status, 200, JSON.stringify(done.data));
+  assert.equal(trail(e.id).filter((x: any) => /put a stamp \(a picture they uploaded, purple ink\)/.test(x.detail || '')).length, 2);
+});
+
+test('a stamp field takes the real size and shape of the stamp chosen for it', () => {
+  const round = stampFieldBox({ size_mm: 40, width: 900, height: 900 }, 612, 792);
+  assert.ok(sameBox(round, stampBox(40, 612, 792)));
+  const wide = stampFieldBox({ size_mm: 55, width: 1000, height: 480 }, 612, 792);
+  assert.ok(Math.abs(wide.w - stampBox(55, 612, 792).w) < 1e-9, '55 mm across its longer side');
+  assert.ok(Math.abs(wide.h - stampBox(55 * 0.48, 612, 792).h) < 1e-9, 'and as tall as its picture makes it');
+  const tall = stampFieldBox({ size_mm: 30, width: 300, height: 600 }, 612, 792);
+  assert.ok(Math.abs(tall.h - stampBox(30, 612, 792).h) < 1e-9 && Math.abs(tall.w - stampBox(15, 612, 792).w) < 1e-9);
+  assert.ok(sameBox(stampFieldBox(null, 612, 792), stampBox(STAMP_DEFAULT_MM, 612, 792)), 'no stamp: the square a new field starts as');
+  const choice = read('src/components/editor/StampChoice.tsx');
+  assert.match(choice, /onChange=\{\(\) => patch\(\{ stamp_id: s\.id, value: '', \.\.\.sized\(s\) \}\)\}/, 'choosing a stamp sizes the field');
+  assert.match(choice, /if \(!untouched\) return \{\};/, 'unless the sender resized it by hand');
+});
+
+test('the stamp screens stay simple: adjustments behind one closed fold, the finish button in view, no dead button, the same stamp offered again', () => {
+  const maker = read('src/components/stamps/StampMaker.tsx');
+  const fold = maker.indexOf('<details className="st-adjust" data-fold');
+  assert.ok(fold > 0, 'one fold, marked data-fold');
+  assert.match(maker, /<summary>Adjust the look<\/summary>/);
+  assert.match(maker, /useState\(false\);\n  const made = useRef/, 'closed to start with');
+  assert.ok(maker.indexOf('className="st-inks"') < fold, 'the ink row stays outside it');
+  for (const inside of ['What counts as paper', 'Rubber texture', 'A different look', 'Make it round', 'Keep the shapes apart', 'Cut off the edges of the picture'])
+    assert.ok(maker.indexOf(inside, fold) > fold && maker.lastIndexOf(inside) > fold, `"${inside}" is inside the fold`);
+  assert.equal((maker.match(/<details/g) || []).length, 1, 'no second fold inside it');
+  const css = read('src/app/styles/stamps.css');
+  assert.match(css, /\.st-foot \{ position: sticky; bottom:/, 'the buttons stay at the bottom of the dialog');
+  assert.match(css, /@media \(hover: hover\) and \(pointer: fine\) \{ \.sg-doc \.field\.fill\.stamp\.done:hover/, 'no outline stuck round a stamp after a tap on a touch screen');
+  const dialog = read('src/components/stamps/StampDialog.tsx'), team = read('src/components/stamps/StampSettings.tsx');
+  for (const [name, src] of [['signing dialog', dialog], ['Settings', team]] as const) {
+    assert.match(src, /<div className="st-foot">/, `${name}: its buttons are in the foot`);
+    assert.doesNotMatch(src, /disabled=\{[^}]*(!pick|!made|!name\.trim\(\)|stamps\.length >= max)/, `${name}: no button that is greyed out because nothing can be done yet`);
+  }
+  assert.match(dialog, /\{file && made && \(\s*<button type="button" className="btn primary"/, 'the main button comes once the stamp is made');
+  assert.match(dialog, /\{!file && !!saved\?\.length && !!pick && \(\s*<button type="button" className="btn primary"/, 'or when there is a saved stamp to use');
+  assert.match(dialog, /setPick\(\(p\) => p \|\| r\.stamps\?\.\[0\]\?\.id \|\| ''\)/, 'the first saved stamp is chosen to start with');
+  assert.match(dialog, /put\(\{ same_as: same\.field_id \}\)\}>\{busy \? 'Putting it on' : 'Use the same stamp'\}/);
+  assert.match(dialog, />Use another picture<\/button>/);
+  assert.match(read('src/app/sign/[token]/page.tsx'), /same=\{sameStampOf\(fields, stampField, stampUrl, turns\)\}/);
+  assert.match(team, /\{\(file \? !!made : !needsPicture\) && <button type="button" className="btn primary"/);
+  assert.match(team, /'Company stamp'\)\);/, 'a new stamp starts with a name that works');
+  assert.match(team, /Give the stamp a name, such as Company stamp or Received, then add it\./);
+  assert.match(team, /may_change && stamps\.length < max && <button/, 'no Add button that cannot add');
+  assert.match(team, /<p className="muted" style=\{\{ margin: '6px 0 0' \}\}>Your company stamp or seal, printed like ink next to a signature\.<\/p>/, 'one line of explanation');
+  assert.match(team, /<details className="st-how" data-fold>\s*<summary>How this works<\/summary>/, 'the longer rules behind How this works');
+  const help = read('src/app/help/stamps.tsx');
+  assert.doesNotMatch(help, /audit trail|SHA-256/, 'plain words on the public help page');
+  assert.match(help, /The record of the document says who put which stamp where and when, and keeps a fingerprint of the picture\./);
+  for (const f of ['src/components/stamps/StampMaker.tsx', 'src/components/stamps/StampDialog.tsx', 'src/components/stamps/StampSettings.tsx', 'src/components/editor/StampChoice.tsx'])
+    assert.doesNotMatch(read(f), /Sign&(amp;)?Grow/, `the old name is not in ${f}`);
 });
 
 test('the API description has the stamp field and the stamp routes; the words never claim more than a picture', async () => {

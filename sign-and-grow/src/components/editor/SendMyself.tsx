@@ -1,12 +1,14 @@
 'use client';
 import { BY_SENDER_TICK, BY_SENDER_HOW, bySenderProblem } from '@/lib/bysender';
+import { canSendMyself } from '@/lib/editorux';
 
 // "I will send the link myself": a person with a name and no email address, whom the sender reaches on WhatsApp, by
 // text message or in any chat. We email them nothing at all. What that means is said under the tick, before anyone
 // relies on it, and the rule for what cannot work without an address is the server's own (src/lib/bysender.ts).
 // Offered for one person who signs, approves or views on an envelope: not on a template, not for a group, not for
 // someone who signs in person on the sender's device, and not for a copy, which only ever goes out by email.
-export const canSendMyself = (r: any, isTpl: boolean) => !isTpl && !r.group_id && (r.role === 'signer' || r.role === 'approver' || r.role === 'viewer');
+// The rule itself is in src/lib/editorux.ts, where the lines of a person's More are decided.
+export { canSendMyself };
 
 /** What stops Send for such a person, in the words the server would use, or null. */
 export function sendMyselfTrouble(r: any, name: string, fields: any[]): string | null {

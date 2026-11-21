@@ -296,7 +296,10 @@ test('a Finish sent again after its answer was lost signs once, uses one signatu
 
 test('the landing page, the in-person notice and /help say that signing needs a connection to open and to finish', () => {
   const page = signPage();
-  assert.equal(page.match(/In-person signing[^\n]*now\. \{SIGNING_ONLINE\}<\/div>/g)?.length, 2, 'both in-person notices');
+  // (repair-simplify-signing: the notice on the consent screen now only says whose turn it is, "Hand this device to
+  // <name> now.", so that screen keeps to 120 words before its tick. The line about the connection is on the document,
+  // which is the next screen, and on the landing page and /help as before.)
+  assert.equal(page.match(/In-person signing[^\n]*now\. \{SIGNING_ONLINE\}<\/div>/g)?.length, 1, 'the in-person notice on the document');
   assert.match(read('src/app/page.tsx'), /\$\{SIGNING_ONLINE\}/);
   const help = read('src/app/help/phone.tsx');
   assert.match(help, /\{SIGNING_ONLINE\} \{SIGNING_WEAK_SIGNAL\}/);

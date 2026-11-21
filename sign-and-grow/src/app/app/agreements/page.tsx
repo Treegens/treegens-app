@@ -13,11 +13,11 @@ export default function Agreements() {
   const [busy, setBusy] = useState(false);
   const router = useRouter();
 
-  if (error) return <div className="card cw-team"><h1 className="serif">Click-to-agree</h1><p style={{ marginTop: 8 }}>{error.status === 403 ? 'Only the owner and the admins of your team manage click-to-agree terms, because they speak for your website. Ask one of them.' : error.message}</p></div>;
+  if (error) return <div className="card cw-team"><h1 className="serif">Website terms</h1><p style={{ marginTop: 8 }}>{error.status === 403 ? 'Only the owner and the admins of your team manage click-to-agree terms, because they speak for your website. Ask one of them.' : error.message}</p></div>;
   return (
     <div className="stack cw-team">
       <div className="pagehead" style={{ marginBottom: 0 }}>
-        <div><h1 className="serif">Click-to-agree</h1><div className="muted">Terms that visitors of your website accept with one click: on a page of their own, inside a frame on your website, or recorded by your website through the API. Each acceptance is kept with the version and a fingerprint of the exact terms, who (as your website or the visitor gave it), when, the internet address, the browser and the page.</div></div>
+        <div><h1 className="serif">Website terms</h1><div className="muted">Terms that visitors of your website accept with one click: on a page of their own, inside a frame on your website, or recorded by your website through the API. Each acceptance is kept with the version and a fingerprint of the exact terms, who (as your website or the visitor gave it), when, the internet address, the browser and the page.</div></div>
       </div>
       {data && <div className="notice">{data.usage.line} {NOT_A_SIGNATURE}</div>}
       <form className="card" onSubmit={(e) => {

@@ -110,7 +110,25 @@ export function restoreInto(backupDir, target) {
  * `dir`, so run it in a process of its own (the CLI does).
  */
 export async function checkRestored(dir, manifest, env = process.env) {
-  process.env.DATA_DIR = path.resolve(dir);
+  // The server's code opens its database for writing (it switches on write-ahead mode and adds new columns). So it
+  // is given a copy of the restored database in a folder of its own, taken away afterwards, and the restored one
+  // stays byte for byte what the manifest says until the server itself is started on it.
+  const look = `${path.resolve(dir)}.checking`;
+  fs.rmSync(look, { recursive: true, force: true });
+  fs.mkdirSync(look, { recursive: true, mode: 0o700 });
+  fs.copyFileSync(path.join(dir, 'sign.db'), path.join(look, 'sign.db'));
+  process.env.DATA_DIR = look;
+  try {
+    return await checkWith(dir, manifest, env);
+  } finally {
+    try {
+      globalThis.__tsdb?.close?.();
+    } catch {}
+    fs.rmSync(look, { recursive: true, force: true });
+  }
+}
+
+async function checkWith(dir, manifest, env) {
   const { all } = await import('../src/server/db.ts');
   const { verifyChain } = await import('../src/server/envelopes.ts');
   const { verifySecurityChain } = await import('../src/server/seclog.ts');

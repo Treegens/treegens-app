@@ -112,7 +112,7 @@ does not explain the law) must say it is not held, or be the sentence of a regis
 Explaining what a law asks for is fine. Honest and short go together: one line, not a paragraph.
 *Test (script):* the CLAIMS list on signer, public and trust pages.
 
-**P14. Order.** No batch changes a core screen until that screen's quick win (section 6) has merged and its new,
+**P14. Order.** No batch changes a core screen until that screen's quick win (section 7) has merged and its new,
 lower numbers are in ceilings.json. A batch that changes a core screen runs the check before and after and puts
 both tables in its report.
 
@@ -496,23 +496,7 @@ Run it before and after any change to a core screen.
 
 ---
 
-## 6. Quick wins, and their order
-
-These lower the ceilings. By P14, the quick win for a screen merges before any feature batch touches that screen.
-
-| Batch | Screens | Quick wins |
-|---|---|---|
-| simplify-start | sign-up, sidebar, Home | Confirm the address with a 6-digit code in the same tab, email of 50 words or fewer. One start button. Sidebar of 9 entries with the More group. Home shows Recently completed with Download. Document names title-cased from the file name |
-| simplify-editor | the editor | Step 1 with one empty person row and everything else in the person's More. Reminders, deadline and the message move to step 3. Six common fields plus More fields. "Sign now" on step 3 when the only person is the sender, before "Sign a document yourself" leaves Home |
-| simplify-envelope | envelope page, Templates | One main button by state, one More per person and per page, folded sections, no IP addresses or hashes. One Download; "Full record for disputes" in More. Toasts at the bottom. Templates: Use on each row |
-| simplify-signing | signing page, invitation email | Next opens the field. Consent of 120 words or fewer. Other actions in the fixed order. "Your signature" and "Sign". Finish straight to Done. Invitation of 80 words or fewer above the button, dates in the person's own time |
-| simplify-public | landing, /pricing, /help, Settings | Landing of 3 phone screenfuls and 800 words, 4 top links. No figure under 1 tree. Settings in the sections of 2.2, "Saved" next to what was saved, Plan rules behind "How signatures work" |
-
-Each batch also adds the attributes of P4 and P3 to its screens.
-
----
-
-## 7. Where every feature lives
+## 6. Where every feature lives
 
 The full note for each key is in research/ux-notes.json. This table is made from it: the gate (P3) and the key
 whose place it shares (P12).
@@ -641,3 +625,19 @@ whose place it shares (P12).
 | simplify-envelope | always |  | The envelope page and Templates (sections 2.4 and 2.5) |
 | simplify-signing | always |  | The signing page, the consent screen and the invitation email (section 2.6) |
 | simplify-public | always |  | Landing, /pricing, /help and Settings (sections 2.2 and 2.7) |
+
+---
+
+## 7. Quick wins, and their order
+
+These lower the ceilings. By P14, the quick win for a screen merges before any feature batch touches that screen.
+
+| Batch | Screens | Quick wins |
+|---|---|---|
+| simplify-start | sign-up, sidebar, Home | Confirm the address with a 6-digit code in the same tab, email of 50 words or fewer. One start button. Sidebar of 9 entries with the More group. Home shows Recently completed with Download. Document names title-cased from the file name |
+| simplify-editor | the editor | Step 1 with one empty person row and everything else in the person's More. Reminders, deadline and the message move to step 3. Six common fields plus More fields. "Sign now" on step 3 when the only person is the sender, before "Sign a document yourself" leaves Home |
+| simplify-envelope | envelope page, Templates | One main button by state, one More per person and per page, folded sections, no IP addresses or hashes. One Download; "Full record for disputes" in More. Toasts at the bottom. Templates: Use on each row |
+| simplify-signing | signing page, invitation email | Next opens the field. Consent of 120 words or fewer. Other actions in the fixed order. "Your signature" and "Sign". Finish straight to Done. Invitation of 80 words or fewer above the button, dates in the person's own time |
+| simplify-public | landing, /pricing, /help, Settings | Landing of 3 phone screenfuls and 800 words, 4 top links. No figure under 1 tree. Settings in the sections of 2.2, "Saved" next to what was saved, Plan rules behind "How signatures work" |
+
+Each batch also adds the attributes of P4 and P3 to its screens.

@@ -37,6 +37,12 @@ export function fmtTrees(trees: number): string {
 
 export const fmtNum = (n: number, digits = 0) => n.toLocaleString('en', { maximumFractionDigits: digits });
 
+// A total is shown only once it is large enough to mean something: the account's paper saved (the sidebar), and the
+// public counters. Until then the place it would stand in is simply absent, never a tiny number or "...". The saving
+// of one document is always shown where a person sends or finishes it.
+export const TOTALS_FROM = { sheets: 1000, treesPlanted: 10 };
+export const totalWorthShowing = (sheets: unknown): boolean => Number(sheets) >= TOTALS_FROM.sheets;
+
 // Pricing. One number per rule, used by the server, the app and the public pages alike.
 export const PRICING = {
   planName: 'Grove',

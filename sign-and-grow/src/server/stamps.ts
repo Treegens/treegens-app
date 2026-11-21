@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { all, get, run, tx } from './db.ts';
 import { bad, id, now, sha256, str } from './util.ts';
 import { audit, hasNotPaid, nameRefusal, type Actor } from './envelopes.ts';
-import { readPng, cleanPng, decodePng } from './png.ts';
+import { readPng, cleanPng, decodePng, looksLikePng } from './png.ts';
 import { STAMP_IS, STAMP_FROM, STAMP_PNG_MAX_BYTES, STAMP_OUT_MAX_SIDE, STAMP_OUT_MIN_SIDE, STAMPS_PER_ACCOUNT, STAMP_DEFAULT_MM, STAMP_MIN_MM, STAMP_MAX_MM, STAMP_NAME_MAX, STAMP_TURN_MAX, stampTurn } from '../lib/stamps.ts';
 import { isInk, validSeed, TILT_MAX, INK_WORD, type Ink } from '../lib/stampink.ts';
 import { whoIs } from '../lib/groups.ts';
@@ -61,11 +61,14 @@ export function saveStampImage(v: any, what = 'The stamp'): { sha: string; width
   const raw = pngBytes(v, what);
   if (raw.length > STAMP_PNG_MAX_BYTES) throw bad(`${what} is ${(raw.length / 1e6).toFixed(1)} MB, and a stamp can be up to ${STAMP_PNG_MAX_BYTES / 1e6} MB. Make it smaller: at most ${STAMP_OUT_MAX_SIDE} pixels on its longer side is plenty. Nothing was saved.`, 413);
   const info = readPng(raw);
+  if (!info && !looksLikePng(raw)) throw bad(`${what} is not a PNG picture: the file holds something else (an SVG, a web page or another kind of picture, whatever its name says). Send the impression as a PNG. The stamp screen in the app (Settings, Stamps) makes one from a photo or a design. Nothing was saved.`);
   if (!info) throw bad(`${what} is not a whole PNG picture. It may have been cut short on the way. Make it again and send it once more. Nothing was saved.`);
   const { width: w, height: h } = info;
   if (Math.max(w, h) < STAMP_OUT_MIN_SIDE) throw bad(`${what} is only ${w} by ${h} pixels, too small to print as a stamp. Use a picture at least ${STAMP_OUT_MIN_SIDE} pixels across. Nothing was saved.`);
   if (w > STAMP_OUT_MAX_SIDE || h > STAMP_OUT_MAX_SIDE) throw bad(`${what} is ${w} by ${h} pixels, and a stamp can be up to ${STAMP_OUT_MAX_SIDE} on each side. Make it smaller and send it again. Nothing was saved.`);
   const px = decodePng(raw, STAMP_OUT_MAX_SIDE * STAMP_OUT_MAX_SIDE);
+  if (!px && info.bitDepth === 8 && info.interlace === 0 && [0, 2, 4, 6].includes(info.colorType))
+    throw bad(`${what} is damaged: its pixel data does not match its size of ${w} by ${h}, or cannot be unpacked. Sending the same file again will not help. Make the picture again and send that. Nothing was saved.`);
   if (!px) throw bad(`${what} must be an 8-bit PNG with a see-through background (RGBA, not interlaced). Pictures with a palette or 16 bits per channel are not taken. The stamp screen in the app makes the right kind. Nothing was saved.`);
   let clear = 0, ink = 0;
   for (let i = 3; i < px.data.length; i += 4) {
@@ -74,7 +77,9 @@ export function saveStampImage(v: any, what = 'The stamp'): { sha: string; width
   }
   if (clear < w * h * 0.05) throw bad(`${what} has no see-through background, so it would print as a box with its paper around it, not like ink. Send the impression: a PNG where everything that is not ink is see-through. The stamp screen in the app (Settings, Stamps) makes one from a photo or a design. Nothing was saved.`);
   if (ink < Math.max(20, w * h * 0.003)) throw bad(`${what} is see-through almost everywhere: there is no ink in it to print. Nothing was saved.`);
-  const png = cleanPng(info, raw);
+  // Stored written again from its pixel data alone: no other chunk of the file and no byte after its pixels is kept.
+  const png = cleanPng(info, STAMP_OUT_MAX_SIDE * STAMP_OUT_MAX_SIDE);
+  if (!png) throw bad(`${what} could not be read. Make the picture again and send that. Nothing was saved.`);
   const sha = sha256(png);
   run('INSERT OR IGNORE INTO stamp_images (sha256, png, width, height, bytes, at) VALUES (?,?,?,?,?,?)', sha, png, w, h, png.length, now());
   return { sha, width: w, height: h, bytes: png.length };

@@ -40,10 +40,6 @@
 .sg-moredlg p { margin: 6px 0 0; }
 .sg-moredlg > .btn { min-height: 48px; justify-content: center; }
 .sg-bottom .btn.sg-morebtn { flex: none; min-height: 54px; min-width: 64px; padding: 0 14px; font-size: 16px; }
-/* Under the list of Other actions: the name this person signs as, and the way to put its spelling right. */
-.sg-menu-as { margin: 12px 0 0; font-size: 14.5px; color: var(--muted); overflow-wrap: anywhere; }
-.sg-menu-as .sg-link { display: inline-flex; align-items: center; min-height: 44px; }
-
 /* The consent screen on a phone: one screenful, so Continue is in sight when the page opens. */
 @media (max-width: 640px) {
   .sg-consent { padding: 12px 16px 14px; margin: 0 auto; }
@@ -60,3 +56,24 @@
   /* The bar above already carries our logo on this screen, so the footer does not say it a second time. */
   .sg-shell:has(.sg-consent) .sg-foot-by { display: none; }
 }
+.pub-replyto { margin: 0 0 12px; overflow-wrap: anywhere; }
+.pub-replyto .sg-link { display: inline-flex; align-items: center; min-height: 44px; }
+
+/* After the simplicity review (repair-simplify-signing). */
+/* 44 px to press at every width, also with a mouse: the header's More and Other actions, the footer's links, the
+   sender's address on the consent screen and "Fix my name" wherever it stands. */
+.sg-bar .btn.sm.sg-morebtn, .sg-bar .btn.sm.sg-other { min-height: 44px; }
+.sg-foot-links .sg-link, .sg-top .sg-link, .sg-dialog .sg-link { display: inline-flex; align-items: center; min-height: 44px; }
+.sg-from a { display: inline-block; padding: 12px 0; margin: -12px 0; }
+/* "Stop reminder emails" on a line of its own under the note, so the note's two lines stay together. */
+.sg-later-stop { margin-top: 2px; }
+.sg-later-stop:empty { display: none; }
+/* The sender's message behind one line, when the consent screen would otherwise pass 120 words before the tick. */
+.sg-fold { margin: 6px 0; }
+.sg-fold > summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--green); text-decoration: underline; font-size: 15px; }
+.sg-fold .sg-quote { margin-top: 4px; }
+/* The bar of the consent screen carries our logo, so its footer does not say "sent with" again, at any width. */
+.sg-shell:has(.sg-consent) .sg-foot-by { display: none; }
+.sg-shell .btn.sm, .sg-dialog .btn.sm { min-height: 44px; }
+.sg-impact .sg-more { display: inline-flex; align-items: center; min-height: 44px; }
+.sg-skip.sg-skip-text:focus { min-height: 46px; box-sizing: border-box; }

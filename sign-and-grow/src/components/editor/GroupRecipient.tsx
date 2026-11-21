@@ -31,7 +31,7 @@ export function useGroups(): GroupItem[] | null {
 
 export const isGroupRow = (r: any) => !!(r?.group_id || r?.group_name);
 const names = (l: Member[]) => (l.length <= 1 ? l.map((m) => m.name).join('') : `${l.slice(0, -1).map((m) => m.name).join(', ')} and ${l[l.length - 1].name}`);
-const ROLES: [string, string][] = [['signer', 'Needs to sign'], ['approver', 'Needs to approve'], ['viewer', 'Needs to view'], ['cc', 'Receives a copy']];
+const ROLES: [string, string][] = [['signer', 'Needs to sign'], ['approver', 'Needs to approve'], ['cc', 'Gets a copy'], ['viewer', 'Must open it']];
 
 /** One line about who can act for a group recipient. */
 export function groupLine(r: any): string {
@@ -79,7 +79,7 @@ export function GroupRow({ ed, r, groups, old }: { ed: Ed; r: any; groups: Group
   const list = groups || [];
   const known = list.some((g) => g.id === r.group_id);
   return (
-    <div className="rcpt ed-group" style={{ ['--fc' as any]: ed.color(r.id) }} role="group" aria-label={`Recipient: the group ${r.group_name || r.name}`}>
+    <div className="rcpt ed-group" data-item="person" style={{ ['--fc' as any]: ed.color(r.id) }} role="group" aria-label={`Recipient: the group ${r.group_name || r.name}`}>
       <div className="row wrap">
         {!!env.ordered && <input type="number" min={1} max={99} value={r.routing_order} aria-label="Signing order" style={{ width: 64 }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { routing_order: Number(e.target.value) || 1 })} />}
         {isTpl && <input placeholder="Role, e.g. HR" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
@@ -87,18 +87,21 @@ export function GroupRow({ ed, r, groups, old }: { ed: Ed; r: any; groups: Group
           {!known && <option value="">{r.group_name || r.name || 'Choose a group'}{r.group_missing ? ' (deleted)' : ''}</option>}
           {list.map((g) => <option key={g.id} value={g.id}>{g.name} ({plural(g.members.length, 'member')})</option>)}
         </select>
-        <select value={r.role} aria-label="Role" style={{ flex: '0 1 170px' }} disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { role: e.target.value })}>
-          {ROLES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-        <button type="button" className="btn sm ghost" onClick={() => setMore(!more)} aria-expanded={more} aria-label={`More options for ${r.group_name || r.name}`}>More</button>
+        <button type="button" className="btn sm ghost" data-more="item" onClick={() => setMore(!more)} aria-expanded={more} aria-controls={`ed-more-${r.id}`} aria-label={`More options for ${r.group_name || r.name}`}>More</button>
         {!wording && <button type="button" className="btn sm ghost danger" onClick={() => ed.removeRcp(r.id)} aria-label={`Remove ${r.group_name || r.name}`}>✕</button>}
       </div>
-      <p className="ed-group-members">{groupLine(r)}{r.role !== 'cc' && ' The first who agrees takes it on, and the others then see who has it.'}</p>
+      <p className="ed-group-members">{r.role !== 'signer' && <b>{ROLES.find(([k]) => k === r.role)?.[1]}. </b>}{groupLine(r)}{r.role !== 'cc' && ' The first who agrees takes it on, and the others then see who has it.'}</p>
       {correcting && old?.claimed_by && old.group_id === r.group_id && (
         <p className="ed-group-members"><b>{old.name} has taken this on for {old.group_name}.</b> To let the whole group have it again, use Give back to the group on the envelope page.</p>
       )}
       {more && (
-        <div className="grid g2" style={{ marginTop: 10 }}>
+        <div id={`ed-more-${r.id}`} className="grid g2" style={{ marginTop: 10 }}>
+          {/* What the group does: in More, like a person's role (PersonMore.tsx). */}
+          <label className="f" style={{ margin: 0 }}><span>What the group does</span>
+            <select value={r.role} aria-label="Role" disabled={!!wording} onChange={(e) => ed.patchRcp(r.id, { role: e.target.value })}>
+              {ROLES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </label>
           <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">(one for the whole group, at least 4 characters, give it to them yourself)</span></span><input value={r.access_code || ''} maxLength={50} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>
           <label className="f" style={{ margin: 0 }}><span>Private note <span className="hint">(every member sees it)</span></span><input value={r.note || ''} maxLength={1000} onChange={(e) => ed.patchRcp(r.id, { note: e.target.value })} /></label>
           <p className="muted small" style={{ gridColumn: '1 / -1', margin: 0 }}>A one-time code by email or text message goes to one person, so it cannot be asked of a group.</p>

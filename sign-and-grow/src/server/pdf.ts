@@ -25,7 +25,7 @@ import { drawSenderDetails } from './customfields.ts';
 import { sealLineFor } from './seal.ts';
 import { STAMP_OPACITY, stampTurn } from '../lib/stamps.ts';
 // The logo in the certificate's header and the "Signed with growsigning" stamp at the foot of pages (brandpdf.ts).
-import { drawBrandHeader, drawSheetFoot, drawPageStamp } from './brandpdf.ts';
+import { drawBrandHeader, drawSheetFoot, drawPageFoot } from './brandpdf.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -656,9 +656,8 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
     }
     for (const page of pages) {
       const m = mapper(page);
-      const p = m.pt(12, 13);
-      page.drawText(`GrowSigning Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`, { x: p.x, y: p.y, size: 6.5, font, color: MUTED, rotate: m.rotate });
-      drawPageStamp(page, m, MUTED); // "Signed with growsigning" at the foot (brandpdf.ts)
+      // The stamp and the envelope ID, side by side at the foot; nothing of ours at the top (brandpdf.ts).
+      drawPageFoot(page, m, { line: `GrowSigning Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`, font, color: MUTED });
       if (mark) drawStamp(page, bold, mark); // and across the whole page (stamp.ts)
     }
     if (mark) markFields(pages, fields.filter((f: any) => f.document_id === d.id), bold, mark);

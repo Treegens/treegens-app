@@ -90,6 +90,8 @@ label.check > input[type='checkbox'], label.check > input[type='radio'] { flex: 
 .side .impact { margin-top: auto; background: rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 12px; font-size: 12.5px; line-height: 1.45; color: #dcebdf; }
 .side .impact b { display: block; font-size: 20px; color: #fff; font-family: var(--serif); }
 .side .me { padding: 10px; font-size: 13px; color: #b9d2c0; }
+/* The usage line under the account name: how many signatures are left, linking to the Plan page. */
+.side .me .usage-line { display: flex; align-items: center; min-height: 44px; color: #fff; text-decoration: underline; text-underline-offset: 3px; }
 .main { padding: 28px 32px 64px; max-width: 1180px; width: 100%; min-width: 0; }
 .pagehead { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .mobilebar { display: none; }
@@ -172,6 +174,10 @@ table.t tr.click:hover td { background: #fbfaf6; }
 .palette { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .palette button { font: inherit; font-size: 12.5px; font-weight: 600; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 6px; cursor: pointer; text-align: left; display: flex; gap: 6px; align-items: center; }
 .palette button:hover { border-color: var(--green); }
+@media (hover: hover) and (pointer: fine) { .palette button:not(:disabled):not(.ed-morefields) { cursor: grab; } }
+.ed-ghost { position: fixed; z-index: 1000; transform: translate(-50%, -50%); pointer-events: none; font-size: 12.5px; font-weight: 600; padding: 8px 14px; border-radius: 6px; border: 2px dashed var(--fc, var(--green)); background: color-mix(in srgb, var(--fc, var(--green)) 14%, #fff); color: #1b1b1b; opacity: .75; box-shadow: 0 6px 18px rgba(0,0,0,.18); white-space: nowrap; }
+.ed-ghost.ok { opacity: 1; border-style: solid; }
+body.ed-pulling, body.ed-pulling * { cursor: grabbing !important; user-select: none; }
 .palette button.on { background: var(--green); color: #fff; border-color: var(--green); }
 .topbar { height: 61px; background: #fff; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 14px; padding: 0 18px; position: sticky; top: 0; z-index: 20; }
 .steps { display: flex; gap: 6px; align-items: center; font-size: 13.5px; font-weight: 600; color: var(--muted); }

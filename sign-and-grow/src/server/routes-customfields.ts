@@ -3,12 +3,14 @@
 import { route } from './router.ts';
 import { bad } from './util.ts';
 import { mine, assertMayChange } from './routes-envelopes.ts';
-import { createDef, updateDef, deleteDef, filterNames, readCustom, writeCustom, valuesOf } from './customfields.ts';
+import { createDef, updateDef, deleteDef, filterNames, neededFor, readCustom, writeCustom, valuesOf } from './customfields.ts';
 import { MAX_CUSTOM_FIELDS, CUSTOM_NAME_MAX, CUSTOM_VALUE_MAX, CUSTOM_CHOICES_MAX, DOC_FIELDS_MAX } from '../lib/customfields.ts';
 
 // Everyone on the team reads them (the editor asks for them on its last step), and so does a "send" API key.
 route('GET', '/custom-fields', (c) => ({
   ...filterNames(c.account.id),
+  // ?template=<id>: the required details that template has no value for (the "Use" dialog asks for them).
+  ...(c.q.get('template') ? { needed: neededFor(c.account.id, String(c.q.get('template'))) } : {}),
   limits: { fields: MAX_CUSTOM_FIELDS, name: CUSTOM_NAME_MAX, value: CUSTOM_VALUE_MAX, choices: CUSTOM_CHOICES_MAX, document_fields: DOC_FIELDS_MAX },
 }));
 route('POST', '/custom-fields', async (c) => createDef(c, await c.body()), 'admin');

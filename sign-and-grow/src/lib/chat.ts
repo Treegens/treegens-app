@@ -69,17 +69,18 @@ export function screenOf(path: string, search = ''): ChatScreen {
   return 'public';
 }
 /** The questions offered before anything is typed, by screen. */
+// Three for each screen, in the words of the person on it.
 export const CHAT_STARTERS: Record<ChatScreen, string[]> = {
-  signing: ['What am I agreeing to?', 'My name is spelled wrong', 'I need more time', 'How do I get a copy later?'],
-  editor: ['How do signatures work, and what is free?', 'Can I fix a document after sending?', 'Why can I not send?', 'Who can see what I send?'],
-  plan: ['Can I get a refund?', 'How do I cancel?', 'What happens to my documents when I cancel?', 'Will the price go up?'],
-  help: ['I cannot find my signing link', 'Is this email really from GrowSigning?', 'How do I cancel?', 'I cannot log in'],
-  app: ['How do signatures work, and what is free?', 'The recipient never got the email', 'How do I cancel?', 'Who can see my documents?'],
-  public: ['How much does it cost?', 'Is this email really from GrowSigning?', 'I cannot find my signing link', 'Do signers need an account?'],
+  signing: ['I cannot sign today', 'My name is spelled wrong', 'How do I get a copy later?'],
+  editor: ['How do signatures work, and what is free?', 'Can I fix a document after sending?', 'Why can I not send?'],
+  plan: ['Can I get a refund?', 'How do I cancel?', 'What happens to my documents when I cancel?'],
+  help: ['I cannot find my signing link', 'Is this email really from GrowSigning?', 'I cannot log in'],
+  app: ['How do I send my first document?', 'They never got my email', 'Who has not signed yet?'],
+  public: ['How much does it cost?', 'Is this email really from GrowSigning?', 'I cannot find my signing link'],
 };
 
 // ---- What the person is told before they type ---------------------------------------------------------------
-/** Said at the top of the chat, always. */
+/** Said behind "What we keep" in the chat, and on /security. */
 export const CHAT_DO_NOT_TYPE = 'Do not type passwords, card numbers, signing links or the codes from our emails. We take out what looks like one before your question is sent, but we cannot catch everything.';
 /** What is kept of a chat, said at the top and on /security. True of the code: see src/server/chat.ts. */
 export const CHAT_KEPT = 'We keep nothing of this chat. Only a count of questions is kept, under a fingerprint of your internet address (and of the signing link or the account, where there is one), for up to two days, to hold the limits. If you send the chat to a person, it becomes part of your help request.';
@@ -88,6 +89,10 @@ export const CHAT_KEPT_PAGE = 'Nothing of what is asked or answered is stored or
 /** Under the title when a model answers. */
 export const CHAT_AI_NOTE = 'An AI helper answers here at once. It can be wrong: the rules on our pages are what count, and it gives no legal advice.';
 /** Under the title when no model is set up on this server, or none can answer now. */
+/** The one line above the conversation, on every screen, and only when a model answers. No model or host is named. */
+export const CHAT_SHORT_AI = 'Answers are written by AI and can be wrong. Do not type passwords or card numbers.';
+/** With no model, nothing is above the conversation. This is its first grey line, before anything is asked. */
+export const CHAT_SHORT_BUILTIN = 'These answers come from our help pages.';
 export const CHAT_BUILTIN_NOTE = 'Answers here come from our help pages, chosen by the words you type. They can miss the point: the rules on our pages are what count.';
 
 // ---- Taking out what must not be sent -----------------------------------------------------------------------
@@ -263,10 +268,13 @@ export function handOverTopic(why: HandOver | null, screen: ChatScreen, lastQues
 
 // ---- The tools that exist -----------------------------------------------------------------------------------
 // The helper takes no action. It names these, and the dialog shows a button for each one that fits the question.
-export type ChatTool = { id: string; label: string; href: string; what: string; words: RegExp };
+// `read`: the link opens something to read, not a tool that does something, and its button says so ("Read: ...").
+// `page`: what the link is about is a control of the signing page itself, so on that page the dialog offers the
+// control (the `acts` of an answer) and not a link away from it.
+export type ChatTool = { id: string; label: string; href: string; what: string; words: RegExp; read?: boolean; page?: boolean };
 export const CHAT_TOOLS: ChatTool[] = [
   { id: 'find-documents', label: 'Find my documents', href: '/help#find-documents', what: 'emails a link to every document sent to an address: waiting, signed or completed. Works without an account.',
-    words: /\b(lost|cannot find|can'?t find|could ?n[o']?t find|missing|link|resend|send (?:it|me) again|where is my|copy|deleted the email|never got)\b/ },
+    words: /\b(lost|cannot find|can'?t find|could ?n[o']?t find|missing|link|resend|send (?:it|me) again|where is my (?:document|link|copy|contract|email)|copy|deleted the email|never got)\b/ },
   { id: 'find-subscription', label: 'Find my subscription', href: '/help#find-subscription', what: 'emails every paid plan tied to an address, each with a link that stops it without logging in.',
     words: /\b(subscription|cancel\w*|stop (?:paying|billing|the plan)|renew\w*|charge\w*|unknown charge)\b/ },
   { id: 'stop-by-card', label: 'Stop billing with my card', href: '/help#stop-by-card', what: 'stops a plan with the last four digits of the card and the account email, or the date and amount of a charge. For someone who no longer has the mailbox.',
@@ -275,22 +283,35 @@ export const CHAT_TOOLS: ChatTool[] = [
     words: /\b(scam\w*|real|genuine|phish\w*|suspicious|fake|security code|is this (?:email|request)|really from|did not expect|unexpected)\b/ },
   { id: 'verify', label: 'Verify a document', href: '/verify', what: 'tells whether a PDF is unchanged since signing finished here, or looks up a printed copy by its envelope ID. It does not say who was behind each signature.',
     words: /\b(verify|unchanged|tamper\w*|authentic|fingerprint|original|changed since|printed copy|envelope id)\b/ },
-  { id: 'fix-name', label: 'Fix my name', href: '/help#while-signing', what: 'on the signing page, in "Check before you finish", which opens at Finish when the name typed for the signature is not the name on the document: "Not spelled right? Fix my name". A small slip is corrected at once; anything more is sent to the sender to confirm.',
+  { id: 'fix-name', label: 'Fix my name', href: '/help#while-signing', read: true, page: true, what: 'on the signing page: tap your name where the document shows it, or choose Other actions and Pass to someone else, where "Not spelled right? Fix my name" is. It is also in the step "Check your name", which opens at Finish when the name typed for the signature is not the name on the document. A small slip is corrected at once; anything more is sent to the sender to confirm.',
     words: /\b(my name|name (?:is )?(?:wrong|spelled|misspel\w*)|misspel\w*|typo in my name|spelling)\b/ },
-  { id: 'more-time', label: 'Ask for more time', href: '/help#more-time', what: 'on the signing page: "Ask the sender for more time", under Other actions, or on the page a passed deadline shows. The sender decides.',
+  { id: 'more-time', label: 'Ask for more time', href: '/help#more-time', read: true, page: true, what: 'on the signing page: "Ask the sender for more time", under Other actions, or on the page a passed deadline shows. The sender decides.',
     words: /\b(expired|deadline|more time|ran out|too late|extend\w*|extension|closed before)\b/ },
-  { id: 'refunds', label: 'The refund rule', href: '/help#refunds', what: 'the whole refund rule, and where the button is (Settings, Plan).', words: /\b(refund\w*|money back)\b/ },
-  { id: 'cancel', label: 'How to cancel', href: '/help#cancel', what: 'the three ways to stop a plan: one button on the Plan page, the stop link in payment emails, and the two tools without logging in.', words: /\b(cancel\w*|stop (?:the )?plan|unsubscribe)\b/ },
-  { id: 'locked-out', label: 'I cannot log in', href: '/help#locked-out', what: 'resetting a password, a lost authenticator phone, a login made with Google or Microsoft.', words: /\b(log ?in|sign ?in|password|locked|two[- ]step|2fa|authenticator)\b/ },
-  { id: 'not-me', label: 'I did not sign this', href: '/help#not-me', what: 'what to do when you are named on a document you did not sign.', words: /\b(did ?n[o']?t sign|never signed|not me|forg\w+|dispute\w*)\b/ },
-  { id: 'security', label: 'Security and trust', href: '/security', what: 'who can see documents, where the data is, what is deleted and what is kept.', words: /\b(who can see|privacy|private|data|stored|where.*(?:data|server)|encrypt\w*|delet\w*|gdpr)\b/ },
+  { id: 'refunds', label: 'The refund rule', href: '/help#refunds', read: true, what: 'the whole refund rule, and where the button is (Settings, Plan).', words: /\b(refund\w*|money back)\b/ },
+  { id: 'cancel', label: 'How to cancel', href: '/help#cancel', read: true, what: 'the three ways to stop a plan: one button on the Plan page, the stop link in payment emails, and the two tools without logging in.', words: /\b(cancel\w*|stop (?:the )?plan|unsubscribe)\b/ },
+  { id: 'locked-out', label: 'I cannot log in', href: '/help#locked-out', read: true, what: 'resetting a password, a lost authenticator phone, a login made with Google or Microsoft.', words: /\b(log ?in|sign ?in|password|locked|two[- ]step|2fa|authenticator)\b/ },
+  { id: 'not-me', label: 'I did not sign this', href: '/help#not-me', read: true, what: 'what to do when you are named on a document you did not sign.', words: /\b(did ?n[o']?t sign|never signed|not me|forg\w+|dispute\w*)\b/ },
+  { id: 'security', label: 'Security and trust', href: '/security', read: true, what: 'who can see documents, where the data is, what is deleted and what is kept.', words: /\b(who can see|privacy|private|data|stored|where.*(?:data|server)|encrypt\w*|delet\w*|gdpr)\b/ },
+  { id: 'pricing', label: 'Pricing', href: '/#pricing', read: true, what: 'the prices and the rules on when signatures expire.', words: /\b(price\w*|pricing|cost\w*|how much|expensive)\b/ },
 ];
-/** The tools that fit a question, then those the answer names, at most three. */
-export function toolsFor(question: string, answer = ''): { id: string; label: string; href: string }[] {
+/**
+ * The tools that fit a question, then those the answer names, at most three. A link that only opens reading is
+ * labelled "Read: ...", so no button looks like it does something it does not. On the signing page nothing about a
+ * price or a plan is offered, nor a link to read about a control that is on that very page.
+ */
+export function toolsFor(question: string, answer = '', screen: ChatScreen = 'public'): { id: string; label: string; href: string }[] {
   const low = (s: string) => String(s || '').toLowerCase().replace(/[’‘]/g, "'");
   const q = low(question), a = low(answer);
-  const hit = [...CHAT_TOOLS.filter((x) => x.words.test(q)), ...CHAT_TOOLS.filter((x) => !x.words.test(q) && a.includes(x.label.toLowerCase()))];
-  return hit.slice(0, 3).map(({ id, label, href }) => ({ id, label, href }));
+  const SENDER_ONLY = ['pricing', 'find-subscription', 'stop-by-card', 'refunds', 'cancel'];
+  // Signed in to an account, "they never got it" is about the people someone sent to: Find my documents is for a
+  // person looking for their own. And "the order people sign in" is not about logging in.
+  const sender = screen === 'app' || screen === 'editor' || screen === 'plan';
+  const fits = CHAT_TOOLS.filter((x) =>
+    (screen !== 'signing' || (!x.page && !SENDER_ONLY.includes(x.id))) &&
+    !(sender && x.id === 'find-documents' && !/\b(?:my signing link|sent to me|i signed|i was sent)\b/.test(q)) &&
+    !(x.id === 'locked-out' && /\border\b/.test(q)));
+  const hit = [...fits.filter((x) => x.words.test(q)), ...fits.filter((x) => !x.words.test(q) && a.includes(x.label.toLowerCase()))];
+  return hit.slice(0, 3).map(({ id, label, href, read }) => ({ id, label: read ? `Read: ${label}` : label, href }));
 }
 /** Only these addresses are ever made into links in an answer. Anything else a model writes stays plain text. */
 export const CHAT_LINKABLE = new Set(['/help', '/check', '/verify', '/security', '/security/processing', '/security/certificate', ...CHAT_TOOLS.map((t) => t.href)]);

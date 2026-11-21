@@ -13,8 +13,9 @@ import { INK_WORD } from '@/lib/stampink';
 
 const inkWord = (ink: string) => INK_WORD[ink as keyof typeof INK_WORD] || '';
 
-function StampForm({ stamp, onClose, onSaved }: { stamp?: any; onClose: () => void; onSaved: () => void }) {
-  const [name, setName] = useState(stamp?.name || '');
+function StampForm({ stamp, taken, onClose, onSaved }: { stamp?: any; /** The names the team's stamps have now. */ taken: string[]; onClose: () => void; onSaved: () => void }) {
+  // A new stamp starts with a name that works, so a picture alone is enough to add it.
+  const [name, setName] = useState(stamp?.name || (taken.some((n) => n.trim().toLowerCase() === 'company stamp') ? '' : 'Company stamp'));
   const [size, setSize] = useState(String(stamp?.size_mm ?? STAMP_DEFAULT_MM));
   const [file, setFile] = useState<{ f: File; from: 'upload' | 'camera' } | null>(null);
   const [made, setMade] = useState<Made | null>(null);
@@ -29,6 +30,7 @@ function StampForm({ stamp, onClose, onSaved }: { stamp?: any; onClose: () => vo
   };
   const mm = Number(size);
   async function save() {
+    if (!name.trim()) return setError('Give the stamp a name, such as Company stamp or Received, then add it.');
     setBusy(true);
     setError('');
     try {
@@ -83,10 +85,14 @@ function StampForm({ stamp, onClose, onSaved }: { stamp?: any; onClose: () => vo
           </>
         )}
         <p className="muted small st-honest">{STAMP_IS_TEAM}</p>
-        {error && <div className="notice err" role="alert">{error}</div>}
-        <div className="actions">
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn primary" disabled={busy || !name.trim() || (needsPicture && !made) || (!!file && !made)} onClick={save}>{busy ? 'Saving' : stamp ? 'Save' : 'Add the stamp'}</button>
+        {/* The buttons stay in view. The main one is there only once it can do something: for a new stamp, after its
+            picture is made. */}
+        <div className="st-foot">
+          {error && <div className="notice err" role="alert">{error}</div>}
+          <div className="actions">
+            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            {(file ? !!made : !needsPicture) && <button type="button" className="btn primary" disabled={busy} onClick={save}>{busy ? 'Saving' : stamp ? 'Save' : 'Add the stamp'}</button>}
+          </div>
         </div>
       </div>
     </Dialog>
@@ -105,12 +111,16 @@ export function StampSettings() {
     <section className="card" aria-labelledby="st-h">
       <div className="row between wrap" style={{ gap: 12 }}>
         <h2 id="st-h">Stamps</h2>
-        {may_change && <button type="button" className="btn primary" style={{ minHeight: 44 }} disabled={stamps.length >= max} onClick={() => setForm({})}>Add a stamp</button>}
+        {may_change && stamps.length < max && <button type="button" className="btn primary" style={{ minHeight: 44 }} onClick={() => setForm({})}>Add a stamp</button>}
       </div>
-      <p className="muted" style={{ margin: '6px 0 0' }}>
-        Your company stamp or seal, to put next to a signature. It is printed like ink from a rubber stamp: the words under it show through. {may_change ? `Your team can keep up to ${max}.` : 'Admins of the account add and change them.'} Everyone on the team can use them: as your own stamp on a document you send, and when you sign a document sent to your address while you are signed in. Changing or deleting a stamp here never changes a document it is already on.
-      </p>
+      <p className="muted" style={{ margin: '6px 0 0' }}>Your company stamp or seal, printed like ink next to a signature.</p>
       <p className="muted small">{STAMP_IS_TEAM}</p>
+      <details className="st-how" data-fold>
+        <summary>How this works</summary>
+        <p className="muted small">
+          {may_change ? `Your team can keep up to ${max}.` : 'Admins of the account add and change them.'} Everyone on the team can use them: as your own stamp on a document you send, and when you sign a document sent to your address while you are signed in. Changing or deleting a stamp here never changes a document it is already on.
+        </p>
+      </details>
       {stamps.length >= max && may_change && <p className="notice small">Your team has {max} stamps, which is as many as an account can keep. Delete one to add another.</p>}
       {!stamps.length ? (
         <p className="muted">No stamps yet.{may_change ? ' Add one from a design file or a photo of the stamp.' : ''}</p>
@@ -134,7 +144,7 @@ export function StampSettings() {
           ))}
         </div>
       )}
-      {form && <StampForm stamp={form.stamp} onClose={() => setForm(null)} onSaved={() => (setForm(null), reload())} />}
+      {form && <StampForm stamp={form.stamp} taken={stamps.map((x: any) => String(x.name || ''))} onClose={() => setForm(null)} onSaved={() => (setForm(null), reload())} />}
       {removing && (
         <Dialog title={`Delete "${removing.name}"?`} onClose={() => setRemoving(null)}>
           <p>Nobody on your team can use it any more. Documents that already have it keep it as it is, and so do drafts and templates that use it.</p>

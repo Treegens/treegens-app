@@ -15,6 +15,7 @@ import { stampEvidence } from './stamps.ts';
 import { STAMP_IS } from '../lib/stamps.ts';
 import { originalsEvidence } from './converted.ts';
 import { ORIGINALS_README } from '../lib/convert.ts';
+import { dropSignatureFields } from './sealpdf.ts';
 
 const SYSTEM: Actor = { name: 'System' };
 
@@ -417,7 +418,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   add('README.txt', [
     `GrowSigning evidence pack for envelope ${e.id}, "${e.subject}".`, `Made on ${now()} by ${madeBy}. It shows the envelope as it stood at that moment.`, '',
     ...(pdfName === 'signed.pdf' ? [`signed.pdf            the signed document exactly as stored when everyone had finished, with its certificate of completion. SHA-256 ${e.final_sha256}. Anyone can check a copy at ${baseUrl()}/verify, or look the envelope up there by its ID.`] : pdfName ? [`${pdfName.padEnd(22)}the document as it stands, ${e.status === 'sent' ? 'while it is still out for signature' : 'marked as not completed on every page'}. It is not a signed document and has no certificate.`] : []),
-    ...(certName ? ['certificate.pdf       the certificate of completion on its own: the last pages of signed.pdf. It was sealed when everyone had finished, so it does not show what happened after that.'] : []),
+    ...(certName ? [`certificate.pdf       the certificate of completion on its own, to read: an extract of the last pages of signed.pdf. To check a file, use signed.pdf. It was drawn when everyone had finished, so it does not show what happened after that.${e.seal_level ? ' The digital seal is in signed.pdf, not in this extract: a PDF reader shows no seal for certificate.pdf, and that is as it should be.' : ''}`] : []),
     'audit-trail.txt       every line of the audit trail, to read: time in UTC, who, internet address, what, and each line\'s hash.',
     `audit-trail.json      the same lines with prev_hash and hash, the browser string stored with each line, the people on the envelope, and the chain as checked now. ${HASH_HOW}`,
     'emails/               a copy of every email we stored about this envelope, as HTML. Signing links and security codes are taken out of these copies, because they would still open the document; nothing else is changed. emails/index.csv says what became of each: whether the mail server took it, every try, and what the mail provider told us later (delivered, came back, marked as spam), with the SHA-256 of the email as stored before anything was taken out.',
@@ -443,6 +444,7 @@ async function certificatePages(e: any, pdf: Uint8Array): Promise<Uint8Array | n
   const attached = all("SELECT f.pages FROM fields x JOIN files f ON f.id=x.value WHERE x.envelope_id=? AND x.type='attachment' AND x.value IS NOT NULL", e.id).reduce((n: number, f: any) => n + (f.pages || 0), 0);
   const from = docs + attached, total = src.getPageCount();
   if (from <= 0 || from >= total) return null;
+  dropSignatureFields(src); // the extract carries no seal: the seal's field belongs to signed.pdf (sealpdf.ts)
   const out = await PDFDocument.create();
   for (const p of await out.copyPages(src, Array.from({ length: total - from }, (_, i) => from + i))) out.addPage(p);
   out.setTitle(`Certificate of completion, envelope ${e.id}`);

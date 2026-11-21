@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { Dialog } from './sign/Dialog';
 import { ContactForm } from '@/app/help/tools';
 import {
-  CHAT_AI_NOTE, CHAT_BUILTIN_NOTE, CHAT_DO_NOT_TYPE, CHAT_KEPT, CHAT_STARTERS, CHAT_KEEP_MESSAGES, CHAT_LINKABLE, HAND_OVER_TEXT,
+  CHAT_SHORT_AI, CHAT_SHORT_BUILTIN, CHAT_DO_NOT_TYPE, CHAT_KEPT, CHAT_STARTERS, CHAT_KEEP_MESSAGES, CHAT_LINKABLE, HAND_OVER_TEXT,
   handOverTopic, limitText, redact, removedText, screenOf, type ChatLimit, type ChatLine, type ChatScreen, type HandOver, type Removed,
 } from '@/lib/chat';
 
@@ -23,7 +23,13 @@ type Msg = {
   person?: HandOver | null;
   tools?: Tool[];
   removed?: Removed[];
+  /** Entries of Other actions on the signing page that do what the answer says, by key (the server names them). */
+  acts?: string[];
+  /** Which built-in answer this is, where it is one. A greeting shows the suggested questions again. */
+  id?: string | null;
 };
+/** A control of the page underneath that an answer may offer as a button: the page's own label and its own action. */
+export type PageAction = { key: string; label: string; onClick?: () => void };
 type Status = { ai: boolean; note: string; do_not_type: string; kept: string };
 
 // One conversation for the site, and one for each signing link, kept while the tab lives. A device handed to someone
@@ -32,6 +38,8 @@ const memory = new Map<string, Msg[]>();
 
 /** In place of an answer that was on its way when the dialog closed. */
 const STOPPED = 'The answer was stopped when you closed the help, so it is not shown. Ask again, or talk to a person.';
+/** Under an answer about an entry of Other actions that this person's list does not have. */
+const NOT_IN_LIST = 'Your list on this page does not have that. Choose Talk to a person and say what you need.';
 const WHY_NOTE: Record<string, string> = {
   down: 'The AI helper could not be reached just now, so this answer comes from our built-in help.',
   slow: 'The AI helper took too long, so this answer comes from our built-in help.',
@@ -62,12 +70,20 @@ function AnswerText({ text, newTab }: { text: string; newTab: boolean }) {
   );
 }
 
-export function HelpChat({ screen, link, code, onClose }: {
+export function HelpChat({ screen, link, code, who, actions, onClose }: {
   screen: ChatScreen;
   /** The signing page's own link secret. It goes to this server only, to count that link's limit. */
   link?: string;
   /** The security code of the signer's emails, so a request written from here names the document. */
   code?: string;
+  /** The person the signing page is for, so "Talk to a person" does not ask for their name and address again. */
+  who?: { name: string; email: string } | null;
+  /**
+   * The signing page's own controls, as it shows them right now (Finish later, Ask <sender> for more time, ...). An
+   * answer that is about one of them gets a button that closes the help and does what that entry does. The labels
+   * stay in the browser: the server only ever names the keys.
+   */
+  actions?: () => PageAction[];
   onClose: () => void;
 }) {
   const key = screen === 'signing' && link ? `sign:${link}` : 'site';
@@ -168,7 +184,7 @@ export function HelpChat({ screen, link, code, onClose }: {
             } catch {
               continue;
             }
-            if (e.open) update((m) => ({ ...m, mode: 'ai', person: e.person || null, tools: e.tools || [], removed: e.removed }));
+            if (e.open) update((m) => ({ ...m, mode: 'ai', person: e.person || null, tools: e.tools || [], removed: e.removed, acts: e.acts || [] }));
             else if (typeof e.d === 'string') {
               text += e.d;
               update((m) => ({ ...m, content: text }));
@@ -178,7 +194,7 @@ export function HelpChat({ screen, link, code, onClose }: {
               speak(text, true);
             } else if (e.fallback) {
               const b = e.fallback;
-              update((m) => ({ ...m, content: b.reply, sig: b.sig, mode: 'builtin', note: noteFor(b), person: b.person || m.person, tools: b.tools || [] }));
+              update((m) => ({ ...m, content: b.reply, sig: b.sig, mode: 'builtin', note: noteFor(b), person: b.person || m.person, tools: b.tools || [], acts: b.acts || [], id: b.id }));
               setSpoken(`${noteFor(b) || ''} ${b.reply}`.trim());
             }
           }
@@ -191,7 +207,7 @@ export function HelpChat({ screen, link, code, onClose }: {
       } else {
         const d = await res.json().catch(() => null);
         if (res.ok && typeof d?.reply === 'string') {
-          update(() => ({ role: 'assistant', content: d.reply, sig: d.sig, mode: 'builtin', note: noteFor(d), person: d.person || null, tools: d.tools || [] }));
+          update(() => ({ role: 'assistant', content: d.reply, sig: d.sig, mode: 'builtin', note: noteFor(d), person: d.person || null, tools: d.tools || [], acts: d.acts || [], id: d.id }));
           setSpoken(`${noteFor(d) || ''} ${d.reply}`.trim());
         } else {
           const words = d?.error || 'Something went wrong on our side. Ask again in a moment, or talk to a person.';
@@ -220,7 +236,17 @@ export function HelpChat({ screen, link, code, onClose }: {
   const reason = lastAnswer?.person || null;
   const lines: ChatLine[] = msgs.filter((m) => m.content && m.mode !== 'error').map((m) => ({ from: m.role === 'user' ? 'you' : 'helper', text: m.content, ...(m.sig ? { sig: m.sig } : {}) }));
   const toPerson = () => (setAttach(true), setView('person'));
-  const note = status ? (status.ai ? CHAT_AI_NOTE : CHAT_BUILTIN_NOTE) : null;
+  // What the page underneath can do right now, by key. Asked for at each render, so a label is never an old one.
+  const pageActs = actions?.() || [];
+  const doAct = (a: PageAction) => {
+    onClose();
+    a.onClick?.();
+  };
+  const starters = (
+    <div className="hc-starters">
+      {CHAT_STARTERS[screen].map((q) => <button key={q} type="button" className="btn sm" onClick={() => send(q)}>{q}</button>)}
+    </div>
+  );
 
   const person: ReactNode = (
     <button type="button" className="btn sm hc-person" onClick={toPerson}>Talk to a person</button>
@@ -231,17 +257,14 @@ export function HelpChat({ screen, link, code, onClose }: {
       <div className="hc">
         {view === 'chat' ? (
           <>
-            <div className="hc-top">
-              {note && <p className="hc-note">{note}</p>}
-              <div className="hc-note"><b>{CHAT_DO_NOT_TYPE}</b> <details className="hc-kept"><summary>What we keep</summary>{status?.kept || CHAT_KEPT}</details></div>
-            </div>
+            {/* Above the conversation: one line, and only when a model answers. With the built-in answers nothing is
+                written by AI, so nothing is said here and the question box is what the person sees first. */}
+            {status?.ai && <p className="hc-note hc-top">{CHAT_SHORT_AI}</p>}
             <div className="hc-log" ref={logRef} role="log" aria-live="off" aria-label="Conversation with the helper" tabIndex={0}>
               {msgs.length === 0 && (
                 <div className="hc-start">
-                  <p className="muted small">Ask anything about GrowSigning, in your own words and in any language. Or choose one:</p>
-                  <div className="hc-starters">
-                    {CHAT_STARTERS[screen].map((q) => <button key={q} type="button" className="btn sm" onClick={() => send(q)}>{q}</button>)}
-                  </div>
+                  <p className="muted small">{status && !status.ai ? `${CHAT_SHORT_BUILTIN} ` : ''}Ask in your own words{status?.ai ? ', in any language' : ''}. Or choose one:</p>
+                  {starters}
                 </div>
               )}
               {msgs.map((m, i) => (
@@ -261,10 +284,19 @@ export function HelpChat({ screen, link, code, onClose }: {
                         <button type="button" className="btn primary sm" onClick={toPerson}>Talk to a person</button>
                       </div>
                     )}
+                    {m.content && m.id === 'hello' && i === msgs.length - 1 && starters}
+                    {/* The answer names an entry this person's list does not have (a witness has no Finish later, a
+                        document without a deadline no "more time"): say so, instead of sending them to look for it. */}
+                    {m.content && actions && (m.acts || []).length > 0 && !pageActs.some((a) => m.acts!.includes(a.key)) && (
+                      <p className="hc-why" style={{ margin: '6px 0 0' }}>{NOT_IN_LIST}</p>
+                    )}
                     {m.content && (
                       <div className="hc-under">
+                        {/* The page's own controls first: they do the thing. Then what there is to read. A person is
+                            offered under the latest answer only, so there is one such button on screen. */}
+                        {pageActs.filter((a) => (m.acts || []).includes(a.key)).sort((a, b) => m.acts!.indexOf(a.key) - m.acts!.indexOf(b.key)).map((a) => <button key={a.key} type="button" className="btn sm" onClick={() => doAct(a)}>{a.label}</button>)}
                         {(m.tools || []).map((t) => <a key={t.id} className="btn sm" href={t.href} {...(newTab ? { target: '_blank', rel: 'noreferrer' } : {})}>{t.label}{newTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>)}
-                        {!(m.person && i === msgs.length - 1) && person}
+                        {i === msgs.length - 1 && !m.person && person}
                       </div>
                     )}
                   </div>
@@ -281,15 +313,16 @@ export function HelpChat({ screen, link, code, onClose }: {
               <button className="btn primary" disabled={busy || !input.trim()}>{busy ? 'Answering' : 'Send'}</button>
             </form>
             <div className="hc-foot">
-              {person}
+              {!lastAnswer && person}
               {msgs.length > 0 && <button type="button" className="btn sm ghost" disabled={busy} onClick={() => (setMsgs([]), said.current = 0, boxRef.current?.focus())}>Start again</button>}
               <a className="btn sm ghost" href="/help" {...(newTab ? { target: '_blank', rel: 'noreferrer' } : {})}>The help page{newTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
+              <details className="hc-kept" data-fold><summary>What we keep</summary>{CHAT_DO_NOT_TYPE} {status?.kept || CHAT_KEPT}</details>
             </div>
           </>
         ) : (
           <div className="hc-person-view">
             <p className="muted small" style={{ marginTop: 0 }}>A person reads every message and answers by email. This works without an account and without signing in.{reason ? ` ${HAND_OVER_TEXT[reason]}` : ''}</p>
-            <ContactForm chat={attach && lines.length ? lines : null} onDropChat={() => setAttach(false)} topic={handOverTopic(reason, screen, lastQuestion)} code={code} message={lastQuestion} />
+            <ContactForm chat={attach && lines.length ? lines : null} onDropChat={() => setAttach(false)} topic={handOverTopic(reason, screen, lastQuestion)} code={code} message={lastQuestion} who={who} />
             <div className="hc-foot"><button type="button" className="btn sm" onClick={() => setView('chat')}>Back to the chat</button></div>
           </div>
         )}

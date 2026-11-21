@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Logo, Mark, SentWith } from '@/components/Brand';
-import { fmtNum, fmtTrees } from '@/lib/impact';
+import { fmtTrees } from '@/lib/impact';
+import { savedLine } from '@/components/sign/actions';
 import { jumpRatherThanGlide } from '@/components/pdfMemory';
 
 const ICONS: Record<string, string> = {
@@ -79,7 +80,7 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
   const style = brand?.brand_color ? ({ ['--brand' as any]: brand.brand_color, ['--sg-bar-ink' as any]: inkOn(brand.brand_color) }) : undefined;
   return (
     <div className="sg-shell">
-      <a className="sg-skip" href="#sg-main">Skip to the main part</a>
+      <a className="sg-skip" href="#sg-main">Skip to content</a>
       <header className="signbar sg-bar" style={style}>
         {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || 'Sender logo'} /> : named && <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
         {/* With no subject to show (a link that did not open), the bar shows the drawn logo, never the mark beside the typed name. */}
@@ -130,14 +131,15 @@ export function Sender({ env, brand, lead = 'Sent by' }: { env: any; brand?: any
 
 export function Impact({ impact }: { impact: any }) {
   if (!impact?.sheets) return null;
+  const saved = savedLine(impact);
   return (
     <div className="card sg-impact">
       <Mark size={28} label="" />
       <div>
         <b>Signed without paper</b>
         <p>
-          About <b>{fmtNum(impact.sheets)} sheets of paper</b>, {fmtNum(impact.litresWater)} litres of water and {fmtNum(impact.kgCo2, 2)} kg of CO2e were not used.
-          That is {fmtTrees(impact.trees)} of a tree.
+          {/* A figure that rounds to nothing is left out, and one sheet is "1 sheet" (savedLine in sign/actions.ts). */}
+          About <b>{saved.sheets}</b>{saved.rest} {saved.verb} not used.{saved.trees ? ` That is ${fmtTrees(impact.trees)} of a tree.` : ''}
         </p>
         {/* Opens in a new tab: the page it leads to is for everyone, with buttons to sign up, and someone who has
             just signed is not carried off to it. Nothing here asks a signer to buy or join anything. */}

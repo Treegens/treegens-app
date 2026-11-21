@@ -2,7 +2,7 @@
   "name": "growsigning",
   "version": "0.1.0",
   "private": true,
-  "description": "E-signatures that plant trees. 100% of subscription revenue funds Treegens tree planting.",
+  "description": "E-signatures without paper. 100% of subscription revenue funds Treegens tree planting.",
   "scripts": {
     "postinstall": "node scripts/copy-assets.mjs",
     "dev": "next dev",

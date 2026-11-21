@@ -16,6 +16,7 @@ import { sealConfigured, tellOperators } from './sealkey.ts';
 import { run, get } from './db.ts';
 import { sha256 } from './util.ts';
 import { audit } from './envelopes.ts';
+import { t, SOURCE_LOCALE } from '../lib/i18n.ts';
 
 type Render = (e: any) => Promise<Uint8Array>;
 type Outcome = { done?: SealDone; unsealed?: 'refused' | 'failed' };
@@ -77,10 +78,11 @@ function noteSeal(e: any, pdf: Uint8Array, o: Outcome) {
   if (o.done) {
     const d = o.done;
     rememberSealCert(d);
-    run('UPDATE envelopes SET seal_level=?, seal_cert=? WHERE id=?', d.level, d.certHash, e.id);
-    audit(e.id, { name: 'System' }, 'Digital seal applied', d.level === 'B-T'
-      ? `The signed PDF was sealed with the certificate of ${d.name}, issued by ${d.issuer}, at level PAdES B-T, with a time-stamp from ${d.tsaHost} at ${d.tsaTime}.`
-      : `The signed PDF was sealed with the certificate of ${d.name}, issued by ${d.issuer}, at level PAdES B-B: the time in the seal is this server's clock.${d.tsaFailed ? ` The time-stamp service could not give a time-stamp: ${d.tsaFailed}.` : ''}`);
+    run('UPDATE envelopes SET seal_level=?, seal_cert=?, seal_tsa=? WHERE id=?', d.level, d.certHash, d.level === 'B-T' ? (d.tsaTrusted ? 'trusted' : 'unchecked') : null, e.id);
+    // The words of the history line are the charter's: "Sealed by <operator name>", and no technical names.
+    audit(e.id, { name: 'System' }, t(SOURCE_LOCALE, 'seal.sealed_by', { name: d.name }), d.level === 'B-T'
+      ? `The signed PDF carries a digital seal made with the certificate of ${d.name}, issued by ${d.issuer}. A PDF reader shows if the file changed after this. ${d.tsaTrusted ? `The seal carries a trusted time stamp from ${d.tsaHost} at ${d.tsaTime}: the certificate of that service leads to one this server was set up to trust.` : `The seal carries a time stamp from ${d.tsaHost} at ${d.tsaTime}. This server checked that the time stamp is over this seal and that its time is within 5 minutes of its own clock. It was not set up to check whose service that is, so nothing here calls the time stamp trusted.`}`
+      : `The signed PDF carries a digital seal made with the certificate of ${d.name}, issued by ${d.issuer}. A PDF reader shows if the file changed after this. The time in the seal is this server's clock.${d.tsaFailed ? ` The time-stamp service could not give a time stamp: ${d.tsaFailed}.` : ''}`);
   } else if (o.unsealed) {
     audit(e.id, { name: 'System' }, 'Not sealed', `The signed PDF was made without a digital seal, because ${o.unsealed === 'refused' ? "this server's seal certificate cannot be used right now" : 'the seal could not be applied'}. Its certificate of completion says nothing about a seal. The people who run this server have been told.`);
   }

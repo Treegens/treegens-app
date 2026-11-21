@@ -201,7 +201,7 @@ test('every kind is recognised from its bytes, and the name does not decide', as
   const asWord = await put(c, docx(), 'scan.pdf', 'application/pdf');
   assert.equal(asWord.status, 200, JSON.stringify(asWord.data));
   assert.equal(asWord.data.converted.kind, 'docx');
-  assert.equal(asWord.data.name, 'scan');
+  assert.equal(asWord.data.name, 'Scan', 'the name is the file name in words (src/lib/docname.ts)');
   const asPdf = await put(c, await samplePdf(1), 'Contract.docx');
   assert.equal(asPdf.status, 200);
   assert.equal(asPdf.data.converted, null);
@@ -470,7 +470,9 @@ test('the words next to the converted pages: always the check, and tracked chang
   const all = [...Object.values(CONVERT_NOTE), words[0], uploadLimits(true, 3), notTaken(true), notTaken(false), CONVERT_KINDS_TEXT, read('src/lib/convert.ts'), read('src/server/convert.ts'), read('src/server/converted.ts')].join('\n');
   assert.ok(!/same layout|looks the same|exactly as|identical|\u2014/i.test(all.replace(/may not look the same/g, '')), 'no promise about the layout and no em dash');
   // The screens show them under each document in the editor and over its pages where fields are placed.
-  assert.match(read('src/components/editor/StepAdd.tsx'), /<ConvertNotes d=\{d\}/);
+  // (simplify-editor: a file's row and its notes are in FileRow.tsx, which step 1 draws for each file.)
+  assert.match(read('src/components/editor/StepAdd.tsx'), /<FileRow key=\{d\.id\} ed=\{ed\} d=\{d\} i=\{i\} \/>/);
+  assert.match(read('src/components/editor/FileRow.tsx'), /<ConvertNotes key="conv" d=\{d\} \/>/);
   assert.match(read('src/components/editor/StepFields.tsx'), /<ConvertNotes d=\{d\}/);
 });
 

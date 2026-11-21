@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/components/ui';
 import { sayConfirmed } from '@/components/ConfirmEmail';
+import { Logo } from '@/components/Brand';
 
 // People open this link from an email, often on a phone: every control is at least 44 pixels tall.
 const TAP = { minHeight: 44 };
@@ -34,6 +35,8 @@ export default function VerifyEmail() {
   const asking = state === 'password' || state === 'signin';
   return (
     <div className="authbox">
+      {/* People land here from an email and look for whose page it is: the same logo as on the sign-in page. */}
+      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
       <div className="card center">
         <h1 className="serif" style={{ fontSize: 24 }}>{state === 'wait' ? 'Confirming…' : state === 'ok' ? 'Email confirmed' : asking ? 'One more step' : 'That did not work'}</h1>
         {state === 'password' && (

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../ui';
 import { who } from './shared';
-import { stampBox, fieldMm, STAMP_DEFAULT_MM, STAMP_IS_TEAM, stampTurn } from '@/lib/stamps';
+import { stampFieldBox, sameBox, fieldMm, STAMP_DEFAULT_MM, STAMP_IS_TEAM, stampTurn } from '@/lib/stamps';
 import { INK_WORD } from '@/lib/stampink';
 
 // A stamp field in the editor (src/server/stamps.ts): who puts it on, which of the team's stamps when it is the
@@ -50,16 +50,25 @@ export function StampChoice({ field, open, envelopeId, page, patch }: {
   const chosen = stamps.find((s) => s.id === field.stamp_id);
   const mm = fieldMm(field, page.w, page.h);
   const real = (mine && chosen?.size_mm) || STAMP_DEFAULT_MM;
-  const realBox = stampBox(real, page.w, page.h);
-  const atReal = Math.abs(field.w - realBox.w) < 0.002 && Math.abs(field.h - realBox.h) < 0.002;
+  const boxOf = (st: any) => stampFieldBox(st || null, page.w, page.h);
+  const realBox = boxOf(mine ? chosen : null);
+  const atReal = sameBox(field, realBox);
+  // Still at a size we gave it (a new field's, or a stamp's real size), not one the sender dragged it to: choosing a
+  // stamp then gives the field that stamp's real size and shape at once. After a resize by hand, the size is theirs.
+  const untouched = sameBox(field, boxOf(null)) || stamps.some((st) => sameBox(field, boxOf(st)));
+  const sized = (st: any) => {
+    if (!untouched) return {};
+    const b = boxOf(st);
+    return { w: b.w, h: b.h, x: Math.max(0, Math.min(field.x, 1 - b.w)), y: Math.max(0, Math.min(field.y, 1 - b.h)) };
+  };
   // The picture this field holds is older than the stamp under Settings: it was changed after it was put here.
   const older = mine && !!chosen && !!field.value && field.value !== chosen.image_sha256;
   return (
     <div className="ed-stamp">
       <label className="f"><span>Who puts the stamp on</span>
         <select value={field.recipient_id || ''} onChange={(e) => patch(e.target.value
-          ? { recipient_id: e.target.value, stamp_id: null, value: '', required: true }
-          : { recipient_id: null, stamp_id: field.stamp_id || stamps[0]?.id || null, value: '', required: false })}>
+          ? { recipient_id: e.target.value, stamp_id: null, value: '', required: true, ...sized(null) }
+          : { recipient_id: null, stamp_id: field.stamp_id || stamps[0]?.id || null, value: '', required: false, ...sized(stamps.find((st) => st.id === (field.stamp_id || stamps[0]?.id))) })}>
           {open.map((r) => <option key={r.id} value={r.id}>{who(r)}, their own stamp</option>)}
           <option value="">Me: one of my team&apos;s stamps</option>
         </select>
@@ -71,7 +80,7 @@ export function StampChoice({ field, open, envelopeId, page, patch }: {
           <div className="st-saved-list">
             {stamps.map((s) => (
               <label key={s.id} className={`st-card${field.stamp_id === s.id ? ' on' : ''}`}>
-                <input type="radio" name={`ed-stamp-${field.id}`} checked={field.stamp_id === s.id} onChange={() => patch({ stamp_id: s.id, value: '' })} />
+                <input type="radio" name={`ed-stamp-${field.id}`} checked={field.stamp_id === s.id} onChange={() => patch({ stamp_id: s.id, value: '', ...sized(s) })} />
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={s.image_url} alt="" />
                 <span><b>{s.name}</b><span className="muted small">{INK_WORD[s.ink as keyof typeof INK_WORD] || ''} ink, {s.size_mm} mm</span></span>
@@ -90,7 +99,7 @@ export function StampChoice({ field, open, envelopeId, page, patch }: {
       )}
       <p className="muted small">On the page it is about {mm.w} by {mm.h} mm.{atReal ? ' That is its real size.' : ''}</p>
       {!atReal && (
-        <button type="button" className="btn sm" style={{ minHeight: 44 }} onClick={() => patch({ w: realBox.w, h: realBox.h, x: Math.min(field.x, 1 - realBox.w), y: Math.min(field.y, 1 - realBox.h) })}>
+        <button type="button" className="btn sm" style={{ minHeight: 44 }} onClick={() => patch({ w: realBox.w, h: realBox.h, x: Math.max(0, Math.min(field.x, 1 - realBox.w)), y: Math.max(0, Math.min(field.y, 1 - realBox.h)) })}>
           Make it {real} mm, {mine && chosen ? 'the stamp\'s real size' : 'the size of a round company seal'}
         </button>
       )}

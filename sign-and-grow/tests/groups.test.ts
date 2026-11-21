@@ -778,8 +778,12 @@ test('the screens: a member\'s page says who has it and before declining that it
   assert.match(sign, /if \(groupAway\(data\) && stage !== 'locked'\)/, 'a member whose colleague has it sees who, not the document');
   assert.match(sign, /note=\{groupDeclineText\(data\)\}/, 'the decline dialog says it declines for the group');
   assert.match(sign, /<GroupConsentNote data=\{data\} \/>/, 'the consent screen says that agreeing takes it on');
-  assert.match(sign, /me\.group\?\.can_hand_back \? \[\{ key: 'handback'/);
-  assert.match(sign, /\(me\.role === 'signer' \|\| me\.role === 'approver'\) && !me\.group \? \[\{ key: 'reassign'/, 'nobody passes a group\'s document outside the group');
+  // (simplify-signing: the list of Other actions is worked out in src/components/sign/actions.ts, and
+  // tests/simplify-signing.test.ts runs it for every role.)
+  const acts = read('src/components/sign/actions.ts');
+  assert.match(acts, /handback: !!me\.group\?\.can_hand_back,/);
+  assert.match(acts, /reassign: \(me\.role === 'signer' \|\| me\.role === 'approver'\) && !me\.group,/, 'nobody passes a group\'s document outside the group');
+  assert.match(sign, /handback: \{ key: 'handback', label: `Hand back to \$\{me\.group\?\.name\}`/);
   assert.match(sign, /if \(e\?\.code === 'taken'\) return void load\(\);/, 'losing the race to a colleague shows who won');
   const { groupDeclineNote, groupTakeOn } = await import('../src/lib/groups.ts');
   assert.match(groupDeclineNote('HR team'), /closes the document for everyone, the rest of HR team included/);

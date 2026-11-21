@@ -15,7 +15,7 @@ export const CONFIRM_CODE_MAX_WRONG = 10;
 
 /** The digits of what was typed: spaces, dashes and dots that people copy along with a code are dropped. */
 export function cleanCode(typed: unknown): string {
-  return String(typed ?? '').replace(/[\s.\-–—]/g, '').slice(0, 20);
+  return String(typed ?? '').replace(/[\s.\-\u2010-\u2015]/g, '').slice(0, 20);
 }
 
 /** "482915" as it is shown in the email, "482 915", so it is easy to read and to type. */

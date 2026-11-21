@@ -6,7 +6,7 @@ import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
-import { STANDING_PAYMENT, personGen, lastExpiry } from './credits.ts';
+import { STANDING_PAYMENT, personGen, lastExpiry, swapRefusal, reholdEnvelope, pastDateText, renewalPending } from './credits.ts';
 import { DATE_FORMATS, momentText, momentForEmail, momentForReader, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
@@ -24,6 +24,7 @@ import { isOpenGroup, whoIs } from '../lib/groups.ts';
 // A person whose link the sender passes on themselves, with no email address (src/server/bysender.ts).
 import { saveBySender, bySenderProblem, reachKey, reporterKey, copyBySender, bySenderNotice, assertNudgeable, remindThroughSender, untoldLines, unopenedLines, noteNoCopy, senderCopyLines, answerLine } from './bysender.ts';
 import { labelOf, signerAt } from '../lib/bysender.ts';
+import { orgOf } from '../lib/sendername.ts';
 import { carryRules } from './tplroles.ts';
 // Around the certificate: the fingerprint in the completion email and the record of each completed copy (evidence.ts).
 import { fingerprintLines, noteCopyMailed } from './evidence.ts';
@@ -45,6 +46,8 @@ import { convertedSent, convertedAdded } from './converted.ts';
 import { convertedOf } from '../lib/convert.ts';
 // The account's own custom fields on envelopes and templates, and name and value pairs per document (customfields.ts).
 import { customView, copyCustom, assertCustomFields, customWords } from './customfields.ts';
+// "Sign now": the sender is the only person on it, so their own invitation is not emailed (signnow.ts).
+import { holdInvite, inviteHeld, dropHold, SIGN_NOW_AUDIT, signNowNote } from './signnow.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson', 'witness'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike', 'stamp'];
@@ -730,6 +733,8 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
   let after: any;
   tx(() => {
     assertFresh(e, body);
+    // What could be sent with before this change, to see below whether the change itself made the account short.
+    const haveBefore = creditsEnabled() ? available(e.account_id) : 0;
     writeContent(e, body, accountId, true, actor);
     after = loadEnvelope(e.id);
     const nowById = new Map<string, any>(after.recipients.map((r: any) => [r.id, r]));
@@ -842,7 +847,14 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
       // Signers added by this correction need signatures like any others. A change that needs no more than before
       // (a name, a field, a date) is never refused, whatever the balance.
       const more = needed(loadEnvelope(e.id), sender) - needed(e, sender);
+      // A held signature is for the person and the documents it was sent with. Other documents let go the ones whose
+      // own date has passed (reholdEnvelope), as another person does (syncHolds): today's are held instead.
+      const files = (x: any) => x.documents.map((d: any) => d.sha256).sort().join();
+      const past = files(after) !== files(e) ? reholdEnvelope(e.account_id, e.id) : null;
       const have = available(e.account_id);
+      // Short because of that, and not because signers were added: said in its own words, and nothing is saved.
+      const stale = have < 0 && have < haveBefore && more <= 0 ? past || get('SELECT MAX(expires_at) x FROM credit_lots WHERE account_id=? AND expires_at <= ?', e.account_id, now())?.x : null;
+      if (stale) throw bad(pastDateText(stale), 402);
       if (more > 0 && have < 0) throw bad(`${newPeople.length ? `This change puts ${listSome(newPeople)}, and another person signs with a signature of their own, also at the same address. Nothing was saved. ` : ''}${outOfSignatures(get('SELECT * FROM accounts WHERE id=?', e.account_id), more, have + more)}`, 402);
     }
     const pages = after.documents.reduce((n: number, d: any) => n + d.pages, 0);
@@ -971,7 +983,10 @@ export const billingEnabled = () => !!process.env.STRIPE_SECRET_KEY;
 // Said whenever someone runs out of signatures. Nothing is ever charged without them choosing it.
 export function outOfSignatures(account: any, need: number, have: number): string {
   const short = `This needs ${need} signature${need === 1 ? '' : 's'} and you have ${Math.max(0, have)} left.`;
-  const how = account.plan === 'grove'
+  // Just after a month ends the new month's signatures are on their way with the renewal payment (renewalPending).
+  const how = renewalPending(account)
+    ? `Your new month's ${PRICING.monthlySignatures} arrive when the renewal payment goes through, usually within the hour. To send before that, top up on the Plan page: $${PRICING.topUpUsd} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`
+    : account.plan === 'grove'
     ? `Top up on the Plan page: $${PRICING.topUpUsd} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`
     : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`;
   // When the number is low because some expired (credits.ts), say so and when: nobody should have to guess.
@@ -1193,7 +1208,7 @@ export function notifyPrefs(user: any): Record<NotifyKey, boolean> {
 }
 
 // `o.anyway` is the sender's answer to the warning about an address that bounced before (see below).
-export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway?: boolean } = {}) {
+export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway?: boolean; signNow?: string | null } = {}) {
   const e = loadEnvelope(envelopeId);
   if (!e || e.kind !== 'envelope') throw bad('Envelope not found.', 404);
   if (e.status !== 'draft') throw bad('This envelope has already been sent.');
@@ -1270,7 +1285,13 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
     newerVersion(e.id, actor, 'sent this envelope');
   });
   fireWebhooks(e.account_id, 'envelope.sent', e.id);
-  await advance(e.id);
+  // The sender signs right away in the tab they are in: their own invitation is held back (signnow.ts).
+  if (o.signNow) holdInvite(o.signNow);
+  try {
+    await advance(e.id);
+  } finally {
+    if (o.signNow) dropHold(o.signNow);
+  }
   // Running low never comes as a surprise: one email at two signatures left, one at none. A public form holds
   // nothing when it is started, so for a form this is said when its visitor signs (completeRecipient).
   if (creditsEnabled() && need > 0 && !e.powerform_id) await lowBalanceMail(account, sender, before, before - need, `${sender.name} sent "${e.subject || e.documents[0].name}"`);
@@ -1340,18 +1361,27 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
   const verb = r.role === 'witness' ? witnessVerb(e, r) : r.role === 'cc' ? 'sent you a copy of' : r.role === 'viewer' ? 'sent you a document to view:' : r.role === 'approver' ? 'asked you to approve' : 'sent you a document to sign:';
   const to = r.role === 'inperson' ? sender.email : r.email;
   // A deadline is a moment: it is said in this person's own time, with the zone named, once their device has told us
-  // which that is, so the email and the signing page name the same moment. Until then it is said in UTC.
+  // which that is, so the email and the signing page name the same moment. Until then it is said in UTC, and the
+  // email says that the signing page shows it in their own time, so the two do not read as two deadlines. Never a
+  // bare day: west of UTC that day can be a day late.
   // Someone who has signed or approved and asks for their link again ("Email me the current link") is not asked to
   // sign: the email says what the link opens now, and its button says "view".
   const done = r.status === 'completed' && (r.role === 'signer' || r.role === 'approver' || r.role === 'witness');
   const deadline = e.expires_at && r.role !== 'cc' && !done ? momentForReader(e.expires_at, r.tz) : '';
   const shared = (e.recipients || []).some((x: any) => x.id !== r.id && x.email.toLowerCase() === r.email.toLowerCase());
+  const subjectUnder = verb.endsWith(':') && r.role !== 'inperson' && kind !== 'again' && !done;
+  // The account is named at the top only when its name says more than the sender's own ("Rosa Gardener's workspace"
+  // does not): the same rule as on the consent screen (src/lib/sendername.ts). A logo of theirs is always shown.
+  const brand = brandOf(e.account_id);
   const mailed = await sendMail({
     to,
     subject: `${NOTICE_PREFIX[kind]}${e.subject}`,
     heading: r.role === 'inperson' ? `Host an in-person signing for ${r.name}` : kind === 'again' ? `${shared ? `For ${r.name}: ` : ''}${sender.name} changed this document after you ${finishedHow(r)} it`
-      : done ? `${shared ? `For ${r.name}: ` : ''}Your link to ${e.subject}` : `${shared ? `For ${r.name}: ` : ''}${sender.name} ${verb} ${e.subject}`,
+      // "sent you a document to sign:" is the whole heading, and the subject is the line under it. Together they read
+      // "... to sign: Please sign: ..." (simplify-signing, after the simplicity review).
+      : done ? `${shared ? `For ${r.name}: ` : ''}Your link to ${e.subject}` : `${shared ? `For ${r.name}: ` : ''}${sender.name} ${subjectUnder ? verb.slice(0, -1) : `${verb} ${e.subject}`}`,
     lines: [
+      ...(subjectUnder ? [e.subject] : []),
       ...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []),
       ...(kind === 'again' ? [
         `${r.role === 'inperson' ? `${r.name} ${finishedHow(r)}` : `You ${finishedHow(r)}`} "${e.subject}" on ${ts(before)}. After that, ${sender.name} changed the document, so what was ${finishedHow(r)} then no longer counts. It is kept on record, and so is the change.`,
@@ -1376,7 +1406,7 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
       ...groupLine(r), // to a member of a group: that it went to the group, and how that works
       ...(r.note ? [`Note for you: ${r.note}`] : []),
       ...(r.access_code ? [`You will need an access code to open it. ${sender.name} will give it to you separately. It is not in this email.`] : []),
-      `Sent by ${sender.name} (${sender.email}). Reply to this email to reach them directly.`,
+      `Reply to this email to reach ${sender.name} (${sender.email}).`,
     ],
     cta: { label: done ? (e.status === 'completed' ? 'View completed document' : 'View document') : r.role === 'cc' ? 'View document' : r.role === 'viewer' ? 'View document' : `${r.role === 'approver' ? 'Review and approve' : r.role === 'witness' ? 'Open and witness' : 'Review and sign'}${kind === 'again' ? ' again' : ''}`, url: signUrl(r) },
     envelopeId: e.id,
@@ -1384,14 +1414,14 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
     // An email that asks this person to do something is not delivered late once they have done it: see tooLate in
     // mail.ts. A copy asks nothing, and neither does a link sent again to someone who has finished.
     untilDone: r.role !== 'cc' && r.status !== 'completed',
-    brand: brandOf(e.account_id),
+    brand: brand?.logo ? brand : { ...brand, name: orgOf(brand?.name, sender.name) || undefined },
     replyTo: sender.email,
     fromName: sender.name,
     code: r.check_code,
     // Someone who cannot open the page where they are is told to ask the sender for a PDF. Not on the email for an
     // in-person signing: that one goes to the sender, who would be asking themselves.
     askForPdf: r.role === 'inperson' ? undefined : sender.name,
-    footnote: [deadline && kind !== 'expiring' ? `This request closes on ${deadline}.` : '', kind === 'reminder' ? `Too many reminders? Stop them for this document: ${signUrl(r)}?mute=1` : ''].filter(Boolean).join(' ') || undefined,
+    footnote: [deadline && kind !== 'expiring' ? `Open until ${deadline}.${validZone(r.tz) ? '' : ' The signing page shows your own time.'}` : '', kind === 'reminder' ? `Too many reminders? Stop them for this document: ${signUrl(r)}?mute=1` : ''].filter(Boolean).join(' ') || undefined,
   });
   // The same news by text message, for a recipient the sender chose that for: see alsoText in signercode.ts.
   await alsoText(e, r, kind);
@@ -1458,9 +1488,11 @@ export async function advance(envelopeId: string): Promise<void> {
       // is only written when the mail server took it. One it would not take is written down by the listener
       // above ("Email could not be sent yet", then "Email sent" when a later try goes through). With no mail
       // server set up nothing is delivered at all, and the record says that too.
-      const how = await notifyRecipient(e, { ...r }, 'new');
+      const now_ = inviteHeld(r.id);
+      const how = now_ ? false : await notifyRecipient(e, { ...r }, 'new');
+      if (now_) audit(e.id, { name: 'System' }, SIGN_NOW_AUDIT, signNowNote(whoIs(r)));
       // Someone who signs in person is never emailed: the sender hosts it on their own device, and is told so.
-      if (r.role === 'inperson') audit(e.id, { name: 'System' }, 'Ready to sign in person', `${r.name}. The sender hosts the signing on their own device.`);
+      else if (r.role === 'inperson') audit(e.id, { name: 'System' }, 'Ready to sign in person', `${r.name}. The sender hosts the signing on their own device.`);
       // Nor is someone whose link the sender passes on. The record says no more than that: not how, not whether it arrived.
       else if (r.link_by_sender && !r.email) audit(e.id, { name: 'System' }, 'Not emailed', `${labelOf(r)}. The sender said they would send the link themselves, so no email went out. The request is open.`);
       else if (how === 'outbox') audit(e.id, { name: 'System' }, 'Not emailed', `${whoIs(r)}. No mail server is set up, so no email went out. The request is open, and the sender can pass on the signing link.`);
@@ -1854,6 +1886,9 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
     // person who made them. So nothing the first one agreed to, typed, ticked, uploaded or drew stays with the
     // request: the new person agrees and signs for themselves, on the same link. A spelling fix keeps everything.
     const other = name !== r.name && !samePerson(r.name, name);
+    // A held signature whose own date has passed does not pass to another person (swapRefusal in credits.ts).
+    const stale = other ? swapRefusal(e.account_id, r.id) : '';
+    if (stale) throw bad(stale, 402);
     if (other) clearAnswers(r.id);
     // Another person is the next person on the request: their signature is their own (sigRef in credits.ts).
     // Someone the request had before (renamed away and back) is that person again (personGen in credits.ts).
@@ -1871,6 +1906,8 @@ export async function correctRecipient(e: any, recipientId: string, patch: { nam
   // A new address is a new person being emailed in the sender's name: not while paused, read by the fake-notice
   // filter, and counted towards the daily limit like a first send.
   assertMayEmail(e, [email]);
+  const stale = swapRefusal(e.account_id, r.id);
+  if (stale) throw bad(stale, 402);
   const free = takeOverCost(e, r, email, name);
   retireToken(r, 'address');
   // A different address is a different person: nothing the first one typed, ticked, uploaded or drew goes with the
@@ -2123,6 +2160,9 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   // Passing a request on emails a new person in the sender's name, so the sender's pause and daily limit hold here
   // too (or a sender could send to themselves and pass each one on). The signer is not told the sender's business.
   if (emailRefusal(e, [email])) throw bad(`This document cannot be passed on to someone else right now. Reply to the email you got and ask ${senderOf(e)?.name || 'the sender'} to send it to the right person.`, 403);
+  // Nor while the signature held for this request has passed its own date and the sender has none of today's for
+  // another person (swapRefusal in credits.ts). The signer can still sign it themselves.
+  if (!sameSigner(r, { email, name }) && swapRefusal(e.account_id, r.id)) throw bad(`This document cannot be passed on to someone else right now. You can still sign it yourself. If someone else should sign, reply to the email you got and ask ${senderOf(e)?.name || 'the sender'} to send it to the right person.`, 403);
   const free = takeOverCost(e, r, email, name, true);
   retireToken(r, 'handed');
   // The new person starts with empty fields: nothing the first one typed, ticked, uploaded or drew is passed on.

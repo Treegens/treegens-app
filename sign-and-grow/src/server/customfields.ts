@@ -10,9 +10,11 @@ import { bad, id, now, str } from './util.ts';
 import { audit, yesNo, emailRefusal, type Actor } from './envelopes.ts';
 import { record } from './seclog.ts';
 import type { Ctx } from './router.ts';
+import { unprintable } from './pdftext.ts';
+import { shownChars } from '../lib/scripts.ts';
 import {
   MAX_CUSTOM_FIELDS, CUSTOM_CHOICES_MAX, CUSTOM_VALUE_MAX, DOC_FIELDS_MAX, CUSTOM_KINDS, CERT_HEADING, CERT_NOTE,
-  customKey, lineProblem, nameProblem, readValue, type CustomDef,
+  customKey, lineProblem, nameProblem, readValue, isBlank, DETAILS_MISSING, PAIRS_MAX, type CustomDef,
 } from '../lib/customfields.ts';
 
 export type Def = CustomDef & { account_id: string; name_key: string; position: number };
@@ -43,7 +45,7 @@ function readDef(accountId: string, b: any, old?: Def) {
   let choices: string[] = old?.kind === 'list' ? old.choices : [];
   if (b.choices !== undefined && b.choices !== null) {
     if (!Array.isArray(b.choices)) throw bad('"choices" has to be a list of words, written with square brackets. Nothing was saved.');
-    if (kind !== 'list' && b.choices.length) throw bad('Choices are only for a field of the kind "list". Send "kind": "list", or leave "choices" out. Nothing was saved.');
+    if (kind !== 'list' && b.choices.length) throw bad('Choices are only for a detail of the kind "list". Send "kind": "list", or leave "choices" out. Nothing was saved.');
     choices = [];
     for (const [i, c] of b.choices.entries()) {
       if (c == null || (typeof c !== 'string' && typeof c !== 'number')) throw bad(`Choice ${i + 1} has to be text. Nothing was saved.`);
@@ -51,6 +53,7 @@ function readDef(accountId: string, b: any, old?: Def) {
       if (!v) continue;
       const no = lineProblem(v, CUSTOM_VALUE_MAX, `Choice ${i + 1}`);
       if (no) throw bad(`${no} Nothing was saved.`);
+      if (isBlank(v)) continue;
       if (choices.some((x) => customKey(x) === customKey(v))) throw bad(`"${v}" is in the list twice. Give each choice once. Nothing was saved.`);
       choices.push(v);
     }
@@ -75,6 +78,9 @@ function notesAfter(d: Def): string[] {
   const notes: string[] = [];
   const forms = d.required ? formsWithout(d.account_id, d.id) : [];
   if (forms.length) notes.push(`${forms.length === 1 ? 'The public form' : 'The public forms'} ${quoted(forms)} ${forms.length === 1 ? 'has' : 'have'} no value for "${d.name}" in ${forms.length === 1 ? 'its template' : 'their templates'}, so ${forms.length === 1 ? 'it takes' : 'they take'} nobody until one is filled in there, on the last step of the template's editor.`);
+  // Printed on the certificate in letters its fonts do not have: said now, not found on a finished document.
+  const boxes = d.on_certificate ? unprintable([d.name, ...d.choices].join(' ')) : '';
+  if (boxes) notes.push(`The certificate cannot print these characters of "${d.name}"${d.kind === 'list' ? ' or its choices' : ''}: ${shownChars(boxes)}. They show there as a replacement mark. On screen and in the export everything shows as typed.`);
   const off = misfits(d);
   if (off) notes.push(`${off === 1 ? 'One draft or template holds' : `${off} drafts and templates hold`} a value for "${d.name}" that is not one of its choices now. ${off === 1 ? 'It' : 'Each'} can be sent once someone picks one.`);
   return notes;
@@ -95,7 +101,7 @@ export function createDef(c: Ctx, b: any) {
 
 function mineDef(c: Ctx, defId: string): Def {
   const r = get('SELECT * FROM custom_field_defs WHERE id=? AND account_id=?', defId, c.account.id);
-  if (!r) throw bad('That detail does not exist any more. Someone may have deleted it. Reload the page to see the fields as they are now.', 404);
+  if (!r) throw bad('That detail does not exist any more. Someone may have deleted it. Reload the page to see the details as they are now.', 404);
   return toDef(r);
 }
 
@@ -135,6 +141,21 @@ export function filterNames(accountId: string): { fields: ReturnType<typeof defV
   const past = all("SELECT v.name, v.name_key FROM custom_values v JOIN envelopes e ON e.id=v.envelope_id WHERE e.account_id=? AND v.document_id='' AND e.kind='envelope' GROUP BY v.name_key ORDER BY MIN(v.name)", accountId)
     .filter((r) => !known.has(r.name_key)).map((r) => r.name as string);
   return { fields: defs.map(defView), past_names: past };
+}
+
+/**
+ * The details this account requires that a template has no value for: what the "Use" dialog asks for, so sending
+ * straight from a template works with one typed value. Nothing for a template of another account.
+ */
+export function neededFor(accountId: string, templateId: string): ReturnType<typeof defView>[] {
+  if (!templateId || !get('SELECT 1 x FROM envelopes WHERE id=? AND account_id=?', templateId, accountId)) return [];
+  const have = rowsOf(templateId);
+  return defsOf(accountId).filter((d) => d.required && !have.some((r) => r.def_id === d.id || r.name_key === d.name_key)).map(defView);
+}
+
+/** For the envelope page: details printed on the certificate in characters its fonts do not have. */
+export function customPrintProblems(envelopeId: string): { where: string; chars: string }[] {
+  return rowsOf(envelopeId).filter((r) => r.on_certificate).map((r) => ({ where: `"${r.name}" under Details`, chars: unprintable(`${r.name} ${r.value}`) })).filter((x) => x.chars);
 }
 
 // ---- Values on envelopes, templates and documents ----------------------------------------------------------------
@@ -195,13 +216,16 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
     // An envelope that was sent keeps each field under the name and certificate choice it went out with, also when
     // its value is put right after the field was renamed: it is found by its old name or its new one.
     const sent = !!e && e.kind === 'envelope' && e.status !== 'draft';
-    for (const p of asPairs(b.custom_fields, where, o.map)) {
+    const pairs = asPairs(b.custom_fields, where, o.map);
+    // An account has at most MAX_CUSTOM_FIELDS details, so a longer list is a mistake, and is not read through.
+    if (pairs.length > PAIRS_MAX) throw bad(`${where} names ${pairs.length} details, and an account can have ${MAX_CUSTOM_FIELDS}. Give each detail once. Nothing was saved.`);
+    for (const p of pairs) {
       const key = customKey(p.name);
       let def = defs.find((d) => d.name_key === key);
       const was = stored.get(key) || (def ? [...stored.values()].find((r) => r.def_id === def!.id) : undefined);
       if (!def && was?.def_id) def = defs.find((d) => d.id === was.def_id);
       const ident = was?.name_key || def?.name_key || key;
-      if (seen.has(ident)) throw bad(`${where} names "${str(p.name, 60)}" twice. Give each field once. Nothing was saved.`);
+      if (seen.has(ident)) throw bad(`${where} names "${str(p.name, 60)}" twice. Give each detail once. Nothing was saved.`);
       seen.add(ident);
       const same = was && p.value != null && typeof p.value !== 'object' && String(p.value).trim() === was.value;
       if (same) {
@@ -209,7 +233,10 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
         continue;
       }
       if (!def) {
-        problems.push(`There is no detail called "${str(p.name, 60)}" in this account. An admin can add it under Settings, Account, or it may have been deleted a moment ago: reload to see the fields as they are now.`);
+        // A value this envelope went out with, under a detail that was deleted since: adding the detail again would
+        // make a new one, so say what can be done here.
+        problems.push(was ? `"${was.name}" was deleted from your account after this was sent, so its value here can be taken off but not changed.`
+          : `There is no detail called "${str(p.name, 60)}" in this account. An admin can add it under Settings, or it may have been deleted a moment ago: reload to see the details as they are now.`);
         continue;
       }
       const v = readValue(def, p.value);
@@ -217,7 +244,7 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
       else if (v.value) out.push(sent && was ? { ...was, value: v.value } : { def_id: def.id, name: def.name, name_key: def.name_key, value: v.value, on_certificate: def.on_certificate, position: def.position });
       else plan.clear.push(ident);
     }
-    if (problems.length) throw bad(`${problems.join(' ')} Nothing was saved.`);
+    if (problems.length) throw bad(`${problems.slice(0, 5).join(' ')}${problems.length > 5 ? ` And ${problems.length - 5} more like these.` : ''} Nothing was saved.`);
     plan.values = out;
     // What would change on an envelope that is out, for its audit trail and for the check below.
     const after = new Map(out.map((r) => [r.name_key, r]));
@@ -228,7 +255,7 @@ export function readCustom(accountId: string, e: any | null, b: any, o: { merge?
     }
     for (const r of gone) plan.changes.push(r.on_certificate ? `${r.name}: "${r.value}" taken off.` : `The value of "${r.name}" (not printed on the certificate) was taken off.`);
     if (e && plan.changes.length) {
-      if (e.status === 'completed') throw bad('This envelope is completed, so its details are fixed: they are part of its record and its certificate. Nothing was changed.', 409);
+      if (e.status === 'completed') throw bad('This envelope is completed, so its details can no longer be changed: they are part of its record and its certificate. Nothing was changed.', 409);
       if (e.status !== 'draft' && e.status !== 'sent') throw bad(`This envelope is ${e.status}, so its details can no longer be changed. Nothing was changed.`, 409);
       // A field the account requires stays filled in on an envelope that is out: it went out with a value.
       const needed = e.status === 'sent' ? defs.filter((d) => d.required && gone.some((r) => r.def_id === d.id || r.name_key === d.name_key)).map((d) => d.name) : [];
@@ -335,13 +362,16 @@ function sendProblems(e: any, over?: { set: Map<string, string>; clear: string[]
   return { missing, misfit };
 }
 const missingText = (missing: string[], how: string) =>
-  `Your account asks for ${quoted(missing)} on every envelope, and ${missing.length === 1 ? 'it has' : 'they have'} no value here. ${how}`;
-const EDITOR_HOW = 'Fill it in on the last step of the editor, under Details (in the API: "custom_fields"), then send again.';
+  `Your account asks for ${quoted(missing)} on every document, and ${missing.length === 1 ? 'it has' : 'they have'} no value here. ${how}`;
+// Said to whoever sends, on a screen or through the API. The screens of the editor and of the "Use" dialog say it in
+// their own words, with the box in view (code DETAILS_MISSING and the names in "missing").
+const EDITOR_HOW = 'Fill in what is missing under Details, on the last step of the editor, then send again.';
+const API_HOW = 'With the API: give each a value in "custom_fields" (PUT /envelopes/{id} or PUT /envelopes/{id}/custom-fields), then send again.';
 
 /** Called by sendEnvelope(), before anything is sent. */
 export function assertCustomFields(e: any) {
   const { missing, misfit } = sendProblems(e);
-  if (missing.length || misfit.length) throw bad([...(missing.length ? [missingText(missing, EDITOR_HOW)] : []), ...misfit].join(' '));
+  if (missing.length || misfit.length) throw bad([...(missing.length ? [missingText(missing, EDITOR_HOW)] : []), ...misfit].join(' '), 400, missing.length ? { code: DETAILS_MISSING, missing, api_hint: API_HOW } : undefined);
   const defs = new Map(defsOf(e.account_id).map((d) => [d.id, d]));
   for (const r of rowsOf(e.id)) {
     const d = r.def_id ? defs.get(r.def_id) : null;
@@ -378,7 +408,7 @@ export function formCustomProblem(tpl: any): string | null {
 function rowPlan(accountId: string, tpl: any, row: any, i: number): Plan | null {
   if (row?.custom_fields === undefined || row.custom_fields === null) return null;
   try {
-    return readCustom(accountId, tpl, { custom_fields: row.custom_fields }, { merge: true, map: true, where: `Row ${i + 1}: "custom_fields"` });
+    return readCustom(accountId, tpl, { custom_fields: row.custom_fields }, { merge: true, map: true });
   } catch (err: any) {
     throw bad(`Row ${i + 1}: ${String(err.message).replace(/ Nothing was saved\.$/, '')} Nothing was sent.`);
   }
@@ -399,24 +429,27 @@ export function assertBulkCustom(accountId: string, tpl: any, rows: any[]) {
     // A row's own value takes the place of the template's, also one that no longer fits its field.
     const { missing, misfit } = sendProblems(tpl, { set: new Map((plan?.values || []).map((r) => [r.name_key, r.value])), clear: plan?.clear || [] });
     if (missing.length || misfit.length)
-      throw bad(`Row ${i + 1}: ${[...(missing.length ? [missingText(missing, 'Add a column named like the field to the list, or give the template a value for it on the last step of its editor.')] : []), ...misfit].join(' ')} Nothing was sent.`);
+      throw bad(`Row ${i + 1}: ${[...(missing.length ? [missingText(missing, 'Add a column named like the detail to the list, or give the template a value for it on the last step of its editor.')] : []), ...misfit].join(' ')} Nothing was sent.`);
   });
 }
 /** Called after a bulk row's envelope was made from the template: the row's own values take the template's place. */
-export function applyRowCustom(accountId: string, tpl: any, envelopeId: string, row: any) {
-  const plan = rowPlan(accountId, tpl, row, 0);
+export function applyRowCustom(accountId: string, tpl: any, envelopeId: string, row: any, position = 0) {
+  const plan = rowPlan(accountId, tpl, row, position);
   if (plan) writeCustom(envelopeId, { ...plan, changes: [] });
 }
 
 // ---- The list, its export and the certificate --------------------------------------------------------------------
 
-/** GET /envelopes?field=Case%20number&value=2026/114: only envelopes with that value (any value when it is empty). */
+/** GET /envelopes?field=Case%20number&value=2026: only envelopes whose value starts with that (any value when it is empty). */
 export function customFilter(q: URLSearchParams, where: string[], p: any[]) {
   const field = customKey(q.get('field'));
   if (!field) return;
   const value = customKey(q.get('value'));
-  where.push("EXISTS (SELECT 1 FROM custom_values v WHERE v.envelope_id=e.id AND v.document_id='' AND v.name_key=? AND (?='' OR v.value_key=?))");
-  p.push(field, value, value);
+  // A value typed in part finds what starts with it ("2026" finds 2026/114). A detail that is a list of choices is
+  // matched whole, so "North" does not find "Northside".
+  where.push(`EXISTS (SELECT 1 FROM custom_values v WHERE v.envelope_id=e.id AND v.document_id='' AND v.name_key=? AND (?='' OR v.value_key=? OR (v.value_key LIKE ? ESCAPE '\\'
+    AND NOT EXISTS (SELECT 1 FROM custom_field_defs d WHERE d.account_id=e.account_id AND d.name_key=v.name_key AND d.kind='list'))))`);
+  p.push(field, value, value, `${value.replace(/[\\%_]/g, '\\$&')}%`);
 }
 
 /** Puts each row's custom fields on it, for the list and its column. */

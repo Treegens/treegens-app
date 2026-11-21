@@ -7,7 +7,7 @@ import { sendMail } from './mail.ts';
 import { creditsEnabled, available, isChargeable } from './credits.ts';
 import {
   loadEnvelope, publicEnvelope, createEnvelope, saveDraft, copyEnvelope, sendEnvelope, voidEnvelope, remindEnvelope,
-  correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl, outOfSignatures,
+  correctRecipient, correctEnvelope, extendEnvelope, auditTrail, verifyChain, buildPdf, finalPdf, audit, signUrl, senderOf, outOfSignatures,
   advance, assertMayEmail, formNeedsSignatures, type Actor,
 } from './envelopes.ts';
 import { hmac, safeEqual } from './util.ts';
@@ -42,10 +42,12 @@ import { assertFormNotStacked, tellStackedForm } from './stackedforms.ts';
 // Office files and others turned into a PDF on upload, with the original kept (src/server/converted.ts).
 import { convertUpload, keepOriginal } from './converted.ts';
 import { KNOWN_EXT } from '../lib/convert.ts';
+import { nameFromFile } from '../lib/docname.ts';
 import { record } from './seclog.ts';
 // The account's own custom fields (customfields.ts): values on envelopes and templates, bulk columns, the list filter.
-import { readCustom, writeCustom, assertBulkCustom, bulkCustomRefusal, applyRowCustom, formCustomProblem, customFilter, attachCustom } from './customfields.ts';
-import { existingSignatures } from './seal.ts';
+import { readCustom, writeCustom, assertBulkCustom, bulkCustomRefusal, applyRowCustom, formCustomProblem, customFilter, attachCustom, customPrintProblems } from './customfields.ts';
+import { existingSignatures, sealFacts } from './seal.ts';
+import { signNowFor } from './signnow.ts';
 import { signaturesLost } from '../lib/seal.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
@@ -81,7 +83,9 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   const info = await inspectPdf(bytes);
   if (info.pages > 500) throw bad('That document has more than 500 pages. Split it into smaller documents and add them one by one.');
   const fid = id('fil');
-  const name = str(file.name, 200).replace(KNOWN_EXT, '') || 'Document';
+  // "planting-partnership.pdf" becomes "Planting partnership": the name is what the subject, the lists and the
+  // downloaded file are called after (src/lib/docname.ts).
+  const name = nameFromFile(str(file.name, 200).replace(KNOWN_EXT, '')) || 'Document';
   // Text is kept for the sender's own search. Files uploaded by signers are not indexed.
   const read = isPdf && accountId ? await extractPages(bytes) : [];
   const text = textOf(read);
@@ -321,11 +325,11 @@ route('GET', '/envelopes/:id', (c) => {
   else env.wording_lock = wordingLock(c, e);
   // Names and wording in a script the signed PDF has no font for, said here so the sender hears it from the
   // envelope page and not from the finished document. Each entry says where the text stands and which characters.
-  const print_problems = e.status === 'completed' && (e.final_sha256 || e.purged_at) ? [] : printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id));
+  const print_problems = e.status === 'completed' && (e.final_sha256 || e.purged_at) ? [] : [...printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id)), ...customPrintProblems(e.id)];
   // texts: what became of every text message about this envelope, like deliveries for email. Numbers are masked.
   // kept_on_delete: whether deleting it now would only take it out of the lists (deleting.ts), for the delete dialog.
   // retention: how long it is kept, a purge asked for or announced, holds, and what a purge left (records.ts).
-  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e) };
+  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e), seal: sealFacts(e) };
 });
 
 // The same check for text that is not saved yet: the editor asks before sending, with what stands on screen.
@@ -433,9 +437,13 @@ route('POST', '/envelopes/:id/restore', (c) => {
 route('POST', '/envelopes/:id/send', async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const e = mine(c, c.params.id, 'envelope');
-  await sendEnvelope(e.id, c.actor, { anyway: b?.send_anyway === true });
+  // "sign_now": true from the person the envelope belongs to, when they are the only person on it: no invitation is
+  // emailed to them and the answer carries their signing page (signnow.ts). In every other case it changes nothing.
+  const now = signNowFor(e, senderOf(e), c.user?.email, b?.sign_now);
+  await sendEnvelope(e.id, c.actor, { anyway: b?.send_anyway === true, signNow: now?.id || null });
   const sent = loadEnvelope(e.id);
-  return { envelope: publicEnvelope(sent), warnings: sendWarnings(sent) };
+  const mine_ = now ? sent.recipients.find((r: any) => r.id === now.id) : null;
+  return { envelope: publicEnvelope(sent), warnings: sendWarnings(sent), ...(mine_?.token ? { sign_url: signUrl(mine_) } : {}) };
 });
 
 // The check before sending, for the review step of the editor and for anyone who wants to look before they send:
@@ -599,7 +607,7 @@ async function sendBatch(b: { id: string; account_id: string; sender_id: string;
           const fill = JSON.parse(row.fill);
           eid = copyEnvelope(forRows(who, tpl), { accountId: b.account_id, senderId: b.sender_id, kind: 'envelope', fill, extra: { bulk_id: b.id, values: fill?.fields && typeof fill.fields === 'object' ? fill.fields : null } });
           // A column named like a custom field fills it for this row ("custom_fields", checked before the batch began).
-          applyRowCustom(b.account_id, tpl, eid, fill);
+          applyRowCustom(b.account_id, tpl, eid, fill, Number(row.position) || 0);
           set('envelope_id=?', eid);
         }
         const status = get('SELECT status FROM envelopes WHERE id=?', eid)?.status;

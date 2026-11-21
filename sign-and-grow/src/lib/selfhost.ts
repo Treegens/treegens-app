@@ -33,8 +33,9 @@ export function securityContacts(env: Env = process.env): string[] {
   const out: string[] = [];
   for (const raw of String(env.SECURITY_CONTACT || '').split(',').map((s) => s.trim()).filter(Boolean)) {
     if (/[\s<>"]/.test(raw)) continue;
-    if (EMAIL.test(raw) && raw.length < 255) out.push(`mailto:${raw}`);
-    else if (/^mailto:/i.test(raw) && EMAIL.test(raw.slice(7))) out.push(`mailto:${raw.slice(7)}`);
+    if (/^mailto:/i.test(raw)) {
+      if (EMAIL.test(raw.slice(7)) && raw.length < 255) out.push(`mailto:${raw.slice(7)}`);
+    } else if (EMAIL.test(raw) && !raw.includes(':') && raw.length < 255) out.push(`mailto:${raw}`);
     else if (/^https:\/\/[^/\s]+/i.test(raw)) {
       try {
         out.push(new URL(raw).toString());

@@ -3,19 +3,25 @@
 //   TSA_URL      the time-stamp service; several, separated by commas, are tried in order (TSA_URLS is read too)
 //   TSA_USER     and TSA_PASSWORD, when the service wants HTTP Basic credentials
 //   TSA_TRUST    optional: a PEM file of the certificates the service's own certificate must lead to
-// Each service gets 10 seconds. An answer counts only when it verifies: granted, over the SHA-256 of our signature
-// value, with our nonce, signed by a certificate meant for time-stamping that was valid at the time it gives, and,
-// with TSA_TRUST, issued under one of those certificates. Otherwise the next service is asked, and when none
-// answers the seal goes out at B-B (seal.ts); the PDF is never held back for it.
+// Each service gets 3 seconds and all of them together 4, because the last signer's Finish waits for the seal. An
+// answer counts only when it verifies: granted, over the SHA-256 of our signature value, with our nonce, signed by a
+// certificate meant for time-stamping that was valid at the time it gives, a time within 5 minutes of this server's
+// clock (a service that lies about the time, or a server whose clock is wrong, is caught there), and, with TSA_TRUST,
+// issued under one of those certificates. Otherwise the next service is asked, and when none answers the seal goes
+// out at B-B (seal.ts); the PDF is never held back for it, and a file sealed at B-B is never changed afterwards.
+// Only with TSA_TRUST does anything call the time stamp "trusted": without it nobody checked whose service answered.
+// TSA_USER and TSA_PASSWORD are only ever sent to https addresses; with them set, a plain http address is not asked.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { seq, integer, octets, algorithm, bool, read, kids, whole, readOid, readInt, readOctets, readTime, readText, DerError } from './der.ts';
-import { parseSignedData, checkSigner, OID } from './sealcms.ts';
+import { parseSignedData, checkSigner, hashName, OID } from './sealcms.ts';
 import { readCert, issued, selfSigned, type CertInfo } from './x509.ts';
 
-export const TSA_TIMEOUT_MS = 10_000;
+export const TSA_TIMEOUT_MS = 3_000;
 /** All services together: the last signer's Finish waits for the seal, so never longer than this for time-stamps. */
-export const TSA_TOTAL_MS = 20_000;
+export const TSA_TOTAL_MS = 4_000;
+/** How far the time in a time-stamp may be from this server's clock. */
+export const TSA_CLOCK_MS = 5 * 60_000;
 const MAX_ANSWER = 256 * 1024;
 const TIME_STAMPING = '1.3.6.1.5.5.7.3.8';
 
@@ -35,7 +41,10 @@ export class TsaError extends Error {}
 
 export type TimeStamp = { token: Buffer; time: Date; url: string; host: string; tsaName: string; trusted: boolean };
 
-function trustCerts(): CertInfo[] | null {
+/** Whether TSA_TRUST is set: only then is a time-stamp service's certificate checked against a list, and called trusted. */
+export const tsaTrustSet = () => !!process.env.TSA_TRUST;
+
+export function trustCerts(): CertInfo[] | null {
   const f = process.env.TSA_TRUST;
   if (!f) return null;
   let text: string;
@@ -54,28 +63,23 @@ export function timeStampRequest(imprint: Buffer, nonce: Buffer): Buffer {
   return seq(integer(1), seq(algorithm(OID.sha256, null), octets(imprint)), integer(nonce), bool(true));
 }
 
-/** Checks an answer (RFC 3161 section 2.4.2) and returns its token and time. Throws TsaError saying why not. */
-export function checkAnswer(answer: Buffer, imprint: Buffer, nonce: Buffer, trust = trustCerts()): { token: Buffer; time: Date; tsaName: string; trusted: boolean } {
+/**
+ * Checks a time-stamp token (RFC 3161 section 2.4.2) on its own: it is over `imprintFor(hash)`, signed by exactly one
+ * certificate meant for time-stamping that was valid at the time it gives, and, with `trust`, issued under one of
+ * those certificates. Throws TsaError saying why not. Used for a service's answer and for a token found in a file.
+ */
+export function checkToken(token: Buffer, imprintFor: (hash: string) => Buffer | null, trust: CertInfo[] | null): { time: Date; tsaName: string; trusted: boolean; nonce: bigint | null } {
   try {
-    const top = kids(read(answer));
-    const status = kids(top[0]);
-    const code = Number(readInt(status[0]));
-    if (code !== 0 && code !== 1) {
-      const said = status[1] && status[1].tag === 0x30 ? kids(status[1]).map(readText).join(' ') : '';
-      throw new TsaError(`the service refused (status ${code}${said ? `: ${said.slice(0, 200)}` : ''})`);
-    }
-    if (!top[1]) throw new TsaError('the service sent no time-stamp');
-    const token = Buffer.from(whole(top[1]));
     const sd = parseSignedData(token);
     if (sd.eContentType !== OID.tstInfo || !sd.eContent) throw new TsaError('the answer is not a time-stamp');
     const info = kids(read(sd.eContent));
     const mi = kids(info[2]);
-    if (readOid(kids(mi[0])[0]) !== OID.sha256 || !readOctets(mi[1]).equals(imprint)) throw new TsaError('the time-stamp is not over our signature');
+    const hash = hashName(readOid(kids(mi[0])[0]));
+    const want = hash && hash !== 'sha1' ? imprintFor(hash) : null;
+    if (!want || !readOctets(mi[1]).equals(want)) throw new TsaError('the time-stamp is not over our signature');
     const time = readTime(info[4]);
-    let got: bigint | null = null;
-    for (const n of info.slice(5)) if (n.tag === 0x02) got = readInt(n);
-    const want = BigInt(`0x${nonce.toString('hex')}`);
-    if (got !== want) throw new TsaError('the time-stamp does not carry our nonce, so it may be an old answer');
+    let nonce: bigint | null = null;
+    for (const n of info.slice(5)) if (n.tag === 0x02) nonce = readInt(n);
     if (sd.signers.length !== 1) throw new TsaError('the time-stamp has more or fewer than one signer');
     const s = sd.signers[0];
     const eContent = sd.eContent;
@@ -96,12 +100,37 @@ export function checkAnswer(answer: Buffer, imprint: Buffer, nonce: Buffer, trus
       if (!anchored(at)) throw new TsaError('the time-stamp service\'s certificate does not lead to one in TSA_TRUST');
       trusted = true;
     }
-    return { token, time, tsaName: c.cert.name, trusted };
+    return { time, tsaName: c.cert.name, trusted, nonce };
   } catch (e) {
     if (e instanceof TsaError) throw e;
     if (e instanceof DerError) throw new TsaError('the answer is not a time-stamp this server can read');
     throw new TsaError(`the answer could not be checked: ${(e as Error)?.message || e}`);
   }
+}
+
+/** Checks a service's answer and returns its token and time: checkToken, our nonce, and a time near our clock (`at`). */
+export function checkAnswer(answer: Buffer, imprint: Buffer, nonce: Buffer, trust = trustCerts(), at = new Date()): { token: Buffer; time: Date; tsaName: string; trusted: boolean } {
+  let token: Buffer;
+  try {
+    const top = kids(read(answer));
+    const status = kids(top[0]);
+    const code = Number(readInt(status[0]));
+    if (code !== 0 && code !== 1) {
+      const said = status[1] && status[1].tag === 0x30 ? kids(status[1]).map(readText).join(' ') : '';
+      throw new TsaError(`the service refused (status ${code}${said ? `: ${said.slice(0, 200)}` : ''})`);
+    }
+    if (!top[1]) throw new TsaError('the service sent no time-stamp');
+    token = Buffer.from(whole(top[1]));
+  } catch (e) {
+    if (e instanceof TsaError) throw e;
+    throw new TsaError('the answer is not a time-stamp this server can read');
+  }
+  const r = checkToken(token, (h) => (h === 'sha256' ? imprint : null), trust);
+  if (r.nonce !== BigInt(`0x${nonce.toString('hex')}`)) throw new TsaError('the time-stamp does not carry our nonce, so it may be an old answer');
+  // A service that gives a time far from ours is lying or broken, or our own clock is wrong: either way the time is not used.
+  if (Math.abs(r.time.getTime() - at.getTime()) > TSA_CLOCK_MS)
+    throw new TsaError(`the time it gives (${r.time.toISOString()}) is more than ${TSA_CLOCK_MS / 60_000} minutes from this server's clock, so one of the two clocks is wrong`);
+  return { token, time: r.time, tsaName: r.tsaName, trusted: r.trusted };
 }
 
 /** Asks each service in turn for a time-stamp over `signature`. Throws TsaError naming what each one did. */
@@ -113,20 +142,26 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls()): Promise<Ti
   const user = process.env.TSA_USER;
   const until = Date.now() + TSA_TOTAL_MS;
   for (const url of urls) {
-    const left = until - Date.now();
-    if (left < 1000) {
-      failures.push(`${url}: not asked, because the ${TSA_TOTAL_MS / 1000} seconds for time-stamps were used up`);
-      continue;
-    }
+    // Only the host is ever repeated: an address can carry a key in its path, and this ends up in the audit trail.
     const host = (() => {
       try {
         return new URL(url).host;
       } catch {
-        return url;
+        return 'a service whose address cannot be read';
       }
     })();
+    const left = until - Date.now();
+    if (left < 500) {
+      failures.push(`${host}: not asked, because the ${TSA_TOTAL_MS / 1000} seconds for time-stamps were used up`);
+      continue;
+    }
     const nonce = crypto.randomBytes(8);
     nonce[0] &= 0x7f;
+    // The user name and password go out with the request, so never over a connection anyone on the way can read.
+    if (user && !/^https:/i.test(url)) {
+      failures.push(`${host}: not asked, because its address is plain http and the user name and password are only sent over https`);
+      continue;
+    }
     try {
       const res = await fetch(url, {
         method: 'POST',

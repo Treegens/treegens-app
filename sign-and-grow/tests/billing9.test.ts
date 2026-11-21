@@ -8,10 +8,10 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { boot, Client, signUp, mailTo, simple, signAll, type Server } from './helpers.ts';
+import { boot, Client, signUp, mailTo, simple, signAll, upload, tokenFor, type Server } from './helpers.ts';
 import { stripe, unix } from './stripe-fake.ts';
 import { PRICING } from '../src/lib/impact.ts';
-import { expiryRuleText, expiryMoment, HELD_EXPIRY_TEXT, refundRuleText } from '../src/lib/policy.ts';
+import { expiryRuleText, expiryShortText, expiredWords, expiryMoment, HELD_EXPIRY_TEXT, refundRuleText } from '../src/lib/policy.ts';
 
 // ---- The fake clock ----------------------------------------------------------------------------------------------
 // Every `new Date()` and `Date.now()` in the server reads it (the server only ever asks Date for the time). It keeps
@@ -233,27 +233,104 @@ test('the 3 signatures of a new account expire 30 days after it was made', async
   assert.equal(credits.lastExpiry(p.id), null);
 });
 
-test('putting another person in after the date: the signature stays held for that envelope, one for one, and nothing comes back to send with', async () => {
+test('putting another person in after the date needs a signature of today\'s: with none, it is refused in plain words and the person on it can still sign', async () => {
   const p = await person('Swap');
   const one = await send(p, `s1-${p.k}@signers.example`);
-  await send(p, `s2-${p.k}@signers.example`);
+  const two = await send(p, `s2-${p.k}@signers.example`);
   await send(p, `s3-${p.k}@signers.example`);
   travel(31);
   await again(p);
   assert.deepEqual(sig(p), { balance: 3, held: 3, available: 0 });
-  // An honest sender who typed the wrong person is not punished for the date: the envelope is still out, and what
-  // was held for it is held for the right person now.
+  // The three held ones are past their date. They are good for the people they were sent to, and for nobody else.
   const sw = await p.c.post(`/envelopes/${one.id}/correct`, { recipient_id: one.rid, name: 'Somebody Else', email: `else-${p.k}@signers.example` });
-  assert.equal(sw.status, 200, JSON.stringify(sw.data));
-  assert.deepEqual(sig(p), { balance: 3, held: 3, available: 0 }, 'one for one: nothing to send with appeared');
-  assert.deepEqual([lot(p, 'welcome').held, lot(p, 'welcome').left, lot(p, 'welcome').expired], [3, 0, 0]);
-  // It is no way to send to someone new: a fourth envelope is refused.
-  const e = await simple(p.c, 'fourth', { recipients: [{ id: 'r', role: 'signer', name: 'Fourth Signer', email: `s4-${p.k}@signers.example` }] });
-  assert.equal((await p.c.post(`/envelopes/${e.id}/send`)).status, 402);
+  assert.equal(sw.status, 402, JSON.stringify(sw.data));
+  assert.equal(sw.data.error, credits.pastDateText(lot(p, 'welcome').expires_at!));
+  assert.match(sw.data.error, /^The signature held for this envelope passed its own date on \d+ \w+ \d{4} at \d\d:\d\d UTC\. It stays good for the person and the documents it was sent with/);
+  assert.match(sw.data.error, /Nothing was changed\. Add signatures on the Plan page and try again, or leave the envelope as it is: the person on it can still sign\.$/);
+  // Another name at the same address is another person too.
+  assert.equal((await p.c.post(`/envelopes/${one.id}/correct`, { recipient_id: one.rid, name: 'Quite Another Person' })).status, 402);
+  // The full editor: the same answer, and nothing saved.
+  const full = (await p.c.get(`/envelopes/${one.id}`)).data.envelope;
+  full.recipients[0].email = `else-${p.k}@signers.example`;
+  full.recipients[0].name = 'Somebody Else';
+  const put = await p.c.put(`/envelopes/${one.id}`, full);
+  assert.equal(put.status, 402, JSON.stringify(put.data));
+  assert.match(put.data.error, /^The signature held for this envelope passed its own date/);
+  // The signer passing it on: refused in words that say nothing of the sender's business, and they can still sign.
+  const pass = await new Client().post(`/sign/${tokenFor(two.id, `s2-${p.k}@signers.example`)}/reassign`, { name: 'A Colleague', email: `col-${p.k}@signers.example` });
+  assert.equal(pass.status, 403, JSON.stringify(pass.data));
+  assert.match(pass.data.error, /^This document cannot be passed on to someone else right now\. You can still sign it yourself\./);
+  assert.doesNotMatch(pass.data.error, /signature held|Plan page|expired/);
+  // Nothing moved: still three held in the trial, none expired, nobody new on any of them.
   assert.deepEqual(sig(p), { balance: 3, held: 3, available: 0 });
-  // The new person signs: used from the trial, after its date, as the held one always could be.
-  assert.equal((await signAll(one.id, `else-${p.k}@signers.example`)).status, 200);
-  assert.deepEqual([lot(p, 'welcome').used, lot(p, 'welcome').held], [1, 2]);
+  assert.deepEqual([lot(p, 'welcome').held, lot(p, 'welcome').left, lot(p, 'welcome').expired], [3, 0, 0]);
+  assert.equal(db.get('SELECT email FROM recipients WHERE id=?', one.rid).email, `s1-${p.k}@signers.example`);
+  // A spelling fix of the same person is not another person, and is never refused.
+  assert.equal((await p.c.post(`/envelopes/${one.id}/correct`, { recipient_id: one.rid, name: `Signer  s1-${p.k}@signers.example` })).status, 200);
+  // The people it was sent to sign with the held ones, after the date, as before.
+  assert.equal((await signAll(one.id, `s1-${p.k}@signers.example`)).status, 200);
+  assert.equal((await signAll(two.id, `s2-${p.k}@signers.example`)).status, 200);
+  assert.deepEqual([lot(p, 'welcome').used, lot(p, 'welcome').held], [2, 1]);
+  balanced(p);
+});
+
+test('parking: a month\'s signatures cannot be kept past its end by sending to a placeholder and putting the real person in later', async () => {
+  const p = await person('Park');
+  await subscribe(p, 20);
+  // Nine envelopes to placeholders (the nine of the month, the soonest to expire), and more time for one of them.
+  const parked: { id: string; rid: string }[] = [];
+  for (let i = 0; i < 9; i++) parked.push(await send(p, `park${i}-${p.k}@signers.example`));
+  assert.equal((await p.c.post(`/envelopes/${parked[0].id}/extend`, { days: 365 })).status, 200);
+  assert.deepEqual([lot(p, 'plan').held, lot(p, 'plan').left], [9, 0]);
+  travel(20 + 1 / 1440);
+  await again(p);
+  // The month is over. Held ones do not expire while held (the brief's rule 5), and the trial's 3 are still good.
+  assert.deepEqual(sig(p), { balance: 12, held: 9, available: 3 });
+  const monthEnd = lot(p, 'plan').expires_at!;
+  // The real person is put in on the first one: the old month's signature is let go and expires, and the new
+  // person is held with one that can pay today (the trial's).
+  const sw = await p.c.post(`/envelopes/${parked[0].id}/correct`, { recipient_id: parked[0].rid, name: 'Real Person', email: `real0-${p.k}@signers.example` });
+  assert.equal(sw.status, 200, JSON.stringify(sw.data));
+  assert.deepEqual(sig(p), { balance: 11, held: 9, available: 2 }, 'the old month paid for nothing new: one of today\'s is held instead');
+  assert.deepEqual([lot(p, 'plan').held, lot(p, 'plan').expired, lot(p, 'welcome').held], [8, 1, 1]);
+  const h = history(p, 'expired').at(-1);
+  assert.match(h.detail, /^1 signature that was held for an envelope was let go after its date had passed, so it expired instead of coming back \(of the 9 signatures of the monthly plan/);
+  assert.ok(h.at > monthEnd, 'the line is dated when it was let go, not at the end of the month');
+  assert.equal(credits.paidSignatureFor(parked[0].rid), false, 'the new person is held in the trial, not in the paid month');
+  assert.equal((await signAll(parked[0].id, `real0-${p.k}@signers.example`)).status, 200);
+  assert.deepEqual([lot(p, 'welcome').used, lot(p, 'plan').used], [1, 0], 'signed with one of today\'s');
+  // Other documents on the second one, same person: the same thing, through the editor.
+  const full = (await p.c.get(`/envelopes/${parked[1].id}`)).data.envelope;
+  full.documents[0].file_id = (await upload(p.c, 3)).id;
+  const put = await p.c.put(`/envelopes/${parked[1].id}`, full);
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  assert.deepEqual([lot(p, 'plan').held, lot(p, 'plan').expired, lot(p, 'welcome').held], [7, 2, 1]);
+  // A change that is not the documents or the person (the subject) leaves a held one where it is.
+  const sub = (await p.c.get(`/envelopes/${parked[2].id}`)).data.envelope;
+  sub.subject = 'A better subject';
+  assert.equal((await p.c.put(`/envelopes/${parked[2].id}`, sub)).status, 200);
+  assert.deepEqual([lot(p, 'plan').held, lot(p, 'plan').expired], [7, 2]);
+  // The trial's last one goes the same way, and then there is nothing of today's left: the next change is refused,
+  // through every door, and nothing is saved.
+  assert.equal((await p.c.post(`/envelopes/${parked[3].id}/correct`, { recipient_id: parked[3].rid, name: 'Real Three', email: `real3-${p.k}@signers.example` })).status, 200);
+  assert.equal(sig(p).available, 0);
+  const no = await p.c.post(`/envelopes/${parked[4].id}/correct`, { recipient_id: parked[4].rid, name: 'Real Four', email: `real4-${p.k}@signers.example` });
+  assert.equal(no.status, 402);
+  assert.equal(no.data.error, credits.pastDateText(monthEnd));
+  const docs = (await p.c.get(`/envelopes/${parked[5].id}`)).data.envelope;
+  const before = docs.documents[0].file_id;
+  docs.documents[0].file_id = (await upload(p.c, 4)).id;
+  const noDocs = await p.c.put(`/envelopes/${parked[5].id}`, docs);
+  assert.equal(noDocs.status, 402, JSON.stringify(noDocs.data));
+  assert.equal(noDocs.data.error, credits.pastDateText(monthEnd));
+  assert.equal((await p.c.get(`/envelopes/${parked[5].id}`)).data.envelope.documents[0].file_id, before, 'nothing was saved');
+  assert.equal((await new Client().post(`/sign/${tokenFor(parked[6].id, `park6-${p.k}@signers.example`)}/reassign`, { name: 'Real Six', email: `real6-${p.k}@signers.example` })).status, 403);
+  assert.deepEqual([lot(p, 'plan').held, lot(p, 'plan').expired], [6, 3], 'the refused ones are still held as they were');
+  assert.ok(sig(p).available >= 0, 'nobody signs with a signature that was not paid for');
+  // The new month arrives: its nine are today's, and the change goes through with one of them.
+  await event('invoice.paid', invoice(p, `in9_${p.k}_2`, 30, { billing_reason: 'subscription_cycle' }));
+  assert.equal((await p.c.post(`/envelopes/${parked[4].id}/correct`, { recipient_id: parked[4].rid, name: 'Real Four', email: `real4-${p.k}@signers.example` })).status, 200);
+  assert.deepEqual([lot(p, 'plan', 0).held, lot(p, 'plan', 0).expired, lot(p, 'plan', 1).held], [5, 4, 1], 'the new person is held in the new month');
   balanced(p);
 });
 
@@ -327,9 +404,12 @@ test('a held signature does not expire while held; let go after its date, it is 
   // Where holds are explained, it says so.
   assert.equal(state(p).held_rule, HELD_EXPIRY_TEXT);
   assert.match(HELD_EXPIRY_TEXT, /does not expire while it is held\. If that envelope is then voided, declined or runs out of time after the signature's own date has passed, that signature is gone instead of coming back/);
-  for (const f of ['src/app/app/settings/page.tsx', 'src/app/help/page.tsx', 'src/app/page.tsx', 'src/components/sender/UsageMeter.tsx']) {
+  for (const f of ['src/app/app/settings/page.tsx', 'src/app/help/page.tsx']) {
     assert.match(readFileSync(f, 'utf8'), /HELD_EXPIRY_TEXT|held_rule/, `${f} explains holds and says what happens after the date`);
   }
+  // The price list and the editor say it in a few words of their own, and never that a held one always comes back.
+  assert.match(readFileSync('src/app/page.tsx', 'utf8'), /come back, unless their own date has passed by then\./);
+  for (const f of ['src/app/page.tsx', 'src/components/editor/StepReview.tsx', 'src/components/sender/UsageMeter.tsx']) assert.doesNotMatch(readFileSync(f, 'utf8'), /comes straight back|come back by themselves\. *<|It comes back if you void/, f);
   balanced(p);
 });
 
@@ -449,16 +529,21 @@ test('a dispute decided in our favour after the date: the set-aside signatures e
 
 test('the expiry rule is written once and quoted on the Plan page, the pricing block, /help, both payment pages, the receipts and every renewal reminder', async () => {
   const rule = expiryRuleText();
-  assert.match(rule, /^The 9 signatures that come with each month of Grove belong to that month/);
+  assert.match(rule, /^The 9 signatures of each month of the monthly plan last until that month ends: at the renewal, or at the end of the paid month if you cancel\. Unused ones expire then, and the next month brings a fresh 9\./);
+  assert.doesNotMatch(rule, /Grove|[()]/, 'the plan is called what the Plan page calls it, and the rule has no asides');
+  assert.ok(rule.split(/\s+/).length <= 110, `${rule.split(/\s+/).length} words`);
   // The refund rule keeps its meaning for what was not used and has not expired.
   assert.match(refundRuleText(30), /^Signatures you have not used, and that have not expired, are refunded in full within 30 days/);
-  assert.match(rule, /Top-up signatures expire 12 months after the payment that bought them/);
-  assert.match(rule, /The 3 free signatures of a new account expire 30 days after it is made/);
-  assert.match(rule, /The one that expires soonest is always used first/);
+  assert.match(rule, /Top-up signatures last 12 months from their payment, and we email you 30 and 3 days before if any are unused/);
+  assert.match(rule, /The 3 free signatures of a new account last 30 days/);
+  assert.match(rule, /The one that ends soonest is always used first/);
   const p = await person('Quoted');
   assert.equal(state(p).expiry_rule, rule);
   assert.match(readFileSync('src/app/app/settings/page.tsx', 'utf8'), /\{b\.expiry_rule\}/, 'the Plan page shows it');
-  assert.match(readFileSync('src/app/page.tsx', 'utf8'), /\{expiryRuleText\(\)\}/, 'the pricing block shows it');
+  // The price list says it in one line and links to the whole rule on /help (the first-send flow has a word ceiling).
+  assert.match(readFileSync('src/app/page.tsx', 'utf8'), /<li id="expiry"><b>When signatures expire\.<\/b> \{expiryShortText\(\)\} <Link href="\/help#expiry">How signatures expire<\/Link>\.<\/li>/);
+  assert.equal(expiryShortText(), "A month's 9 signatures last for that month, top-ups last 12 months, and every date is on your Plan page.");
+  assert.match(readFileSync('src/app/help/page.tsx', 'utf8'), /<p id="expiry">/);
   assert.match(readFileSync('src/app/help/page.tsx', 'utf8'), /\{expiryRuleText\(\)\}/, '/help shows it');
   // Both payment pages of the provider, inside the 1200 characters the provider allows.
   stripe.calls.length = 0;
@@ -485,10 +570,10 @@ test('the Plan page says how many are left this month and when they reset, and l
   assert.match(expiryMoment(st.period!.resets_at), /^\d{1,2} [A-Z][a-z]+ \d{4} at \d{2}:\d{2} UTC$/);
   assert.equal(expiryMoment('2026-12-03T14:00:00.000Z'), '3 December 2026 at 14:00 UTC');
   const src = readFileSync('src/app/app/settings/page.tsx', 'utf8');
-  assert.match(src, /This month of the plan: \{b\.period\.left\} of \{b\.period\.of\} left<\/b>, \{b\.period\.fresh === 'none'/);
-  assert.match(src, /they reset on \{expiryMoment\(b\.period\.resets_at\)\}/);
+  assert.match(src, /<b>This month: \{b\.period\.left\} of \{b\.period\.of\} left\.<\/b> \{b\.period\.fresh === 'none'/);
+  assert.match(src, /They reset on \{expiryMoment\(b\.period\.resets_at\)\}\./);
   // The long rules are closed until someone asks (research/ux-notes.json "expiry"): the dates are what stays in sight.
-  assert.match(src, /<details className="card">\s*<summary[^>]*>How signatures work<\/summary>\s*<ul className="rules"[^>]*>[\s\S]*\{b\.expiry_rule\}[\s\S]*\{b\.held_rule\}[\s\S]*<\/details>/);
+  assert.match(src, /<details className="card" data-fold="">\s*<summary[^>]*>How signatures work<\/summary>\s*<ul className="rules"[^>]*>[\s\S]*\{b\.expiry_rule\}[\s\S]*\{b\.held_rule\}[\s\S]*<\/details>/);
   assert.deepEqual(st.topups.map((l: any) => [l.of, l.left, l.expires_at]), [[4, 4, lot(p, 'topup').expires_at]]);
   assert.ok(st.lots.some((l: any) => l.source === 'welcome' && l.left === 3 && l.expires_at === lot(p, 'welcome').expires_at), 'the trial is listed with its date too');
   // The page that stops a renewal without logging in says the dates too, never "they stay yours".
@@ -505,7 +590,9 @@ test('every renewal reminder says how many of this month\'s signatures will expi
   assert.equal(acct(p.id).renews_at, lot(p, 'plan').expires_at, 'the renewal is the moment the month ends');
   assert.ok((await moneyTimer()).renewals >= 1);
   const m = lastMail(p.email, /^Heads up: your plan renews/)!;
-  assert.match(m, new RegExp(`7 of this month's 9 signatures are still unused\\. If they are not used by the renewal, they expire then, on ${expiryMoment(lot(p, 'plan').expires_at)}, and the renewal brings a fresh 9\\.`));
+  assert.match(m, new RegExp(`7 of this month's 9 signatures are still unused\\. If they are not used by the renewal, they expire then, and the renewal brings a fresh 9\\.`));
+  // One way of writing the renewal in the email: the reader's day, as in its first line (no second, UTC, moment).
+  assert.doesNotMatch(m, /\d\d:\d\d UTC/);
   assert.ok(m.includes(expiryRuleText()));
   // The day before, with everything used or held: none will expire, and it says so.
   await used(p, 5, 'r2');
@@ -642,4 +729,147 @@ test('ledger lines written before lots existed become lots with the rule\'s date
   assert.equal(tp.expires_at, credits.addMonths(at, 12));
   assert.deepEqual([w.used, tp.used], [3, 1], 'the trial first, it expires sooner');
   assert.equal(credits.creditSummary(id).available, 3);
+});
+
+// ---- After the skeptic and the simplicity review (tests/out/verify-expiry, tests/out/ux-expiry) ---------------
+
+test('the plan history tells "held and let go after its date" from "expired unused", and dates each when it happened', async () => {
+  // All three held when the date passes, one voided two days later: not "expired unused", and not dated at the date.
+  const p = await person('Late');
+  const one = await send(p, `l1-${p.k}@signers.example`);
+  await send(p, `l2-${p.k}@signers.example`);
+  await send(p, `l3-${p.k}@signers.example`);
+  travel(31);
+  assert.deepEqual(sig(p), { balance: 3, held: 3, available: 0 });
+  assert.equal(history(p, 'expired').length, 0, 'nothing expired: all three are held');
+  travel(2);
+  await again(p);
+  assert.equal((await p.c.post(`/envelopes/${one.id}/void`, { reason: 'not needed' })).status, 200);
+  assert.deepEqual(sig(p), { balance: 2, held: 2, available: 0 });
+  const h = history(p, 'expired');
+  assert.equal(h.length, 1);
+  assert.match(h[0].detail, /^1 signature that was held for an envelope was let go after its date had passed, so it expired instead of coming back \(of the 3 signatures every new account gets/);
+  const until = lot(p, 'welcome').expires_at!;
+  assert.ok(Date.parse(h[0].at) - Date.parse(until) > 1.5 * DAY, `dated when it was let go (${h[0].at}), not at the lot's date (${until})`);
+  assert.equal(db.get("SELECT at FROM credits WHERE account_id=? AND reason='expired'", p.id).at, h[0].at, 'the ledger line carries the same moment');
+  balanced(p);
+
+  // Voided before the date, and nobody looked until after it: that one was not held when the date passed.
+  const q = await person('Early');
+  const e = await send(q, `e1-${q.k}@signers.example`);
+  await send(q, `e2-${q.k}@signers.example`);
+  travel(5);
+  await again(q);
+  assert.equal((await q.c.post(`/envelopes/${e.id}/void`, { reason: 'not needed' })).status, 200);
+  travel(27);
+  assert.deepEqual(sig(q), { balance: 1, held: 1, available: 0 });
+  const g = history(q, 'expired');
+  assert.equal(g.length, 1);
+  assert.match(g[0].detail, /^2 of the 3 signatures every new account gets, 30 days after the account was made \(.*\) expired unused\.$/);
+  assert.equal(g[0].at, lot(q, 'welcome').expires_at);
+  balanced(q);
+});
+
+test('between the end of a month and the renewal payment: the page and the refusal say the new nine are on their way', async () => {
+  const p = await person('Between');
+  await subscribe(p, 20);
+  await used(p, 2, 'b');
+  assert.equal(state(p).renewal_pending, false);
+  travel(20 + 1 / 1440);
+  await again(p);
+  let st = state(p);
+  assert.equal(st.period, null, 'the old month is over');
+  assert.equal(st.renewal_pending, true);
+  assert.deepEqual(st.signatures, { balance: 3, held: 0, available: 3 });
+  // A send that needs more than is left is refused with the reason and what to do, not just "top up".
+  const e = await simple(p.c, 'four', {
+    recipients: [1, 2, 3, 4].map((i) => ({ id: `r${i}`, role: 'signer', name: `Signer ${i}`, email: `bw${i}-${p.k}@signers.example` })),
+    fields: [1, 2, 3, 4].map((i) => ({ id: `f${i}`, document_id: 'd', recipient_id: `r${i}`, type: 'signature', page: 0, x: 0.1, y: 0.1 + i * 0.15, w: 0.3, h: 0.06 })),
+  });
+  const no = await p.c.post(`/envelopes/${e.id}/send`);
+  assert.equal(no.status, 402);
+  assert.match(no.data.error, /^This needs 4 signatures and you have 3 left\. 7 signatures you had not used expired on .*; the Plan page shows every date\. Your new month's 9 arrive when the renewal payment goes through, usually within the hour\. To send before that, top up on the Plan page: \$1 a signature/);
+  // The screens say it where the number is: the Plan card, Home, step 3, and the line about the next charge.
+  const page = readFileSync('src/app/app/settings/page.tsx', 'utf8');
+  assert.match(page, /\{b\.renewal_pending && <p className="plan-line lot-line" role="status"><b>Your new month&apos;s \{P\.monthlySignatures\} signatures arrive when the renewal payment goes through\.<\/b>/);
+  assert.match(page, /b\.renews_at && Date\.parse\(b\.renews_at\) <= Date\.now\(\) \? <>The payment for the new month is being taken now/);
+  assert.match(readFileSync('src/components/sender/UsageMeter.tsx', 'utf8'), /a\.renewalPending \? <>Your new month&apos;s/);
+  assert.match(readFileSync('src/components/editor/StepReview.tsx', 'utf8'), /b\.renewal_pending \? `Your new month's/);
+  // The payment arrives: a fresh nine, and nothing is "on its way" any more.
+  await event('invoice.paid', invoice(p, `in9_${p.k}_2`, 30, { billing_reason: 'subscription_cycle' }));
+  st = state(p);
+  assert.equal(st.renewal_pending, false);
+  assert.equal(st.period!.left, 9);
+  assert.equal((await p.c.post(`/envelopes/${e.id}/send`)).status, 200);
+  // A plan that was cancelled has no new month on its way, and an account that never had a plan has none either.
+  const c = await person('Ended');
+  await subscribe(c, 20);
+  db.run('UPDATE accounts SET cancel_at=? WHERE id=?', lot(c, 'plan').expires_at, c.id);
+  travel(20 + 1 / 1440);
+  assert.equal(state(c).renewal_pending, false);
+  assert.equal(state(await person('Never')).renewal_pending, false);
+  balanced(p);
+});
+
+test('running out because signatures expired is said with the number, where the person first sees it', async () => {
+  const p = await person('Back');
+  assert.equal(state(p).last_expiry, null);
+  travel(31);
+  await again(p);
+  const st = state(p);
+  assert.deepEqual(st.signatures, { balance: 0, held: 0, available: 0 });
+  assert.deepEqual(st.last_expiry, { n: 3, at: lot(p, 'welcome').expires_at, source: 'welcome' });
+  assert.equal(expiredWords(st.last_expiry), `Your 3 free signatures expired on ${expiryMoment(lot(p, 'welcome').expires_at)}.`);
+  assert.equal((await p.c.get('/billing')).data.last_expiry.n, 3, 'GET /billing carries it');
+  assert.equal(expiredWords({ n: 1, at: '2026-12-03T14:00:00.000Z', source: 'topup' }), '1 unused top-up signature expired on 3 December 2026 at 14:00 UTC.');
+  assert.equal(expiredWords({ n: 7, at: '2026-12-03T14:00:00.000Z', source: 'plan' }), '7 unused signatures of your last plan month expired on 3 December 2026 at 14:00 UTC.');
+  assert.equal(expiredWords(null), '');
+  // The Plan card, Home and step 3 of the editor each say it once, next to the zero.
+  assert.match(readFileSync('src/app/app/settings/page.tsx', 'utf8'), /const gone = s && s\.available <= 0 && !b\.renewal_pending \? expiredWords\(b\.last_expiry\) : '';/);
+  assert.match(readFileSync('src/app/app/settings/page.tsx', 'utf8'), /\{gone && <p className="plan-line lot-line" role="status"><b>\{gone\}<\/b> \{grove \? 'Top up below to send again\.' : 'Start the monthly plan below to send again\.'\}<\/p>\}/);
+  assert.match(readFileSync('src/components/sender/UsageMeter.tsx', 'utf8'), /<b>None left to send with\.<\/b> \{a\.renewalPending \? [\s\S]{0,200}expiredWords\(a\.lastExpiry\) \? <>\{expiredWords\(a\.lastExpiry\)\}/);
+  assert.match(readFileSync('src/components/sender/allowance.ts', 'utf8'), /lastExpiry: billing\?\.last_expiry \|\| null/);
+  assert.match(readFileSync('src/components/editor/StepReview.tsx', 'utf8'), /have === 0 && expiredWords\(b\.last_expiry\) \? `\$\{expiredWords\(b\.last_expiry\)\} ` : ''/);
+  // Once something new arrives it is no longer the news.
+  await subscribe(p, 30);
+  assert.equal(state(p).last_expiry, null);
+});
+
+test('the renewal reminder with one held signature is written in the singular', async () => {
+  const p = await person('One');
+  await subscribe(p, 6);
+  await send(p, `oh-${p.k}@signers.example`);
+  assert.ok((await moneyTimer()).renewals >= 1);
+  const m = lastMail(p.email, /^Heads up: your plan renews/)!;
+  assert.match(m, /8 of this month's 9 signatures are still unused\. If they are not used by the renewal, they expire then, and the renewal brings a fresh 9\. The 1 signature held for envelopes that are out does not expire while it is held\./);
+});
+
+test('the screens: one way of writing a moment on the Plan tab, 44 px targets, the usage line, and nothing extra on the daily path', () => {
+  const page = readFileSync('src/app/app/settings/page.tsx', 'utf8');
+  const tab = page.slice(page.indexOf('function Billing() {'), page.indexOf('function YourData() {'));
+  // Every date on the tab is written by expiryMoment (UTC, and it says so), so two cards never show one moment two ways.
+  assert.doesNotMatch(tab, /longMoment\(|fmtDate\(|longDate\(|utcDate\(|toLocale(Date|Time)String/);
+  assert.match(tab, /Next charge: <b>\{b\.next_amount \|\| price\} on \{expiryMoment\(b\.renews_at\)\}<\/b>/);
+  assert.match(tab, /`Top-up of \$\{utcDay\(l\.at\)\}`/);
+  assert.match(tab, /<tr key=\{p\.id\}><td>\{utcDay\(p\.at\)\}<\/td>/, 'the payments table shows the same day as the top-up line');
+  assert.match(tab, /Dates and times on this page are in UTC\./);
+  // The count has a heading a screen reader can jump to, and the card does not end in a paragraph of rules.
+  assert.match(tab, /<h2>Signatures<\/h2>\s*<div className="balance"><b className="num">\{Math\.max\(0, s\.available\)\}<\/b> left to send with<\/div>/);
+  assert.doesNotMatch(tab, /The rest is under &quot;How signatures work&quot; below/);
+  assert.equal(billing.billingState(acct(db.get('SELECT id FROM accounts LIMIT 1').id)).lots.find((l: any) => l.source === 'welcome')?.label ?? 'Your free signatures', 'Your free signatures');
+  // Buttons, link-buttons, boxes and the fold on the tab are at least 44 px tall on a phone.
+  assert.match(tab, /<div className="stack plan-tab">/);
+  assert.match(readFileSync('src/app/styles/settings.css', 'utf8'), /@media \(max-width: 760px\) \{\s*\.plan-tab \.btn, \.plan-tab \.btn\.sm, \.plan-tab \.linklike, \.plan-tab input, \.plan-tab summary \{ min-height: 44px; \}/);
+  // The usage line under the account name: only while signatures are counted, and it leads to the Plan page.
+  assert.match(readFileSync('src/components/AppShell.tsx', 'utf8'), /\{typeof me\.billing\?\.signatures\?\.available === 'number' && \(\s*<Link href="\/app\/settings\?tab=billing" className="usage-line"/);
+  // Step 3 says nothing about signatures when enough are left (the designer's note): the last thing it returns is nothing.
+  const step = readFileSync('src/components/editor/StepReview.tsx', 'utf8');
+  const cost = step.slice(step.indexOf('function SignatureCost('), step.indexOf('// Two people on one envelope'));
+  assert.match(cost, /\n  return null;\n\}\s*$/);
+  assert.doesNotMatch(cost, /Sending holds/);
+  // Home shows the count, when it resets and one link; the rules live on the Plan page only.
+  const home = readFileSync('src/components/sender/UsageMeter.tsx', 'utf8');
+  assert.doesNotMatch(home, /sn-rules|HELD_EXPIRY_TEXT|<li>/);
+  assert.match(home, /<Link href=\{PLAN_PAGE\}>How signatures work<\/Link>/);
+  assert.match(home, /This month&apos;s signatures \{a\.period\.fresh === 'none' \? 'expire' : 'reset'\} on \{expiryMoment\(a\.period\.resets_at\)\}/);
 });

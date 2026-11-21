@@ -798,7 +798,7 @@ route('POST', '/public/verify', async (c) => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const hash = sha256(bytes);
   // The digital seal inside the file, when it carries one (src/server/seal.ts): said beside the byte-for-byte answer.
-  const seal = sealForVerify(bytes);
+  const seal = await sealForVerify(bytes);
   const e = get("SELECT e.id, e.subject, e.completed_at, e.sheets, e.disputed_at, u.name sender FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.final_sha256=? AND e.status='completed'", hash);
   // A file of a completed document whose sender deleted it with their account: we kept its fingerprint, its id and
   // its day, nothing else (keepFingerprint in evidence.ts). "match" stays for a document we still hold.

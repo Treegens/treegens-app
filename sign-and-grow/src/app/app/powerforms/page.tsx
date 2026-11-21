@@ -14,7 +14,7 @@ export default function PowerForms() {
 
   return (
     <div className="stack">
-      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">PowerForms</h1><div className="muted">A public link anyone can open to fill in and sign a template. Put it on your website or in an email, or print its QR code for a poster or a front desk.</div></div></div>
+      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Forms</h1><div className="muted">A public link anyone can open to fill in and sign a template. Put it on your website or in an email, or print its QR code for a poster or a front desk.</div></div></div>
       <div className="card">
         <h2 style={{ marginBottom: 12 }}>Create a PowerForm</h2>
         <div className="row wrap" style={{ alignItems: 'flex-end' }}>

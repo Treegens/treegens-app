@@ -30,7 +30,7 @@ export async function finishLanded(ask: () => Promise<any>): Promise<'done' | 'o
  * Said in the last step when Finish did not get through and that is known: the device was offline before it was
  * sent, or the server says nothing is signed yet. `online` is what the device says about itself.
  */
-export const finishNotSent = (online: boolean, finish = 'Finish and send'): string => online
+export const finishNotSent = (online: boolean, finish = 'Finish'): string => online
   ? `Not sent yet. We could not reach GrowSigning just now, and nothing is signed yet. Your answers are safe on this page. We keep trying by ourselves while this stays open, or choose ${finish} to try now.`
   : `Not sent yet. This device seems to be offline, so nothing was signed. Your answers are safe on this page. We send it by ourselves as soon as the connection is back, or choose ${finish} to try now.`;
 
@@ -38,7 +38,7 @@ export const finishNotSent = (online: boolean, finish = 'Finish and send'): stri
  * Said when Finish was sent but no answer came back and the server cannot be asked: it may well have gone through,
  * so nothing is promised either way. Trying again is safe: a second Finish of the same person signs nothing twice.
  */
-export const finishUnknown = (online: boolean, finish = 'Finish and send'): string => online
+export const finishUnknown = (online: boolean, finish = 'Finish'): string => online
   ? `We did not hear back from GrowSigning, so we cannot tell yet whether it went through. Nothing you typed is lost. We keep checking by ourselves while this stays open and send it again if it did not arrive, or choose ${finish} to try now.`
   : `This device seems to have lost its connection, so we cannot tell yet whether it went through. Nothing you typed is lost. We check as soon as the connection is back and send it again if it did not arrive, or choose ${finish} to try now.`;
 

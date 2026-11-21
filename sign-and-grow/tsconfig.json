@@ -59,20 +59,14 @@
     ".next-build-ds-sec-log/dev/types/**/*.ts",
     ".next-build-brand-wire/types/**/*.ts",
     ".next-build-brand-wire/dev/types/**/*.ts",
-    ".next-build-simplify-signing/types/**/*.ts",
-    ".next-build-simplify-signing/dev/types/**/*.ts",
     ".next-build-simplify-start/types/**/*.ts",
     ".next-build-simplify-start/dev/types/**/*.ts",
-    ".next-finish-simplify-signing/types/**/*.ts",
-    ".next-finish-simplify-signing/dev/types/**/*.ts",
-    ".next-verify-brand-wire/types/**/*.ts",
-    ".next-verify-brand-wire/dev/types/**/*.ts",
-    ".next-verify-brand-wire-b/types/**/*.ts",
-    ".next-verify-brand-wire-b/dev/types/**/*.ts",
-    ".next-ux-chat/types/**/*.ts",
-    ".next-ux-chat/dev/types/**/*.ts",
-    ".next-verify-ds-custom-fields/types/**/*.ts",
-    ".next-verify-ds-custom-fields/dev/types/**/*.ts"
+    ".next-verify-simplify-editor/types/**/*.ts",
+    ".next-verify-simplify-editor/dev/types/**/*.ts",
+    ".next-uxse/types/**/*.ts",
+    ".next-uxse/dev/types/**/*.ts",
+    ".next-dragdrop/types/**/*.ts",
+    ".next-dragdrop/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

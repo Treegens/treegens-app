@@ -54,8 +54,10 @@ before(async () => {
   server = await boot();
   alice = await signUp('Alice Operator', 'alice@selfhost.example', '198.51.100.20');
   completed = await simple(alice, 'sam@selfhost.example');
+  assert.equal((await alice.post(`/envelopes/${completed.id}/send`)).status, 200);
   assert.equal((await signAll(completed.id, 'sam@selfhost.example')).status, 200);
-  await simple(alice, 'tom@selfhost.example'); // one still out for signature
+  const out = await simple(alice, 'tom@selfhost.example'); // one still out for signature
+  assert.equal((await alice.post(`/envelopes/${out.id}/send`)).status, 200);
 });
 
 // ---- 1. GET /api/health ----------------------------------------------------------------------------------------------
@@ -161,6 +163,10 @@ let good: { dir: string; manifest: any };
 let lateFile = '';
 test('backup: a consistent copy while the server runs, with a manifest, and never a key', async () => {
   const dest = tmp('backups');
+  // The health test above stopped the file store for a moment, and the alert about that is written a little later.
+  // Wait for it, so nothing is written to the server's database between this backup and the comparison after it.
+  for (let i = 0; i < 60 && !server.db.get("SELECT 1 x FROM support_requests WHERE email LIKE 'files-alert@%'"); i++) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 100));
   const secretFile = fs.readFileSync(path.join(dataDir(), 'secret'), 'utf8').trim();
   good = await backup({
     dataDir: dataDir(), dest,
@@ -319,7 +325,8 @@ test('outside: the hosts the settings imply, for several configurations', () => 
   }
   delete process.env.TSA_URL;
   // Lists: a pasted address counts as its host, junk is dropped, "*." is any name under.
-  assert.deepEqual(hostList('https://Hooks.Example.org/x, *.Corp.Example. , bad host!, relay.example.org:587'), ['hooks.example.org', '*.corp.example', 'bad', 'host!'.replace('!', '') ? 'relay.example.org' : ''].filter((h) => h !== 'bad'));
+  assert.deepEqual(hostList('https://Hooks.Example.org/x, *.Corp.Example. , bad host!, relay.example.org:587'), ['hooks.example.org', '*.corp.example', 'relay.example.org']);
+  assert.deepEqual(hostList('a.example b.example, -x.example, *., c.example'), ['a.example', 'b.example', 'c.example']);
   assert.equal(onList(['*.corp.example'], 'a.b.corp.example'), true);
   assert.equal(onList(['*.corp.example'], 'corp.example'), false);
   assert.equal(onList(['*.corp.example'], 'evilcorp.example'), false);
@@ -651,4 +658,53 @@ test('docs: the self-assessment and the runbooks say what they are, claim nothin
   for (const area of ['5 Organizational controls', '6 People controls', '7 Physical controls', '8 Technological controls']) assert.ok(controls.includes(area), area);
   for (let i = 1; i <= 14; i++) assert.match(controls, new RegExp(`^\\| ${i}\\. `, 'm'), `NCSC principle ${i}`);
   for (const h of ['## Restoring a backup', '## Rotating FILE_ENCRYPTION_KEY', '## Rotating APP_SECRET', '## A leaked key', '## A breach']) assert.ok(runbooks.includes(h), h);
+});
+
+// ---- 7. The container files, read as text (scripts/container-smoke.sh runs them for real, where Docker is) -----------
+
+test('container: not root, a health check, one volume, one replica, egress denied, and every setting documented', () => {
+  const docker = read('Dockerfile');
+  assert.match(docker, /^USER node$/m);
+  assert.ok(docker.lastIndexOf('USER node') > docker.lastIndexOf('RUN '), 'nothing runs as root after the user is set');
+  assert.match(docker, /^HEALTHCHECK [^\n]*\\\n\s+CMD \[.*\/api\/health/m);
+  assert.match(docker, /NEXT_TELEMETRY_DISABLED=1/);
+  assert.match(docker, /^ARG WITH_LIBREOFFICE=0$/m);
+  assert.match(docker, /^RUN npm ci$/m);
+  assert.ok(!/npm install/.test(docker.replace(/^#.*$/gm, '')), 'the lockfile decides what is installed');
+  assert.match(docker, /^VOLUME \["\/data"\]$/m);
+  // No key and no data can get into an image.
+  const ignore = read('.dockerignore').split('\n');
+  for (const n of ['.env', '.env.*', 'data', 'backups']) assert.ok(ignore.includes(n), n);
+  // The compose example: every setting through the env file, the volume, a read-only root, the same health check.
+  const compose = read('docker-compose.example.yml');
+  assert.match(compose, /env_file:\n\s+- \.env\n/);
+  assert.match(compose, /growsigning-data:\/data/);
+  assert.match(compose, /read_only: true/);
+  assert.match(compose, /cap_drop:\n\s+- ALL/);
+  assert.match(compose, /\/api\/health/);
+  assert.ok(!/—/.test(docker + compose));
+  // The chart: one replica that is not a value, Recreate, the reason said, and egress denied unless listed.
+  const dep = read('deploy/helm/growsigning/templates/deployment.yaml');
+  assert.match(dep, /^  replicas: 1$/m);
+  assert.match(dep, /type: Recreate/);
+  assert.match(dep, /readOnlyRootFilesystem: true/);
+  assert.match(dep, /runAsNonRoot: true/);
+  const values = read('deploy/helm/growsigning/values.yaml');
+  assert.ok(!/^replicas?:/m.test(values));
+  assert.match(values, /SQLite has one writer/);
+  assert.match(values, /^  allowDns: false$/m);
+  assert.match(values, /^  egressAllow: \[\]$/m);
+  const np = read('deploy/helm/growsigning/templates/networkpolicy.yaml');
+  assert.match(np, /policyTypes:\n\s+- Ingress\n\s+- Egress/);
+  assert.match(np, /egress: \[\]/);
+  // Every setting this feature reads is in .env.example and in the README table, and the health call is described.
+  const envExample = read('.env.example'), readme = read('README.md');
+  for (const k of ['OUTSIDE_CALLS', 'OUTBOUND_ALLOW', 'WEBHOOK_ALLOW_HOSTS', 'SECURITY_CONTACT', 'SECURITY_REPLY_DAYS']) {
+    assert.match(envExample, new RegExp(`^# ${k}=`, 'm'), k);
+    assert.match(readme, new RegExp(`^\\| \`${k}\` \\|`, 'm'), k);
+  }
+  assert.match(readme, /^## Running it yourself$/m);
+  assert.match(read('src/server/openapi.ts'), /'\/health': \{ get: \{/);
+  // The smoke test really starts the container without a network.
+  assert.match(read('scripts/container-smoke.sh'), /docker run -d [^\n]*--network none --read-only/);
 });

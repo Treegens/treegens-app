@@ -87,7 +87,7 @@ function expiryFor(accountId: string, reason: string, ref: string, at: string): 
   return null;
 }
 
-type Lot = { id: number; account_id: string; source: string; ref: string; qty: number; at: string; expires_at: string | null; paid: number; warned: string; drawn: number; held: number };
+type Lot = { id: number; account_id: string; source: string; ref: string; qty: number; at: string; expires_at: string | null; paid: number; warned: string; late: number; drawn: number; held: number };
 const loadLots = (accountId: string): Lot[] =>
   all(`SELECT l.*, COALESCE((SELECT SUM(d.n) FROM credit_draws d WHERE d.lot_id=l.id), 0) drawn,
       (SELECT COUNT(*) FROM credit_holds h WHERE h.lot_id=l.id) held FROM credit_lots l WHERE l.account_id=? ORDER BY l.id`, accountId);
@@ -190,10 +190,12 @@ export const holdKey = (ref: string) => createHash('sha256').update(String(ref))
 
 // Each signature held right now is held in one lot: the soonest-expiring one that was free when its envelope went
 // out. One that is let go (voided, declined, out of time) goes back to its lot, and if that lot's date has passed by
-// then it expires with it instead of coming back. When another person is put in on an envelope that is still out,
-// the signature held for the old person is held for the new one in the same step (their hold dates from when the
-// envelope went out), also after the lot's date: it is held for the envelope, one for one, and nothing that could be
-// sent with comes back (tests/billing9.test.ts, "putting another person in after the date").
+// then it expires with it instead of coming back. A held signature is held for one person signing the documents
+// that were sent, and for nothing else: when another person is put in on an envelope that is still out, the one held
+// for the old person is let go and the new person's is held from that moment, in a lot that can still pay today.
+// The same goes when the documents themselves are replaced (reholdEnvelope). So a month's signatures cannot be kept
+// past its end by parking them on envelopes and changing who or what they are for later (tests/billing9.test.ts,
+// "parking"). The places that put another person in ask swapRefusal first, so nobody ends up signing unpaid.
 // A person who has just pressed Finish is no longer "held" by the time their "signature used" line is written (the
 // two are a moment apart, with other work in between): their hold is kept for that moment (HOLD_GRACE_MS), so the
 // line takes the signature that was held for it, also from a lot whose date has passed, instead of it expiring.
@@ -203,14 +205,33 @@ const FINISHING = `FROM recipients r JOIN envelopes e ON e.id=r.envelope_id JOIN
         AND (r.role = 'inperson' OR (r.role = 'signer' AND (r.free = 0 OR (r.free IS NULL AND r.email != u.email))))
         AND NOT EXISTS (SELECT 1 FROM credits c WHERE c.account_id = e.account_id AND c.reason = 'signature'
           AND c.ref = r.id || '|' || lower(r.email) || CASE WHEN COALESCE(r.person_gen, 0) > 0 THEN '|' || r.person_gen ELSE '' END)`;
+// A held signature is let go. If its lot's date had passed by then, the lot remembers it (late), so the plan history
+// can say truthfully that it was held and let go after its date, and when. The moment an envelope was voided,
+// declined or ran out of time is on the envelope; anything else (another person, a recipient taken off) is now.
+function letGo(lotId: number | null, rid: string | null, t: string) {
+  const l = lotId ? get('SELECT expires_at FROM credit_lots WHERE id=?', lotId) : null;
+  if (!l?.expires_at || l.expires_at > t) return;
+  const e = rid ? get('SELECT e.status, e.updated_at FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE r.id=?', rid) : null;
+  const when = e && e.status !== 'sent' && e.updated_at ? e.updated_at : t;
+  if (when >= l.expires_at) run('UPDATE credit_lots SET late=COALESCE(late,0)+1 WHERE id=?', lotId);
+}
 function syncHolds(accountId: string) {
   const want = new Map<string, { since: string; rid: string }>();
   const grace = new Date(Date.now() - HOLD_GRACE_MS).toISOString();
   for (const r of [...all(`SELECT r.id, r.email, r.person_gen, COALESCE(e.sent_at, ?) since ${HELD}`, now(), accountId),
     ...all(`SELECT r.id, r.email, r.person_gen, COALESCE(e.sent_at, ?) since ${FINISHING}`, now(), accountId, grace)]) want.set(holdKey(sigRef(r)), { since: r.since, rid: r.id });
-  const have = all('SELECT key FROM credit_holds WHERE account_id=?', accountId);
-  for (const h of have) if (!want.has(h.key)) run('DELETE FROM credit_holds WHERE account_id=? AND key=?', accountId, h.key);
+  const have = all('SELECT key, lot_id, rid FROM credit_holds WHERE account_id=?', accountId);
+  const t = now();
+  // The requests whose held signature was let go in this step: whoever is on them now is held from now.
+  const passed = new Set<string>();
+  for (const h of have) {
+    if (want.has(h.key)) continue;
+    run('DELETE FROM credit_holds WHERE account_id=? AND key=?', accountId, h.key);
+    letGo(h.lot_id, h.rid, t);
+    if (h.rid) passed.add(h.rid);
+  }
   const had = new Set(have.map((h) => h.key));
+  for (const [k, w] of want) if (!had.has(k) && passed.has(w.rid)) w.since = t;
   const fresh = [...want].filter(([k]) => !had.has(k)).sort((x, y) => x[1].since.localeCompare(y[1].since));
   if (!fresh.length) return;
   const lots = loadLots(accountId).sort(soonest);
@@ -274,16 +295,22 @@ function lotWords(l: Lot): string {
 function expireDue(accountId: string) {
   const t = now();
   for (const l of loadLots(accountId).filter((x) => x.expires_at && x.expires_at <= t && freeIn(x) > 0)) {
-    const n = freeIn(l);
-    const before = get("SELECT COUNT(*) n FROM credit_draws d JOIN credits c ON c.id=d.credit_id WHERE d.lot_id=? AND c.reason='expired'", l.id).n;
-    const at = before ? t : l.expires_at!;
-    const r = run("INSERT OR IGNORE INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,'expired',?,?)", accountId, -n, `lot:${l.id}:${before + 1}`, at);
-    if (!r.changes) continue;
-    addDraw(Number(r.lastInsertRowid), l.id, n);
-    const detail = before
-      ? `${sigsWord(n)} that ${n === 1 ? 'was' : 'were'} held for an envelope ${n === 1 ? 'was' : 'were'} let go after ${n === 1 ? 'its' : 'their'} date had passed, so ${n === 1 ? 'it' : 'they'} expired instead of coming back (${lotWords(l)}).`
-      : `${n} ${lotWords(l)} expired unused.`;
-    run('INSERT INTO billing_log (account_id, at, what, ref, detail) VALUES (?,?,?,?,?)', accountId, at, 'expired', PAID_SOURCES.includes(l.source) ? l.ref : '', detail);
+    const free = freeIn(l);
+    // Of these, the ones that were held when the date passed and were let go since (letGo): they get a line of
+    // their own, dated now. The rest were simply not used: dated at the lot's own date the first time, and now when
+    // something came back to a lot that had already been written off (a dispute decided in our favour, say).
+    const late = Math.min(free, Number(l.late) || 0);
+    let before = get("SELECT COUNT(*) n FROM credit_draws d JOIN credits c ON c.id=d.credit_id WHERE d.lot_id=? AND c.reason='expired'", l.id).n;
+    const write = (n: number, at: string, detail: string) => {
+      if (n <= 0) return;
+      const r = run("INSERT OR IGNORE INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,'expired',?,?)", accountId, -n, `lot:${l.id}:${++before}`, at);
+      if (!r.changes) return;
+      addDraw(Number(r.lastInsertRowid), l.id, n);
+      run('INSERT INTO billing_log (account_id, at, what, ref, detail) VALUES (?,?,?,?,?)', accountId, at, 'expired', PAID_SOURCES.includes(l.source) ? l.ref : '', detail);
+    };
+    write(free - late, before ? t : l.expires_at!, `${free - late} ${lotWords(l)} expired unused.`);
+    write(late, t, `${sigsWord(late)} that ${late === 1 ? 'was' : 'were'} held for an envelope ${late === 1 ? 'was' : 'were'} let go after ${late === 1 ? 'its' : 'their'} date had passed, so ${late === 1 ? 'it' : 'they'} expired instead of coming back (${lotWords(l)}).`);
+    if (l.late) run('UPDATE credit_lots SET late=0 WHERE id=?', l.id);
   }
 }
 
@@ -533,15 +560,72 @@ export function stillLive(accountId: string, reason: string, ref: string): numbe
   if (!line) return 0;
   return Number(get('SELECT COALESCE(SUM(d.n),0) n FROM credit_draws d JOIN credit_lots l ON l.id=d.lot_id WHERE d.credit_id=? AND (l.expires_at IS NULL OR l.expires_at > ?)', line.id, now()).n) || 0;
 }
+// ---- A held signature is for one person and the documents that were sent ---------------------------------------
+
+/** The date of the lot this recipient's held signature sits in, when that date has passed; null otherwise. */
+export function heldPastDate(accountId: string, recipientId: string): string | null {
+  if (!creditsEnabled()) return null;
+  settle(accountId);
+  return get('SELECT l.expires_at FROM credit_holds h JOIN credit_lots l ON l.id=h.lot_id WHERE h.account_id=? AND h.rid=? AND l.expires_at <= ?', accountId, recipientId, now())?.expires_at || null;
+}
+/** What the sender reads when a change needs a signature of today's and there is none (pastDateText, below). */
+export const pastDateText = (until: string) =>
+  `The signature held for this envelope passed its own date on ${expiryMoment(until)}. It stays good for the person and the documents it was sent with, and it does not pass to another person or to other documents: that needs a signature you can send with today, and you have none. Nothing was changed. Add signatures on the Plan page and try again, or leave the envelope as it is: the person on it can still sign.`;
+/**
+ * Asked before another person is put on a request that is out (a new address, another name at the same address, a
+ * signer passing it on). '' when it may go ahead. A sentence when the signature held for the request has passed its
+ * own date and nothing is free to hold for the new person: without this they would sign with a signature nobody
+ * paid for, or with one of a month that is over.
+ */
+export function swapRefusal(accountId: string, recipientId: string): string {
+  const until = heldPastDate(accountId, recipientId);
+  return until && available(accountId) < 1 ? pastDateText(until) : '';
+}
+/**
+ * The documents of an envelope that is out were replaced (correctEnvelope). Signatures held for it in a lot whose
+ * date has passed were held for the documents that went out, so they are let go (and expire, with a line in the plan
+ * history), and each person still to sign is held from now, in a lot that can pay today. The answer is the date of
+ * the first lot that was past its date, or null when nothing changed. The caller checks afterwards that the account
+ * is not short because of it.
+ */
+export function reholdEnvelope(accountId: string, envelopeId: string): string | null {
+  if (!creditsEnabled()) return null;
+  settle(accountId);
+  const t = now();
+  let until: string | null = null;
+  for (const h of all(`SELECT h.key, h.lot_id, l.expires_at FROM credit_holds h JOIN credit_lots l ON l.id=h.lot_id
+      WHERE h.account_id=? AND l.expires_at <= ? AND h.rid IN (SELECT id FROM recipients WHERE envelope_id=?) ORDER BY l.expires_at`, accountId, t, envelopeId)) {
+    run('UPDATE credit_holds SET lot_id=NULL, since=? WHERE account_id=? AND key=?', t, accountId, h.key);
+    run('UPDATE credit_lots SET late=COALESCE(late,0)+1 WHERE id=?', h.lot_id);
+    until ??= h.expires_at;
+  }
+  if (until) settle(accountId);
+  return until;
+}
+
+// Between the end of a paid month and the renewal payment arriving (the provider usually takes it within the hour)
+// a subscriber has no signatures of the plan: the old month's have expired and the new month's come with the
+// payment. True in that gap, so the Plan page and the "too few" message can say that the new ones are on their way.
+export function renewalPending(account: any): boolean {
+  if (!creditsEnabled() || !account || account.plan !== 'grove' || account.promo_code || account.cancel_at || !account.stripe_subscription_id) return false;
+  if (!['active', 'trialing'].includes(account.subscription_status || '')) return false;
+  const t = now();
+  return !get("SELECT 1 x FROM credit_lots WHERE account_id=? AND source='plan' AND expires_at > ?", account.id, t)
+    && !!get("SELECT 1 x FROM credit_lots WHERE account_id=? AND source='plan' AND expires_at <= ?", account.id, t);
+}
+
 // For the sentence someone reads when they have too few to send with: the signatures that expired most recently, when
 // nothing has been added since. So a person whose free ones or whose month ran out is told why the number is lower
 // than they remember, and when it happened. Null when nothing expired, or when something arrived after it.
-export function lastExpiry(accountId: string): { n: number; at: string } | null {
+// `source` says what they were (welcome, plan, code, topup), or 'mixed' when more than one kind went at that moment.
+export function lastExpiry(accountId: string): { n: number; at: string; source: string } | null {
   if (!creditsEnabled()) return null;
   const x = get("SELECT -delta n, at FROM credits WHERE account_id=? AND reason='expired' ORDER BY at DESC, id DESC LIMIT 1", accountId);
   if (!x || x.n <= 0) return null;
   const same = get("SELECT COALESCE(SUM(-delta),0) n FROM credits WHERE account_id=? AND reason='expired' AND at=?", accountId, x.at).n;
-  return get('SELECT 1 x FROM credits WHERE account_id=? AND delta > 0 AND at > ?', accountId, x.at) ? null : { n: Number(same) || x.n, at: x.at };
+  if (get('SELECT 1 x FROM credits WHERE account_id=? AND delta > 0 AND at > ?', accountId, x.at)) return null;
+  const kinds = all("SELECT DISTINCT l.source FROM credits c JOIN credit_draws d ON d.credit_id=c.id JOIN credit_lots l ON l.id=d.lot_id WHERE c.account_id=? AND c.reason='expired' AND c.at=?", accountId, x.at);
+  return { n: Number(same) || x.n, at: x.at, source: kinds.length === 1 ? kinds[0].source : 'mixed' };
 }
 // Writes down that a lot's expiry email for `stage` (days before) went out, so it goes once.
 export const markWarned = (lotId: number, stage: string) => {

@@ -432,7 +432,10 @@ test('the bulk list reads a "language" column, takes a code or a name, and leave
 
 test('the editor and Settings offer a language only when there is more than one to choose; nothing a sender writes is translated', () => {
   const stepAdd = read('src/components/editor/StepAdd.tsx');
-  assert.match(stepAdd, /<RecipientLanguage value=\{r\.locale\} who=\{who\(r\)\} onChange=\{\(p\) => ed\.patchRcp\(r\.id, p\)\} \/>/);
+  // (simplify-editor: the language is a line of the person's More, listed only with 2 or more languages.)
+  assert.match(stepAdd, /<PersonMore ed=\{ed\} r=\{r\} \/>/);
+  assert.match(read('src/components/editor/PersonMore.tsx'), /if \(key === 'language'\) return <RecipientLanguage value=\{r\.locale\} who=\{name\} onChange=\{patch\} \/>;/);
+  assert.match(read('src/lib/editorux.ts'), /if \(\(o\.languages \|\| 1\) >= 2\) lines\.push\(\{ key: 'language'/);
   const editor = read('src/components/Editor.tsx');
   assert.match(editor, /locale: r\.locale \|\| null,/, 'every save sends it');
   assert.match(editor, /locale: me\.account\?\.default_locale \|\| null, \.\.\.p \}/, 'a new person starts with the default');
