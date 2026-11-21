@@ -1,0 +1,62 @@
+State at the checkpoint commit c36914e (2026-11-21): npx tsc --noEmit is clean; npm test: 1103 of 1138 pass, 34 fail, 1 skipped. Every failure belongs to work that was cut off part way. Failing tests by file:
+
+tests/selfhost.test.ts (16):
+  - health: 200 when everything works, and nothing about any account in the answer
+  - health: each failure on its own gives 503 and says which, in words
+  - backup: a consistent copy while the server runs, with a manifest, and never a key
+  - restore: a round trip gives the same database and files, every audit chain and file checks, and the keys are asked for
+  - restore: a backup that is not whole is refused, and nothing is copied
+  - outside: the hosts the settings imply, for several configurations
+  - outside: what each mode allows
+  - outside: OUTSIDE_CALLS=none switches off every service that needs another host, so it is absent, and keeps mail
+  - outside: the guard refuses a stubbed outside call before it is made, allows a listed one, and logs once an hour
+  - outside: the raw sockets of the mail relay and webhooks are held too, and a looked-up relay address counts as its name
+  - outside: webhooks go only to WEBHOOK_ALLOW_HOSTS, at saving and at delivery, and the page says so
+  - outside: every place the server calls out is on the list
+  - security.txt: served from SECURITY_CONTACT with the fields RFC 9116 asks for, and absent without one
+  - sbom: npm makes it, it lists pdf-lib, and a licence nobody checked stops it
+  - sbom: present at /security/sbom.json after a build
+  - docs: the self-assessment and the runbooks say what they are, claim nothing, and every file they cite exists
+
+tests/gaps-mobile-sign.test.ts (3):
+  - Finish that cannot reach us says that nothing was signed, keeps everything, and goes again by itself
+  - the signing page offers 100, 150 and 200 percent, sharp at each, in a strip that leaves the bars alone; pinch zoom stays on
+  - two fields of the same person that cover each other are named; anything a finger can still reach is not
+
+tests/gaps-nonus-words.test.ts (3):
+  - the signing screen and the signature dialog show those words and nothing stronger
+  - the screens offer the choice, hand the sender the link, and never promise an email to someone without an address
+  - someone with no address who asks for more time is never told "by email", and the sender is told there is no address to answer
+
+tests/stamps.test.ts (3):
+  - one ink: every pixel in the colour of stamp pad ink, varied a little; a thin line stays thin; a tint in a design prints solid, as rubber does
+  - rubber: sized in millimetres at the printed size; full ink in the cores, a heavier side, voids, darker rims; still readable
+  - photos: faint small print is kept; printed text is left out and the stroke it crossed is filled; the ink chosen is the ink kept
+
+tests/signerux.test.ts (2):
+  - two signers on one address each get their own completion email with their own link
+  - the signing screens keep what they promise in markup: new tab, labels, real controls, thumb-sized links, honest words
+
+tests/abuse.test.ts (1):
+  - a support message is shown only to the person who wrote it, and the form mails a stranger's words to nobody
+
+tests/billing9.test.ts (1):
+  - a month of the plan: its unused signatures expire when the period ends, with a history line, and the renewal brings a fresh 9
+
+tests/gaps-industry.test.ts (1):
+  - the screens say it: the step before Finish opens by itself, and the envelope page names who has not pressed it
+
+? (1):
+  - the screens: a member's page says who has it and before declining that it is for everyone; the sender's page has each member's link and Give back to the group
+
+tests/i18n.test.ts (1):
+  - a missing key falls back to English and never shows the key
+
+tests/integrity.test.ts (1):
+  - handing a request over to another person at the same address passes on nothing either
+
+tests/signin.test.ts (1):
+  - a first password is set through a link to the mailbox, and then the provider can be disconnected
+
+tests/witness.test.ts (1):
+  - the screens: a witness of their own on the signing page, the choice in the editor, the facts on the envelope page, 44 px to tap
