@@ -37,6 +37,7 @@ import '@/server/routes-starters';
 import '@/server/routes-orgs';
 import '@/server/routes-pdfa';
 import '@/server/routes-whatsapp';
+import '@/server/routes-writedoc';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

@@ -712,6 +712,14 @@ CREATE TABLE IF NOT EXISTS voice_calls (
   error TEXT, at TEXT NOT NULL, provider TEXT, provider_id TEXT,
   said TEXT -- only on a machine without a provider (the outbox): what the call would have read out, code and all
 );
+-- The text a document was written from in the app (src/server/writedoc.ts), kept with the PDF made from it so the
+-- sender can edit it again. source is in the clear only without FILE_ENCRYPTION_KEY; with it, source_sealed holds it.
+-- ai is 1 when any of it came from the model: said to the sender only, never on the document or its record.
+CREATE TABLE IF NOT EXISTS written_docs (
+  file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, source TEXT, source_sealed TEXT, source_key TEXT, paper TEXT NOT NULL DEFAULT 'a4', ai INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each

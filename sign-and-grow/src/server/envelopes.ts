@@ -55,6 +55,8 @@ import { notSealedLines } from '../lib/seal.ts';
 // A stamp next to a signature: a recipient's own, or the sender's, printed like ink (stamps.ts).
 import { isSenderStamp, printedStamp, stampOnSave, copyStamps, stampProblem, stampsSent, stampsFinished, senderStampChange } from './stamps.ts';
 import { convertedSent, convertedAdded } from './converted.ts';
+// Documents written in the app (writedoc.ts): their line in the record, "Wording changed", and their words for the filter.
+import { writtenSent, rewritten, writtenWords } from './writedoc.ts';
 import { convertedOf } from '../lib/convert.ts';
 import { CONFIRM_BEFORE_SEND } from '../lib/confirm.ts';
 // The account's own custom fields on envelopes and templates, and name and value pairs per document (customfields.ts).
@@ -609,7 +611,8 @@ function describeCorrection(a: any, b: any): { people: string[]; content: string
     else if (o.file_id !== d.file_id) {
       // Made from the old file by turning, removing or moving pages (src/server/pagechain.ts): said in those words.
       const turned = pageChangeWords(o.file_id, d.file_id);
-      fileLine((print) => turned ? `The pages of document ${q(d.name)} were changed: ${turned} Before: ${pages(o.pages)}${print(o)}. Now: ${pages(d.pages)}${print(d)}.`
+      fileLine((print) => rewritten(o.file_id, d.file_id) ? `Wording changed: document ${q(d.name)} was written again in GrowSigning. Before: ${pages(o.pages)}${print(o)}. Now: ${pages(d.pages)}${print(d)}.`
+        : turned ? `The pages of document ${q(d.name)} were changed: ${turned} Before: ${pages(o.pages)}${print(o)}. Now: ${pages(d.pages)}${print(d)}.`
         : `The file of document ${q(d.name)} was replaced. Before: ${pages(o.pages)}${print(o)}. Now: ${pages(d.pages)}${print(d)}.`);
     }
     if (o && o.name !== d.name) content.push(`Document ${q(o.name)} renamed to ${q(d.name)}.`);
@@ -1111,7 +1114,9 @@ function fakeNotice(e: any, account: any, sender: any, extra: any[] = []): strin
     // The name of a group is printed in every member's email, and a member's name on the other members' screens.
     ...groupWords(e),
     // The custom fields printed on the certificate are the sender's words too (customfields.ts).
-    ...customWords(e)]);
+    ...customWords(e),
+    // The text of a document written in the app is the sender's words too (writedoc.ts).
+    ...writtenWords(e)]);
   return lure ? lureText(lure) : null;
 }
 
@@ -1314,6 +1319,8 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
     stampsSent(e, actor);
     // A document made from a Word file or the like: what it was made from, its fingerprint and the tool (converted.ts).
     convertedSent(e, actor);
+    // A document written in the app says so, never whether an AI helped (writedoc.ts).
+    writtenSent(e, actor);
     // A word that often means paper, a witness or a notary is needed is written down with the send, and the answer to
     // sending carries it as "warnings". It never stops a send: see src/server/warnings.ts. A visitor of a public
     // form is not the sender, so there the line does not say that the sender was told.

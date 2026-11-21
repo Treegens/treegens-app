@@ -133,11 +133,17 @@ const plain = (s: string) => s.replace(/\s*\u2014\s*/g, ', ');
 
 // ---- The model -------------------------------------------------------------------------------------------------------
 function callModel(p: ChatProvider, screen: ChatScreen, turns: ChatTurn[], tuned: boolean, signal: AbortSignal): Promise<Response> {
+  return modelCall(p, [{ role: 'system', content: systemPrompt(screen) }, ...turns], { tuned, signal, maxTokens: MAX_COMPLETION_TOKENS, title: 'GrowSigning help' });
+}
+
+/**
+ * The one client for the model, with the chat's own settings (src/lib/chatprovider.ts). The help chat asks through
+ * it, and so does writing a document (src/server/writedoc.ts): one key, one host, one set of rules for both.
+ */
+export function modelCall(p: ChatProvider, messages: { role: 'system' | 'user' | 'assistant'; content: string }[], o: { tuned: boolean; signal: AbortSignal; maxTokens: number; title: string }): Promise<Response> {
+  const tuned = o.tuned, signal = o.signal;
   // No temperature: Kimi K3 refuses every value but 1, and leaving it out takes each host's own default.
-  const body: Record<string, unknown> = {
-    model: p.model, stream: true, max_tokens: MAX_COMPLETION_TOKENS,
-    messages: [{ role: 'system', content: systemPrompt(screen) }, ...turns],
-  };
+  const body: Record<string, unknown> = { model: p.model, stream: true, max_tokens: o.maxTokens, messages };
   // Little thinking for a support answer. The two hosts spell it differently; a host that knows neither refuses the
   // request, and it is asked once more without it.
   if (tuned) {
@@ -146,7 +152,7 @@ function callModel(p: ChatProvider, screen: ChatScreen, turns: ChatTurn[], tuned
   }
   const headers: Record<string, string> = { 'content-type': 'application/json', authorization: `Bearer ${(process.env[p.keyVar] || '').trim()}` };
   // OpenRouter's optional attribution names this site, never the person.
-  if (p.style === 'openrouter') Object.assign(headers, { 'http-referer': baseUrl(), 'x-title': 'GrowSigning help' });
+  if (p.style === 'openrouter') Object.assign(headers, { 'http-referer': baseUrl(), 'x-title': o.title });
   return globalThis.fetch(`${p.baseUrl}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal });
 }
 

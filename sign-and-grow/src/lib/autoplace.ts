@@ -103,8 +103,9 @@ export function fieldForLabel(label: string): string | null {
   return null;
 }
 
-const TAG = /\{\{\s*(signature|initials|date|name|email|title|company|checkbox|text)\s*(\d{1,2})?\s*(?::\s*([^{}]*?))?\s*\}\}/gi;
-const TAG_TYPE: Record<string, string> = { signature: 'signature', initials: 'initials', date: 'date_signed', name: 'full_name', email: 'email', title: 'title', company: 'company', checkbox: 'checkbox', text: 'text' };
+// Exported for documents written in the app (src/lib/writedoc.ts), which use the same tags.
+export const TAG = /\{\{\s*(signature|initials|date|name|email|title|company|checkbox|text)\s*(\d{1,2})?\s*(?::\s*([^{}]*?))?\s*\}\}/gi;
+export const TAG_TYPE: Record<string, string> = { signature: 'signature', initials: 'initials', date: 'date_signed', name: 'full_name', email: 'email', title: 'title', company: 'company', checkbox: 'checkbox', text: 'text' };
 // A blank drawn with characters: underscores, a dotted leader, or a run of ellipses.
 const BLANK = /_{3,}|\.{5,}|…{2,}/g;
 

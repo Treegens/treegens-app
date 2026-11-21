@@ -108,6 +108,29 @@ function claimed(answer: string, list: RegExp[]): boolean {
   return false;
 }
 
+/**
+ * Each place where a text says a signature or a document is valid, binding or enforceable or will hold up, read the
+ * same way as the backstop reads it, as [start, end) of the words. Writing a document (src/server/writedoc.ts) takes
+ * these words out of a draft itself, since a sentence added under a contract would be signed with it.
+ */
+export function validClaimSpans(answer: string): [number, number][] {
+  const text = String(answer || '');
+  const out: [number, number][] = [];
+  for (const re of VALID_CLAIMS) {
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re)) {
+      const before = text.slice(Math.max(0, m.index - 200), m.index);
+      let from = 0;
+      for (const b of before.matchAll(CLAUSE_START)) from = b.index + b[0].length;
+      if (TAKES_BACK.test(`${before.slice(from)}${m[0]}`.replace(SAYS_YES, ' '))) continue;
+      const head = before.slice(from);
+      if (/valid$/iu.test(m[0]) && ABOUT_THING.test(head) && !LEGAL_THING.test(`${head} ${m[0]}`)) continue;
+      out.push([m.index, m.index + m[0].length]);
+    }
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
 /** The correcting lines an answer needs, in order: none when it claims neither. */
 export function backstop(answer: string): string[] {
   const text = String(answer || '');
