@@ -28,6 +28,7 @@ import './styles/envelope.css';
 import './styles/consent.css';
 import './styles/pagetools.css';
 import './styles/starters.css';
+import './styles/home.css';
 // After globals.css, so its --serif (Lora first) wins. Keep it the last style import.
 import './styles/brand.css';
 import type { Metadata, Viewport } from 'next';

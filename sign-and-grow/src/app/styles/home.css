@@ -1,0 +1,276 @@
+/* The home page (src/app/page.tsx). One deep green stage, inset from the edges of the page, that holds the message,
+   the one button and the video of the trees being counted. A signature writes itself under the headline and the leaf
+   of the logo grows out of its last stroke. Everything else on the page stays on paper.
+   Tokens are local to the stage so nothing here leaks into the rest of the product. */
+
+.home-stage {
+  --st-bg: #0d2619;
+  --st-fg: #f3eee1;
+  --st-fg-2: rgba(243, 238, 225, 0.8);
+  --st-fg-3: rgba(243, 238, 225, 0.62);
+  --st-line: rgba(243, 238, 225, 0.14);
+  --st-leaf: #b8dc9c;
+  --st-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  padding: 8px 20px 0;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.pub .home-stage .hero.home-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(32px, 4.5vw, 72px);
+  margin: 0;
+  max-width: none;
+  min-height: min(calc(100dvh - 96px), 820px);
+  padding: clamp(40px, 6vw, 88px) clamp(28px, 5vw, 80px);
+  border-radius: 36px;
+  background: var(--st-bg);
+  color: var(--st-fg);
+}
+.pub .home-stage .hero.home-hero.alone { grid-template-columns: minmax(0, 760px); }
+
+/* Grain and one soft light from the top left: they tie the footage and the type together and stop banding. */
+.home-stage .home-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(900px 520px at 12% 0%, rgba(184, 220, 156, 0.12), transparent 70%);
+  pointer-events: none;
+}
+.home-stage .home-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.07;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.home-copy { max-width: 620px; }
+
+.home-stage .home-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 26px;
+  padding: 6px 16px 6px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--st-line);
+  background: rgba(243, 238, 225, 0.05);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--st-fg-2);
+}
+
+.home-stage .home-hero h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: clamp(40px, 5.4vw, 76px);
+  line-height: 1.02;
+  letter-spacing: -0.028em;
+  color: var(--st-fg);
+  text-wrap: balance;
+}
+.home-stage .home-hero h1 em {
+  font-style: normal;
+  color: var(--st-leaf);
+  white-space: nowrap;
+}
+
+/* The signature. Its stroke is drawn once, then the leaf rises from where the pen lifted. */
+.home-sig {
+  position: relative;
+  width: min(400px, 82%);
+  margin: 26px 0 22px;
+}
+.home-sig-ink { display: block; width: 100%; height: auto; overflow: visible; }
+.home-sig-ink path {
+  fill: none;
+  stroke: var(--st-fg);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.9;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: home-write 1.7s 0.55s var(--st-ease) forwards;
+}
+.home-sig-sprout {
+  position: absolute;
+  right: -14px;
+  top: -24px;
+  display: block;
+  transform-origin: 30% 100%;
+  transform: scale(0) rotate(-18deg);
+  animation: home-sprout 0.9s 2.05s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes home-write { to { stroke-dashoffset: 0; } }
+@keyframes home-sprout { to { transform: scale(1) rotate(0deg); } }
+
+.home-stage .home-hero .lead {
+  max-width: 32rem;
+  margin: 0 0 30px;
+  font-size: clamp(16px, 1.25vw, 18px);
+  line-height: 1.6;
+  color: var(--st-fg-2);
+}
+
+/* The one button: a cream pill on the green, with an arrow in a disc that nudges on hover. */
+.home-stage .home-hero .btn.primary.lg {
+  min-height: 52px;
+  padding: 8px 10px 8px 28px;
+  gap: 14px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--st-fg);
+  color: var(--st-bg);
+  font-size: 16px;
+  font-weight: 600;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s var(--st-ease), background 0.2s;
+}
+.home-stage .home-hero .btn.primary.lg::after {
+  content: '';
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--st-bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f3eee1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M13 6l6 6-6 6'/%3E%3C/svg%3E") center / 18px no-repeat;
+  transition: transform 0.25s var(--st-ease);
+}
+.home-stage .home-hero .btn.primary.lg:hover { background: #fffaf0; transform: translateY(-1px); }
+.home-stage .home-hero .btn.primary.lg:hover::after { transform: translateX(3px); }
+.home-stage .home-hero .btn.primary.lg:active { transform: scale(0.97); }
+.home-stage .home-hero .btn.primary.lg:focus-visible { outline: 2px solid var(--st-leaf); outline-offset: 3px; }
+
+.home-stage .home-note {
+  max-width: 30rem;
+  margin: 18px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--st-fg-3);
+}
+
+/* The video sits in its own frame, tilted forward a little, like a screen held up to show you. */
+.home-stage .home-video { margin: 0; position: relative; }
+.home-stage .home-video video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 22px;
+  background: #081a10;
+  box-shadow: 0 0 0 1px var(--st-line), 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+.home-stage .home-video figcaption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 13.5px;
+  color: var(--st-fg-3);
+}
+.home-stage .home-video figcaption::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--st-leaf);
+  box-shadow: 0 0 0 4px rgba(184, 220, 156, 0.16);
+}
+
+/* Entrance: kicker, headline, words, button, then the video. Each piece is visible at rest if the animation never runs. */
+.home-stage .home-kicker,
+.home-stage .home-hero h1,
+.home-stage .home-hero .lead,
+.home-stage .home-hero .btn.primary.lg,
+.home-stage .home-note,
+.home-stage .home-video {
+  animation: home-rise 0.9s var(--st-ease) both;
+}
+.home-stage .home-kicker { animation-delay: 0.05s; }
+.home-stage .home-hero h1 { animation-delay: 0.15s; }
+.home-stage .home-hero .lead { animation-delay: 0.9s; }
+.home-stage .home-hero .btn.primary.lg { animation-delay: 1.02s; }
+.home-stage .home-note { animation-delay: 1.12s; }
+.home-stage .home-video { animation-delay: 0.45s; animation-duration: 1.2s; }
+@keyframes home-rise { from { opacity: 0; transform: translateY(22px); } }
+
+/* How it works: three editorial rows on paper, numbered in the heading face. */
+.pub .home-how { padding-top: clamp(64px, 9vw, 120px); padding-bottom: clamp(48px, 7vw, 96px); }
+.home-how-h {
+  margin: 0 0 clamp(24px, 3vw, 40px);
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: clamp(28px, 3.2vw, 44px);
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.pub .home-how .home-points { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--line); }
+.pub .home-how .home-points li {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 28px 32px 8px 0;
+}
+.pub .home-how .home-points li + li { padding-left: 32px; border-left: 1px solid var(--line); }
+.pub .home-how .home-points li::before {
+  content: '0' counter(home);
+  display: block;
+  width: auto;
+  height: auto;
+  margin: 0 0 18px;
+  background: none;
+  border-radius: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 44px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--green);
+}
+.pub .home-how .home-points b { font-size: 19px; letter-spacing: -0.01em; margin-bottom: 8px; }
+.pub .home-how .home-points span { line-height: 1.6; color: #3d4a42; }
+.pub .home-how .home-more { margin-top: 28px; }
+
+@media (max-width: 900px) {
+  .home-stage { padding: 4px 12px 0; }
+  .pub .home-stage .hero.home-hero {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    gap: 36px;
+    padding: 36px 22px 26px;
+    border-radius: 26px;
+  }
+  .home-stage .home-hero h1 { font-size: clamp(36px, 10vw, 52px); }
+  .home-stage .home-hero h1 em { white-space: normal; }
+  .home-sig { width: min(300px, 86%); margin: 6px 0 18px; }
+  .home-sig-sprout svg { width: 28px; height: 28px; }
+  .home-stage .home-hero .btn.primary.lg { width: 100%; justify-content: space-between; }
+  .pub .home-how .home-points { grid-template-columns: 1fr; }
+  .pub .home-how .home-points li, .pub .home-how .home-points li + li { padding: 24px 0 18px; border-left: 0; border-top: 1px solid var(--line); }
+  .pub .home-how .home-points li:first-child { border-top: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-stage .home-kicker,
+  .home-stage .home-hero h1,
+  .home-stage .home-hero .lead,
+  .home-stage .home-hero .btn.primary.lg,
+  .home-stage .home-note,
+  .home-stage .home-video,
+  .home-sig-ink path,
+  .home-sig-sprout { animation: none; }
+  .home-sig-ink path { stroke-dashoffset: 0; }
+  .home-sig-sprout { transform: none; }
+}

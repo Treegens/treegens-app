@@ -28,7 +28,7 @@ test('the home page says one thing: one button, three points, and nothing of the
   assert.ok(words(home) < 450, `the source of the home page is short (${words(home)} words with its code)`);
   // The hero is about the mangroves a paid signature plants, with the leaf of the logo, and says what a free one does.
   assert.match(home, /Every signature you pay for plants <em>\{TREES_PER_SIGNATURE\} mangroves\.<\/em>/);
-  assert.match(home, /<Mark size=\{28\} label="" \/> Planted with Treegens/);
+  assert.match(home, /<Mark size=\{28\}(?: tone="dark")? label="" \/> Planted with Treegens/);
   assert.match(home, /Free signatures plant no trees\./);
   // Green claims: what happens is said as what happens. No generic word and nothing about carbon.
   assert.doesNotMatch(home, /eco-friendly|\bgreen\b(?!-)|sustainab|planet|carbon|CO2|offset|climate|neutral/i);
