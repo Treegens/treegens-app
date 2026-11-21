@@ -17,7 +17,8 @@
 /* The sidebar: one start button with a class of its own, so the "one main button per screen" count leaves it out. */
 .side .side-start { margin: 0 4px 10px; background: #ffd24a; border-color: #ffd24a; color: #2b2100; min-height: 44px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
 .side .side-start:hover { background: #ffdc6e; border-color: #ffdc6e; }
-.side .nav, .side button.nav { min-height: 40px; }
+.side .nav, .side button.nav { min-height: 44px; }
+.side a.nav { display: flex; align-items: center; }
 .side button.nav { display: flex; align-items: center; gap: 10px; width: 100%; color: #cfe2d3; background: none; border: 0; text-align: left; padding: 8px 10px; border-radius: 9px; font: inherit; font-weight: 500; font-size: 14px; cursor: pointer; }
 .side button.nav:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .side .nav-more-toggle::after { content: ''; margin-left: auto; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg) translate(-2px, -2px); transition: transform 0.15s; }
@@ -37,7 +38,10 @@
   .tabbar .tab-send span.dot { display: flex; align-items: center; justify-content: center; width: 40px; height: 32px; border-radius: 10px; background: #ffd24a; }
   .shell .main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
   body:has(.tabbar) .toasts { bottom: calc(80px + env(safe-area-inset-bottom)); }
-  .side.open { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  /* The open menu: the bar stays on top of it, its last button reads Close, and what the bar already has is not
+     said again in the list. */
+  .side.open { inset: 0 0 calc(64px + env(safe-area-inset-bottom)) 0; padding-bottom: 16px; z-index: 54; }
+  .side.open .in-bar { display: none; }
 }
 
 /* Home: what was completed lately, each with Download. */
@@ -48,6 +52,7 @@
 .side .side-gap { margin-top: auto; }
 .side .me .side-support { display: flex; align-items: center; min-height: 44px; color: #cfe2d3; font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; }
 .side .nav-more-toggle[aria-disabled='true'] { cursor: default; }
+.side .nav-more-toggle[aria-disabled='true']::after { display: none; }
 /* Home says where the start button is: on the left on a wide screen, in the bar at the bottom on a phone. */
 .sn-where-phone { display: none; }
 @media (max-width: 900px) {
@@ -65,3 +70,11 @@
   .side .nav, .side button.nav, .side .side-close, .side .me .side-out { min-height: 44px; }
   .side .me .side-out { display: inline-flex; align-items: center; }
 }
+
+/* The first stop for a keyboard in the app: past the menu, to the page. Seen only while it has the focus. */
+.app-skip { position: absolute; left: 8px; top: -80px; opacity: 0; z-index: 90; background: #fff; color: var(--ink); padding: 12px 16px; border-radius: 10px; font-weight: 600; box-shadow: var(--shadow); }
+.app-skip::before { content: 'Skip to content'; }
+.app-skip:focus { top: 8px; opacity: 1; }
+#app-main:focus { outline: none; }
+/* The code box on the review step of the editor, for an address that is not confirmed yet. */
+.cc-send { margin: 0; }

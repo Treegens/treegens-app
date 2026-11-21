@@ -145,7 +145,7 @@ export default function Contacts() {
             setRemoving(null);
             reload();
           }}>
-          <p>{removing.name} ({removing.email}) will no longer be suggested when you add recipients. Envelopes you already sent them are not affected.</p>
+          <p>{removing.name} ({removing.email}) will no longer be suggested when you add people to a document. Documents you already sent them are not affected.</p>
         </ConfirmDialog>
       )}
     </div>

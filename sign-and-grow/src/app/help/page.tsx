@@ -15,6 +15,7 @@ import { FindDocuments, FindSubscription, StopByCard, ContactForm, YourRequests,
 import { ConsentWords, SignatureKind } from './outside';
 import { WitnessHelp } from './witness';
 import { StampHelp } from './stamps';
+import { WordFilesHelp } from './convert';
 import { SigningOnPhone } from './phone';
 import { NotMeAnswer } from './NotMe';
 import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
@@ -232,7 +233,7 @@ export default function Help() {
           <QA id="not-received" q="The recipient says they never got the email">
             <p>Open the envelope. It shows whether each email left our server, and whether the person has opened the document.</p>
             <ul className="pub-list">
-              <li>Copy their signing link and send it yourself by text or chat. If they are standing next to you, show it as a QR code instead (&quot;Show QR code&quot; on the envelope) and they open it with their phone camera. The code is the link, so show it only to them.</li>
+              <li>Copy their signing link and send it yourself by text or chat. If they are standing next to you, show it as a QR code instead (&quot;QR code&quot; in their More on the document&apos;s page) and they open it with their phone camera. The code is the link, so show it only to them.</li>
               <li>Send a reminder to just that person.</li>
               <li>Correct their email address. Nothing is voided and nobody else is disturbed.</li>
             </ul>
@@ -245,7 +246,7 @@ export default function Help() {
             <QA id="bounced" q="An envelope says &quot;Could not be delivered&quot; or &quot;Marked as spam&quot;">
               <p><b>Could not be delivered.</b> {BOUNCE_MEANS} The envelope says it next to the person&apos;s name, in our own words, and we email you at once unless you switched off &quot;When something needs you&quot; under Settings, Notifications. {BOUNCE_STOPS}</p>
               <ul className="pub-list">
-                <li>Address wrong? Choose <b>Correct</b> next to their name and type the right one. A new email goes out at once, and nothing is voided.</li>
+                <li>Address wrong? Choose <b>Change person</b> in the More next to their name and type the right one. A new email goes out at once, and nothing is voided.</li>
                 <li>Address right, and the mailbox works again (it was full, or switched off for a while)? Choose <b>Try again</b>. We email them again at once and reminders start again. If it comes back again, you hear it again.</li>
                 <li>Either way you can copy their signing link and send it yourself, by text or chat.</li>
               </ul>
@@ -262,7 +263,7 @@ export default function Help() {
               {CHECK_PROVES.filter((p) => textsOn || p.key !== 'sms_code').map((p) => <li key={p.key}><b>{p.title}.</b> {p.text}</li>)}
             </ul>
             <p>{CHECK_LIMITS}</p>
-            <p>You can change a person&apos;s check or number while the envelope is out: <b>Correct</b> next to their name. They then have to pass the check again, and the audit trail says what you changed. If you send the document to another person, a number you typed for the first one is never used for the second: you are asked for it again. A template keeps its check, a bulk send takes a <b>phone</b> column, and a public form can ask its visitors for a code by email only, because they type their own details.</p>
+            <p>You can change a person&apos;s check or number while the document is out: <b>Change person</b>, in the More next to their name. They then have to pass the check again, and the audit trail says what you changed. If you send the document to another person, a number you typed for the first one is never used for the second: you are asked for it again. A template keeps its check, a bulk send takes a <b>phone</b> column, and a public form can ask its visitors for a code by email only, because they type their own details.</p>
             {textsOn
               ? <p className="muted small">Text messages are not charged to you. To keep them from being misused, one account can send {smsDaily} in 24 hours, every code and every reminder counted, and an account under the daily limit on emails can text as many phone numbers a day as people it can email. A text that could not be delivered shows on the envelope, and you are told when we stop trying.</p>
               : <p className="muted small">The software can also send a one-time code by text message and text the signing link. The operator of this server has not switched text messages on, so they are not offered here.</p>}
@@ -274,7 +275,7 @@ export default function Help() {
 
           <QA id="reminders" q="Are people reminded by themselves?">
             <p>On an account made today, yes. It starts with a reminder every {DEFAULT_REMINDER_DAYS} days: {reminderText(DEFAULT_REMINDER_DAYS).replace(/^Automatic reminders are on: /, '')}</p>
-            <p>You see the setting on the last step before every send, next to More options, and can change it there for that one envelope, or switch it off. An owner or admin sets what new envelopes start with under Settings, then Account. An account that was made before reminders were on by default keeps the number it had, which may be none: the last step before sending says which.</p>
+            <p>You see the setting on the last step before every send, next to More options, and can change it there for that one envelope, or switch it off. An owner or admin sets what new envelopes start with under Settings, then Sending. An account that was made before reminders were on by default keeps the number it had, which may be none: the last step before sending says which.</p>
             <p>A reminder to someone who has filled in everything and only has to press Finish says exactly that, and the envelope page shows you who is at that point. Reminders are sent by the service&apos;s own timer, so one can arrive a little after it is due, and none go out while sending is paused on an account.</p>
           </QA>
 
@@ -298,7 +299,7 @@ export default function Help() {
 
           <QA id="signing-groups" q="Can I send to a team, where anyone in it can sign?">
             <p>Yes, with a signing group, such as &ldquo;HR team&rdquo;. Admins make them under Contacts, with {GROUP_MIN_MEMBERS} to {GROUP_MAX_MEMBERS} people each, and everyone on the team can choose one as a recipient, also in templates. {GROUP_RULE}</p>
-            <p>Each member has a link of their own. Once someone has taken it on, the others see who has it, and only you can give it back to the whole group: on the envelope page, choose <b>Give back to the group</b>. To change who is in the group on an envelope that is already out, choose <b>Edit envelope</b>. Changing the group under Contacts only changes what you send from then on. A one-time code by email or text message goes to one person, so it cannot be asked of a group. Public forms cannot send to a group.</p>
+            <p>Each member has a link of their own. Once someone has taken it on, the others see who has it, and only you can give it back to the whole group: on the envelope page, choose <b>Give back to the group</b>. To change who is in the group on an envelope that is already out, choose <b>More</b>, then <b>Edit</b>, on its page. Changing the group under Contacts only changes what you send from then on. A one-time code by email or text message goes to one person, so it cannot be asked of a group. Public forms cannot send to a group.</p>
             <p>If a member marks our email as spam, or reports the document, we email that member nothing more about it, and we tell you which member it was. The others are not affected. Only that member can start our emails again, on their own signing page.</p>
           </QA>
           <QA id="template-access" q="Who can use and change a template, and what does a locked wording mean?">
@@ -307,6 +308,7 @@ export default function Help() {
             <p>A locked wording keeps your team from sending an altered contract from the template. It does not stop anyone from uploading a different document of their own, and it does not make a document right for what you use it for: the rules differ by country and by kind of document, so check what yours needs.</p>
           </QA>
 
+          <WordFilesHelp />
           <QA id="cannot-send" q="Why can I not send?">
             <ul className="pub-list">
               <li><b>Your email address is not confirmed yet.</b> We sent a 6-digit code when you signed up. Type it in the box at the top of the app, which can also send a new one.</li>
@@ -321,8 +323,8 @@ export default function Help() {
 
           <QA id="locked-out" q="I cannot log in">
             <p><b>Forgot the password?</b> <Link href="/forgot">Reset it here</Link>. The link we email works for one hour.</p>
-            {signInWith && <p><b>Made your login with {signInWith}?</b> Use that button on the <Link href="/login">sign-in page</Link>. Such a login has no password until you choose one: <Link href="/forgot">the same link by email</Link> lets you do that, and under Settings, Profile you see every way into your login and can connect or disconnect {signInWith}. The last way in cannot be removed.</p>}
-            {signInWith && <p><b>Told that you already have a login with this address?</b> Then {signInWith} did not confirm to us that the address is yours, and we never open an existing login on the strength of an address alone. Sign in with your password once (or choose one with the link by email), then connect it under Settings, Profile.</p>}
+            {signInWith && <p><b>Made your login with {signInWith}?</b> Use that button on the <Link href="/login">sign-in page</Link>. Such a login has no password until you choose one: <Link href="/forgot">the same link by email</Link> lets you do that, and under Settings, Security you see every way into your login and can connect or disconnect {signInWith}. The last way in cannot be removed.</p>}
+            {signInWith && <p><b>Told that you already have a login with this address?</b> Then {signInWith} did not confirm to us that the address is yours, and we never open an existing login on the strength of an address alone. Sign in with your password once (or choose one with the link by email), then connect it under Settings, Security.</p>}
             <p><b>Your name, signature, branding or webhooks were gone afterwards?</b> That happens once, the first time the address of a login is proven ({signInWith ? `${signInWith} confirms it, or ` : ''}you choose a password with the link we emailed) if nobody had confirmed it before. Until then anyone could have made that login in your name, so what was set up in it is removed, and the screen and an email list exactly what. If you set it up yourself, set it up again under Settings.</p>
             <p><b>Lost the phone with your authenticator app?</b> Type one of your recovery codes in place of the code. Each works once. Without them:</p>
             <ul>{TWO_STEP_LOST.map((l) => <li key={l}>{l}</li>)}</ul>

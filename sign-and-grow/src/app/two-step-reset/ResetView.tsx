@@ -33,7 +33,7 @@ function StopView({ token }: { token: string }) {
         ) : 'again' in state ? (
           <div role="status">
             <p><b>The reset was stopped.</b> Two-step login of your login stays on, and we emailed you that it stopped.{state.again ? ` A new reset by email can be asked for from ${state.again}.` : ''}</p>
-            <p>Whoever asked for it typed your password and can read your email. Change both now: the password of your GrowSigning login under Settings, Profile (or with &quot;Forgot password&quot; on the sign-in page), and the password of your mailbox.</p>
+            <p>Whoever asked for it typed your password and can read your email. Change both now: the password of your GrowSigning login under Settings, Security (or with &quot;Forgot password&quot; on the sign-in page), and the password of your mailbox.</p>
           </div>
         ) : (
           <p className="notice err" role="alert">{state.no}</p>
@@ -77,7 +77,7 @@ export function ResetView() {
               : <button className="btn primary" disabled={state === 'busy'} onClick={start}>{state === 'busy' ? 'Starting…' : `Start the reset (${TWO_STEP_EMAIL_RESET_DAYS} days)`}</button>}
           </>
         ) : 'when' in state ? (
-          <p role="status">The reset has started. Two-step login of your login will be switched off on {state.when}. We email you every day until then, and every browser where you are signed in is signed out on that day. After that, sign in with your password and set it up again with your new phone under Settings, Profile.</p>
+          <p role="status">The reset has started. Two-step login of your login will be switched off on {state.when}. We email you every day until then, and every browser where you are signed in is signed out on that day. After that, sign in with your password and set it up again with your new phone under Settings, Security.</p>
         ) : 'off' in state ? (
           <p role="status">Two-step login is already off for this login, so there is nothing to reset. <Link href="/login">Sign in</Link> with your password.</p>
         ) : (

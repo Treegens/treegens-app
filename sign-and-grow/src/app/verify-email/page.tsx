@@ -51,10 +51,10 @@ export default function VerifyEmail() {
           </form>
         )}
         {state === 'signin' && <p className="muted" style={{ margin: '10px 0 16px' }}>This link confirms the email address of a GrowSigning login that has no password, because it was made by signing in with Google or Microsoft. Sign in the same way first, then open the link in the email again in this browser. If you did not sign up for GrowSigning, close this page: nothing was confirmed.</p>}
-        {!asking && <p className="muted" style={{ margin: '10px 0 16px' }}>{state === 'ok' ? 'Documents sent to this address will now show up in your inbox.' : state === 'wait' ? '' : state}</p>}
+        {!asking && <p className="muted" style={{ margin: '10px 0 16px' }}>{state === 'ok' ? 'Documents sent to this address now show up under To sign.' : state === 'wait' ? '' : state}</p>}
         {state === 'signin' ? <Link href="/login" className="btn primary" style={TAP}>Sign in</Link> : state !== 'password' && <Link href="/app" className="btn primary" style={TAP}>Go to GrowSigning</Link>}
       </div>
-      <p className="muted small center" style={{ marginTop: 14 }}>{state !== 'wait' && state !== 'ok' && !asking ? 'You can ask for a new confirmation email from the banner at the top of the app. ' : state === 'password' ? 'Signed up in another browser? You can also sign in here first and open the link again. ' : ''}<Link href="/help#contact">Need a hand? Get help</Link></p>
+      <p className="muted small center" style={{ marginTop: 14 }}>{state !== 'wait' && state !== 'ok' && !asking ? 'You can ask for a new code or email at the top of the app, once you are signed in. ' : state === 'password' ? 'Signed up in another browser? You can also sign in here first and open the link again. ' : ''}<Link href="/help#contact">Need a hand? Get help</Link></p>
     </div>
   );
 }

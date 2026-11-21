@@ -19,7 +19,7 @@
 /* Step 1 */
 .ed-drop { display: block; position: relative; }
 .ed-drop:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
-.ed-uploads { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.ed-uploads { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .ed-uploads li { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
 .ed-uploads li.err { background: var(--red-soft); border-color: #f1cfca; color: #7d241d; }
 .ed-upload-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; min-width: 0; }

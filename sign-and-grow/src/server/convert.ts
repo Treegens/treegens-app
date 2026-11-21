@@ -9,11 +9,13 @@
 //    a sheet split across pages, pictures and files it points at outside itself, macros), for the words next to the
 //    converted pages.
 // 3. Two converters, chosen by settings. CONVERTER=soffice runs LibreOffice headless on this machine: a fresh profile
-//    folder per job (-env:UserInstallation) with macros switched off, a minimal environment (no secret of this server
-//    reaches it), its own process group killed whole after CONVERT_TIMEOUT_MS, at most CONVERT_MAX_JOBS at once in a
-//    queue, and its temporary folder removed afterwards. Where `unshare -rn` works it runs without any network
-//    (a document can point at remote pictures); where it does not, the server log says so at the first job and the
-//    README says how to block it. CONVERTER_URL points at a Gotenberg service (MIT) instead, which the operator keeps
+//    folder per job (-env:UserInstallation) set not to run macros, a minimal environment (no secret of this server
+//    reaches it), a memory limit (CONVERT_MEMORY_MB), its own process group killed whole after CONVERT_TIMEOUT_MS,
+//    at most CONVERT_MAX_JOBS at once in a queue, and its temporary folder removed afterwards. Where the machine
+//    allows it the job runs with no network and a file system of its own that holds LibreOffice and the job's
+//    folder and nothing else (convert-box.ts); where it does not, the server log says at the first job how far it
+//    got and the README says what to do. A web page is cleaned of everything it names outside itself first
+//    (convert-html.ts), whatever the machine allows. CONVERTER_URL points at a Gotenberg service (MIT) instead, which the operator keeps
 //    in a network of its own with no way out. CONVERTER=stub is for tests only and refused on a production server.
 //    With none of them the feature is absent: uploads behave as before and the refusal names what needs a converter.
 import { spawn } from 'node:child_process';
@@ -24,7 +26,9 @@ import { pathToFileURL } from 'node:url';
 import zlib from 'node:zlib';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { bad, HttpError, rateLimit, rateWait } from './util.ts';
-import { CONVERT_KINDS_TEXT, needsConverter, type ConvertNote } from '../lib/convert.ts';
+import { CONVERT_KINDS_TEXT, needsConverter, OPERATOR_HINT, type ConvertNote } from '../lib/convert.ts';
+import { boxed, type BoxLevel } from './convert-box.ts';
+import { safeHtmlBytes } from './convert-html.ts';
 
 export const UNPACKED_MAX = 100_000_000;
 export const UNPACKED_RATIO = 20;
@@ -223,7 +227,8 @@ export async function detect(b: Uint8Array, deep = true): Promise<Detected> {
     const t = latin1(b);
     const notes: ConvertNote[] = [];
     if (/\\(revised|deleted|annotation|atnid|atrfstart)(?![a-z])/.test(t)) notes.push('tracked');
-    if (/(INCLUDEPICTURE|INCLUDETEXT)\s[^}]{0,400}?(https?|ftp|file):/i.test(t)) notes.push('external');
+    // These fields always name a file or an address outside the document, with or without a scheme.
+    if (/\b(INCLUDEPICTURE|INCLUDETEXT|IMPORT)\s+\S/i.test(t)) notes.push('external');
     return { kind: 'rtf', notes };
   }
   if (starts(b, 0x49, 0x49, 0x2a, 0x00) || starts(b, 0x4d, 0x4d, 0x00, 0x2a)) return { kind: 'tiff', notes: [], tiffPages: tiffPages(b) };
@@ -235,14 +240,16 @@ export async function detect(b: Uint8Array, deep = true): Promise<Detected> {
   if (body.length && !body.includes(0)) {
     const head = latin1(body.subarray(0, 4096));
     if (HTML_START.test(head) || (/^\s*</.test(head) && /<(head|body)[\s>]/i.test(head))) {
-      const t = latin1(body);
-      const outside = /<(img|link|script|iframe|frame|object|embed|video|audio|source|image|input)\b[^>]*\s(src|href|data|srcset|poster)\s*=\s*["']?\s*(https?:|\/\/|ftp:|file:)/i.test(t) || /url\(\s*["']?\s*(https?:|\/\/)|@import\s/i.test(t);
-      return { kind: 'html', notes: outside ? ['external'] : [] };
+      // Whatever the page names outside itself (a picture, a style sheet, a frame, on another server or on this
+      // machine's disk) is taken out before it is converted (convert-html.ts); the sender is told when anything was.
+      return { kind: 'html', notes: safeHtmlBytes(body).removed ? ['external'] : [] };
     }
     // Only markup is told apart here: a letter that starts with "BM" or "MZ" is still a letter.
     if (/^\s*<\?xml|^\s*<svg/i.test(head)) return { kind: 'unknown', why: 'This is an XML or SVG file, not a document we can turn into a PDF.' };
     try {
-      new TextDecoder('utf-8', { fatal: true }).decode(body);
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
+      // A page with nothing on it is not a document anyone can sign, and would be taken for a scan.
+      if (!/\S/u.test(text)) return { kind: 'unknown', why: 'This text file has no words in it, only spaces or empty lines.' };
       return { kind: 'txt', notes: [] };
     } catch {
       return { kind: 'unknown', why: 'This text file is not saved as UTF-8, so its letters could come out wrong. Save it again as UTF-8 (in Notepad: File, Save as, Encoding: UTF-8) and upload that.' };
@@ -273,7 +280,7 @@ async function detectZip(b: Uint8Array, deep: boolean): Promise<Detected> {
     const notes: ConvertNote[] = [];
     if (kind === 'odt' && /<text:tracked-changes\b[^>]*>\s*<text:changed-region|<office:annotation\b/.test(content)) notes.push('tracked');
     if (kind === 'ods') notes.push('sheet');
-    if (/<(draw:image|draw:object|draw:object-ole|draw:plugin|draw:floating-frame|text:section-source|table:table-source)\b[^>]*xlink:href="(https?|ftp|file):/i.test(content)) notes.push('external');
+    if (/<(draw:image|draw:object|draw:object-ole|draw:plugin|draw:floating-frame|text:section-source|table:table-source)\b[^>]*xlink:href="\s*([a-z][a-z0-9+.-]*:|\/|\\|\.\.\/)/i.test(content)) notes.push('external');
     if ([...names].some((n) => n.startsWith('Basic/') || n.startsWith('Scripts/'))) notes.push('macros');
     return { kind, notes };
   }
@@ -334,6 +341,9 @@ const intSetting = (name: string, def: number, min: number, max: number) => {
 };
 export const convertTimeoutMs = () => intSetting('CONVERT_TIMEOUT_MS', 60_000, 1000, 600_000);
 export const convertMaxJobs = () => intSetting('CONVERT_MAX_JOBS', 2, 1, 32);
+// The most memory one LibreOffice job may ask for. A tiny file can describe a sheet of a billion cells; without a
+// limit the job would take the machine's memory before the timeout stops it. 0 switches the limit off.
+export const convertMemoryMb = () => (String(process.env.CONVERT_MEMORY_MB ?? '').trim() === '0' ? 0 : intSetting('CONVERT_MEMORY_MB', 1024, 256, 65_536));
 
 /** Whether this server turns office files into PDF. False when nothing is set up, or when the converter it was told
  *  to use was found missing. */
@@ -371,10 +381,10 @@ function removeFolder(dir: string) {
   }
 }
 
-function runGroup(cmd: string, args: string[], ms: number, cwd: string): Promise<Ran> {
+function runGroup(cmd: string, args: string[], ms: number, cwd: string, home = cwd): Promise<Ran> {
   return new Promise((resolve) => {
     // Only what LibreOffice needs: none of this server's settings (keys, mail and payment secrets) are handed on.
-    const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: cwd, TMPDIR: cwd, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', SAL_USE_VCLPLUGIN: 'svp' } as unknown as NodeJS.ProcessEnv;
+    const env = { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: home, TMPDIR: home, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', SAL_USE_VCLPLUGIN: 'svp' } as unknown as NodeJS.ProcessEnv;
     let child;
     try {
       child = spawn(cmd, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -427,7 +437,8 @@ function sweepTemp() {
   }
 }
 
-// Macros off and links that lead out of the file blocked, in the fresh profile of every job.
+// LibreOffice is told not to run macros and to refuse links that lead out of the file, in the fresh profile of
+// every job. These are its own settings; the box around the job (convert-box.ts) is what does not depend on them.
 const PROFILE = `<?xml version="1.0" encoding="UTF-8"?>
 <oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop></item>
@@ -436,69 +447,84 @@ const PROFILE = `<?xml version="1.0" encoding="UTF-8"?>
 </oor:items>
 `;
 
-function freshProfile(dir: string): string {
-  const profile = path.join(dir, 'profile');
-  fs.mkdirSync(path.join(profile, 'user'), { recursive: true });
-  fs.writeFileSync(path.join(profile, 'user', 'registrymodifications.xcu'), PROFILE);
-  return pathToFileURL(profile).href;
+/** A job's folder: work/ holds the file, a fresh LibreOffice profile and the PDF; in the box it is all the job sees. */
+function jobFolder(): { dir: string; work: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), TEMP_PREFIX));
+  fs.chmodSync(dir, 0o700);
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(path.join(work, 'profile', 'user'), { recursive: true });
+  fs.writeFileSync(path.join(work, 'profile', 'user', 'registrymodifications.xcu'), PROFILE);
+  return { dir, work };
 }
 
-type Soffice = { isolated: boolean; version: string; missing?: boolean };
+/** Runs LibreOffice for one job at one level of isolation (convert-box.ts). `args` gets the folder as the job sees it. */
+function runSoffice(level: BoxLevel, job: { dir: string; work: string }, ms: number, args: (base: string) => string[]): Promise<Ran> {
+  const base = level === 'box' ? '/work' : job.work;
+  const c = boxed(level, { unshare: convertTesting.unshare, dir: job.dir, memKb: convertMemoryMb() * 1024, program: convertTesting.soffice, args: [`-env:UserInstallation=${pathToFileURL(path.join(base, 'profile')).href}`, ...args(base)] });
+  return runGroup(c.cmd, c.args, ms, job.work, base);
+}
 
-/** Finds out once whether LibreOffice is there, which version it is, and whether it can run without a network. */
+type Soffice = { level: BoxLevel; version: string; missing?: boolean };
+
+/** Finds out once whether LibreOffice is there, which version it is, and how far it can be shut in: with no network
+ *  and a file system of its own, with no network only, or not at all. */
 async function soffice(): Promise<Soffice> {
   if (g.__sgsoffice) return g.__sgsoffice;
   g.__sgsofficeprobe ??= (async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), TEMP_PREFIX));
     try {
-      const args = [`-env:UserInstallation=${freshProfile(dir)}`, '--version'];
       const word = (r: Ran) => (/LibreOffice\s+[\d.]+/i.exec(r.out)?.[0] || '').replace(/^libreoffice/i, 'LibreOffice');
-      let r = convertTesting.unshare ? await runGroup(convertTesting.unshare, ['-rn', '--', convertTesting.soffice, ...args], 30_000, dir) : null;
-      if (r && r.code === 0 && word(r)) return (g.__sgsoffice = { isolated: true, version: word(r) });
-      r = await runGroup(convertTesting.soffice, args, 30_000, dir);
-      if (r.code === 0) {
-        logOnce('open', '\n[convert] LibreOffice runs WITH network access: "unshare -rn" does not work on this machine. A document can point at pictures on other servers, and LibreOffice may fetch them. Run the server as a user whose outbound traffic is blocked, or use Gotenberg in a container with no network (README, "Turning office files into PDF").\n');
-        return (g.__sgsoffice = { isolated: false, version: word(r) || 'LibreOffice' });
+      let last: Ran | null = null;
+      for (const level of (convertTesting.unshare ? ['box', 'net', 'open'] : ['open']) as BoxLevel[]) {
+        const job = jobFolder();
+        try {
+          const r = (last = await runSoffice(level, job, 30_000, () => ['--version']));
+          if (r.code !== 0 || (level !== 'open' && !word(r))) continue;
+          if (level === 'net') logOnce('net', '\n[convert] LibreOffice runs without a network, but it can see the files of this machine: a file system of its own ("unshare -rnmpf" with mount and pivot_root) does not work here. Web pages are cleaned of everything they name outside themselves before they are converted, and LibreOffice is set to refuse links out of a document; to be sure, run the server as a user that can read nothing but the app, or use Gotenberg in a container (README, "Turning office files into PDF").\n');
+          if (level === 'open') logOnce('open', '\n[convert] LibreOffice runs WITH network access and can see the files of this machine: "unshare -rn" does not work here. A document can point at pictures on other servers, and LibreOffice may fetch them. Run the server as a user whose outbound traffic is blocked, or use Gotenberg in a container with no network (README, "Turning office files into PDF").\n');
+          return (g.__sgsoffice = { level, version: word(r) || 'LibreOffice' });
+        } finally {
+          removeFolder(job.dir);
+        }
       }
-      logOnce('missing', `\n[convert] CONVERTER=soffice, but LibreOffice could not be started (${r.failed || r.err.trim().slice(0, 200) || `exit ${r.code}`}). Office files are not converted until it is installed and the server is restarted.\n`);
-      return (g.__sgsoffice = { isolated: false, version: '', missing: true });
+      logOnce('missing', `\n[convert] CONVERTER=soffice, but LibreOffice could not be started (${last?.failed || last?.err.trim().slice(0, 200) || `exit ${last?.code}`}). Office files are not converted until it is installed and the server is restarted.\n`);
+      return (g.__sgsoffice = { level: 'open', version: '', missing: true });
     } finally {
-      removeFolder(dir);
       delete g.__sgsofficeprobe;
     }
   })();
   return g.__sgsofficeprobe;
 }
 
+/** How far LibreOffice is shut in on this machine (for tests and the operator's log): 'box', 'net' or 'open'. */
+export const sofficeLevel = async (): Promise<BoxLevel | null> => (converterMode()?.mode === 'soffice' ? (await soffice()).missing ? null : (await soffice()).level : null);
+
 const DOWN = 'The converter on this server is not working right now, so this file could not be turned into a PDF. Nothing was saved. The reason is written in the server log for the people who run it. Upload a PDF instead, or try again later.';
 const tooSlow = () => `Turning this file into a PDF took longer than ${Math.round(convertTimeoutMs() / 1000)} seconds, so it was stopped. Nothing was saved. Save it as a PDF in the program you made it with and upload that, or try a smaller file.`;
-const COULD_NOT = 'This file could not be turned into a PDF: the converter could not open it. It may be damaged, protected with a password, or from a program the converter does not know. Nothing was saved. Open it in the program you made it with, save it as a PDF and upload that.';
+const COULD_NOT = 'This file could not be turned into a PDF: the converter could not open it. It may be damaged, protected with a password, far larger inside than it looks, or from a program the converter does not know. Nothing was saved. Open it in the program you made it with, save it as a PDF and upload that.';
 
 async function bySoffice(input: Uint8Array, ext: string): Promise<{ pdf: Uint8Array; tool: string }> {
   const lo = await soffice();
   if (lo.missing) throw new HttpError(503, DOWN);
   sweepTemp();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), TEMP_PREFIX));
+  const job = jobFolder();
   try {
-    fs.chmodSync(dir, 0o700);
-    const src = path.join(dir, `document${ext}`);
-    fs.writeFileSync(src, input, { mode: 0o600 });
-    const args = ['--headless', '--invisible', '--norestore', '--nolockcheck', '--nodefault', '--nologo', '--nofirststartwizard', `-env:UserInstallation=${freshProfile(dir)}`, '--convert-to', 'pdf', '--outdir', path.join(dir, 'out'), src];
-    const r = lo.isolated ? await runGroup(convertTesting.unshare, ['-rn', '--', convertTesting.soffice, ...args], convertTimeoutMs(), dir) : await runGroup(convertTesting.soffice, args, convertTimeoutMs(), dir);
+    fs.writeFileSync(path.join(job.work, `document${ext}`), input, { mode: 0o600 });
+    const r = await runSoffice(lo.level, job, convertTimeoutMs(), (base) => ['--headless', '--invisible', '--norestore', '--nolockcheck', '--nodefault', '--nologo', '--nofirststartwizard', '--convert-to', 'pdf', '--outdir', path.join(base, 'out'), path.join(base, `document${ext}`)]);
     if (r.timedOut) throw bad(tooSlow(), 422, { code: 'convert_timeout' });
     if (r.failed) {
       console.error(`[convert] LibreOffice could not be started: ${r.failed}`);
       throw new HttpError(503, DOWN, { code: 'converter_down' });
     }
-    const out = path.join(dir, 'out', 'document.pdf');
-    if (!fs.existsSync(out)) {
+    const out = path.join(job.work, 'out', 'document.pdf');
+    // What the job leaves is read as a plain file only: a link it put there instead leads nowhere we follow.
+    if (!fs.existsSync(out) || !fs.lstatSync(out).isFile()) {
       console.error(`[convert] LibreOffice made no PDF (exit ${r.code}${r.signal ? `, ${r.signal}` : ''}): ${r.err.trim().slice(0, 300)}`);
       throw bad(COULD_NOT, 422, { code: 'convert_failed' });
     }
     if (fs.statSync(out).size > OUTPUT_MAX) throw bad(bigger(), 422);
     return { pdf: new Uint8Array(fs.readFileSync(out)), tool: lo.version };
   } finally {
-    removeFolder(dir);
+    removeFolder(job.dir);
   }
 }
 
@@ -588,9 +614,10 @@ export async function toPdf(bytes: Uint8Array, accountId: string): Promise<Conve
   if (d.kind === 'pdf' || d.kind === 'png' || d.kind === 'jpeg') return null;
   if (d.kind === 'unknown') throw bad(`${d.why ? `${d.why} ` : ''}${on ? `Upload a PDF, PNG or JPEG, or ${CONVERT_KINDS_TEXT}, which we turn into a PDF.` : 'Upload a PDF, PNG or JPEG. Export Word or Google Docs files as PDF first.'} Nothing was saved.`, 400, { code: 'file_type' });
   const k = KINDS[d.kind];
-  if (!on) throw bad(needsConverter(k.what), 400, { code: 'needs_converter' });
+  if (!on) throw bad(needsConverter(k.what), 400, { code: 'needs_converter', operator_hint: OPERATOR_HINT });
   // Plain text gets a byte order mark, so every converter reads it as UTF-8 whatever its own default is.
-  const input = d.kind === 'txt' && !starts(bytes, 0xef, 0xbb, 0xbf) ? new Uint8Array(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes])) : bytes;
+  // A web page is converted without anything it names outside itself (convert-html.ts). The original is kept as it was.
+  const input = d.kind === 'txt' && !starts(bytes, 0xef, 0xbb, 0xbf) ? new Uint8Array(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes])) : d.kind === 'html' ? safeHtmlBytes(bytes).bytes : bytes;
   const made = await inLine(accountId, () => (on.mode === 'stub' ? byStub(input, d.kind as ConvertKind) : on.mode === 'gotenberg' ? byGotenberg(on.url!, input, k.ext) : bySoffice(input, k.ext)));
   if (!starts(made.pdf, 0x25, 0x50, 0x44, 0x46)) throw bad(COULD_NOT, 422, { code: 'convert_failed' });
   // A TIFF with several pages must not lose any on the way: some converters read the first page only.

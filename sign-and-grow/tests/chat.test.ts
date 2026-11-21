@@ -950,7 +950,7 @@ test('"I cannot sign this today. What can I do?" on the signing page is answered
   // "I need more time", the starter on the signing page, names both controls there, and the sender's own on theirs.
   assert.match(kb.builtInAnswer('I need more time', 'signing').reply, /On this page, choose Other actions, then Ask for more time\..*Finish later/);
   assert.deepEqual(kb.builtInAnswer('I need more time', 'signing').acts, ['time', 'later']);
-  assert.match(kb.builtInAnswer('I need more time', 'app').reply, /Open Documents, choose the document, then Give more time/);
+  assert.match(kb.builtInAnswer('I need more time', 'app').reply, /Open Documents, choose the document, then More and Give more time/);
   // The model's stand-in after a failure knows the screen too.
   provider('openrouter');
   stub(() => new Response('no', { status: 503 }));
@@ -1010,16 +1010,16 @@ test('what someone who sends most often asks has a built-in answer that names th
   const cases: [string, string, RegExp][] = [
     ['How do I send a document?', 'send', /^In the menu, choose Send a document\./],
     ['How do I add a second signer?', 'add-signer', /editor's first step.*Set signing order/],
-    ['Has everyone signed yet?', 'status', /^Open Documents and choose the document\..*Send reminder.*Copy link/],
-    ['How do I void an envelope?', 'void', /^Open Documents, choose the document, then Void\./],
+    ['Has everyone signed yet?', 'status', /^Open Documents and choose the document\..*Remind, or Copy link in that person's More/],
+    ['How do I void an envelope?', 'void', /^Open Documents, choose the document, then More and Cancel the request\./],
     ['Can I use a template?', 'template', /New template.*Save as template/],
     ['Can I send to many people at once?', 'bulk', /^Open More in the menu, then Send to many/],
     ['How do I add my team?', 'team', /^Open Settings, then Team\..*Invite by email/],
-    ['Where do I change my notifications?', 'settings', /^Open Settings\. Profile has your name, Notifications/],
+    ['Where do I change my notifications?', 'settings', /^Open Settings\. Profile has your name and which emails you get, Security has your password/],
     ['How do I set a deadline?', 'deadline', /Give more time.*under Deadline/],
-    ['Where is my signed document?', 'copy', /^If you sent it: open Documents, choose the completed document, then Download with certificate\./],
+    ['Where is my signed document?', 'copy', /^If you sent it: open Documents, choose the completed document, then Download\./],
     ['How do I change my name?', 'name', /^Your own name is under Settings, then Profile\./],
-    ['How do I remind someone?', 'reminders', /^Open Documents, choose the document, then Send reminder\./],
+    ['How do I remind someone?', 'reminders', /^Open Documents, choose the document, then Remind\./],
   ];
   for (const [q, id, words] of cases) {
     const b = kb.builtInAnswer(q, 'app');
@@ -1176,13 +1176,13 @@ test('the missing email is answered for whoever asks: a sender in the app, eithe
   for (const q of ['The recipient never got the email', 'They never got my email', 'She did not receive the email', 'He has not got the invitation']) {
     const b = kb.builtInAnswer(q, 'app');
     assert.equal(b.id, 'not-received', q);
-    assert.match(b.reply, /^Open Documents and choose the document: .*Send reminder or Copy link, or correct their address\.$/, q);
+    assert.match(b.reply, /^Open Documents and choose the document: .*Remind, or open that person's More for Copy link or to change their address\.$/, q);
     assert.deepEqual(lib.toolsFor(q, b.reply, 'app').map((t) => t.id), [], 'Find my documents is not offered to someone who sent it');
   }
   for (const s of ['help', 'public'] as const) {
     const b = kb.builtInAnswer('I did not get the email', s);
     assert.equal(b.id, 'no-email');
-    assert.match(b.reply, /^Look in spam for a message from GrowSigning\. Then use Find my documents .*If you sent the document, log in, open Documents and choose Send reminder or Copy link\.$/);
+    assert.match(b.reply, /^Look in spam for a message from GrowSigning\. Then use Find my documents .*If you sent the document, log in, open Documents, choose the document, then Remind, or Copy link in that person's More\.$/);
     assert.ok(!/void/i.test(b.reply));
     assert.equal(kb.builtInAnswer('I never received the code', s).id, 'code');
   }
@@ -1199,7 +1199,7 @@ test('"the order people sign in" is about the order, and "send a reminder" about
     for (const q of ['How do I send a reminder?', 'remind a signer', 'Can I nudge them?']) {
       const b = kb.builtInAnswer(q, s);
       assert.equal(b.id, 'reminders', `${q} on ${s}`);
-      assert.match(b.reply, new RegExp(`choose the document, then Send reminder\\. Reminders also go out by themselves every ${policy.DEFAULT_REMINDER_DAYS} days unless you changed that\\.$`));
+      assert.match(b.reply, new RegExp(`choose the document, then Remind\\. Reminders also go out by themselves every ${policy.DEFAULT_REMINDER_DAYS} days unless you changed that\\.$`));
     }
   }
   for (const q of ['resend the email', 'How do I send the email again?', 'send it again']) assert.equal(kb.builtInAnswer(q, 'app').id, q === 'send it again' ? 'reminders' : 'reminders', q);
@@ -1228,7 +1228,7 @@ test('the twenty likely questions are answered right, in 55 words or fewer, on t
   const price = kb.builtInAnswer('What does it cost?', 'public').reply;
   assert.equal(price, `A new account gets ${PRICING.welcomeSignatures} signatures free. ${PRICING.planName} is ${usd(PRICING.monthlyUsd)} a month with ${PRICING.monthlySignatures} signatures, and extra signatures are ${usd(PRICING.topUpUsd)} each. Signing is always free for the people who sign. Pricing on our front page has the rules on when signatures expire.`);
   assert.match(kb.builtInAnswer('What does it cost?', 'app').reply, /Settings, then Plan, has the rules on when signatures expire\.$/);
-  assert.deepEqual(lib.toolsFor('What does it cost?', price, 'public').map((t) => `${t.label} ${t.href}`), ['Read: Pricing /#pricing']);
+  assert.deepEqual(lib.toolsFor('What does it cost?', price, 'public').map((t) => `${t.label} ${t.href}`), ['Read: Pricing /pricing']);
   // No built-in answer anywhere is longer than 70 words but the ones that quote a rule word for word.
   const quoted = new Set(['refund', 'price-change', 'agree', 'who-sees', 'cannot-send', 'health', 'groups', 'bulk', 'signatures', 'free-code', 'close', 'language']);
   for (const f of kb.FAQ) for (const s of ['signing', 'app', 'public'] as const) if (!quoted.has(f.id)) assert.ok(wordsIn(f.answer(s)) <= 70, `${f.id} on ${s}: ${wordsIn(f.answer(s))} words`);

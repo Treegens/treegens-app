@@ -7,8 +7,12 @@ import { Mark } from '@/components/Brand';
 import { useMe } from '@/components/AppShell';
 import { SenderTrees } from '@/components/impact/SenderTrees';
 import { reminderText } from '@/lib/policy';
-import { Recipients, lastEmailTo, type Delivery } from '@/components/sender/Recipients';
-import { BackNews, MailStopLines, deliveredLine, remindedText } from '@/components/sender/MailNews';
+import { Recipients, lastEmailTo, openToSign, type Delivery } from '@/components/sender/Recipients';
+import { MoreMenu, Fold, type MenuLine } from '@/components/sender/More';
+import { History } from '@/components/sender/History';
+import { mainButton, pageMore, personRemind, waitingSentence, type PagePerson } from '@/lib/envelopepage';
+import { actingName } from '@/lib/groups';
+import { MailStopLines, remindedText } from '@/components/sender/MailNews';
 import { ConfirmDialog, CorrectDialog, ExtendDialog, VoidDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { AfterSend } from '@/components/sender/AfterSend';
@@ -18,13 +22,10 @@ import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { ownLink } from '@/components/sender/OwnLink';
 import { Disputed } from '@/components/sender/Disputed';
 import { EnvelopeComments } from '@/components/sender/Comments';
-import { RetentionCard } from '@/components/sender/Retention';
+import { RetentionCard, DeleteNotes, type RetentionAsk } from '@/components/sender/Retention';
 import { CustomDetails } from '@/components/sender/CustomDetails';
 import { FileChecks } from '@/components/sender/FileChecks';
-import { redactedNote } from '@/lib/retention';
-import { closingSoon, dayTime, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened, waitingOn } from '@/components/sender/lib';
-
-const MAIL_STATUS: Record<string, string> = { sent: 'Handed to the mail server', outbox: 'Not delivered, no mail server set up', failed: 'Could not be sent', queued: 'Waiting to go out' };
+import { closingSoon, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened } from '@/components/sender/lib';
 
 export default function EnvelopeDetail() {
   const { id } = useParams<{ id: string }>();
@@ -34,6 +35,11 @@ export default function EnvelopeDetail() {
   const [dialog, setDialog] = useState<'' | 'void' | 'extend' | 'delete'>('');
   const [fix, setFix] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  // Which of the keeping dialogs is open (Keep it, Hold, Lift the hold, remove the files): they live in Retention.tsx.
+  const [keeping, setKeeping] = useState<RetentionAsk>('');
+  // Sent from Templates (the Use dialog sends people here with ?from=templates): the way back is Templates.
+  const [fromTemplates, setFromTemplates] = useState(false);
+  useEffect(() => setFromTemplates(new URLSearchParams(window.location.search).get('from') === 'templates'), []);
   const askedForTime = useRef(false);
 
   // Emails about deadlines link here with ?extend=1, so the dialog is already open when the page loads.
@@ -44,7 +50,7 @@ export default function EnvelopeDetail() {
     if (q.get('extend') !== '1') return;
     const s = data.envelope.status;
     if (s === 'sent' || s === 'expired') setDialog('extend');
-    else toast(s === 'completed' ? 'Everyone has already finished, so this one does not need more time.' : 'This envelope is closed, so it cannot be given more time. Clone it to send it again.');
+    else toast(s === 'completed' ? 'Everyone has already finished, so this one does not need more time.' : 'This document is stopped, so it cannot be given more time. Copy it to send it again.');
     q.delete('extend');
     window.history.replaceState(null, '', `${window.location.pathname}${q.toString() ? `?${q}` : ''}`);
   }, [data]);
@@ -62,7 +68,7 @@ export default function EnvelopeDetail() {
     }
   };
 
-  if (error) return <div className="sn card center"><h1 className="serif" style={{ fontSize: 22 }}>We could not open this envelope</h1><p className="muted" style={{ marginTop: 8 }}>It may have been deleted, or it belongs to someone else on your team. Ask them to share it, or go back to your list.</p><Link href="/app/envelopes" className="btn">Back to envelopes</Link></div>;
+  if (error) return <div className="sn card center"><h1 className="serif" style={{ fontSize: 22 }}>We could not open this document</h1><p className="muted" style={{ marginTop: 8 }}>It may have been deleted, or it belongs to someone else on your team. Ask them to share it, or go back to your list.</p><Link href="/app/envelopes" className="btn">Back to documents</Link></div>;
   if (!data) return <div className="muted" role="status">Loading…</div>;
 
   const e = data.envelope;
@@ -92,7 +98,6 @@ export default function EnvelopeDetail() {
   const kept = data.kept_on_delete ?? (!isTpl && e.status !== 'draft' && (done || e.recipients.some((r: any) => r.status === 'completed' && r.role !== 'cc')));
   // Kept for nothing but an open dispute: a declined or voided one nobody had finished.
   const keptForDispute = kept && !!e.disputed_at && !done && !e.recipients.some((r: any) => r.role !== 'cc' && (r.status === 'completed' || r.signed_before));
-  const waiting = out ? waitingOn(e.recipients, me.user.email) : null;
   const unopened = out ? e.recipients.filter((r: any) => neverOpened(r)) : [];
   // People who filled in everything required and have not pressed Finish, by the server's count (progress.ready).
   const almost = out ? e.recipients.filter((r: any) => r.progress?.ready) : [];
@@ -128,27 +133,55 @@ export default function EnvelopeDetail() {
     router.push(`/app/${kind === 'template' ? 'templates' : 'envelopes'}/${r.id}/edit`);
   });
 
+  // One main button by state, and everything else in the page's one More (src/lib/envelopepage.ts).
+  const mine = (r: any) => r.role !== 'inperson' && (r.email || '').toLowerCase() === me.user.email.toLowerCase();
+  const people: PagePerson[] = e.recipients.map((r: any) => ({
+    id: r.id, name: actingName(r) || r.name || r.role_name || 'them', role: r.role, status: r.status, turn: out && hasTurn(r), me: mine(r),
+    remindable: out && hasTurn(r) && !r.muted && !stopped.includes(r) && !ownLink(r) && r.role !== 'inperson' && !mine(r),
+  }));
+  const main = mainButton({ status: e.status, isTemplate: isTpl, removed: !!removed, purged: !!e.purged_at, people });
+  const mainPerson = main?.personId ? e.recipients.find((r: any) => r.id === main.personId) : null;
+  const whyNot = paused ? 'Sending is paused on this account, so this has to wait.' : undefined;
+  const mainEl = !main ? null
+    : main.kind === 'restore' ? <button className="btn primary" disabled={busy} onClick={() => act(() => api(`/envelopes/${e.id}/restore`, { method: 'POST' }), 'Put back. It is in the lists, the search, the export and the reports again.')}>{main.label}</button>
+    : main.kind === 'continue' ? <Link href={editHref} className="btn primary">{main.label}</Link>
+    : main.kind === 'sign' || main.kind === 'host' ? <button className="btn primary" disabled={busy} onClick={() => (setBusy(true), openToSign(e.id, mainPerson).catch((err) => (fail(err), setBusy(false))))}>{main.label}</button>
+    : main.kind === 'remind' ? <button className="btn primary" disabled={busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out.' : undefined} onClick={remindAll}>{main.label}</button>
+    : main.kind === 'download' ? <a className="btn primary" href={`/api/envelopes/${e.id}/download`}>{main.label}</a>
+    : main.kind === 'reopen' ? <button className="btn primary" disabled={paused} title={whyNot} onClick={() => setDialog('extend')}>{main.label}</button>
+    : <button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>{main.label}</button>;
+  // A deletion schedule applies to it: only then are Keep it and Hold listed (src/components/sender/Retention.tsx).
+  const ret = isTpl ? null : data.retention;
+  const schedule = !!ret && !!(ret.period || ret.due_at || ret.noticed_at);
+  const more: MenuLine[] = pageMore({
+    status: e.status, isTemplate: isTpl, removed: !!removed, purged: !!e.purged_at, hasFiles: e.documents.length > 0, mayChange, mayDelete: !isTpl || e.access?.may_delete !== false,
+    main: isTpl && (tplLocked || tplHeld) ? 'copy' : main?.kind || null, schedule, mayKeep: !!ret && !!ret.closed_at && !ret.held && !!(ret.noticed_at || ret.due_at) && !ret.asked,
+    mayHold: !!ret?.may_hold, held: !!ret?.held, heldHere: !!ret?.holds?.some((h: any) => h.envelope_id === e.id),
+  }).map((l): MenuLine => ({
+    ...l,
+    ...(l.key === 'open_pdf' ? { href: `/api/envelopes/${e.id}/download?inline=1`, newTab: true }
+      : l.key === 'full_record' ? { href: `/api/envelopes/${e.id}/evidence` }
+      : l.key === 'edit' ? { href: editHref, route: true }
+      : l.key === 'more_time' ? { onPick: () => setDialog('extend') }
+      : l.key === 'copy' ? { onPick: () => clone('envelope'), disabled: busy }
+      : l.key === 'save_template' ? { onPick: () => clone('template'), disabled: busy }
+      : l.key === 'cancel' ? { onPick: () => setDialog('void') }
+      : l.key === 'keep' ? { onPick: () => setKeeping('keep') }
+      : l.key === 'hold' ? { onPick: () => setKeeping('hold') }
+      : l.key === 'lift_hold' ? { onPick: () => setKeeping('lift') }
+      : { onPick: () => setDialog('delete') }),
+  }));
+  const title = e.subject || (isTpl ? 'Untitled template' : 'Untitled');
+  const nFiles = e.documents.length;
+
   return (
     <div className="sn stack">
-      <div className="pagehead" style={{ marginBottom: 0 }}>
+      <div className="pagehead sn-head" style={{ marginBottom: 0 }}>
         <div className="grow">
-          <Link href={isTpl ? '/app/templates' : '/app/envelopes'} className="small sn-back">← {isTpl ? 'Templates' : 'Documents'}</Link>
-          <h1 className="serif sn-title">{e.subject || (isTpl ? 'Untitled template' : 'Untitled')}</h1>
-          <div className="row wrap" style={{ marginTop: 6, rowGap: 4 }}>
-            <Status s={e.status} label={isTpl ? 'Template' : undefined} />
-            <span className="muted small">{e.sent_at ? `Sent ${fmtDate(e.sent_at, true)} · ` : ''}<span className="sn-id">ID {e.id}</span></span>
-          </div>
+          <Link href={isTpl || fromTemplates ? '/app/templates' : '/app/envelopes'} className="small sn-back">← {isTpl || fromTemplates ? 'Templates' : 'Documents'}</Link>
+          <h1 className="serif sn-title">{title}</h1>
         </div>
-        <div className="row wrap sn-headactions">
-          {e.documents.length > 0 && <a className="btn" href={`/api/envelopes/${e.id}/download?inline=1`} target="_blank" rel="noreferrer">{e.status === 'completed' ? 'View signed PDF' : 'Preview PDF'}</a>}
-          {e.status === 'completed' && !e.purged_at && <a className="btn primary" href={`/api/envelopes/${e.id}/download`}>Download with certificate</a>}
-          {/* The signed PDF, the certificate, the record, our emails and the consent wording in one ZIP (evidence.ts). */}
-          {!isTpl && e.status !== 'draft' && !e.purged_at && <a className="btn" href={`/api/envelopes/${e.id}/evidence`} title="A ZIP with the signed PDF, its certificate, the audit trail as text and data, our emails about it and what each person agreed to">Download evidence pack</a>}
-          {!removed && !e.purged_at && <button className="btn" disabled={busy} onClick={() => clone('envelope')}>{isTpl ? 'Use' : 'Clone'}</button>}
-          {!removed && !isTpl && !e.purged_at && <button className="btn" disabled={busy} onClick={() => clone('template')}>Save as template</button>}
-          {out && <button className="btn danger" onClick={() => setDialog('void')}>Void</button>}
-          {!removed && !out && mayChange && (!isTpl || e.access?.may_delete !== false) && <button className="btn ghost danger" disabled={busy} onClick={() => setDialog('delete')}>Delete</button>}
-        </div>
+        <div className="sn-headactions"><MoreMenu kind="screen" label={`More for ${title}`} lines={more} /></div>
       </div>
 
       {removed && (
@@ -157,9 +190,9 @@ export default function EnvelopeDetail() {
             <div>
               <p className="sn-now-line">Removed from its sender&apos;s lists on {longDate(removed)}.</p>
               <p className="sn-now-sub">It is only under Envelopes, in the tab Removed by its sender: in no other list, search, export or report of your team. Everyone who was on it still has their link and their copy. You can open it because you are an admin of this account.</p>
-              <p className="sn-now-sub">Put it back and it is an ordinary envelope again, for its sender and for the admins. The audit trail records who removed it and who put it back.</p>
+              <p className="sn-now-sub">Put it back and it is an ordinary document again, for its sender and for the admins. Its history records who removed it and who put it back.</p>
             </div>
-            <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => act(() => api(`/envelopes/${e.id}/restore`, { method: 'POST' }), 'Put back. It is in the lists, the search, the export and the reports again.')}>Put it back</button></div>
+            <div className="sn-now-actions">{mainEl}</div>
           </div>
         </section>
       )}
@@ -173,8 +206,9 @@ export default function EnvelopeDetail() {
       {e.status === 'draft' && (
         <section className="card sn-now" aria-label="Where this stands">
           <div className="sn-now-main">
-            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new envelope, or edit it to change the document, roles and fields.' : tplLocked ? `Use it to start a new envelope. Its wording is locked: you fill in names, email addresses and the fields left empty for you. To change it, ask ${e.access.owner} or an admin of your team.` : tplHeld ? `Use it to start a new envelope. It belongs to ${e.access.owner} and is not for everyone on the team, so only they or an admin can change it, and a copy would be theirs too. To change something, ask ${e.access.owner} or an admin of your team.` : 'Use it to start a new envelope. It belongs to a colleague, so only they or an admin of your team can change or delete it. To change something, make your own copy: the copy is yours and the original stays as it is.'}</p></div>
-            {mayChange ? <div className="sn-now-actions"><Link href={editHref} className="btn primary">{isTpl ? 'Edit template' : 'Continue editing'}</Link></div>
+            <div><p className="sn-now-line">{isTpl ? 'A template, ready to use.' : 'Not sent yet.'}</p><p className="muted">{!isTpl ? 'Nobody has received anything. Pick up where you left off.' : mayChange ? 'Use it to start a new document, or edit it to change the files, roles and fields.' : tplLocked ? `Use it to start a new document. Its wording is locked: you fill in names, email addresses and the fields left empty for you. To change it, ask ${e.access.owner} or an admin of your team.` : tplHeld ? `Use it to start a new document. It belongs to ${e.access.owner} and is not for everyone on the team, so only they or an admin can change it, and a copy would be theirs too. To change something, ask ${e.access.owner} or an admin of your team.` : 'Use it to start a new document. It belongs to a colleague, so only they or an admin of your team can change or delete it. To change something, make your own copy: the copy is yours and the original stays as it is.'}</p></div>
+            {!isTpl ? !removed && <div className="sn-now-actions">{mainEl}</div>
+              : mayChange ? <div className="sn-now-actions"><Link href={editHref} className="btn primary">Edit template</Link></div>
               : tplLocked || tplHeld ? <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>Use</button></div>
               : <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('template')}>Make my own copy</button></div>}
           </div>
@@ -188,29 +222,19 @@ export default function EnvelopeDetail() {
         <section className="card sn-now" aria-label="Where this stands">
           <div className="sn-now-main">
             <div>
-              <p className="sn-now-line">{waiting ? <>Waiting on <b>{waiting.label}</b>{waiting.since ? ` for ${howLong(waiting.since)}` : ''}.</> : 'Sent. Nobody is holding it up right now.'}</p>
-              {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} {bounced.some((r: any) => lastEmailTo(deliveries, r.email, r.id)?.next_try_at) ? 'has not gone out yet, and we keep trying' : 'did not go out'}. See below to fix the address or share the link yourself.</p>}
+              <p className="sn-now-line">{waitingSentence(people)}{e.sent_at ? ` Sent ${howLong(e.sent_at)} ago.` : ''}</p>
+              {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} {bounced.some((r: any) => lastEmailTo(deliveries, r.email, r.id)?.next_try_at) ? 'has not gone out yet, and we keep trying' : 'did not go out'}. Open their More below to change the address or share the link yourself.</p>}
               <MailStopLines people={stopped} />
               {almost.length > 0 && <p className="sn-now-sub warn" id="sn-almost"><b>{joinNames(almost.map((r: any) => r.name))}</b> {almost.length === 1 ? 'has' : 'have'} filled in everything but {almost.length === 1 ? 'has' : 'have'} not pressed Finish, so {almost.length === 1 ? 'their part is' : 'their parts are'} not signed yet. A reminder tells them that one button is left.</p>}
-              {unopened.length > 0 && <p className="sn-now-sub warn">{joinNames(unopened.map((r: any) => r.name))} {unopened.length === 1 ? 'has' : 'have'} not opened it yet. See below for ways to reach them.</p>}
-              {allMuted && <p className="sn-now-sub">They turned reminder emails off, so reach them with their link instead. It is below.</p>}
-              <p className={`sn-now-sub${closingSoon(e.expires_at) ? ' warn' : ''}`}>{e.expires_at ? `${deadlineLine(e.expires_at)}.` : 'No closing date.'}{closingSoon(e.expires_at) ? ' Give more time if they need it.' : ''}</p>
-              {/* Whether anyone is reminded without the sender doing anything, in a full sentence (reminderText in src/lib/policy.ts). */}
-              {!paused && <p className="sn-now-sub" id="sn-reminders">{reminderText(e.reminder_days)}{e.reminder_days > 0 && e.recipients.some(ownLink) ? ' For someone whose link you send yourself, the reminder comes to you instead.' : ''} To change it, use Edit envelope.</p>}
-              {paused && <p className="sn-now-sub warn">Sending is paused on this account, so reminders are off, nobody is emailed about a change you make, and people further down the signing order are asked only once the pause is lifted. You can still give more time, change the envelope and void it.</p>}
-              {!paused && e.held_at && <p className="sn-now-sub warn">We are holding back emails about this envelope. We emailed you why, and the history below says it too.</p>}
+              {unopened.length > 0 && <p className="sn-now-sub warn">{joinNames(unopened.map((r: any) => r.name))} {unopened.length === 1 ? 'has' : 'have'} not opened it yet. Their More below has other ways to reach them.</p>}
+              {allMuted && <p className="sn-now-sub">They turned reminder emails off, so reach them with their link instead. It is in their More below.</p>}
+              {e.expires_at && <p className={`sn-now-sub${closingSoon(e.expires_at) ? ' warn' : ''}`}>{deadlineLine(e.expires_at)}.{closingSoon(e.expires_at) ? ' Give more time, in More, if they need it.' : ''}</p>}
+              {paused && <p className="sn-now-sub warn">Sending is paused on this account, so reminders are off, nobody is emailed about a change you make, and people further down the signing order are asked only once the pause is lifted. You can still give more time, change the document and cancel the request.</p>}
+              {!paused && e.held_at && <p className="sn-now-sub warn">We are holding back emails about this document. We emailed you why, and its history below says it too.</p>}
+              {/* The paper this one saves, and what its signatures plant when that is true (impact/SenderTrees.tsx). */}
+              <SenderTrees envelopeId={e.id} status={e.status} line />
             </div>
-            <div className="sn-now-actions">
-              {canRemind && <button className="btn" disabled={busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out.' : undefined} onClick={remindAll}>Send reminder</button>}
-              <button className={`btn${closingSoon(e.expires_at) ? ' sn-amber' : ''}`} onClick={() => setDialog('extend')}>Give more time</button>
-            </div>
-          </div>
-          <div className="sn-edit">
-            <div>
-              <b>Need to change something?</b> Fix a typo, swap a document or change who signs, without voiding.
-              {finished.length > 0 && <div className="small sn-edit-lock">{joinNames(finished.map((r: any) => r.name))} already finished. Names, addresses and the order of the others can still change. A change to the pages means asking {finished.length === 1 ? 'them' : 'those who finished'} to sign again, and you are asked first.</div>}
-            </div>
-            <Link href={editHref} className="btn primary">Edit envelope</Link>
+            {!removed && mainEl && <div className="sn-now-actions">{mainEl}</div>}
           </div>
         </section>
       )}
@@ -223,7 +247,7 @@ export default function EnvelopeDetail() {
               {unfinished.length > 0 && <p className="sn-now-sub">Still needed: <b>{joinNames(unfinished.map((r: any) => r.name))}</b>.</p>}
               <p className="sn-now-sub">{paused ? 'Sending is paused on this account. Reopening emails everyone who still has to sign, so it has to wait until the pause is lifted.' : 'Reopen it with a new closing date. Nobody who already signed has to sign again.'}</p>
             </div>
-            {!removed && <div className="sn-now-actions"><button className="btn primary" disabled={paused} title={paused ? 'Sending is paused on this account, so this has to wait.' : undefined} onClick={() => setDialog('extend')}>Reopen</button></div>}
+            {!removed && <div className="sn-now-actions">{mainEl}</div>}
           </div>
         </section>
       )}
@@ -234,9 +258,9 @@ export default function EnvelopeDetail() {
             <div>
               <p className="sn-now-line">{decliner ? <><b>{decliner.name}</b> declined{decliner.completed_at ? ` on ${longDate(decliner.completed_at)}` : ''}.</> : 'This was declined.'}</p>
               {decliner?.decline_reason && <p className="sn-now-sub">They wrote: &ldquo;{decliner.decline_reason}&rdquo;</p>}
-              <p className="sn-now-sub">This envelope is closed. Clone it, change what needs changing and send it again.</p>
+              <p className="sn-now-sub">Nobody can sign this one any more. Copy it, change what needs changing and send it again.</p>
             </div>
-            {!removed && <div className="sn-now-actions"><button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>Clone and fix</button></div>}
+            {!removed && mainEl && <div className="sn-now-actions">{mainEl}</div>}
           </div>
         </section>
       )}
@@ -245,112 +269,84 @@ export default function EnvelopeDetail() {
         <section className="card sn-now closed" aria-label="Where this stands">
           <div className="sn-now-main">
             <div>
-              <p className="sn-now-line">Voided. Nobody can sign it any more.</p>
+              <p className="sn-now-line">Cancelled. Nobody can sign it any more.</p>
               <p className="sn-now-sub">Reason given: &ldquo;{e.void_reason}&rdquo;</p>
-              <p className="sn-now-sub">{costLine ? `${costLine} ` : ''}Clone it to send a corrected one.</p>
+              <p className="sn-now-sub">{costLine ? `${costLine} ` : ''}Copy it to send a corrected one.</p>
             </div>
-            {!removed && <div className="sn-now-actions"><button className="btn" disabled={busy} onClick={() => clone('envelope')}>Clone</button></div>}
+            {!removed && mainEl && <div className="sn-now-actions">{mainEl}</div>}
           </div>
         </section>
       )}
 
       {e.status === 'completed' && (
-        <div className="card row" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>
+        <div className="card sn-done">
           <Mark size={26} label="" />
-          <div><b>Everyone finished{e.completed_at ? ` on ${longDate(e.completed_at)}` : ''}. Completed without paper.</b><SenderTrees envelopeId={e.id} status={e.status} bare /></div>
+          <div className="grow"><b>Everyone finished{e.completed_at ? ` on ${longDate(e.completed_at)}` : ''}. Completed without paper.</b><SenderTrees envelopeId={e.id} status={e.status} /></div>
+          {/* The signed PDF with its signing record pages: the one file most people want. */}
+          {!removed && mainEl && <div className="sn-now-actions">{mainEl}</div>}
         </div>
       )}
-      {/* Out for signature: what this one saves and what its signatures plant; the first send ever gets the picture (impact/SenderTrees.tsx). */}
-      {out && <SenderTrees envelopeId={e.id} status={e.status} />}
 
       <section className="card pad0" aria-labelledby="sn-rcpt-h">
         <div className="sn-cardhead">
-          <h2 id="sn-rcpt-h">{isTpl ? 'Roles' : 'Recipients'}</h2>
-          {!isTpl && e.status !== 'draft' && <p className="muted small">What happened to each email, when they opened the document, and when they finished.{e.ordered ? ' They sign in the order shown.' : ''}</p>}
+          <h2 id="sn-rcpt-h">{isTpl ? 'Roles' : 'People'}</h2>
+          {!isTpl && e.status !== 'draft' && !!e.ordered && <p className="muted small">They sign in the order shown.</p>}
         </div>
         {noMailServer && (
           <div className="notice warn sn-inset" role="note">
-            This server has no mail server set up, so emails are saved but not delivered. Share each link yourself with the buttons below.
+            This server has no mail server set up, so emails are saved but not delivered. Share each link yourself: it is in each person&apos;s More.
             {me.outbox && <> You can read the saved emails in the <a href="/dev/outbox" target="_blank" rel="noreferrer">dev outbox</a>.</>}
           </div>
         )}
         {e.recipients.length === 0 ? <div className="empty">Nobody has been added yet.</div> : (
-          <Recipients envelope={e} deliveries={deliveries} texts={data.texts || []} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} paused={paused} />
+          <Recipients envelope={e} deliveries={deliveries} texts={data.texts || []} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} paused={paused}
+            mainPersonId={main?.personId || ''} remindOne={(r: any) => { const p = people.find((x) => x.id === r.id); return !!p && personRemind(people, main, p); }} />
         )}
       </section>
 
+      {/* How long it is kept, and what a deletion left. Keep it, Hold and Delete are in More (src/components/sender/Retention.tsx). */}
+      {!isTpl && <RetentionCard envelopeId={e.id} r={data.retention} onChanged={reload} ask={keeping} onAsk={setKeeping} />}
+
+      {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
+      <PayLinkNote envelopeId={e.id} closed={!isTpl && e.status !== 'draft' && e.status !== 'sent'} />
+
+      {/* Folded, and closed every time the page opens: comments, history, files, details, checks. */}
       {/* Questions and comments: the threads, who waits for an answer, answer and settle (components/sender/Comments.tsx). */}
       {!isTpl && <EnvelopeComments envelope={e} />}
-
-      {/* How long it is kept, holds, Keep it, Purge now, and what a purge left (src/components/sender/Retention.tsx). */}
-      {!isTpl && <RetentionCard envelopeId={e.id} r={data.retention} onChanged={reload} />}
-
+      {!isTpl && e.status !== 'draft' && <History audit={data.audit} deliveries={deliveries} chain={data.chain} fullRecordHref={e.purged_at ? null : `/api/envelopes/${e.id}/evidence`} />}
+      <Fold title="Files" count={nFiles}>
+        {nFiles === 0 && <p className="muted small">{e.purged_at ? `Its files were deleted on ${longDate(e.purged_at)}.` : 'No file has been added yet.'}</p>}
+        {e.documents.map((d: any) => <div key={d.id} className="row between" style={{ padding: '5px 0' }}><span className="truncate">{d.name}</span><span className="muted small" style={{ whiteSpace: 'nowrap' }}>{d.pages} page{d.pages === 1 ? '' : 's'}</span></div>)}
+        <p className="muted small">
+          {pages} page{pages === 1 ? '' : 's'} · {e.fields.length} field{e.fields.length === 1 ? '' : 's'} · {e.ordered ? 'signed in order' : 'everyone at once'}{out && !e.expires_at ? ' · no closing date' : ''}
+        </p>
+        {/* Whether anyone is reminded without the sender doing anything, in a full sentence (reminderText in src/lib/policy.ts). */}
+        {out && !paused && <p className="muted small" id="sn-reminders">{reminderText(e.reminder_days)}{e.reminder_days > 0 && e.recipients.some(ownLink) ? ' For someone whose link you send yourself, the reminder comes to you instead.' : ''} To change it, choose Edit in More.</p>}
+        {e.message && <p className="muted" style={{ whiteSpace: 'pre-wrap' }}>&ldquo;{e.message}&rdquo;</p>}
+        {e.status !== 'draft' && <p className="muted small" style={{ marginBottom: 0 }}>{e.sent_at ? `Sent ${fmtDate(e.sent_at, true)}. ` : ''}If you write to us about it, its number is <span className="sn-id">{e.id}</span>.</p>}
+        {/* Without a deletion schedule, an admin still finds the hold here (with one, it is in More). */}
+        {!!ret?.may_hold && !schedule && !ret.holds?.some((h: any) => h.envelope_id === e.id) && !e.purged_at && <p style={{ marginBottom: 0 }}><button type="button" className="btn sm" onClick={() => setKeeping('hold')}>Put on hold</button></p>}
+      </Fold>
       {/* The account's own details on this envelope, such as a case number, folded (src/components/sender/CustomDetails.tsx). */}
       <CustomDetails envelope={e} editHref={mayChange ? editHref : null} onSaved={reload} />
       {/* What can be checked about the signed PDF, folded: today its digital seal, when it carries one (FileChecks.tsx). */}
       <FileChecks seal={data.seal} />
 
-      {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
-      <PayLinkNote envelopeId={e.id} closed={!isTpl && e.status !== 'draft' && e.status !== 'sent'} />
-
-      <div className="grid g2">
-        <section className="card" aria-labelledby="sn-docs-h">
-          <h2 id="sn-docs-h" style={{ marginBottom: 10 }}>Documents</h2>
-          {e.documents.length === 0 && <div className="muted small">{e.purged_at ? `Its documents were purged on ${longDate(e.purged_at)}.` : 'No document has been added yet.'}</div>}
-          {e.documents.map((d: any) => <div key={d.id} className="row between" style={{ padding: '5px 0' }}><span className="truncate">{d.name}</span><span className="muted small" style={{ whiteSpace: 'nowrap' }}>{d.pages} page{d.pages === 1 ? '' : 's'}</span></div>)}
-          <div className="muted small" style={{ marginTop: 8 }}>
-            {pages} page{pages === 1 ? '' : 's'} · {e.fields.length} field{e.fields.length === 1 ? '' : 's'} · {e.ordered ? 'signed in order' : 'everyone at once'}
-            {!isTpl && <> · {e.reminder_days > 0 ? `automatic reminder every ${e.reminder_days} day${e.reminder_days === 1 ? '' : 's'}` : 'no automatic reminders'}</>}
-          </div>
-          {e.message && <p className="muted" style={{ marginTop: 12, whiteSpace: 'pre-wrap' }}>&ldquo;{e.message}&rdquo;</p>}
-          {!isTpl && deliveries.length > 0 && (
-            <details className="sn-mails">
-              <summary>Every email about this envelope ({deliveries.length})</summary>
-              <ul>
-                {deliveries.map((d, i) => (
-                  <li key={i}>
-                    <div><b className="small">{d.subject}</b></div>
-                    <div className="muted small">To {d.to_email} · {dayTime(d.at)}</div>
-                    {/* A refused email is tried again by the timer: say whether a next try is coming or nobody tries any more. */}
-                    <div className={`small${d.status === 'failed' || d.status === 'outbox' ? ' sn-bad' : ''}`}>{d.status === 'sent' && deliveredLine(d) ? <>{deliveredLine(d)}.</> : <>{d.status === 'failed' && d.next_try_at ? 'Not sent yet' : MAIL_STATUS[d.status] || d.status}{d.status === 'failed' && d.error ? `: ${d.error}` : ''}{d.status === 'failed' ? (d.next_try_at ? `. We try again around ${dayTime(d.next_try_at)}.` : '. We have stopped trying.') : ''}</>}<BackNews d={d} /></div>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </section>
-        <section className="card" aria-labelledby="sn-audit-h">
-          <div className="row between wrap"><h2 id="sn-audit-h">Audit trail</h2><span className={`badge ${data.chain.ok ? 'completed' : 'declined'}`}>{data.chain.ok ? (data.chain.redacted ? 'Record intact, some details removed' : 'Record intact') : 'Record was altered'}</span></div>
-          {data.chain.ok && data.chain.redacted > 0 && <p className="muted small" role="note">{redactedNote(data.chain.redacted_on)}</p>}
-          <div className="sn-audit" tabIndex={0} role="group" aria-label="Audit trail entries">
-            {data.audit.length === 0 && <div className="muted small">Nothing has happened yet.</div>}
-            {data.audit.map((a: any) => (
-              <div key={a.seq} className="sn-audit-item">
-                <div className="row between wrap" style={{ rowGap: 0 }}><b className="small">{a.action}</b><span className="muted small">{fmtDate(a.at, true)}</span></div>
-                <div className="muted small">{a.detail}</div>
-                <div className="muted mono" style={{ fontSize: 11 }}>{a.actor}{a.ip ? ` · ${a.ip}` : ''} · {a.hash.slice(0, 12)}</div>
-                {a.redacted_at && <span className="badge ret-audit-mark">Details removed {String(a.redacted_at).slice(0, 10)}</span>}
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-
       {dialog === 'extend' && <ExtendDialog envelope={e} onClose={() => setDialog('')} onDone={() => (setDialog(''), reload())} />}
       {dialog === 'void' && (
-        <VoidDialog title="Void this envelope" confirmLabel="Void envelope" onClose={() => setDialog('')}
+        <VoidDialog title="Cancel the request" confirmLabel="Cancel the request" onClose={() => setDialog('')}
           onVoid={async (reason) => {
             await api(`/envelopes/${e.id}/void`, { body: { reason } });
-            toast('Envelope voided. Everyone who had it has been told.');
+            toast('Cancelled. Everyone who had it has been told.');
             setDialog('');
             reload();
           }}>
           <p>Nobody will be able to sign it any more, and everyone who already has it is told why.{finished.length > 0 ? ` The ${finished.length === 1 ? 'signature' : 'signatures'} already collected will be lost.` : ''}</p>
-          <p className="muted">Only need to fix something? <Link href={editHref}>Edit the envelope</Link> instead. That keeps it open and keeps what has been signed.{costLine ? ` ${costLine}` : ''}</p>
+          <p className="muted">Only need to fix something? <Link href={editHref}>Edit the document</Link> instead. That keeps it open and keeps what has been signed.{costLine ? ` ${costLine}` : ''}</p>
         </VoidDialog>
       )}
       {dialog === 'delete' && (
-        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this envelope'} confirmLabel={kept ? 'Delete from my account' : 'Delete for good'} onClose={() => setDialog('')}
+        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this document'} confirmLabel={kept ? 'Delete from my account' : 'Delete for good'} onClose={() => setDialog('')}
           onConfirm={async () => {
             await api(`/envelopes/${e.id}`, { method: 'DELETE' });
             toast(kept ? (keptForDispute ? 'Deleted from your account. It is kept while the dispute about it is open.' : 'Deleted from your account. Everyone who was on it keeps their copy.') : 'Deleted.');
@@ -366,7 +362,9 @@ export default function EnvelopeDetail() {
               {/* Kept only because a dispute is open (keptOnDelete in src/server/deleting.ts): said as that, not as a copy someone keeps. */}
               {keptForDispute ? <p className="muted">A person named on it disputes it, and GrowSigning has not closed that dispute yet, so it cannot be deleted for good until then.</p> : <p className="muted">{done ? 'It is a completed document, so it is not only yours.' : 'Someone on it has already done their part (signed, approved, witnessed or confirmed they viewed it), so it is not only yours.'} Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>}
             </>
-          ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its audit trail will be removed for good. This cannot be undone.</p>}
+          ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its history will be removed for good. This cannot be undone.</p>}
+          {/* One Delete: what the deletion schedule will do by itself, and the way to remove the files for good, are said here. */}
+          {!isTpl && <DeleteNotes r={ret} onKeep={() => (setDialog(''), setKeeping('keep'))} onPurge={() => (setDialog(''), setKeeping('purge'))} />}
         </ConfirmDialog>
       )}
       {fix && <CorrectDialog envelopeId={e.id} recipient={fix} onClose={() => setFix(null)} onDone={() => (setFix(null), reload())} />}

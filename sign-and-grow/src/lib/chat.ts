@@ -292,7 +292,7 @@ export const CHAT_TOOLS: ChatTool[] = [
   { id: 'locked-out', label: 'I cannot log in', href: '/help#locked-out', read: true, what: 'resetting a password, a lost authenticator phone, a login made with Google or Microsoft.', words: /\b(log ?in|sign ?in|password|locked|two[- ]step|2fa|authenticator)\b/ },
   { id: 'not-me', label: 'I did not sign this', href: '/help#not-me', read: true, what: 'what to do when you are named on a document you did not sign.', words: /\b(did ?n[o']?t sign|never signed|not me|forg\w+|dispute\w*)\b/ },
   { id: 'security', label: 'Security and trust', href: '/security', read: true, what: 'who can see documents, where the data is, what is deleted and what is kept.', words: /\b(who can see|privacy|private|data|stored|where.*(?:data|server)|encrypt\w*|delet\w*|gdpr)\b/ },
-  { id: 'pricing', label: 'Pricing', href: '/#pricing', read: true, what: 'the prices and the rules on when signatures expire.', words: /\b(price\w*|pricing|cost\w*|how much|expensive)\b/ },
+  { id: 'pricing', label: 'Pricing', href: '/pricing', read: true, what: 'the prices and the rules on when signatures expire.', words: /\b(price\w*|pricing|cost\w*|how much|expensive)\b/ },
 ];
 /**
  * The tools that fit a question, then those the answer names, at most three. A link that only opens reading is

@@ -101,7 +101,7 @@ test('/help names the browsers that can show the document, and no page promises 
   assert.match(floor, /chrome 111/);
   for (const file of ['src/app/page.tsx', 'src/app/help/page.tsx', 'src/app/security/page.tsx', 'src/app/developers/page.tsx', 'README.md'])
     assert.ok(!/\bany phone/i.test(read(file)), `${file} does not promise any phone`);
-  assert.match(read('src/app/page.tsx'), /SIGNING_ONLINE/);
+  assert.match(read('src/app/features/page.tsx'), /SIGNING_ONLINE/);
   assert.match(SIGNING_ONLINE, /open the document and again to finish/);
 });
 
@@ -300,7 +300,7 @@ test('the landing page, the in-person notice and /help say that signing needs a 
   // <name> now.", so that screen keeps to 120 words before its tick. The line about the connection is on the document,
   // which is the next screen, and on the landing page and /help as before.)
   assert.equal(page.match(/In-person signing[^\n]*now\. \{SIGNING_ONLINE\}<\/div>/g)?.length, 1, 'the in-person notice on the document');
-  assert.match(read('src/app/page.tsx'), /\$\{SIGNING_ONLINE\}/);
+  assert.match(read('src/app/features/page.tsx'), /\$\{SIGNING_ONLINE\}/);
   const help = read('src/app/help/phone.tsx');
   assert.match(help, /\{SIGNING_ONLINE\} \{SIGNING_WEAK_SIGNAL\}/);
   assert.match(SIGNING_WEAK_SIGNAL, /Nothing counts as signed until the page says you are done\./);

@@ -40,11 +40,11 @@ export function ExtendDialog({ envelope, onClose, onDone }: { envelope: { id: st
   }
 
   return (
-    <Dialog title={expired ? 'Reopen this envelope' : 'Give more time'} onClose={onClose}>
+    <Dialog title={expired ? 'Reopen this document' : 'Give more time'} onClose={onClose}>
       <p>
         {expired
-          ? `${deadlineLine(envelope.expires_at) || 'This envelope closed'} before everyone had finished. Reopen it and everyone who still needs to act gets a fresh email.`
-          : `${deadlineLine(envelope.expires_at) || 'This envelope has no closing date yet'}. The days you add are counted from that date.`}
+          ? `${deadlineLine(envelope.expires_at) || 'This document closed'} before everyone had finished. Reopen it and everyone who still needs to act gets a fresh email.`
+          : `${deadlineLine(envelope.expires_at) || 'This document has no closing date yet'}. The days you add are counted from that date.`}
         {' '}<b>Nobody who already signed has to sign again.</b>
       </p>
       <fieldset className="sn-choices">
@@ -89,7 +89,7 @@ export function VoidDialog({ title, children, confirmLabel, onClose, onVoid }: {
     try {
       await onVoid(reason.trim());
     } catch (e: any) {
-      setError(explain(e, 'Nothing was voided.'));
+      setError(explain(e, 'Nothing was cancelled.'));
     } finally {
       setBusy(false);
     }
@@ -98,13 +98,13 @@ export function VoidDialog({ title, children, confirmLabel, onClose, onVoid }: {
     <Dialog title={title} onClose={onClose}>
       {children}
       <label className="f">
-        <span>Reason <span className="hint">(recipients will see this)</span></span>
+        <span>Reason <span className="hint">(the people on it will see this)</span></span>
         <textarea value={reason} onChange={(e) => (setReason(e.target.value), setError(''))} maxLength={500} data-autofocus="" placeholder="For example: sent the wrong version" />
       </label>
       {error && <div className="notice err" role="alert">{error}</div>}
       <div className="actions">
         <button className="btn" onClick={onClose}>Keep it</button>
-        <button className="btn primary sn-danger" disabled={busy} onClick={go}>{busy ? 'Voiding…' : confirmLabel}</button>
+        <button className="btn primary sn-danger" disabled={busy} onClick={go}>{busy ? 'Cancelling…' : confirmLabel}</button>
       </div>
     </Dialog>
   );
@@ -174,7 +174,7 @@ export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { enve
   }
 
   return (
-    <Dialog title={`Correct ${recipient.name || 'this recipient'}`} onClose={onClose}>
+    <Dialog title={`Change ${recipient.name || 'this person'}`} onClose={onClose}>
       <p className="muted">{codeOnly ? `The name and the address of ${recipient.name} can no longer be changed here. Their access code still can: it is not part of what was signed, and their link needs it to open the document or their copy of it.`
         : 'Fix a typo, send it to a different address, or change how they are checked. Nothing is voided and nobody else is disturbed.'}</p>
       <form onSubmit={(e) => (e.preventDefault(), save())}>

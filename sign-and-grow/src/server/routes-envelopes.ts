@@ -42,13 +42,14 @@ import { assertFormNotStacked, tellStackedForm } from './stackedforms.ts';
 // Office files and others turned into a PDF on upload, with the original kept (src/server/converted.ts).
 import { convertUpload, keepOriginal } from './converted.ts';
 import { KNOWN_EXT } from '../lib/convert.ts';
-import { nameFromFile } from '../lib/docname.ts';
+import { nameFromFile, listName } from '../lib/docname.ts';
 import { record } from './seclog.ts';
 // The account's own custom fields (customfields.ts): values on envelopes and templates, bulk columns, the list filter.
 import { readCustom, writeCustom, assertBulkCustom, bulkCustomRefusal, applyRowCustom, formCustomProblem, customFilter, attachCustom, customPrintProblems } from './customfields.ts';
 import { existingSignatures, sealFacts } from './seal.ts';
 import { signNowFor } from './signnow.ts';
 import { signaturesLost } from '../lib/seal.ts';
+import { dayText } from '../lib/dates.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -511,7 +512,7 @@ route('POST', '/envelopes/:id/clone', async (c) => {
   // so a copy is no way round them. Its history says who made it (noteCopy).
   const senderId = cloneOwner(c, e, kind);
   // A purged envelope has no documents left to copy (records.ts).
-  if (e.purged_at) throw bad(`The documents of this envelope were purged on ${String(e.purged_at).slice(0, 10)}, so there is nothing left to copy. Start a new envelope instead.`, 409, { code: 'purged' });
+  if (e.purged_at) throw bad(`The documents of this envelope were purged on ${dayText(e.purged_at)}, so there is nothing left to copy. Start a new envelope instead.`, 409, { code: 'purged' });
   const eid = copyEnvelope(e, { accountId: c.account.id, senderId, kind, subject: kind === e.kind ? `${e.subject} (copy)`.trim() : e.subject });
   noteCopy(c, eid, e);
   if (senderId !== c.user.id) return { id: eid, belongs_to: get('SELECT name FROM users WHERE id=?', senderId)?.name || null, locked: !!get('SELECT tpl_locked FROM envelopes WHERE id=?', eid)?.tpl_locked };
@@ -541,12 +542,12 @@ route('POST', '/envelopes/:id/recipient-view', async (c) => {
 
 route('GET', '/envelopes/:id/download', async (c) => {
   const e = mine(c, c.params.id, undefined, { removed: true });
-  if (e.purged_at) throw bad(`The documents of this envelope were purged on ${String(e.purged_at).slice(0, 10)} under the account's retention rule or at someone's request. Its record is on the envelope page. A copy someone was emailed or downloaded before is not affected.`, 410, { code: 'purged' });
+  if (e.purged_at) throw bad(`The documents of this envelope were purged on ${dayText(e.purged_at)} under the account's retention rule or at someone's request. Its record is on the envelope page. A copy someone was emailed or downloaded before is not affected.`, 410, { code: 'purged' });
   if (!e.documents.length) throw bad('This envelope has no documents yet.');
   const done = finalPdf(e);
   // A closed envelope's copy opens with a page that says it was not completed, and is marked across every page, so
   // the signatures already on it never pass for a signed document (senderNotice in evidence.ts).
-  return pdfResponse(done || (await buildPdf(e, false, undefined, CLOSED.includes(e.status) ? senderNotice(e) : undefined)), e.subject || 'document', c.q.get('inline') === '1');
+  return pdfResponse(done || (await buildPdf(e, false, undefined, CLOSED.includes(e.status) ? senderNotice(e) : undefined)), listName(e.subject) || 'document', c.q.get('inline') === '1');
 });
 
 // ---- Bulk send -----------------------------------------------------------------------------

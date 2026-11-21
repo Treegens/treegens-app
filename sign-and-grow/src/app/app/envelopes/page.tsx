@@ -8,10 +8,11 @@ import { Dialog } from '@/components/sender/Dialog';
 import { fail } from '@/components/sender/feedback';
 import { cap, exportUrl, howLong, joinNames, neverOpened, waitingOn } from '@/components/sender/lib';
 import { remindedText } from '@/components/sender/MailNews';
+import { listName } from '@/lib/docname';
 // A custom field to filter by and to show as a column (sender/CustomFieldFilter.tsx).
 import { CustomFieldFilter, customValue } from '@/components/sender/CustomFieldFilter';
 
-const BOXES: [string, string][] = [['all', 'All'], ['drafts', 'Drafts'], ['waiting', 'Waiting for others'], ['completed', 'Completed'], ['closed', 'Declined, voided, expired']];
+const BOXES: [string, string][] = [['all', 'All'], ['drafts', 'Drafts'], ['waiting', 'Waiting'], ['completed', 'Completed'], ['closed', 'Stopped']];
 // For admins only: what a sender deleted from their own lists after somebody had signed. It is in no other tab, and
 // it is not remembered as the last tab, so nobody lands in it by accident.
 const REMOVED = 'removed';
@@ -169,7 +170,7 @@ export default function Envelopes() {
 
       <div className="sn-filters">
         <div className="sn-search">
-          <input type="search" placeholder="Search subject, people, document text or ID" value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Search envelopes" />
+          <input type="search" placeholder="Search subject, people, document text or ID" value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Search documents" />
           {typed && <button className="btn sm ghost" onClick={() => (setTyped(''), change({ q: '' }))}>Clear</button>}
         </div>
         {data && data.folders.length > 0 && (
@@ -194,20 +195,20 @@ export default function Envelopes() {
           </>
         ) : (
           <span className="muted small">
-            {!data ? '' : rows.length === 0 ? '' : `${rows.length}${rows.length === PAGE ? ' most recently updated' : ''} envelope${rows.length === 1 ? '' : 's'}${rows.length === PAGE ? '. Search to find older ones' : ''}.${inRemoved ? '' : ' Tick the boxes to download several as one ZIP.'}`}
+            {!data ? '' : rows.length === 0 ? '' : `${rows.length}${rows.length === PAGE ? ' most recently updated' : ''} document${rows.length === 1 ? '' : 's'}${rows.length === PAGE ? '. Search to find older ones' : ''}.${inRemoved ? '' : ' Tick the boxes to download several as one ZIP.'}`}
           </span>
         )}
       </div>
 
       <div className="card pad0">
         {error ? (
-          <div className="empty" role="alert"><h3>We could not load your envelopes</h3>Check your connection, then try again.<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>Try again</button></div></div>
+          <div className="empty" role="alert"><h3>We could not load your documents</h3>Check your connection, then try again.<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>Try again</button></div></div>
         ) : !data ? (
           <div className="empty" role="status">Loading…</div>
         ) : rows.length === 0 ? (
           <div className="empty">
             <h3>{filtered ? 'Nothing matches' : 'No documents yet'}</h3>
-            {filtered ? 'No envelope fits this tab and search.' : <>Press <b>Send a document</b> to start. Upload a PDF, add who needs to sign and place the fields. It takes about a minute.</>}
+            {filtered ? 'No document fits this tab and search.' : <>Press <b>Send a document</b><span className="sn-where-phone"> (Send, in the bar at the bottom)</span> to start. Upload a PDF, add who needs to sign and place the fields. It takes about a minute.</>}
             {filtered && <div style={{ marginTop: 14 }}><button className="btn" onClick={() => (setTyped(''), change({ ...START }))}>Show all documents</button></div>}
           </div>
         ) : (
@@ -228,7 +229,7 @@ export default function Envelopes() {
                 // Someone still to act whose last email came back, or who marked it as spam (MailNews.tsx). Said before "not opened".
                 const dead = e.status === 'sent' ? e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && (r.bounced_at || r.complained_at)) : [];
                 const cold = e.status === 'sent' && !dead.length && e.recipients.some((r: any) => neverOpened(r));
-                const title = e.subject || 'Untitled draft';
+                const title = listName(e.subject) || 'Untitled draft';
                 const waitingText = w ? <><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{dead.length ? <span className="sn-cold"> · {dead.some((r: any) => r.bounced_at && !r.complained_at) ? 'could not be delivered' : 'marked as spam'}</span> : cold ? <span className="sn-cold"> · not opened</span> : null}</>
                   : e.status === 'draft' ? <span className="muted">Not sent yet</span>
                   : e.status === 'completed' ? <span className="muted">Everyone finished</span>

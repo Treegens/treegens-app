@@ -10,9 +10,8 @@ import { flushComments } from './routes-comments.ts';
 import { pruneStampImages } from './stamps.ts';
 import { sweepSignIns } from './reclaim.ts';
 import { purgeSecurityLog } from './seclog.ts';
-import { retentionTick } from './records.ts';
+import { retentionTick, sweepArchiveCopies } from './records.ts';
 import { noteTickStart, noteTick } from './selfhost.ts';
-import { forgetArchiveCopies } from './archivemail.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -60,5 +59,5 @@ async function tickOnce() {
     // Closed envelopes at the end of their retention period: the email 14 days before, then the purge (records.ts).
     retention: await retentionTick(),
     // Our stored archive copies about envelopes deleted or purged since, once they have left (archivemail.ts).
-    archive_copies_forgotten: forgetArchiveCopies() };
+    archive_copies_forgotten: sweepArchiveCopies() };
 }

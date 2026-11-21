@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { boot, Client, signUp, upload, simple, signAll, tokenFor, PNG, type Server } from './helpers.ts';
 import { fmtCode } from '../src/server/util.ts';
-import { ARCHIVE_LINK_REMOVED, ARCHIVE_CODE_REMOVED, ARCHIVE_MAX_ADDRESSES, ARCHIVE_BOUNCES_TO_PAUSE, ARCHIVE_ASKS_PER_ADDRESS_DAY } from '../src/lib/archivemail.ts';
+import fs from 'node:fs';
+import path from 'node:path';
+import { ARCHIVE_LINK_REMOVED, ARCHIVE_CODE_REMOVED, ARCHIVE_MAX_ADDRESSES, ARCHIVE_BOUNCES_TO_PAUSE, ARCHIVE_ASKS_PER_ADDRESS_DAY, ARCHIVE_NO, ARCHIVE_BAD_ADDRESS, ARCHIVE_TEAM_MEMBER, archiveAddress, archiveKey } from '../src/lib/archivemail.ts';
 
 let db: Server['db'];
 let cron: Server['cron'];
@@ -82,7 +84,7 @@ test('an address gets nothing until someone with its inbox confirms it, and only
   assert.equal(added.data.address.state, 'waiting');
   assert.equal(added.data.message, 'We sent a link to confirm it. Copies start once it is confirmed.');
   const ask = db.get('SELECT * FROM emails WHERE to_email=? ORDER BY id DESC LIMIT 1', records);
-  assert.match(ask.subject, /^Confirm: copies of emails from/);
+  assert.equal(ask.subject, 'Should this address get copies of a team\'s emails?');
   assert.ok(ask.expires_at, 'the link in it runs out');
   assert.equal(db.get('SELECT confirm_hash h FROM archive_addresses WHERE email=?', records).h.length, 64, 'only a fingerprint of the link is kept');
   assert.equal(JSON.stringify((await owner.get('/account/archive-addresses')).data).includes(confirmToken(records)), false, 'the admin never sees the link');
@@ -136,7 +138,7 @@ test('an address gets nothing until someone with its inbox confirms it, and only
   assert.equal((await api.get('/account/archive-addresses')).data.addresses.length, 1);
   const byKey = await api.post('/account/archive-addresses', { email: 'thief@elsewhere.example' });
   assert.equal(byKey.status, 403);
-  assert.match(byKey.data.error, /An API key cannot add an archive address/);
+  assert.match(byKey.data.error, /An API key cannot add an address that gets copies/);
   assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email='thief@elsewhere.example'").n, 0);
   const id = (await owner.get('/account/archive-addresses')).data.addresses[0].id;
   assert.equal((await api.call('DELETE', `/account/archive-addresses/${id}`)).status, 403);
@@ -147,12 +149,12 @@ test('an address gets nothing until someone with its inbox confirms it, and only
   assert.equal((await other.get('/account/archive-addresses')).data.addresses.length, 0);
 });
 
-test('at most five, "this was not me" stops the asking for 30 days and can be taken back at once, and asking is limited', async () => {
+test('at most five, "No, do not send copies" stops the asking for 30 days and can be taken back at once, and asking is limited', async () => {
   const owner = await person('Ama Owner', 'ama@limits.example');
   for (let i = 1; i <= ARCHIVE_MAX_ADDRESSES; i++) assert.equal((await owner.post('/account/archive-addresses', { email: `box${i}@limits.example` })).status, 200);
   const sixth = await owner.post('/account/archive-addresses', { email: 'box6@limits.example' });
   assert.equal(sixth.status, 409);
-  assert.match(sixth.data.error, /can have 5 archive addresses/);
+  assert.match(sixth.data.error, /already has 5 addresses that get copies/);
   assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email='box6@limits.example'").n, 0, 'nothing was sent to the sixth');
 
   // The reader of box1 did not ask for it.
@@ -694,7 +696,7 @@ test('the copy, the card, /security, the API description and the README use the 
 
   // /security lists archive addresses under "Who can see your documents", with the number the server enforces.
   const policy = await import('../src/lib/policy.ts');
-  const who = policy.WHO_CAN_SEE.find((w) => /Archive addresses/.test(w.who))!;
+  const who = policy.WHO_CAN_SEE.find((w) => /sends copies of its emails to/.test(w.who))!;
   assert.ok(who, 'archive addresses are on the list');
   assert.match(who.what, new RegExp(`up to ${ARCHIVE_MAX_ADDRESSES} email addresses`));
   assert.match(who.what, /confirmed from its own inbox before it gets anything/);
@@ -738,4 +740,195 @@ test('a link that was answered works for nobody else, a member cannot add or rem
   const all = db.all('SELECT to_email, subject FROM emails WHERE archive_envelope=?', e.id);
   assert.equal(all.length, 2 * originals([e.id]).length);
   assert.equal(all.some((m: any) => m.subject.startsWith('Archive copy: Archive copy: ')), false);
+});
+
+// ---- Repairs after the skeptic and the simplicity review -------------------------------------------------------------
+
+test('a login that has not confirmed its own address asks nobody, and only one plain address is taken', async () => {
+  const fresh = browser();
+  assert.equal((await fresh.post('/auth/signup', { name: 'Una Unconfirmed', email: 'una@throwaway.example', password: 'correct horse battery' })).status, 200);
+  const no = await fresh.post('/account/archive-addresses', { email: 'target@stranger.example' });
+  assert.equal(no.status, 403, JSON.stringify(no.data));
+  assert.match(no.data.error, /Confirm your own email address/);
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE '%stranger.example%'").n, 0);
+  assert.equal(db.get("SELECT COUNT(*) n FROM archive_addresses WHERE email LIKE '%stranger.example%'").n, 0);
+
+  const owner = await person('Sol Speller', 'sol@spelling.example');
+  for (const typed of ['x<target@stranger.example>', '"a"<target@stranger.example>', 'target@stranger.example,', 'target@stranger.example.', 'a@b.example c@d.example', 'records-office', '.dot@stranger.example', 'a..b@stranger.example', 'target@stranger']) {
+    const r = await owner.post('/account/archive-addresses', { email: typed });
+    assert.equal(r.status, 400, `${typed}: ${JSON.stringify(r.data)}`);
+    assert.equal(r.data.error, ARCHIVE_BAD_ADDRESS);
+    assert.equal(archiveAddress(typed), null);
+  }
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE '%stranger%'").n, 0, 'nothing went to any spelling');
+  // Letters of any script, and capitals, are fine.
+  assert.equal(archiveAddress('  Records@Example.ORG '), 'records@example.org');
+  assert.equal(archiveAddress('记录@例子.测试'), '记录@例子.测试');
+  assert.equal(archiveKey('Target+Lease@Stranger.Example'), 'target@stranger.example');
+});
+
+test('"No" holds for the inbox with or without a +tag, and the daily limit is counted for the inbox', async () => {
+  const owner = await person('Tag Tester', 'tag@tags.example');
+  assert.equal((await owner.post('/account/archive-addresses', { email: 'target@inbox.example' })).status, 200);
+  const no = await browser().post('/public/archive-confirm', { token: confirmToken('target@inbox.example'), answer: 'no' });
+  assert.equal(no.status, 200);
+  assert.match(no.data.message, /Nothing is sent to target@inbox\.example/);
+  for (const typed of ['target+1@inbox.example', 'TARGET+records@inbox.example', 'target@inbox.example']) {
+    const r = await owner.post('/account/archive-addresses', { email: typed });
+    assert.equal(r.status, 409, `${typed}: ${JSON.stringify(r.data)}`);
+    assert.equal(r.data.code, 'refused');
+    assert.match(r.data.error, /said no to the copies/);
+  }
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE 'target%@inbox.example'").n, 1, 'only the first email that asked');
+  // A "no" given with a +tag holds for the plain address too.
+  assert.equal((await owner.post('/account/archive-addresses', { email: 'clerk+a@inbox.example' })).status, 200);
+  await browser().post('/public/archive-confirm', { token: confirmToken('clerk+a@inbox.example'), answer: 'no' });
+  assert.equal((await owner.post('/account/archive-addresses', { email: 'clerk@inbox.example' })).status, 409);
+  // Three emails a day for one inbox, whatever the tag.
+  for (let i = 1; i <= ARCHIVE_ASKS_PER_ADDRESS_DAY; i++) assert.equal((await owner.post('/account/archive-addresses', { email: `office+${i}@inbox.example` })).status, 200);
+  const more = await owner.post('/account/archive-addresses', { email: 'office+9@inbox.example' });
+  assert.equal(more.status, 429, JSON.stringify(more.data));
+  assert.equal(db.get("SELECT COUNT(*) n FROM archive_addresses WHERE email='office+9@inbox.example'").n, 0);
+});
+
+test('marking the email that asked as spam is a "no": the address goes, nobody is told a copy was sent, and it is not asked again', async () => {
+  process.env.MAIL_EVENTS_TOKEN = TOKEN;
+  try {
+    const owner = await person('Sam Asker', 'sam@asker.example');
+    const account = await accountOf(owner);
+    const victim = 'victim@spam-marked.example';
+    assert.equal((await owner.post('/account/archive-addresses', { email: victim })).status, 200);
+    const m = db.get('SELECT id FROM emails WHERE to_email=? ORDER BY id DESC LIMIT 1', victim);
+    assert.equal((await news({ type: 'complaint', email: victim, mail_id: String(m.id) })).status, 200);
+    assert.equal(db.get('SELECT COUNT(*) n FROM archive_addresses WHERE email=?', victim).n, 0, 'the address is gone');
+    assert.equal(db.get('SELECT why FROM archive_refused WHERE account_id=? AND email=?', account, victim).why, 'spam');
+    for (const typed of [victim, 'victim+2@spam-marked.example']) {
+      const again = await owner.post('/account/archive-addresses', { email: typed });
+      assert.equal(again.status, 409, JSON.stringify(again.data));
+      assert.match(again.data.error, /marked the email that asked as spam/);
+    }
+    assert.equal(db.get('SELECT COUNT(*) n FROM emails WHERE to_email LIKE ?', 'victim%@spam-marked.example').n, 1);
+    // No email to the admins says a copy was marked as spam or that copies are paused: no copy ever went there.
+    assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE subject LIKE 'Copies to%paused'").n - db.get("SELECT COUNT(*) n FROM emails WHERE subject LIKE 'Copies to%paused' AND to_email!='sam@asker.example'").n, 0);
+    const list = (await owner.get('/account/archive-addresses')).data;
+    assert.deepEqual(list.refused.map((r: any) => [r.email, r.why]), [[victim, 'spam']]);
+    // A spam mark keeps no link: it cannot be taken back from the page, and the old link works for nothing.
+    assert.equal(db.get('SELECT token_hash t FROM archive_refused WHERE email=?', victim).t, null);
+
+    // Someone who marked an earlier email about a document from this account as spam is not asked either.
+    db.run('INSERT INTO mail_complaints (account_id, email, at) VALUES (?,?,?)', account, 'signer@spam-marked.example', new Date().toISOString());
+    for (const typed of ['signer@spam-marked.example', 'signer+x@spam-marked.example']) {
+      const r = await owner.post('/account/archive-addresses', { email: typed });
+      assert.equal(r.status, 409, JSON.stringify(r.data));
+      assert.equal(r.data.code, 'marked_spam');
+    }
+    assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE 'signer%@spam-marked.example'").n, 0);
+  } finally {
+    delete process.env.MAIL_EVENTS_TOKEN;
+  }
+});
+
+for (const level of ['documents', 'values', 'personal'] as const)
+  test(`a purge at the "${level}" level takes our stored copies and the signed PDF they carried off the disk at once`, async () => {
+    // A stand-in mail server, so emails are stored as sent, with their attachments.
+    process.env.SMTP_URL = 'smtp://stand-in.invalid';
+    (globalThis as any).__tsmail = { sendMail: async () => ({ messageId: 'x' }) };
+    try {
+      const owner = await person('Pia Purger', `pia-${level}@purge.example`);
+      await confirmed(owner, `records-${level}@purge.example`);
+      const e = await simple(owner, `sig-${level}@resident.example`, { send: true, subject: 'Purge me' });
+      assert.equal((await signAll(e.id, `sig-${level}@resident.example`)).status, 200);
+      const sha = db.get('SELECT final_sha256 s FROM envelopes WHERE id=?', e.id).s;
+      const blob = path.join(process.env.DATA_DIR!, 'blobs', sha);
+      assert.equal(fs.existsSync(blob), true);
+      assert.ok(copiesTo(`records-${level}@purge.example`).some((m: any) => String(m.payload).includes(sha)), 'a copy carried the signed PDF');
+      const rec = await import('../src/server/records.ts');
+      assert.equal(rec.purgeEnvelope(e.id, level, { name: 'Test', why: 'Test.' }), true);
+      assert.equal(db.all('SELECT 1 FROM emails WHERE archive_envelope=?', e.id).length, 0, 'no stored copy is left');
+      assert.equal(fs.existsSync(blob), false, 'the signed PDF is off the disk');
+    } finally {
+      delete process.env.SMTP_URL;
+      (globalThis as any).__tsmail = undefined;
+    }
+  });
+
+test('a copy that waited for a pause is not sent once its envelope was deleted, and the timer drops files only a left-over copy held', async () => {
+  const owner = await person('Dee Deleter', 'dee@late.example');
+  const account = await accountOf(owner);
+  await confirmed(owner, 'records@late.example');
+  const e = await simple(owner, 'ray@resident.example', { send: true, subject: 'Late lease' });
+  db.run('UPDATE accounts SET suspended_at=?, suspended_reason=? WHERE id=?', new Date().toISOString(), 'reports', account);
+  // The signer declines while sending is paused: their emails go, the copy for the archive waits.
+  const tok = await tokenFor(e.id, 'ray@resident.example');
+  assert.equal((await browser().post(`/sign/${tok}/decline`, { reason: 'A private reason' })).status, 200);
+  const waiting = db.all("SELECT id FROM emails WHERE archive_envelope=? AND status='queued'", e.id);
+  assert.ok(waiting.length >= 1, 'a copy waits');
+  db.run('UPDATE accounts SET suspended_at=NULL WHERE id=?', account);
+  const del = await owner.call('DELETE', `/envelopes/${e.id}`);
+  assert.equal(del.status, 200, JSON.stringify(del.data));
+  assert.equal(db.all('SELECT 1 FROM emails WHERE archive_envelope=?', e.id).length, 0, 'the waiting copy went with the envelope');
+  await mail.retryMail();
+  assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email='records@late.example' AND html LIKE '%A private reason%' AND status IN ('sent','outbox')").n, 0);
+  // A copy row written in a race after the delete is refused by the check before it is handed over.
+  const a = db.get("SELECT id FROM archive_addresses WHERE email='records@late.example'").id;
+  assert.match((arch.archiveCheck({ archive_to: a, archive_envelope: e.id, payload: '{}' }) as any).why, /deleted or purged/);
+  // And the timer takes a left-over copy and the file only it pointed at.
+  const sha = 'ab'.repeat(32);
+  const blob = path.join(process.env.DATA_DIR!, 'blobs', sha);
+  fs.mkdirSync(path.dirname(blob), { recursive: true });
+  fs.writeFileSync(blob, 'left over');
+  db.run('INSERT INTO emails (to_email, subject, html, status, at, archive_to, archive_envelope, payload) VALUES (?,?,?,?,?,?,?,?)', 'records@late.example', 'x', 'x', 'queued', new Date().toISOString(), a, e.id, JSON.stringify({ attachments: [{ filename: 'a.pdf', sha256: sha }] }));
+  const rec = await import('../src/server/records.ts');
+  assert.equal(rec.sweepArchiveCopies(), 1);
+  assert.equal(fs.existsSync(blob), false);
+});
+
+test('the email that asks starts with our words, says "No, do not send copies", and an address on the team is said', async () => {
+  const owner = await person('Urgent: your mailbox closes today, open the request', 'lure@lure.example');
+  const r = await owner.post('/account/archive-addresses', { email: 'reader@lure-target.example' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.team_member, false);
+  const m = db.get("SELECT subject, payload FROM emails WHERE to_email='reader@lure-target.example'");
+  const text = JSON.parse(m.payload).text as string;
+  assert.doesNotMatch(m.subject, /Urgent|mailbox closes/, 'no name the account chose is in the subject');
+  assert.match(text, /A team that uses GrowSigning[^\n]*"[^"\n]*"[^\n]*signed in as lure@lure\.example/);
+  assert.ok(text.indexOf('Urgent:') > text.indexOf('A team that uses GrowSigning'), 'the name comes after our words');
+  assert.ok(text.includes(`"${ARCHIVE_NO}"`));
+  assert.doesNotMatch(text, /This was not me|—/);
+  assert.ok(text.split(/\s+/).length < 170, `the email is short (${text.split(/\s+/).length} words)`);
+  // The admin's own address: allowed, and said.
+  const own = await owner.post('/account/archive-addresses', { email: 'lure@lure.example' });
+  assert.equal(own.status, 200);
+  assert.equal(own.data.team_member, true);
+  assert.ok(own.data.message.endsWith(ARCHIVE_TEAM_MEMBER));
+});
+
+test('the copy has no security code in small letters and no one-time code written in two groups', () => {
+  const s = { tokens: [], codes: ['ABCD2345EFGH'], codeMail: true };
+  const out = arch.scrub('Your code abcd-2345-efgh or abcd2345efgh. 123 456 is your code. Type 987 654 on the page. Sent on 21 November 2026 at 10:38.', s);
+  assert.doesNotMatch(out, /abcd|2345|123 456|987 654/i);
+  assert.match(out, /21 November 2026 at 10:38/);
+});
+
+test('the card and the page keep the keyboard and the words right', () => {
+  const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+  const card = read('src/components/settings/ArchiveSettings.tsx');
+  // No pressed button is switched off (the focus would fall to the page), the field gets the focus back, and a
+  // wrong address is said in the card.
+  assert.doesNotMatch(card, /disabled=/);
+  assert.match(card, /aria-busy=\{busy === 'add'\}/);
+  assert.match(card, /field\.current\?\.focus\(\)/);
+  assert.match(card, /noValidate/);
+  assert.match(card, /settings\.archive\.bad_address/);
+  const en = JSON.parse(read('src/locales/en.json'));
+  assert.equal(en['settings.archive.bad_address'], ARCHIVE_BAD_ADDRESS);
+  assert.doesNotMatch(en['settings.archive.paused_spam'], /start over/);
+  const view = read('src/app/archive-confirm/ConfirmView.tsx');
+  assert.doesNotMatch(view, /This was not me|disabled=/);
+  assert.match(view, /ARCHIVE_NO/);
+  assert.match(view, /aria-label="GrowSigning home"/);
+  assert.match(view, /<details/);
+  assert.ok(view.indexOf('<details') > view.indexOf("answer('no')"), 'the long list is folded under the buttons');
+  assert.equal(ARCHIVE_NO, 'No, do not send copies');
+  for (const f of ['src/server/routes-archive.ts', 'src/server/openapi-archive.ts', 'README.md']) assert.doesNotMatch(read(f).replace(/I did not sign this, or this was not me/g, ''), /This was not me/, f);
 });

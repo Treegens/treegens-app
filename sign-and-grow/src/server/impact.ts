@@ -25,6 +25,16 @@ export const whoOf = (email: any): string | null => {
 const genOf = (r: any) => Number(r?.person_gen) || 0;
 
 /**
+ * Who a finished signature belongs to. Someone who signs in person has no address of their own on the document: the
+ * address on their row is the host's, and every walk-in at one desk would share it. So they are nobody we can know
+ * again, and their signature is counted for the document and the account only, never added to another person's.
+ */
+const personOf = (r: any): string | null => (r?.role === 'inperson' ? null : whoOf(r?.email));
+
+/** Does this server take payments at all? Where it does not, nothing is earned and nothing is said about giving. */
+export const takesPayments = (): boolean => creditsEnabled();
+
+/**
  * Mangroves that will be planted when this person finishes: 10 for someone who signs and whose signature is held from
  * a payment that stands, 0 for everyone else. This is the line next to Finish and the line in the email.
  */
@@ -45,7 +55,18 @@ export function noteSigned(r: any): void {
   if (!r || !signs(r) || r.status !== 'completed') return;
   const e = get('SELECT account_id FROM envelopes WHERE id=?', r.envelope_id);
   run('INSERT OR IGNORE INTO impact_signed (recipient_id, gen, envelope_id, account_id, who, trees, at) VALUES (?,?,?,?,?,?,?)',
-    r.id, genOf(r), r.envelope_id, e?.account_id || null, whoOf(r.email), paidSignatureFor(r.id) ? TREES_PER_SIGNATURE : 0, r.completed_at || now());
+    r.id, genOf(r), r.envelope_id, e?.account_id || null, personOf(r), paidSignatureFor(r.id) ? TREES_PER_SIGNATURE : 0, r.completed_at || now());
+}
+
+/**
+ * Called by Finish itself (completeRecipient in envelopes.ts), so a paid signature is counted whether or not anyone
+ * ever opens the finished screen or the signing record, and stays counted when its envelope is cancelled later. It
+ * reads the row as it is now, and it never stops a Finish: counting trees is not worth a failed signature.
+ */
+export function noteFinished(recipientId: string): void {
+  try {
+    noteSigned(get('SELECT * FROM recipients WHERE id=?', recipientId));
+  } catch { /* counted later, when the finished screen or the signing record asks (signerMoment, treesOnEnvelope) */ }
 }
 
 /** Every finished signature on an envelope is written down, whichever way it was finished. */
@@ -80,7 +101,9 @@ const seen = (key: string) => !!get('SELECT 1 x FROM impact_seen WHERE key=?', k
 const markSeen = (key: string) => void run('INSERT OR IGNORE INTO impact_seen (key, at) VALUES (?,?)', key, now());
 // A person who signs is known by their address. One who has none (the sender passed the link on) is known only as
 // this one place on this one document.
-const signerKey = (r: any) => `s:${whoOf(r.email) || `${r.id}:${genOf(r)}`}`;
+const signerKey = (r: any) => `s:${personOf(r) || `${r.id}:${genOf(r)}`}`;
+// The same person's first signature that plants anything, when an earlier one of theirs was free.
+const paidKey = (r: any) => `p:${personOf(r) || `${r.id}:${genOf(r)}`}`;
 
 /**
  * The finished screen of a person who signs: what this signature funds, whether it is their first on this server,
@@ -92,24 +115,37 @@ export function signerMoment(e: any, r: any): (SignerFacts & { celebrate: boolea
   noteSigned(r);
   const mine = get('SELECT * FROM impact_signed WHERE recipient_id=? AND gen=?', r.id, genOf(r));
   if (!mine) return null;
-  const who = whoOf(r.email);
+  const who = personOf(r);
   // An earlier finished signature from the same address: one we wrote down (it stays when its envelope is deleted),
-  // or one from before this was counted, which is still on its envelope.
+  // or one from before this was counted, which is still on its envelope. Signatures made in person are not looked at:
+  // the address on those is the host's, not the signer's.
   const earlier = !!who && (
     !!get('SELECT 1 x FROM impact_signed WHERE who=? AND NOT (recipient_id=? AND gen=?) AND at <= ?', who, r.id, genOf(r), mine.at)
-    || !!get("SELECT 1 x FROM recipients WHERE lower(email)=lower(?) AND id<>? AND status='completed' AND role IN ('signer','inperson') AND completed_at <= ?", String(r.email).trim(), r.id, mine.at));
+    || !!get("SELECT 1 x FROM recipients WHERE lower(email)=lower(?) AND id<>? AND status='completed' AND role='signer' AND completed_at <= ?", String(r.email).trim(), r.id, mine.at));
   const rows = who ? all('SELECT * FROM impact_signed WHERE who=? ORDER BY at DESC', who) : [mine];
+  const trees = standing(mine);
+  const total = Math.max(trees, sumStanding(rows));
+  // The picture: the first time a person signs here, and once more the first time a signature of theirs plants
+  // anything (someone whose first was free has not seen the seedlings yet). "More" is never said from here: the
+  // words say it only when the total is above what this signature funds.
+  const firstPaid = trees > 0 && total === trees;
   return {
-    trees: standing(mine),
+    trees,
     first: !earlier,
-    celebrate: !earlier && !seen(signerKey(r)),
-    total: sumStanding(rows),
+    celebrate: (!earlier && !seen(signerKey(r))) || (firstPaid && !seen(paidKey(r))),
+    total,
     sheets: Number(e?.sheets) || 0,
   };
 }
 
 /** The first-time picture was drawn for this person: it is not shown again. */
-export const signerSaw = (r: any) => (signs(r) && r.status === 'completed' ? markSeen(signerKey(r)) : undefined);
+export function signerSaw(r: any): void {
+  if (!signs(r) || r.status !== 'completed') return;
+  markSeen(signerKey(r));
+  // Seedlings were only drawn if this signature was paid for: only then is the planting picture used up.
+  const mine = get('SELECT * FROM impact_signed WHERE recipient_id=? AND gen=?', r.id, genOf(r));
+  if (mine && standing(mine) > 0) markSeen(paidKey(r));
+}
 
 // How long after sending the first-time picture is still offered. Someone who opens their first envelope a week
 // later is not congratulated on having just sent it.
@@ -122,15 +158,15 @@ const FRESH_MS = 60 * 60 * 1000;
  */
 export function senderMoment(e: any, userId: string): (SenderFacts & { celebrate: boolean }) | null {
   if (!e || e.kind !== 'envelope' || !e.sent_at) return null;
-  const sender = get('SELECT email, name FROM users WHERE id=?', e.sender_id);
   const people = (e.recipients || []).filter(signs);
   const paid = people.filter((r: any) => paidSignatureFor(r.id)).length;
   const first = !get("SELECT 1 x FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at IS NOT NULL AND id<>? AND sent_at <= ?", e.account_id, e.id, e.sent_at);
   const fresh = Date.now() - new Date(e.sent_at).getTime() < FRESH_MS;
   return {
     paid,
-    // Someone signing their own document uses no signature and is not counted among those a signature is paid for.
-    signers: people.filter((r: any) => !sender || isChargeable(r, sender)).length,
+    // Everyone who signs, the sender included: "every signature" is said only when every one of them is paid for,
+    // and a sender signing their own document uses no signature and plants nothing.
+    signers: people.length,
     planted: treesOfAccount(e.account_id),
     sheets: Number(e.sheets) || 0,
     celebrate: first && fresh && e.sender_id === userId && !['voided', 'declined', 'expired'].includes(e.status) && !seen(`a:${e.account_id}`),

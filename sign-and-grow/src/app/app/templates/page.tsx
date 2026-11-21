@@ -1,13 +1,13 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, useLoad, fmtDate, toast } from '@/components/ui';
 import { Dialog } from '@/components/sender/Dialog';
+import { MorePanel } from '@/components/sender/More';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
-import { reminderText } from '@/lib/policy';
 import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 // Who can use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { AccessDialog, AccessMarks } from '@/components/templates/WhoCanUse';
@@ -26,6 +26,18 @@ export default function Templates() {
   const [typed, setTyped] = useState('');
   const [moving, setMoving] = useState<any>(null);
   const [rules, setRules] = useState<any>(null);
+  // Whose More is open: one row at a time, and closed every time the page opens.
+  const [more, setMore] = useState('');
+  useEffect(() => {
+    if (!more) return;
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape' || document.querySelector('[role="dialog"]')) return;
+      setMore('');
+      document.getElementById(`tpl-more-btn-${more}`)?.focus();
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [more]);
   // The last search and folder are remembered, so using a template and coming back does not lose the place.
   useEffect(() => {
     let v: View = { q: '', folder: '' };
@@ -89,7 +101,7 @@ export default function Templates() {
   async function create(send: boolean, anyway = false) {
     if (send && !draftId) {
       const gap = use.open.find((r: any) => !fill[r.id]?.name.trim() || !looksLikeEmail((fill[r.id]?.email || '').trim()));
-      if (gap) return setProblem(`Add a name and a full email address for ${gap.role_name || 'every recipient'} before sending. To finish it later, choose Review first.`);
+      if (gap) return setProblem(`Add a name and a full email address for ${gap.role_name || 'every person'} before sending. To finish it later, choose Review first.`);
       const noDetail = cf.problem();
       if (noDetail) return setProblem(noDetail);
     }
@@ -108,8 +120,8 @@ export default function Templates() {
         return router.push(`/app/envelopes/${id}/edit`);
       }
       await api(`/envelopes/${id}/send`, { method: 'POST', body: { send_anyway: anyway } });
-      toast('Sent.');
-      router.push(`/app/envelopes/${id}`);
+      // The document's page says "Sent." in its banner, and its way back is Templates.
+      router.push(`/app/envelopes/${id}?sent=1&from=templates`);
     } catch (e: any) {
       if (e?.code === 'bounced_address' && !anyway) return setDead(e.data?.bounced || []);
       // A required detail has no value: the draft opens on that box, instead of a button that can only fail again.
@@ -125,8 +137,9 @@ export default function Templates() {
   return (
     <div className="sn">
       <div className="pagehead">
-        <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds. Each template says who can use and change it: usually everyone on your team can use it, and only the person it belongs to or an admin can change or delete it. Templates you cannot use are not listed.</div></div>
-        <Link href="/app/envelopes/new?kind=template" className="btn primary">New template</Link>
+        <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds.</div></div>
+        {/* With no template yet, the one filled button is "Create your first template" in the empty list below. */}
+        {(rows.length > 0 || filtered || !data) && <Link href="/app/envelopes/new?kind=template" className="btn primary">New template</Link>}
       </div>
       {/* Shown once there is something to look through, and kept while a search or a folder hides everything. */}
       {(rows.length > 0 || filtered || (data?.folders || []).length > 0) && (
@@ -145,7 +158,7 @@ export default function Templates() {
       <div className="sn-selbar" aria-live="polite">
         <span className="muted small">
           {!data || rows.length === 0 ? '' : `${rows.length}${rows.length === PAGE ? ' most recently updated' : ''} template${rows.length === 1 ? '' : 's'}${filtered ? ` ${rows.length === 1 ? 'matches' : 'match'}` : ''}${rows.length === PAGE ? '. Search to find older ones' : ''}.`}
-          {data && rows.length > 0 && data.folders.length === 0 ? ' Use Move to sort them into folders, for example one for each state or client.' : ''}
+          
         </span>
       </div>
       <div className="card pad0">
@@ -159,40 +172,44 @@ export default function Templates() {
           <div className="empty"><h3>No templates yet</h3>Good for contracts, NDAs, waivers and anything else you send more than once.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new?kind=template" className="btn primary">Create your first template</Link></div></div>
         ) : (
           <div className="tablewrap"><table className="t sn-list">
-            <thead><tr><th>Template</th><th className="hide-sm">Roles</th><th className="hide-sm">Folder</th><th className="hide-sm">Pages</th><th className="hide-sm">Updated</th><th className="hide-sm"><span className="sn-vh">Actions</span></th></tr></thead>
+            <thead><tr><th>Template</th><th className="hide-sm">Roles</th><th className="hide-sm">Folder</th><th className="hide-sm">Pages</th><th className="hide-sm">Updated</th><th><span className="sn-vh">Actions</span></th></tr></thead>
             <tbody>
               {rows.map((t) => {
                 const name = t.subject || 'Untitled template';
                 const roles = t.recipients.map((r: any) => r.role_name || r.name).filter(Boolean).join(', ') || 'None yet';
                 const fillable = t.recipients.some((r: any) => !r.email);
+                const open = more === t.id;
                 return (
-                  <tr key={t.id}>
+                  <Fragment key={t.id}>
+                  <tr data-item="template">
                     <td className="sn-main">
                       <b>{name}</b><AccessMarks access={t.access} />
                       <div className="muted small">by {t.sender}</div>
                       <div className="muted small sn-only-sm">Roles: {roles} · {t.pages} page{t.pages === 1 ? '' : 's'}{t.folder ? ` · Folder: ${t.folder}` : ''}</div>
-                      <div className="sn-only-sm sn-inlineactions">
-                        <button className="btn sm primary" onClick={() => start(t)} aria-label={`Use ${name}`}>Use</button>
-                        {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to a list`}>Send to a list</Link>}
-                        {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
-                        {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move</button>}
-                        <button className="btn sm ghost tr-tap" onClick={() => setRules(t)} aria-label={`Who can use ${name}`}>Who can use this</button>
-                        {(t.access?.may_delete ?? t.may_change) !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
-                      </div>
                     </td>
                     <td className="small hide-sm">{roles}</td>
                     <td className="hide-sm muted small">{t.folder || ''}</td>
                     <td className="hide-sm num">{t.pages}</td>
                     <td className="hide-sm muted small">{fmtDate(t.updated_at)}</td>
-                    <td className="sn-rowactions hide-sm">
-                      <button className="btn sm primary" onClick={() => start(t)} aria-label={`Use ${name}`}>Use</button>
-                      {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to a list`}>Send to a list</Link>}
-                      {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
-                      {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move</button>}
-                      <button className="btn sm ghost tr-tap" onClick={() => setRules(t)} aria-label={`Who can use ${name}`}>Who can use this</button>
-                      {(t.access?.may_delete ?? t.may_change) !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
+                    <td className="sn-rowactions">
+                      <button className="btn sm" onClick={() => start(t)} aria-label={`Use ${name}`}>Use</button>
+                      <span id={`tpl-more-wrap-${t.id}`}><MorePanel label={`More for ${name}`} panelId={`tpl-more-${t.id}`} open={open} onToggle={() => setMore(open ? '' : t.id)} buttonRef={(el) => { if (el) el.id = `tpl-more-btn-${t.id}`; }} /></span>
                     </td>
                   </tr>
+                  {open && (
+                    <tr className="tpl-more-row">
+                      <td colSpan={6}>
+                        <div className="sn-rowmore" id={`tpl-more-${t.id}`} role="group" aria-label={`More for ${name}`}>
+                          {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to many`}>Send to many</Link>}
+                          {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
+                          {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move</button>}
+                          <button className="btn sm ghost tr-tap" onClick={() => setRules(t)} aria-label={`Who can use ${name}`}>Who can use this</button>
+                          {(t.access?.may_delete ?? t.may_change) !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -206,14 +223,12 @@ export default function Templates() {
             {use.open.length === 0 && <p className="muted">Everyone who signs is already set in this template. Send it as it is, or review it first.</p>}
             {use.open.map((r: any, i: number) => (
               <fieldset key={r.id} className="sn-rolefill">
-                <legend>{r.role_name || `Recipient ${i + 1}`}</legend>
+                <legend>{r.role_name || `Person ${i + 1}`}</legend>
                 <label className="f"><span>Full name</span><input value={fill[r.id]?.name || ''} readOnly={!!draftId} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], name: e.target.value } }))} autoComplete="off" data-autofocus={i === 0 ? '' : undefined} /></label>
                 <label className="f"><span>Email</span><input type="email" value={fill[r.id]?.email || ''} readOnly={!!draftId} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], email: e.target.value } }))} autoComplete="off" /></label>
               </fieldset>
             ))}
             {cf.boxes}
-            {/* "Send now" skips the review step, so what it would show about reminders is said here. */}
-            <p className="muted small" id="sn-use-reminders">{reminderText(use.reminder_days)} That comes from the template. To change it for this envelope, choose Review first.</p>
             {problem && <div className="notice err" role="alert">{problem}</div>}
             {dead && <div className="notice warn" role="alert"><b>{sendAnywayAsk(dead).title}.</b> {sendAnywayAsk(dead).body} It is saved as a draft: to correct the address, choose Open the draft.</div>}
             <div className="actions">
@@ -232,7 +247,7 @@ export default function Templates() {
             setDeleting(null);
             reload();
           }}>
-          <p>&ldquo;{deleting.subject || 'Untitled template'}&rdquo; will be removed for your whole team. Envelopes already sent from it are not affected.</p>
+          <p>&ldquo;{deleting.subject || 'Untitled template'}&rdquo; will be removed for your whole team. Documents already sent from it are not affected.</p>
         </ConfirmDialog>
       )}
 

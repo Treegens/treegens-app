@@ -5,7 +5,7 @@ import { useMe } from '@/components/AppShell';
 import { SetUpTwoStep, RecoveryCodes, CodeField, LostPhoneRules } from '@/components/TwoStep';
 import { TWO_STEP_API_KEYS, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_REMEMBER_DAYS, TWO_STEP_EMAIL_RESET_RISK, TWO_STEP_RESET_BLOCK_DAYS } from '@/lib/policy';
 
-// Settings, Profile: two-step login of this login. Settings, Team: the team rule and resets by an admin. The rules
+// Settings, Security: two-step login of this login. Settings, Team: the team rule and resets by an admin. The rules
 // are in src/server/twostep.ts and the routes in src/server/routes-twostep.ts.
 
 const longMoment = (s?: string | null) => (s ? new Date(s).toLocaleString(undefined, { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
@@ -95,7 +95,7 @@ export function TwoStepCard() {
           <p style={{ margin: '10px 0' }}>Off. Signing in asks for no code.</p>
           {d.email_verified
             ? <button className="btn primary" onClick={() => (setSaid(''), setDoing('setup'))}>Set up two-step login</button>
-            : <p className="notice warn" role="status">Confirm your email address first: open the link we sent to {me.user.email}, or have it sent again at the top of this page. Two-step login can only be switched on for a confirmed address, so that nobody can put their phone in front of a login made in someone else&apos;s name.</p>}
+            : <p className="notice warn" role="status">Confirm your email address first: type the 6-digit code we emailed to {me.user.email} in the box at the top of this page, where you can also have a new one sent. Two-step login can only be switched on for a confirmed address, so that nobody can put their phone in front of a login made in someone else&apos;s name.</p>}
         </>)}
       {!codes && d.on && (
         <>
@@ -201,7 +201,7 @@ export function TeamTwoStep() {
           {d.required
             ? <button className="btn" onClick={() => (setError(''), setCode(''), setAsking(false))}>Stop asking everyone</button>
             : <button className="btn primary" disabled={!d.you_on} aria-describedby={!d.you_on ? 'ask-first' : undefined} onClick={() => (setError(''), setCode(''), setAsking(true))}>Ask everyone for two-step login</button>}
-          {!d.required && !d.you_on && <p id="ask-first" className="muted small" style={{ flexBasis: '100%', margin: 0 }}>Switch it on for yourself first, under Settings, Profile.</p>}
+          {!d.required && !d.you_on && <p id="ask-first" className="muted small" style={{ flexBasis: '100%', margin: 0 }}>Switch it on for yourself first, under Settings, Security.</p>}
         </div>
       )}
       {asking !== null && (

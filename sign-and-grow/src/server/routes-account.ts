@@ -2,7 +2,7 @@ import { route, json, type Ctx } from './router.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 import { chosenLocale, defaultFor } from './locales.ts';
 import { all, get, run, tx } from './db.ts';
-import { bad, id, token, sha256, now, isEmail, str, rateLimit, baseUrl, safeEqual, HttpError } from './util.ts';
+import { bad, id, token, sha256, now, isEmail, str, rateLimit, rateWait, baseUrl, safeEqual, HttpError } from './util.ts';
 import { hashPassword, checkPassword, hasPassword, cutEarlierAccess, createSession, cookie, sessionEnd, SESSION_COOKIE } from './auth.ts';
 import { rememberedDevice } from './twostep.ts';
 import { PROVIDER_NAMES, isProviderId, type Removed } from '../lib/signin.ts';
@@ -98,7 +98,12 @@ function join(inv: any, userId: string, t = now(), c?: Ctx) {
 // ---- Auth ----------------------------------------------------------------------------------
 
 route('POST', '/auth/signup', async (c) => {
-  rateLimit(`signup:${c.ip}`, 10, 3600_000);
+  try {
+    rateLimit(`signup:${c.ip}`, 10, 3600_000);
+  } catch {
+    // Said for what it is: a shared office or school can reach this honestly.
+    throw new HttpError(429, `Too many new accounts from this connection in the last hour. Try again in about ${Math.max(1, Math.ceil(rateWait(`signup:${c.ip}`, 10) / 60_000))} minutes, or sign in if you already have a login.`);
+  }
   const b = await c.body();
   const name = str(b.name, 120).trim();
   const email = str(b.email, 254).trim().toLowerCase();
@@ -382,7 +387,7 @@ route('POST', '/me/password', async (c) => {
   const b = await c.body();
   // Someone who signs in with Google or Microsoft has no current password to type. The first one is chosen through
   // a link sent to their address (POST /me/signin/password-link), which shows the mailbox is theirs.
-  if (!hasPassword(c.user)) throw bad(`This login has no password yet. Under Settings, Profile, Ways to sign in, choose "Email me a link to set a password". The link goes to ${c.user.email}.`);
+  if (!hasPassword(c.user)) throw bad(`This login has no password yet. Under Settings, Security, Ways to sign in, choose "Email me a link to set a password". The link goes to ${c.user.email}.`);
   if (!checkPassword(str(b.current, 200), c.user.password_hash)) throw bad('Your current password is not right.');
   await needCode(c, b.code, 'change your password');
   if (str(b.password, 200).length < 8) throw bad('Use a password of at least 8 characters.');
@@ -474,7 +479,7 @@ route('POST', '/account/invites', async (c) => {
   // An invitation is an email to an address the inviter typed, under names the inviter chose. So it has the rules an
   // envelope has: a confirmed address first, then the pause, the check on the names it prints and a daily limit of
   // its own (inviteRefusal). Without them it was a way to mail any words to anyone from a login one minute old.
-  if (!c.user.email_verified) throw bad('Confirm your email address before you invite anyone. Type the 6-digit code from our email in the banner at the top of the app, or press the button in that email. The banner can send a new one.', 403);
+  if (!c.user.email_verified) throw bad('Confirm your email address before you invite anyone. Type the 6-digit code from our email at the top of the app, or press the button in that email. "Send a new code" there emails a new one.', 403);
   const no = inviteRefusal(c.account, c.user, email);
   if (no) throw bad(no.message, no.status);
   run('DELETE FROM invites WHERE account_id=? AND email=? AND accepted_at IS NULL', c.account.id, email);
@@ -681,6 +686,9 @@ route('GET', '/api-keys', (c) => ({
 route('POST', '/api-keys', async (c) => {
   const b = await c.body();
   if (b.scope != null && b.scope !== 'send' && b.scope !== 'admin') throw bad('Choose what the key may do: "send" for everyday work, or "admin" to also change account settings.');
+  // A key reads every document of the account and outlives the browser. Until the address of the login is confirmed,
+  // the login may be a stranger's made in somebody else's name (the same rule as for a webhook, below).
+  if (!c.user.email_verified) throw bad('Confirm your email address before you create a key. Type the 6-digit code from our email at the top of the app, or press the button in that email. "Send a new code" there emails a new one.', 403);
   const scope = b.scope === 'admin' ? 'admin' : 'send';
   if (scope === 'admin' && !c.admin) throw bad('Only account admins can create a key with the "admin" scope. Leave the scope out for a "send" key.', 403);
   const key = `tsk_${token(30)}`;
@@ -722,7 +730,7 @@ route('POST', '/webhooks', async (c) => {
   const b = await c.body();
   // A webhook hears about every document of the account. Until the address of the login is confirmed, the login may
   // be a stranger's made in somebody else's name, waiting for that person to arrive and send (reclaim.ts).
-  if (!c.user.email_verified) throw bad('Confirm your email address before you add a webhook. Type the 6-digit code from our email in the banner at the top of the app, or press the button in that email. The banner can send a new one.', 403);
+  if (!c.user.email_verified) throw bad('Confirm your email address before you add a webhook. Type the 6-digit code from our email at the top of the app, or press the button in that email. "Send a new code" there emails a new one.', 403);
   try {
     await assertPublicUrl(str(b.url, 500));
   } catch (e: any) {

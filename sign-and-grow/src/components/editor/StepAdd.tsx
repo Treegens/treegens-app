@@ -47,7 +47,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
                 its files, its photos and its camera. Only one of the two lines is shown (editor.css). */}
             <b>{uploading ? 'Uploading. You can add more.' : <><span className="ed-fine">Choose a file or drop it here</span><span className="ed-touch">Tap to choose files or take a photo</span></>}</b>
             {/* How long a large file takes on a phone is said on the row of a file that is large (FileRow.tsx). */}
-            <div className="muted small">{uploadLimitsShort(!!me.converts)}</div>
+            <div className="muted small" data-feature={me.converts ? 'ds-convert' : undefined}>{uploadLimitsShort(!!me.converts)}</div>
           </label>
         )}
         {/* Next was pressed with no file: said here, where the file goes, and gone once one is added (Editor.tsx go). */}

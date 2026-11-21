@@ -264,7 +264,8 @@ test('a dragged field snaps to the edges and centres of its neighbours and repor
 
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 // reminder_days is part of what the editor sends: a new account starts with reminders on (DEFAULT_REMINDER_DAYS).
-const asBody = (e: any) => ({ subject: e.subject, message: e.message, ordered: e.ordered, reminder_days: e.reminder_days, documents: e.documents, recipients: e.recipients, fields: e.fields });
+// The date format travels with the body, as in the editor (Editor.tsx): a new envelope now starts with one (D MMM YYYY).
+const asBody = (e: any) => ({ subject: e.subject, message: e.message, ordered: e.ordered, reminder_days: e.reminder_days, date_format: e.date_format, documents: e.documents, recipients: e.recipients, fields: e.fields });
 const kinds = (r: { people: any[] }) => Object.fromEntries(r.people.map((p) => [p.name, p.kind]));
 
 test('the review step says what really happens to each person', async () => {

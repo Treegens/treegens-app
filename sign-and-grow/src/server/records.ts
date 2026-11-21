@@ -488,6 +488,9 @@ function removeDocuments(e: any): string[] {
   // The signed PDF: its fingerprint stays (purged_sha256), so Verify a document can still answer for the file.
   shas.push(e.final_sha256);
   run('UPDATE envelopes SET purged_sha256=COALESCE(final_sha256, purged_sha256), final_sha256=NULL, final_size=NULL WHERE id=?', e.id);
+  // Our stored copies for the archive addresses go as a whole, at every level, also one that was still waiting to
+  // be sent (archivemail.ts). The files they carried are added to the list.
+  forgetArchiveCopies(e.id, shas);
   // Our stored copies of the emails keep their words but not their attachments.
   for (const m of all("SELECT id, payload FROM emails WHERE envelope_id=? AND payload LIKE '%\"sha256\"%'", e.id)) {
     let p: any = null;
@@ -609,6 +612,14 @@ export function purgeEnvelope(envelopeId: string, level: PurgeLevel, by: { name:
 }
 
 // ---- The timer --------------------------------------------------------------------------------------------------------
+
+/** Run from the timer: our stored archive copies about envelopes that are gone or purged, and the files only they held. */
+export function sweepArchiveCopies(): number {
+  const shas: string[] = [];
+  const n = forgetArchiveCopies(undefined, shas);
+  dropBlobs(shas);
+  return n;
+}
 
 /**
  * Run from the timer (cron.ts): emails what reaches its date within 14 days, once, and purges what is due. A purge

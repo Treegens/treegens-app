@@ -19,8 +19,9 @@
 .pub-menu a { display: flex; align-items: center; min-height: 48px; padding: 0 12px; border-top: 1px solid var(--line); color: var(--ink); font-weight: 600; text-decoration: none; }
 .pub-menu a:hover { background: rgba(23, 36, 28, 0.05); }
 .pub-menu a[aria-current='page'] { color: var(--green); }
-@media (min-width: 1041px) { .pub-menu { display: none; } }
-@media (max-width: 1040px) {
+/* Four entries fit beside the logo on anything wider than a phone, so the menu button is for phones only. */
+@media (min-width: 641px) { .pub-menu { display: none; } }
+@media (max-width: 640px) {
   .pub-links { display: none; }
   .pub-actions { margin-left: auto; }
   .pub-menu-btn { display: inline-flex; }
@@ -241,4 +242,26 @@
   .pub-ep .group { padding: 0; }
   .pub-ep .group th { padding: 8px 16px; }
   .pub-ep .call { white-space: normal; margin-bottom: 4px; overflow-wrap: anywhere; }
+}
+
+/* ---- Home page: one message, one button, the video, three points ------------------------------ */
+.home-hero.alone { grid-template-columns: minmax(0, 720px); }
+.home-kicker { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--green-deep); }
+.home-hero h1 { font-size: clamp(34px, 4.6vw, 54px); }
+.home-hero .btn.lg { min-height: 48px; }
+.home-note { margin: 14px 0 0; max-width: 520px; }
+.home-video { margin: 0; }
+.home-video video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 14px; background: #0f2a1b; box-shadow: var(--shadow); }
+.home-video figcaption { margin-top: 8px; font-size: 13.5px; color: var(--muted); }
+.home-points { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; counter-reset: home; }
+.home-points li { counter-increment: home; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+.home-points li::before { content: counter(home); display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--green-soft); color: var(--green-deep); font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+.home-points b { display: block; font-size: 17px; margin-bottom: 4px; }
+.home-points span { color: #3d4a42; }
+.home-more { margin: 20px 0 0; }
+.home-more a, .home-points a { display: inline-flex; align-items: center; min-height: 44px; }
+@media (max-width: 860px) {
+  .home-points { grid-template-columns: 1fr; gap: 12px; }
+  .pub .wrap.hero.home-hero { padding-top: 24px; padding-bottom: 16px; gap: 22px; }
+  .pub .wrap.section { padding-top: 24px; padding-bottom: 24px; }
 }

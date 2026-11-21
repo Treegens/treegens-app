@@ -9,6 +9,7 @@ import { closeDisputes } from './evidence.ts';
 import { supportFirstReplyHours, supportUrgentReplyHours, supportReachable, SUPPORT_TOPICS, SUPPORT_URGENT_TOPICS, SUPPORT_REOPEN_DAYS, SUPPORT_MEDIAN_DAYS, SUPPORT_MEDIAN_MIN, SUPPORT_REPLIES_PER_REQUEST, SUPPORT_REPLIES_PER_ADDRESS, SUPPORT_OTHERS_PER_ADDRESS, SUPPORT_KEEP_DAYS } from '../lib/policy.ts';
 import { TOPIC_LABEL, firstName, whenText, knownZone, spanText } from '../lib/support.ts';
 import { attachedChat, attachedOf } from './chat.ts';
+import { dayText } from '../lib/dates.ts';
 
 // Help requests as tickets. Every request has a reference, a state the customer can see (open: waiting for us,
 // waiting: we asked them something, answered, closed), an owner, a time by which a person will have answered, and a
@@ -366,7 +367,7 @@ async function customerReply(t: any, text: any, userId: string | null) {
     const fresh = openRequest({ email: t.email, name: t.name, topic: t.topic, message, envelope_id: t.envelope_id, user_id: userId, account_id: userId ? t.account_id : null, verified: true, tz: t.tz, follows: t.id, came_by: userId ? 'signed_in' : 'link' });
     say(fresh, 'event', `Opened as a follow-up to request ${refOf(t)}, which was closed more than ${SUPPORT_REOPEN_DAYS} days before`, by);
     say(t, 'event', `The customer wrote again after ${SUPPORT_REOPEN_DAYS} days. That opened request ${refOf(fresh)}`, by);
-    await announce(fresh, [`This continues request ${refOf(t)}, which was closed on ${t.closed_at.slice(0, 10)}.`]);
+    await announce(fresh, [`This continues request ${refOf(t)}, which was closed on ${dayText(t.closed_at)}.`]);
     await acknowledge(fresh, [`Your earlier request ${refOf(t)} was closed more than ${SUPPORT_REOPEN_DAYS} days ago, so this is a new one. It is linked to the old one, and the person who answers sees both.`]);
     return { fresh, moved: true };
   }
@@ -424,7 +425,7 @@ async function sendLinksAgain(email: string) {
   await sendMail({ to: email, subject: `Your requests to GrowSigning: ${found.length === 1 ? 'the link' : 'the links'} again`, heading: found.length === 1 ? 'Here is the link to your request' : 'Here are the links to your requests',
     lines: ['Someone, we hope you, asked on our help page for the links to the requests written from this address. Each link opens one request without signing in: there you read everything written so far and reply.',
       'If you did not ask for this, you can ignore it: nothing was changed, and only this inbox received the links.', NO_REPLY],
-    links: found.map((t) => ({ label: `Request ${refOf(t)}`, url: linkFor(t), note: `${TOPIC_LABEL[t.topic] || 'Help request'}, written ${t.at.slice(0, 10)}, ${t.status === 'open' ? 'waiting for our answer' : t.status === 'waiting' ? 'waiting for your answer' : t.status}` })), help: true });
+    links: found.map((t) => ({ label: `Request ${refOf(t)}`, url: linkFor(t), note: `${TOPIC_LABEL[t.topic] || 'Help request'}, written ${dayText(t.at)}, ${t.status === 'open' ? 'waiting for our answer' : t.status === 'waiting' ? 'waiting for your answer' : t.status}` })), help: true });
 }
 // The answer is the same whether or not there are any, and it goes back before anything is looked up or sent, so it
 // also takes the same time: handing an email to the mail server takes long enough to be timed, and the form must

@@ -6,7 +6,7 @@ import { ConfirmCode } from './ConfirmEmail';
 import { qrSvg } from '@/lib/qr';
 import { TWO_STEP_API_KEYS, TWO_STEP_LOST, TWO_STEP_RECOVERY_CODES, TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES } from '@/lib/policy';
 
-// Setting up two-step login, and the recovery codes shown once. Used under Settings, Profile, and by the screen a
+// Setting up two-step login, and the recovery codes shown once. Used under Settings, Security, and by the screen a
 // team that asks for it shows to someone without it (TwoStepRequired). The rules are in src/server/twostep.ts.
 
 const group = (s: string) => s.replace(/(.{4})(?=.)/g, '$1 ');
@@ -162,7 +162,7 @@ export function TwoStepResetBanner({ me }: { me: any }) {
   const stop = () => {
     setBusy(true);
     api('/me/two-step/reset/stop', { method: 'POST' })
-      .then(() => (setSaid('The reset was stopped, and two-step login stays on. We emailed you that it stopped. If you did not ask for it, change your password now under Settings, Profile, and the password of your mailbox.'), me.reload?.()))
+      .then(() => (setSaid('The reset was stopped, and two-step login stays on. We emailed you that it stopped. If you did not ask for it, change your password now under Settings, Security, and the password of your mailbox.'), me.reload?.()))
       .catch((e: any) => setSaid(e?.message || 'We could not reach GrowSigning, so nothing was stopped. Check your connection and press the button again.'))
       .finally(() => setBusy(false));
   };

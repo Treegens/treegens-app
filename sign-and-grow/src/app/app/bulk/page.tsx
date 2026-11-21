@@ -153,7 +153,7 @@ function BulkSend({ preset }: { preset: string }) {
       <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Send to many</h1><div className="muted">Send one template to a whole list. Everyone gets their own private copy to sign, and you follow them all as one batch.</div></div></div>
 
       <section className="card" aria-labelledby="sn-bulk-new-h">
-        <h2 id="sn-bulk-new-h" className="sn-vh">New bulk send</h2>
+        <h2 id="sn-bulk-new-h" className="sn-vh">New send to many</h2>
         <label className="f"><span>1. Choose a template</span>
           <select value={tid} onChange={(e) => (setTid(e.target.value), setResult(null))}>
             <option value="">Choose a template…</option>
@@ -237,7 +237,7 @@ function BulkSend({ preset }: { preset: string }) {
                 {listOk && <p className="muted small" id="sn-batch-reminders">{reminderText(loaded.reminder_days)} That comes from the template, for every envelope in this batch. To change it, <Link href={`/app/templates/${tid}/edit`}>edit the template</Link> first.</p>}
 
                 <div className="sn-sendrow">
-                  <label className="f"><span>Name this batch <span className="hint">(optional, only you see it)</span></span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder={loaded.subject || 'Bulk send'} /></label>
+                  <label className="f"><span>Name this batch <span className="hint">(optional, only you see it)</span></span><input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder={loaded.subject || 'Send to many'} /></label>
                   <button className="btn primary" disabled={!canSend} aria-describedby={listOk ? 'sn-batch-cost sn-batch-reminders' : undefined} onClick={() => setConfirming(ready)}>
                     {stuck.length > 0 && ready.length > 0 ? `Send the ${plural(ready.length, 'ready row')}` : `Send ${plural(ready.length, 'envelope')}`}
                   </button>
@@ -267,7 +267,7 @@ function BulkSend({ preset }: { preset: string }) {
 
       <section className="card pad0" aria-labelledby="sn-batches-h">
         <div className="sn-cardhead"><h2 id="sn-batches-h">Past batches</h2><p className="muted small">Open a batch to see everyone in it, remind them, void what is still open or download what is done.</p></div>
-        {!batches ? <div className="empty" role="status">Loading…</div> : batches.batches.length === 0 ? <div className="empty"><h3>No batches yet</h3>Your first bulk send will show up here.</div> : (
+        {!batches ? <div className="empty" role="status">Loading…</div> : batches.batches.length === 0 ? <div className="empty"><h3>No batches yet</h3>The first list you send to will show up here.</div> : (
           <div className="tablewrap"><table className="t sn-list">
             <thead><tr><th>Batch</th><th className="hide-sm">Completed</th><th className="hide-sm">Sent on</th><th><span className="sn-vh">Open</span></th></tr></thead>
             <tbody>

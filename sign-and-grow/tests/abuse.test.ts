@@ -1,6 +1,8 @@
 // Keeping scammers and strangers out: the filter for fake payment notices, the daily limit, the pause, reports,
 // who may read a support message, access codes, public forms, and reporting an email with its security code.
 // Every test here pins down a way round one of those rules that an audit found. Each failed before its fix.
+// Days in sentences read 20 Nov 2026 since 21 November 2026 (simplify-public).
+import { dayText } from '../src/lib/dates.ts';
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { boot, Client, upload, simple, tokenFor, signUp, signAll, mailTo, type Server } from './helpers.ts';
@@ -711,7 +713,7 @@ test('paying does not lift the checks at once: a payment has to stand for 14 day
     const many = await blast();
     assert.equal(many.status, 429, 'and still counted');
     assert.match(many.data.error, /^An account whose first payment is less than 14 days old can send to 3 people a day\./);
-    assert.ok(many.data.error.includes(`Your payment was made on ${ago(0).slice(0, 10)}, so the limit goes on ${ago(-14).slice(0, 10)}, provided the payment is not refunded or disputed.`), many.data.error);
+    assert.ok(many.data.error.includes(`Your payment was made on ${dayText(ago(0))}, so the limit goes on ${dayText(ago(-14))}, provided the payment is not refunded or disputed.`), many.data.error);
     assert.equal(db.get("SELECT COUNT(*) n FROM emails WHERE to_email LIKE 'blast%' OR to_email='victim-paid@example.com'").n, 0);
     // One day short of the 14 it still holds. After them the payment has earned it.
     db.run("UPDATE payments SET at=? WHERE id='pay_pat'", ago(13));

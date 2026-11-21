@@ -727,8 +727,8 @@ test('the code is made here: no library, no outside service, and the link is sen
 test('each place a link is handed over in person offers a code, with its warning', () => {
   // The envelope page: next to "Copy link", for the same people and no others.
   const people = read('src/components/sender/Recipients.tsx');
-  assert.match(people, /\{reachable && <button className="btn sm qr-tap"[^\n]*onClick=\{\(ev\) => showQr\(r, ev\.currentTarget\)\}[^\n]*aria-label=\{`Show a QR code with the signing link for \$\{r\.name\}`\}>Show QR code<\/button>\}/);
-  assert.match(people, /Copy link<\/button>\}\n\s*\{reachable && <button[^\n]*>Show QR code<\/button>\}/, 'it stands right after Copy link');
+  assert.match(people, /\{reachable && <button className="btn sm qr-tap"[^\n]*onClick=\{\(ev\) => showQr\(r, ev\.currentTarget\)\}[^\n]*aria-label=\{`Show a QR code with the signing link for \$\{r\.name\}`\}>QR code<\/button>\}/);
+  assert.match(people, /Copy link<\/button>\}\n\s*\{reachable && <button[^\n]*>QR code<\/button>\}/, 'it stands right after Copy link');
   assert.match(people, /const reachable = turn && !isMe && r\.role !== 'inperson'(?: && !own)?;/, 'not for someone who signs on the sender\'s own device, and not before their turn');
   // Also for someone with no email address whose link the sender passes on (OwnLink.tsx), during their turn and
   // afterwards for their copy.
@@ -782,7 +782,7 @@ test('each place a link is handed over in person offers a code, with its warning
 });
 
 test('the public pages and the README say what is now true about QR codes', () => {
-  const landing = read('src/app/page.tsx');
+  const landing = read('src/app/features/page.tsx'); // the feature list moved off the home page (simplify-public)
   assert.match(landing, /\['PowerForms', 'A public link that lets anyone fill in and sign a form on their own\. Put it on your website or in an email, or print the QR code the app makes for it on a sheet for a poster or a front desk\./);
   assert.doesNotMatch(landing, /we do not make one yet|tool of your own/);
   const help = read('src/app/help/page.tsx');

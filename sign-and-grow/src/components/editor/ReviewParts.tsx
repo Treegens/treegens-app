@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Mark } from '../Brand';
-import { DATE_FORMATS, DATE_FORMAT_CHOICES, formatDate, deviceZone, momentText } from '@/lib/dates';
+import { DATE_FORMATS, DATE_FORMAT_CHOICES, DEFAULT_DATE_FORMAT, formatDate, deviceZone, momentText } from '@/lib/dates';
 import { savingLine, reviewSummary, dateExampleDay } from '@/lib/editorux';
 import { api } from '../ui';
 import { useMe } from '../AppShell';
@@ -53,7 +53,7 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
   const payHidden = !!pay?.pay_link && !payShown;
   const said = reviewSummary({
     reminderDays: env.reminder_days, expireDays: correcting ? null : env.expire_days, closesOn: correcting && env.expires_at ? momentText(env.expires_at, zone) : '',
-    dateFormat: format, defaults: { expireDays: me.account?.default_expire_days ?? null, dateFormat: me.account?.default_date_format || DATE_FORMATS[0] },
+    dateFormat: format, defaults: { expireDays: me.account?.default_expire_days ?? null, dateFormat: me.account?.default_date_format || DEFAULT_DATE_FORMAT },
     dateExample: formatDate(today, env.date_format, zone), signNow: ed.signNow, payLink: payShown,
   });
   return (

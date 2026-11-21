@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { toastLift } from '@/lib/toastplace';
 import { Mark } from './Brand';
 
 // The reader's time zone, sent along when the app loads, so dates in emails match the dates on screen.
@@ -43,8 +44,33 @@ export function Toasts() {
       setTimeout(() => setList((l) => l.filter((x) => x.id !== t.id)), t.err ? Math.min(30000, Math.max(6000, t.msg.length * 60)) : 3200);
     };
   }, []);
+  // A toast never sits over something a person can press: it is lifted to the nearest free band (src/lib/toastplace.ts),
+  // again when the page scrolls under it.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || !list.length) return;
+    let frame = 0;
+    const place = () => {
+      el.style.marginBottom = '';
+      // Plain boxes: the fields of a DOMRect are not its own, so they would be lost when copied.
+      const plain = (r: DOMRect) => ({ top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width });
+      const t = plain(el.getBoundingClientRect());
+      const controls = [...document.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, summary, [role="button"]')]
+        .filter((c) => !el.contains(c) && c.offsetParent !== null).map((c) => plain(c.getBoundingClientRect())).filter((r) => r.width > 0 && r.bottom > 0 && r.top < window.innerHeight);
+      const lift = toastLift(t, controls, window.innerHeight);
+      if (lift) el.style.marginBottom = `${lift}px`;
+    };
+    const later = () => (cancelAnimationFrame(frame), (frame = requestAnimationFrame(place)));
+    place();
+    // Once more after the page has drawn what the action changed.
+    const again = setTimeout(place, 500);
+    window.addEventListener('scroll', later, { passive: true });
+    window.addEventListener('resize', later);
+    return () => (clearTimeout(again), cancelAnimationFrame(frame), window.removeEventListener('scroll', later), window.removeEventListener('resize', later), void (el.style.marginBottom = ''));
+  }, [list]);
   return (
-    <div className="toasts" role="status" aria-live="polite">
+    <div className="toasts" role="status" aria-live="polite" ref={box}>
       {list.map((t) => <div key={t.id} className={`toast${t.err ? ' err' : ''}`}>{withLinks(t.msg)}</div>)}
     </div>
   );

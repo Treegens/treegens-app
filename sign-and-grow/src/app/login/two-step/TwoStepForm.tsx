@@ -36,7 +36,7 @@ export function TwoStepForm() {
       // What the sign-in did on the way (a team joined, a closing login back, Google connected), said on the first
       // screen of the app, as the other sign-in pages do.
       const said = [signInNotice(r),
-        r.used === 'recovery' ? `You signed in with a recovery code. ${r.recovery_left === 0 ? 'That was your last one: make new ones now under Settings, Profile, Two-step login.' : `${r.recovery_left} ${r.recovery_left === 1 ? 'is' : 'are'} left. You can make new ones under Settings, Profile.`}` : '',
+        r.used === 'recovery' ? `You signed in with a recovery code. ${r.recovery_left === 0 ? 'That was your last one: make new ones now under Settings, Security, Two-step login.' : `${r.recovery_left} ${r.recovery_left === 1 ? 'is' : 'are'} left. You can make new ones under Settings, Security.`}` : '',
         r.reset_stopped ? 'The reset of your two-step login that was under way has stopped, because you signed in with your code.' : ''].filter(Boolean).join(' ');
       try {
         if (r.restored) sessionStorage.setItem('sg_restored', '1');
@@ -76,7 +76,7 @@ export function TwoStepForm() {
             <button type="button" className="btn ghost" style={{ marginBottom: 8 }} onClick={() => (setRecovery(!recovery), setCode(''))}>{recovery ? 'Use the code from the app instead' : 'Use a recovery code instead'}</button>
             <label className="setting-row" style={{ cursor: 'pointer' }}>
               <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} aria-describedby="ts-remember-hint" />
-              <span>Remember this device for {TWO_STEP_REMEMBER_DAYS} days<span id="ts-remember-hint" className="muted small" style={{ display: 'block' }}>Then this browser asks only for your password. Only on a device of your own. You can withdraw it under Settings, Profile, &quot;Devices that skip the second step&quot;.</span></span>
+              <span>Remember this device for {TWO_STEP_REMEMBER_DAYS} days<span id="ts-remember-hint" className="muted small" style={{ display: 'block' }}>Then this browser asks only for your password. Only on a device of your own. You can withdraw it under Settings, Security, &quot;Devices that skip the second step&quot;.</span></span>
             </label>
             {error && (
               <div className="notice err" role="alert" style={{ margin: '12px 0' }}>

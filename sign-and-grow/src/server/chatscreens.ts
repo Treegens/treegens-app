@@ -46,17 +46,17 @@ export const APP_LABELS = {
   bulk: { label: 'Send to many', where: 'src/lib/nav.ts' },
   more: { label: 'More', where: 'src/components/AppNav.tsx' },
   settings: { label: 'Settings', where: 'src/lib/nav.ts' },
-  remind: { label: 'Send reminder', where: 'src/app/app/envelopes/[id]/page.tsx' },
-  moreTime: { label: 'Give more time', where: 'src/app/app/envelopes/[id]/page.tsx' },
-  void: { label: 'Void', where: 'src/app/app/envelopes/[id]/page.tsx' },
-  download: { label: 'Download with certificate', where: 'src/app/app/envelopes/[id]/page.tsx' },
-  saveTemplate: { label: 'Save as template', where: 'src/app/app/envelopes/[id]/page.tsx' },
+  remind: { label: 'Remind', where: 'src/lib/envelopepage.ts' },
+  moreTime: { label: 'Give more time', where: 'src/lib/envelopepage.ts' },
+  void: { label: 'Cancel the request', where: 'src/lib/envelopepage.ts' },
+  download: { label: 'Download', where: 'src/lib/envelopepage.ts' },
+  saveTemplate: { label: 'Save as template', where: 'src/lib/envelopepage.ts' },
   copyLink: { label: 'Copy link', where: 'src/components/sender/Recipients.tsx' },
   addMyself: { label: 'Add me', where: 'src/components/editor/StepAdd.tsx' },
   order: { label: 'Set signing order', where: 'src/components/editor/StepAdd.tsx' },
   newTemplate: { label: 'New template', where: 'src/app/app/templates/page.tsx' },
   profile: { label: 'Profile', where: 'src/app/app/settings/page.tsx' },
-  notifications: { label: 'Notifications', where: 'src/app/app/settings/page.tsx' },
+  security: { label: 'Security', where: 'src/lib/settingsnav.ts' },
   team: { label: 'Team', where: 'src/app/app/settings/page.tsx' },
   inviteByEmail: { label: 'Invite by email', where: 'src/app/app/settings/page.tsx' },
 } as const;
@@ -84,7 +84,7 @@ export const moreTimeForSigner = (s?: ChatScreen): string =>
     : `Open your link anyway. If the deadline has passed, the page has a button that asks the sender for more time. Before the deadline it is under ${L.menu} on the signing page. When the sender agrees, the same link works again.`;
 /** For "more time", asked by someone who sends. */
 export const moreTimeForSender = (s?: ChatScreen): string =>
-  `${inApp(s, A.envelopes.label)}, choose the document, then ${A.moreTime.label}. It also reopens an envelope whose deadline has passed: the same links work again. The deadline for a new envelope is set in the editor's last step: open More options, and it is under Deadline.`;
+  `${inApp(s, A.envelopes.label)}, choose the document, then More and ${A.moreTime.label}. It also reopens an envelope whose deadline has passed: the same links work again. The deadline for a new envelope is set in the editor's last step: open More options, and it is under Deadline.`;
 
 /** Asked on the signing page: does the person who signs pay? Never a price or a plan there. */
 export const FREE_FOR_SIGNER = 'Signing is free for you, and you need no account. The sender pays for it.';
@@ -93,10 +93,10 @@ export const noCodeForSigner = (): string =>
   'The code goes to the address or phone the sender gave. Look in spam, wait a minute, then choose Send a new code. Still nothing? Choose "I do not get the code" on the same screen: it tells the sender. Or choose Talk to a person.';
 /** The same, asked where we cannot tell who asks: first for someone who signs, then for someone who sent. */
 export const noEmailAnywhere = (): string =>
-  `Look in spam for a message from GrowSigning. Then use Find my documents with the address the document was sent to: we email your link again. If you sent the document, log in, open ${A.envelopes.label} and choose ${A.remind.label} or ${A.copyLink.label}.`;
+  `Look in spam for a message from GrowSigning. Then use Find my documents with the address the document was sent to: we email your link again. If you sent the document, log in, open ${A.envelopes.label}, choose the document, then ${A.remind.label}, or ${A.copyLink.label} in that person's More.`;
 /** Asked by someone who sent a document. */
 export const noEmailForSender = (s?: ChatScreen): string =>
-  `${inApp(s, A.envelopes.label)} and choose the document: it shows whether each email left our server and whether the person opened the document. From there choose ${A.remind.label} or ${A.copyLink.label}, or correct their address.`;
+  `${inApp(s, A.envelopes.label)} and choose the document: it shows whether each email left our server and whether the person opened the document. From there choose ${A.remind.label}, or open that person's More for ${A.copyLink.label} or to change their address.`;
 /** Reminding someone now. */
 export const remindNow = (s?: ChatScreen, days = 3): string =>
   `${inApp(s, A.envelopes.label)}, choose the document, then ${A.remind.label}. Reminders also go out by themselves every ${days} days unless you changed that.`;
@@ -146,17 +146,17 @@ export const SENDER_FAQ: Faq[] = [
   { id: 'add-signer', words: ['add a signer', 'add signer', 'second signer', 'another signer', 'add a recipient', 'add someone', 'add a person', 'add another', 'more than one', 'two people', 'several people', 'signing order', 'sign in order', 'who signs first', 'sign first', 'sign it myself', 'sign myself', 'sign my own'],
     answer: () => `In the editor's first step, add each person with a name and an email address. For an order, open More options. Tick ${A.order.label} there to number who goes first: without it everyone gets the document at the same time. ${A.addMyself.label} puts you on the list.` },
   { id: 'status', words: ['has everyone signed', 'who has signed', 'who signed', 'who has not signed', 'has not signed', "hasn't signed", 'did they sign', 'did they open', 'have they signed', 'status of', 'envelope status', 'document status', ' track', 'progress', 'waiting for', 'still waiting'],
-    answer: (s) => `${inApp(s, A.envelopes.label)} and choose the document. It shows for each person whether the email left our server, whether they opened the document and whether they have finished. From there you can choose ${A.remind.label} or ${A.copyLink.label}.` },
+    answer: (s) => `${inApp(s, A.envelopes.label)} and choose the document. It shows for each person whether the email left our server, whether they opened the document and whether they have finished. From there you can choose ${A.remind.label}, or ${A.copyLink.label} in that person's More.` },
   { id: 'void', words: [' void', 'cancel an envelope', 'cancel the envelope', 'cancel a document', 'cancel the document', 'cancel this document', 'cancel this envelope', 'recall', 'unsend', 'withdraw the', 'withdraw a', 'stop the document', 'stop the envelope', 'delete an envelope', 'delete a document', 'delete the envelope'],
-    answer: (s) => `${inApp(s, A.envelopes.label)}, choose the document, then ${A.void.label}. The links stop working, and the signatures held for people who had not signed come back to you. For a wrong name, address or field, correct it on the same page instead.` },
+    answer: (s) => `${inApp(s, A.envelopes.label)}, choose the document, then More and ${A.void.label}. The links stop working, and the signatures held for people who had not signed come back to you. For a wrong name, address or field, correct it on the same page instead.` },
   { id: 'template', words: ['template', 'reuse', 'same document again', 'send it again'],
-    answer: (s) => `A template keeps a document with its fields, so you only fill in who signs each time. ${inApp(s, A.templates.label)} and choose ${A.newTemplate.label}, or open an envelope you sent and choose ${A.saveTemplate.label}.` },
+    answer: (s) => `A template keeps a document with its fields, so you only fill in who signs each time. ${inApp(s, A.templates.label)} and choose ${A.newTemplate.label}, or open a document you sent and choose More, then ${A.saveTemplate.label}.` },
   { id: 'bulk', words: ['many people', 'bulk', 'mass send', 'everyone at once', 'list of people', 'csv', 'spreadsheet', 'hundred people', 'all my customers', 'all employees'],
     answer: (s) => `${inApp(s, A.more.label)} in the menu, then ${A.bulk.label}: it sends one template to a list of people, and each of them gets a copy of their own to sign. ${BULK_COST_NOTE}` },
   { id: 'team', words: ['my team', 'team member', 'invite', 'add a user', 'add users', 'add a member', 'add a colleague', 'another user', 'coworker', 'co-worker', 'second admin', 'seats'],
     answer: (s) => `${inApp(s, A.settings.label)}, then ${A.team.label}. Owners and admins type an address under ${A.inviteByEmail.label}, choose Member or Admin, and the person gets an invitation.` },
   { id: 'settings', words: ['notification', 'too many notifications', 'change my email', 'change my password', 'change my name', 'my profile', 'profile', 'change a setting', 'where are the settings'],
-    answer: (s) => `${inApp(s, A.settings.label)}. ${A.profile.label} has your name, ${A.notifications.label} has which emails you get, and the other tabs are named for what they hold.` },
+    answer: (s) => `${inApp(s, A.settings.label)}. ${A.profile.label} has your name and which emails you get, ${A.security.label} has your password and two-step login, and the other tabs are named for what they hold.` },
   { id: 'deadline', words: ['set a deadline', 'set the deadline', 'add a deadline', 'change the deadline', 'due date', 'give more time', 'give them more time', 'reopen', 'asked for more time'], answer: (s) => moreTimeForSender(s) },
 ];
 for (const f of SENDER_FAQ) f.side = 'sender';
@@ -177,7 +177,7 @@ export function screenFacts(): string {
     `- A witness has a shorter list: "${WITNESS_LABELS.absent}", "${S.ask!.label}" and Help. A witness who stops for now closes the page; the same link works again.`,
     `- There is no way to sign on paper in GrowSigning, and no button for it.`,
     `- The app (people who send, signed in): the menu starts with "${A.start.label}" (on a phone: Send, in the bar at the bottom). It has Home, ${A.envelopes.label}, To sign, ${A.templates.label}, Contacts, ${A.more.label}, ${A.settings.label} and Help. Under ${A.more.label} are ${A.bulk.label}, Forms, Reports and Trees planted.`,
-    `- An envelope's own page shows each person's progress and has "${A.remind.label}", "${A.moreTime.label}", "${A.void.label}" (while it is out), "${A.copyLink.label}" for each person, "${A.saveTemplate.label}", and "${A.download.label}" once it is completed.`,
-    `- ${A.settings.label} has tabs: ${A.profile.label}, ${A.notifications.label}, Account, ${A.team.label}, Plan, Your data, and others.`,
+    `- An envelope's own page shows each person's progress and has one main button ("${A.remind.label}" and the person's name while it is out, "${A.download.label}" once it is completed), a "More" with "${A.moreTime.label}", "${A.void.label}" (while it is out) and "${A.saveTemplate.label}", and a "More" for each person with "${A.copyLink.label}".`,
+    `- ${A.settings.label} has tabs: ${A.profile.label} (your name, your signature, which emails you get), ${A.security.label} (password, two-step login, where you are signed in), ${A.team.label} and API and webhooks. Owners and admins also have Account, Sending (reminders, deadline and date format of new documents), Stamps, Plan and Your data.`,
   ].join('\n');
 }

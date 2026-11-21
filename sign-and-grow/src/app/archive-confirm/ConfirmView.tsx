@@ -1,12 +1,13 @@
 'use client';
 // The page behind the link in the email that asks an address whether it should get copies of a team's emails
 // (src/server/routes-archive.ts). Opening it changes nothing: a mail program that opens links to check them confirms
-// nothing. Only a press on one of the two buttons does. Whoever reads the inbox is often not a customer of ours, on
+// nothing. Only a press on one of the two buttons does. The long list of what is copied is folded under them. Whoever reads the inbox is often not a customer of ours, on
 // a phone: plain words, every control at least 44 pixels tall, and the answer is said in a line a screen reader reads.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/components/ui';
 import { Logo } from '@/components/Brand';
+import { ARCHIVE_NO } from '@/lib/archivemail';
 
 const TAP = { minHeight: 44 };
 const OFFLINE = 'We could not reach GrowSigning, so nothing was changed. Check your connection and try again.';
@@ -30,6 +31,8 @@ export function ConfirmView() {
   }, []);
 
   const answer = (a: 'yes' | 'no' | 'undo') => {
+    // A pressed button stays as it is while the answer is on its way (the focus stays on it); a second press waits.
+    if (busy) return;
     setBusy(a);
     setError('');
     api('/public/archive-confirm', { body: { token, answer: a } })
@@ -37,6 +40,12 @@ export function ConfirmView() {
       .catch((e) => setError(e?.status ? e.message : OFFLINE))
       .finally(() => setBusy(''));
   };
+
+  // The buttons go once one was pressed: the focus moves to the heading, which now says what happened.
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (done) heading.current?.focus();
+  }, [done]);
 
   const state = done?.state || ask?.state || '';
   const asking = !!ask && state === 'waiting';
@@ -48,9 +57,9 @@ export function ConfirmView() {
 
   return (
     <div className="authbox">
-      <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
+      <Link href="/" className="logo" aria-label="GrowSigning home" style={{ marginBottom: 20, display: 'inline-flex', alignItems: 'center', minHeight: 44 }}><Logo height={26} /></Link>
       <main id="main" className="card">
-        <h1 className="serif" style={{ fontSize: 24 }}>{title}</h1>
+        <h1 ref={heading} tabIndex={-1} className="serif" style={{ fontSize: 24, outline: 'none' }}>{title}</h1>
         <div role="status">
           {gone && <p className="muted" style={{ margin: '10px 0 0' }}>{gone}</p>}
           {done && <p style={{ margin: '10px 0 0' }}>{done.message}</p>}
@@ -60,25 +69,29 @@ export function ConfirmView() {
         {asking && (
           <>
             <p style={{ margin: '10px 0', overflowWrap: 'anywhere' }}>
-              {ask.asked_by ? `${ask.asked_by} of ${ask.account}` : ask.account} asked GrowSigning to send copies of the team&apos;s emails about its documents to <b>{ask.email}</b>, for their records.
+              {ask.asked_by ? `${ask.asked_by} of ${ask.account}` : ask.account} asked GrowSigning to send <b>{ask.email}</b> a copy of every email the team sends about its documents, with any signed PDF attached. Signing links and codes are taken out of each copy. Nothing is sent here unless you confirm.
             </p>
-            <p className="small">{ask.what}</p>
-            <p className="small muted">Nothing is sent here unless you confirm. To stop the copies later, ask {ask.account} to remove this address in their settings.</p>
             <div className="row wrap" style={{ gap: 10, marginTop: 16 }}>
-              <button type="button" className="btn primary" style={TAP} disabled={!!busy} onClick={() => answer('yes')}>{busy === 'yes' ? 'Confirming…' : 'Confirm'}</button>
-              <button type="button" className="btn" style={TAP} disabled={!!busy} onClick={() => answer('no')}>{busy === 'no' ? 'One moment…' : 'This was not me'}</button>
+              <button type="button" className="btn primary" style={TAP} aria-busy={busy === 'yes'} onClick={() => answer('yes')}>{busy === 'yes' ? 'Confirming…' : 'Confirm'}</button>
+              <button type="button" className="btn" style={TAP} aria-busy={busy === 'no'} onClick={() => answer('no')}>{busy === 'no' ? 'One moment…' : ARCHIVE_NO}</button>
             </div>
-            <p className="small muted" style={{ margin: '12px 0 0' }}>&quot;This was not me&quot; means nothing is sent here, and {ask.account} cannot ask this address again for {ask.refused_days} days.</p>
+            <p className="small muted" style={{ margin: '12px 0 0' }}>If you choose No, nothing is sent here, and {ask.account} cannot ask this address again for {ask.refused_days} days.</p>
+            <details style={{ marginTop: 8 }}>
+              <summary className="small" style={{ padding: '12px 0', cursor: 'pointer' }}>What exactly is copied</summary>
+              <p className="small" style={{ margin: '0 0 8px' }}>{ask.what}</p>
+              <p className="small muted" style={{ margin: 0 }}>To stop the copies later, ask {ask.account} to remove this address in their settings.</p>
+            </details>
           </>
         )}
         {done?.state === 'refused' && (
           <p style={{ margin: '14px 0 0' }}>
-            <button type="button" className="btn" style={TAP} disabled={!!busy} onClick={() => answer('undo')}>{busy === 'undo' ? 'One moment…' : 'Take that back'}</button>
+            <button type="button" className="btn" style={TAP} aria-busy={busy === 'undo'} onClick={() => answer('undo')}>{busy === 'undo' ? 'One moment…' : 'Take that back'}</button>
           </p>
         )}
         {error && <p className="notice err" role="alert" style={{ marginTop: 14, marginBottom: 0 }}>{error}</p>}
       </main>
-      <p className="muted small center" style={{ marginTop: 14 }}>Did not expect this? Then close this page. Nothing is sent to an address that was not confirmed. <Link href="/help#contact">Need a hand? Get help</Link></p>
+      <p className="muted small center" style={{ margin: '14px 0 0' }}>Did not expect this? Close this page and nothing is sent here.</p>
+      <p className="small center" style={{ margin: 0 }}><Link href="/help#contact" style={{ display: 'inline-flex', alignItems: 'center', minHeight: 44, padding: '0 12px' }}>Need a hand? Get help</Link></p>
     </div>
   );
 }

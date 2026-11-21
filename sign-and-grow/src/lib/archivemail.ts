@@ -17,9 +17,9 @@ export const ARCHIVE_CONFIRM_DAYS = 7;
 export const ARCHIVE_ASKS_PER_DAY = 10;
 /** The same for one address: the first email and "send the link again" together. */
 export const ARCHIVE_ASKS_PER_ADDRESS_DAY = 3;
-/** After the reader of an address said "this was not me", that account cannot ask it again for this many days. */
+/** After the reader of an address said no (or marked the asking email as spam), that account cannot ask it again for this many days. */
 export const ARCHIVE_REFUSED_DAYS = 30;
-/** How long "this was not me" can be undone from the same page. */
+/** How long that "no" can be taken back from the same page. */
 export const ARCHIVE_UNDO_MINUTES = 60;
 
 /** What stands in a copy where a link was (the designer's words, research/ux-notes.json, "ds-mail-records"). */
@@ -50,4 +50,34 @@ export const ARCHIVE_WHY = 'Signing links, security codes and one-time codes are
 export const ARCHIVE_WHAT = `A copy of every email the account sends about its documents: requests to sign, reminders, deadline warnings, the completed copy with its signed PDF, declines, voided and corrected documents, comments, and the emails to witnesses and to the members of signing groups. Each copy is an email of its own, not a hidden copy of the original. Signing links, security codes and one-time codes are taken out, so nobody can open or sign a document from a copy. Everything else stays, the names, addresses and messages in the email and the attached signed PDF included. Emails about the plan, payments and help requests are not copied.`;
 
 /** What a confirmed address does not do, for the same places. */
-export const ARCHIVE_LIMITS = 'A copy goes once the email it copies has left our server. An email that never left is not copied. Copies wait while sending is paused on the account and go out when it is lifted. They never count towards the daily sending limits.';
+export const ARCHIVE_LIMITS = 'A copy goes once the email it copies has left our server. An email that never left is not copied. Copies wait while sending is paused on the account and go out when it is lifted. A copy that is still waiting when its document is deleted or purged is not sent. Copies never count towards the daily sending limits.';
+
+/** The button that says no on the page the email opens, and how the email and Settings name it. */
+export const ARCHIVE_NO = 'No, do not send copies';
+/** What an admin reads under the field when what they typed is not one plain email address. */
+export const ARCHIVE_BAD_ADDRESS = 'That does not look like an email address. Check it and try again. Nothing was sent.';
+/** What an admin reads when the address belongs to someone on the account. */
+export const ARCHIVE_TEAM_MEMBER = 'This is the address of someone on your team. They will get each copy as well as their own emails.';
+
+/**
+ * The one plain address in what was typed, in lower case, or null. Plain means the address alone: no name in front,
+ * no angle brackets, quotes, commas or spaces, and no full stop at either end of a part, because a mail program
+ * reads all of those as another spelling of the same inbox. Letters of any script are fine.
+ */
+export function archiveAddress(typed: unknown): string | null {
+  const s = String(typed ?? '').trim().normalize('NFKC').toLowerCase();
+  if (s.length > 254 || !/^[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(\.[\p{L}\p{N}-]+)+$/u.test(s)) return null;
+  const [local, domain] = s.split('@');
+  if (local.startsWith('.') || local.endsWith('.') || local.includes('..') || domain.split('.').some((l) => l.startsWith('-') || l.endsWith('-'))) return null;
+  return s;
+}
+
+/**
+ * The inbox an address reaches, as far as its spelling says: the address without a "+tag". The daily limits, and
+ * a "no" from whoever reads the inbox, hold for every address with the same key.
+ */
+export function archiveKey(email: string): string {
+  const s = String(email ?? '').trim().normalize('NFKC').toLowerCase();
+  const at = s.lastIndexOf('@');
+  return at < 1 ? s : `${s.slice(0, at).split('+')[0]}${s.slice(at)}`;
+}

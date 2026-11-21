@@ -11,7 +11,7 @@ import { TwoStepRequired, TwoStepResetBanner } from './TwoStep';
 import { HelpChatButton } from './HelpChat';
 import { ConfirmBanner } from './ConfirmEmail';
 import { SideNav, TabBar } from './AppNav';
-import { navOn } from '@/lib/nav';
+import { navOn, pageTitle } from '@/lib/nav';
 
 type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; /** This server turns Word files and the like into PDF on upload (src/server/convert.ts). */ converts?: boolean; admins: number; members: number; operator: boolean; support_email: string | null; reload: () => void };
 const MeCtx = createContext<Me | null>(null);
@@ -58,6 +58,30 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (me) api('/impact').then(setImpact).catch(() => {});
   }, [me, path]);
   useEffect(() => setOpen(false), [path]);
+  // Each page of the app has its own name in the browser tab (src/lib/nav.ts).
+  useEffect(() => {
+    if (!me) return;
+    const want = pageTitle(path);
+    const set = () => {
+      if (document.title !== want) document.title = want;
+    };
+    set();
+    // The site's own title comes back when a page is swapped in (a redirect into the editor, say): put ours back.
+    const seen = new MutationObserver(set);
+    seen.observe(document.head, { childList: true, subtree: true, characterData: true });
+    return () => seen.disconnect();
+  }, [path, me]);
+  // The phone's menu closes with Escape, and the keyboard goes back to the button that opened it.
+  useEffect(() => {
+    if (!open) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      document.getElementById('tab-menu')?.focus();
+    };
+    document.addEventListener('keydown', key);
+    return () => document.removeEventListener('keydown', key);
+  }, [open]);
   useEffect(() => {
     // Set by the login form when signing in cancelled a pending account closure.
     try {
@@ -87,13 +111,16 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <MeCtx.Provider value={{ ...me, reload }}>
+      {/* The first stop for a keyboard: past the menu, straight to the page. Its words are drawn by start.css when
+          it has the focus, so a screen without a keyboard in use has nothing more on it. */}
+      <a href="#app-main" className="app-skip" aria-label="Skip to content" />
       <div className="mobilebar">
         <Link href="/app" className="row mobilebar-logo"><Logo height={20} tone="dark" /></Link>
         {/* With more than one workspace, a phone shows which one this is without opening the menu. */}
         {me.accounts?.length > 1 && <span className="truncate" style={{ flex: 1, minWidth: 0, margin: '0 10px', textAlign: 'right', fontSize: 12.5, opacity: 0.85 }} title="The workspace you are in">{me.account.name}</span>}
       </div>
       <div className="shell">
-        <aside className={`side${open ? ' open' : ''}`}>
+        <aside id="app-menu" className={`side${open ? ' open' : ''}`} aria-label="Menu">
           <Link href="/app" className="brand"><Logo height={24} tone="dark" /></Link>
           {/* Nine entries: the one start button, five pages, More, Settings and Help (src/lib/nav.ts). */}
           <SideNav path={path} role={me.role} userId={me.user.id} onGo={() => setOpen(false)} />
@@ -101,7 +128,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           <HelpChatButton className="nav hc-open hc-nav">Help</HelpChatButton>
           {me.operator && <Link href="/app/operator" className={`nav${navOn('/app/operator', path) ? ' on' : ''}`}>Operator</Link>}
           {me.outbox && <a className="nav" href="/dev/outbox" target="_blank">Dev outbox ↗</a>}
-          <button className="btn sm ghost side-close" style={{ color: '#fff', display: open ? 'block' : 'none', marginTop: 8 }} onClick={() => setOpen(false)}>Close menu</button>
           {/* The account's total of paper saved, only once it is large enough to mean something (src/lib/impact.ts).
               Until then, and while it loads, nothing stands here. The saving of one document is said where it is sent. */}
           {impact && totalWorthShowing(impact.account.sheets)
@@ -125,7 +151,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button className="btn sm ghost side-out" style={{ color: '#cfe2d3', padding: '4px 0', marginTop: 4 }} onClick={() => api('/auth/logout', { method: 'POST' }).then(() => window.location.assign('/'))}>Sign out</button>
           </div>
         </aside>
-        <main className="main">
+        <main className="main" id="app-main" tabIndex={-1}>
           {me.account.paused && (
             <div className="banner paused" role="alert">
               <span><b>Sending is paused on this account.</b> Reason: {String(me.account.paused).replace(/[.\s]+$/, '')}. A person reviews every pause. Until then nothing you start is emailed to anyone: no new envelopes, no new or changed recipients, no reminders, no reopening, no team invitations and no email about a change, and people further down a signing order are asked only once the pause is lifted. You can still open, download and export everything, give an open document more time or void it, and people who already have a document can still sign it.</span>

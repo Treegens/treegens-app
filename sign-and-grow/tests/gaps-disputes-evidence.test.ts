@@ -61,7 +61,7 @@ test('A: the pages say what a match shows and what it does not, list the causes 
   assert.match(CHAIN_TRUTH, /whoever can write to that database/);
   assert.match(CHAIN_TRUTH, /chain head printed on the certificate/);
   assert.match(CHAIN_TRUTH, /browser description stored with a line is not part of its fingerprint/);
-  assert.match(src('src/app/page.tsx'), /Every completed envelope gets a certificate of completion/);
+  assert.match(src('src/app/features/page.tsx'), /Every completed envelope gets a certificate of completion/);
   assert.doesNotMatch(src('README.md'), /Editing any past event breaks the chain, and the app shows it\./);
 });
 
@@ -601,8 +601,9 @@ test('G: a voided envelope\'s pack carries its marked copy; a draft has none; an
   const stranger = await person('Not Theirs', 'stranger@disputes.example');
   assert.equal((await stranger.get(`/envelopes/${v.id}/evidence`)).status, 404);
   assert.equal((await from().get(`/envelopes/${v.id}/evidence`)).status, 401);
-  assert.match(src('src/app/app/envelopes/[id]/page.tsx'), /href=\{`\/api\/envelopes\/\$\{e\.id\}\/evidence`\}/);
-  assert.match(src('src/app/app/envelopes/[id]/page.tsx'), /Download evidence pack/);
+  // (simplify-envelope: the download is a line of the page's More now, named 'Full record for disputes'.)
+  assert.match(src('src/app/app/envelopes/[id]/page.tsx'), /href: `\/api\/envelopes\/\$\{e\.id\}\/evidence`/);
+  assert.match(src('src/lib/envelopepage.ts'), /add\('full_record', 'Full record for disputes'\)/);
 });
 
 // ---- H. How to read a certificate --------------------------------------------------------------------------------

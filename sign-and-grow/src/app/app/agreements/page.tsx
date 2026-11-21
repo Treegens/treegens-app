@@ -13,7 +13,7 @@ export default function Agreements() {
   const [busy, setBusy] = useState(false);
   const router = useRouter();
 
-  if (error) return <div className="card cw-team"><h1 className="serif">Website terms</h1><p style={{ marginTop: 8 }}>{error.status === 403 ? 'Only the owner and the admins of your team manage click-to-agree terms, because they speak for your website. Ask one of them.' : error.message}</p></div>;
+  if (error) return <div className="card cw-team"><h1 className="serif">Website terms</h1><p style={{ marginTop: 8 }}>{error.status === 403 ? 'Only the owner and the admins of your team manage website terms, because they speak for your website. Ask one of them.' : error.message}</p></div>;
   return (
     <div className="stack cw-team">
       <div className="pagehead" style={{ marginBottom: 0 }}>
@@ -33,7 +33,7 @@ export default function Agreements() {
         <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>Nothing is shown to anyone until you publish. You write the terms next, or choose a PDF.</p>
       </form>
       <div className="card pad0">
-        {data && data.agreements.length === 0 ? <div className="empty"><h3>No click-to-agree terms yet</h3>Start one above.</div> : (
+        {data && data.agreements.length === 0 ? <div className="empty"><h3>No website terms yet</h3>Start one above.</div> : (
           <div className="tablewrap"><table className="t">
             <thead><tr><th>Terms</th><th>State</th><th>Accepted</th><th>Changed</th></tr></thead>
             <tbody>

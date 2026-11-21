@@ -5,6 +5,8 @@
 // It is used for the date of signing and for every date a signer types into a date field.
 export const DATE_FORMATS = ['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'D MMM YYYY', 'MMM D, YYYY'] as const;
 export type DateFormat = (typeof DATE_FORMATS)[number];
+/** What a new account and a new document start with: 20 Nov 2026. The month is a word, so nobody can misread it. */
+export const DEFAULT_DATE_FORMAT: DateFormat = 'D MMM YYYY';
 /** The same formats in the order a picker lists them: the ones with the month as a word first, because nobody can misread them. */
 export const DATE_FORMAT_CHOICES: DateFormat[] = ['D MMM YYYY', 'MMM D, YYYY', 'YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY'];
 
@@ -210,4 +212,14 @@ export function momentOnScreen(iso: string | Date | null | undefined, locale?: u
   if (plainEnglish(tag)) return momentText(iso, tz);
   const when = new Intl.DateTimeFormat(tag, { dateStyle: 'long', timeStyle: 'short', hourCycle: 'h23', timeZone: c.zone }).format(typeof iso === 'string' ? new Date(iso) : iso!);
   return `${when} ${c.zone === 'UTC' ? 'UTC' : `${c.zone.replace(/_/g, ' ')} (${c.offset})`}`;
+}
+
+/**
+ * A day for a person to read, in a sentence on a screen or in an email: "20 Nov 2026". The day is the UTC day of the
+ * moment, as the dates in file names, the API and CSV exports are (those stay 2026-11-20). Empty for no moment.
+ */
+export function dayText(iso: string | Date | null | undefined): string {
+  if (!iso) return '';
+  const text = typeof iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00Z` : iso;
+  return formatDate(text, DEFAULT_DATE_FORMAT, 'UTC');
 }

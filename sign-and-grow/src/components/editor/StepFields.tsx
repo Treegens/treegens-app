@@ -475,7 +475,7 @@ export function StepFields({ ed }: { ed: Ed }) {
               <div key={d.id} data-doc={d.id}>
                 <div className="muted small" style={{ fontWeight: 600, marginBottom: 6, textAlign: 'center' }}>{d.name}</div>
                 {/* Pages made from a Word file or the like: check them before placing fields (ConvertNotes.tsx). */}
-                <ConvertNotes d={d} compact />
+                <ConvertNotes d={d} />
                 <PdfDoc url={`/api/files/${d.file_id}/content`} zoom={zoom} onPageClick={(p, x, y) => place(d, p, x, y)} onDocument={(pdf) => setPdfs((m) => ({ ...m, [d.id]: pdf }))}
                   // Stamps on the page, printed like ink the way the signing page and the PDF print them.
                   // eslint-disable-next-line @next/next/no-img-element

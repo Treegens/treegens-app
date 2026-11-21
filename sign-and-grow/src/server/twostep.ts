@@ -233,9 +233,9 @@ export async function useCode(u: any, typed: any, o: { passwordOk?: boolean; at?
         lines: [at === 'settings'
           ? `${TWO_STEP_TRIES} codes in a row that were typed under Settings, in a browser signed in to your GrowSigning login, were not right, so changes that need a code are paused in that browser until ${whenFor(me, till)}.`
           : `${TWO_STEP_TRIES} codes in a row that were typed for your GrowSigning login were not right, so its second step is paused until ${whenFor(me, till)}. They came after your correct password (or after Google or Microsoft), so whoever typed them got past the first step.`,
-        'If that was not you, someone knows your password: change it under Settings, Profile. Pauses from signing in do not stop you there, in a browser where you are signed in. Or use "Forgot password" on the sign-in page.',
+        'If that was not you, someone knows your password: change it under Settings, Security. Pauses from signing in do not stop you there, in a browser where you are signed in. Or use "Forgot password" on the sign-in page.',
         'If it was you: wait, then type the newest code your authenticator app shows. Codes depend on the time, so check that the time on your phone is set automatically.',
-        'We email you about this at most once a day. Settings, Profile lists every pause under "What happened to your second step".'],
+        'We email you about this at most once a day. Settings, Security lists every pause under "What happened to your second step".'],
         cta: { label: 'Open GrowSigning', url: `${baseUrl()}/login` } });
   }
   if (login?.until || mine?.until || sidePaused) throw paused(login?.until || mine?.until || sidePaused!, at);
@@ -389,7 +389,7 @@ export function adminResetTeams(userId: string): string[] {
 // every browser that is signed in (AppShell). Any sign-in that passes the second step stops it at once (a remembered
 // device too), and so does changing the password while signed in. Stopped any other way, a new one waits
 // TWO_STEP_RESET_BLOCK_DAYS unless the person signs in with the second step first. Each person can switch it off
-// under Settings, Profile.
+// under Settings, Security.
 export const emailResetAllowed = (u: any): boolean => !u?.two_step_email_reset_off;
 export const resetBlockedUntil = (u: any): string | null => {
   const at = Date.parse(u?.two_step_reset_stopped_at || '');
@@ -468,9 +468,9 @@ export async function resetIfDue(u: any): Promise<boolean> {
   })) return false;
   await sendMail({ to: u.email, subject: 'Two-step login of your GrowSigning login is off', heading: 'Your second step was reset',
     lines: [`As announced, two-step login of your GrowSigning login was switched off ${TWO_STEP_EMAIL_RESET_DAYS} days after the reset was started. Signing in asks for no code now, and every browser that was signed in was signed out.`,
-      'Set it up again under Settings, Profile, with the authenticator app on your new phone. If a team you are on asks for it, you are asked to do that the next time you sign in.',
+      'Set it up again under Settings, Security, with the authenticator app on your new phone. If a team you are on asks for it, you are asked to do that the next time you sign in.',
       'If you did not ask for this, someone knows your password and can read this mailbox: change both, set two-step login up again (that signs out every other browser), and write to us through the help page.'],
-    cta: { label: 'Set it up again', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });
+    cta: { label: 'Set it up again', url: `${baseUrl()}/app/settings?tab=security#two-step` } });
   return true;
 }
 

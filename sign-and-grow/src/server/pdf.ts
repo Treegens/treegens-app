@@ -6,9 +6,9 @@ import fontkitMod from '@pdf-lib/fontkit';
 import { readBlob, get } from './db.ts';
 import { bad, baseUrl } from './util.ts';
 import { impactOf } from '../lib/impact.ts';
-import { recordShowsTrees, treesOnEnvelope } from './impact.ts';
+import { recordShowsTrees, treesOnEnvelope, takesPayments } from './impact.ts';
 import { recordLines } from '../lib/impactwords.ts';
-import { formatDate, formatDateValue, localStamp, validZone, zoneLabel } from '../lib/dates.ts';
+import { dayText, formatDate, formatDateValue, localStamp, validZone, zoneLabel } from '../lib/dates.ts';
 import { typesetterFor } from './pdftext.ts';
 import { isolate, hasRtl } from './bidi.ts';
 import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
@@ -350,7 +350,8 @@ export class Sheet {
 }
 
 const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approver', cc: 'Receives a copy', viewer: 'Needs to view', inperson: 'In-person signer', witness: 'Witness' };
-const ts = (s: string | null | undefined) => (s ? s.replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '-');
+// A moment on the signing record: the day with the month as a word, so nobody can misread it, and the time in UTC.
+const ts = (s: string | null | undefined) => (s ? `${dayText(s)} ${s.slice(11, 19)} UTC` : '-');
 
 async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   // The stamp at the foot of each sheet says "Signed with growsigning", so the footer line does not repeat the name.
@@ -476,7 +477,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   // were paid for (src/server/impact.ts, src/lib/impactwords.ts).
   if (!recordShowsTrees(e.account_id)) return;
   const i = impactOf(e.sheets || 0);
-  const lines = recordLines({ ...i, trees: treesOnEnvelope(e.id), site: baseUrl() });
+  const lines = recordLines({ ...i, trees: treesOnEnvelope(e.id), plans: takesPayments(), site: baseUrl() });
   const high = 36 + lines.length * 13;
   s.need(high + 28);
   s.y -= 10;

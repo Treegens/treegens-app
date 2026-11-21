@@ -10,7 +10,6 @@ import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFT
 import { DEFAULT_REMINDER_DAYS, reminderText } from '@/lib/policy';
 // When a signature expires, written the same way as in the emails: "3 December 2026 at 14:00 UTC".
 import { expiryMoment, expiredWords, TOPUP_EXPIRY_MONTHS } from '@/lib/policy';
-import { DATE_FORMAT_CHOICES, formatDate, deviceZone } from '@/lib/dates';
 // The same holds for signin.ts: the names and the words only.
 import { PROVIDER_NAMES, isProviderId, signInErrorText } from '@/lib/signin';
 import { SignedIn } from './SignedIn';
@@ -27,6 +26,10 @@ import { LanguageSettings } from '@/components/settings/LanguageSettings';
 // The account's own custom fields, such as a case number (src/components/settings/CustomFieldSettings.tsx).
 import { CustomFieldSettings } from '@/components/settings/CustomFieldSettings';
 import { SecurityLog } from '@/components/settings/SecurityLog';
+// Sections, cards, "Saved" next to what saved, and the one More options of a section (research/ux-charter.md, 2.2).
+import { sectionsFor, landingFor } from '@/lib/settingsnav';
+import { Card, MoreOptions, useSaved } from '@/components/settings/Frame';
+import { SendingDefaults } from '@/components/settings/SendingDefaults';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -44,20 +47,22 @@ function Profile() {
   const me = useMe();
   const [f, setF] = useState({ name: me.user.name, title: me.user.title || '', company: me.user.company || '' });
   const [adopt, setAdopt] = useState<'' | 'signature' | 'initials'>('');
-  const save = (body: any, msg = 'Saved') => api('/me', { method: 'PATCH', body }).then(() => (toast(msg), me.reload())).catch(oops);
+  const [said, saved] = useSaved();
+  const save = (body: any, msg = 'Saved') => api('/me', { method: 'PATCH', body }).then(() => (msg === 'Saved' ? saved() : toast(msg), me.reload())).catch(oops);
+  const member = me.role === 'member';
   return (
     <div className="stack">
-      <div className="card">
+      <Card><div className="card">
         <h2 style={{ marginBottom: 12 }}>Profile</h2>
         <div className="grid g3">
           <label className="f"><span>Name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
           <label className="f"><span>Job title</span><input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></label>
           <label className="f"><span>Company</span><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} /></label>
         </div>
-        <div className="row between wrap"><span className="muted small">{me.user.email} · {me.user.email_verified ? 'confirmed' : 'not confirmed yet'}</span><button className="btn primary" onClick={() => save(f)}>Save profile</button></div>
-      </div>
-      <EmailAddressCard me={me} />
-      <div className="card">
+        <div className="row between wrap"><span className="muted small">{me.user.email} · {me.user.email_verified ? 'confirmed' : 'not confirmed yet'}</span><span className="row">{said}<button className="btn" onClick={() => save(f)}>Save profile</button></span></div>
+      </div></Card>
+      <Card><EmailAddressCard me={me} /></Card>
+      <Card><div className="card">
         <h2 style={{ marginBottom: 4 }}>Your signature</h2>
         <p className="muted small">Saved here, it is offered when a document is sent to {me.user.email}. You can always change it while signing.</p>
         <div className="grid g2">
@@ -74,11 +79,31 @@ function Profile() {
             );
           })}
         </div>
-      </div>
-      <SignInWays />
-      <TwoStepCard />
-      <SignedIn />
+      </div></Card>
+      <Card><Notifications /></Card>
+      <p className="muted small" style={{ margin: 0 }}>Your password, two-step login and the places you are signed in are under Security, the next section.</p>
+      {/* A member has no Your data section: what was theirs to do there is here, behind the one More options. */}
+      {member && <MoreOptions><YourData /></MoreOptions>}
       {adopt &&<AdoptSignature kind={adopt} name={me.user.name} doneLabel="Save" onClose={() => setAdopt('')} onDone={(png) => (save({ [`${adopt}_png`]: png }), setAdopt(''))} />}
+    </div>
+  );
+}
+
+// Settings, Security. The first card, "Your sign-in", is for everyone: the password and the other ways to sign in,
+// two-step login, and where this login is signed in. The security record of the account follows, for its admins.
+function Security() {
+  const me = useMe();
+  return (
+    <div className="stack">
+      <Card>
+        <section className="stack" aria-labelledby="your-signin-h">
+          <h2 id="your-signin-h" className="set-group">Your sign-in</h2>
+          <SignInWays />
+          <TwoStepCard />
+          <SignedIn />
+        </section>
+      </Card>
+      {me.role !== 'member' && <Card><SecurityLog /></Card>}
     </div>
   );
 }
@@ -98,7 +123,7 @@ function SignInWays() {
     const p = q.get('provider');
     if (q.get('signin_error')) setSaid({ text: signInErrorText(q.get('signin_error'), p), err: true });
     else if (q.get('signin') === 'connected') setSaid({ text: `${isProviderId(p) ? PROVIDER_NAMES[p] : 'It'} is connected. From now on you can sign in with it.` });
-    if (q.get('signin_error') || q.get('signin')) window.history.replaceState(null, '', '/app/settings?tab=profile');
+    if (q.get('signin_error') || q.get('signin')) window.history.replaceState(null, '', '/app/settings?tab=security');
   }, []);
   const providers: any[] = d?.providers || [];
   const hasPw: boolean = d ? d.password : me.user.has_password !== false;
@@ -176,19 +201,23 @@ const NOTIFY: [string, string, string][] = [
 function Notifications() {
   const me = useMe();
   const [n, setN] = useState<Record<string, boolean>>(me.user.notify || {});
+  const [said, saved] = useSaved();
+  // "Saved" stands next to the switch that was changed last.
+  const [last, setLast] = useState('');
   const flip = (k: string) => {
     const next = { ...n, [k]: !n[k] };
     setN(next);
-    api('/me', { method: 'PATCH', body: { notify: { [k]: next[k] } } }).then(() => (toast('Saved'), me.reload())).catch(oops);
+    setLast(k);
+    api('/me', { method: 'PATCH', body: { notify: { [k]: next[k] } } }).then(() => (saved(), me.reload())).catch(oops);
   };
   return (
-    <div className="card">
+    <div className="card" id="notifications">
       <h2 style={{ marginBottom: 4 }}>Emails about your envelopes</h2>
       <p className="muted small">You choose how much we email you. Everything is always visible in the app either way.</p>
       {NOTIFY.map(([k, title, hint]) => (
         <label key={k} className="setting-row">
           <input type="checkbox" checked={!!n[k]} onChange={() => flip(k)} />
-          <span><b>{title}</b><span className="muted small" style={{ display: 'block' }}>{hint}</span></span>
+          <span><b>{title}</b> {last === k && said}<span className="muted small" style={{ display: 'block' }}>{hint}</span></span>
         </label>
       ))}
       <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>People you send to get one request, the reminders you set on the envelope, and one copy when it is complete. They can turn reminders off for themselves.</p>
@@ -200,7 +229,8 @@ function Account() {
   const me = useMe();
   const a = me.account;
   const admin = me.role !== 'member';
-  const [f, setF] = useState({ name: a.name, brand_color: a.brand_color || '#1f6f43', brand_logo: a.brand_logo || '', default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || 'YYYY-MM-DD' });
+  const [f, setF] = useState({ name: a.name, brand_color: a.brand_color || '#1f6f43', brand_logo: a.brand_logo || '' });
+  const [said, saved] = useSaved();
   if (!admin) return <div className="notice">Only account admins can change these settings.</div>;
   return (
     <div className="card">
@@ -215,20 +245,10 @@ function Account() {
             {f.brand_logo && <button className="btn sm ghost" onClick={() => setF({ ...f, brand_logo: '' })}>Remove</button>}
           </div>
         </div>
-        <label className="f"><span>Remind people every <span className="hint">(days, 0 for never)</span></span><input type="number" min={0} max={60} value={f.default_reminder_days} aria-describedby="set-reminders" onChange={(e) => setF({ ...f, default_reminder_days: Number(e.target.value) })} /></label>
-        <label className="f"><span>Default deadline <span className="hint">(days)</span></span><input type="number" min={1} max={365} value={f.default_expire_days} onChange={(e) => setF({ ...f, default_expire_days: Number(e.target.value) })} /></label>
-        <label className="f"><span>Dates are written as <span className="hint">(on the documents)</span></span>
-          <select value={f.default_date_format} aria-describedby="set-dates" onChange={(e) => setF({ ...f, default_date_format: e.target.value })}>
-            {DATE_FORMAT_CHOICES.map((x) => <option key={x} value={x}>{formatDate(new Date(), x, deviceZone())} ({x})</option>)}
-          </select>
-        </label>
       </div>
-      <p className="muted small" id="set-dates"><b>How dates are written.</b> New envelopes start with this format, and whoever sends can change it for one envelope on the last step, under More options. It is used for the date each person signs on and for dates they pick in a date field. A format with the month as a word cannot be misread: 03/04/2026 is 3 April in most of the world and 4 March in the United States.</p>
-      {/* Said in full, because a new account has reminders on without anyone having chosen that. */}
-      <p className="muted small" id="set-reminders"><b>New envelopes start like this.</b> {reminderText(f.default_reminder_days)} A new account starts at {DEFAULT_REMINDER_DAYS} days. Whoever sends sees the setting on the last step before sending and can change it for that envelope. Envelopes that are already out keep what they were sent with.</p>
       <p className="muted small">Emails to your recipients come from "{me.user.name} via GrowSigning" and replies go straight to you.</p>
-      <button className="btn primary" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (toast('Saved'), me.reload())).catch(oops)}>Save</button>
-      {/* Saves by itself, so it stands below the Save button of the boxes above (settings/TreesOnRecord.tsx). */}
+      <div className="row"><button className="btn" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (saved(), me.reload())).catch(oops)}>Save</button>{said}</div>
+      {/* A switch that saves by itself, set apart from the Save button of the boxes above (settings/TreesOnRecord.tsx). */}
       <TreesOnRecord />
     </div>
   );
@@ -817,7 +837,21 @@ function Billing() {
   );
 }
 
-function YourData() {
+// The two lists of what closing an account deletes and keeps, closed until someone wants them.
+function WhatIsKept() {
+  return (
+    <details data-fold="" className="set-kept">
+      <summary className="set-fold">What is kept</summary>
+      <div className="grid g2" style={{ margin: '10px 0 0' }}>
+        <div><b>Deleted for good</b><ul className="rules small" style={{ marginTop: 6 }}>{DELETED_WITH_ACCOUNT.map((x) => <li key={x}>{x}</li>)}</ul></div>
+        <div><b>Kept</b><ul className="rules small" style={{ marginTop: 6 }}>{KEPT_AFTER_DELETION.map((x) => <li key={x}>{x}</li>)}</ul></div>
+      </div>
+    </details>
+  );
+}
+
+// `only` draws one of its two cards: an admin has Export open and Close your account behind More options.
+function YourData({ only }: { only?: 'export' | 'close' } = {}) {
   const me = useMe();
   const [info] = useLoad(() => api('/me/delete'));
   const [open, setOpen] = useState(false);
@@ -843,15 +877,15 @@ function YourData() {
 
   return (
     <div className="stack">
-      <div className="card row between wrap">
+      {only !== 'close' && <div className="card row between wrap" data-item="card">
         <div style={{ maxWidth: 600 }}>
           <h2>Take everything with you</h2>
           <p className="muted" style={{ margin: '6px 0 0' }}>One ZIP file with every signed PDF and its certificate, the full audit trail of every envelope, and a spreadsheet listing them all. Free on every plan, as often as you like, and it keeps working if you cancel.</p>
         </div>
-        <a className="btn primary" href="/api/export">Export everything</a>
-      </div>
+        <a className="btn" href="/api/export">Export everything</a>
+      </div>}
 
-      <div className="card">
+      {only !== 'export' && <div className="card" data-item="card">
         <h2>Close your account</h2>
         <p className="muted" style={{ margin: '6px 0 12px' }}>Closing is separate from cancelling a plan. If you only want to stop paying, <button className="linklike" onClick={() => window.location.assign('/app/settings?tab=billing')}>cancel the plan</button> instead and keep all your documents.</p>
         {blocked.length > 0 ? (
@@ -859,10 +893,7 @@ function YourData() {
             <div className="notice warn">You own {blocked.map((n) => `"${n}"`).join(' and ')} and other people still use it. Make one of them the owner on the Team tab first, then you can close your own account.</div>
             {/* What closing would remove and keep is said here too, so nobody has to hand an account over to find out. */}
             <p className="muted small" style={{ margin: '14px 0 0' }}>Once you can close it, this is what goes and what stays. An account you have handed to someone else is theirs then and is not deleted.</p>
-            <div className="grid g2" style={{ margin: '10px 0 0' }}>
-              <div><b>Deleted for good</b><ul className="rules small" style={{ marginTop: 6 }}>{DELETED_WITH_ACCOUNT.map((x) => <li key={x}>{x}</li>)}</ul></div>
-              <div><b>Kept</b><ul className="rules small" style={{ marginTop: 6 }}>{KEPT_AFTER_DELETION.map((x) => <li key={x}>{x}</li>)}</ul></div>
-            </div>
+            <WhatIsKept />
           </>
         ) : (
           <>
@@ -871,25 +902,22 @@ function YourData() {
               <li>Any subscription is cancelled at once. If the payment provider still takes a payment before it has confirmed that, the software refunds it by itself.</li>
               <li><b>Nothing is deleted for {CLOSE_GRACE_DAYS} days.</b> If you change your mind, or closed it by mistake, sign in again and the account comes straight back. We email you {CLOSING_REMINDER_DAYS} days before the end with the date and how to keep it.</li>
               <li>While it is closing, nothing new starts in it: nothing can be sent, nobody can be invited or join, and public forms take no new signatures.</li>
-              <li>After {CLOSE_GRACE_DAYS} days {owned.length ? `the account and its ${owned.reduce((n, a) => n + a.envelopes, 0)} envelope(s) are` : 'your login is'} removed for good. Export first if you want copies. The lists below say exactly what goes and what stays.</li>
+              <li>After {CLOSE_GRACE_DAYS} days {owned.length ? `the account and its ${owned.reduce((n, a) => n + a.envelopes, 0)} envelope(s) are` : 'your login is'} removed for good. Export first if you want copies. &quot;What is kept&quot; below says exactly what goes and what stays.</li>
               {inFlight > 0 && <li>{inFlight} envelope(s) are still out for signature. People can keep signing during the {CLOSE_GRACE_DAYS} days.</li>}
               {keys.length > 0 && <li><b>{keys.length === 1 ? 'Your API key stops' : `Your ${keys.length} API keys stop`} working at once:</b> {keys.map((k) => `"${k.name}" in ${k.account}`).join(', ')}. Whatever uses {keys.length === 1 ? 'it' : 'them'} starts failing straight away, and {keys.length === 1 ? 'it works' : 'they work'} again only if you sign in within the 30 days.{keys.some((k) => k.team) ? ' The admins of a team a key belongs to are told by email.' : ''}</li>}
             </ul>
-            <div className="grid g2" style={{ margin: '14px 0' }}>
-              <div><b>Deleted for good</b><ul className="rules small" style={{ marginTop: 6 }}>{DELETED_WITH_ACCOUNT.map((x) => <li key={x}>{x}</li>)}</ul></div>
-              <div><b>Kept</b><ul className="rules small" style={{ marginTop: 6 }}>{KEPT_AFTER_DELETION.map((x) => <li key={x}>{x}</li>)}</ul></div>
-            </div>
+            <WhatIsKept />
             <button className="btn danger" onClick={() => setOpen(true)}>Close my account</button>
           </>
         )}
-      </div>
+      </div>}
 
       {open && (
         <Modal title="Close your account" onClose={() => setOpen(false)}>
           {me.user.has_password === false ? (
             // Someone who signs in with Google or Microsoft has no password to type here. They are told how to get
             // one, and the button below stays off until they have it.
-            <div className="notice warn" style={{ marginBottom: 12 }}>Closing an account is confirmed with your password, and this login has none yet because you sign in another way. Set one first: open <button className="linklike" onClick={() => window.location.assign('/app/settings?tab=profile')}>Settings, Profile</button> and choose &quot;Email me a link to set a password&quot;. Then come back here. Nothing has been changed.</div>
+            <div className="notice warn" style={{ marginBottom: 12 }}>Closing an account is confirmed with your password, and this login has none yet because you sign in another way. Set one first: open <button className="linklike" onClick={() => window.location.assign('/app/settings?tab=security')}>Settings, Security</button> and choose &quot;Email me a link to set a password&quot;. Then come back here. Nothing has been changed.</div>
           ) : (
             <>
               <p>Enter your password to confirm it is you, <bdi>{me.user.name}</bdi>.</p>
@@ -910,16 +938,21 @@ function YourData() {
 // Checkout sessions this page has already confirmed, so coming back is handled once.
 const returned = new Set<string>();
 
-const TABS: [string, string][] = [['profile', 'Profile'], ['notifications', 'Notifications'], ['account', 'Account'], ['team', 'Team'], ['stamps', 'Stamps'], ['billing', 'Plan'], ['data', 'Your data'], ['developers', 'API and webhooks'], ['security', 'Security']];
-// Tabs only admins have: a member is never shown one that would only say "admins only".
-const ADMIN_TABS = new Set(['security']);
 
 export default function Settings() {
   const me = useMe();
   const [tab, setTab] = useState('profile');
+  // Said once when a link asked for a section this person does not have (src/lib/settingsnav.ts).
+  const [note, setNote] = useState('');
+  // The sections this person has: an owner or admin at most 10, a member at most 4.
+  const TABS = sectionsFor(me.role);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    if (q.get('tab')) setTab(q.get('tab')!);
+    const to = landingFor(me.role, q.get('tab'), window.location.hash, !!(q.get('signin') || q.get('signin_error')));
+    setTab(to.tab);
+    setNote(to.note || '');
+    // An old link to something that moved: bring it into view once its section is drawn.
+    if (to.focus) setTimeout(() => document.getElementById(to.focus!)?.scrollIntoView({ block: 'start' }), 400);
     if ((q.get('upgraded') || q.get('topped')) && !returned.has(q.get('session_id') || '')) {
       returned.add(q.get('session_id') || '');
       // Back from checkout: apply the plan or the top-up right away rather than waiting for the payment provider to tell us.
@@ -941,27 +974,29 @@ export default function Settings() {
     document.querySelector('.tabs .on')?.scrollIntoView({ inline: 'center', block: 'nearest' });
   }, [tab]);
   const pick = (k: string) => {
-    setTab(k);
+    setTab(k as typeof tab);
+    setNote('');
     window.history.replaceState(null, '', `/app/settings?tab=${k}`);
   };
   return (
     <div>
       <div className="pagehead"><h1 className="serif">Settings</h1></div>
-      <div className="tabs" role="tablist">{TABS.filter(([k]) => !ADMIN_TABS.has(k) || me.role !== 'member').map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>{l}</button>)}</div>
+      <div className="tabs" role="tablist">{TABS.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>{l}</button>)}</div>
+      {note && <div className="notice" role="status" style={{ marginBottom: 16 }}>{note}</div>}
       {tab === 'profile' && <Profile />}
-      {tab === 'notifications' && <Notifications />}
-      {tab === 'account' && <Account />}
+      {tab === 'security' && <Security />}
+      {tab === 'account' && <Card><Account /></Card>}
       {tab === 'account' && <LanguageSettings />}
-      {tab === 'account' && <CustomFieldSettings />}
+      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><CustomFieldSettings /></div>}
       {tab === 'team' && <Team />}
       {tab === 'billing' && <Billing />}
-      {tab === 'data' && <RetentionSettings />}
+      {tab === 'data' && <Card><RetentionSettings /></Card>}
       {tab === 'data' && <ArchiveSettings />}
       {tab === 'data' && <SealStatus />}
-      {tab === 'data' && <YourData />}
+      {tab === 'data' && <YourData only="export" />}
+      {tab === 'data' && <MoreOptions><YourData only="close" /></MoreOptions>}
       {tab === 'developers' && <Developers />}
-      {tab === 'stamps' && <StampSettings />}
-      {tab === 'security' && <SecurityLog />}
+      {tab === 'stamps' && <Card><StampSettings /></Card>}
     </div>
   );
 }

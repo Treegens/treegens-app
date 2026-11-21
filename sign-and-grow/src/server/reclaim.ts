@@ -91,7 +91,7 @@ export async function tellRemoved(user: { email: string }, r: Removed, how: stri
     to: user.email, subject: 'What we removed from your GrowSigning login', heading: 'What we removed from your login',
     lines: [`${how} Until then nobody had shown that the address ${user.email} was theirs, so anything set up in the login before could have been set up by someone else. To be safe, we removed it.`, said,
       'If you set these things up yourself, you can set them up again under Settings. If you did not, there is nothing more to do: the person who did can no longer sign in to this login.'],
-    cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=profile` },
+    cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=security` },
   });
 }
 

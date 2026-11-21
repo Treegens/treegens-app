@@ -26,7 +26,7 @@ export function precheck(file: File, shrinksFirst = false, converts = false): st
   if (file.size === 0) return 'This file is empty. Choose a different file.';
   // A guess from the name and type only: the server decides by the bytes (src/server/convert.ts).
   const known = /\.(pdf|png|jpe?g)$/i.test(file.name) || ['application/pdf', 'image/png', 'image/jpeg'].includes(file.type) || (converts && isConvertible(file));
-  if (!known) return notTaken(converts);
+  if (!known) return notTaken(converts, file);
   return '';
 }
 

@@ -33,7 +33,7 @@ export function MailStopHint({ r }: { r: any }) {
   );
   if (r.bounced_at) return (
     <p className="sn-hint warn">
-      <b>Could not be delivered:</b> {r.bounce_reason || 'their mail server will not take email for this address'}. No reminders go to {r.email} until you do something. Choose <b>Correct</b> to put in the right address, and a new email goes out at once. If the address is right and the mailbox works again, choose <b>Try again</b>. You can also send them the link yourself. <Link href="/help#bounced">What this means</Link>
+      <b>Could not be delivered:</b> {r.bounce_reason || 'their mail server will not take email for this address'}. No reminders go to {r.email} until you do something. Choose <b>Change person</b>, in their More, to put in the right address, and a new email goes out at once. If the address is right and the mailbox works again, choose <b>Try again</b>. You can also send them the link yourself. <Link href="/help#bounced">What this means</Link>
     </p>
   );
   return null;

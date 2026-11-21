@@ -304,7 +304,7 @@ async function afterwards(seqs: number[]) {
         const name = userName(r.actor_id)?.name || 'a member of the team';
         await alert(r.account_id, 'failed_signins', 'Many failed sign-ins',
           [forPerson >= ALERT_FAILED_SIGNINS_HOUR ? `In the last hour, ${forPerson} sign-ins to the login of ${name} failed. The latest was at ${at(r)}${from(r)}.` : `In the last hour, ${fromIp} sign-ins failed from the internet address ${r.ip}, to logins of ${team}. The latest was at ${at(r)}, for ${name}.`,
-            'If that was not someone on your team who forgot a password, someone may be trying to guess one. Ask the person to choose a long password they use nowhere else, and to switch on two-step login under Settings, Profile.']);
+            'If that was not someone on your team who forgot a password, someone may be trying to guess one. Ask the person to choose a long password they use nowhere else, and to switch on two-step login under Settings, Security.']);
       }
     } else if (r.kind === 'api_key.created') {
       await alert(r.account_id, 'api_key_created', 'An API key was made',

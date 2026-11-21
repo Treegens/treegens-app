@@ -104,7 +104,7 @@ export function SigningGroups() {
               ? <button type="button" className="btn sn-group-btn" onClick={() => setDraft({ ...draft, members: [...draft.members, { name: '', email: '' }] })}>Add a member</button>
               : <p className="muted small">A group can have up to {GROUP_MAX_MEMBERS} members. For more, make a second group.</p>}
           </fieldset>
-          {draft.id && <p className="muted small">Envelopes already sent to this group keep the members they went out with. To change who can act on one of those, open that envelope and choose Edit envelope. Drafts and templates that name the group use it as you save it here.</p>}
+          {draft.id && <p className="muted small">Envelopes already sent to this group keep the members they went out with. To change who can act on one of those, open that document and choose More, then Edit. Drafts and templates that name the group use it as you save it here.</p>}
           {problem && <div className="notice err" role="alert">{problem}</div>}
           <div className="sn-contact-actions">
             <button type="submit" className="btn primary sn-group-btn" disabled={saving}>{saving ? 'Saving…' : 'Save group'}</button>

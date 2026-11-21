@@ -77,7 +77,7 @@ export function Editor({ id }: { id: string }) {
     api(`/envelopes/${id}`).then(({ envelope: e }) => {
       if (!on) return;
       if (e.status !== 'draft' && !(e.kind === 'envelope' && e.status === 'sent')) {
-        toast(`This document is ${e.status}, so it can no longer be changed. Clone it to send a new version.`);
+        toast(`This document is ${e.status}, so it can no longer be changed. Copy it to send a new version.`);
         return router.replace(`/app/envelopes/${id}`);
       }
       // A template can be changed by the person it belongs to, by admins and by whoever its rule lets change it (the
@@ -466,7 +466,7 @@ export function Editor({ id }: { id: string }) {
         const q = sendAnywayAsk(e.data?.bounced || []);
         return confirm({ title: q.title, body: q.body, yes: 'Send anyway', no: 'Go back and check', onYes: () => void send(true) });
       }
-      toast('Sent. No paper involved.');
+      // The document's page says "Sent." in its banner (sender/AfterSend.tsx), so no toast says it a second time over the page.
       leave(`/app/envelopes/${id}?sent=1`);
     } catch (e) {
       // A required detail without a value: its box is marked and takes the cursor (sender/DetailBoxes.tsx).

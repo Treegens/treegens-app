@@ -1,4 +1,5 @@
 'use client';
+import { SentHead } from '@/components/impact/SenderTrees';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../ui';
@@ -37,28 +38,28 @@ export function AfterSend({ envelope }: { envelope: any }) {
     setBusy(true);
     setSaid(null);
     api('/me', { method: 'PATCH', body: { notify: { signed: next } } })
-      .then(() => (me.reload(), setSaid({ text: next ? 'Saved. You get an email as each person finishes, for this envelope and the ones you send from now on.' : 'Saved. No email for each signature.' })))
+      .then(() => (me.reload(), setSaid({ text: next ? 'Saved. You get an email as each person finishes, for this document and the ones you send from now on.' : 'Saved. No email for each signature.' })))
       .catch((e: any) => (setOn(!next), setSaid({ text: `${e?.status ? e.message : 'We could not reach the server.'} The setting was not changed. Try the switch again.`, err: true })))
       .finally(() => setBusy(false));
   };
   return (
     <section className="card sn-sent" aria-labelledby="sn-sent-h">
-      <h2 id="sn-sent-h">Sent. No paper involved.</h2>
+      {/* "Sent.", and the first time an account sends anything, the picture and its words (impact/SenderTrees.tsx). */}
+      <SentHead envelopeId={envelope.id} id="sn-sent-h" />
       <p className="muted">
         {me.user.notify?.completed !== false
-          ? <>We email you at {me.user.email} when {acting.length === 1 ? `${acting[0].name} has` : 'everyone has'} finished, and when something needs you.</>
-          : <>You have switched off the email that tells you when everyone has finished. You can switch it back on under <Link href="/app/settings?tab=notifications">Settings, Notifications</Link>.</>}
-        {' '}This page always shows where things stand.
+          ? <>We email you at {me.user.email} when {acting.length === 1 ? `${acting[0].name} has` : 'everyone has'} finished.</>
+          : <>You have switched off the email that tells you when everyone has finished. You can switch it back on under <Link href="/app/settings?tab=notifications">Settings, Profile</Link>.</>}
       </p>
       {/* People with no address, whose link the sender said they would send: nobody else will (OwnLink.tsx). */}
-      {own.length > 0 && <p className="sn-hint warn"><b>Now send {joinNames(own.map((r: any) => r.name))} the link yourself.</b> It is on {own.length === 1 ? 'their card' : 'each of their cards'} below. We do not write to them.</p>}
+      {own.length > 0 && <p className="sn-hint warn"><b>Now send {joinNames(own.map((r: any) => r.name))} the link yourself.</b> It is next to {own.length === 1 ? 'their name' : 'each of their names'} below. We do not write to them.</p>}
       {acting.length > 1 && (
         <>
           <label className="setting-row sn-switch">
             <input type="checkbox" role="switch" checked={on} disabled={busy} onChange={flip} aria-describedby="sn-sent-hint" />
             <span>
               <b>Email me each time someone signs</b>
-              <span id="sn-sent-hint" className="muted small" style={{ display: 'block' }}>One email as each of {joinNames(acting.map((r: any) => r.name))} finishes, not only at the end. This is your setting for every envelope you send, the same one as under Settings, Notifications.</span>
+              <span id="sn-sent-hint" className="muted small" style={{ display: 'block' }}>One email as each of {joinNames(acting.map((r: any) => r.name))} finishes, not only at the end. This is your setting for every document you send, the same one as under Settings, Notifications.</span>
             </span>
           </label>
           {said && <p className={`small${said.err ? ' sn-bad' : ' muted'}`} role={said.err ? 'alert' : 'status'} style={{ margin: '4px 0 0' }}>{said.text}</p>}

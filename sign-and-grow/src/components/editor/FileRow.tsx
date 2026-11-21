@@ -4,7 +4,6 @@ import { useMe } from '../AppShell';
 import { scanWarning } from '@/lib/scans';
 import { phoneWeight } from '@/lib/phone';
 import { acceptList, convertNotes } from '@/lib/convert';
-import { ConvertNotes } from './ConvertNotes';
 import { plural, type Ed } from './shared';
 
 // One file in step 1 (research/ux-charter.md, 2.3): its name, how many pages, and one More with what is done to a
@@ -24,8 +23,9 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
   // The server keeps which pages are pictures with the file, so this is also said when a draft is opened again.
   if (scanWarning(d)) notes.push(<p key="scan" className="notice warn small ed-file-note">{scanWarning(d)}</p>);
   if (phoneWeight(d)) notes.push(<p key="phone" className="notice warn small ed-file-note">{phoneWeight(d)}</p>);
-  // Made from a Word file or the like: the PDF is what is signed, and what may look different (ConvertNotes.tsx).
-  if (convertNotes(d.converted).length) notes.push(<ConvertNotes key="conv" d={d} />);
+  // Made from a Word file or the like: the PDF is what is signed, and what may look different. Each sentence is a
+  // note of its own, so the rule of this row holds for them too: one shows, the rest fold (src/lib/convert.ts).
+  for (const line of convertNotes(d.converted)) notes.push(<p key={line} className="notice warn small ed-file-note" data-feature="ds-convert">{line}</p>);
 
   return (
     <div data-item="file">
@@ -42,6 +42,8 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
           </label>
           {ed.docs.length > 1 && <button type="button" className="btn sm" disabled={i === 0} onClick={() => ed.moveDoc(i, -1)} aria-label={`Move ${name} up`}>Move up</button>}
           {ed.docs.length > 1 && <button type="button" className="btn sm" disabled={last} onClick={() => ed.moveDoc(i, 1)} aria-label={`Move ${name} down`}>Move down</button>}
+          {/* The file as it was uploaded, before it became a PDF (GET /files/:id/original). */}
+          {d.converted?.from && <a className="btn sm" data-feature="ds-convert" href={`/api/files/${d.file_id}/original`} download>Download {d.converted.from}</a>}
           <button type="button" className="btn sm danger" onClick={() => ed.removeDoc(d.id)} aria-label={`Remove ${name}`}>Remove</button>
         </div>
       )}

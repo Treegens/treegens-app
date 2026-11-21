@@ -5,10 +5,10 @@
 // Admins see how each one stands, send its link again, or remove it; a member reads only that copies go somewhere.
 // The rules are in src/lib/archivemail.ts, which the server and the emails use too. The card follows the designer's
 // note (research/ux-notes.json, "ds-mail-records"): one line of explanation, no expander, no filled button.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, useLoad, fmtDate } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
-import { ARCHIVE_MAX_ADDRESSES, ARCHIVE_BOUNCES_TO_PAUSE, ARCHIVE_ONE_LINE } from '@/lib/archivemail';
+import { ARCHIVE_MAX_ADDRESSES, ARCHIVE_BOUNCES_TO_PAUSE, ARCHIVE_ONE_LINE, archiveAddress } from '@/lib/archivemail';
 import { SOURCE_LOCALE, t } from '@/lib/i18n';
 
 // The sender's own screens are in English until they are translated, as in LanguageSettings.
@@ -29,12 +29,25 @@ export function ArchiveSettings() {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState('');
   const [said, setSaid] = useState<{ text: string; err?: boolean } | null>(null);
+  // Keyboard and screen reader: a pressed button is never switched off under the finger (the focus would fall to the
+  // top of the page), a second press while one is on its way is ignored, and after a change the focus goes to the
+  // field for the next address, or to the line that says the list is full.
+  const working = useRef(false);
+  const field = useRef<HTMLInputElement>(null);
+  const fullLine = useRef<HTMLParagraphElement>(null);
+  const [refocus, setRefocus] = useState(0);
+  const count = data?.addresses?.length ?? 0;
+  useEffect(() => {
+    if (refocus) (field.current || fullLine.current)?.focus();
+  }, [refocus, count]);
   if (failed) return me.role === 'member' ? null : <section className="card" style={{ marginTop: 16 }} {...CARD}><h2>{t(ui, 'settings.archive.title')}</h2><p className="notice err" role="alert">{failed.message || t(ui, 'settings.archive.load_failed')}</p></section>;
   if (!data) return null;
   // A member: one line when copies go somewhere, because their emails are copied too. Nothing otherwise.
   if (me.role === 'member' || !data.addresses) return data.taking ? <section className="card" style={{ marginTop: 16 }} aria-labelledby="archive-h" {...CARD}><h2 id="archive-h">{t(ui, 'settings.archive.title')}</h2><p className="muted" style={{ margin: 0 }}>{t(ui, 'settings.archive.member', { count: data.taking })} {ARCHIVE_ONE_LINE}</p></section> : null;
 
   const act = async (key: string, call: () => Promise<any>, after?: () => void) => {
+    if (working.current) return;
+    working.current = true;
     setBusy(key);
     setSaid(null);
     try {
@@ -45,11 +58,18 @@ export function ArchiveSettings() {
     } catch (e: any) {
       setSaid({ text: e?.status ? e.message : t(ui, 'settings.archive.offline'), err: true });
     } finally {
+      working.current = false;
       setBusy('');
     }
   };
-  const add = (address: string, again = false) => act(again ? address : 'add', () => api('/account/archive-addresses', { body: { email: address } }), () => !again && setEmail(''));
-  const remove = (a: any) => window.confirm(t(ui, 'settings.archive.remove_confirm', { email: a.email })) && act(a.id, () => api(`/account/archive-addresses/${a.id}`, { method: 'DELETE' }));
+  const again = (address: string) => act(address, () => api('/account/archive-addresses', { body: { email: address } }));
+  const add = () => {
+    if (!email.trim()) return field.current?.focus();
+    // Said in the card, in our words, and not only in the browser's own bubble.
+    if (!archiveAddress(email)) return (setSaid({ text: t(ui, 'settings.archive.bad_address'), err: true }), field.current?.focus());
+    act('add', () => api('/account/archive-addresses', { body: { email: email.trim() } }), () => (setEmail(''), setRefocus((n) => n + 1))).then(() => field.current?.focus());
+  };
+  const remove = (a: any) => window.confirm(t(ui, 'settings.archive.remove_confirm', { email: a.email })) && act(a.id, () => api(`/account/archive-addresses/${a.id}`, { method: 'DELETE' }), () => setRefocus((n) => n + 1));
   const full = data.addresses.length >= data.max;
 
   return (
@@ -67,22 +87,22 @@ export function ArchiveSettings() {
               {a.problem && a.state !== 'paused' && <div className="small">{a.problem}</div>}
               {data.may_change && (
                 <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
-                  {a.state !== 'confirmed' && <button type="button" className="btn sm" style={TAP} disabled={!!busy} onClick={() => add(a.email, true)} aria-label={t(ui, 'settings.archive.resend_for', { email: a.email })}>{t(ui, 'settings.archive.resend')}</button>}
-                  <button type="button" className="btn sm ghost" style={TAP} disabled={!!busy} onClick={() => remove(a)} aria-label={t(ui, 'settings.archive.remove_for', { email: a.email })}>{t(ui, 'settings.archive.remove')}</button>
+                  {a.state !== 'confirmed' && <button type="button" className="btn sm" style={TAP} aria-busy={busy === a.email} onClick={() => again(a.email)} aria-label={t(ui, 'settings.archive.resend_for', { email: a.email })}>{t(ui, 'settings.archive.resend')}</button>}
+                  <button type="button" className="btn sm ghost" style={TAP} aria-busy={busy === a.id} onClick={() => remove(a)} aria-label={t(ui, 'settings.archive.remove_for', { email: a.email })}>{t(ui, 'settings.archive.remove')}</button>
                 </div>
               )}
             </li>
           ))}
         </ul>
       )}
-      {(data.refused || []).map((r: any) => <p key={r.email} className="small muted" style={{ overflowWrap: 'anywhere' }}>{t(ui, 'settings.archive.refused', { email: r.email, until: fmtDate(r.can_ask_again_at) })}</p>)}
+      {(data.refused || []).map((r: any) => <p key={r.email} className="small muted" style={{ overflowWrap: 'anywhere' }}>{t(ui, r.why === 'spam' ? 'settings.archive.refused_spam' : 'settings.archive.refused', { email: r.email, until: fmtDate(r.can_ask_again_at) })}</p>)}
 
-      {data.may_change && (full ? <p className="small muted">{t(ui, 'settings.archive.full', { max: data.max })}</p> : (
-        <form onSubmit={(e) => (e.preventDefault(), email.trim() && !busy && add(email.trim()))} className="row wrap" style={{ gap: 8, alignItems: 'flex-end' }}>
+      {data.may_change && (full ? <p ref={fullLine} tabIndex={-1} className="small muted">{t(ui, 'settings.archive.full', { max: data.max })}</p> : (
+        <form noValidate onSubmit={(e) => (e.preventDefault(), add())} className="row wrap" style={{ gap: 8, alignItems: 'flex-end' }}>
           <label className="f" style={{ flex: '1 1 220px', margin: 0, minWidth: 0 }}><span>{t(ui, 'settings.archive.add_label')}</span>
-            <input type="email" inputMode="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} style={TAP} />
+            <input ref={field} type="email" inputMode="email" autoComplete="off" value={email} aria-invalid={said?.err && !!email ? true : undefined} onChange={(e) => (setEmail(e.target.value), setSaid(null))} style={TAP} />
           </label>
-          <button type="submit" className="btn" style={TAP} disabled={!!busy || !email.trim()}>{busy === 'add' ? t(ui, 'settings.archive.sending') : t(ui, 'settings.archive.add_button')}</button>
+          <button type="submit" className="btn" style={TAP} aria-busy={busy === 'add'}>{busy === 'add' ? t(ui, 'settings.archive.sending') : t(ui, 'settings.archive.add_button')}</button>
         </form>
       ))}
       {said && <p className={`notice${said.err ? ' err' : ''}`} role={said.err ? 'alert' : 'status'} style={{ marginTop: 12, marginBottom: 0 }}>{said.text}</p>}

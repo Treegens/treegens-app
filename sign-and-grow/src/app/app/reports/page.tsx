@@ -20,8 +20,8 @@ export default function Reports() {
 
       <div className="card">
         <h2 style={{ marginBottom: 14 }}>Envelopes per month</h2>
-        {r.months.length === 0 ? <div className="muted">Send your first envelope to see activity here.</div> : (
-          <div role="img" aria-label="Bar chart of envelopes sent and completed per month" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', height: 180, overflowX: 'auto' }}>
+        {r.months.length === 0 ? <div className="muted">Send your first document to see activity here.</div> : (
+          <div role="img" aria-label="Bar chart of documents sent and completed per month" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', height: 180, overflowX: 'auto' }}>
             {r.months.map((m: any) => (
               <div key={m.month} style={{ flex: '1 0 44px', maxWidth: 80, textAlign: 'center' }} title={`${m.month}: ${m.sent} sent, ${m.completed} completed`}>
                 <div className="small num" style={{ fontWeight: 600 }}>{m.sent}</div>

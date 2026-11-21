@@ -9,13 +9,11 @@ import { HelpChatButton } from './HelpChat';
 
 // Shared frame of the public pages: the top navigation, the footer and the live impact numbers.
 
-// Help is one entry, the button that opens the helper (HelpChat.tsx). The help page is the link inside it, and in the footer.
+// The top bar has four entries: Pricing, Help, Sign in, Start free (research/ux-charter.md, 2.7). Help is the button
+// that opens the helper (HelpChat.tsx); the help page is the link inside it, and in the footer. Everything else a
+// visitor may look for (checking an email or a signed document, security, trees planted, the API) is in the footer.
 const LINKS: [string, string][] = [
-  ['/impact', 'Impact'],
-  ['/check', 'Check an email'],
-  ['/security', 'Security'],
-  ['/verify', 'Verify a document'],
-  ['/developers', 'API'],
+  ['/pricing', 'Pricing'],
 ];
 
 export function PublicNav() {
@@ -61,7 +59,6 @@ export function PublicNav() {
           {/* On a phone the header has no room for the help chat's button, so it is the first thing in the menu. */}
           <HelpChatButton className="hc-menu">Help</HelpChatButton>
           {LINKS.map(([href, label]) => <Link key={href} href={href} {...current(href)} onClick={() => setOpen(false)}>{label}</Link>)}
-          <Link href="/#pricing" onClick={() => setOpen(false)}>Pricing</Link>
           <Link href="/login" onClick={() => setOpen(false)}>Sign in</Link>
         </nav>
       </header>
@@ -78,28 +75,27 @@ export function PublicFooter() {
         <div className="pub-foot-brand">
           <Link href="/" className="logo"><Logo height={22} /></Link>
           <p>100% of what you pay goes to Treegens tree planting.</p>
-          <p>Stuck? <Link href="/help#contact">Write to us</Link>{support?.email ? <> or email <a href={`mailto:${support.email}`}>{support.email}</a></> : null}. A person replies, and you do not need to log in.</p>
+          <p>Stuck? <Link href="/help">The help page</Link> has answers, or <Link href="/help#contact">write to us</Link>{support?.email ? <> or email <a href={`mailto:${support.email}`}>{support.email}</a></> : null}. A person replies, and you do not need to log in.</p>
         </div>
+        <nav aria-label="For signers">
+          <h2>For signers</h2>
+          <Link href="/check">Check an email</Link>
+          <Link href="/verify">Check a signed document</Link>
+          <Link href="/help#find-documents">Find my documents</Link>
+        </nav>
         <nav aria-label="Product">
           <h2>Product</h2>
-          <Link href="/#pricing">Pricing</Link>
-          <Link href="/impact">Impact</Link>
-          <Link href="/developers">API reference</Link>
-          <Link href="/signup">Start free</Link>
-        </nav>
-        <nav aria-label="Help">
-          <h2>Help</h2>
-          <Link href="/help">The help page</Link>
-          <Link href="/help#find-documents">Find my documents</Link>
-          <Link href="/help#cancel">Stop a subscription</Link>
-          <Link href="/help#contact">Contact a person</Link>
+          <Link href="/pricing">Pricing</Link>
+          <Link href="/features">What it does</Link>
+          <Link href="/impact">Trees planted</Link>
+          <Link href="/developers">Developers</Link>
         </nav>
         <nav aria-label="Trust">
           <h2>Trust</h2>
-          <Link href="/check">Check an email</Link>
-          <Link href="/verify">Verify a document</Link>
           <Link href="/security">Security</Link>
+          <Link href="/security/processing">Data processing</Link>
           <Link href="/security/disclosure">Report a weakness</Link>
+          <Link href="/help#cancel">Stop a subscription</Link>
         </nav>
       </div>
     </footer>

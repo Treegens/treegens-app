@@ -553,7 +553,7 @@ test('when the provider vouches for the address, it is connected to the existing
   const [told] = mailTo('ada@gmail.com').filter((m) => /Google can now open your GrowSigning login|Google can now open your GrowSigning login/.test(m.subject));
   assert.ok(told, 'the owner gets an email');
   assert.match(told.html, /because Google confirmed to us that ada@gmail\.com belongs to the person who just signed in there\. Your password is unchanged\./);
-  assert.match(told.html, /If it was not you: sign in, open Settings, Profile, and under &quot;Ways to sign in&quot; disconnect Google\. Then change your password/);
+  assert.match(told.html, /If it was not you: sign in, open Settings, Security, and under &quot;Ways to sign in&quot; disconnect Google\. Then change your password/);
   // The password still works, and the browser that was signed in stays signed in.
   assert.equal((await browser().post('/auth/login', { email: 'ada@gmail.com', password: PW })).status, 200);
   assert.equal((await whoIs(ada)).id, id);
@@ -573,7 +573,13 @@ test('a login somebody started in another person\'s name is theirs no longer onc
   // and waits. The address is never confirmed.
   const stranger = browser();
   assert.equal((await stranger.post('/auth/signup', { name: 'Not Really Val', email: 'val@gmail.com', password: 'known to the stranger' })).status, 200);
-  const key = (await stranger.post('/api-keys', { name: 'left behind' })).data.key;
+  // An unconfirmed login can no longer create a key (simplify-start, after the skeptic's round). This one stands for
+  // a key made before that rule: it is put in the table directly, and the sweep still has to remove it.
+  assert.equal((await stranger.post('/api-keys', { name: 'refused' })).status, 403);
+  const { sha256 } = await import('../src/server/util.ts');
+  const key = 'tsk_leftbehind0000000000000000000000';
+  const squat = db.get("SELECT u.id, m.account_id FROM users u JOIN memberships m ON m.user_id=u.id WHERE u.email='val@gmail.com'");
+  db.run('INSERT INTO api_keys (id, account_id, user_id, name, prefix, key_hash, created_at, scope) VALUES (?,?,?,?,?,?,?,?)', 'key_leftbehind', squat.account_id, squat.id, 'left behind', key.slice(0, 10), sha256(key), new Date().toISOString(), 'send');
   assert.equal((await new Client().call('GET', '/envelopes', undefined, { authorization: `Bearer ${key}` })).status, 200);
   // The real Val arrives with Google.
   const val = browser();
@@ -810,7 +816,7 @@ test('Settings lists the ways to sign in, and the last way in cannot be disconne
 
   // A second way in: Microsoft, connected from Settings. Then Google can go.
   const m = await connect(c, 'microsoft', microsoft('gil@work.example'));
-  assert.equal(m.location, 'http://test.local/app/settings?tab=profile&signin=connected&provider=microsoft');
+  assert.equal(m.location, 'http://test.local/app/settings?tab=security&signin=connected&provider=microsoft');
   ways = (await c.get('/me/signin')).data;
   assert.equal(ways.providers[1].connected[0].email, 'gil@work.example');
   const told = mailTo('gil@gmail.com').filter((x) => /Microsoft can now open your/.test(x.subject));

@@ -507,8 +507,8 @@ const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url),
 test('the screens show the rule and the lock before anyone types, and the pages promise only what the code keeps', async () => {
   const list = read('src/app/app/templates/page.tsx');
   assert.match(list, /<AccessMarks access=\{t\.access\} \/>/, 'the list marks "Admins only", "Chosen members" and "Wording locked"');
-  assert.equal(list.match(/onClick=\{\(\) => setRules\(t\)\} aria-label=\{`Who can use \$\{name\}`\}>Who can use this<\/button>/g)?.length, 2, 'on a phone and on a desktop, for everyone who sees the template');
-  assert.equal(list.match(/\(t\.access\?\.may_delete \?\? t\.may_change\) !== false && <button className="btn sm ghost danger"/g)?.length, 2, 'Delete only for its owner and admins');
+  assert.equal(list.match(/onClick=\{\(\) => setRules\(t\)\} aria-label=\{`Who can use \$\{name\}`\}>Who can use this<\/button>/g)?.length, 1, 'in the row\'s More (simplify-envelope: one row for phone and desktop), for everyone who sees the template');
+  assert.equal(list.match(/\(t\.access\?\.may_delete \?\? t\.may_change\) !== false && <button className="btn sm ghost danger"/g)?.length, 1, 'Delete only for its owner and admins');
   assert.doesNotMatch(list, /Everyone on your team can use every template/);
   const who = read('src/components/templates/WhoCanUse.tsx');
   assert.match(who, /<legend>Who can use it<\/legend>/);

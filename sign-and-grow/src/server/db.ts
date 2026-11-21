@@ -596,6 +596,9 @@ CREATE INDEX IF NOT EXISTS impact_signed_account ON impact_signed(account_id);
 CREATE INDEX IF NOT EXISTS impact_signed_envelope ON impact_signed(envelope_id);
 -- The first-time picture is shown once: who has seen it (a keyed hash for a person who signs, the account for a sender).
 CREATE TABLE IF NOT EXISTS impact_seen (key TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- Wrong confirmation codes typed for an email address, over every login made with it (confirmcode.ts). The key is an
+-- HMAC of the address, never the address; a row is forgotten 30 days after its first guess.
+CREATE TABLE IF NOT EXISTS confirm_guesses (address_key TEXT PRIMARY KEY, wrong INTEGER NOT NULL DEFAULT 0, first_at TEXT NOT NULL);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1131,6 +1134,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['emails', 'archive_draft', 'TEXT'],
   ['emails', 'archive_to', 'TEXT'],
   ['emails', 'archive_envelope', 'TEXT'],
+  // archive_refused.email_key: the inbox the address reaches, without a "+tag" (archiveKey in src/lib/archivemail.ts),
+  // so the "no" holds for every spelling. why: 'spam' when the email that asked was marked as spam, else the button.
+  ['archive_refused', 'email_key', 'TEXT'],
+  ['archive_refused', 'why', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

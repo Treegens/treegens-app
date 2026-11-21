@@ -5,19 +5,22 @@ import { api, useLoad, fmtDate, toast } from '@/components/ui';
 import { Mark } from '@/components/Brand';
 import { useMe } from '@/components/AppShell';
 import { NAV_START } from '@/lib/nav';
+import { listName } from '@/lib/docname';
 import { AllowanceCard } from '@/components/sender/UsageMeter';
 import { useAllowance } from '@/components/sender/allowance';
 import { fail } from '@/components/sender/feedback';
 import { cap, howLong, neverOpened, waitingOn } from '@/components/sender/lib';
 
 const SHOWN = 5;
+// How many waiting documents Home asks for. With that many or more, "See all" gives no number: it would be too low.
+const WAITING_ASKED = 100;
 
 export default function Home() {
   const me = useMe();
   const [rep] = useLoad(() => api('/reports/summary'));
   // What was completed lately, newest first: the thing people come back for is the signed copy.
   const [done] = useLoad(() => api('/envelopes?box=completed&limit=5'));
-  const [out] = useLoad(() => api('/envelopes?box=waiting&limit=100'));
+  const [out] = useLoad(() => api(`/envelopes?box=waiting&limit=${WAITING_ASKED}`));
   const [inbox] = useLoad(() => api('/inbox'));
   const [allowance] = useAllowance();
   const [nudging, setNudging] = useState('');
@@ -73,8 +76,8 @@ export default function Home() {
               <ul role="list">
                 {todo.map((i: any, n: number) => (
                   <li key={i.id + i.token} data-item="row">
-                    <div className="grow"><b>{i.subject}</b><div className="muted small">from {i.sender}{i.sent_at ? ` · ${howLong(i.sent_at)} ago` : ''}</div></div>
-                    <a className={`btn sm${n === 0 ? ' primary' : ''}`} href={`/sign/${i.token}`} aria-label={`${i.role === 'approver' ? 'Review' : i.role === 'viewer' ? 'View' : 'Sign'} ${i.subject}`}>{i.role === 'approver' ? 'Review' : i.role === 'viewer' ? 'View' : 'Sign'}</a>
+                    <div className="grow"><b>{listName(i.subject)}</b><div className="muted small">from {i.sender}{i.sent_at ? ` · ${howLong(i.sent_at)} ago` : ''}</div></div>
+                    <a className={`btn sm${n === 0 ? ' primary' : ''}`} href={`/sign/${i.token}`} aria-label={`${i.role === 'approver' ? 'Review' : i.role === 'viewer' ? 'View' : 'Sign'} ${listName(i.subject)}`}>{i.role === 'approver' ? 'Review' : i.role === 'viewer' ? 'View' : 'Sign'}</a>
                   </li>
                 ))}
               </ul>
@@ -82,17 +85,17 @@ export default function Home() {
           )}
           {others.length > 0 && (
             <section className="card sn-wait" aria-labelledby="sn-onothers-h">
-              <div className="row between"><h2 id="sn-onothers-h">Waiting on others</h2>{others.length > SHOWN && <Link href="/app/envelopes?box=waiting" className="small">See all {others.length}</Link>}</div>
+              <div className="row between"><h2 id="sn-onothers-h">Waiting on others</h2>{others.length > SHOWN && <Link href="/app/envelopes?box=waiting" className="small">{(out?.envelopes || []).length >= WAITING_ASKED ? 'See all' : `See all ${others.length}`}</Link>}</div>
               <ul role="list">
                 {others.slice(0, SHOWN).map(({ e, w }: any) => {
                   const cold = e.recipients.some((r: any) => neverOpened(r));
                   return (
                     <li key={e.id} data-item="row">
                       <div className="grow">
-                        <Link href={`/app/envelopes/${e.id}`} className="sn-subject">{e.subject}</Link>
+                        <Link href={`/app/envelopes/${e.id}`} className="sn-subject">{listName(e.subject) || 'Untitled'}</Link>
                         <div className="small"><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{cold ? <span className="sn-cold"> · not opened</span> : null}</div>
                       </div>
-                      <button className="btn sm" disabled={nudging === e.id} onClick={() => nudge(e)} aria-label={`Send a reminder for ${e.subject}`}>{nudging === e.id ? 'Sending…' : 'Remind'}</button>
+                      <button className="btn sm" disabled={nudging === e.id} onClick={() => nudge(e)} aria-label={`Send a reminder for ${listName(e.subject)}`}>{nudging === e.id ? 'Sending…' : 'Remind'}</button>
                     </li>
                   );
                 })}
@@ -114,10 +117,10 @@ export default function Home() {
             {completed.map((e: any) => (
               <li key={e.id} data-item="row">
                 <div className="grow">
-                  <Link href={`/app/envelopes/${e.id}`} className="sn-subject">{e.subject || 'Untitled'}</Link>
+                  <Link href={`/app/envelopes/${e.id}`} className="sn-subject">{listName(e.subject) || 'Untitled'}</Link>
                   <div className="muted small">Completed {fmtDate(e.completed_at || e.updated_at)}{e.recipients?.length ? ` · ${e.recipients.map((r: any) => r.name).filter(Boolean).join(', ')}` : ''}</div>
                 </div>
-                <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download ${e.subject || 'the signed document'}`}>Download</a>
+                <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download ${listName(e.subject) || 'the signed document'}`}>Download</a>
               </li>
             ))}
           </ul>

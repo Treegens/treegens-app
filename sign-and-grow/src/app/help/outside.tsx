@@ -95,7 +95,7 @@ export function SignatureKind() {
       <QA id="cannot-open" q="My signer says the page will not open where they are">
         <p>Some countries and some office networks do not let a website through. We have not tested from which places this one can be reached, so we make no promise about any country. Every email we send in your name that asks someone to sign (the request, the reminders and the notices about it) therefore ends with this line, and a reply to it comes to you. The list a signer gets from Find my documents comes from us and can name several senders, so it tells them to reply to your own email about the document instead.</p>
         <blockquote className="pub-quote"><p>{cannotOpenLine('you')}</p></blockquote>
-        <p>When someone writes that to you: open the envelope, choose <b>Preview PDF</b> and save the file. It is the document as it stands, with what has been filled in so far. Send it to them yourself, and collect their signature on paper or as a scan.</p>
+        <p>When someone writes that to you: open the document, choose <b>More</b>, then <b>Open the PDF</b>, and save the file. It is the document as it stands, with what has been filled in so far. Send it to them yourself, and collect their signature on paper or as a scan.</p>
         <p>A signature collected that way is outside GrowSigning. It is not on our certificate and not in the audit trail, so keep the paper or the scan yourself. The envelope here stays open until you void it or its deadline passes. If the others on it should still finish here, take that one person off with a correction instead.</p>
       </QA>
 

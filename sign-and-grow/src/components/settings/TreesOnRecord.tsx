@@ -23,13 +23,14 @@ export function TreesOnRecord() {
     reload();
     setBusy(false);
   };
+  // Drawn as a switch with its own line, apart from the Save button of the boxes above: it saves as it is flipped.
   return (
-    <div className="f" data-feature="impact" style={{ margin: '18px 0 0', paddingTop: 12, borderTop: '1px solid var(--line)' }}>
-      <label className="check" style={{ minHeight: 44 }}>
-        <input type="checkbox" checked={!!d.on} disabled={busy} aria-describedby="trees-record-hint" onChange={(e) => flip(e.target.checked)} /> Trees on the signing record
-        <span role="status" className="small" style={{ marginLeft: 8, color: 'var(--green)' }}>{saved ? 'Saved' : ''}</span>
-      </label>
-      <p className="muted small" id="trees-record-hint" style={{ margin: 0 }}>The signing record of a completed document ends with a box on the paper it saved, as an estimate, and the mangroves its paid signatures fund. Switch this off to leave that box off documents completed from now on. Screens and emails do not change.</p>
-    </div>
+    <label className="setting-row" data-feature="impact" style={{ margin: '22px 0 0', minHeight: 44 }}>
+      <input type="checkbox" role="switch" checked={!!d.on} disabled={busy} aria-describedby="trees-record-hint" onChange={(e) => flip(e.target.checked)} />
+      <span>
+        <b>Trees on the signing record</b> <span role="status" className="small" style={{ marginLeft: 6, color: 'var(--green)' }}>{saved ? 'Saved' : ''}</span>
+        <span className="muted small" id="trees-record-hint" style={{ display: 'block' }}>Adds the paper saved and the mangroves funded to the last page of documents completed from now on. Saves by itself.</span>
+      </span>
+    </label>
   );
 }

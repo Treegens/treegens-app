@@ -12,23 +12,26 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName } from 'pdf-lib';
 
 // Every stored file in this test is encrypted, so "kept like any file" is checked on the disk.
 process.env.FILE_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
 import { boot, Client, PNG, signUp, signAll, samplePdf, tokenFor, type Server } from './helpers.ts';
-import { detect, tiffPages, convertTesting, queueState, converterMode, UNPACKED_MAX } from '../src/server/convert.ts';
+import { detect, tiffPages, convertTesting, queueState, converterMode, sofficeLevel, convertMemoryMb, UNPACKED_MAX } from '../src/server/convert.ts';
+import { safeHtml } from '../src/server/convert-html.ts';
+import { boxed } from '../src/server/convert-box.ts';
 import { extractPages } from '../src/server/text.ts';
-import { acceptList, convertNotes, isConvertible, notTaken, uploadLimits, CONVERT_KINDS_TEXT, CONVERT_NOTE, KNOWN_EXT, checkingLabel } from '../src/lib/convert.ts';
+import { acceptList, convertNotes, isConvertible, notTaken, uploadLimits, uploadLimitsShort, converterConfigured, CONVERT_KINDS_TEXT, CONVERT_NOTE, KNOWN_EXT, checkingLabel } from '../src/lib/convert.ts';
 
 let db: Server['db'];
 before(async () => {
   ({ db } = await boot());
 });
 const ROOT = path.resolve(import.meta.dirname, '..');
+const hasSoffice = spawnSync('soffice', ['--version'], { timeout: 30_000 }).status === 0;
 const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 
-const SETTINGS = ['CONVERTER', 'CONVERTER_URL', 'CONVERT_TIMEOUT_MS', 'CONVERT_MAX_JOBS'];
+const SETTINGS = ['CONVERTER', 'CONVERTER_URL', 'CONVERT_TIMEOUT_MS', 'CONVERT_MAX_JOBS', 'CONVERT_MEMORY_MB'];
 const set = (o: Record<string, string | undefined>) => {
   for (const k of SETTINGS) delete process.env[k];
   for (const [k, v] of Object.entries(o)) if (v !== undefined) process.env[k] = v;
@@ -365,7 +368,16 @@ test('with no converter, uploads behave as before and the refusal names what nee
   const r = await put(c, docx(), 'Contract.docx');
   assert.equal(r.status, 400);
   assert.equal(r.data.code, 'needs_converter');
-  assert.match(r.data.error, /^This is a Word file\. Word, Excel, PowerPoint, OpenDocument, RTF, plain text, web page \(HTML\) and TIFF files need a converter to become a PDF, and this server has none set up\./);
+  // One plain thing to do, and nothing about what only the people who run the server can set up: that goes in a
+  // field of its own, for them.
+  assert.equal(r.data.error, 'This is a Word file. Save it as a PDF and add it again. Nothing was saved.');
+  assert.ok(!/converter|server|set up/i.test(r.data.error));
+  assert.match(r.data.operator_hint, /^Word, Excel, PowerPoint, OpenDocument, RTF, plain text, web page \(HTML\) and TIFF files are turned into a PDF only on a server with a converter \(CONVERTER or CONVERTER_URL\)\. This server has none set up\.$/);
+  // The browser says the same before a byte is sent, by the file's name, and the old sentence for anything else.
+  assert.equal(notTaken(false, { name: 'Contract.docx' }), 'This is a Word file. Save it as a PDF and add it again.');
+  assert.equal(notTaken(false, { name: 'Trees.xlsx' }), 'This is an Excel file. Save it as a PDF and add it again.');
+  assert.equal(notTaken(false, { name: 'x.gif' }), 'Upload a PDF, PNG or JPEG. Export Word or Google Docs files as PDF first.');
+  assert.match(read('src/components/editor/upload.ts'), /return notTaken\(converts, file\);/);
   assert.match((await put(c, utf8('GIF89a....'), 'x.gif')).data.error, /GIF picture.*Upload a PDF, PNG or JPEG\. Export Word or Google Docs files as PDF first\./);
   // With nothing to convert, nothing is unpacked: a bomb is refused like any Word file, at no cost.
   const t = Date.now();
@@ -441,7 +453,8 @@ test('a name that reads like a payment notice is not repeated on the certificate
   });
   assert.equal((await c.post(`/envelopes/${made.data.envelope.id}/send`)).status, 200);
   const detail = db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Converted to PDF'", made.data.envelope.id).detail;
-  assert.ok(!/PayPal|555/.test(detail), detail);
+  // (A fingerprint is random letters and digits and can hold "555" by chance, so it is left out of the check.)
+  assert.ok(!/PayPal|555/.test(detail.replace(/[0-9a-f]{64}/g, '')), detail);
   assert.match(detail, /^Converted from a \.docx file \(its name is left out of this record because it reads like a payment notice\)/);
 });
 
@@ -452,14 +465,15 @@ test('the words next to the converted pages: always the check, and tracked chang
   const c = await person();
   const tracked = (await put(c, docx(TRACKED), 'Contract.docx')).data;
   const words = convertNotes(tracked.converted);
-  assert.equal(words[0], 'Converted from Contract.docx. Check every page: the PDF is what people sign, and conversion can move text.');
-  assert.equal(words[1], 'This file has tracked changes or comments. Accept or remove them first: the PDF shows them as they print.');
-  assert.deepEqual(convertNotes((await put(c, docx(), 'Clean.docx')).data.converted), ['Converted from Clean.docx. Check every page: the PDF is what people sign, and conversion can move text.']);
+  // Most urgent first: what the sender must do before sending, then the line that is always said.
+  assert.equal(words[0], 'This file has tracked changes or comments. Accept or remove them first: the PDF shows them as they print.');
+  assert.equal(words[1], 'Converted from Contract.docx. Check every page before you send: the PDF is what people sign, and text can move.');
+  assert.deepEqual(convertNotes((await put(c, docx(), 'Clean.docx')).data.converted), ['Converted from Clean.docx. Check every page before you send: the PDF is what people sign, and text can move.']);
   assert.ok(convertNotes((await put(c, xlsx(), 'Trees.xlsx')).data.converted).includes('A sheet may be split across pages.'));
   // Outside content: a picture fetched from elsewhere counts, a web link someone clicks does not.
   const outsidePicture = docx(undefined, [['word/_rels/document.xml.rels', '<Relationships><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://pictures.example.com/a.png" TargetMode="External"/></Relationships>', true]]);
   const link = docx(undefined, [['word/_rels/document.xml.rels', '<Relationships><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/></Relationships>', true]]);
-  assert.ok(convertNotes((await put(c, outsidePicture, 'Pictures.docx')).data.converted).includes('This file points at outside content, which was not fetched.'));
+  assert.ok(convertNotes((await put(c, outsidePicture, 'Pictures.docx')).data.converted).includes('This file links to pictures or content stored elsewhere. They may be missing from the PDF.'));
   assert.deepEqual((await put(c, link, 'Link.docx')).data.converted.notes, []);
   assert.deepEqual((await put(c, utf8(HTML), 'Lease.html')).data.converted.notes, ['external']);
   const macros = docx(undefined, [['word/vbaProject.bin', 'macro bytes', true]]);
@@ -472,8 +486,25 @@ test('the words next to the converted pages: always the check, and tracked chang
   // The screens show them under each document in the editor and over its pages where fields are placed.
   // (simplify-editor: a file's row and its notes are in FileRow.tsx, which step 1 draws for each file.)
   assert.match(read('src/components/editor/StepAdd.tsx'), /<FileRow key=\{d\.id\} ed=\{ed\} d=\{d\} i=\{i\} \/>/);
-  assert.match(read('src/components/editor/FileRow.tsx'), /<ConvertNotes key="conv" d=\{d\} \/>/);
-  assert.match(read('src/components/editor/StepFields.tsx'), /<ConvertNotes d=\{d\}/);
+  // One note line under a file: every sentence is a note of its own in the row, so the first shows and the rest fold
+  // into "1 more note" with the file's other notes; over the pages the same, one line and a fold. Each carries the
+  // feature's key (charter P3), and no screen says "conversion" or names the tool.
+  const row = read('src/components/editor/FileRow.tsx');
+  assert.match(row, /for \(const line of convertNotes\(d\.converted\)\) notes\.push\(<p key=\{line\} className="notice warn small ed-file-note" data-feature="ds-convert">\{line\}<\/p>\);/);
+  assert.match(row, /\{notes\[0\]\}\s*\{notes\.length > 1 && \(\s*<details data-fold className="ed-fold">/);
+  const over = read('src/components/editor/ConvertNotes.tsx');
+  assert.match(over, /data-feature="ds-convert" role="note"/);
+  assert.match(over, /<p className="notice warn small" style=\{\{ margin: 0 \}\}>\{lines\[0\]\}<\/p>\s*\{lines\.length > 1 && \(\s*<details data-fold className="ed-fold">\s*<summary>\{plural\(lines\.length - 1, 'more note'\)\}<\/summary>/);
+  assert.match(read('src/components/editor/StepFields.tsx'), /<ConvertNotes d=\{d\} \/>/);
+  assert.match(read('src/components/editor/StepAdd.tsx'), /data-feature=\{me\.converts \? 'ds-convert' : undefined\}>\{uploadLimitsShort\(!!me\.converts\)\}/);
+  const onScreen = [...Object.values(CONVERT_NOTE), ...words, uploadLimitsShort(true), uploadLimitsShort(false), notTaken(false, { name: 'a.docx' }), checkingLabel('a.docx')].join(' ');
+  assert.ok(!/conversion|LibreOffice|Gotenberg|MIME|converter|fetched/i.test(onScreen), onScreen);
+  assert.equal(uploadLimitsShort(true), 'PDF, Word, Excel, PowerPoint or a picture. Up to 25 MB and 500 pages each.');
+  // What the sentence about macros says is what is done: a setting. It does not say a macro cannot run.
+  assert.equal(CONVERT_NOTE.macros, 'This file has macros. Macros are switched off when the PDF is made, so check that nothing is missing.');
+  assert.match(read('src/server/convert.ts'), /DisableMacrosExecution" oor:op="fuse"><value>true<\/value>/);
+  // A file's refusal never sticks out of its card on a phone.
+  assert.match(read('src/app/styles/editor.css'), /\.ed-uploads \{[^}]*grid-template-columns: minmax\(0, 1fr\);/);
 });
 
 // ---- 5. The accept list, the API description, the settings --------------------------------------------------------
@@ -498,7 +529,7 @@ test('the file picker offers office files only on a server that converts, and th
   assert.match(files, /CONVERTER/);
   assert.match(files, /converts/);
   assert.ok(spec.components.schemas.File.properties.converted);
-  for (const k of ['CONVERTER', 'CONVERTER_URL', 'CONVERT_TIMEOUT_MS', 'CONVERT_MAX_JOBS']) {
+  for (const k of ['CONVERTER', 'CONVERTER_URL', 'CONVERT_TIMEOUT_MS', 'CONVERT_MAX_JOBS', 'CONVERT_MEMORY_MB']) {
     assert.match(read('.env.example'), new RegExp(`# ${k}=`), k);
     assert.match(read('README.md'), new RegExp(`\\| \`${k}\``), k);
   }
@@ -619,7 +650,6 @@ test('one account converts at most 60 files an hour, and is told when it can go 
   assert.equal((await put(await person(), small, 'Other.docx')).status, 200);
 });
 
-const hasSoffice = spawnSync('soffice', ['--version'], { timeout: 30_000 }).status === 0;
 test('the real LibreOffice turns a Word file, a sheet, a web page and a text into PDFs', { skip: !hasSoffice && 'LibreOffice is not installed here' }, async () => {
   set({ CONVERTER: 'soffice', CONVERT_TIMEOUT_MS: '120000' });
   const c = await person();
@@ -644,4 +674,237 @@ test('the real LibreOffice turns a Word file, a sheet, a web page and a text int
   const txt = await put(c, utf8('First line of the note\nZweite Zeile: Größe\n'), 'Note.txt');
   assert.equal(txt.status, 200, JSON.stringify(txt.data));
   assert.match((await extractPages(new Uint8Array((await c.get(`/files/${txt.data.id}/content`)).data))).join(' '), /Größe/);
+});
+
+// ---- Repairs: what a file names outside itself, memory, an empty text, the original given back ---------------------
+
+// A picture that can be found again inside a PDF by its size.
+function picture(w = 137, h = 91): Buffer {
+  const chunk = (t: string, d: Buffer) => {
+    const l = Buffer.alloc(4); l.writeUInt32BE(d.length);
+    const td = Buffer.concat([Buffer.from(t), d]);
+    const c = Buffer.alloc(4); c.writeUInt32BE(zlib.crc32(td) >>> 0);
+    return Buffer.concat([l, td, c]);
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) raw[y * (w * 3 + 1) + 1 + x * 3] = 255;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+async function picturesIn(pdf: Uint8Array): Promise<string[]> {
+  const d = await PDFDocument.load(pdf);
+  const out: string[] = [];
+  for (const [, o] of d.context.enumerateIndirectObjects()) {
+    const dict: any = (o as any).dict;
+    if (dict && String(dict.get(PDFName.of('Subtype'))) === '/Image') out.push(`${dict.get(PDFName.of('Width'))}x${dict.get(PDFName.of('Height'))}`);
+  }
+  return out;
+}
+const SECRET = '/srv/secret/photo.png';
+// Every way found (and a few more) for a web page to name a file on the server's disk or on another server.
+const HTML_ATTACKS: Record<string, string> = {
+  'body background, a bare path': `<html><body background="${SECRET}"><p>hello</p></body></html>`,
+  'body background, file://': `<html><body background="file://${SECRET}"><p>hello</p></body></html>`,
+  'body background, no quotes': `<html><body background=${SECRET}><p>hello</p></body></html>`,
+  'body background, single quotes and capitals': `<HTML><BODY BACKGROUND='${SECRET}'><p>hello</p></BODY></HTML>`,
+  'body background, spelled with entities': `<html><body background="&#102;ile&colon;//${SECRET.replace(/\//g, '&#x2f;')}"><p>hello</p></body></html>`,
+  'a style sheet': `<html><head><style>body{background:url(file://${SECRET})}</style></head><body><p>hello</p></body></html>`,
+  'a style sheet with an escape': `<html><head><style>body{background:u\\rl(file://${SECRET})}</style></head><body><p>hello</p></body></html>`,
+  'a style sheet with a comment inside the word': `<html><head><style>body{background:ur/**/l("${SECRET}")}</style></head><body><p>hello</p></body></html>`,
+  'a style sheet that imports another': `<html><head><style>@import "${SECRET}.css";</style></head><body><p>hello</p></body></html>`,
+  'a style attribute': `<html><body><p style="background-image:url('${SECRET}')">hello</p></body></html>`,
+  'a style attribute with entities': `<html><body><p style="background-image:&#117;rl(${SECRET})">hello</p></body></html>`,
+  'a table and a cell': `<html><body><table background="${SECRET}"><tr><td background="${SECRET}">x</td></tr></table></body></html>`,
+  'a picture': `<html><body><img src="${SECRET}"><img src="file://${SECRET}"><img src="//10.0.0.1${SECRET}"><img srcset="${SECRET} 2x" lowsrc="${SECRET}" dynsrc="${SECRET}"></body></html>`,
+  'a picture on another server': `<html><body><img src="https://pictures.example.com${SECRET}"></body></html>`,
+  'a linked style sheet and a base': `<html><head><base href="file:///srv/secret/"><link rel="stylesheet" href="${SECRET}.css"></head><body>x</body></html>`,
+  'frames, objects, embeds': `<html><body><iframe src="${SECRET}"></iframe><object data="${SECRET}"></object><embed src="${SECRET}"><frameset><frame src="${SECRET}"></frameset></body></html>`,
+  'an input and a list': `<html><body><input type="image" src="${SECRET}"><ul style="list-style-image:url(${SECRET})"><li>x</li></ul></body></html>`,
+  'inside a comment and a declaration': `<!DOCTYPE html SYSTEM "file://${SECRET}"><?xml-stylesheet href="${SECRET}"?><html><!--[if gte mso 9]><body background="${SECRET}"><![endif]--><body><p>hello</p></body></html>`,
+  'a refresh': `<html><head><meta http-equiv="refresh" content="0;url=file://${SECRET}"></head><body>x</body></html>`,
+  'an attribute nobody listed': `<html><body><div madeup="file://${SECRET}" other="${SECRET}" third="../../..${SECRET}">x</div></body></html>`,
+  'a tag that never closes': `<html><body><p>hello</p><body background="${SECRET}"`,
+  'a link to a file on the disk': `<html><body><a href="file://${SECRET}">open</a></body></html>`,
+};
+// Taken out without a note: what sat there was never content of the page.
+const QUIET = new Set(['inside a comment and a declaration', 'a refresh']);
+
+test('a web page is converted without anything it names outside itself, however it is spelled', () => {
+  for (const [name, page] of Object.entries(HTML_ATTACKS)) {
+    const r = safeHtml(page);
+    assert.ok(!/srv|secret|photo|10\.0\.0\.1|pictures\.example/i.test(r.html.replace(/&#?\w+;/g, '')), `${name}: ${r.html}`);
+    assert.ok(!/url\s*\(|@import|background\s*=|src\s*=|<link|<base|<iframe|<object|<embed|<frame|http-equiv/i.test(r.html), `${name}: ${r.html}`);
+    // What sat in a comment or a declaration was never going to be loaded, so it goes without a note.
+    assert.equal(r.removed > 0, !QUIET.has(name), `${name}: counted, so the sender is told`);
+  }
+  // What a page carries inside itself stays, and so do its words, its links to click and its plain styles.
+  const inline = `data:image/png;base64,${picture(3, 2).toString('base64')}`;
+  const good = `<!doctype html><html><head><meta charset="utf-8"><title>Lease</title><style>p{color:red;background:url(${inline})}</style></head><body bgcolor="#ffffff"><h1 align="center">Lease &amp; rent</h1><p style="font-weight:bold">Gr\u00fc\u00dfe, 5 < 7</p><img src="${inline}" alt="a tree" width="3"><a href="https://example.com/a?b=1&amp;c=2">terms</a><a href="mailto:ada@example.com">write</a><table border="1"><tr><td colspan="2">x</td></tr></table></body></html>`;
+  const kept = safeHtml(good);
+  assert.equal(kept.removed, 0, kept.html);
+  for (const part of ['<!DOCTYPE html>', '<meta charset="utf-8">', `background:url(${inline})`, '<body bgcolor="#ffffff">', '<h1 align="center">Lease &amp; rent</h1>', 'Gr\u00fc\u00dfe, 5 &lt; 7', `<img src="${inline}" alt="a tree" width="3">`, '<a href="https://example.com/a?b=1&amp;c=2">terms</a>', '<a href="mailto:ada@example.com">write</a>', '<td colspan="2">x</td>']) assert.ok(kept.html.includes(part), `${part} in ${kept.html}`);
+  // A script goes without a note (it names nothing outside), and so does an encoding in which "<" has other spellings.
+  const quiet = safeHtml('<html><head><meta charset="utf-7"><script>alert(1)</script></head><body onload="x()"><p onclick="y()">hello</p></body></html>');
+  assert.equal(quiet.html, '<html><head></head><body><p>hello</p></body></html>');
+  assert.equal(quiet.removed, 0);
+});
+
+const hasBox = spawnSync('unshare', ['-rnmpf', 'true']).status === 0;
+test('the box a job runs in holds LibreOffice and the job folder, and nothing else of this machine', { skip: !hasBox && 'unshare -rnmpf does not work on this machine' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-convert-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-outside-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'work'));
+    fs.writeFileSync(path.join(dir, 'work', 'mine.txt'), 'the job file');
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'SECRET ON DISK');
+    const look = [
+      `cat ${outside}/secret.txt 2>&1`, `ls ${ROOT} 2>&1`, 'ls /home /root /tmp /var/log /etc/passwd /etc/shadow 2>&1', `ls ${process.env.DATA_DIR} 2>&1`,
+      'echo "work: $(cat /work/mine.txt)"', 'echo made > /work/out.txt', 'echo "pids: $(ls /proc | grep -c "^[0-9]")"', 'echo "nets: $(ls /sys/class/net 2>/dev/null | tr "\\n" " ")$(cat /proc/net/dev | tail -n +3 | cut -d: -f1 | tr -d " " | tr "\\n" " ")"',
+      'touch /usr/x 2>&1 || echo "usr is read-only"', 'echo "old root: $(ls -a / | grep -c "^\\.old$") $(grep -c "/\\.old" /proc/self/mountinfo)"', 'echo "root: $(ls / | tr "\\n" " ")"',
+    ].join('; ');
+    const c = boxed('box', { unshare: 'unshare', dir, memKb: 1024 * 1024, program: 'sh', args: ['-c', look] });
+    const r = spawnSync(c.cmd, c.args, { encoding: 'utf8', cwd: path.join(dir, 'work'), env: { PATH: process.env.PATH } as any });
+    const said = r.stdout + r.stderr;
+    assert.equal(r.status, 0, said);
+    assert.ok(!said.includes('SECRET ON DISK'), said);
+    assert.ok(!/package\.json|README\.md|node_modules/.test(said), `the app is not there: ${said}`);
+    assert.ok(!/sg-outside|\.sqlite|blobs/.test(said.split('\n').filter((l) => !/No such file or directory$/.test(l)).join('\n')), said);
+    assert.match(said, /work: the job file/);
+    assert.match(said, /nets: lo $/m, 'only the loopback');
+    assert.match(said, /usr is read-only/);
+    // The machine's own root was let go (pivot_root, then unmounted), so breaking out of the new root leads nowhere.
+    assert.match(said, /old root: 0 0/);
+    assert.match(read('src/server/convert-box.ts'), /pivot_root \. \.old\nexec chroot \. sh -c 'umount -l \/\.old && rmdir \/\.old/);
+    assert.match(said, /root: (bin )?dev etc (lib\w* )*proc (sbin )?tmp usr (var )?work $/m, said);
+    assert.ok(Number(/pids: (\d+)/.exec(said)![1]) < 8, 'it sees its own processes only');
+    assert.equal(fs.readFileSync(path.join(dir, 'work', 'out.txt'), 'utf8'), 'made\n', 'what it writes in /work is the job folder');
+    // Nothing of the box is left on this machine once the job is over.
+    assert.deepEqual(fs.readdirSync(path.join(dir, 'root')), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('the real LibreOffice: a page cannot pull a picture from the disk into the PDF, boxed or not, and a tiny file cannot take the memory', { skip: !hasSoffice && 'LibreOffice is not installed here' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-outside-'));
+  const pic = path.join(dir, 'secret.png');
+  fs.writeFileSync(pic, picture());
+  fs.chmodSync(dir, 0o755);
+  const inline = `data:image/png;base64,${picture().toString('base64')}`;
+  const pages = [`<html><body background="${pic}"><p>hello</p></body></html>`, `<html><head><style>body{background:url(file://${pic})}</style></head><body background="file://${pic}"><p>hello</p><img src="${pic}"></body></html>`];
+  try {
+    // First with every wall this machine allows, then with none of them: the page is cleaned either way.
+    for (const walls of [true, false]) {
+      set({ CONVERTER: 'soffice', CONVERT_TIMEOUT_MS: '120000' });
+      convertTesting.unshare = walls ? 'unshare' : '';
+      convertTesting.forget();
+      assert.equal(await sofficeLevel(), walls ? (hasBox ? 'box' : (await sofficeLevel())) : 'open');
+      const c = await person();
+      for (const page of pages) {
+        const r = await put(c, utf8(page), 'Page.html');
+        assert.equal(r.status, 200, JSON.stringify(r.data));
+        assert.deepEqual(r.data.converted.notes, ['external'], 'the sender is told something is missing');
+        const pdf = new Uint8Array((await c.get(`/files/${r.data.id}/content`)).data);
+        assert.deepEqual(await picturesIn(pdf), [], `walls ${walls}: ${page}`);
+        assert.match((await extractPages(pdf)).join(' '), /hello/);
+      }
+      // The test can see a picture when there is one: the same picture carried inside the page is in the PDF.
+      const own = await put(c, utf8(`<html><body><p>hello</p><img src="${inline}"></body></html>`), 'Own.html');
+      assert.deepEqual(own.data.converted.notes, []);
+      assert.deepEqual(await picturesIn(new Uint8Array((await c.get(`/files/${own.data.id}/content`)).data)), ['137x91']);
+    }
+    // A sheet of a thousand million cells in a file of 1 KB: nothing to unpack, so only the memory limit stops it,
+    // long before the timeout, and the person is told in words.
+    set({ CONVERTER: 'soffice', CONVERT_TIMEOUT_MS: '120000' });
+    convertTesting.unshare = 'unshare';
+    convertTesting.forget();
+    assert.equal(convertMemoryMb(), 1024);
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
+    const huge = odf('application/vnd.oasis.opendocument.spreadsheet', `<?xml version="1.0" encoding="UTF-8"?><office:document-content ${NS} office:version="1.2"><office:body><office:spreadsheet><table:table table:name="A"><table:table-row table:number-rows-repeated="1000000"><table:table-cell table:number-columns-repeated="1000" office:value-type="string"><text:p>x</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>`);
+    assert.ok(huge.length < 2000);
+    const c = await person();
+    let peak = 0;
+    const watch = setInterval(() => {
+      const rss = spawnSync('ps', ['-eo', 'rss,comm'], { encoding: 'utf8' }).stdout.split('\n').filter((l) => /soffice/.test(l)).reduce((n, l) => n + Number(l.trim().split(/\s+/)[0] || 0), 0);
+      peak = Math.max(peak, rss);
+    }, 250);
+    const t = Date.now();
+    const r = await put(c, huge, 'Huge.ods');
+    clearInterval(watch);
+    assert.equal(r.status, 422, JSON.stringify(r.data));
+    assert.equal(r.data.code, 'convert_failed');
+    assert.match(r.data.error, /far larger inside than it looks/);
+    assert.ok(Date.now() - t < 60_000, `stopped by memory, not by the clock: ${Date.now() - t} ms`);
+    assert.ok(peak < 1100 * 1024, `never more than the limit: ${Math.round(peak / 1024)} MB`);
+    // An ordinary file still converts under the same limit.
+    assert.equal((await put(c, docx(), 'After.docx')).status, 200);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a text file with no words is refused, and other files that name outside content are noted', async () => {
+  set({ CONVERTER: 'stub' });
+  const c = await person();
+  const blank = await put(c, utf8('   \n\n\t\n'), 'blank.txt');
+  assert.equal(blank.status, 400);
+  assert.match(blank.data.error, /^This text file has no words in it, only spaces or empty lines\./);
+  assert.match(blank.data.error, /Nothing was saved\.$/);
+  assert.equal((await put(c, utf8('One word\n'), 'one.txt')).data.is_scan, false);
+  // A bare path counts as outside content too, in an OpenDocument text and in an RTF field.
+  const NS = 'xmlns:office="o" xmlns:draw="d" xmlns:xlink="x"';
+  const odt = (href: string) => odf('application/vnd.oasis.opendocument.text', `<office:document-content ${NS}><office:body><draw:image xlink:href="${href}"/></office:body></office:document-content>`);
+  assert.deepEqual((await put(c, odt('/srv/secret/photo.png'), 'a.odt')).data.converted.notes, ['external']);
+  assert.deepEqual((await put(c, odt('../../secret.png'), 'b.odt')).data.converted.notes, ['external']);
+  assert.deepEqual((await put(c, odt('Pictures/own.png'), 'c.odt')).data.converted.notes, [], 'a picture inside the file is not outside content');
+  assert.deepEqual((await put(c, utf8('{\\rtf1\\ansi hello {\\field{\\*\\fldinst INCLUDEPICTURE "C:\\\\\\\\secret.png" \\\\d}{\\fldrslt old}}}'), 'd.rtf')).data.converted.notes, ['external']);
+  for (const [name, page] of Object.entries(HTML_ATTACKS)) assert.deepEqual((await detect(utf8(page)) as any).notes, QUIET.has(name) ? [] : ['external'], name);
+});
+
+test('the original can be downloaded again by the account that uploaded it, from a draft too, and by nobody else', async () => {
+  set({ CONVERTER: 'stub' });
+  const c = await person(), other = await person();
+  const bytes = docx(para('The original words'));
+  const up = (await put(c, bytes, 'Con"tract\n.docx')).data;
+  const got = await c.get(`/files/${up.id}/original`);
+  assert.equal(got.status, 200);
+  assert.deepEqual(new Uint8Array(got.data), bytes, 'byte for byte what was uploaded');
+  const { handle } = await import('../src/server/router.ts');
+  const r = await handle(new Request(`http://test.local/api/files/${up.id}/original`, { headers: { cookie: Object.entries(c.cookies).map(([k, v]) => `${k}=${v}`).join('; '), 'x-forwarded-for': c.ip } }));
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+  assert.match(r.headers.get('content-disposition')!, /^attachment; filename="Con_tract .docx"$/);
+  assert.equal((await other.get(`/files/${up.id}/original`)).status, 404);
+  assert.equal((await new Client().get(`/files/${up.id}/original`)).status, 401);
+  const plain = (await put(c, await samplePdf(1), 'Ready.pdf')).data;
+  const none = await c.get(`/files/${plain.id}/original`);
+  assert.equal(none.status, 404);
+  assert.equal(none.data.code, 'no_original');
+  assert.match(none.data.error, /^This file was uploaded as a PDF or a picture, so there is no other original\./);
+  // The editor offers it under More, next to the file, only for a file that has one; the API description has it.
+  assert.match(read('src/components/editor/FileRow.tsx'), /\{d\.converted\?\.from && <a className="btn sm" data-feature="ds-convert" href=\{`\/api\/files\/\$\{d\.file_id\}\/original`\} download>Download \{d\.converted\.from\}<\/a>\}/);
+  assert.ok((await c.get('/openapi.json')).data.paths['/files/{id}/original'].get);
+});
+
+test('the help page answers "Can I add a Word file?" for this server, and the docs say what the code does', () => {
+  set({});
+  assert.equal(converterConfigured(), false);
+  set({ CONVERTER: 'soffice' });
+  assert.equal(converterConfigured(), true);
+  set({ CONVERTER_URL: 'http://gotenberg:3000' });
+  assert.equal(converterConfigured(), true);
+  set({ CONVERTER_URL: 'nonsense' });
+  assert.equal(converterConfigured(), false);
+  assert.match(read('src/app/help/page.tsx'), /<WordFilesHelp \/>/);
+  const help = read('src/app/help/convert.tsx');
+  assert.match(help, /Save it as a PDF first/);
+  assert.ok(!/LibreOffice|Gotenberg|\u2014/.test(help));
+  const readme = read('README.md');
+  assert.match(readme, /CONVERT_MEMORY_MB/);
+  assert.match(readme, /unshare -rnmpf/);
+  assert.ok(!/a few hundred MB of memory per job/.test(readme), 'the README no longer gives a memory figure the code does not keep');
+  assert.ok(!/macros[^.|]*never run|They were not run/i.test(readme + read('src/lib/convert.ts')), 'no promise that a macro cannot run');
+  assert.ok(!/\u2014/.test(read('src/server/convert-html.ts') + read('src/server/convert-box.ts') + read('src/server/routes-convert.ts')));
 });

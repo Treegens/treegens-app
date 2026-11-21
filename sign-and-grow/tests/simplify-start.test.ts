@@ -5,10 +5,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, Client, signUp, mailTo, simple, signAll, samplePdf } from './helpers.ts';
-import { NAV_START, NAV_MAIN, NAV_MORE, NAV_END, NAV_ENTRIES, TAB_BAR, navOn, moreFor, insideMore, moreKey } from '../src/lib/nav.ts';
-import { nameFromFile } from '../src/lib/docname.ts';
+import { NAV_START, NAV_MAIN, NAV_MORE, NAV_END, NAV_ENTRIES, TAB_BAR, IN_TAB_BAR, navOn, moreFor, insideMore, moreKey, pageTitle } from '../src/lib/nav.ts';
+import { nameFromFile, listName } from '../src/lib/docname.ts';
 import { TOTALS_FROM, totalWorthShowing } from '../src/lib/impact.ts';
-import { CONFIRM_CODE_MAX_WRONG, CONFIRM_CODE_HOURS, CODE_REFUSED, cleanCode, showCode } from '../src/lib/confirm.ts';
+import { CONFIRM_CODE_MAX_WRONG, CONFIRM_CODE_HOURS, CONFIRM_ADDRESS_DAYS, CONFIRM_BEFORE_SEND, CODE_REFUSED, cleanCode, showCode } from '../src/lib/confirm.ts';
 
 const { db } = await boot();
 
@@ -222,7 +222,7 @@ test('2. Home has no start button of its own, and the old three are gone', () =>
   assert.ok(!/fmtTrees|of a tree|'…'/.test(home));
   // The shell: the one start button has a class of its own and is not a filled button of the page.
   const nav = read('src/components/AppNav.tsx');
-  assert.match(nav, /<Link href=\{NAV_START\.href\} className="btn side-start"/);
+  assert.match(nav, /<Link href=\{NAV_START\.href\} className="btn side-start in-bar"/);
   assert.equal(NAV_START.label, 'Send a document');
   assert.equal(NAV_START.href, '/app/envelopes/new');
 });
@@ -243,7 +243,7 @@ test('2. Recently completed: the newest completed documents of the account, each
   // The Download of a row is this address.
   const home = read('src/app/app/page.tsx');
   assert.match(home, /api\('\/envelopes\?box=completed&limit=5'\)/);
-  assert.match(home, /<li key=\{e\.id\} data-item="row">[\s\S]*?href=\{`\/api\/envelopes\/\$\{e\.id\}\/download`\} aria-label=\{`Download \$\{e\.subject \|\| 'the signed document'\}`\}>Download<\/a>/);
+  assert.match(home, /<li key=\{e\.id\} data-item="row">[\s\S]*?href=\{`\/api\/envelopes\/\$\{e\.id\}\/download`\} aria-label=\{`Download \$\{listName\(e\.subject\) \|\| 'the signed document'\}`\}>Download<\/a>/);
   const pdf = await c.call('GET', `/envelopes/${first.id}/download`);
   assert.equal(pdf.status, 200);
   assert.match(String(pdf.headers?.get?.('content-type') || pdf.res?.headers.get('content-type') || 'application/pdf'), /pdf/);
@@ -345,7 +345,12 @@ test('4. a name from a file name: hyphens and underscores become spaces, a first
     ['iPhone-lease', 'iPhone lease'],
     ['Well-being policy', 'Well-being policy'],
     ['contract 2026-03-01', 'Contract 2026-03-01'],
-    ['lease-2026-03-01', 'Lease-2026-03-01'],
+    ['lease-2026-03-01', 'Lease 2026-03-01'],
+    ['planting-partnership_2026', 'Planting partnership 2026'],
+    ['NDA_acme-corp_2026-03-01', 'NDA acme corp 2026-03-01'],
+    ['2026-03-01-lease', '2026-03-01 lease'],
+    ['scan0001', 'Scan0001'],
+    ['Well-being_policy', 'Well being policy'],
     ['Agreement', 'Agreement'],
     ['  spaced   out  ', 'Spaced out'],
     ['élan-vital', 'Élan vital'],
@@ -403,4 +408,211 @@ test('1. an API key of the account cannot type the code: confirming is done by t
   assert.equal(db.get('SELECT verify_code_wrong n FROM users WHERE id=?', u.id).n, 0, 'and it costs the person no guess');
   assert.equal((await owner.post('/auth/verify-code', { code })).status, 200);
   assert.equal(verified('kay.key@start.test'), true);
+});
+
+// ---- After the skeptic's and the simplicity reviewer's rounds -------------------------------------------------------
+
+test('repair: Send from an unconfirmed address is refused in words the review step turns into the code box, with no banner named', async () => {
+  const c = await fresh('send.early@start.test', '198.51.100.60');
+  const env = await simple(c, 'sam.early@start.test');
+  const r = await c.post(`/envelopes/${env.id}/send`, {});
+  assert.equal(r.status, 403);
+  assert.equal(r.data.code, 'confirm_email');
+  assert.ok(r.data.error.startsWith(CONFIRM_BEFORE_SEND), r.data.error);
+  assert.match(r.data.error, /Type the 6-digit code we emailed to send\.early@start\.test/);
+  assert.doesNotMatch(r.data.error, /banner/);
+  assert.equal(mailTo('sam.early@start.test').length, 0, 'nothing went to the signer');
+  // The editor has no banner, so the review step carries the box itself, before and after Send was pressed.
+  const step = read('src/components/editor/StepReview.tsx');
+  assert.match(step, /\{!isTpl && !correcting && !closed && <ConfirmToSend refused=\{isConfirmRefusal\(error\)\}/);
+  assert.match(step, /error && !closed && !isConfirmRefusal\(error\) &&/, 'the refusal is not said twice');
+  const box = read('src/components/editor/ConfirmToSend.tsx');
+  assert.match(box, /if \(!unconfirmed\) return null;/, 'nothing at all for a confirmed address');
+  assert.match(box, /<ConfirmCode /);
+  assert.match(box, /Your document is saved as a draft\./);
+  // No message of the server sends anyone to "the banner" any more.
+  for (const f of ['src/server/envelopes.ts', 'src/server/routes-account.ts']) assert.doesNotMatch(read(f), /in the banner at the top/, f);
+  // The code typed there confirms, and the same Send then goes out.
+  assert.equal((await c.post('/auth/verify-code', { code: codeIn('send.early@start.test')! })).status, 200);
+  assert.equal((await c.post(`/envelopes/${env.id}/send`, {})).status, 200);
+});
+
+test('repair: deleting an unconfirmed login and signing up again with the same address gives no new guesses', async () => {
+  const email = 'again.victim@start.test';
+  let c = await fresh(email, '198.51.100.61');
+  const wrongOnes = (real: string, n: number) => Array.from({ length: n }, (_, i) => String((Number(real) + 1 + i) % 1e6).padStart(6, '0'));
+  let real = codeIn(email)!;
+  for (const g of wrongOnes(real, 5)) assert.equal((await c.post('/auth/verify-code', { code: g })).status, 400);
+  await aMinuteLater(async () => {
+    const answers = [];
+    for (const g of wrongOnes(real, 5)) answers.push((await c.post('/auth/verify-code', { code: g })).status);
+    assert.deepEqual(answers, [400, 400, 400, 400, 403]);
+  });
+  // The login goes, with its own count, and the same address signs up again from somewhere else.
+  const gone = await c.post('/me/delete', { now: true, password: 'correct horse battery' });
+  assert.equal(gone.status, 200, JSON.stringify(gone.data));
+  assert.equal(db.get('SELECT COUNT(*) n FROM users WHERE email=?', email).n, 0);
+  c = await fresh(email, '198.51.100.62');
+  const me = (await c.get('/me')).data.user;
+  assert.equal(me.confirm_by_code, false, 'codes are closed for the new login from the start');
+  assert.equal(codeIn(email), null, 'and its email has the button only');
+  assert.equal((await c.post('/auth/verify-code', { code: '123456' })).status, 403);
+  // What is kept is a keyed hash, never the address.
+  const rows = db.all('SELECT * FROM confirm_guesses');
+  assert.ok(rows.length >= 1 && !JSON.stringify(rows).includes('again.victim'));
+  // The button in the email still confirms for the person who holds the mailbox and the login.
+  const t = db.get('SELECT verify_token t FROM users WHERE email=?', email).t;
+  assert.equal((await c.post('/auth/verify', { token: t })).status, 200);
+  assert.equal(verified(email), true);
+  // The count for an address is forgotten after CONFIRM_ADDRESS_DAYS, so it cannot shut a mailbox out of codes for good.
+  const c2 = await fresh('again.later@start.test', '198.51.100.63');
+  real = codeIn('again.later@start.test')!;
+  assert.equal((await c2.post('/auth/verify-code', { code: wrongOnes(real, 1)[0] })).status, 400);
+  db.run('UPDATE confirm_guesses SET wrong=?, first_at=?', CONFIRM_CODE_MAX_WRONG, new Date(Date.now() - (CONFIRM_ADDRESS_DAYS + 1) * 86400_000).toISOString());
+  assert.equal((await c2.post('/auth/verify-code', { code: real })).status, 200);
+});
+
+test('repair: too many tries in a minute are answered in words that say how long and what still works, and cost no guess', async () => {
+  const c = await fresh('code.wait@start.test', '198.51.100.64');
+  const real = codeIn('code.wait@start.test')!;
+  for (let i = 1; i <= 5; i++) await c.post('/auth/verify-code', { code: String((Number(real) + i) % 1e6).padStart(6, '0') });
+  const r = await c.post('/auth/verify-code', { code: real });
+  // The pause holds for the right code too: otherwise its answer would tell a guesser right from wrong for free.
+  assert.equal(r.status, 429);
+  assert.equal(r.data.code, 'code_wait');
+  assert.equal(r.data.error, CODE_REFUSED.code_wait);
+  assert.match(r.data.error, /Wait a minute, then type the code again: it still works\. Or press the button in our email/);
+  assert.equal(db.get("SELECT verify_code_wrong n FROM users WHERE email='code.wait@start.test'").n, 5);
+  assert.equal((await aMinuteLater(() => c.post('/auth/verify-code', { code: real }))).status, 200);
+  // The box lets the same digits be tried again after a pause.
+  assert.match(read('src/components/ConfirmEmail.tsx'), /e\?\.code === 'code_wait' \|\| !e\?\.code\) tried\.current = ''/);
+});
+
+test('repair: digits typed full-width or in another script are the code; letters are still not', async () => {
+  assert.equal(cleanCode('\uFF14\uFF18\uFF12 \uFF19\uFF11\uFF15'), '482915');
+  assert.equal(cleanCode('\u0664\u0668\u0662\u0669\u0661\u0665'), '482915', 'Arabic-Indic');
+  assert.equal(cleanCode('\u06F4\u06F8\u06F2\u06F9\u06F1\u06F5'), '482915', 'Persian');
+  assert.equal(cleanCode('\u096A\u096E\u0968\u096F\u0967\u096B'), '482915', 'Devanagari');
+  assert.equal(cleanCode('48a915'), '48a915');
+  assert.equal(cleanCode('x'.repeat(500)).length, 20);
+  const c = await fresh('code.arabic@start.test', '198.51.100.65');
+  const real = codeIn('code.arabic@start.test')!;
+  const arabic = [...real].map((d) => String.fromCodePoint(0x660 + Number(d))).join('');
+  assert.equal((await c.post('/auth/verify-code', { code: arabic })).status, 200);
+  assert.equal(verified('code.arabic@start.test'), true);
+});
+
+test('repair: a login without a password confirms with the code in its own session; a sign-in held at the second step cannot', async () => {
+  // As a sign-up with Google or Microsoft that the provider did not vouch for leaves it: a session, no password.
+  const p = await fresh('code.provider@start.test', '198.51.100.66');
+  db.run("UPDATE users SET password_hash='none' WHERE email='code.provider@start.test'");
+  assert.equal((await p.get('/me')).data.user.has_password, false);
+  assert.equal((await p.post('/auth/verify-code', { code: codeIn('code.provider@start.test')! })).status, 200);
+  assert.equal(verified('code.provider@start.test'), true);
+  // Two-step login is on, the password was right, the code of the second step was not typed yet: no session, so no code.
+  const t = await fresh('code.twostep@start.test', '198.51.100.67');
+  const real = codeIn('code.twostep@start.test')!;
+  const u = db.get("SELECT id FROM users WHERE email='code.twostep@start.test'");
+  db.run('UPDATE users SET two_step_secret=?, two_step_on_at=?, two_step_codes=? WHERE id=?', 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', new Date().toISOString(), '[]', u.id);
+  const held = new Client();
+  held.ip = '198.51.100.68';
+  const login = await held.post('/auth/login', { email: 'code.twostep@start.test', password: 'correct horse battery' });
+  assert.equal(login.data.two_step, true, JSON.stringify(login.data));
+  const tried = await held.post('/auth/verify-code', { code: real });
+  assert.equal(tried.status, 401, JSON.stringify(tried.data));
+  assert.equal(verified('code.twostep@start.test'), false);
+  assert.equal(db.get('SELECT verify_code_wrong n FROM users WHERE id=?', u.id).n, 0);
+  void t;
+});
+
+test('repair: an unconfirmed login cannot create an API key, the same rule as for a webhook and an invitation', async () => {
+  const c = await fresh('key.early@start.test', '198.51.100.69');
+  const r = await c.post('/api-keys', { name: 'early' });
+  assert.equal(r.status, 403);
+  assert.match(r.data.error, /^Confirm your email address before you create a key\. Type the 6-digit code/);
+  assert.equal(db.get("SELECT COUNT(*) n FROM api_keys k JOIN users u ON u.id=k.user_id WHERE u.email='key.early@start.test'").n, 0);
+  assert.equal((await c.post('/auth/verify-code', { code: codeIn('key.early@start.test')! })).status, 200);
+  assert.equal((await c.post('/api-keys', { name: 'now' })).status, 200);
+});
+
+test('repair: too many sign-ups from one connection are told what happened and how long to wait', async () => {
+  const ip = '198.51.100.70';
+  let last: any;
+  for (let i = 0; i < 11; i++) {
+    const c = new Client();
+    c.ip = ip;
+    last = await c.post('/auth/signup', { name: 'Office Person', email: `office.${i}@start.test`, password: 'correct horse battery' });
+  }
+  assert.equal(last.status, 429);
+  assert.match(last.data.error, /^Too many new accounts from this connection in the last hour\. Try again in about \d+ minutes, or sign in if you already have a login\.$/);
+});
+
+test('repair: lists and downloads name a document without the "Please sign:" of the invitation email', () => {
+  assert.equal(listName('Please sign: Planting partnership'), 'Planting partnership');
+  assert.equal(listName('please sign:Lease'), 'Lease');
+  assert.equal(listName('Board minutes, March'), 'Board minutes, March', 'a subject in the sender\'s own words stays');
+  assert.equal(listName('Please sign: '), 'Please sign:', 'never an empty name');
+  assert.equal(listName(null), '');
+  const home = read('src/app/app/page.tsx');
+  assert.equal((home.match(/\{e\.subject|\{i\.subject/g) || []).length, 0, 'Home shows no raw subject');
+  assert.match(read('src/app/app/envelopes/page.tsx'), /const title = listName\(e\.subject\) \|\| 'Untitled draft';/);
+  assert.match(read('src/server/routes-envelopes.ts'), /listName\(e\.subject\) \|\| 'document', c\.q\.get\('inline'\)/);
+  assert.match(read('src/server/routes-sign.ts'), /listName\(e\.subject\) \|\| 'document', c\.q\.get\('inline'\)/);
+  // The editor still makes the subject of the email from the name.
+  assert.match(read('src/components/Editor.tsx'), /`Please sign: \$\{f\.name\}`/);
+});
+
+test('repair: the phone menu keeps the bar on top with Close in place of Menu, closes with Escape, is named, and does not repeat the bar', () => {
+  const shell = read('src/components/AppShell.tsx');
+  const nav = read('src/components/AppNav.tsx');
+  const css = read('src/app/styles/start.css');
+  assert.match(shell, /<aside id="app-menu" className=\{`side\$\{open \? ' open' : ''\}`\} aria-label="Menu">/);
+  assert.ok(!shell.includes('Close menu'), 'the way out is the button that opened it, not one at the end of the list');
+  assert.match(shell, /e\.key !== 'Escape'/);
+  assert.match(nav, /aria-expanded=\{menuOpen\} aria-controls="app-menu"[^>]*>.*\{menuOpen \? 'Close' : 'Menu'\}/);
+  assert.deepEqual(IN_TAB_BAR, ['/app', '/app/envelopes', '/app/inbox']);
+  assert.match(css, /\.side\.open \{ inset: 0 0 calc\(64px \+ env\(safe-area-inset-bottom\)\) 0;[^}]*z-index: 54; \}/, 'the open menu ends above the bar (z-index 55)');
+  assert.match(css, /\.side\.open \.in-bar \{ display: none; \}/);
+  // On a wide screen every entry is 44 px high, and More shows no arrow on a page inside it.
+  assert.match(css, /\.side \.nav, \.side button\.nav \{ min-height: 44px; \}/);
+  assert.match(css, /\.nav-more-toggle\[aria-disabled='true'\]::after \{ display: none; \}/);
+});
+
+test('repair: a skip link is the first stop of the app, each page has its own tab title, and sign-up puts the keyboard in the code box', () => {
+  const shell = read('src/components/AppShell.tsx');
+  assert.match(shell, /<a href="#app-main" className="app-skip" aria-label="Skip to content" \/>\s*<div className="mobilebar">/);
+  assert.match(read('src/app/styles/start.css'), /\.app-skip::before \{ content: 'Skip to content'; \}\s*\.app-skip:focus \{ top: 8px; opacity: 1; \}/);
+  assert.match(shell, /<main className="main" id="app-main" tabIndex=\{-1\}>/);
+  assert.match(shell, /const want = pageTitle\(path\);/);
+  const titles: [string, string][] = [
+    ['/app', 'Home · GrowSigning'], ['/app/envelopes', 'Documents · GrowSigning'], ['/app/envelopes/env_1', 'Documents · GrowSigning'],
+    ['/app/envelopes/new', 'Send a document · GrowSigning'], ['/app/envelopes/env_1/edit', 'Send a document · GrowSigning'],
+    ['/app/inbox', 'To sign · GrowSigning'], ['/app/templates', 'Templates · GrowSigning'], ['/app/contacts', 'Contacts · GrowSigning'],
+    ['/app/bulk', 'Send to many · GrowSigning'], ['/app/powerforms', 'Forms · GrowSigning'], ['/app/agreements', 'Website terms · GrowSigning'],
+    ['/app/reports', 'Reports · GrowSigning'], ['/app/impact', 'Trees planted · GrowSigning'], ['/app/settings', 'Settings · GrowSigning'],
+    ['/app/operator', 'Operator · GrowSigning'], ['/app/something-else', 'GrowSigning'],
+  ];
+  for (const [path, title] of titles) assert.equal(pageTitle(path), title, path);
+  assert.equal(new Set(titles.slice(0, -1).map(([, t]) => t)).size, 13, 'every page of the menu has a title of its own');
+  assert.match(read('src/components/AuthForm.tsx'), /if \(mode === 'signup'\) sessionStorage\.setItem\('sg_signed_up', '1'\);/);
+  const box = read('src/components/ConfirmEmail.tsx');
+  assert.match(box, /export const JUST_SIGNED_UP = 'sg_signed_up';/);
+  assert.match(box, /if \(focusFirst\) box\.current\?\.focus\(\);/);
+  // The two codes a new person meets have different names.
+  assert.match(read('src/components/AuthForm.tsx'), /<span>Plan code <span className="hint">/);
+});
+
+test('repair: the pages inside More and Documents use the names the menu uses', () => {
+  const forms = read('src/app/app/powerforms/page.tsx');
+  assert.ok(!/PowerForm[^s(]|PowerForms yet/.test(forms.replace(/export default function PowerForms/, '')), 'no PowerForm in words a person reads');
+  assert.match(forms, /Make a form/);
+  assert.match(forms, /No forms yet/);
+  assert.ok(!/bulk send/i.test(read('src/app/app/bulk/page.tsx').replace(/\/\/.*|\{\/\*[\s\S]*?\*\/\}/g, '')));
+  assert.ok(!/>[^<{]*click-to-agree/i.test(read('src/app/app/agreements/page.tsx')));
+  const docs = read('src/app/app/envelopes/page.tsx');
+  assert.match(docs, /\['waiting', 'Waiting'\], \['completed', 'Completed'\], \['closed', 'Stopped'\]/);
+  assert.match(docs, /document\$\{rows\.length === 1 \? '' : 's'\}/);
+  assert.match(docs, /<span className="sn-where-phone"> \(Send, in the bar at the bottom\)<\/span>/);
+  assert.match(read('src/app/verify-email/page.tsx'), /now show up under To sign\./);
+  assert.doesNotMatch(read('src/app/app/settings/TwoStep.tsx'), /open the link we sent/);
 });

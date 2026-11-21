@@ -5,11 +5,11 @@ import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
-import { treesInInvite } from './impact.ts';
+import { treesInInvite, noteFinished } from './impact.ts';
 import { mailLine } from '../lib/impactwords.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
 import { STANDING_PAYMENT, personGen, lastExpiry, swapRefusal, reholdEnvelope, pastDateText, renewalPending } from './credits.ts';
-import { DATE_FORMATS, momentText, momentForEmail, momentForReader, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
+import { DATE_FORMATS, DEFAULT_DATE_FORMAT, momentText, momentForEmail, momentForReader, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
 import { abuseSuspendAfter, newAccountDailyRecipients, unpaidDailyRecipients, powerformIdleHours, powerformSharedIdleMinutes, ACCESS_CODE_MIN, ACCESS_CODE_TRIES } from '../lib/policy.ts';
 import { PAID_TRUST_DAYS, paidTrustText, TEAM_INVITES_PER_DAY, expiryMoment } from '../lib/policy.ts';
@@ -46,10 +46,12 @@ import { notSealedLines } from '../lib/seal.ts';
 import { isSenderStamp, printedStamp, stampOnSave, copyStamps, stampProblem, stampsSent, stampsFinished, senderStampChange } from './stamps.ts';
 import { convertedSent, convertedAdded } from './converted.ts';
 import { convertedOf } from '../lib/convert.ts';
+import { CONFIRM_BEFORE_SEND } from '../lib/confirm.ts';
 // The account's own custom fields on envelopes and templates, and name and value pairs per document (customfields.ts).
 import { customView, copyCustom, assertCustomFields, customWords } from './customfields.ts';
 // "Sign now": the sender is the only person on it, so their own invitation is not emailed (signnow.ts).
 import { holdInvite, inviteHeld, dropHold, SIGN_NOW_AUDIT, signNowNote } from './signnow.ts';
+import { dayText } from '../lib/dates.ts';
 
 export const ROLES =['signer', 'approver', 'cc', 'viewer', 'inperson', 'witness'];
 export const FIELD_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'email', 'text', 'number', 'date', 'company', 'title', 'checkbox', 'radio', 'dropdown', 'attachment', 'note', 'strike', 'stamp'];
@@ -142,9 +144,10 @@ export function createEnvelope(account: any, userId: string, kind: 'envelope' | 
   const t = now();
   run(
     // A new envelope starts with the account's own date format (Settings), like its reminder and deadline defaults.
+    // An account that never chose one starts with the readable one, 20 Nov 2026 (DEFAULT_DATE_FORMAT).
     'INSERT INTO envelopes (id, account_id, sender_id, kind, subject, message, reminder_days, expire_days, date_format, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
     eid, account.id, userId, kind, fit(init.subject, 200, 'The subject'), fit(init.message, 5000, 'The message to recipients'), account.default_reminder_days ?? 0, account.default_expire_days ?? 120,
-    (DATE_FORMATS as readonly string[]).includes(account.default_date_format) ? account.default_date_format : null, t, t,
+    (DATE_FORMATS as readonly string[]).includes(account.default_date_format) ? account.default_date_format : DEFAULT_DATE_FORMAT, t, t,
   );
   return eid;
 }
@@ -1040,7 +1043,7 @@ export function pausedText(account: any): string {
 // Said wherever something is refused because the account is being closed. Nothing new starts in an account that is
 // about to be deleted: what was sent, and whoever joined, would be deleted with it. `what` says what was refused.
 export function closingText(account: { name: string; closing_at: string }, what: string): string {
-  return `${account.name} is being closed and will be deleted on ${String(account.closing_at).slice(0, 10)}. ${what}. If its owner signs in before that day, the account is restored at once and this works again.`;
+  return `${account.name} is being closed and will be deleted on ${dayText(account.closing_at)}. ${what}. If its owner signs in before that day, the account is restored at once and this works again.`;
 }
 
 // Fake payment notices ("your PayPal order, call this number") are the classic way e-signature services get abused.
@@ -1104,7 +1107,7 @@ function roomFor(have: Map<string, string>, emails: string[], cap: number): { fr
 function limitWords(account: any): { who: string; lift: string } {
   const paid = youngPayment(account);
   const person = `use the contact form at ${baseUrl()}/help and a person can lift it for you.`;
-  if (paid) return { who: `An account whose first payment is less than ${PAID_TRUST_DAYS} days old`, lift: `Your payment was made on ${paid.slice(0, 10)}, so the limit goes on ${day(Date.parse(paid) + PAID_TRUST_DAYS * 864e5)}, provided the payment is not refunded or disputed. To have it lifted sooner, ${person}` };
+  if (paid) return { who: `An account whose first payment is less than ${PAID_TRUST_DAYS} days old`, lift: `Your payment was made on ${dayText(paid)}, so the limit goes on ${dayText(new Date(Date.parse(paid) + PAID_TRUST_DAYS * 864e5))}, provided the payment is not refunded or disputed. To have it lifted sooner, ${person}` };
   return { who: dailyCap(account).firstWeek ? 'In its first week, an account that has not paid' : 'An account that has not paid',
     lift: billingEnabled() ? `To lift the limit, pay for anything on the Plan page (the monthly plan is the place to start): the limit goes ${PAID_TRUST_DAYS} days after a payment that is not refunded or disputed. To have it lifted sooner, ${person}` : `To lift the limit, ${person}` };
 }
@@ -1223,7 +1226,7 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
   if (account.closing_at) throw bad(closingText(account, 'Nothing new can be sent from it'), 403);
   // These checks exist to keep scammers from using the service to send convincing fakes: a confirmed address, then
   // the pause, the fake-notice filter and the daily limit, which every other path that emails a recipient shares.
-  if (!sender?.email_verified) throw bad('Confirm your email address before you send. Type the 6-digit code from our email in the banner at the top of the app, or press the button in that email. The banner can send a new one.', 403);
+  if (!sender?.email_verified) throw bad(`${CONFIRM_BEFORE_SEND} Type the 6-digit code we emailed to ${sender?.email || 'you'} where you are signed in to GrowSigning, or press the button in that email. Nothing was sent.`, 403, { code: 'confirm_email' });
   assertCodes(e.recipients);
   // A check by one-time code can work for everyone it was asked for, and the account may text whom it asks to text.
   assertChecks(e);
@@ -1409,7 +1412,7 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
       ...(r.note ? [`Note for you: ${r.note}`] : []),
       ...(r.access_code ? [`You will need an access code to open it. ${sender.name} will give it to you separately. It is not in this email.`] : []),
       // To someone who signs with a paid signature, and nobody else: what finishing plants (impact.ts).
-      ...(kind === 'new' && mailLine(treesInInvite(r)) ? [mailLine(treesInInvite(r))] : []),
+      ...(kind === 'new' && treesInInvite(r) ? [mailLine(treesInInvite(r), r.role === 'inperson' ? r.name : '')] : []),
       `Reply to this email to reach ${sender.name} (${sender.email}).`,
     ],
     cta: { label: done ? (e.status === 'completed' ? 'View completed document' : 'View document') : r.role === 'cc' ? 'View document' : r.role === 'viewer' ? 'View document' : `${r.role === 'approver' ? 'Review and approve' : r.role === 'witness' ? 'Open and witness' : 'Review and sign'}${kind === 'again' ? ' again' : ''}`, url: signUrl(r) },
@@ -2107,6 +2110,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
       if (owner) await lowBalanceMail(get('SELECT * FROM accounts WHERE id=?', e.account_id), owner, after + 1, after, `${r.name} signed your public form "${form?.name || e.subject}"`, true).catch(() => {});
     }
   }
+  noteFinished(r.id); // trees: a finished signature is counted here, not when somebody looks (impact.ts)
   const left = e.recipients.filter((x: any) => x.id !== r.id && x.status !== 'completed' && x.role !== 'cc');
   if (left.length) await notifySender(e, 'signed', `${verb}: ${e.subject}`, `${r.name} has ${verb.toLowerCase()} your document`, [`Still waiting on ${left.map((x: any) => x.name).join(', ')}.`]);
   await advance(e.id);

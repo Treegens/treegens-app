@@ -7,6 +7,8 @@ import { CONFIRM_CODE_DIGITS, CODE_REFUSED, cleanCode } from '@/lib/confirm';
 // tab or by the link in the email (src/app/verify-email/page.tsx). The tab the person signed up in then drops its
 // banner by itself.
 export const CONFIRMED_SIGNAL = 'growsigning-email-confirmed';
+/** Set in this tab's session storage by the sign-up form, and read once by the banner. */
+export const JUST_SIGNED_UP = 'sg_signed_up';
 
 /** Tells the other tabs of this browser that the address is confirmed. */
 export function sayConfirmed() {
@@ -62,6 +64,16 @@ export function useConfirmedElsewhere(active: boolean, check: () => void) {
 export function ConfirmBanner({ me }: { me: { user: any; reload: () => void } }) {
   const unconfirmed = !me.user.email_verified;
   useConfirmedElsewhere(unconfirmed, me.reload);
+  // Straight after signing up the keyboard starts in the code box, once: the next thing to do (AuthForm sets the mark).
+  const [fresh] = useState(() => {
+    try {
+      const was = sessionStorage.getItem(JUST_SIGNED_UP) === '1';
+      sessionStorage.removeItem(JUST_SIGNED_UP);
+      return was;
+    } catch {
+      return false;
+    }
+  });
   if (!unconfirmed) return null;
   // Too many wrong codes were typed for this login (src/server/confirmcode.ts): only the button in the email works now.
   if (me.user.confirm_by_code === false) return (
@@ -72,13 +84,13 @@ export function ConfirmBanner({ me }: { me: { user: any; reload: () => void } })
   );
   return (
     <section className="notice warn cc-banner" aria-labelledby="cc-h">
-      <p className="cc-text"><b id="cc-h">Confirm your email.</b> We sent a 6-digit code to <bdi className="cc-email">{me.user.email}</bdi>. Type it here to start sending.</p>
-      <ConfirmCode email={me.user.email} onConfirmed={() => (toast('Email confirmed. You can send now.'), me.reload())} onClosed={me.reload} />
+      <p className="cc-text"><b id="cc-h">Confirm your email.</b> We sent a 6-digit code to <bdi className="cc-email">{me.user.email}</bdi>. Type it here. You need it before you can send.</p>
+      <ConfirmCode email={me.user.email} focusFirst={fresh} onConfirmed={() => (toast('Email confirmed. You can send now.'), me.reload())} onClosed={me.reload} />
     </section>
   );
 }
 
-function ResendLink({ email, label }: { email: string; label: string }) {
+export function ResendLink({ email, label }: { email: string; label: string }) {
   const [said, setSaid] = useState<{ text: string; err?: boolean } | null>(null);
   return (
     <div className="cc-row">
@@ -92,11 +104,15 @@ function ResendLink({ email, label }: { email: string; label: string }) {
  * The code box: type the 6 digits from the email, here, in the tab you signed up in. Six digits confirm by
  * themselves; Confirm does the same for anyone who prefers to press it. "Send a new code" emails a new one.
  */
-export function ConfirmCode({ email, onConfirmed, onClosed, compact = false, main = false }: { email: string; onConfirmed: () => void; onClosed?: () => void; compact?: boolean; /** On a screen of its own, Confirm is the filled button. In the banner it is not: the page under it keeps its one main button. */ main?: boolean }) {
+export function ConfirmCode({ email, onConfirmed, onClosed, compact = false, main = false, focusFirst = false }: { email: string; /** Put the keyboard in the box when it appears. */ focusFirst?: boolean; onConfirmed: () => void; onClosed?: () => void; compact?: boolean; /** On a screen of its own, Confirm is the filled button. In the banner it is not: the page under it keeps its one main button. */ main?: boolean }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<{ text: string; err?: boolean } | null>(null);
   const tried = useRef('');
+  const box = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (focusFirst) box.current?.focus();
+  }, [focusFirst]);
 
   async function confirm(typed = code) {
     const digits = cleanCode(typed);
@@ -113,6 +129,8 @@ export function ConfirmCode({ email, onConfirmed, onClosed, compact = false, mai
       setSaid({ text: e?.message || 'We could not check the code just now. Try again in a minute.', err: true });
       // No code works for this login any more: the screen says what does (the button in the email).
       if (e?.code === 'code_closed') onClosed?.();
+      // A pause was asked for: the same digits may be typed again after it.
+      if (e?.code === 'code_wait' || !e?.code) tried.current = '';
     } finally {
       setBusy(false);
     }
@@ -137,6 +155,7 @@ export function ConfirmCode({ email, onConfirmed, onClosed, compact = false, mai
           <span>Code from the email</span>
           <input
             className="cc-input"
+            ref={box}
             value={code}
             inputMode="numeric"
             autoComplete="one-time-code"

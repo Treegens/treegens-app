@@ -79,7 +79,7 @@ test('what the people who run the server see in the app is what "Who can see you
   assert.equal((await sender.get('/operator/queue')).status, 404);
 
   const who = policy.WHO_CAN_SEE.map((w) => w.who);
-  assert.deepEqual(who, ['The people it was sent to, and anyone they pass their link to.', 'The person who sent it.', 'The owner and the admins of the sender\'s account.', 'Archive addresses the sender\'s account chose.', 'The people who run this server.', 'The companies that carry it.', 'Nobody else.']);
+  assert.deepEqual(who, ['The people it was sent to, and anyone they pass their link to.', 'The person who sent it.', 'The owner and the admins of the sender\'s account.', 'Addresses the sender\'s account sends copies of its emails to.', 'The people who run this server.', 'The companies that carry it.', 'Nobody else.']);
   const operator = policy.WHO_CAN_SEE[4].what;
   assert.match(operator, /no screen and no function that opens a document/);
   assert.match(operator, /adds no encryption of its own/, 'and it says that the disk is another matter');
@@ -116,7 +116,8 @@ test('on a team, the owner and admins can open what a member sends, and a member
 });
 
 test('public forms are not sold for consent forms any more, and the missing health agreement is said in three places from one text', () => {
-  const landing = read('src/app/page.tsx');
+  // The feature list moved from the home page to /features on 21 November 2026 (simplify-public).
+  const landing = read('src/app/features/page.tsx');
   assert.doesNotMatch(landing, /consent forms/i);
   assert.match(landing, /Not for patient forms/);
   // One text, kept once.
@@ -148,7 +149,8 @@ test('public forms are not sold for consent forms any more, and the missing heal
 });
 
 test('bulk send is no longer "on every plan, including free" without its price', () => {
-  const landing = read('src/app/page.tsx');
+  // The feature list is on /features and the rules are on /pricing since 21 November 2026 (simplify-public).
+  const landing = read('src/app/features/page.tsx') + read('src/app/pricing/page.tsx');
   assert.doesNotMatch(landing, /Every plan, including free/);
   assert.match(landing, /Send one template to hundreds of people from a spreadsheet\. \$\{BULK_COST_NOTE\}/);
   assert.match(landing, /<li id="bulk-cost"><b>What a bulk send costs\.<\/b> \{BULK_COST_NOTE\}/);
@@ -195,11 +197,14 @@ test('"automatic nudges" is true: a new account reminds every 3 days, says so, a
   // (simplify-editor: reminders are asked once, under More options of the step with the Send button, and what is set stands next to that button.)
   assert.match(read('src/components/editor/StepReview.tsx'), /<ReviewMore ed=\{ed\} closed=\{!!closed\} \/>/, 'the choice is on the step with the Send button');
   assert.match(read('src/components/editor/ReviewParts.tsx'), /<ReminderChoice days=\{env\.reminder_days\}/);
-  assert.match(read('src/components/editor/ReviewParts.tsx'), /env\.reminder_days \? `Reminder every \$\{plural\(env\.reminder_days, 'day'\)\}` : 'No automatic reminders'/);
+  // (repair-simplify-editor: the line next to the closed More options is built in src/lib/editorux.ts reviewSummary. It always
+  // says the reminders, except when the sender signs alone and nobody is invited.)
+  assert.match(read('src/lib/editorux.ts'), /if \(!o\.signNow\) said\.push\(o\.reminderDays > 0 \? `Reminder every \$\{days\(Math\.round\(o\.reminderDays\)\)\}` : 'No automatic reminders'\);/);
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /reminderDays: env\.reminder_days,/);
   assert.match(read('src/components/editor/ReminderChoice.tsx'), /reminderText\(n\)/);
   assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /id="sn-reminders">\{reminderText\(e\.reminder_days\)\}/, 'and on the envelope');
   assert.match(read('src/app/app/settings/page.tsx'), /id="set-reminders"><b>New envelopes start like this\.<\/b> \{reminderText\(f\.default_reminder_days\)\}/, 'and under Settings');
-  const landing = read('src/app/page.tsx');
+  const landing = read('src/app/features/page.tsx');
   assert.doesNotMatch(landing, /Automatic nudges/);
   assert.match(landing, /A new account reminds whoever has not finished by email every \$\{DEFAULT_REMINDER_DAYS\} days/);
   // In-person signing says that it needs a connection.
@@ -1063,7 +1068,7 @@ test('the screens show the payment link only where the rules say, and every page
   // Not offered on an envelope whose template wording is locked: the link is part of that wording (tests/templates.test.ts).
   // (simplify-editor: the payment link is under More options of the last step, which is absent once the envelope is closed.)
   assert.match(read('src/components/editor/ReviewParts.tsx'), /if \(closed\) return null;/);
-  assert.match(read('src/components/editor/ReviewParts.tsx'), /\{!ed\.wording && <PayLinkChoice envelopeId=\{env\.id\} isTpl=\{isTpl\} \/>\}/);
+  assert.match(read('src/components/editor/ReviewParts.tsx'), /\{!ed\.wording && <PayLinkChoice envelopeId=\{env\.id\} isTpl=\{isTpl\} onChange=/);
   const choice = read('src/components/editor/PayLinkChoice.tsx');
   assert.match(choice, /if \(!envelopeId \|\| !st \|\| \(!st\.may && !st\.pay_link\)\) return null;/, 'no dead control for an account that may not');
   assert.match(choice, /<span>Address of your own payment page<\/span>/);

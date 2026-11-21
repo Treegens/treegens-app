@@ -100,7 +100,7 @@ export function SignerDone({ base, impact }: { base: string; impact: any }) {
         <div className="imp-tap" onClick={close}><Mangroves trees={d.trees} go={go} /></div>
         {/* The one sentence a screen reader is told: the heading, put in once the region exists. */}
         <div role="status" aria-live="polite">{said && <h2 className="serif" id="imp-h">{w.title}</h2>}</div>
-        {w.line && <p>{w.line}</p>}
+        {w.under && <p>{w.under}</p>}
         {w.count && <p>{w.count}</p>}
         {/* Nothing about plans or who pays on a screen a signer reads; "How we work this out" is on the card that
             stays after Close. */}

@@ -125,9 +125,9 @@ async function tellConnected(user: any, p: Provider, who: Identity, how: 'settin
         : how === 'address' ? `It was connected because ${p.name} confirmed to us that ${who.email} belongs to the person who just signed in there.${hasPassword(user) ? ' Your password is unchanged.' : ''}`
         : `This login was started earlier, but its address had never been confirmed, so we could not know who started it. ${p.name} has now confirmed that the address is yours. To be safe, ${hadPassword ? 'the password that was set before no longer works, ' : ''}every browser that was signed in has been signed out. ${hadPassword ? 'You can choose a new password under Settings.' : ''} ${removedText(removed) || 'Nothing else had been set up in it.'} If you set any of it up yourself, you can set it up again under Settings.`.replace(/\s+/g, ' ').trim(),
       'If this was you, there is nothing to do.',
-      `If it was not you: sign in, open Settings, Profile, and under "Ways to sign in" disconnect ${p.name}.${how !== 'reclaimed' && hasPassword(user) ? ' Then change your password, because someone else may know it.' : ' Then disconnect any other way to sign in listed there that you do not know.'} If you cannot get in, use "Forgot password" on the sign-in page, or write to us: ${baseUrl()}/help`,
+      `If it was not you: sign in, open Settings, Security, and under "Ways to sign in" disconnect ${p.name}.${how !== 'reclaimed' && hasPassword(user) ? ' Then change your password, because someone else may know it.' : ' Then disconnect any other way to sign in listed there that you do not know.'} If you cannot get in, use "Forgot password" on the sign-in page, or write to us: ${baseUrl()}/help`,
     ],
-    cta: { label: 'Open ways to sign in', url: `${baseUrl()}/app/settings?tab=profile` },
+    cta: { label: 'Open ways to sign in', url: `${baseUrl()}/app/settings?tab=security` },
   });
 }
 
@@ -137,8 +137,8 @@ function fail(row: any, p: Provider, code: SignInError, email = ''): Response {
   const q = new URLSearchParams({ signin_error: code, provider: p.id });
   // A connection that failed is said under Settings, where it was started. Unless the person is no longer signed
   // in there: then the sign-in page says it, and Settings opens once they are back in.
-  if (row?.user_id && code === 'session') return redirect(`/login?${q}&next=${encodeURIComponent('/app/settings?tab=profile')}`);
-  if (row?.user_id) return redirect(`/app/settings?tab=profile&${q}`);
+  if (row?.user_id && code === 'session') return redirect(`/login?${q}&next=${encodeURIComponent('/app/settings?tab=security')}`);
+  if (row?.user_id) return redirect(`/app/settings?tab=security&${q}`);
   if (row?.invite) q.set('invite', row.invite);
   // The sign-up form shows the invited address and does not let it be changed, so it goes back with the invitation.
   const address = email || (row?.invite ? get('SELECT email FROM invites WHERE token=?', row.invite)?.email : '');
@@ -203,7 +203,7 @@ route('GET', '/auth/:provider/callback', async (c) => {
       if (who.vouched && sameEmail(who.email, c.user.email) && !c.user.email_verified) run('UPDATE users SET email_verified=1 WHERE id=?', c.user.id);
       await tellConnected(c.user, p, who, 'settings');
     }
-    return redirect(`/app/settings?tab=profile&${new URLSearchParams({ signin: 'connected', provider: p.id })}`);
+    return redirect(`/app/settings?tab=security&${new URLSearchParams({ signin: 'connected', provider: p.id })}`);
   }
 
   // ---- Signing in, or signing up ----

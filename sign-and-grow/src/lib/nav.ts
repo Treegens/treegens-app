@@ -50,5 +50,21 @@ export const moreFor = (role: string): NavItem[] => NAV_MORE.filter((n) => !n.ad
 /** Whether `path` is a page inside More: then the group is open without being asked. */
 export const insideMore = (path: string, role: string): boolean => moreFor(role).some((n) => navOn(n.href, path));
 
+/** The entries the phone's bottom bar already shows, so the phone's menu does not say them a second time. */
+export const IN_TAB_BAR = ['/app', '/app/envelopes', '/app/inbox'];
+
+/**
+ * The title of the browser tab for a page of the app, so Home, Documents, To sign and Settings do not all sound
+ * alike to a screen reader or look alike in a row of tabs: "Documents · GrowSigning".
+ */
+export function pageTitle(path: string): string {
+  const named = (label: string) => `${label} · GrowSigning`;
+  if (path.startsWith('/app/envelopes/new') || /^\/app\/envelopes\/[^/]+\/edit/.test(path)) return named(NAV_START.label);
+  if (path === '/app/operator' || path.startsWith('/app/operator/')) return named('Operator');
+  // The longest address first, so a page inside Documents is not taken for Home.
+  const hit = [...NAV_MAIN, ...NAV_MORE, ...NAV_END].filter((n) => navOn(n.href, path)).sort((a, b) => b.href.length - a.href.length)[0];
+  return hit ? named(hit.label) : 'GrowSigning';
+}
+
 /** Where this browser remembers, per person, that More was left open. */
 export const moreKey = (userId: string) => `growsigning-nav-more:${userId}`;

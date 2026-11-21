@@ -8,7 +8,7 @@ const int = { type: 'integer' };
 const bool = { type: 'boolean' };
 const tok = { name: 'token', in: 'path', required: true, schema: { type: 'string' } };
 const idParam = { name: 'id', in: 'path', required: true, schema: { type: 'string' } };
-const RULE = `A signature that was paid for funds ${TREES_PER_SIGNATURE} mangroves, planted by Treegens. A free one (the signatures a new account starts with, a free code, a sender signing their own document, a server that takes no payments) funds none, and nothing is said to be planted for it; the most that is said then is: "${SOFT_LINE}"`;
+const RULE = `A signature that was paid for funds ${TREES_PER_SIGNATURE} mangroves, planted by Treegens. A free one (the signatures a new account starts with, a free code, a sender signing their own document, a server that takes no payments) funds none, and nothing is said to be planted for it; the most that is said then is one line on the signing record of a server that takes payments: "${SOFT_LINE}" A finished signature is counted when it is finished, whether or not anyone opens a screen.`;
 
 export const impactPaths = () => ({
   '/sign/{token}/impact': {
@@ -20,9 +20,9 @@ export const impactPaths = () => ({
         finish: { ...int, description: `Mangroves that will be planted when this person finishes: ${TREES_PER_SIGNATURE} for someone who signs with a paid signature while it is their turn, otherwise 0.` },
         done: { type: 'object', nullable: true, description: 'After this person has finished signing. null before, and for anyone who does not sign.', properties: {
           trees: { ...int, description: `${TREES_PER_SIGNATURE} or 0. Asked again each time: a payment that went back no longer counts.` },
-          first: { ...bool, description: 'No earlier finished signature from this address on this server.' },
-          celebrate: { ...bool, description: 'The first-time picture has not been shown yet.' },
-          total: { ...int, description: 'Mangroves funded by all paid signatures from this address, this one included.' },
+          first: { ...bool, description: 'No earlier finished signature from this address on this server. Someone who signs in person is known only on this document: the address on their row is the host\'s.' },
+          celebrate: { ...bool, description: 'The picture has not been shown yet: for the first signature of this person, and once more for their first signature that plants anything.' },
+          total: { ...int, description: 'Mangroves funded by all paid signatures from this address, this one included. For someone who signs in person: this signature only.' },
           sheets: { ...int, description: 'An estimate: the pages of the document times the people on it.' },
         } },
       } }),
@@ -40,7 +40,7 @@ export const impactPaths = () => ({
         plus: { ...bool, description: 'For a draft: every signature of it would come out of a payment, as things stand. A forecast, asked again after sending.' },
         sent: { type: 'object', nullable: true, description: 'null for a draft.', properties: {
           paid: { ...int, description: 'People who sign for whom a paid signature is held or was used. Someone later in a signing order has none held yet.' },
-          signers: { ...int, description: 'People who sign and use a signature.' },
+          signers: { ...int, description: 'Everyone on it who signs, the sender included. "Every signature on it plants" is said only when paid equals this.' },
           planted: { ...int, description: 'Mangroves funded by the paid signatures finished on this account\'s documents.' },
           sheets: int,
           celebrate: { ...bool, description: 'This is the first envelope the account ever sent, asked by the person who sent it within the hour, and the picture has not been shown.' },

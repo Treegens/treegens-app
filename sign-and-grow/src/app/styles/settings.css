@@ -30,3 +30,16 @@ ul.rules + .btn, ul.rules + .row { margin-top: 16px; }
   .plan-tab .btn, .plan-tab .btn.sm, .plan-tab .linklike, .plan-tab input, .plan-tab summary { min-height: 44px; }
   .plan-tab .linklike { display: inline-flex; align-items: center; }
 }
+
+/* Settings sections (research/ux-charter.md, 2.2): "Saved" next to what saved, cards, the one More options. */
+.set-saved { color: var(--green); font-size: 13.5px; font-weight: 600; }
+.set-saved:empty { display: none; }
+.set-card + .set-card, .set-card + .set-more, .set-card + .card, .card + .set-card, .set-more { margin-top: 16px; }
+.stack > .set-card, .stack > .set-more { margin-top: 16px; }
+.stack > .set-card:first-child { margin-top: 0; }
+.set-card > .card[style], .set-card > section.card { margin-top: 0 !important; }
+.set-group { font-size: 18px; margin: 0; }
+.set-more > summary, .set-fold { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-weight: 600; color: var(--green-deep); }
+.set-more > summary { font-size: 16px; }
+.set-more-body { margin-top: 8px; }
+.set-kept { margin: 6px 0 14px; }

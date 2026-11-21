@@ -66,6 +66,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
         try {
           if (r.restored) sessionStorage.setItem('sg_restored', '1');
           if (notice) sessionStorage.setItem('sg_notice', notice);
+          // A new login: the app puts the keyboard in the box for the code from our email (ConfirmEmail.tsx).
+          if (mode === 'signup') sessionStorage.setItem('sg_signed_up', '1');
         } catch {
           /* storage can be unavailable */
         }
@@ -106,14 +108,14 @@ export function AuthForm({ mode }: { mode: Mode }) {
             {mode === 'signup' && <label className="f"><span>Your name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>}
             {mode !== 'reset' && <label className="f"><span>Email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoComplete="email" readOnly={mode === 'signup' && !!q?.get('invite')} /></label>}
             {mode !== 'forgot' && <label className="f"><span>{mode === 'reset' ? 'New password' : 'Password'} {mode !== 'login' && <span className="hint">(at least 8 characters)</span>}</span><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={mode === 'login' ? 1 : 8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>}
-            {mode === 'signup' && !q?.get('invite') && <label className="f"><span>Code <span className="hint">(optional, if you were given one)</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
+            {mode === 'signup' && !q?.get('invite') && <label className="f"><span>Plan code <span className="hint">(optional, only if we gave you one)</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
             {error && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{error}</div>}
             <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Save password'}</button>
             {(mode === 'login' || mode === 'signup') && providers.length > 0 && signedInAs && !q?.get('invite') && (
               <div className="auth-alt" role="group" aria-label="You are signed in already">
                 <p className="auth-or" aria-hidden="true"><span>or</span></p>
-                <p className="notice" style={{ margin: '8px 0 0' }}>You are signed in as {signedInAs} in this browser. To sign in with {list(providers.map((p) => p.name))} as well, connect it under Settings, Profile: continuing with it here would make you a separate login. To use another login, sign out first.</p>
-                <a className="btn" href="/app/settings?tab=profile">Open Settings, Profile</a>
+                <p className="notice" style={{ margin: '8px 0 0' }}>You are signed in as {signedInAs} in this browser. To sign in with {list(providers.map((p) => p.name))} as well, connect it under Settings, Security: continuing with it here would make you a separate login. To use another login, sign out first.</p>
+                <a className="btn" href="/app/settings?tab=security">Open Settings, Security</a>
                 <button type="button" className="btn" onClick={signOut}>Sign out</button>
               </div>
             )}

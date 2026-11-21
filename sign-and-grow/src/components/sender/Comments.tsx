@@ -47,8 +47,10 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
   // The email about new comments links to #comments. This card appears only once its data is here, after the
   // browser looked for the anchor, so it is brought into view then.
   const arrived = !!data;
+  // Folded, and closed every time the page opens, unless the person came for it: the email link, or a later tap on one.
+  const [open, setOpen] = useState(false);
   useEffect(() => {
-    if (arrived && window.location.hash === '#comments') document.getElementById('comments')?.scrollIntoView({ block: 'start' });
+    if (arrived && window.location.hash === '#comments') (setOpen(true), setTimeout(() => document.getElementById('comments')?.scrollIntoView({ block: 'start' }), 0));
   }, [arrived]);
 
   if (!shown) return null;
@@ -86,18 +88,19 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
   const threads: any[] = data?.threads || [];
   const waiting: any[] = data?.waiting || [];
   return (
-    <section className="card cm-card" id="comments" aria-labelledby={`${ids}-h`}>
-      <div className="row between wrap">
-        <h2 id={`${ids}-h`}>Questions and comments</h2>
+    <details className="card sn-fold cm-card" id="comments" data-fold="" open={open} onToggle={(ev) => setOpen((ev.currentTarget as HTMLDetailsElement).open)} aria-labelledby={`${ids}-h`}>
+      <summary>
+        <span id={`${ids}-h`}>Questions and comments{data ? ` (${threads.length})` : ''}</span>
         {waiting.length > 0 && <span className="cm-tag warn">{waiting.length === 1 ? '1 waits for your answer' : `${waiting.length} wait for your answer`}</span>}
-      </div>
+      </summary>
+      <div className="sn-fold-in">
       {data?.not_signed && <p className="muted small" style={{ marginTop: 4 }}>{data.not_signed}</p>}
       {problem && <div className="notice err" role="alert">{problem} <button type="button" className="btn sm" onClick={load}>Try again</button></div>}
       {!data && !problem && <p className="muted" role="status">Loading the comments</p>}
       {data && (waiting.length > 0
         ? <p className="notice warn" role="status" style={{ marginTop: 10 }}>Waiting for your answer: <b>{joinNames([...new Set(waiting.map((w) => w.name as string))])}</b>.</p>
         : threads.length > 0 ? <p className="muted" style={{ marginTop: 10 }}>Nobody is waiting for an answer.</p>
-        : <p className="muted" style={{ marginTop: 10 }}>Nobody has written anything yet. The people on this envelope can ask you something from their signing page, and you are emailed when they do.</p>)}
+        : <p className="muted" style={{ marginTop: 10 }}>Nobody has written anything yet. The people on this document can ask you something from their signing page, and you are emailed when they do.</p>)}
 
       {threads.map((t, i) => (
         <article key={t.id} className={`cm-thread${t.settled_at ? ' settled' : t.waiting ? ' waiting' : ''}`} aria-label={`Conversation ${i + 1}`} style={{ marginTop: 12 }}>
@@ -123,7 +126,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
               <label className="f"><span>Your answer</span><textarea dir="auto" rows={3} maxLength={COMMENT_MAX_CHARS} value={reply} onChange={(ev) => setReply(ev.target.value)} autoFocus /></label>
               <p className="muted small">{t.private ? `Only ${t.with?.name || 'this person'} can read it${t.with?.emailed ? ', and they are emailed.' : `. ${t.with?.not_emailed || 'They are not emailed. They see it on their signing page.'}`}` : 'Everyone on the envelope can read it on their signing page. Whoever wrote in this conversation is emailed if we can email them, and under your answer it says who was.'}</p>
               <div className="row wrap">
-                <button className="btn primary" disabled={busy}>{busy ? 'Sending' : 'Send answer'}</button>
+                <button className="btn" disabled={busy}>{busy ? 'Sending' : 'Send answer'}</button>
                 <button type="button" className="btn" onClick={() => (setReplyTo(''), setReply(''))}>Cancel</button>
               </div>
             </form>
@@ -139,7 +142,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
       ))}
 
       {error && <div className="notice err" role="alert" style={{ marginTop: 10 }}>{error}</div>}
-      {data && !data.may_write && <p className="muted small" style={{ marginTop: 10 }}>This envelope is no longer out, so these can be read and no longer added to. They are kept with the envelope, and its export and evidence pack carry them.</p>}
+      {data && !data.may_write && <p className="muted small" style={{ marginTop: 10 }}>This document is no longer out, so these can be read and no longer added to. They are kept with it, and its export and its full record for disputes carry them.</p>}
       {data?.may_write && !replyTo && (
         <form className="cm-new" style={{ marginTop: 14 }} onSubmit={async (ev) => {
           ev.preventDefault();
@@ -152,13 +155,14 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
           <label className="f"><span>Who can read it</span>
             <select value={forWhom} onChange={(ev) => setForWhom(ev.target.value)} required>
               <option value="">Choose who can read it</option>
-              <option value="everyone">Everyone on the envelope (nobody is emailed)</option>
+              <option value="everyone">Everyone on the document (nobody is emailed)</option>
               {(data.people || []).map((p: any) => <option key={p.id} value={p.id}>Only {p.name} ({p.emailed ? 'they are emailed' : 'not emailed, they see it on their signing page'})</option>)}
             </select>
           </label>
-          <button className="btn primary" disabled={busy}>{busy ? 'Sending' : 'Send'}</button>
+          <button className="btn" disabled={busy}>{busy ? 'Sending' : 'Send comment'}</button>
         </form>
       )}
-    </section>
+      </div>
+    </details>
   );
 }

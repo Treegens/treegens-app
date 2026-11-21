@@ -870,6 +870,8 @@ async function flowC(f, templateName) {
 
 // (d) Find the completed document and download it.
 async function flowD(f, subject) {
+  // Lists and downloads name a document without the "Please sign:" of the invitation email (src/lib/docname.ts).
+  subject = subject.replace(/^please sign:\s*/i, '');
   const p = f.page;
   await p.goto(`${BASE}/app`);
   // Home lists what was completed lately, each with a Download that names it: the shortest way, when it is there.

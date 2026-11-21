@@ -8,6 +8,7 @@ import { find } from './routes-sign.ts';
 import { memberForCode } from './groups.ts';
 import { mine } from './routes-envelopes.ts';
 import { zipStream } from './zip.ts';
+import { dayText } from '../lib/dates.ts';
 
 // The public side of what happens around a certificate (src/server/evidence.ts): the lookup by envelope ID, and
 // "I did not sign this, or this was not me" from the check page and from the signing page.
@@ -50,7 +51,7 @@ route('GET', '/envelopes/:id/evidence', async (c) => {
   const e = mine(c, c.params.id, 'envelope', { removed: true });
   if (e.status === 'draft') throw bad('This envelope has not been sent, so there is no record to put in an evidence pack yet.');
   // Purged (src/server/records.ts): the documents and the signed PDF are gone, and the record is on the envelope page.
-  if (e.purged_at) throw bad(`The documents of this envelope were purged on ${String(e.purged_at).slice(0, 10)}, so there is no evidence pack any more. Its record, with the fingerprint of its signed PDF, is on the envelope page. A pack someone downloaded before is not affected.`, 410, { code: 'purged' });
+  if (e.purged_at) throw bad(`The documents of this envelope were purged on ${dayText(e.purged_at)}, so there is no evidence pack any more. Its record, with the fingerprint of its signed PDF, is on the envelope page. A pack someone downloaded before is not affected.`, 410, { code: 'purged' });
   // A key's request carries the login of whoever made the key, but no person asked for this pack: the README says so.
   const { entries, name } = await evidencePack(e, c.auth?.via === 'api_key' ? `an API key that ${c.user.name} <${c.user.email}> created` : `${c.user.name} <${c.user.email}>`);
   return new Response(zipStream(entries), { headers: { 'content-type': 'application/zip', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="${name.replace(/[^\w .()-]+/g, '_')}"` } });

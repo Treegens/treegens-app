@@ -655,7 +655,7 @@ test('disagree: a mistyped password on a login without two-step login is still s
 
 test('the words: 7 days, the switch and its risk, on the screens, /help, /security and in the README', () => {
   const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
-  assert.match(TWO_STEP_LOST.join(' '), /switched it off under Settings, Profile/);
+  assert.match(TWO_STEP_LOST.join(' '), /switched it off under Settings, Security/);
   assert.match(TWO_STEP_LOST.join(' '), /unless you own a workspace or are an admin of another one/);
   assert.match(TWO_STEP_LOST.join(' '), /remembered device stops it at once/);
   assert.equal(TWO_STEP_EMAIL_RESET_RISK, 'Someone who controls your mailbox and knows your password, and whom you do not notice for a week, could get in this way. Switch the reset by email off if you would rather be locked out than take that risk.');

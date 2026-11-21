@@ -23,6 +23,7 @@ import './styles/customfields.css';
 import './styles/simplesign.css';
 import './styles/start.css';
 import './styles/impact.css';
+import './styles/envelope.css';
 // After globals.css, so its --serif (Lora first) wins. Keep it the last style import.
 import './styles/brand.css';
 import type { Metadata, Viewport } from 'next';

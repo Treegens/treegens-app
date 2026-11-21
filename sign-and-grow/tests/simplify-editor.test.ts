@@ -462,8 +462,8 @@ test('the editor says document, file and person: never envelope or recipient, in
   assert.match(editor, /<b>This document is already out\.<\/b>/);
   assert.match(read('src/components/editor/FileRow.tsx'), /aria-label="File name"/);
   // The words for giving signatures back name the button the document's page really has.
-  assert.match(read('src/components/editor/StepReview.tsx'), /Cancelling a document you no longer need \(Void, on its page\)/);
-  assert.match(read('src/app/app/envelopes/[id]/page.tsx'), />Void<\/button>/);
+  assert.match(read('src/components/editor/StepReview.tsx'), /Cancelling a document you no longer need \(Cancel the request, in More on its page\)/);
+  assert.match(read('src/lib/envelopepage.ts'), /add\('cancel', 'Cancel the request', true\)/);
 });
 
 test('"Check who signs" is one list; a code by text only where texts are sent; what a locked template asks for cannot be picked away', () => {
@@ -568,7 +568,7 @@ test('step 2: a field\'s More options closes for every other field, and "Place f
 test('the drop area says it in one line each, and the narrowest phones still name the step', async () => {
   const { uploadLimitsShort, uploadLimits } = await import('../src/lib/convert.ts');
   assert.equal(uploadLimitsShort(false), 'PDF, PNG or JPEG. Up to 25 MB and 500 pages each.');
-  assert.match(uploadLimitsShort(true), /which we turn into a PDF\. Up to 25 MB and 500 pages each\.$/);
+  assert.equal(uploadLimitsShort(true), 'PDF, Word, Excel, PowerPoint or a picture. Up to 25 MB and 500 pages each.');
   assert.ok(uploadLimits(false, 6).startsWith(uploadLimitsShort(false)), 'the same limits as the long line');
   const add = read('src/components/editor/StepAdd.tsx');
   assert.match(add, /<span className="ed-fine">Choose a file or drop it here<\/span>/);

@@ -18,6 +18,7 @@ import { CustomFieldsStep } from './CustomFieldsStep';
 import { phoneWeight } from '@/lib/phone';
 import { isGroupRow, groupLine } from './GroupRecipient';
 import { noAddressWords, personLabel } from '@/lib/editorux';
+import { ConfirmToSend, isConfirmRefusal } from './ConfirmToSend';
 
 const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
@@ -71,7 +72,7 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
           {b.plan === 'grove'
             ? <li><b>Top up {each(short)} for ${short * PRICING.topUpUsd}.</b> One payment, nothing recurring, and it plants {mangrovesFor(short * PRICING.topUpUsd)} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>
             : <li><b>Start the monthly plan:</b> ${PRICING.monthlyUsd} a month for {PRICING.monthlySignatures} signatures, month to month, and every dollar plants {PRICING.treesPerUsd} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>}
-          {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Cancelling a document you no longer need (Void, on its page) gives its signatures back at once, unless their own date has passed (then they expire instead).</li>}
+          {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Cancelling a document you no longer need (Cancel the request, in More on its page) gives its signatures back at once, unless their own date has passed (then they expire instead).</li>}
           {next && !b.renewal_pending && Date.parse(next) > Date.now() && b.plan === 'grove' && <li><b>Wait.</b> The next {each(PRICING.monthlySignatures)} arrive on {fmtDate(next)}.</li>}
           <li><b>Send to fewer people now.</b> Signing your own copy, approvers, viewers and copies are always free.</li>
         </ul>
@@ -133,7 +134,9 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
           </div>
         </div>
       )}
-      {error && !closed && <div className="notice err" role="alert"><b>{correcting ? 'Not saved yet.' : isTpl ? 'Not saved yet.' : 'Not sent yet.'}</b> {error} Your changes are still here.</div>}
+      {/* An address that is not confirmed yet: the code box is here, where Send is (ConfirmToSend.tsx). */}
+      {!isTpl && !correcting && !closed && <ConfirmToSend refused={isConfirmRefusal(error)} button={ed.signNow ? 'Sign now' : 'Send'} />}
+      {error && !closed && !isConfirmRefusal(error) && <div className="notice err" role="alert"><b>{correcting ? 'Not saved yet.' : isTpl ? 'Not saved yet.' : 'Not sent yet.'}</b> {error} Your changes are still here.</div>}
       {problems.length > 0 && <div className="notice warn"><b>Almost there.</b><ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{problems.map((p) => <li key={p}>{p}</li>)}</ul></div>}
       {!isTpl && !closed && rcps.length > 0 && <SignatureCost rcps={rcps} correcting={correcting} />}
       {!isTpl && <SharedInbox rcps={rcps} />}

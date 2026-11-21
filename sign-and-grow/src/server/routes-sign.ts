@@ -1,4 +1,5 @@
 import { route, pdfResponse, type Ctx } from './router.ts';
+import { listName } from '../lib/docname.ts';
 import { get, run, readBlob } from './db.ts';
 import { bad, hmac, now, str, rateLimit, safeEqual, fmtCode, HttpError } from './util.ts';
 import { cookie, readCookie } from './auth.ts';
@@ -409,11 +410,11 @@ route('GET', '/sign/:token/download', async (c) => {
   // download is the document as it is now.
   const waits = e.status === 'sent' && r.status === 'pending' && !!r.signed_before;
   const earlier = keeps || waits || c.q.get('earlier') === '1' ? await earlierCopy(e, r, keeps) : null;
-  if (earlier) return pdfResponse(earlier, `${e.subject || 'document'} (as first signed)`, c.q.get('inline') === '1');
+  if (earlier) return pdfResponse(earlier, `${listName(e.subject) || 'document'} (as first signed)`, c.q.get('inline') === '1');
   if (!keeps) assertViewable(e, r);
   const done = finalPdf(e);
   // The first time this person opens or downloads the completed copy goes in the record (evidence.ts).
   if (done) noteCopyOpened(e, r, actor, c.q.get('inline') === '1');
   // Until everyone has finished, the copy a recipient downloads is made for them: it shows what their screen shows.
-  return pdfResponse(done || (await buildPdf(e, false, r.id, keeps ? notCompletedNotice(e, r) : undefined)), e.subject || 'document', c.q.get('inline') === '1');
+  return pdfResponse(done || (await buildPdf(e, false, r.id, keeps ? notCompletedNotice(e, r) : undefined)), listName(e.subject) || 'document', c.q.get('inline') === '1');
 }, 'public');

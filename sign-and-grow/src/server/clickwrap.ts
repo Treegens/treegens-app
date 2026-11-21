@@ -20,6 +20,7 @@ import {
   CLICK_LAW, DEFAULT_BUTTON, DEFAULT_CHECKBOX, IDENTITY_LABEL, LABEL_MAX, NAME_MAX, TERMS_MAX_CHARS, VIA_LABEL, VIEW_MAX_HOURS, WHO_MAX_DAYS,
   VIEW_MATCH_LABEL, coverLine, recordShows, termsPlain, usageLine, type Identity, type Via,
 } from '../lib/clickwrap.ts';
+import { dayText } from '../lib/dates.ts';
 
 export const pageUrl = (slug: string) => `${baseUrl()}/agree/${slug}`;
 
@@ -236,7 +237,7 @@ export function closedWhy(cw: any, v: any = versionOf(cw), extra: any[] = []): s
   const account = get('SELECT * FROM accounts WHERE id=?', cw.account_id);
   if (!account) return 'The account no longer exists.';
   if (account.suspended_at) return `${pausedText(account)} While sending is paused, its click-to-agree pages are closed too.`;
-  if (account.closing_at) return `The account is being closed and will be deleted on ${String(account.closing_at).slice(0, 10)}, so its terms cannot be accepted. Signing in again before then keeps the account.`;
+  if (account.closing_at) return `The account is being closed and will be deleted on ${dayText(account.closing_at)}, so its terms cannot be accepted. Signing in again before then keeps the account.`;
   if (!v) return 'Nothing is published yet. Publish the terms to open the page.';
   if (!cw.active) return 'You closed these terms. Open them again to take acceptances.';
   // Read again every time: an account that loses its trust (a refund, a dispute) has its pages read like a new one.

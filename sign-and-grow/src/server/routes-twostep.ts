@@ -99,7 +99,7 @@ route('POST', '/me/two-step/lost', async (c) => {
   } catch {}
   if (!twoStepOn(c.user)) throw bad('Two-step login is not on for your login, so there is nothing to reset.', 409);
   rateLimit(`two-step-lost-pw:${c.user.id}`, 5, 3600_000);
-  if (!hasPassword(c.user)) throw bad('A reset by email needs the password of your login, and your login has none yet. Choose one first under Settings, Profile, Ways to sign in ("Email me a link to set a password"), then come back here.', 409, { code: 'password_first' });
+  if (!hasPassword(c.user)) throw bad('A reset by email needs the password of your login, and your login has none yet. Choose one first under Settings, Security, Ways to sign in ("Email me a link to set a password"), then come back here.', 409, { code: 'password_first' });
   if (!checkPassword(str(b.password, 200), c.user.password_hash)) throw bad(b.password ? 'That password is not right, so nothing was emailed. Type the password you sign in with.' : 'Type your password as well: a reset by email needs it. Nothing was emailed.', 403, { code: 'password_needed' });
   const what = await sendWayBack(c.user);
   if (!what) throw bad(`We have emailed you about a lost phone ${TWO_STEP_LOST_PER_DAY} times in the last day already, so nothing more was sent. Look for those emails, also among spam, or ask again tomorrow.`, 429, { code: 'lost_limit' });
@@ -121,7 +121,7 @@ async function sendWayBack(u: any): Promise<WayBack | false> {
   const notYou = 'If you did not ask for this, someone knows your password: change it.';
   if (!emailResetAllowed(u)) {
     await sendMail({ to: u.email, subject: 'Getting back into your GrowSigning login without your phone', heading: admins ? 'Ask an admin of your team' : 'Only a recovery code can help now',
-      lines: [said, 'You switched the reset by email off under Settings, Profile, so it cannot be done by email.',
+      lines: [said, 'You switched the reset by email off under Settings, Security, so it cannot be done by email.',
         admins ? `${admins} Then sign in with your password and set two-step login up again with your new phone.`
           : 'Nobody else can switch your second step off either, because you own a workspace or are an admin of more than one, and it would open those too. One of your recovery codes, or a device that is remembered for your login, is the way in that is left.',
         notYou] });
@@ -160,7 +160,7 @@ route('POST', '/auth/two-step/email-reset', async (c) => {
   run('DELETE FROM two_step_resets WHERE user_id=?', r.user_id);
   const u = user(r.user_id);
   if (!u || !twoStepOn(u)) return { ok: true, off: true };
-  if (!emailResetAllowed(u)) throw bad('The reset by email was switched off for this login under Settings, Profile, so nothing was started. A recovery code, a remembered device or an admin of your team are the ways left.', 409, { code: 'email_reset_off' });
+  if (!emailResetAllowed(u)) throw bad('The reset by email was switched off for this login under Settings, Security, so nothing was started. A recovery code, a remembered device or an admin of your team are the ways left.', 409, { code: 'email_reset_off' });
   const blocked = !u.two_step_reset_at && resetBlockedUntil(u);
   if (blocked) throw bad(`A reset of this login was stopped recently, so a new one can start from ${whenFor(u, blocked)}. Nothing was started.`, 409, { code: 'reset_blocked', until: blocked });
   const already = !!u.two_step_reset_at;
@@ -175,7 +175,7 @@ route('POST', '/auth/two-step/email-reset/stop', async (c) => {
   const t = str((await c.body()).token, 200);
   const r = t ? get('SELECT user_id FROM two_step_stops WHERE token_hash=?', sha256(t)) : null;
   const u = r ? user(r.user_id) : null;
-  if (!u?.two_step_reset_at) throw bad('There is no reset under way that this link could stop: it was stopped already, or it has taken effect. If you can sign in, Settings, Profile shows what happened to your second step.', 410, { code: 'nothing_to_stop' });
+  if (!u?.two_step_reset_at) throw bad('There is no reset under way that this link could stop: it was stopped already, or it has taken effect. If you can sign in, Settings, Security shows what happened to your second step.', 410, { code: 'nothing_to_stop' });
   await stopEmailReset(u, 'link');
   const again = resetBlockedUntil(user(u.id));
   return { ok: true, stopped: true, again_from: again, again_when: again ? whenFor(u, again) : null };
@@ -275,7 +275,7 @@ route('POST', '/me/two-step/confirm', async (c) => {
     lines: [moving ? 'From now on, signing in to your GrowSigning login asks for the code of the authenticator app that was just added. The app used before no longer works for it. Your recovery codes stay as they were.'
       : `From now on, signing in to your GrowSigning login asks for the code from your authenticator app after the password, or after Google or Microsoft. ${done.signed_out ? 'Every other browser that was signed in was signed out.' : ''}`.trim(),
       'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'],
-    cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });
+    cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=security#two-step` } });
   return { ok: true, moved: moving, codes: done.codes, signed_out: done.signed_out };
 });
 
@@ -347,10 +347,10 @@ route('POST', '/me/two-step/email-reset', async (c) => {
   }
   await sendMail({ to: c.user.email, subject: b.allowed ? 'A reset by email of your two-step login is allowed again' : 'The reset by email of your two-step login is off', heading: b.allowed ? 'Reset by email allowed' : 'Reset by email switched off',
     lines: [b.allowed
-      ? `It was allowed again under Settings, Profile, in a browser signed in to your GrowSigning login. If you lose your phone and your recovery codes, you can ask for a reset by email after your password: it takes effect ${TWO_STEP_EMAIL_RESET_DAYS} days later, and we email you every day until then.`
-      : `It was switched off under Settings, Profile, in a browser signed in to your GrowSigning login. If you lose your phone and your recovery codes, ${adminResetTeams(c.user.id).length ? 'only an admin of your team can switch your second step off' : 'nobody can switch your second step off: keep your recovery codes safe'}.`,
+      ? `It was allowed again under Settings, Security, in a browser signed in to your GrowSigning login. If you lose your phone and your recovery codes, you can ask for a reset by email after your password: it takes effect ${TWO_STEP_EMAIL_RESET_DAYS} days later, and we email you every day until then.`
+      : `It was switched off under Settings, Security, in a browser signed in to your GrowSigning login. If you lose your phone and your recovery codes, ${adminResetTeams(c.user.id).length ? 'only an admin of your team can switch your second step off' : 'nobody can switch your second step off: keep your recovery codes safe'}.`,
       'If you did not do this, someone else is in your login: write to us through the help page, and change your password.'],
-    cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });
+    cta: { label: 'Open Settings', url: `${baseUrl()}/app/settings?tab=security#two-step` } });
   return { ok: true, allowed: b.allowed };
 });
 
@@ -373,7 +373,7 @@ route('POST', '/account/two-step', async (c) => {
   if (typeof b.required !== 'boolean') throw bad('Send "required": true to ask everyone for two-step login, or false to stop asking.');
   if (b.required === !!c.account.two_step_required_at) return { ok: true, required: b.required, told: 0 };
   // The owner first: whoever asks it of others has it, and cannot be shut out of their own account by it.
-  if (b.required && !twoStepOn(c.user)) throw bad('Switch two-step login on for yourself first, under Settings, Profile. Then you can ask it of everyone.', 409, { code: 'set_up_first' });
+  if (b.required && !twoStepOn(c.user)) throw bad('Switch two-step login on for yourself first, under Settings, Security. Then you can ask it of everyone.', 409, { code: 'set_up_first' });
   await needCode(c, b.code, b.required ? 'ask everyone for two-step login' : 'stop asking everyone for two-step login');
   run('UPDATE accounts SET two_step_required_at=? WHERE id=?', b.required ? now() : null, c.account.id);
   record('settings.changed', { c, details: { settings: { two_step_required: { from: !b.required, to: b.required } } } });
@@ -385,7 +385,7 @@ route('POST', '/account/two-step', async (c) => {
       await sendMail({ to: m.email, about: m.id, subject: `${c.account.name} asks you to use two-step login`, heading: 'Two-step login for your team',
         lines: [`${c.user.name}, the owner of ${c.account.name} on GrowSigning, asks everyone on the team to sign in with two-step login: after the password, a 6-digit code from an authenticator app on your phone.`,
           `The next time you open ${c.account.name}, you are asked to set it up, and until then nothing else in it opens. It takes a minute. You need an authenticator app, such as the one your phone may already have for passwords, or any app that shows 6-digit sign-in codes.`],
-        cta: { label: 'Set it up now', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });
+        cta: { label: 'Set it up now', url: `${baseUrl()}/app/settings?tab=security#two-step` } });
     }
   }
   return { ok: true, required: b.required, told };
@@ -399,7 +399,7 @@ route('POST', '/account/members/:id/two-step/reset', async (c) => {
   const b = await c.body();
   const m = get('SELECT u.*, m.role member_role FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id=?', c.account.id, c.params.id);
   if (!m) throw bad('That person is not on this team.', 404);
-  if (m.id === c.user.id) throw bad('Your own second step is changed under Settings, Profile, not here. If you lost your phone and your recovery codes, sign out and choose "I lost my phone and my recovery codes" after your password.', 400);
+  if (m.id === c.user.id) throw bad('Your own second step is changed under Settings, Security, not here. If you lost your phone and your recovery codes, sign out and choose "I lost my phone and my recovery codes" after your password.', 400);
   if (m.member_role === 'owner') throw bad(`${m.name} owns ${c.account.name}, and nobody else can reset the second step of an owner. The owner uses the reset by email on the sign-in screen, which takes effect after ${TWO_STEP_EMAIL_RESET_DAYS} days.`, 403, { code: 'owner' });
   if (!adminResetTeams(m.id).includes(c.account.id)) throw bad(`${m.name} owns a workspace or is an admin of another one, so nobody on ${c.account.name} can switch their second step off: it would open that workspace too. ${m.name} can use the reset by email on the sign-in screen, which takes effect after ${TWO_STEP_EMAIL_RESET_DAYS} days. Nothing was changed.`, 403, { code: 'admin_elsewhere' });
   if (!twoStepOn(m)) throw bad(`${m.name} does not have two-step login on, so there is nothing to reset.`, 409, { code: 'two_step_off' });
@@ -412,9 +412,9 @@ route('POST', '/account/members/:id/two-step/reset', async (c) => {
   });
   await sendMail({ to: m.email, subject: `${c.user.name} switched off two-step login of your GrowSigning login`, heading: 'Your second step was reset',
     lines: [`${c.user.name}, an admin of ${c.account.name}, switched off two-step login of your GrowSigning login just now. Signing in asks for no code now, and your recovery codes and remembered devices were removed.`,
-      `Set it up again under Settings, Profile, with the authenticator app on your phone.${c.account.two_step_required_at ? ` ${c.account.name} asks everyone for it, so you are asked to do that the next time you open it.` : ''}`,
+      `Set it up again under Settings, Security, with the authenticator app on your phone.${c.account.two_step_required_at ? ` ${c.account.name} asks everyone for it, so you are asked to do that the next time you open it.` : ''}`,
       `If you did not ask for this, tell ${c.user.name} and change your password, because whoever knows it can now sign in with it alone.`],
-    cta: { label: 'Set it up again', url: `${baseUrl()}/app/settings?tab=profile#two-step` } });
+    cta: { label: 'Set it up again', url: `${baseUrl()}/app/settings?tab=security#two-step` } });
   return { ok: true, name: m.name };
 }, 'admin');
 

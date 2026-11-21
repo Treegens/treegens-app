@@ -28,6 +28,7 @@ import { record, securityExport, securityWords } from './seclog.ts';
 import { originalShas } from './converted.ts';
 import { assertMayClose, forgetRetentionLog } from './records.ts';
 import { customCsv } from './customfields.ts';
+import { dayText } from '../lib/dates.ts';
 
 // Things that exist so nobody gets stuck: help that reaches a person, proof an email is genuine, lost links,
 // taking your documents with you, closing an account, and the queue the people running the service work from.
@@ -284,7 +285,7 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
     // News from the mail provider about these emails (a spam complaint) still counts against the account (bounces.ts).
     if (owner) rememberGoneMail(eid, owner);
     run(`DELETE FROM emails WHERE envelope_id=?${account ? '' : ` AND ${NOT_WAITING}`}`, eid);
-    forgetArchiveCopies(eid); // our stored copies for the archive addresses (archivemail.ts)
+    forgetArchiveCopies(eid, shas); // our stored copies for the archive addresses, waiting ones too (archivemail.ts)
     run('DELETE FROM retired_tokens WHERE envelope_id=? OR recipient_id IN (SELECT id FROM recipients WHERE envelope_id=?)', eid, eid);
     if (account) run('DELETE FROM abuse_reports WHERE envelope_id=?', eid);
   }
@@ -324,7 +325,7 @@ export const keysOf = (userId: string): any[] => all(`SELECT k.id, k.name, k.pre
 
 // How a key is named in an email: what lets someone find it in the list, never the key itself.
 export const keyList = (keys: any[], withAccount = false) =>
-  keys.map((k) => `"${k.name}" (${k.prefix}..., ${k.last_used_at ? `last used ${k.last_used_at.slice(0, 10)}` : 'never used'})${withAccount ? ` in ${k.account}` : ''}`).join('\n');
+  keys.map((k) => `"${k.name}" (${k.prefix}..., ${k.last_used_at ? `last used ${dayText(k.last_used_at)}` : 'never used'})${withAccount ? ` in ${k.account}` : ''}`).join('\n');
 
 // A key hangs on the person who made it. When that person closes their own login, their keys in a team go off with
 // them and whatever used those keys breaks, exactly as when an admin removes them. Nobody should learn that from a
@@ -341,7 +342,7 @@ export async function tellTeamsAboutKeys(who: { id: string; name: string }, keys
     const [state, why, lines] = {
       off: [`${one ? 'is' : 'are'} switched off`, `${who.name} is closing their login`, [`${who.name} is closing their GrowSigning login. The API keys ${who.name} created in ${team} were switched off at that moment:`, list,
         'Anything that uses one of them now gets an error that says so. To carry on, create a new key and put it into the integration.',
-        `Nothing is deleted before ${until.slice(0, 10)}. If ${who.name} signs in again before then, the keys work again. If not, they stop for good on that day. You are told by email when either happens.`]],
+        `Nothing is deleted before ${dayText(until)}. If ${who.name} signs in again before then, the keys work again. If not, they stop for good on that day. You are told by email when either happens.`]],
       back: [`${one ? 'works' : 'work'} again`, `${who.name} kept their login`, [`${who.name} signed in again, so their GrowSigning login is no longer being closed. The API keys ${who.name} created in ${team} work again from that moment:`, list,
         'If you put a new key into an integration in the meantime, the old one is not needed any more. You can revoke it under Settings, API and webhooks.']],
       stopped: ['stopped working', `${who.name} closed their login`, [`${who.name} closed their GrowSigning login, and it has now been deleted. The API keys ${who.name} created in ${team} have stopped for good:`, list,
@@ -541,7 +542,7 @@ route('POST', '/me/delete', async (c) => {
   const b = await c.body();
   // Someone who signs in with Google or Microsoft may have no password to type. Closing is confirmed with one, so
   // they are told how to get one instead of being told that a password they never had is wrong.
-  if (!hasPassword(c.user)) throw bad(`Closing an account is confirmed with your password, and this login has none yet because you sign in another way. Set one first: Settings, Profile, "Email me a link to set a password". Then come back here. Nothing was changed.`, 400, { code: 'no_password' });
+  if (!hasPassword(c.user)) throw bad(`Closing an account is confirmed with your password, and this login has none yet because you sign in another way. Set one first: Settings, Security, "Email me a link to set a password". Then come back here. Nothing was changed.`, 400, { code: 'no_password' });
   if (!checkPassword(str(b.password, 200), c.user.password_hash)) throw bad('That password is not right.');
   const owned = all("SELECT a.* FROM accounts a JOIN memberships m ON m.account_id=a.id WHERE m.user_id=? AND m.role='owner'", c.user.id);
   for (const a of owned)
@@ -585,10 +586,10 @@ route('POST', '/me/delete', async (c) => {
   record('account.closing', { c, member: c.user.id, about: ['user', c.user.id], details: { deleted_now: false, deletes_at: when, accounts_closing: owned.length, keys_switched_off: keys.length } });
   run('DELETE FROM sessions WHERE user_id=?', c.user.id);
   await tellTeamsAboutKeys(c.user, keys, 'off', when);
-  await sendMail({ to: c.user.email, subject: 'Your GrowSigning account is closing', heading: `Your account will be deleted on ${when.slice(0, 10)}`,
+  await sendMail({ to: c.user.email, subject: 'Your GrowSigning account is closing', heading: `Your account will be deleted on ${dayText(when)}`,
     lines: [confirmed ? 'Any subscription has been stopped and you will not be charged again.' : 'Your subscription is cancelled on our side. The payment provider did not confirm it straight away, so we keep trying until it does. If a payment is taken in the meantime, the software refunds it by itself.',
-      `Until ${when.slice(0, 10)} nothing is deleted. Changed your mind, or closed it by mistake? Just sign in again and the account comes straight back.`,
-      ...ownKeyLines(keys, `${keys.length === 1 ? 'This API key of yours is' : 'These API keys of yours are'} switched off from now. Signing in again before ${when.slice(0, 10)} switches ${keys.length === 1 ? 'it' : 'them'} back on:`),
+      `Until ${dayText(when)} nothing is deleted. Changed your mind, or closed it by mistake? Just sign in again and the account comes straight back.`,
+      ...ownKeyLines(keys, `${keys.length === 1 ? 'This API key of yours is' : 'These API keys of yours are'} switched off from now. Signing in again before ${dayText(when)} switches ${keys.length === 1 ? 'it' : 'them'} back on:`),
       owned.length ? `After that date your login and ${owned.map((a) => `"${a.name}"`).join(' and ')} are removed for good, with everything in it: envelopes, signed documents, files signers attached, audit trails and our copies of the emails about them. To take a copy first, sign in, export everything under Settings, Your data, and close the account again.` : 'After that date your login is removed for good.',
       ...(teams ? [`What you sent as a member of ${teams} is not deleted. It belongs to that team and passes to its owner on that date.`] : []),
       ...kept, `We remind you by email ${CLOSING_REMINDER_DAYS} days before that date.`],
