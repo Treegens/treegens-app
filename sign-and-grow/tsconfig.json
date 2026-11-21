@@ -69,8 +69,6 @@
     ".next-finish-ux-revise/dev/types/**/*.ts",
     ".next-finish-expiry/types/**/*.ts",
     ".next-finish-expiry/dev/types/**/*.ts",
-    ".next-finish-chat/types/**/*.ts",
-    ".next-finish-chat/dev/types/**/*.ts",
     ".next-finish-simplify-signing/types/**/*.ts",
     ".next-finish-simplify-signing/dev/types/**/*.ts"
   ],

@@ -1044,6 +1044,9 @@ test('every control the helper names is on the screen it names it for, read from
   assert.ok(sign.includes(`label: '${A.ask!.label}'`));
   assert.ok(sign.includes(`'${A.decline!.label}'`));
   // Signing on paper is a key of the page's list that nobody is shown yet, so the helper never names it.
+  assert.ok(sign.includes(`label: '${screens.WITNESS_LABELS.absent}'`));
+  assert.match(fs.readFileSync('src/components/sign/actions.ts', 'utf8'), /WITNESS_ACTIONS = \['absent', 'ask', 'help'\]/, 'a witness has no Finish later, and the helper says what to do then');
+  assert.match(kb.builtInAnswer('I cannot sign today', 'signing').reply, /If Finish later is not in your list, as for a witness, close the page: the same link works when you come back\./);
   assert.equal(A.paper, null);
   assert.match(fs.readFileSync('src/components/sign/actions.ts', 'utf8'), /not built yet: always false/);
   assert.ok(!kb.systemPrompt('signing').includes('Sign on paper instead'));
@@ -1118,4 +1121,6 @@ test('a page that goes away before the model has begun to answer stops the model
   gone.abort();
   await pending.catch(() => {});
   assert.equal(aborted, true, 'the call to the model was stopped when the page left');
+  // Leaving early does not get a question past the limits: it was counted before the model was asked.
+  assert.ok(db.prepare('SELECT n FROM chat_counts WHERE key=?').get(chat.countKey('ip', '198.51.200.9')), 'the question was counted');
 });

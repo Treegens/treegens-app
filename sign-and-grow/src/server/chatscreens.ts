@@ -28,6 +28,8 @@ export const SIGN_ACTIONS: Record<(typeof ACTION_ORDER)[number], { label: string
   paper: null,
   decline: { label: 'Decline to sign', when: 'for everyone who signs or approves; always the last entry' },
 };
+/** The entry only a witness has (WITNESS_ACTIONS in the same file of the page). */
+export const WITNESS_LABELS = { absent: 'I was not there' } as const;
 /** Labels on the signing page that are not entries of Other actions. */
 export const SIGN_LABELS = { menu: 'Other actions', next: 'Next', finish: 'Finish', report: 'Report this request', textView: 'Text view', download: 'Download', stopReminders: 'Stop reminder emails', fixName: 'Fix my name', check: 'Check before you finish' } as const;
 /** Labels in the app, for people who send. `where` is the source file each one is read from in the tests. */
@@ -77,7 +79,7 @@ export const moreTimeForSender = (s?: ChatScreen): string =>
 // ---- What someone who signs asks ---------------------------------------------------------------------------------
 export const SIGNER_FAQ: Faq[] = [
   { id: 'later', words: ['cannot sign', "can't sign", 'can not sign', 'unable to sign', 'sign later', 'sign it later', 'sign this later', 'finish later', 'sign this today', 'sign today', 'not today', 'sign tomorrow', 'come back later', 'not now', 'no time', 'not ready', 'do it later', 'save and', 'pause'],
-    answer: (s) => `${other(s)}, then ${S.later!.label}. What you filled in is saved, and the same link brings you back when you are ready, on any device. If the document has a deadline, the same list has "${S.time!.label}" (the page shows the sender's name): the sender decides. If you cannot sign because something on the page does not work, say what you see, or choose Talk to a person.` },
+    answer: (s) => `${other(s)}, then ${S.later!.label}. What you filled in is saved, and the same link brings you back when you are ready, on any device. If the document has a deadline, the same list has "${S.time!.label}" (the page shows the sender's name): the sender decides. If ${S.later!.label} is not in your list, as for a witness, close the page: the same link works when you come back. If you cannot sign because something on the page does not work, say what you see, or choose Talk to a person.` },
   { id: 'decline', words: ['decline', 'do not want to sign', "don't want to sign", 'not want to sign', 'refuse to sign', 'not going to sign', 'say no', 'will not sign', "won't sign", 'disagree'],
     answer: (s) => `You do not have to sign. ${other(s)}, then ${S.decline!.label}, and add a short reason. Declining closes the document for everyone, and the sender is told why. If you only have a question, choose ${S.ask!.label} instead and nothing is closed. If the request is not meant for you or looks wrong, choose ${L.report} on the signing page.` },
   { id: 'pass', words: ['someone else', 'wrong person', 'not for me', 'not meant for me', 'pass it', 'pass this', 'forward', 'reassign', 'another person', 'instead of me', 'right person', 'my boss', 'my manager', 'my colleague', 'delegate'],
@@ -140,6 +142,7 @@ export function screenFacts(): string {
     `- The signing page (people who sign): the first screen shows who sent the document and a box to tick to agree. Then ${L.next} goes from field to field, and turns into ${L.finish} when every field is done. Nothing is signed before ${L.finish}.`,
     `- The signing page has one menu, "${L.menu}", on both screens. Its entries, in this order: ${acts.map((a) => `"${a.label}" (${a.when})`).join('; ')}. Under them: Help (this chat), and under The document: Document or ${L.textView}, the size of the pages, and ${L.download}.`,
     `- "${S.later!.label}" saves what was filled in; the same link brings the person back. After it the page shows "${L.stopReminders}". "${L.report}" is on the signing page for a request that looks wrong.`,
+    `- A witness has a shorter list: "${WITNESS_LABELS.absent}", "${S.ask!.label}" and Help. A witness who stops for now closes the page; the same link works again.`,
     `- There is no way to sign on paper in GrowSigning, and no button for it.`,
     `- The app (people who send, signed in): Home has "${A.start.label}". The menu has ${A.envelopes.label}, ${A.templates.label}, ${A.bulk.label} and ${A.settings.label}, among others.`,
     `- An envelope's own page shows each person's progress and has "${A.remind.label}", "${A.moreTime.label}", "${A.void.label}" (while it is out), "${A.copyLink.label}" for each person, "${A.saveTemplate.label}", and "${A.download.label}" once it is completed.`,

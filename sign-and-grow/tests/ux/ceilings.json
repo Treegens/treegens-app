@@ -1,5 +1,5 @@
 {
-  "_about": "The ceilings of the core flows, per profile (research/ux-charter.md, section 3). tests/ux/flows.cjs reads them and breaks the run (exit 3) when a number is over. A batch that lowers a number writes the new one here in the same change (UX_RECORD=1 does it, and fills flows that have none). Nothing here is ever raised. default: a to f are the baseline of tests/out/ux-baseline; g-sign-in and h-sign-myself were measured on 21 November 2026 (h on the Home link 'Sign a document yourself', ?self=1). everything and government: recorded on their first run after the five simplify batches have merged.",
+  "_about": "The ceilings of the core flows, per profile (research/ux-charter.md, section 3). tests/ux/flows.cjs reads them and breaks the run (exit 3) when a number is over. A batch that lowers a number writes the new one here in the same change (UX_RECORD=1 does it, and fills flows that have none). Nothing here is ever raised. default: a to f are the baseline of tests/out/ux-baseline; g-sign-in and h-sign-myself were measured on 21 November 2026 (h on the Home link 'Sign a document yourself', ?self=1, then 'Sign now' on the envelope page). everything and government: recorded on their first run after the five simplify batches have merged.",
   "default": {
     "a-send-first": {
       "actions": 19,
@@ -66,11 +66,11 @@
       "notices": 0
     },
     "h-sign-myself": {
-      "actions": 15,
-      "screens": 10,
-      "choices_seen": 190,
+      "actions": 14,
+      "screens": 9,
+      "choices_seen": 156,
       "max_choices": 37,
-      "words": 1703,
+      "words": 1493,
       "notices": 1
     }
   },

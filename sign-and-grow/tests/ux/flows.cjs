@@ -79,7 +79,8 @@
 //   f  A signer who cannot sign right now looks for help on the signing page, on a phone.
 //   g  The sender signs in again from the landing page and lands on Home.
 //   h  The sender signs a document themselves: today Home, "Sign a document yourself" (?self=1); once that is gone,
-//      the start button and "Add me". After Send, "Sign now" when step 3 offers it, else Home and Sign on its row.
+//      the start button and "Add me". After Send: "Sign now" when step 3 offers it, else "Sign now" on the envelope page,
+//      else Home and Sign on its row.
 //   Then an inventory (not counted as a flow): every Settings tab, every option in the editor, on the envelope page
 //   and on the signing page, written to the JSON under "inventory" with screenshots in <out>/inventory/, every More
 //   opened and counted (under "inventory_mores"), and the public pages checked for words.
@@ -180,7 +181,7 @@ const STRICT = process.env.UX_STRICT === '1';
 const NEVER_ABOVE = {
   'a-send-first': [19, 10, 193, 42, 3751, 2], 'b-sign-phone': [8, 6, 48, 13, 751, 0], 'b-sign-desktop': [8, 6, 48, 13, 761, 0],
   'c-template-send': [5, 4, 92, 34, 666, 1], 'd-find-download': [4, 3, 99, 43, 739, 0], 'e-settings-name': [3, 2, 68, 36, 487, 0],
-  'f-signer-help': [7, 5, 42, 10, 927, 2], 'g-sign-in': [4, 3, 81, 42, 2807, 0], 'h-sign-myself': [15, 10, 190, 37, 1703, 1],
+  'f-signer-help': [7, 5, 42, 10, 927, 2], 'g-sign-in': [4, 3, 81, 42, 2807, 0], 'h-sign-myself': [14, 9, 156, 37, 1493, 1],
 };
 // P6: technical names, never on signer pages, nor on public pages other than the trust pages.
 const TECHNICAL = /\b(PAdES|PKI|SAML|SCIM|SIEM|OIDC|OpenID|QES|AES|QTSP|PDF\/A|RFC ?3161|FIPS|PKCS(#\d+)?|HSM|KMS|OTP|LTV|OCSP|IDV|IAL|AAL|PIV|CAC|Part 11|LLM)\b/;
