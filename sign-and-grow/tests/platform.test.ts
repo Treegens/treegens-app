@@ -1,5 +1,6 @@
 // Platform and security: where the links in emails come from, whose address a request has, what an API key may
 // do and what it says when it cannot be used, and webhooks that either arrive or can be sent again.
+import { dayText } from '../src/lib/dates.ts'; // days in sentences read 21 Dec 2026 (simplify-public)
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -418,7 +419,7 @@ test('a member who closes their own login takes their API keys along, and the te
   // She closes her login, with the usual days to change her mind. The team's integration stops at that moment.
   const closed = (await lea.post('/me/delete', { password })).data;
   assert.equal(closed.closed, 'scheduled');
-  const until = closed.deletes_at.slice(0, 10);
+  const until = dayText(closed.deletes_at);
   assert.equal((await withKey(key).get('/envelopes')).status, 403);
   // Every admin of the team is told which key, why, and until when it can come back. A plain member is not.
   for (const to of admins) {

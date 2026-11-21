@@ -1351,8 +1351,9 @@ test('the API description has the stamp field and the stamp routes; the words ne
 
 test('the screens: Settings, the editor, the signing page and its text view, the help and developers pages, with the honest words', () => {
   const settings = read('src/app/app/settings/page.tsx');
-  assert.match(settings, /\['stamps', 'Stamps'\]/, 'a Stamps tab under Settings');
-  assert.match(settings, /\{tab === 'stamps' && <StampSettings \/>\}/);
+  // The sections of Settings are listed in src/lib/settingsnav.ts since 21 November 2026 (simplify-public).
+  assert.match(read('src/lib/settingsnav.ts'), /\{ key: 'stamps', label: 'Stamps', admins: true \}/, 'a Stamps tab under Settings');
+  assert.match(settings, /\{tab === 'stamps' && <Card><StampSettings \/><\/Card>\}/);
   const team = read('src/components/stamps/StampSettings.tsx');
   assert.match(team, /\{STAMP_IS_TEAM\}/);
   assert.match(team, /Changing or deleting a stamp here never changes a document it is already on/);

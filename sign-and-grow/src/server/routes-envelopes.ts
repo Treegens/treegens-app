@@ -29,14 +29,14 @@ import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../
 import { reminderText } from '../lib/policy.ts';
 import { keptOnDelete, keptLine } from './deleting.ts';
 // Keeping closed envelopes for a set time, legal holds and what a purge left (records.ts).
-import { assertNotHeld, holdsFollow, retentionFacts } from './records.ts';
+import { assertNotHeld, holdsFollow, isHeld, retentionFacts } from './records.ts';
 // Who may use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { assertMayUse, mayUse, mayChange, maySetRules, changeRefusal, usableSql, markList, accessOf, wordingLock, assertWordingKept, assertMessageKept, cloneOwner, noteCopy, copyIsTheirs, fileHeldBack, templateGoes, assertCorrectionKept, asMember, forRows, askWho } from './tplroles.ts';
 // A witness for one signer (src/server/witness.ts): one the signer names is no open role for a bulk row or a form.
 import { witnessCorrected, rowFills } from './witness.ts';
 import { rowFieldProblem } from './logic.ts';
 // A bulk row's "language", and a form visitor's language from their browser (locales.ts).
-import { rowLanguageRefusal, assertRowLanguages, visitorLocale } from './locales.ts';
+import { rowLanguageRefusal, assertRowLanguages, visitorLocale, correctionLocale } from './locales.ts';
 import { keepText, sealedTextHits } from './searchtext.ts';
 import { assertFormNotStacked, tellStackedForm } from './stackedforms.ts';
 // Office files and others turned into a PDF on upload, with the original kept (src/server/converted.ts).
@@ -360,6 +360,8 @@ route('PUT', '/envelopes/:id', async (c) => {
   assertWordingKept(c, e, b);
   // "custom_fields" and "documents[].fields", checked before anything is saved and written after (customfields.ts).
   const custom = readCustom(c.account.id, e, b);
+  // A draft on hold is frozen: saving could empty it, which is deleting by another name (records.ts).
+  if (e.kind === 'envelope' && e.status === 'draft') assertNotHeld([e.id], c.actor.name, 'change it');
   // A body that carries the edit_version its sender loaded is refused with 409 when someone has saved since, so a
   // save from an older copy never wipes a colleague's work. A body without it is saved as it always was.
   if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, b, c.account.id, c.actor);
@@ -396,14 +398,15 @@ route('DELETE', '/envelopes/:id', (c) => {
   if (e.kind === 'template' && get('SELECT 1 x FROM powerforms WHERE template_id=?', e.id)) throw bad('A PowerForm still uses this template. Delete the PowerForm first.');
   // Kept for whoever keeps a copy: the same rule as their download (keepsCopy), so a viewer who confirmed, or someone
   // who signed and was then asked to sign again (signed_before), does not lose theirs (deleting.ts).
+  // On hold: refused, also when deleting would only take it out of the lists, so a held document stays where the
+  // people who hold it look for it. The attempt is recorded (records.ts).
+  if (e.kind === 'envelope') assertNotHeld([e.id], c.actor.name, 'delete it');
   if (keptOnDelete(e)) {
     run('UPDATE envelopes SET hidden_at=? WHERE id=?', now(), e.id);
     audit(e.id, c.actor, 'Removed from the sender\'s lists', keptLine(e));
     record('envelope.deleted', { c, about: ['envelope', e.id], details: { status: e.status, kept_for_recipients: true } });
     return { ok: true, kept_for_recipients: true };
   }
-  // Deleting for good is refused while a legal hold covers it, and the attempt is recorded (records.ts).
-  if (e.kind === 'envelope') assertNotHeld([e.id], c.actor.name, 'delete it');
   const shas = tx(() => {
     // Whoever a locked template belonged to keeps changing what was started from it once it is gone (tplroles.ts).
     templateGoes(e);
@@ -487,8 +490,17 @@ route('POST', '/envelopes/:id/correct', async (c) => {
   assertBySenderCorrection(e, str(b.recipient_id), b);
   // A check or an access code a locked template gave this person stays (tplroles.ts).
   assertCorrectionKept(c, e, str(b.recipient_id), b);
+  // Their language ("locale"): checked first, saved after; another person does not keep the first one's (locales.ts).
+  const lang = correctionLocale(e, str(b.recipient_id), b);
+  if (lang.only) {
+    const said = lang.apply();
+    if (said) audit(e.id, c.actor, 'Recipient corrected', `${e.recipients.find((r: any) => r.id === str(b.recipient_id)).name}: ${said}.`);
+    return { ok: true };
+  }
   // With their check too ("verify", "phone", "text_link"): correctWithCheck does all of the call or none of it.
   await correctWithCheck(e, str(b.recipient_id), b, c.actor);
+  const said = lang.apply();
+  if (said) audit(e.id, c.actor, 'Recipient corrected', `${get('SELECT name FROM recipients WHERE id=?', str(b.recipient_id))?.name}: ${said}.`);
   // A witness who is now another person starts clean, and is asked at once if their signer has signed (witness.ts).
   await witnessCorrected(e.id, str(b.recipient_id), e.recipients.find((r: any) => r.id === str(b.recipient_id)));
   // An address that marked an email of this account as spam keeps that mark through a correction (db.ts), so no email
@@ -583,7 +595,10 @@ async function sendBatch(b: { id: string; account_id: string; sender_id: string;
   try {
     // A draft in the batch that no row points at was made in the instant before the process stopped. Its row is
     // still open and makes a new copy, so the old one goes.
-    run("DELETE FROM envelopes WHERE bulk_id=? AND status='draft' AND id NOT IN (SELECT envelope_id FROM bulk_rows WHERE bulk_id=? AND envelope_id IS NOT NULL)", b.id, b.id);
+    // One on hold stays, like everything a hold covers (records.ts).
+    const orphans = all("SELECT id FROM envelopes WHERE bulk_id=? AND status='draft' AND id NOT IN (SELECT envelope_id FROM bulk_rows WHERE bulk_id=? AND envelope_id IS NOT NULL)", b.id, b.id).map((r) => r.id);
+    const onHold = isHeld(orphans);
+    for (const oid of orphans) if (!onHold.has(oid)) run("DELETE FROM envelopes WHERE id=? AND status='draft'", oid);
     const tpl = loadEnvelope(b.template_id);
     for (const row of all('SELECT position, fill, envelope_id FROM bulk_rows WHERE bulk_id=? AND sent_at IS NULL AND error IS NULL ORDER BY position', b.id)) {
       const set = (what: string, ...p: any[]) => run(`UPDATE bulk_rows SET ${what} WHERE bulk_id=? AND position=?`, ...p, b.id, row.position);

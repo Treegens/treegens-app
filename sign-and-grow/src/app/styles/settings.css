@@ -43,3 +43,13 @@ ul.rules + .btn, ul.rules + .row { margin-top: 16px; }
 .set-more > summary { font-size: 16px; }
 .set-more-body { margin-top: 8px; }
 .set-kept { margin: 6px 0 14px; }
+
+/* Section tabs: a thumb-sized target at every width. */
+.tabs[role='tablist'] button { min-height: 44px; }
+
+/* A refused number, said under its own box (Settings, Sending). */
+.set-bad { display: block; margin-top: 6px; color: #8c241c; font-size: 13.5px; font-weight: 600; }
+/* Inviting on a phone: the address gets the whole width, then the role, then the button. */
+@media (max-width: 640px) {
+  .set-invite > label.f, .set-invite > .btn { flex: 1 1 100%; }
+}

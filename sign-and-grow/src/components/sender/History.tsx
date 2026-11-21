@@ -27,7 +27,7 @@ export function History({ audit, deliveries, chain, fullRecordHref }: { audit: a
   return (
     <Fold title="History" count={lines.length} id="history"
       note={<span className={`badge ${chain.ok ? 'completed' : 'declined'}`}>{chain.ok ? (chain.redacted ? 'Record intact, some details removed' : 'Record intact') : 'Record was altered'}</span>}>
-      {chain.ok && !!chain.redacted && <p className="muted small" role="note">{redactedNote(chain.redacted_on)}</p>}
+      {chain.ok && !!chain.redacted && <p className="muted small" role="note">{redactedNote(dayText(chain.redacted_on))}</p>}
       {!chain.ok && <p className="notice err" role="alert">A line of this record does not match the one before it, so something changed it after it was written. Download the full record and write to us through Help.</p>}
       {lines.length === 0 && <p className="muted small">Nothing has happened yet.</p>}
       <ol className="sn-history" role="list">

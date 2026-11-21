@@ -8,6 +8,7 @@ import { MorePanel } from '@/components/sender/More';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
+import { joinNames } from '@/lib/envelopepage';
 import { sendAnywayAsk, type BouncedAddress } from '@/lib/mailnews';
 // Who can use and change each template, and the lock on its wording (src/server/tplroles.ts).
 import { AccessDialog, AccessMarks } from '@/components/templates/WhoCanUse';
@@ -139,7 +140,7 @@ export default function Templates() {
       <div className="pagehead">
         <div><h1 className="serif">Templates</h1><div className="muted">Set a document up once, then send it again in seconds.</div></div>
         {/* With no template yet, the one filled button is "Create your first template" in the empty list below. */}
-        {(rows.length > 0 || filtered || !data) && <Link href="/app/envelopes/new?kind=template" className="btn primary">New template</Link>}
+        {(rows.length > 0 || filtered || !data) && <Link href="/app/envelopes/new?kind=template" className="btn primary sn-newtpl">New template</Link>}
       </div>
       {/* Shown once there is something to look through, and kept while a search or a folder hides everything. */}
       {(rows.length > 0 || filtered || (data?.folders || []).length > 0) && (
@@ -220,7 +221,8 @@ export default function Templates() {
       {use && (
         <Dialog title={`Use "${use.subject || 'template'}"`} onClose={() => setUse(null)}>
           <form onSubmit={(e) => (e.preventDefault(), create(true, !!dead))}>
-            {use.open.length === 0 && <p className="muted">Everyone who signs is already set in this template. Send it as it is, or review it first.</p>}
+            {/* Nobody to fill in: say who it goes to, so Send now is never a surprise (a template saved from a sent document keeps its people). */}
+            {use.open.length === 0 && <p>This goes to <b>{joinNames(use.recipients.filter((r: any) => r.email).map((r: any) => `${r.name || r.role_name || 'someone'} (${r.email})`)) || 'the people set in this template'}</b>. Send it as it is, or review it first.</p>}
             {use.open.map((r: any, i: number) => (
               <fieldset key={r.id} className="sn-rolefill">
                 <legend>{r.role_name || `Person ${i + 1}`}</legend>

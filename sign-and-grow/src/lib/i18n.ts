@@ -11,6 +11,8 @@
 //                                                  other is always needed.
 // There is no other syntax and no escaping: a { or } is always one of these. A text that does not read is not shown:
 // the English one is.
+// A value given as a number is written as an amount, the language's own way: 1234 is "1,234" in English. A year, an
+// id, a code or a version is not an amount: give it as a string ({ year: '2026' }) and it is printed as it is.
 //
 // What a person sees, in order: their own language (pt-BR), then the language without the region (pt), then English.
 // A key with no text in any of them shows nothing rather than the key: tests/i18n.test.ts checks that every key used
@@ -114,9 +116,11 @@ export function fallbackChain(locale: unknown): string[] {
   return out;
 }
 
-const RTL = new Set(['ar', 'he', 'fa', 'ur']);
-const RTL_SCRIPTS = new Set(['Arab', 'Hebr']);
-/** Which way a language is written: 'rtl' for Arabic, Hebrew, Persian and Urdu (and a tag that names their scripts). */
+// Arabic, Hebrew, Persian, Urdu, and the other languages usually written from the right: Pashto, Sindhi, Uyghur,
+// Central Kurdish, Yiddish and Dhivehi. A tag that names its script (ku-Arab, sd-Deva) goes by the script.
+const RTL = new Set(['ar', 'he', 'fa', 'ur', 'ps', 'sd', 'ug', 'ckb', 'yi', 'dv']);
+const RTL_SCRIPTS = new Set(['Arab', 'Hebr', 'Thaa', 'Syrc', 'Nkoo', 'Adlm', 'Rohg']);
+/** Which way a language is written: 'rtl' for the languages above (and a tag that names their scripts). */
 export function dir(locale: unknown): 'rtl' | 'ltr' {
   const tag = normalizeLocale(locale);
   if (!tag) return 'ltr';

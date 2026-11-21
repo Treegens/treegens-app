@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { toastLift } from '@/lib/toastplace';
+import { fmtDateTag } from '@/lib/dates';
 import { Mark } from './Brand';
 
 // The reader's time zone, sent along when the app loads, so dates in emails match the dates on screen.
@@ -107,7 +108,10 @@ export const COLORS = ['#1f6f43', '#2f5f9e', '#b3392f', '#8a4fb0', '#b97712', '#
 export function fmtDate(s?: string | null, time = false) {
   if (!s) return '';
   const d = new Date(s);
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) + (time ? `, ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '');
+  // In English the day comes first and the month is a word, "21 Nov 2026, 14:05", whatever the browser's region:
+  // nobody can misread it. Another language keeps its own way of writing a date.
+  const tag = fmtDateTag(typeof navigator === 'undefined' ? '' : navigator.language);
+  return d.toLocaleDateString(tag, { day: 'numeric', month: 'short', year: 'numeric' }) + (time ? `, ${d.toLocaleTimeString(tag, { hour: '2-digit', minute: '2-digit' })}` : '');
 }
 
 export const newId = (prefix: string) => {

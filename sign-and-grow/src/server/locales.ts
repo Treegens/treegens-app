@@ -49,14 +49,63 @@ export const visitorLocale = (req?: Request): string | null => browserLocale(hea
 export function saveLocales(asked: { rid: string; r: any; i: number }[], before: Map<string, any>, accountId: string) {
   const account = get('SELECT default_locale FROM accounts WHERE id=?', accountId);
   for (const { rid, r, i } of asked) {
-    const whom = `The language ("locale") of recipient ${i + 1}${r?.name ? ` (${str(r.name, 120)})` : ''}`;
+    const want = askedOf(r);
+    const whom = `The language ("${want.word}") of recipient ${i + 1}${r?.name ? ` (${str(r.name, 120)})` : ''}`;
     const old = before.get(rid);
     // A language stored before it was switched off is kept when the editor sends it back unchanged, so a draft
     // never stops saving because of it. Only a new choice has to be a language that is switched on.
-    const same = old?.locale && r?.locale != null && normalizeLocale(r.locale) === old.locale;
-    const value = r?.locale === undefined ? (old ? old.locale ?? null : defaultFor(account)) : same ? old.locale : chosenLocale(r.locale, whom);
+    const same = old?.locale && want.value != null && normalizeLocale(want.value) === old.locale;
+    // A row whose address changed is another person: the language chosen for the one before is not theirs, so with
+    // nothing said they start as a new recipient does. (The editor always says, so its row keeps what it shows.)
+    const kept = old && (!old.email || sameAddress(old.email, r?.email));
+    const value = want.value === undefined ? (kept ? old.locale ?? null : defaultFor(account)) : same ? old.locale : chosenLocale(want.value, whom);
     if (!old || (old.locale ?? null) !== value) run('UPDATE recipients SET locale=? WHERE id=?', value, rid);
   }
+}
+
+const sameAddress = (a: unknown, b: unknown) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+/**
+ * What a recipient in a request says about their language. The field is "locale"; "language" (the word bulk rows and
+ * template fills use) is read as the same thing, so neither spelling is ever dropped without a word. Both, saying
+ * different things, is refused.
+ */
+function askedOf(r: any): { value: unknown; word: 'locale' | 'language' } {
+  if (!r || typeof r !== 'object') return { value: undefined, word: 'locale' };
+  const { locale, language } = r;
+  if (locale !== undefined && language !== undefined && (normalizeLocale(locale) || locale || null) !== (normalizeLocale(language) || language || null))
+    throw bad(`${r.name ? `${str(r.name, 120)} has` : 'A recipient has'} both "locale" (${JSON.stringify(locale)}) and "language" (${JSON.stringify(language)}), and they say different things. Send one of them. Nothing was saved.`);
+  return locale !== undefined ? { value: locale, word: 'locale' } : { value: language, word: 'language' };
+}
+
+/**
+ * POST /envelopes/:id/correct and the language. Call it before the correction: it checks "locale" (or "language"), so
+ * a language that is not switched on refuses the whole call. `only` is true when the call asks for nothing but the
+ * language. Call `apply` after the correction: it saves the language asked for, or, when nothing was said and the
+ * place now belongs to another person (another address, or another name at the same one), clears the language
+ * chosen for the one before, so the new person's browser decides. Returns what changed, for the record, or ''.
+ */
+export function correctionLocale(e: any, recipientId: string, b: any): { only: boolean; apply: () => string } {
+  const r = e.recipients.find((x: any) => x.id === recipientId);
+  const want = askedOf(b);
+  const said = want.value !== undefined;
+  const value = said ? chosenLocale(want.value, `The language ("${want.word}")${r?.name ? ` of ${str(r.name, 120)}` : ''}`, 'Nothing was changed.') : null;
+  const only = said && !['name', 'email', 'access_code', 'verify', 'phone', 'text_link', 'number_confirmed', 'members'].some((k) => b?.[k] !== undefined);
+  if (only) {
+    if (!r) throw bad('Recipient not found.', 404);
+    if (e.status !== 'sent' || r.status === 'completed') throw bad(`The language can be changed for someone who has not finished, on an envelope that is out for signature. ${e.status !== 'sent' ? 'This envelope is not.' : `${r.name} has finished.`} Nothing was changed.`);
+  }
+  return {
+    only,
+    apply: () => {
+      const now = get('SELECT locale, person_gen, email FROM recipients WHERE id=?', recipientId);
+      if (!now) return '';
+      const other = !said && (Number(now.person_gen) || 0) !== (Number(r?.person_gen) || 0) || (!said && !sameAddress(now.email, r?.email));
+      const next = said ? value : other ? null : now.locale ?? null;
+      if ((now.locale ?? null) === next) return '';
+      run('UPDATE recipients SET locale=? WHERE id=?', next, recipientId);
+      return said ? `the language of our screens for them is now ${next ? languageWords(next) : 'the one their browser asks for'}` : '';
+    },
+  };
 }
 
 /** The language a new recipient starts in when the request names none: the account's default, if it is still switched on. */

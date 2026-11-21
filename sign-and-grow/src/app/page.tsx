@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import Link from 'next/link';
 import { Mark } from '@/components/Brand';
 import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/Public';
@@ -16,7 +18,8 @@ const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 
 export default function Landing() {
   const P = PRICING;
-  const video = homeVideo();
+  // A file named under public/videos/ counts only when it is there, so a typing mistake gives no block instead of an empty player.
+  const video = homeVideo(process.env, (sitePath) => fs.existsSync(path.join(process.cwd(), 'public', sitePath)));
   return (
     <div className="pub">
       <PublicNav />

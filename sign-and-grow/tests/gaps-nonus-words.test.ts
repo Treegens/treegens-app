@@ -130,7 +130,7 @@ test('the audit line for consent names the wording the signer was shown', async 
 });
 
 test('a page promises a QR code only because the app draws one, and every public page says which language signers are asked in', () => {
-  const landing = src('app/page.tsx');
+  const landing = src('app/features/page.tsx'); // the feature list moved off the home page (simplify-public)
   // The landing page once promised "a public link or QR code" while nothing drew one, and then said to use a tool
   // of your own. The app now makes the code itself (src/lib/qr.ts, held to the standard in tests/qr.test.ts), so the
   // page says that, and the promise stands on code that exists.
@@ -185,7 +185,7 @@ test('every price on a public page is written as US$, with one line about curren
   const publicPages = ['app/page.tsx', 'app/help/page.tsx', 'app/help/outside.tsx', 'app/impact/page.tsx', 'app/security/page.tsx', 'app/billing/stop/StopView.tsx', 'components/Public.tsx'];
   for (const f of publicPages) assert.doesNotMatch(src(f), bare, f);
 
-  const landing = src('app/page.tsx');
+  const landing = src('app/pricing/page.tsx'); // the prices moved to /pricing (simplify-public)
   assert.match(landing, /<div className="price">\{usd\(PLANS\.seedling\.price\)\}<\/div>/);
   assert.match(landing, /<div className="price">\{usd\(P\.monthlyUsd\)\}<small> \/ month<\/small><\/div>/);
   assert.match(landing, /More when you need them, \{usd\(P\.topUpUsd\)\} a signature/);
@@ -402,7 +402,7 @@ test('the review step shows the warning without switching Send off, and the help
   assert.match(help, /<QA id="enough" q="Is this signature enough for my document\?">/);
   assert.match(src('app/help/page.tsx'), /<SignatureKind \/>/);
   // The places that send people there: the landing page under the prices, the security page, the review step.
-  assert.match(src('app/page.tsx'), /<Link href="\/help#enough">check before you rely on it<\/Link>/);
+  assert.match(src('app/pricing/page.tsx'), /<Link href="\/help#enough">check before you rely on it<\/Link>/);
   assert.match(src('app/security/page.tsx'), /<Link href="\/help#outside-us">/);
 });
 
@@ -862,7 +862,7 @@ test('the screens offer the choice, hand the sender the link, and never promise 
   assert.match(card, /\{qr === r\.id && links\[r\.id\] && \(turn \|\| own\) && <QrDialog/);
   assert.match(src('app/styles/abroad.css'), /\.sn-myself \.btn \{ min-height: 44px; \}/);
   const own = src('components/sender/OwnLink.tsx');
-  for (const b of ['Show link', 'Copy link', 'QR code', 'WhatsApp', 'Text']) assert.ok(own.includes(`>${b}</button>`), b);
+  for (const b of ['Copy link', 'QR code', 'WhatsApp', 'Text']) assert.ok(own.includes(`>${b}</button>`), b);
   assert.match(own, /const done = r\.status === 'completed' && \(envelopeStatus === 'sent' \|\| envelopeStatus === 'completed'\);/);
   assert.doesNotMatch(own, /Nudge/);
   assert.match(src('components/sender/AfterSend.tsx'), /const own = acting\.filter\(\(r: any\) => ownLink\(r\) && r\.status === 'sent'\);/);

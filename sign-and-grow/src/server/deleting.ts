@@ -14,4 +14,5 @@ export const keptOnDelete = (e: any): boolean =>
 /** The line the envelope's record gets when deleting it only took it out of the sender's lists. */
 export const keptLine = (e: any): string => (e.status !== 'completed' && !e.recipients.some((r: any) => keepsCopy(e, r))
   ? 'The sender deleted this envelope from their account. It is kept, because a person named on it disputes it and GrowSigning has not closed that dispute yet. Once it is closed, it can be deleted for good.'
-  : 'The sender deleted this envelope from their account. Everyone on it keeps their link and their copy.');
+  // Their link stops on the day its files are deleted, by the account's deletion schedule or on request (records.ts).
+  : 'The sender deleted this envelope from their account. Everyone on it keeps their link and their copy, unless its files are deleted later.');

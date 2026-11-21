@@ -64,7 +64,7 @@ export function FindDocuments() {
     <form className="pub-form" onSubmit={(e) => a.run(e, async () => (await api('/public/links/find', { body: { email: email.trim() } }), email.trim()), (err) => explain(err, 'We have already sent the list to this address a few times in the last hour. Check the inbox and the spam folder, or try again in an hour.'))}>
       <div className="pub-form-row">
         <label className="f"><span>The email address the document was sent to</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" placeholder="you@example.com" /></label>
-        <button className="btn primary" disabled={a.busy}>{a.busy ? 'Sending' : 'Find my documents'}</button>
+        <button className="btn" disabled={a.busy}>{a.busy ? 'Sending' : 'Find my documents'}</button>
       </div>
       {a.error && <div className="notice err" role="alert">{a.error}</div>}
     </form>
@@ -110,7 +110,7 @@ export function FindSubscription({ label = 'Your email address' }: { label?: str
     <form className="pub-form" onSubmit={(e) => a.run(e, async () => (await api('/public/billing/find', { body: { email: email.trim() } }), email.trim()), (err) => explain(err, 'We have already emailed this address a few times in the last hour. Check the inbox and the spam folder, or try again in an hour.'))}>
       <div className="pub-form-row">
         <label className="f"><span>{label}</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" placeholder="you@example.com" /></label>
-        <button className="btn primary" disabled={a.busy}>{a.busy ? 'Sending' : 'Find my subscription'}</button>
+        <button className="btn" disabled={a.busy}>{a.busy ? 'Sending' : 'Find my subscription'}</button>
       </div>
       {a.error && <div className="notice err" role="alert">{a.error}</div>}
     </form>
@@ -154,7 +154,7 @@ export function StopByCard() {
         <label className="f pub-last4"><span>Last 4 digits of the card</span><input value={last4} onChange={(e) => setLast4(e.target.value.replace(/\D/g, '').slice(0, 4))} onPaste={(e) => (e.preventDefault(), setLast4(e.clipboardData.getData('text').replace(/\D/g, '').slice(-4)))} required inputMode="numeric" pattern="[0-9]{4}" maxLength={4} autoComplete="off" placeholder="1234" title="The last four digits of the card being charged" /></label>
         {noEmail && <label className="f"><span>Date of a charge on your statement</span><input type="date" value={on} onChange={(e) => setOn(e.target.value)} required /></label>}
         {noEmail && <label className="f pub-last4"><span>Amount charged</span><input value={amount} onChange={(e) => setAmount(e.target.value)} required inputMode="decimal" placeholder="9.00" title="The amount of that charge, as on your statement" /></label>}
-        <button className="btn primary" disabled={a.busy}>{a.busy ? 'Stopping' : 'Stop billing'}</button>
+        <button className="btn" disabled={a.busy}>{a.busy ? 'Stopping' : 'Stop billing'}</button>
       </div>
       <p className="muted small pub-form-hint">
         Only the last four digits. Never type a full card number here.{!noEmail && " The email address has to be one of the account's owners or admins, the people who can stop the plan in the app."}{' '}
@@ -327,7 +327,7 @@ export function ContactForm({ chat, onDropChat, topic: firstTopic, code: firstCo
       )}
       {a.error && <div className="notice err" role="alert">{a.error}</div>}
       <div className="pub-contact-foot">
-        <button className="btn primary" disabled={a.busy}>{a.busy ? 'Sending' : 'Send to a person'}</button>
+        <button className="btn" disabled={a.busy}>{a.busy ? 'Sending' : 'Send to a person'}</button>
         <span className="muted small">You get a reference straight away. No account needed.</span>
       </div>
       {direct}

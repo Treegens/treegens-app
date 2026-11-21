@@ -17,9 +17,14 @@ export type PagePerson = {
   me: boolean;
   /** A reminder email would really go to them: an address, reminders not turned off, emails to them not stopped. */
   remindable: boolean;
+  /**
+   * The last email to them was saved and not delivered, because this server has no mail server. A reminder would
+   * be saved the same way, so none is offered: the page offers their link instead.
+   */
+  noMail?: boolean;
 };
 
-export type MainKind = 'restore' | 'continue' | 'sign' | 'host' | 'remind' | 'download' | 'reopen' | 'copy_fix' | 'copy';
+export type MainKind = 'restore' | 'continue' | 'sign' | 'host' | 'remind' | 'download' | 'reopen' | 'copy_fix' | 'copy' | 'copy_link';
 export type MainButton = { kind: MainKind; label: string; personId?: string };
 
 const VERB: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view', witness: 'witness' };
@@ -48,7 +53,10 @@ export function mainButton(o: { status: string; isTemplate?: boolean; removed?: 
     const here = o.people.find((p) => p.turn && p.role === 'inperson');
     if (here) return { kind: 'host', label: 'Host signing now', personId: here.id };
     const who = o.people.filter((p) => p.turn && p.remindable);
-    return who.length ? { kind: 'remind', label: remindLabel(who.map((p) => p.name)) } : null;
+    if (who.length) return { kind: 'remind', label: remindLabel(who.map((p) => p.name)) };
+    // No email can reach them from this server. One such person: their link is the next thing that moves it.
+    const byLink = o.people.filter((p) => p.turn && p.noMail && !p.me && p.role !== 'inperson');
+    return byLink.length === 1 ? { kind: 'copy_link', label: `Copy the link for ${byLink[0].name}`, personId: byLink[0].id } : null;
   }
   if (o.status === 'completed') return o.purged ? null : { kind: 'download', label: 'Download' };
   if (o.status === 'expired') return { kind: 'reopen', label: 'Reopen' };
@@ -77,7 +85,7 @@ export function waitingSentence(people: PagePerson[]): string {
   return `Waiting for ${joinNames(names)}${verbs.length === 1 ? ` to ${verbs[0]}` : ''}.`;
 }
 
-export type MoreKey = 'open_pdf' | 'full_record' | 'edit' | 'more_time' | 'copy' | 'save_template' | 'cancel' | 'keep' | 'hold' | 'lift_hold' | 'delete';
+export type MoreKey = 'open_pdf' | 'full_record' | 'edit' | 'more_time' | 'copy' | 'save_template' | 'cancel' | 'keep' | 'hold' | 'lift_hold' | 'remove_files' | 'delete';
 export type MoreLine = { key: MoreKey; label: string; danger?: boolean };
 
 /**
@@ -88,12 +96,15 @@ export type MoreLine = { key: MoreKey; label: string; danger?: boolean };
 export function pageMore(o: {
   status: string; isTemplate?: boolean; removed?: boolean; purged?: boolean; hasFiles?: boolean; mayChange?: boolean; mayDelete?: boolean;
   main?: MainKind | null; schedule?: boolean; mayKeep?: boolean; mayHold?: boolean; held?: boolean; heldHere?: boolean;
+  /** May start removing the files for good (the server's may_purge, nothing asked yet, no dispute open). */
+  mayPurge?: boolean;
 }): MoreLine[] {
   const out: MoreLine[] = [];
   const sent = o.status === 'sent';
   const add = (key: MoreKey, label: string, danger?: boolean) => out.push({ key, label, ...(danger ? { danger } : {}) });
   // A completed document has Download as its main button: the same file, so no second way to open it next to it.
-  if (o.hasFiles && !(o.status === 'completed' && !o.purged)) add('open_pdf', 'Open the PDF');
+  // One its sender removed has "Put it back" as its main button instead, so the file is offered here.
+  if (o.hasFiles && !(o.status === 'completed' && !o.purged && !o.removed)) add('open_pdf', 'Open the PDF');
   if (!o.isTemplate && o.status !== 'draft' && !o.purged) add('full_record', 'Full record for disputes');
   if (!o.removed && o.mayChange && sent) add('edit', 'Edit');
   if (!o.removed && sent) add('more_time', 'Give more time');
@@ -103,7 +114,12 @@ export function pageMore(o: {
   if (!o.isTemplate && !o.purged && o.schedule && o.mayKeep) add('keep', 'Keep it');
   if (!o.isTemplate && !o.purged && o.mayHold && o.heldHere) add('lift_hold', 'Lift the hold');
   else if (!o.isTemplate && !o.purged && o.mayHold && o.schedule) add('hold', 'Hold');
-  if (!o.removed && !sent && o.mayChange && o.mayDelete !== false) add('delete', 'Delete', true);
+  // Delete is not offered for a document its sender already removed, and Delete is where removing the files for
+  // good starts. So an admin gets that line here, without putting the document back into everyone's lists first.
+  // Only with a deletion schedule on: without one, an admin starts this from Settings (charter P3).
+  if (o.removed && !o.isTemplate && !o.purged && !sent && o.mayPurge && o.schedule) add('remove_files', 'Delete its files for good', true);
+  // On hold: the software refuses to delete it, so Delete is not offered until the hold ends.
+  if (!o.removed && !sent && o.mayChange && o.mayDelete !== false && !(o.held && !o.isTemplate)) add('delete', 'Delete', true);
   return out;
 }
 
@@ -121,6 +137,26 @@ export function withoutAddresses(text: string): string {
     .replace(/\b[0-9a-f]{32,}\b/gi, '(fingerprint in the full record)');
 }
 
+/**
+ * The page's words for lines of the record that were written in older words. Only what the page shows changes:
+ * the stored record, and the full record for disputes, keep every line as it was written.
+ */
+const PLAIN_TITLE: Record<string, string> = {
+  'Envelope sent': 'Sent', 'Envelope voided': 'Request cancelled', 'Envelope completed': 'Completed', 'Envelope expired': 'Closed: the deadline passed',
+  'Envelope reopened': 'Reopened', 'Envelope corrected': 'Document changed',
+};
+/** Fixed phrases only, and never inside quotation marks: what a person wrote (a reason, a title) stays as they wrote it. */
+export function plainWords(text: string): string {
+  return String(text || '').split(/(\u201c[^\u201d]*\u201d|"[^"]*")/).map((part, i) => (i % 2 ? part : part
+    .replace(/\bAll recipients have finished\b/g, 'Everyone has finished')
+    .replace(/\b(\d+) recipients?\b/gi, (_m, n) => `${n} ${n === '1' ? 'person' : 'people'}`)
+    .replace(/\b(the|this|any|an|The|This|Any|An) envelope\b/g, (_m, w) => `${w === 'an' ? 'a' : w === 'An' ? 'A' : w} document`)
+    .replace(/\benvelope page\b/g, 'document page'))).join('');
+}
+/** An email's subject on the page: only our own first word changes, never the title after it. */
+export const plainSubject = (subject: string) => String(subject || '').replace(/^Voided:/, 'Cancelled:');
+export const plainTitle = (action: string) => PLAIN_TITLE[String(action || '').trim()] || String(action || '');
+
 export type HistoryLine = { key: string; at: string; title: string; detail: string; who?: string; mail?: boolean; bad?: boolean; removed?: string | null };
 
 /**
@@ -129,8 +165,8 @@ export type HistoryLine = { key: string; at: string; title: string; detail: stri
  */
 export function historyLines(audit: any[], mails: { at: string; subject: string; to_email: string; state: string; bad?: boolean }[]): HistoryLine[] {
   const a: HistoryLine[] = (audit || []).filter((x) => !offThePage(x.action || '')).map((x) => ({
-    key: `a${x.seq}`, at: x.at, title: x.action, detail: withoutAddresses(x.detail || ''), who: x.actor, removed: x.redacted_at || null,
+    key: `a${x.seq}`, at: x.at, title: plainTitle(x.action), detail: plainWords(withoutAddresses(x.detail || '')), who: x.actor, removed: x.redacted_at || null,
   }));
-  const m: HistoryLine[] = (mails || []).map((d, i) => ({ key: `m${i}`, at: d.at, title: `Email: ${d.subject}`, detail: `To ${d.to_email}. ${d.state}`, mail: true, bad: !!d.bad }));
+  const m: HistoryLine[] = (mails || []).map((d, i) => ({ key: `m${i}`, at: d.at, title: `Email: ${plainSubject(d.subject)}`, detail: `To ${d.to_email}. ${d.state}`, mail: true, bad: !!d.bad }));
   return [...a, ...m].sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : x.key.localeCompare(y.key)));
 }

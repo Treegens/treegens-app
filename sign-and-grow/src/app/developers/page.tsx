@@ -21,7 +21,7 @@ const GROUPS: [string, Endpoint[]][] = [
     ['GET', '/api/envelopes/:id', 'One envelope with its documents, recipients and fields, the audit trail, the email delivery log and how far each signer has got.'],
     ['PUT', '/api/envelopes/:id', 'Replace a draft. On an envelope that is already out, the same call corrects it in place.', true],
     ['PATCH', '/api/envelopes/:id', 'Move to a folder.'],
-    ['DELETE', '/api/envelopes/:id', 'Delete a draft, a template or a closed envelope for good. A completed envelope, or any envelope somebody has already signed, is taken out of your lists, search, export and reports, and its recipients keep their link and their copy.'],
+    ['DELETE', '/api/envelopes/:id', 'Delete a draft, a template or a closed envelope for good. A completed envelope, or any envelope somebody has already signed, is taken out of your lists, search, export and reports, and its recipients keep their link and their copy until its files are deleted (by the account\'s deletion schedule, or POST /api/envelopes/:id/purge) or the account is closed. One on hold answers 409.'],
     ['POST', '/api/envelopes/:id/send', 'Send a draft. The answer carries "warnings": what the check before sending found. The envelope has gone out either way.'],
     ['GET', '/api/envelopes/:id/warnings', 'The check before sending, to read before you send: words in the subject, a document name or the text of a document that name a kind of document which often needs paper, a witness, a notary or a qualified signature. It warns and never refuses.', true],
     ['POST', '/api/envelopes/:id/clone', 'Copy as a new draft or template. A copy of a template keeps who can use and change it and the lock. A copy of one that is locked or not for everyone, made by someone who may not set its rules, stays with its owner, and an envelope started before its template was locked cannot be copied by someone the lock is for.'],
@@ -218,6 +218,19 @@ const expected = "sha256=" + crypto.createHmac("sha256", WEBHOOK_SECRET)
   .update(req.headers["x-growsigning-timestamp"] + "." + rawBody).digest("hex");
 const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers["x-growsigning-signature"]));`}</Code>
           <p className="muted small">Webhook addresses must use https and point to a public address. The name is looked up once when each delivery starts, and the delivery only connects to an address that passed the check.</p>
+        </div>
+
+        <div className="card" id="security-record">
+          <h2>The security record, for your security system (SIEM)</h2>
+          <p>Who signed in and what changed in an account, without anything from a document. An admin reads it under Settings, then Security. A security system fetches it with an API key that has the <C>admin</C> scope:</p>
+          <Code label="Example: fetch the security record">{`curl -H "Authorization: Bearer $KEY" "https://YOUR_HOST/api/account/security-events?after=0&limit=1000"`}</Code>
+          <ul className="pub-list">
+            <li><b>Paging.</b> Lines come oldest first. Keep the <C>next_after</C> of each answer and ask again with <C>after</C> set to it. A page with nothing new keeps the same cursor. Up to 1,000 lines a call.</li>
+            <li><b>As it happens.</b> A webhook that lists the event <C>security.event</C> by name gets each line when it is written. A webhook for every event does not get these, because they carry the internet addresses of your team. An admin adds the address under Settings, Security, More options.</li>
+            <li><b>People are ids.</b> Names and email addresses are sent only when an admin switched that on, and only for people who are on the team at that moment.</li>
+            <li><b>Fingerprints.</b> Each line carries <C>prev_hash</C> and <C>hash</C>. Check that the <C>prev_hash</C> of a line is the <C>hash</C> of the line you got before it. The fingerprint is keyed with a secret only the server has, so you cannot compute it yourself: the copy in your own system is the one nobody at the server can change.</li>
+            <li><b>Nobody watches it for you.</b> It is a record with five email alerts, not monitoring.</li>
+          </ul>
         </div>
 
         <div className="card" id="checks">

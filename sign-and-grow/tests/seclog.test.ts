@@ -7,6 +7,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { boot, Client, signUp, mailTo, simple, signAll, PNG } from './helpers.ts';
 import { totp, fromBase32, stepAt } from '../src/server/twostep.ts';
 
@@ -120,7 +121,10 @@ test('signing in: success and failure go to every account of the person, a stran
   assert.equal((await c.post('/auth/login', { email: ben.email, password: PW })).status, 200);
   keep(c.cookies.ts_session);
   for (const acc of [A, ben.own]) {
-    const s = one(acc, 'signin.succeeded');
+    // Signing up was a sign-in too (a line with new_login), so the sign-in with the password is looked for by itself.
+    const mine = lines(acc, 'signin.succeeded').map((l: any) => ({ ...l, details: JSON.parse(l.details) })).filter((l: any) => l.actor_id === ben.id && !l.details.new_login);
+    assert.equal(mine.length, 1);
+    const s = mine[0];
     assert.deepEqual([s.actor_type, s.actor_id, s.details.method, s.ip, s.outcome], ['user', ben.id, 'password', c.ip, 'success']);
     assert.ok(s.ua !== undefined);
   }
@@ -460,7 +464,7 @@ test('alerts: ten failed sign-ins email the admins once an hour, a new key once,
     await pam.c.call('DELETE', `/envelopes/${d.data.envelope.id}`);
   }
   await settle();
-  assert.equal(alerts('ray@seclog.example', 'Many envelopes were deleted').length, 1);
+  assert.equal(alerts('ray@seclog.example', 'Many documents were deleted').length, 1);
   // The owner handed over.
   assert.equal((await pam.c.post('/account/transfer-owner', { user_id: ray.id })).status, 200);
   await settle();
@@ -519,4 +523,418 @@ test('a browser name that is a formula opens as text in the CSV, and a key from 
   // The addresses past the limit are not remembered, so they are written on a later day.
   const keyId = db.get('SELECT id FROM api_keys WHERE account_id=? AND name=?', vic.own, 'leaky').id;
   assert.equal(db.get('SELECT COUNT(*) n FROM api_key_addresses WHERE key_id=?', keyId).n, KEY_NEW_ADDRESS_PER_DAY);
+});
+
+// ==== Repairs after the skeptic's and the simplicity reviewer's reports ============================================
+
+const view = async (c: Client, query = '') => (await c.get(`/account/security-events/view${query}`)).data.events as any[];
+const hourBack = (accountId: string, rule: string) => db.run('UPDATE security_alerts_sent SET at=? WHERE account_id=? AND rule=?', new Date(Date.now() - 2 * 3600_000).toISOString(), accountId, rule);
+
+test('repair: INSERT OR REPLACE cannot rewrite a line, the days cannot be set to none, and a line re-chained without the server secret shows', async () => {
+  const tom = await person('Tom Tamper', 'tom@seclog.example');
+  const T = tom.own;
+  await tom.c.post('/api-keys', { name: 'first' });
+  await tom.c.post('/api-keys', { name: 'second' });
+  const rows = lines(T);
+  assert.ok(rows.length >= 3);
+  const r = rows[1];
+  // The skeptic's probe: the same number again, with another person in it.
+  assert.throws(() => db.run('INSERT OR REPLACE INTO security_events (seq, account_id, at, actor_type, actor_id, kind, outcome, details, prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    r.seq, T, r.at, 'user', 'usr_forged', r.kind, r.outcome, r.details, r.prev_hash, r.hash), /never replaced/);
+  assert.equal(db.get('SELECT actor_id FROM security_events WHERE seq=?', r.seq).actor_id, r.actor_id);
+  assert.throws(() => db.run('UPDATE security_log_keep SET days=0 WHERE id=1'), /at least one day/);
+  assert.throws(() => db.run('DELETE FROM security_log_keep'), /at least one day/);
+  assert.equal(seclog.verifySecurityChain(T).ok, true);
+
+  // Someone who can change the database's own rules: the triggers go, a line is rewritten, and every fingerprint is
+  // made again the way the code makes it, but without the server's secret (plain SHA-256, as it was before).
+  const triggers = db.all("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='security_events'");
+  for (const g of triggers) db.run(`DROP TRIGGER ${g.name}`);
+  try {
+    db.run("UPDATE security_events SET actor_id='usr_forged' WHERE seq=?", r.seq);
+    let prev = lines(T)[0].prev_hash || '';
+    for (const l of lines(T)) {
+      const h = crypto.createHash('sha256').update(JSON.stringify([prev, T, l.at, l.actor_type, l.actor_id || '', l.kind, l.outcome, l.about_type || '', l.about_id || '', l.details, l.ip || '', l.ua || ''])).digest('hex');
+      db.run('UPDATE security_events SET prev_hash=?, hash=? WHERE seq=?', prev, h, l.seq);
+      prev = h;
+    }
+    const v = seclog.verifySecurityChain(T);
+    assert.deepEqual([v.ok, v.why], [false, 'line']);
+    const said = (await tom.c.get('/account/security')).data.chain;
+    assert.deepEqual([said.whole, said.why], [false, 'line']);
+  } finally {
+    for (const g of triggers) db.run(g.sql);
+  }
+});
+
+test('repair: the newest lines taken away show, and so does a changed note of the newest line; an account with nothing left after its days reads as whole', async () => {
+  const una = await person('Una Tail', 'una@seclog.example');
+  const U = una.own;
+  for (const name of ['a', 'b', 'c']) await una.c.post('/api-keys', { name });
+  assert.equal(seclog.verifySecurityChain(U).ok, true);
+  const kept = db.get("SELECT sql FROM sqlite_master WHERE name='security_events_kept'").sql;
+  db.run('DROP TRIGGER security_events_kept');
+  try {
+    // The skeptic's probe: the three newest lines go, and what is left still chains.
+    const newest = lines(U).slice(-3).map((l: any) => l.seq);
+    db.run(`DELETE FROM security_events WHERE seq IN (${newest.join(',')})`);
+    const v = seclog.verifySecurityChain(U);
+    assert.deepEqual([v.ok, v.why], [false, 'missing']);
+    assert.equal((await una.c.get('/account/security')).data.chain.why, 'missing');
+    // Pointing the note at the line that is now the newest does not help without the secret.
+    const last = lines(U).pop();
+    db.run('UPDATE security_heads SET seq=?, hash=?, at=? WHERE account_id=?', last.seq, last.hash, last.at, U);
+    assert.equal(seclog.verifySecurityChain(U).ok, false);
+    // Nor does removing the note.
+    db.run('DELETE FROM security_heads WHERE account_id=?', U);
+    assert.equal(seclog.verifySecurityChain(U).ok, false);
+  } finally {
+    db.run(kept);
+  }
+  // Every line gone after its days, the honest way: nothing is wrong.
+  const old = await person('Olga Old', 'olga@seclog.example');
+  process.env.SECURITY_LOG_DAYS = '1';
+  const real = Date.now;
+  try {
+    seclog.purgeSecurityLog();
+    assert.throws(() => db.run('DELETE FROM security_events WHERE account_id=?', old.own), /kept for its days/);
+  } finally {
+    delete process.env.SECURITY_LOG_DAYS;
+    seclog.purgeSecurityLog();
+    Date.now = real;
+  }
+  // After the server's secret was changed, the lines written before still check when the old one is named as retired.
+  const { secret } = await import('../src/server/db.ts');
+  const was = process.env.APP_SECRET;
+  const oldSecret = secret();
+  process.env.APP_SECRET = 'a new secret after rotating';
+  try {
+    assert.deepEqual([seclog.verifySecurityChain(A).ok, seclog.verifySecurityChain(A).why], [false, 'line']);
+    process.env.APP_SECRET_RETIRED = `something else, ${oldSecret}`;
+    assert.equal(seclog.verifySecurityChain(A).ok, true);
+  } finally {
+    if (was === undefined) delete process.env.APP_SECRET;
+    else process.env.APP_SECRET = was;
+    delete process.env.APP_SECRET_RETIRED;
+  }
+  assert.equal(seclog.verifySecurityChain(A).ok, true);
+  // The newest lines only are checked on the screen, and a short check of a long record is still right.
+  assert.equal(seclog.verifySecurityChain(A, 3).ok, true);
+  assert.equal(seclog.verifySecurityChain(A, 3).checked, 3);
+});
+
+test('repair: a key or a secret in the browser name is left out, and an ordinary browser name is kept', async () => {
+  const wes = await person('Wes Agent', 'wes@seclog.example');
+  for (const ua of ['curl Bearer tsk_live_abcdefghijklmnop whsec_zzz', 'tool/1 Bearer abcdefghijklmnop', 'x whsec_abcdef']) {
+    assert.equal((await browser().call('POST', '/auth/login', { email: wes.email, password: 'a wrong guess' }, { 'user-agent': ua })).status, 401);
+  }
+  assert.equal((await browser().call('POST', '/auth/login', { email: wes.email, password: 'a wrong guess' }, { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15' })).status, 401);
+  const uas = lines(wes.own, 'signin.failed').map((l: any) => l.ua);
+  assert.deepEqual(uas.slice(0, 3), ['[left out]', '[left out]', '[left out]']);
+  assert.match(uas[3], /Macintosh/);
+  const everything = JSON.stringify(lines(wes.own)) + Buffer.from((await wes.c.get('/account/security-events/csv')).data).toString('utf8');
+  assert.ok(!/tsk_live|whsec_|abcdefghijklmnop/.test(everything));
+  // On the screen the browser is words, never the raw text.
+  const shown = (await view(wes.c, '?kind=signin.failed'))[0];
+  assert.equal(shown.device, 'Mac or iPad, Safari');
+});
+
+test('repair: someone who left the team is no longer named: not by the API, the webhook view, the download or the screen', async () => {
+  const eve = await person('Eve Owner', 'eve@seclog.example');
+  const E = eve.own;
+  const gus = await joinBySignup('Gus Leaver', 'gus@seclog.example', await invite(eve.c, E, 'gus@seclog.example', 'admin'));
+  assert.equal((await eve.c.call('PATCH', '/account/security', { emails: true })).status, 200);
+  const key = keep((await eve.c.post('/api-keys', { name: 'siem', scope: 'admin' })).data.key);
+  const pulled = async () => (await withKey(key).get('/account/security-events?limit=1000')).data.events as any[];
+  // While on the team, with names switched on: named.
+  assert.ok((await pulled()).some((e) => e.actor.id === gus.id && e.actor.email === 'gus@seclog.example'));
+  assert.equal((await eve.c.call('DELETE', `/account/members/${gus.id}`)).status, 200);
+  // Afterwards they change their name and address, in a workspace that is theirs alone.
+  db.run("UPDATE users SET name='Gus Newname', email='gus.new@elsewhere.example' WHERE id=?", gus.id);
+  const after = await pulled();
+  const about = after.filter((e) => e.actor.id === gus.id || e.about?.id === gus.id);
+  assert.ok(about.length >= 2);
+  for (const e of about) {
+    assert.ok(!('name' in e.actor && e.actor.id === gus.id) && !('email' in e.actor && e.actor.id === gus.id), JSON.stringify(e.actor));
+    if (e.about?.id === gus.id) assert.ok(!('name' in e.about) && !('email' in e.about));
+  }
+  const all = JSON.stringify(after) + JSON.stringify(await view(eve.c)) + Buffer.from((await eve.c.get('/account/security-events/csv')).data).toString('utf8') + Buffer.from((await withKey(key).get('/account/security-events/csv')).data).toString('utf8');
+  assert.ok(!/Gus Newname|gus\.new@elsewhere|Gus Leaver|gus@seclog/.test(all), 'a former member is named');
+  const removed = (await view(eve.c, '?kind=member.removed'))[0];
+  assert.equal(removed.about_name, 'someone who is no longer on the team');
+  assert.equal(removed.actor_name, 'Eve Owner');
+});
+
+test('repair: switching an alert off and on fifteen times is one email to the other admins, and one more when the hour is over and it is still off', async () => {
+  const ida = await person('Ida Flood', 'ida@seclog.example');
+  const I = ida.own;
+  await joinBySignup('Jon Other', 'jon@seclog.example', await invite(ida.c, I, 'jon@seclog.example', 'admin'));
+  const told = () => mailTo('jon@seclog.example').filter((m: any) => /switched off a security alert/.test(m.subject)).length;
+  for (let i = 0; i < 15; i++) {
+    assert.equal((await ida.c.call('PATCH', '/account/security', { alerts: { everything_exported: false } })).status, 200);
+    if (i < 14) assert.equal((await ida.c.call('PATCH', '/account/security', { alerts: { everything_exported: true } })).status, 200);
+  }
+  assert.equal(told(), 1);
+  // Another alert is its own email: one admin cannot hide a second switch-off behind the first.
+  assert.equal((await ida.c.call('PATCH', '/account/security', { alerts: { api_key_created: false } })).status, 200);
+  assert.equal(told(), 2);
+  // Every switch is still a line.
+  assert.equal(lines(I, 'settings.changed').length, 30);
+  // Nothing more within the hour; when it is over, one email says it is off now.
+  assert.equal(await seclog.sendHeldAlerts(), 0);
+  hourBack(I, 'off:everything_exported');
+  assert.equal(await seclog.sendHeldAlerts(), 2);
+  assert.equal(mailTo('jon@seclog.example').filter((m: any) => m.subject === "A security alert of Ida Flood's workspace is switched off").length, 1);
+  assert.equal(await seclog.sendHeldAlerts(), 0);
+});
+
+test('repair: a second API key made within the hour of the first is named to the admins when the hour is over', async () => {
+  const kay = await person('Kay Keys', 'kay@seclog.example');
+  const K = kay.own;
+  await kay.c.post('/api-keys', { name: 'ordinary' });
+  await settle();
+  await kay.c.post('/api-keys', { name: 'hostile one', scope: 'admin' });
+  await settle();
+  const mails = () => mailTo('kay@seclog.example').filter((m: any) => m.subject.startsWith('Security alert for'));
+  assert.equal(mails().length, 1);
+  assert.equal(db.get("SELECT held FROM security_alerts_sent WHERE account_id=? AND rule='api_key_created'", K).held, 1);
+  // The timer within the hour: nothing yet. The purge does not forget what is held either.
+  assert.equal(await seclog.sendHeldAlerts(), 0);
+  hourBack(K, 'api_key_created');
+  seclog.purgeSecurityLog();
+  assert.equal(await seclog.sendHeldAlerts(), 1);
+  const follow = mails().pop();
+  assert.match(follow.subject, /1 more since the last alert/);
+  assert.match(follow.html, /hostile one/);
+  assert.match(follow.html, /Can do everything an admin can/);
+  assert.ok(!follow.html.includes('Named ordinary'), 'the key of the first email is not repeated');
+  assert.equal(await seclog.sendHeldAlerts(), 0);
+  // An alert that was switched off in between says nothing afterwards.
+  await kay.c.post('/api-keys', { name: 'third' });
+  await settle();
+  await kay.c.post('/api-keys', { name: 'fourth' });
+  await settle();
+  await kay.c.call('PATCH', '/account/security', { alerts: { api_key_created: false } });
+  hourBack(K, 'api_key_created');
+  assert.equal(await seclog.sendHeldAlerts(), 0);
+});
+
+test('repair: an invitation withdrawn, new recovery codes, remembered devices withdrawn and signing up each write one line, without an address or a code', async () => {
+  const lea = await person('Lea Lines', 'lea@seclog.example');
+  const L = lea.own;
+  // Signing up signed her in.
+  const up = lines(L, 'signin.succeeded').map((l: any) => ({ ...l, details: JSON.parse(l.details) }));
+  assert.equal(up.length, 1);
+  assert.deepEqual([up[0].actor_id, up[0].details], [lea.id, { method: 'sign_up', new_login: true }]);
+  // An admin invitation, withdrawn.
+  await invite(lea.c, L, 'never@seclog.example', 'admin');
+  const inv = db.get('SELECT id FROM invites WHERE account_id=?', L).id;
+  assert.equal((await lea.c.call('DELETE', `/account/invites/${inv}`)).status, 200);
+  const w = one(L, 'member.invite_withdrawn');
+  assert.deepEqual([w.actor_id, w.about_type, w.about_id, w.details], [lea.id, 'invite', inv, { role: 'admin' }]);
+  // Withdrawing it again, or one of another account, writes nothing.
+  await lea.c.call('DELETE', `/account/invites/${inv}`);
+  const other = db.get('SELECT id FROM invites WHERE account_id != ? LIMIT 1', L);
+  if (other) await lea.c.call('DELETE', `/account/invites/${other.id}`);
+  assert.equal(lines(L, 'member.invite_withdrawn').length, 1);
+
+  const s = await lea.c.post('/me/two-step/setup', { password: PW });
+  const secret = keep(s.data.secret);
+  const on = await lea.c.post('/me/two-step/confirm', { code: code(secret) });
+  for (const rc of on.data.codes) keep(rc);
+  const fresh = await lea.c.post('/me/two-step/recovery-codes', { code: code(secret) });
+  assert.equal(fresh.status, 200, JSON.stringify(fresh.data));
+  for (const rc of fresh.data.codes) keep(rc);
+  assert.equal(one(L, 'two_step.codes_renewed').actor_id, lea.id);
+  // A browser that is remembered, then withdrawn from Settings.
+  const b = browser();
+  assert.equal((await b.post('/auth/login', { email: lea.email, password: PW })).data.two_step, true);
+  assert.equal((await b.post('/auth/two-step', { code: code(secret), remember: true })).status, 200);
+  keep(b.cookies.ts_session);
+  for (const v of Object.values(b.cookies)) keep(v);
+  assert.equal((await lea.c.call('DELETE', '/me/two-step/devices')).status, 200);
+  const d = one(L, 'two_step.devices_forgotten');
+  assert.deepEqual([d.actor_id, d.details.devices], [lea.id, 1]);
+  // With none left, nothing is written.
+  assert.equal((await lea.c.call('DELETE', '/me/two-step/devices')).status, 200);
+  assert.equal(lines(L, 'two_step.devices_forgotten').length, 1);
+
+  const all = JSON.stringify(lines(L));
+  for (const x of secrets) assert.ok(!all.includes(x), `found a secret in the record: ${x.slice(0, 6)}...`);
+  assert.ok(!all.includes('never@seclog.example'));
+  // Each reads as a sentence on the screen, and no id is in the words.
+  for (const e of await view(lea.c)) assert.ok(!/\b(usr|inv|key|whk|env|acc)_[A-Za-z0-9]/.test(JSON.stringify([e.actor_name, e.about_name, e.said, e.device])), JSON.stringify(e));
+});
+
+test('repair: Google connected to a login, a sign-in with it and its removal are each one line', async () => {
+  const G = { id: 'seclog.apps.google.test', secret: 'google-secret-for-seclog' };
+  keep(G.secret);
+  Object.assign(process.env, { GOOGLE_CLIENT_ID: G.id, GOOGLE_CLIENT_SECRET: G.secret });
+  const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const b64 = (v: any) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
+  const codes = new Map<string, string>();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init: any = {}) => {
+    const u = new URL(String(url));
+    const json = (out: any, status = 200) => new Response(JSON.stringify(out), { status, headers: { 'content-type': 'application/json' } });
+    if (u.host !== 'oauth2.googleapis.com' && u.host !== 'www.googleapis.com') return realFetch(url, init);
+    if (u.pathname === '/oauth2/v3/certs') return json({ keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'k1', use: 'sig', alg: 'RS256' }] });
+    if (init.method === 'POST' && u.pathname === '/token') {
+      const p = Object.fromEntries(new URLSearchParams(String(init.body)));
+      const token = codes.get(p.code);
+      codes.delete(p.code);
+      return token ? json({ access_token: 'not-used', token_type: 'Bearer', id_token: token }) : json({ error: 'invalid_grant' }, 400);
+    }
+    return json({ error: 'not_found' }, 404);
+  }) as any;
+  const { handle } = await import('../src/server/router.ts');
+  const go = async (c: Client, url: string) => {
+    const res = await handle(new Request(`http://test.local/api${url}`, { headers: { cookie: Object.entries(c.cookies).map(([k, v]) => `${k}=${v}`).join('; '), 'x-forwarded-for': c.ip } }));
+    for (const ck of res.headers.getSetCookie()) {
+      const [kv] = ck.split(';');
+      c.cookies[kv.slice(0, kv.indexOf('='))] = kv.slice(kv.indexOf('=') + 1);
+    }
+    return { status: res.status, location: res.headers.get('location') || '' };
+  };
+  const approve = (location: string, who: Record<string, any>) => {
+    const auth = new URL(location);
+    const t = Math.floor(Date.now() / 1000);
+    const head = b64({ alg: 'RS256', typ: 'JWT', kid: 'k1' });
+    const body = b64({ iss: 'https://accounts.google.com', azp: G.id, aud: auth.searchParams.get('client_id'), nonce: auth.searchParams.get('nonce'), iat: t, exp: t + 3600, email_verified: true, ...who });
+    const code = keep(`code-${crypto.randomBytes(8).toString('hex')}`);
+    codes.set(code, keep(`${head}.${body}.${crypto.sign('RSA-SHA256', Buffer.from(`${head}.${body}`), pair.privateKey).toString('base64url')}`));
+    return `/auth/google/callback?${new URLSearchParams({ code, state: keep(auth.searchParams.get('state')!) })}`;
+  };
+  try {
+    const mia = await person('Mia Google', 'gina@seclog.example');
+    const who = { sub: 'google-sub-mia-1', email: 'gina@seclog.example', name: 'Mia Google' };
+    // Connected from Settings.
+    const start = await mia.c.post('/me/signin/google/connect');
+    assert.equal(start.status, 200, JSON.stringify(start.data));
+    assert.equal((await go(mia.c, approve(start.data.url, who))).status, 302);
+    const con = one(mia.own, 'signin_method.connected');
+    assert.deepEqual([con.actor_id, con.about_id, con.details.provider], [mia.id, mia.id, 'google']);
+    // A sign-in with it, in another browser.
+    const b = browser();
+    const s = await go(b, '/auth/google/start');
+    assert.equal(s.status, 302);
+    assert.equal((await go(b, approve(s.location, who))).status, 302);
+    keep(b.cookies.ts_session);
+    const ins = lines(mia.own, 'signin.succeeded').map((l: any) => ({ ...l, details: JSON.parse(l.details) })).filter((l: any) => l.details.method === 'google');
+    assert.equal(ins.length, 1);
+    assert.deepEqual([ins[0].actor_id, ins[0].ip], [mia.id, b.ip]);
+    assert.deepEqual(seclog.screenView(ins[0].seq ? db.get('SELECT * FROM security_events WHERE seq=?', ins[0].seq) : null).said, ['With Google.']);
+    // Removed again.
+    const idn = db.get('SELECT id FROM identities WHERE user_id=?', mia.id).id;
+    assert.equal((await mia.c.call('DELETE', `/me/signin/${idn}`)).status, 200);
+    const rem = one(mia.own, 'signin_method.removed');
+    assert.deepEqual([rem.actor_id, rem.details.provider], [mia.id, 'google']);
+    const all = JSON.stringify(lines(mia.own));
+    assert.ok(!all.includes('google-sub-mia-1') && !all.includes(G.secret));
+    for (const x of secrets) assert.ok(!all.includes(x), `found a secret in the record: ${x.slice(0, 6)}...`);
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.GOOGLE_CLIENT_ID;
+    delete process.env.GOOGLE_CLIENT_SECRET;
+  }
+});
+
+test('repair: the search box finds lines by a name, by what happened and by a key name; the signed-in download has names, a key gets ids', async () => {
+  const noa = await person('Noa Search', 'noa@seclog.example');
+  const N = noa.own;
+  const pat = await joinBySignup('Pat Finder', 'pat@seclog.example', await invite(noa.c, N, 'pat@seclog.example', 'member'));
+  const key = keep((await noa.c.post('/api-keys', { name: 'Payroll sync', scope: 'admin' })).data.key);
+  assert.equal((await browser().post('/auth/login', { email: 'pat@seclog.example', password: 'not right at all' })).status, 401);
+  const kinds = async (q: string) => (await view(noa.c, `?q=${encodeURIComponent(q)}`)).map((e) => e.kind);
+  assert.deepEqual([...new Set(await kinds('pat finder'))].sort(), ['member.joined', 'signin.failed', 'signin.succeeded']);
+  assert.deepEqual(await kinds('failed'), ['signin.failed']);
+  assert.deepEqual(await kinds('payroll'), ['api_key.created']);
+  assert.deepEqual(await kinds('PAT failed'), ['signin.failed']);
+  assert.deepEqual(await kinds('nothing like this is in it'), []);
+  // What is typed is words, never part of the question to the database.
+  assert.deepEqual(await kinds("%' OR 1=1 --"), []);
+  assert.deepEqual(await kinds('_'), (await kinds('_')).filter(() => true));
+  // Search and the other filters work together, and the download follows both.
+  assert.deepEqual((await view(noa.c, `?q=pat&kind=member.joined`)).map((e) => e.kind), ['member.joined']);
+  const mine = Buffer.from((await noa.c.get('/account/security-events/csv?q=pat')).data).toString('utf8');
+  assert.match(mine.split('\r\n')[0], /"said"/);
+  assert.ok(mine.includes('"Pat Finder"') && mine.includes('Wrong password.'));
+  assert.ok(!mine.includes('pat@seclog.example'), 'email addresses stay out until they are switched on');
+  assert.ok(!mine.includes('Payroll'));
+  const machine = Buffer.from((await withKey(key).get('/account/security-events/csv?q=pat')).data).toString('utf8');
+  assert.ok(machine.includes(pat.id) && !machine.includes('Pat Finder'));
+  // Another account's admin finds nothing of this one by searching for its people.
+  assert.deepEqual((await view(ada.c, '?q=pat%20finder')).length, 0);
+  // A cursor that is not a number is said, not ignored.
+  const badBefore = await noa.c.get('/account/security-events/view?before=abc');
+  assert.equal(badBefore.status, 400);
+  assert.match(badBefore.data.error, /whole number\. Leave it out/);
+});
+
+test('repair: a long record is exported in files of a set size, and addresses a key was used from are forgotten after the days', async () => {
+  const quy = await person('Quy Export', 'quy@seclog.example');
+  const Q = quy.own;
+  const key = keep((await quy.c.post('/api-keys', { name: 'k' })).data.key);
+  assert.equal((await withKey(key, '203.0.113.77').get('/me')).status, 200);
+  const n = lines(Q).length;
+  assert.ok(n >= 3);
+  const files = [...seclog.securityExport(Q, 2)];
+  assert.equal(files.length, Math.ceil(n / 2) + (n % 2 === 0 ? 1 : 0) - (n % 2 === 0 ? 1 : 0) || files.length);
+  assert.ok(files.every((f) => /^security\/security-events-\d+\.csv$/.test(f.name)));
+  const rows = files.flatMap((f) => f.data.toString('utf8').replace('﻿', '').split('\r\n').slice(1)).filter(Boolean);
+  assert.equal(rows.length, n);
+  assert.ok(files.every((f) => f.data.toString('utf8').split('\r\n').length <= 3));
+  assert.ok(rows.some((r) => r.includes('"Quy Export"')));
+  // A short record is one file with the name it always had.
+  assert.deepEqual([...seclog.securityExport(Q)].map((f) => f.name), ['security/security-events.csv']);
+
+  const keyId = db.get('SELECT id FROM api_keys WHERE account_id=?', Q).id;
+  assert.equal(db.get('SELECT COUNT(*) n FROM api_key_addresses WHERE key_id=?', keyId).n, 1);
+  db.run('UPDATE api_key_addresses SET at=? WHERE key_id=?', new Date(Date.now() - 401 * 864e5).toISOString(), keyId);
+  seclog.purgeSecurityLog();
+  assert.equal(db.get('SELECT COUNT(*) n FROM api_key_addresses WHERE key_id=?', keyId).n, 0);
+});
+
+test('repair: the words: no envelope, recipient, purge, legal hold or events on the screen, details as sentences, every kind and alert has its words', async () => {
+  const lib = await import('../src/lib/seclog.ts');
+  const { CATALOGUES } = await import('../src/lib/i18n.ts');
+  const en = CATALOGUES.en as Record<string, string>;
+  for (const k of lib.SECURITY_KIND_LIST) assert.ok(en[`security.kind.${k}`], `no words for ${k}`);
+  for (const [g, kinds] of lib.SECURITY_GROUPS) {
+    assert.ok(en[`security.group.${g}`], g);
+    for (const k of kinds) assert.ok(lib.isSecurityKind(k));
+  }
+  assert.deepEqual(lib.SECURITY_GROUPS.flatMap(([, k]) => k).sort(), [...lib.SECURITY_KIND_LIST].sort(), 'every kind is in one group of the filter');
+  for (const a of lib.SECURITY_ALERT_LIST) assert.ok(en[`security.alert.${a}`]);
+  const screen = Object.entries(en).filter(([k]) => k.startsWith('settings.security.') || /^security\.(kind|group|alert|detail|who|device|setting|words)/.test(k));
+  assert.ok(screen.length > 150);
+  for (const [k, v] of screen) {
+    assert.ok(!/envelope|recipient|purge|legal hold|\bevents?\b|24\/7|monitor|—/i.test(v), `${k}: ${v}`);
+    // Technical names only where the destination is set up.
+    if (!/siem_title|webhook|kind\.webhook|group\.keys|detail\.hook/.test(k)) assert.ok(!/next_after|security\.event|\bGET\b|scope|SIEM|syslog/i.test(v), `${k}: ${v}`);
+  }
+  assert.equal(lib.securityLogWords(400), 'Who signed in and what changed, kept for 400 days. Nobody watches it for you: the alerts are emails.');
+  assert.equal(en['settings.security.search_label'], 'Search the record');
+
+  const said = (kind: string, d: any) => lib.securityDetail(kind, d).join(' ');
+  assert.equal(said('member.role_changed', { from: 'admin', to: 'member' }), 'Role changed from admin to member.');
+  assert.equal(said('signin.failed', { method: 'password', reason: 'wrong_password' }), 'Wrong password.');
+  assert.equal(said('member.joined', { role: 'member', invite: 'inv_hJ1GopbQ9uTnSR7' }), 'Joined with the role member.');
+  assert.equal(said('settings.changed', { settings: { default_reminder_days: { from: 3, to: 7 } } }), 'Days between reminders: 3 changed to 7.');
+  assert.equal(said('settings.changed', { settings: { alert_api_key_created: { from: true, to: false } } }), 'Alert switched off: An API key is made.');
+  assert.equal(said('settings.changed', { settings: { brand_logo: { changed: true } } }), 'Logo changed.');
+  assert.equal(said('api_key.created', { name: 'Payroll sync', scope: 'admin' }), 'Named Payroll sync. Can do everything an admin can.');
+  assert.equal(said('signin.succeeded', { method: 'password' }), '');
+  assert.equal(said('signout.everywhere', { signed_out: 2, devices_forgotten: 0 }), '2 other sign-ins ended.');
+  assert.equal(said('retention.changed', { days: 365, level: 'files', was_days: 0, was_level: null, templates: 0 }), 'Finished documents are now kept for 365 days. Before: until someone deletes them.');
+  // Something nobody wrote a sentence for is still words, and an id never shows.
+  assert.equal(said('envelope.purged', { kind: 'template', status: 'draft', made_by: 'usr_zqMz3FFvTcMjfYhv', odd_new_detail: 'by_hand' }), 'It was draft. Odd new detail: by hand.');
+  assert.equal(lib.securityDevice('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.8103.78 Safari/537.36'), 'Linux computer, Chrome');
+  assert.equal(lib.securityDevice(''), '');
+  assert.equal(lib.securityDevice('[left out]'), '');
+  // Every line written by this whole file reads without an id or a field name with an underscore.
+  for (const r of db.all('SELECT * FROM security_events')) {
+    const v = seclog.screenView(r);
+    assert.ok(!/\b(usr|inv|key|whk|env|acc|tpl)_[A-Za-z0-9]{6,}|[a-z]_[a-z]/.test(v.said.join(' ')), `${r.kind}: ${v.said.join(' ')} <- ${r.details}`);
+  }
 });

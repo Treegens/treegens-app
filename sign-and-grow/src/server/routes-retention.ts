@@ -27,6 +27,8 @@ route('GET', '/account/retention', (c) => {
       queue: all(`SELECT q.envelope_id id, e.subject, q.goes_at, COALESCE(q.asked_level, q.level) level, q.asked_by, q.asked_at FROM retention_queue q JOIN envelopes e ON e.id=q.envelope_id
         WHERE q.account_id=? AND q.goes_at IS NOT NULL AND e.purged_at IS NULL ORDER BY q.goes_at LIMIT 200`, c.account.id),
       folders: all("SELECT DISTINCT folder FROM envelopes WHERE account_id=? AND kind='envelope' AND folder IS NOT NULL AND folder != '' ORDER BY folder", c.account.id).map((r) => r.folder),
+      // Whether the deletion record has a line yet: Settings offers the download only then.
+      has_record: !!get('SELECT 1 x FROM retention_log WHERE account_id=? LIMIT 1', c.account.id),
     } : {}),
   };
 });
@@ -36,7 +38,7 @@ route('PUT', '/account/retention', async (c) => setPolicy(c, await c.body()), 'a
 // The disposition record: every rule change, keep, hold, purge and refused attempt. ?format=csv for the file.
 route('GET', '/account/retention/log', (c) => {
   if (c.q.get('format') === 'csv')
-    return new Response(retentionCsv(c.account.id), { headers: { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="retention-record-${now().slice(0, 10)}.csv"` } });
+    return new Response(retentionCsv(c.account.id), { headers: { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'private, no-store', 'content-disposition': `attachment; filename="deletion-record-${now().slice(0, 10)}.csv"` } });
   return { lines: retentionLog(c.account.id, Math.min(1000, Number(c.q.get('limit')) || 200)) };
 }, 'admin');
 
@@ -60,8 +62,8 @@ route('DELETE', '/envelopes/:id/hold', async (c) => {
   const own = get('SELECT id FROM legal_holds WHERE envelope_id=? AND lifted_at IS NULL', e.id);
   if (!own) {
     const other = (isHeld([e.id]).get(e.id) || [])[0];
-    if (other) throw bad(`This envelope is held because its folder "${other.folder}" is on hold. Lift that hold under Settings, Your data, if it may go.`, 409, { code: 'folder_hold', hold_id: other.id });
-    throw bad('This envelope is not on hold. Nothing changed.', 409);
+    if (other) throw bad(`This document is on hold because its folder "${other.folder}" is on hold. Lift that hold under Settings, Your data, if it may go.`, 409, { code: 'folder_hold', hold_id: other.id });
+    throw bad('This document is not on hold, so there is nothing to lift. Leave it as it is.', 409);
   }
   return liftHold(c, own.id, b.reason);
 });

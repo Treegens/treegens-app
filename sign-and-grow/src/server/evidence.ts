@@ -5,7 +5,8 @@ import { sendMail, type MailStatus } from './mail.ts';
 import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnvelope, type Actor } from './envelopes.ts';
 import { safeName, type ZipEntry } from './zip.ts';
 import { labelOf } from '../lib/bysender.ts';
-import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf } from '../lib/policy.ts';
+import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf, consentVersionOf, consentUnstated } from '../lib/policy.ts';
+import { languageWords } from '../lib/i18n.ts';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '../lib/evidence.ts';
 import { FINGERPRINT_KEPT_DAYS } from '../lib/evidence.ts';
 import { deviceName } from '../lib/phone.ts';
@@ -42,11 +43,16 @@ export function keepFingerprint(envelopeId: string) {
 }
 
 /** The deleted document a signed file or an envelope id belongs to, with the last day we keep knowing it. */
-export function forgottenFile(o: { sha256?: string; id?: string }): { envelope_id: string; completed_at: string | null; deleted_at: string; kept_until: string | null; disputed_on: string | null; dispute_open: boolean; purged?: { level: string } } | null {
+export function forgottenFile(o: { sha256?: string; id?: string }): { envelope_id: string; completed_at: string | null; deleted_at: string; kept_until: string | null; disputed_on: string | null; dispute_open: boolean; disputes?: number; dispute_in_error_on?: string | null; purged?: { level: string } } | null {
   // A completed envelope whose documents a retention purge removed (src/server/records.ts): its record is still here,
   // with the fingerprint, for as long as the account keeps it (kept_until null). purged says so, and at which level.
-  const p = o.sha256 || o.id ? get(`SELECT id, completed_at, purged_at, purged_level FROM envelopes WHERE kind='envelope' AND status='completed' AND purged_at IS NOT NULL AND ${o.sha256 ? 'purged_sha256=?' : 'id=?'}`, o.sha256 || o.id) : null;
-  if (p) return { envelope_id: p.id, completed_at: String(p.completed_at || '').slice(0, 10) || null, deleted_at: String(p.purged_at).slice(0, 10), kept_until: null, disputed_on: null, dispute_open: false, purged: { level: p.purged_level } };
+  const p = o.sha256 || o.id ? get(`SELECT id, completed_at, purged_at, purged_level, disputed_at FROM envelopes WHERE kind='envelope' AND status='completed' AND purged_at IS NOT NULL AND ${o.sha256 ? 'purged_sha256=?' : 'id=?'}`, o.sha256 || o.id) : null;
+  // The record is still here, so the mark that someone disputes it is too: deleting the files never washes it off.
+  if (p) {
+    const d = disputeFacts(p.id);
+    return { envelope_id: p.id, completed_at: String(p.completed_at || '').slice(0, 10) || null, deleted_at: String(p.purged_at).slice(0, 10), kept_until: null,
+      disputed_on: p.disputed_at ? String(p.disputed_at).slice(0, 10) : null, dispute_open: d.disputes_open > 0, disputes: d.disputes, dispute_in_error_on: d.dispute_in_error_on, purged: { level: p.purged_level } };
+  }
   const f = o.sha256 ? get('SELECT * FROM forgotten_files WHERE file_sha256=?', o.sha256) : o.id ? get('SELECT * FROM forgotten_files WHERE envelope_id=? ORDER BY at DESC LIMIT 1', o.id) : null;
   if (!f) return null;
   // A dispute that was open when it was deleted is still said, for as long as it is open (keepDispute).
@@ -110,7 +116,9 @@ export async function lookupEnvelope(envelopeId: string): Promise<any> {
   const e = get("SELECT id, status, sent_at, completed_at, final_sha256, final_pages, disputed_at, purged_at, purged_level, purged_sha256 FROM envelopes WHERE id=? AND kind='envelope' AND status!='draft'", envelopeId);
   // Purged under its account's retention rule or at its sender's request (src/server/records.ts): said like a deleted
   // one, with the state it was in and the fingerprint of the signed PDF it had, if any.
-  if (e?.purged_at) return { found: true, id: e.id, status: 'deleted', was: e.status, completed_at: String(e.completed_at || '').slice(0, 10) || null, deleted_at: String(e.purged_at).slice(0, 10), kept_until: null, sha256: e.purged_sha256 || null, purged: { level: e.purged_level } };
+  if (e?.purged_at) return { found: true, id: e.id, status: 'deleted', was: e.status, completed_at: String(e.completed_at || '').slice(0, 10) || null, deleted_at: String(e.purged_at).slice(0, 10), kept_until: null, sha256: e.purged_sha256 || null, purged: { level: e.purged_level },
+    // Still marked as disputed, as before its files were deleted (records.ts keeps the disputes with the record).
+    disputed_at: e.disputed_at || null, ...disputeFacts(e.id) };
   if (!e) {
     const gone = forgottenFile({ id: envelopeId });
     if (gone) return { found: true, id: gone.envelope_id, status: 'deleted', completed_at: gone.completed_at, deleted_at: gone.deleted_at, kept_until: gone.kept_until, sha256: get('SELECT file_sha256 s FROM forgotten_files WHERE envelope_id=?', envelopeId)?.s,
@@ -389,14 +397,15 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     ...(agreed.length ? agreed.flatMap((a: any) => {
       // A line that names no version was written before versions were recorded, by the code that showed the
       // wording kept as UNVERSIONED_CONSENT. Today's words would put a sentence in front of that person they never saw.
-      const named = /Wording (\S+?),/.exec(a.detail)?.[1] || /wording in use was (\S+?),/.exec(a.detail)?.[1];
+      // Read from the end of the line, never from the person's name in front of it (consentVersionOf in policy.ts).
+      const named = consentVersionOf(a.detail);
       const version = named || UNVERSIONED_CONSENT;
       const r = people.find((p: any) => labelOf(p) === a.actor);
       // In the language the line names (English for a line from before languages were recorded): policy.ts.
       const w = consentWordingAsRecorded(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version, consentLanguageOf(a.detail));
       const how = !named ? ' (their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line, which only the code before that change wrote, and not stated by their screen)'
-        : /did not say/.test(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
-      return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. Wording ${w.version}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
+        : consentUnstated(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
+      return [`${a.actor}, ${String(a.at).replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}${a.ip ? `, from ${a.ip}` : ''}. Wording ${w.version}, in ${languageWords(w.language)}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
     }) : ['Nobody has agreed yet.']),
   ].join('\r\n'));
 

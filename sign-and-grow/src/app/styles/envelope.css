@@ -46,6 +46,9 @@
 
 /* Templates: Use on each row, the rest in the row's More, which opens as a line under the row. */
 .sn-rowactions .mo-btn { margin-left: 6px; }
+.sn-rowactions .btn, .sn-newtpl { min-height: 44px; }
+.sn-linkbtn { border: 0; background: none; padding: 0; font: inherit; color: var(--green); text-decoration: underline; cursor: pointer; min-height: 44px; }
+.sn-linkbtn:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 tr.tpl-more-row > td { padding-top: 0; border-top: 0; background: #fafbf9; }
 .sn-rowmore { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 10px; }
 .sn-rowmore .btn { min-height: 44px; }
@@ -59,7 +62,10 @@ body:has(.toasts > .toast) .shell .main { padding-bottom: 120px; }
 @media (max-width: 900px) {
   .mo { position: static; }
   .sn-head .mo { position: relative; }
-  .sn-head .sn-headactions { padding-top: 40px; }
+  /* On a phone More sits on the line of the back link, so the title has the whole width to itself. */
+  .sn > .pagehead.sn-head { position: relative; }
+  .sn-head .sn-headactions { position: absolute; top: 0; right: 0; padding-top: 0; }
+  .sn-head .sn-back { min-height: 44px; }
   .sn-person-head { flex-wrap: wrap; }
   .sn-person-head > .grow { flex: 1 1 100%; }
   .sn-person-badges { flex: 1 1 auto; width: auto; }

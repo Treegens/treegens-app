@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, useLoad } from './ui';
-import { Logo } from './Brand';
+import { Logo, Mark } from './Brand';
 import { fmtNum, usd, TOTALS_FROM, totalWorthShowing } from '@/lib/impact';
 import { HelpChatButton } from './HelpChat';
 
@@ -40,11 +40,12 @@ export function PublicNav() {
       <a href="#main" className="pub-skip">Skip to the main content</a>
       <header className="pub-head">
         <div className="nav-top">
-          <Link href="/" className="logo"><Logo height={26} /></Link>
+          {/* On the narrowest phones the mark alone stands for the name, so Sign in and Start free both fit beside it. */}
+          <Link href="/" className="logo"><Logo height={26} /><Mark size={30} label="GrowSigning" className="pub-logo-mark" /></Link>
           <nav className="pub-links" aria-label="Main">
             {LINKS.map(([href, label]) => <Link key={href} href={href} className="btn ghost sm" {...current(href)}>{label}</Link>)}
           </nav>
-          <div className="pub-actions">
+          <div className="pub-actions" role="navigation" aria-label="Help, sign in and start">
             {/* The help chat: answers at once, with a person one click away (HelpChat.tsx). */}
             <HelpChatButton className="btn sm hc-open">Help</HelpChatButton>
             <Link href="/login" className="btn sm pub-signin">Sign in</Link>
@@ -56,10 +57,9 @@ export function PublicNav() {
           </div>
         </div>
         <nav id="pub-menu" className="pub-menu" aria-label="Menu" hidden={!open}>
-          {/* On a phone the header has no room for the help chat's button, so it is the first thing in the menu. */}
+          {/* On a phone the header keeps Sign in and Start free, so a returning person is one tap from the login. Help and Pricing are here. */}
           <HelpChatButton className="hc-menu">Help</HelpChatButton>
           {LINKS.map(([href, label]) => <Link key={href} href={href} {...current(href)} onClick={() => setOpen(false)}>{label}</Link>)}
-          <Link href="/login" onClick={() => setOpen(false)}>Sign in</Link>
         </nav>
       </header>
     </>
@@ -86,6 +86,7 @@ export function PublicFooter() {
         <nav aria-label="Product">
           <h2>Product</h2>
           <Link href="/pricing">Pricing</Link>
+          <Link href="/help#cancel">Stop a subscription</Link>
           <Link href="/features">What it does</Link>
           <Link href="/impact">Trees planted</Link>
           <Link href="/developers">Developers</Link>
@@ -95,7 +96,6 @@ export function PublicFooter() {
           <Link href="/security">Security</Link>
           <Link href="/security/processing">Data processing</Link>
           <Link href="/security/disclosure">Report a weakness</Link>
-          <Link href="/help#cancel">Stop a subscription</Link>
         </nav>
       </div>
     </footer>

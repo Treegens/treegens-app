@@ -286,6 +286,8 @@ route('POST', '/me/two-step/recovery-codes', async (c) => {
   const codes = tx(() => {
     const l = newRecoveryCodes(c.user.id);
     logStep(c.user.id, 'codes');
+    // That new codes were made, never a code (seclog.ts).
+    record('two_step.codes_renewed', { c, member: c.user.id, about: ['user', c.user.id] });
     return l;
   });
   await sendMail({ to: c.user.email, subject: 'New recovery codes for your GrowSigning login', heading: 'New recovery codes',
@@ -317,6 +319,7 @@ route('DELETE', '/me/two-step/devices/:id', (c) => {
   if (!d) throw bad('That device does not skip the second step any more, so there was nothing to withdraw.', 404);
   run('DELETE FROM two_step_devices WHERE id=?', d.id);
   const out = Number(run('DELETE FROM sessions WHERE user_id=? AND two_step_device=? AND id != ?', c.user.id, d.id, c.auth?.sessionId || '').changes);
+  record('two_step.devices_forgotten', { c, member: c.user.id, about: ['user', c.user.id], details: { devices: 1, signed_out: out } });
   return { ok: true, signed_out: out };
 });
 route('DELETE', '/me/two-step/devices', (c) => {
@@ -325,6 +328,7 @@ route('DELETE', '/me/two-step/devices', (c) => {
   let out = 0;
   for (const id of ids) out += Number(run('DELETE FROM sessions WHERE user_id=? AND two_step_device=? AND id != ?', c.user.id, id, c.auth?.sessionId || '').changes);
   if (n) logStep(c.user.id, 'devices_forgotten');
+  if (n) record('two_step.devices_forgotten', { c, member: c.user.id, about: ['user', c.user.id], details: { devices: n, signed_out: out } });
   return { ok: true, withdrawn: n, signed_out: out };
 });
 

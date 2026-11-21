@@ -78,11 +78,11 @@ export default function Verify() {
             <span className="badge completed">Completed here, deleted since</span>
             <h2>This file was completed with GrowSigning on {longDay(res.deleted.completed_at)}</h2>
             <p>Its fingerprint matches the signed PDF of envelope <span className="mono">{res.deleted.envelope_id}</span>, which everyone had finished on that day. So the file is unchanged since then.</p>
-            {res.deleted.disputed_on && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {longDay(res.deleted.disputed_on)}, a person named on this document told us they did not sign it, or that it was not them, and a person at GrowSigning has not closed that yet. This page cannot tell you who is right.</div>}
+            {res.deleted.disputed_on && <div className="notice warn" style={{ marginBottom: 12 }}><b>Disputed.</b> On {longDay(res.deleted.disputed_on)}, a person named on this document told us they did not sign it, or that it was not them{res.deleted.dispute_in_error_on ? `. On ${longDay(res.deleted.dispute_in_error_on)} a person at GrowSigning looked into it and found that it was filed in error` : res.deleted.dispute_open ? ', and a person at GrowSigning has not closed that yet' : ''}. This page cannot tell you who is right.</div>}
             {/* Purged under its account's retention rule or at its sender's request (src/server/records.ts): the record is still here. */}
             {res.deleted.purged ? (
               <>
-                <p>Its documents were removed on {longDay(res.deleted.deleted_at)}, under its account&apos;s retention rule or at its sender&apos;s request. The signed file is no longer kept here, so this page cannot show you who signed it. The certificate inside the file is what you have: read it with <Link href="/security/certificate">How to read a certificate</Link>.</p>
+                <p>Its files were deleted on {longDay(res.deleted.deleted_at)}, by its account&apos;s deletion schedule or at the request of its sender or an admin. The signed file is no longer kept here, so this page cannot show you who signed it. The certificate inside the file is what you have: read it with <Link href="/security/certificate">How to read a certificate</Link>.</p>
                 <p className="muted small">We keep this fingerprint, the envelope ID and the day it was completed with the record of the envelope, for as long as its account keeps that record, and for one year after the account is deleted.</p>
               </>
             ) : (

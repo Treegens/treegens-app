@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { api, useLoad, fmtDate } from '@/components/ui';
 import { sessionWords } from '@/lib/policy';
+import { sessionShort } from '@/lib/settingsnav';
 
 // Where a person is signed in: every browser that holds a session of theirs, as GET /me/sessions lists them. A
 // browser stays signed in while it is used (src/server/auth.ts), so this is also where one that should not be
@@ -25,10 +26,14 @@ export function SignedIn() {
   return (
     <section className="card" aria-labelledby="where-h">
       <h2 id="where-h" style={{ marginBottom: 4 }}>Where you are signed in</h2>
-      <p className="muted small">
-        {sessionWords(d.days, d.max_days)}{' '}
-        Signing in on another device does not sign this one out. The device and browser are what the browser told us, and &ldquo;last used&rdquo; is noted at most once every {d.noted_every_minutes} minutes.
-      </p>
+      <p className="muted small">{sessionShort(d.days, d.max_days)}</p>
+      <details data-fold="">
+        <summary className="set-fold">How this works</summary>
+        <p className="muted small">
+          {sessionWords(d.days, d.max_days)}{' '}
+          Signing in on another device does not sign this one out. The device and browser are what the browser told us, and &ldquo;last used&rdquo; is noted at most once every {d.noted_every_minutes} minutes.
+        </p>
+      </details>
       {said && <div className={`notice${said.err ? ' err' : ''}`} role={said.err ? 'alert' : 'status'} style={{ margin: '10px 0' }}>{said.text}</div>}
       <ul className="ways">
         {d.sessions.map((s) => (

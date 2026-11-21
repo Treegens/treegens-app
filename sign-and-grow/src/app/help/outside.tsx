@@ -60,7 +60,7 @@ export function SignatureKind() {
           <li>In Germany: the fixed term in an employment contract, a notice of termination and a separation agreement.</li>
         </ul>
         <p><b>The check before sending.</b> When the subject, the name of a document or the text of a document contains a word that usually means one of these, the review step of the editor shows a warning that names the word and where it stands, and the audit trail of the envelope gets a line that says so. Through the API the same list comes back as <code>warnings</code> in the answer to sending, and from <code>GET /api/envelopes/&#123;id&#125;/warnings</code> before it. It is a reminder and nothing more: it never blocks a send, it only knows the words below, and a document it says nothing about can still need paper.</p>
-        <details>
+        <details data-fold="">
           <summary>The words it looks for</summary>
           <p className="muted small" style={{ margin: '8px 0 0' }}>Capitals and accents make no difference, and an umlaut may be written out (ue for ü). The name of a document is usually its file name, and it is read too: underscores and dots count as spaces, so Power_of_Attorney.pdf and PowerOfAttorney.pdf are found. A word followed by three dots stands for every word that begins that way.</p>
           <dl className="pub-words">

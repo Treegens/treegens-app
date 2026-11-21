@@ -4,6 +4,7 @@
 // members cannot rewrite each other's templates or see each other's folders and batches, a completed envelope its
 // sender deleted stays with its recipients, help references can be read out loud, sign-in opens the workspace used
 // last, and a signer's cry for help reaches the sender.
+import { dayText } from '../src/lib/dates.ts'; // days in sentences read 21 Dec 2026 (simplify-public)
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -440,7 +441,7 @@ test('nobody is invited into, joins or sends from an account that is being close
 
   const closed = (await owner.post('/me/delete', { password: PW })).data;
   assert.equal(closed.closed, 'scheduled');
-  const day = closed.deletes_at.slice(0, 10);
+  const day = dayText(closed.deletes_at);
   const refusal = new RegExp(`Clo Sing's workspace is being closed and will be deleted on ${day}\\..*If its owner signs in before that day, the account is restored`);
 
   // Joining: by signing up from the invitation, by accepting it signed in, or by signing in from it.
@@ -1273,8 +1274,8 @@ test('the screens offer what the server allows, promise only what it does, and c
   assert.match(list, /\/restore`/);
   const page = source('app/app/envelopes/[id]/page.tsx');
   assert.match(page, /\/restore`/);
-  assert.match(page, /It is only under Envelopes, in the tab Removed by its sender: in no other list/);
-  assert.match(page, /An admin of your team still finds it under Envelopes, in the tab <b>Removed by its sender<\/b>/);
+  assert.match(page, /It is only under Documents, in the tab Removed by its sender: in no other list/);
+  assert.match(page, /An admin of your team still finds it under Documents, in the tab <b>Removed by its sender<\/b>/);
   // A member sees whose public form it is under its name, where a phone shows it, and no buttons that would be refused.
   const forms = source('app/app/powerforms/page.tsx');
   // The buttons that change it stand under the name too (so a phone reaches them), and only for whoever may.

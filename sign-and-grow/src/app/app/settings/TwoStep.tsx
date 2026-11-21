@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { api, useLoad, fmtDate, toast, Modal } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { SetUpTwoStep, RecoveryCodes, CodeField, LostPhoneRules } from '@/components/TwoStep';
-import { TWO_STEP_API_KEYS, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_REMEMBER_DAYS, TWO_STEP_EMAIL_RESET_RISK, TWO_STEP_RESET_BLOCK_DAYS } from '@/lib/policy';
+import { TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_REMEMBER_DAYS, TWO_STEP_EMAIL_RESET_RISK, TWO_STEP_RESET_BLOCK_DAYS } from '@/lib/policy';
 
 // Settings, Security: two-step login of this login. Settings, Team: the team rule and resets by an admin. The rules
 // are in src/server/twostep.ts and the routes in src/server/routes-twostep.ts.
@@ -161,7 +161,6 @@ export function TwoStepCard() {
           <ul className="ts-list">{d.log.map((l: any, i: number) => <li key={i}><span>{l.text}</span><span className="muted small">{longMoment(l.at)}</span></li>)}</ul>
         </details>
       )}
-      {!d.on && <p className="muted small" style={{ marginTop: 12 }}>{TWO_STEP_API_KEYS}</p>}
     </section>
   );
 }
@@ -185,7 +184,7 @@ export function TeamTwoStep() {
   return (
     <section className="card twostep" aria-labelledby="team-two-step-h">
       <h2 id="team-two-step-h" style={{ marginBottom: 4 }}>Two-step login on this team</h2>
-      <p className="muted small">{d.required ? `Everyone on ${me.account.name} has to use two-step login, since ${fmtDate(d.required_since)}. Someone without it is asked to set it up the next time they open ${me.account.name}, and nothing else in it opens for them until they have.` : `Members choose for themselves. ${d.members.length - without.length} of ${d.members.length} have it on.`} {TWO_STEP_API_KEYS}</p>
+      <p className="muted small">{d.required ? `Everyone on ${me.account.name} has to use two-step login, since ${fmtDate(d.required_since)}. Someone without it is asked to set it up the next time they open ${me.account.name}, and nothing else in it opens for them until they have.` : `Members choose for themselves. ${d.members.length - without.length} of ${d.members.length} have it on.`}</p>
       <ul className="ts-list" style={{ marginTop: 8 }}>
         {d.members.map((m: any) => (
           <li key={m.id}>
@@ -200,7 +199,7 @@ export function TeamTwoStep() {
         <div className="ts-actions">
           {d.required
             ? <button className="btn" onClick={() => (setError(''), setCode(''), setAsking(false))}>Stop asking everyone</button>
-            : <button className="btn primary" disabled={!d.you_on} aria-describedby={!d.you_on ? 'ask-first' : undefined} onClick={() => (setError(''), setCode(''), setAsking(true))}>Ask everyone for two-step login</button>}
+            : <button className="btn" disabled={!d.you_on} aria-describedby={!d.you_on ? 'ask-first' : undefined} onClick={() => (setError(''), setCode(''), setAsking(true))}>Ask everyone for two-step login</button>}
           {!d.required && !d.you_on && <p id="ask-first" className="muted small" style={{ flexBasis: '100%', margin: 0 }}>Switch it on for yourself first, under Settings, Security.</p>}
         </div>
       )}

@@ -488,8 +488,12 @@ CREATE TABLE IF NOT EXISTS chat_counts (key TEXT NOT NULL, slot TEXT NOT NULL, n
 -- and account, chained by hash per account like the audit trail. Ids only, never a password, token, code, key, email
 -- address or document content. A line is never changed, and is deleted only once it is older than the days in
 -- security_log_keep (SECURITY_LOG_DAYS, written there by the purge) or when its account is deleted: the triggers
--- below refuse anything else, whatever code asks. security_alerts_sent: when each alert last emailed an account's
--- admins. api_key_addresses: the internet addresses each key has been used from, so a new one is noticed.
+-- below refuse an UPDATE, a DELETE, and an INSERT that names a number already used (INSERT OR REPLACE). They stop
+-- code and careless hands, not someone who can change the database's own rules: for that the fingerprints are keyed
+-- with the server's secret, and security_heads holds the newest line of each account under the same key, so a line
+-- rewritten or the newest lines taken away without that secret show (seclog.ts verifySecurityChain).
+-- security_alerts_sent: when each alert last emailed an account's admins, and how many more it held back since.
+-- api_key_addresses: the internet addresses each key has been used from, so a new one is noticed.
 CREATE TABLE IF NOT EXISTS security_events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, at TEXT NOT NULL, actor_type TEXT NOT NULL, actor_id TEXT,
   ip TEXT, ua TEXT, kind TEXT NOT NULL, outcome TEXT NOT NULL, about_type TEXT, about_id TEXT, details TEXT NOT NULL DEFAULT '{}',
@@ -505,6 +509,14 @@ CREATE TRIGGER IF NOT EXISTS security_events_kept BEFORE DELETE ON security_even
     AND EXISTS (SELECT 1 FROM accounts WHERE id = old.account_id)
   BEGIN SELECT RAISE(ABORT, 'A line of the security record is kept for its days and deleted only with its account.'); END;
 CREATE TRIGGER IF NOT EXISTS accounts_security_gone AFTER DELETE ON accounts BEGIN DELETE FROM security_events WHERE account_id = old.id; END;
+CREATE TRIGGER IF NOT EXISTS security_events_numbered BEFORE INSERT ON security_events
+  WHEN new.seq IS NOT NULL AND new.seq <> -1 AND new.seq <= (SELECT COALESCE(MAX(seq), 0) FROM security_events)
+  BEGIN SELECT RAISE(ABORT, 'A line of the security record is never replaced.'); END;
+CREATE TRIGGER IF NOT EXISTS security_log_keep_days BEFORE UPDATE ON security_log_keep WHEN new.days < 1 OR new.id <> 1
+  BEGIN SELECT RAISE(ABORT, 'The security record is kept for at least one day.'); END;
+CREATE TRIGGER IF NOT EXISTS security_log_keep_stays BEFORE DELETE ON security_log_keep
+  BEGIN SELECT RAISE(ABORT, 'The security record is kept for at least one day.'); END;
+CREATE TABLE IF NOT EXISTS security_heads (account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, seq INTEGER NOT NULL, hash TEXT NOT NULL, at TEXT NOT NULL, mac TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS security_alerts_sent (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, rule TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (account_id, rule));
 CREATE TABLE IF NOT EXISTS api_key_addresses (key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, ip TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (key_id, ip));
 -- Keeping closed envelopes for a set time (src/server/records.ts). retention_queue: one row for an envelope that the
@@ -1099,10 +1111,12 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['files', 'original_sha256', 'TEXT'],
   ['files', 'converted', 'TEXT'],
   // The security record (src/server/seclog.ts). security_alerts_off: the alerts an admin switched off, as a JSON list
-  // of their names (src/lib/seclog.ts SECURITY_ALERTS); NULL is every alert on. security_log_emails: 1 when the record
-  // leaves the app (the API, the webhook, the CSV, the export) with people's email addresses as well as their ids.
+  // of their names (src/lib/seclog.ts SECURITY_ALERTS); NULL is every alert on. security_log_emails: 1 when the API
+  // and the webhook give a security system people's names and email addresses as well as their ids.
   ['accounts', 'security_alerts_off', 'TEXT'],
   ['accounts', 'security_log_emails', 'INTEGER NOT NULL DEFAULT 0'],
+  // Alerts the hourly limit held back since the last email of that alert (seclog.ts sendHeldAlerts tells the admins).
+  ['security_alerts_sent', 'held', 'INTEGER NOT NULL DEFAULT 0'],
   // Keeping closed envelopes for a set time (src/server/records.ts). accounts.retention_days: how long, counted from
   // when an envelope closed (NULL: off, the default); retention_level: what goes then (src/lib/retention.ts
   // PURGE_LEVELS); retention_name and retention_code: the schedule's own name and code, as the organisation writes them.
@@ -1114,6 +1128,10 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['accounts', 'retention_level', 'TEXT'],
   ['accounts', 'retention_name', 'TEXT'],
   ['accounts', 'retention_code', 'TEXT'],
+  // retention_days counts for completed documents; retention_stopped_days for cancelled, declined and expired ones (NULL:
+  // kept). retention_mailed_at: when the account last got the email that lists what is due (at most one a week).
+  ['accounts', 'retention_stopped_days', 'INTEGER'],
+  ['accounts', 'retention_mailed_at', 'TEXT'],
   // 'Trees on the signing record' switched off: the tree and paper lines are left off the certificate (impact.ts).
   ['accounts', 'cert_impact_off', 'INTEGER NOT NULL DEFAULT 0'],
   ['envelopes', 'retention_days', 'INTEGER'],

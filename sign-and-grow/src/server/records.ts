@@ -33,15 +33,17 @@ import { record } from './seclog.ts';
 import { purgeCustom } from './customfields.ts';
 import type { Ctx } from './router.ts';
 import { dataPlace } from '../lib/dataplace.ts';
+import { dayText } from '../lib/dates.ts';
 import {
-  RETENTION_NOTICE_DAYS, RETENTION_CLOSED, PURGE_LEVELS, LEVEL_NAME, KEPT_AT, isPurgeLevel, removesAt, retentionStays, removedOn,
-  validDays, dueAt, daysText, HOLD_TRUTH, RETENTION_MIN_DAYS, RETENTION_MAX_DAYS, type PurgeLevel,
+  RETENTION_NOTICE_DAYS, RETENTION_MAIL_EVERY_DAYS, RETENTION_CLOSED, PURGE_LEVELS, LEVEL_NAME, LEVEL_DOES, KEPT_AT, isPurgeLevel, retentionStays, removedOn,
+  validDays, dueAt, daysText, plainDay, STAYS_SHORT, HOLD_TRUTH, RETENTION_MIN_DAYS, RETENTION_MAX_DAYS, type PurgeLevel,
 } from '../lib/retention.ts';
 
 const DAY = 864e5;
 const SYSTEM: Actor = { name: 'System' };
 const day = (t: string | null | undefined) => String(t || '').slice(0, 10);
 const NOTICE_MS = RETENTION_NOTICE_DAYS * DAY;
+const MAIL_EVERY_MS = RETENTION_MAIL_EVERY_DAYS * DAY;
 const isClosed = (s: string) => RETENTION_CLOSED.includes(s);
 /** The lower of two levels: a purge never removes more than its email said. */
 const lower = (a: PurgeLevel, b: PurgeLevel): PurgeLevel => (PURGE_LEVELS.indexOf(a) <= PURGE_LEVELS.indexOf(b) ? a : b);
@@ -106,7 +108,7 @@ export const activeHolds = (accountIds: string[]): any[] =>
   accountIds.length ? all(`SELECT * FROM legal_holds WHERE lifted_at IS NULL AND account_id IN (${accountIds.map(() => '?').join(',')}) ORDER BY set_at`, ...accountIds) : [];
 
 /** How a hold is named in a sentence: "the hold on folder "Claims" set on 2026-11-20 by Ada Admin (matter M-12)". */
-export const holdName = (h: any) => `the hold on ${h.folder ? `folder "${h.folder}"` : `envelope ${h.envelope_id}`} set on ${day(h.set_at)} by ${h.set_by}${h.matter ? ` (matter ${h.matter})` : ''}`;
+export const holdName = (h: any) => `the hold on ${h.folder ? `folder "${h.folder}"` : `document ${h.envelope_id}`} set on ${plainDay(h.set_at)} by ${h.set_by}${h.matter ? ` (matter ${h.matter})` : ''}`;
 
 /**
  * Refuses when any of these envelopes is held, after writing the attempt to the record of each. `what` says what was
@@ -117,10 +119,12 @@ export function assertNotHeld(envelopeIds: string[], who: string, what: string) 
   if (!held.size) return;
   for (const [eid, holds] of held) {
     const acct = holds[0].account_id;
-    logLine(acct, eid, 'refused', { who, detail: `Refused to ${what}: the envelope is on legal hold (${holds.map((h) => h.id).join(', ')}).` });
+    logLine(acct, eid, 'refused', { who, detail: `Refused to ${what}: the document is on hold (${holds.map((h) => h.id).join(', ')}).` });
   }
   const one = held.size === 1;
-  throw bad(`${one ? 'This envelope is' : `${held.size} of these envelopes are`} on legal hold, so ${one ? 'it' : 'they'} cannot be deleted or purged while the hold is on. Only an admin of the account can lift a hold, under Settings, Your data. Nothing was deleted, and this attempt was recorded.`, 409,
+  // A draft on hold is frozen as it is: saving it could empty it, which is deleting by another name.
+  if (what === 'change it') throw bad('This draft is on hold, so the software refuses to change it. Ask an admin of the account to lift the hold under Settings, Your data, or start a new document. Nothing was changed, and this attempt was recorded.', 409, { code: 'legal_hold', held: [...held.keys()] });
+  throw bad(`${one ? 'This document is' : `${held.size} of these documents are`} on hold, so the software refuses to delete ${one ? 'it' : 'them'}. Ask an admin of the account to lift the hold under Settings, Your data, if ${one ? 'it' : 'they'} may go. Nothing was deleted, and this attempt was recorded.`, 409,
     { code: 'legal_hold', held: [...held.keys()] });
 }
 
@@ -141,21 +145,21 @@ function holdCovers(h: any): string[] {
 /** An admin puts an envelope or a folder on hold. Answers the hold and how many envelopes it covers now. */
 // An integration key with the "send" scope works with envelopes, not with what keeps them: it neither places nor lifts a hold.
 const assertHoldKey = (c: Ctx) => {
-  if (c.auth?.via === 'api_key' && (c.auth as any).scope !== 'admin') throw bad('An API key with the "send" scope cannot place or lift a legal hold. An admin can, in the app or with a key of the "admin" scope.', 403);
+  if (c.auth?.via === 'api_key' && (c.auth as any).scope !== 'admin') throw bad('An API key with the "send" scope cannot place or lift a hold. Use a key with the "admin" scope, or ask an admin to do it in the app.', 403);
 };
 
 export function placeHold(c: Ctx, o: { envelopeId?: string | null; folder?: string | null; reason: any; matter?: any }) {
-  if (!c.admin) throw bad('Only an admin of the account can put something on legal hold. Ask an admin of your team.', 403);
+  if (!c.admin) throw bad('Only an admin of the account can put something on hold. Ask an admin of your team.', 403);
   assertHoldKey(c);
   const reason = str(o.reason, 500).trim();
   const matter = str(o.matter, 120).trim() || null;
   if (reason.length < 3) throw bad('Say why it is held, in a few words (for example the claim or the request it is kept for). The reason is kept with the hold, for the admins. Nothing was put on hold.');
   const folder = o.folder == null ? '' : str(o.folder, 80).trim();
-  if (!o.envelopeId && !folder) throw bad('Say what to hold: an envelope, or the name of a folder. Nothing was put on hold.');
+  if (!o.envelopeId && !folder) throw bad('Nothing was put on hold, because the request names neither a document nor a folder. Send "envelope_id" or "folder".');
   if (o.envelopeId) {
     const e = get("SELECT id, kind FROM envelopes WHERE id=? AND account_id=?", o.envelopeId, c.account.id);
     if (!e || e.kind !== 'envelope') throw bad('Envelope not found.', 404);
-    if (get('SELECT 1 x FROM legal_holds WHERE envelope_id=? AND lifted_at IS NULL', e.id)) throw bad('This envelope is already on hold. Nothing changed.', 409, { code: 'already_held' });
+    if (get('SELECT 1 x FROM legal_holds WHERE envelope_id=? AND lifted_at IS NULL', e.id)) throw bad('This document is already on hold. Nothing changed.', 409, { code: 'already_held' });
   } else if (get('SELECT 1 x FROM legal_holds WHERE account_id=? AND folder=? AND lifted_at IS NULL', c.account.id, folder))
     throw bad(`The folder "${folder}" is already on hold. Nothing changed.`, 409, { code: 'already_held' });
   const h = { id: id('hold'), account_id: c.account.id, envelope_id: o.envelopeId || null, folder: o.envelopeId ? null : folder, reason, matter, set_by_id: c.user.id, set_by: c.user.name, set_at: now() };
@@ -165,10 +169,10 @@ export function placeHold(c: Ctx, o: { envelopeId?: string | null; folder?: stri
     for (const eid of ids) {
       if (h.folder) run('INSERT OR IGNORE INTO legal_hold_items (hold_id, envelope_id) VALUES (?,?)', h.id, eid);
       // The reason and the matter stay with the hold, for the admins: the record of the envelope says that it is held.
-      audit(eid, c.actor, 'Put on legal hold', `${h.folder ? `Its folder "${h.folder}" was put on legal hold` : 'It was put on legal hold'} by an admin of the account. While the hold is on, it cannot be deleted or purged.`);
-      cancelQueued(eid, 'It was put on legal hold.');
+      audit(eid, c.actor, 'Put on hold', `${h.folder ? `Its folder "${h.folder}" was put on hold` : 'It was put on hold'} by an admin of the account. While the hold is on, the software refuses to delete it or its files.`);
+      cancelQueued(eid, 'It was put on hold.');
     }
-    logLine(h.account_id, h.envelope_id, 'hold', { who: `${c.user.name} <${c.user.email}>`, detail: `${h.folder ? `Folder "${h.folder}"` : `Envelope ${h.envelope_id}`} put on hold (${h.id}), covering ${ids.length} envelope(s). Reason: ${reason}${matter ? `. Matter: ${matter}` : ''}` });
+    logLine(h.account_id, h.envelope_id, 'hold', { who: `${c.user.name} <${c.user.email}>`, detail: `${h.folder ? `Folder "${h.folder}"` : `Document ${h.envelope_id}`} put on hold (${h.id}), covering ${ids.length} document(s). Reason: ${reason}${matter ? `. Matter: ${matter}` : ''}` });
     return ids.length;
   });
   secLine('legal_hold.placed', h.account_id, { c, about: ['legal_hold', h.id], details: { folder: !!h.folder, envelope_id: h.envelope_id, covers: covered } });
@@ -180,18 +184,18 @@ function lift(h: any, by: { name: string; actor: Actor; log: string }, reason: s
   return tx(() => {
     if (!run('UPDATE legal_holds SET lifted_at=?, lifted_by=?, lift_reason=? WHERE id=? AND lifted_at IS NULL', now(), by.name, reason, h.id).changes) return 0;
     const ids = holdCovers(h);
-    for (const eid of ids) audit(eid, by.actor, 'Legal hold lifted', `${h.folder ? `The hold on its folder "${h.folder}"` : 'The legal hold'} was lifted by ${by.name.endsWith('GrowSigning') ? 'the people who run this server' : 'an admin of the account'}.${isHeld([eid]).size ? ' Another hold still covers it.' : ''}`);
-    logLine(h.account_id, h.envelope_id, 'hold_lifted', { who: by.log, detail: `${h.folder ? `Folder "${h.folder}"` : `Envelope ${h.envelope_id}`}: hold ${h.id} lifted. Reason: ${reason}` });
+    for (const eid of ids) audit(eid, by.actor, 'Hold lifted', `${h.folder ? `The hold on its folder "${h.folder}"` : 'The hold'} was lifted by ${by.name.endsWith('GrowSigning') ? 'the people who run this server' : 'an admin of the account'}.${isHeld([eid]).size ? ' Another hold still covers it.' : ''}`);
+    logLine(h.account_id, h.envelope_id, 'hold_lifted', { who: by.log, detail: `${h.folder ? `Folder "${h.folder}"` : `Document ${h.envelope_id}`}: hold ${h.id} lifted. Reason: ${reason}` });
     return ids.length;
   });
 }
 
 export function liftHold(c: Ctx, holdId: string, reasonIn: any) {
-  if (!c.admin) throw bad('Only an admin of the account can lift a legal hold. Ask an admin of your team.', 403);
+  if (!c.admin) throw bad('Only an admin of the account can lift a hold. Ask an admin of your team.', 403);
   assertHoldKey(c);
   const h = get('SELECT * FROM legal_holds WHERE id=? AND account_id=?', holdId, c.account.id);
   if (!h) throw bad('Hold not found.', 404);
-  if (h.lifted_at) throw bad(`This hold was lifted on ${day(h.lifted_at)}. Nothing changed.`, 409);
+  if (h.lifted_at) throw bad(`This hold was lifted on ${plainDay(h.lifted_at)}. Nothing changed.`, 409);
   const reason = str(reasonIn, 500).trim();
   if (reason.length < 3) throw bad('Say why the hold can be lifted, in a few words. The reason is kept with the hold. Nothing was changed.');
   const n = lift(h, { name: c.user.name, actor: c.actor, log: `${c.user.name} <${c.user.email}>` }, reason);
@@ -206,7 +210,7 @@ export function liftHold(c: Ctx, holdId: string, reasonIn: any) {
 export async function operatorLift(holdId: string, op: { name: string; email: string }, reasonIn: any) {
   const h = get('SELECT * FROM legal_holds WHERE id=?', holdId);
   if (!h) throw bad('Hold not found.', 404);
-  if (h.lifted_at) throw bad(`This hold was lifted on ${day(h.lifted_at)}. Nothing changed.`, 409);
+  if (h.lifted_at) throw bad(`This hold was lifted on ${plainDay(h.lifted_at)}. Nothing changed.`, 409);
   const reason = str(reasonIn, 500).trim();
   if (reason.length < 3) throw bad('Say what requires the hold to be lifted (the court order, or the legal duty). Nothing was changed.');
   const fresh = h.override_at && Date.parse(h.override_at) > Date.now() - 7 * DAY;
@@ -220,9 +224,9 @@ export async function operatorLift(holdId: string, op: { name: string; email: st
   const n = lift(h, { name: `${first} and ${op.name}, GrowSigning`, actor: { name: `${first} and ${op.name}, GrowSigning` }, log: `${first} (asked) and ${op.name} (confirmed), GrowSigning` }, `Lifted by the people who run this server: ${why}`);
   secLine('legal_hold.lifted', h.account_id, { operator: true, about: ['legal_hold', h.id], details: { covers: n, by_operator: true } });
   for (const a of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", h.account_id))
-    await sendMail({ to: a.email, subject: 'A legal hold on your GrowSigning account was lifted by the people who run the service', heading: 'A legal hold was lifted',
+    await sendMail({ to: a.email, subject: 'A hold on your GrowSigning account was lifted by the people who run the service', heading: 'A hold was lifted',
       lines: [`Two people who run this GrowSigning server lifted ${holdName(h)}.`, `What they gave as the reason: ${why}`,
-        'What it covered can be deleted and purged again by the usual rules. Envelopes the retention rule had reached get a new email 14 days before anything is purged.',
+        'What it covered can be deleted again by the usual rules. If your deletion schedule had reached any of it, you get a new email at least 14 days before anything is deleted.',
         'If you did not expect this, contact the people who run this server.'],
       cta: { label: 'Open Your data', url: `${baseUrl()}/app/settings?tab=data` } });
   return { lifted: true, covered: n };
@@ -237,64 +241,78 @@ export const holdView = (h: any, admin: boolean) => ({
 // ---- The rule ----------------------------------------------------------------------------------------------------------
 
 export function policyOf(accountId: string) {
-  const a = get('SELECT retention_days, retention_level, retention_name, retention_code FROM accounts WHERE id=?', accountId) || {};
-  return { on: a.retention_days != null, days: a.retention_days ?? null, level: (isPurgeLevel(a.retention_level) ? a.retention_level : 'documents') as PurgeLevel, name: a.retention_name || null, code: a.retention_code || null };
+  const a = get('SELECT retention_days, retention_stopped_days, retention_level, retention_name, retention_code FROM accounts WHERE id=?', accountId) || {};
+  const days = a.retention_days ?? null, stopped = a.retention_stopped_days ?? null;
+  // Two lines: completed documents, and the ones that stopped (cancelled, declined, expired). Each is off when empty.
+  return { on: days != null || stopped != null, days: days as number | null, stopped_days: stopped as number | null, level: (isPurgeLevel(a.retention_level) ? a.retention_level : 'documents') as PurgeLevel, name: a.retention_name || null, code: a.retention_code || null };
 }
 
-/** The period that applies to one envelope, or null when the account's rule is off. */
-export function periodFor(e: { account_id: string; template_id?: string | null }): { days: number; from: 'account' | 'template'; template?: string } | null {
-  const p = policyOf(e.account_id);
-  if (!p.on) return null;
+/** The account's own number of days for a document that ended this way, or null when that line is off. */
+const daysFor = (p: { days: number | null; stopped_days: number | null }, status: string): number | null => (status === 'completed' ? p.days : p.stopped_days);
+
+/** The period that applies to one document, or null when the account's schedule is off for the way it ended. */
+export function periodFor(e: { account_id: string; status: string; template_id?: string | null }): { days: number; from: 'account' | 'template'; template?: string } | null {
+  const own = daysFor(policyOf(e.account_id), e.status);
+  if (own == null) return null;
   const t = e.template_id ? get("SELECT subject, retention_days FROM envelopes WHERE id=? AND kind='template' AND account_id=?", e.template_id, e.account_id) : null;
-  return t?.retention_days ? { days: t.retention_days, from: 'template', template: t.subject || 'Untitled template' } : { days: p.days, from: 'account' };
+  return t?.retention_days ? { days: t.retention_days, from: 'template', template: t.subject || 'Untitled template' } : { days: own, from: 'account' };
 }
 
-/** How the rule is said in an email or an audit line: "keep closed envelopes for 365 days (Contracts, GRS 2.1)". */
-const ruleText = (p: ReturnType<typeof policyOf>, days: number) => `keep closed envelopes for ${daysText(days)}${p.name || p.code ? ` (${[p.name, p.code].filter(Boolean).join(', ')})` : ''}`;
+/** How the schedule is said in an email or a line of the history: "delete completed documents after 365 days (Contracts, GRS 2.1)". */
+const ruleText = (p: ReturnType<typeof policyOf>, days: number, status: string) => `delete ${status === 'completed' ? 'completed' : 'cancelled, declined and expired'} documents after ${daysText(days)}${p.name || p.code ? ` (${[p.name, p.code].filter(Boolean).join(', ')})` : ''}`;
+const scheduleText = (days: number | null, stopped: number | null, level: PurgeLevel) => (days == null && stopped == null ? 'off'
+  : `${[days != null ? `completed after ${daysText(days)}` : '', stopped != null ? `cancelled, declined and expired after ${daysText(stopped)}` : ''].filter(Boolean).join(', ')}; at the end: ${LEVEL_NAME[level].toLowerCase()}`);
 
 /** What PUT /account/retention changes. `dry` answers what would happen without saving. */
 export function setPolicy(c: Ctx, b: any) {
-  if (!c.admin) throw bad('Only an admin of the account can change how long closed envelopes are kept.', 403);
+  if (!c.admin) throw bad('Only an admin of the account can change the deletion schedule. Ask an admin of your team.', 403);
   const before = policyOf(c.account.id);
-  // Left out, the period stays as it is; null (or "on": false) switches the rule off.
-  const days = b.on === false || b.days === null || b.days === '' ? null : b.days === undefined ? before.days : Number(b.days);
-  if (days !== null && !validDays(days)) throw bad(`"days" must be a whole number from ${RETENTION_MIN_DAYS} to ${RETENTION_MAX_DAYS}, or null to switch the rule off. Nothing was saved.`);
+  // Left out, a period stays as it is; null or "" switches that line off, and "on": false switches both off.
+  const read = (v: any, was: number | null, name: string): number | null => {
+    const n = b.on === false || v === null || v === '' ? null : v === undefined ? was : Number(v);
+    if (n !== null && !validDays(n)) throw bad(`Nothing was saved, because "${name}" is not a whole number from ${RETENTION_MIN_DAYS} to ${RETENTION_MAX_DAYS}. Send such a number, or null to keep those documents.`);
+    return n;
+  };
+  const days = read(b.days, before.days, 'days');
+  const stopped = read(b.stopped_days, before.stopped_days, 'stopped_days');
   const level = b.level == null ? before.level : b.level;
-  if (!isPurgeLevel(level)) throw bad(`"level" must be one of ${PURGE_LEVELS.map((l) => `"${l}"`).join(', ')}. Nothing was saved.`);
+  if (!isPurgeLevel(level)) throw bad(`Nothing was saved, because "level" is not one of ${PURGE_LEVELS.map((l) => `"${l}"`).join(', ')}. Send one of those.`);
   const name = b.name === undefined ? before.name : str(b.name, 120).trim() || null;
   const code = b.code === undefined ? before.code : str(b.code, 80).trim() || null;
   const tpls: [string, number | null][] = [];
   if (b.templates != null) {
-    if (typeof b.templates !== 'object' || Array.isArray(b.templates)) throw bad('"templates" must be an object of template ids and days, such as {"tpl_x": 3650}, with null to use the account\'s period. Nothing was saved.');
+    if (typeof b.templates !== 'object' || Array.isArray(b.templates)) throw bad('Nothing was saved, because "templates" is not an object. Send template ids with days, such as {"tpl_x": 3650}, and null for the account\'s own period.');
     for (const [tid, v] of Object.entries(b.templates)) {
       if (!get("SELECT 1 x FROM envelopes WHERE id=? AND account_id=? AND kind='template'", tid, c.account.id)) throw bad(`There is no template ${str(tid, 60)} in this account. Nothing was saved.`, 404);
       const n = v === null || v === '' ? null : Number(v);
-      if (n !== null && !validDays(n)) throw bad(`The period of template ${str(tid, 60)} must be a whole number of days from ${RETENTION_MIN_DAYS} to ${RETENTION_MAX_DAYS}, or null. Nothing was saved.`);
+      if (n !== null && !validDays(n)) throw bad(`Nothing was saved, because the period of template ${str(tid, 60)} is not a whole number of days from ${RETENTION_MIN_DAYS} to ${RETENTION_MAX_DAYS}. Send such a number, or null.`);
       tpls.push([tid, n]);
     }
   }
-  // What switching on or shortening would bring into the queue at once: those get the email now and go in 14 days.
-  const soon = days === null ? 0 : all(`SELECT e.id, e.template_id, ${CLOSED_AT} closed FROM envelopes e WHERE e.account_id=? AND e.kind='envelope' AND e.purged_at IS NULL AND e.status IN ('completed','voided','declined','expired')`, c.account.id)
+  // What switching on or shortening brings into reach at once: those are in the next email and go 14 days after it.
+  const soon = days === null && stopped === null ? 0 : all(`SELECT e.id, e.status, e.template_id, ${CLOSED_AT} closed FROM envelopes e WHERE e.account_id=? AND e.kind='envelope' AND e.purged_at IS NULL AND e.status IN ('completed','voided','declined','expired')`, c.account.id)
     .filter((e) => {
+      const acct = daysFor({ days, stopped_days: stopped }, e.status);
+      if (acct == null) return false;
       const own = tpls.find(([t]) => t === e.template_id)?.[1];
       const t = own !== undefined ? own : e.template_id ? get('SELECT retention_days d FROM envelopes WHERE id=?', e.template_id)?.d : null;
-      return Date.parse(dueAt(e.closed, t || days)) - NOTICE_MS <= Date.now();
+      return Date.parse(dueAt(e.closed, t || acct)) - NOTICE_MS <= Date.now();
     }).length;
   const answer = { would_notice_now: soon, notice_days: RETENTION_NOTICE_DAYS };
   if (b.dry_run === true) return answer;
   tx(() => {
-    run('UPDATE accounts SET retention_days=?, retention_level=?, retention_name=?, retention_code=? WHERE id=?', days, level, name, code, c.account.id);
+    run('UPDATE accounts SET retention_days=?, retention_stopped_days=?, retention_level=?, retention_name=?, retention_code=? WHERE id=?', days, stopped, level, name, code, c.account.id);
     for (const [tid, n] of tpls) {
       const was = get('SELECT retention_days d FROM envelopes WHERE id=?', tid)?.d ?? null;
       if (was === n) continue;
       run('UPDATE envelopes SET retention_days=? WHERE id=?', n, tid);
       logLine(c.account.id, tid, 'template_period', { who: `${c.user.name} <${c.user.email}>`, detail: `Template ${tid}: ${was ? daysText(was) : "the account's period"} became ${n ? daysText(n) : "the account's period"}.` });
     }
-    if (before.days !== days || before.level !== level || before.name !== name || before.code !== code)
+    if (before.days !== days || before.stopped_days !== stopped || before.level !== level || before.name !== name || before.code !== code)
       logLine(c.account.id, null, 'policy', { level, who: `${c.user.name} <${c.user.email}>`,
-        detail: `${before.on ? `Was: keep for ${daysText(before.days)}, then remove ${LEVEL_NAME[before.level].toLowerCase()}` : 'Was: off'}. Now: ${days === null ? 'off' : `keep for ${daysText(days)}, then remove ${LEVEL_NAME[level].toLowerCase()}`}${name || code ? ` (${[name, code].filter(Boolean).join(', ')})` : ''}.` });
+        detail: `Was: ${scheduleText(before.days, before.stopped_days, before.level)}. Now: ${scheduleText(days, stopped, level)}${name || code ? ` (${[name, code].filter(Boolean).join(', ')})` : ''}.` });
   });
-  secLine('retention.changed', c.account.id, { c, about: ['account', c.account.id], details: { days, level, was_days: before.days, was_level: before.level, templates: tpls.length } });
+  secLine('retention.changed', c.account.id, { c, about: ['account', c.account.id], details: { days, stopped_days: stopped, level, was_days: before.days, was_stopped_days: before.stopped_days, was_level: before.level, templates: tpls.length } });
   return { ...answer, policy: policyOf(c.account.id) };
 }
 
@@ -305,7 +323,7 @@ function cancelQueued(envelopeId: string, why: string) {
   const q = get('SELECT * FROM retention_queue WHERE envelope_id=?', envelopeId);
   if (!q?.noticed_at && !q?.asked_at) return;
   run('UPDATE retention_queue SET noticed_at=NULL, goes_at=NULL, level=NULL, asked_level=NULL, asked_at=NULL, asked_by=NULL, asked_by_id=NULL WHERE envelope_id=?', envelopeId);
-  audit(envelopeId, SYSTEM, 'Purge called off', `${q.asked_at ? 'The purge that was asked for' : 'The purge the retention rule had announced'}${q.goes_at ? ` for ${day(q.goes_at)}` : ''} will not happen: ${why} If it is due again later, the sender and the admins are emailed 14 days before.`);
+  audit(envelopeId, SYSTEM, 'Deletion called off', `${q.asked_at ? 'The deletion that was asked for' : 'The deletion the schedule had announced'}${q.goes_at ? ` for ${plainDay(q.goes_at)}` : ''} will not happen: ${why} If it is due again later, the sender and the admins are emailed at least 14 days before.`);
 }
 
 const queueRow = (e: any) => {
@@ -330,6 +348,8 @@ export function retentionFacts(c: Ctx, e: any) {
     asked: q.asked_at ? { at: q.asked_at, by: q.asked_by, level: q.asked_level } : null,
     holds, held: holds.length > 0, disputed: disputeOpen(e.id),
     purged_at: e.purged_at || null, purged_level: e.purged_level || null, purged_sha256: e.purged_sha256 || null,
+    // Whether the account has a deletion schedule at all: only then do the screens list Keep it and Hold.
+    schedule_on: policy.on,
     may_purge: !e.purged_at && !!closed && !holds.length, may_hold: c.admin,
     stays: retentionStays(dataPlace().backups),
   };
@@ -337,55 +357,57 @@ export function retentionFacts(c: Ctx, e: any) {
 
 /** "Keep it": one more period from today, with a reason in the audit trail. Calls off a purge that was asked for. */
 export function keepIt(c: Ctx, e: any, reasonIn: any) {
-  if (e.purged_at) throw bad(`This envelope was purged on ${day(e.purged_at)}. That cannot be undone, so there is nothing left to keep.`, 409);
-  if (!isClosed(e.status)) throw bad('Only a closed envelope reaches the end of its retention period. This one is still out, so there is nothing to keep it from yet.');
+  if (e.purged_at) throw bad(`The files of this document were deleted on ${plainDay(e.purged_at)}, and that cannot be undone. Ask someone who was on it for their copy.`, 409);
+  if (!isClosed(e.status)) throw bad('This document is still out, and only a finished one is ever deleted by the schedule. Come back when it is completed or stopped.');
   const reason = str(reasonIn, 500).trim();
-  if (reason.length < 3) throw bad('Say why it is kept, in a few words. The reason goes into its audit trail. Nothing was changed.');
+  if (reason.length < 3) throw bad('Nothing was changed, because the reason is missing. Write why it is kept in a few words: it goes into the history of the document.');
   const period = periodFor(e);
   const q = queueRow(e);
-  if (!period && !q.asked_at) throw bad('The account keeps closed envelopes without an end date, and nobody asked to purge this one, so there is nothing to keep it from. Nothing was changed.');
+  if (!period && !q.asked_at) throw bad('Nothing is set to delete this document: the account has no deletion schedule for it, and nobody asked to delete its files. Leave it as it is.');
   const until = period ? new Date(Date.now() + period.days * DAY).toISOString() : null;
   tx(() => {
     run('UPDATE retention_queue SET kept_until=?, kept_reason=?, kept_by=?, noticed_at=NULL, goes_at=NULL, level=NULL, asked_level=NULL, asked_at=NULL, asked_by=NULL, asked_by_id=NULL WHERE envelope_id=?',
       until || q.kept_until, reason, c.user.name, e.id);
-    audit(e.id, c.actor, 'Kept past its retention date', `${reason}${until ? `. Kept until ${day(until)}; the sender and the admins are emailed 14 days before that` : ''}${q.asked_at ? '. The purge that was asked for is called off' : ''}.`);
-    logLine(e.account_id, e.id, 'keep', { who: `${c.user.name} <${c.user.email}>`, detail: `Kept${until ? ` until ${day(until)}` : ''}. Reason: ${reason}` });
+    audit(e.id, c.actor, 'Kept', `${reason}${until ? `. Kept until ${plainDay(until)}; the sender and the admins are emailed at least 14 days before anything is deleted` : ''}${q.asked_at ? '. The deletion that was asked for is called off' : ''}.`);
+    logLine(e.account_id, e.id, 'keep', { who: `${c.user.name} <${c.user.email}>`, detail: `Kept${until ? ` until ${dayText(until)}` : ''}. Reason: ${reason}` });
   });
   return { kept_until: until };
 }
 
 /** "Purge now": the sender or an admin, on a closed envelope, at a level. It waits 14 days and can be called off. */
 export async function askPurge(c: Ctx, e: any, levelIn: any) {
-  if (!isPurgeLevel(levelIn)) throw bad(`Choose what to remove: "level" must be one of ${PURGE_LEVELS.map((l) => `"${l}"`).join(', ')}. Nothing was changed.`);
-  if (e.purged_at) throw bad(`This envelope was already purged on ${day(e.purged_at)}.`, 409);
-  if (!isClosed(e.status)) throw bad(e.status === 'draft' ? 'This is a draft. Delete it instead: a draft goes for good at once.' : 'Only a closed envelope can be purged. This one is still out for signature: void it first if it should not be signed.', 400);
-  assertNotHeld([e.id], `${c.user.name} <${c.user.email}>`, 'purge it');
-  if (disputeOpen(e.id)) throw bad('A person named on this envelope disputes it, and GrowSigning has not closed that dispute yet, so it cannot be purged until then. Nothing was changed.', 409, { code: 'disputed' });
+  if (!isPurgeLevel(levelIn)) throw bad(`Nothing was changed, because "level" is not one of ${PURGE_LEVELS.map((l) => `"${l}"`).join(', ')}. Choose what to delete and try again.`);
+  if (e.purged_at) throw bad(`The files of this document were already deleted on ${plainDay(e.purged_at)}. Leave it as it is.`, 409);
+  if (!isClosed(e.status)) throw bad(e.status === 'draft' ? 'This is a draft, and a draft goes for good at once. Delete it instead.' : 'This document is still out for signature, and only a finished one can have its files deleted. Cancel the request first if it should not be signed.', 400);
+  assertNotHeld([e.id], `${c.user.name} <${c.user.email}>`, 'delete its files');
+  if (disputeOpen(e.id)) throw bad('A person named on this document disputes it, and GrowSigning has not closed that dispute yet, so its files cannot be deleted until then. Try again once the dispute is closed.', 409, { code: 'disputed' });
   const q = queueRow(e);
-  if (q.asked_at) throw bad(`A purge was already asked for on ${day(q.asked_at)}. It goes on ${day(q.goes_at)} unless it is called off. Nothing changed.`, 409);
+  // Asking, calling off and asking again must not fill the admins' inboxes: one email a day for one document.
+  const mailedToday = !!get("SELECT 1 x FROM retention_log WHERE envelope_id=? AND what='purge_asked' AND at > ?", e.id, new Date(Date.now() - DAY).toISOString());
+  if (q.asked_at) throw bad(`Someone already asked for this on ${plainDay(q.asked_at)}, and its files go on ${plainDay(q.goes_at)}. Call that off first if you want something else.`, 409);
   const goes = new Date(Date.now() + NOTICE_MS).toISOString();
   tx(() => {
     // One statement decides, so two requests at the same moment leave one request and one line.
     if (!run('UPDATE retention_queue SET asked_level=?, asked_at=?, asked_by=?, asked_by_id=?, noticed_at=?, goes_at=?, level=? WHERE envelope_id=? AND asked_at IS NULL', levelIn, now(), c.user.name, c.user.id, now(), goes, levelIn, e.id).changes)
-      throw bad('A purge was asked for on this envelope a moment ago. Nothing changed.', 409);
-    audit(e.id, c.actor, 'Purge asked for', `${LEVEL_NAME[levelIn as PurgeLevel]} will be removed on ${day(goes)}. Until then the sender or an admin can call it off on the envelope page. After that it cannot be undone.`);
-    logLine(e.account_id, e.id, 'purge_asked', { level: levelIn, who: `${c.user.name} <${c.user.email}>`, detail: `Goes on ${day(goes)}.` });
+      throw bad('Someone asked for this a moment ago. Reload the page to see it.', 409);
+    audit(e.id, c.actor, 'Deletion asked for', `On ${plainDay(goes)}, ${LEVEL_DOES[levelIn as PurgeLevel]}. Until then the sender or an admin can call it off on the page of the document. After that it cannot be undone.`);
+    logLine(e.account_id, e.id, 'purge_asked', { level: levelIn, who: `${c.user.name} <${c.user.email}>`, detail: `Goes on ${dayText(goes)}.` });
   });
   secLine('purge.asked', e.account_id, { c, about: ['envelope', e.id], details: { level: levelIn } });
-  await notify(e.account_id, [{ ...e, goes_at: goes, level: levelIn, asked_by: c.user.name }]);
+  if (!mailedToday) await notify(e.account_id, [{ ...e, goes_at: goes, level: levelIn, asked_by: c.user.name }]);
   return { goes_at: goes, level: levelIn };
 }
 
 export function cancelPurge(c: Ctx, e: any) {
   const q = get('SELECT * FROM retention_queue WHERE envelope_id=?', e.id);
-  if (e.purged_at) throw bad(`This envelope was purged on ${day(e.purged_at)}. That cannot be undone.`, 409);
+  if (e.purged_at) throw bad(`The files of this document were deleted on ${plainDay(e.purged_at)}, and that cannot be undone. Ask someone who was on it for their copy.`, 409);
   if (!q?.asked_at) {
-    if (q?.noticed_at) throw bad(`Nobody asked to purge this one: the account's retention rule reaches it on ${day(q.goes_at)}. To keep it, choose "Keep it" and give a reason.`, 409, { code: 'rule' });
-    throw bad('No purge was asked for on this envelope. Nothing changed.', 409);
+    if (q?.noticed_at) throw bad(`Nobody asked for this one: the account's deletion schedule reaches it on ${plainDay(q.goes_at)}. Choose "Keep it" and give a reason to stop that.`, 409, { code: 'rule' });
+    throw bad('Nobody asked to delete the files of this document, so there is nothing to call off. Leave it as it is.', 409);
   }
   tx(() => {
     run('UPDATE retention_queue SET asked_level=NULL, asked_at=NULL, asked_by=NULL, asked_by_id=NULL, noticed_at=NULL, goes_at=NULL, level=NULL WHERE envelope_id=?', e.id);
-    audit(e.id, c.actor, 'Purge called off', `The purge asked for on ${day(q.asked_at)} will not happen.`);
+    audit(e.id, c.actor, 'Deletion called off', `The deletion asked for on ${plainDay(q.asked_at)} will not happen.`);
     logLine(e.account_id, e.id, 'purge_cancelled', { who: `${c.user.name} <${c.user.email}>` });
   });
   secLine('purge.cancelled', e.account_id, { c, about: ['envelope', e.id] });
@@ -393,9 +415,12 @@ export function cancelPurge(c: Ctx, e: any) {
   return { cancelled: true, rule_due_at: f?.due_at || null };
 }
 
-// ---- The email 14 days before ------------------------------------------------------------------------------------------
+// ---- The email before a deletion ---------------------------------------------------------------------------------------
 
-/** One email to each person concerned: the sender of each envelope, and every admin of the account for all of them. */
+/**
+ * One email to each person concerned: the sender of each document, and every admin of the account for all of them.
+ * One row per document with its own "Keep" link, which opens the Keep dialog on its page.
+ */
 async function notify(accountId: string, list: any[]) {
   if (!list.length) return 0;
   const admins = all("SELECT u.id, u.name, u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", accountId);
@@ -410,25 +435,27 @@ async function notify(accountId: string, list: any[]) {
     add(get('SELECT id, name, email FROM users WHERE id=?', e.sender_id), e);
     for (const a of admins) add(a, e);
   }
-  const policy = policyOf(accountId);
-  const stays = retentionStays(dataPlace().backups);
   let sent = 0;
   for (const p of people.values()) {
-    const n = p.items.length;
-    const asked = p.items.filter((e) => e.asked_by);
+    const items = [...p.items].sort((x, y) => String(x.goes_at).localeCompare(String(y.goes_at)));
+    const n = items.length;
+    const asked = items.filter((e) => e.asked_by);
+    const title = (e: any) => str(e.subject || 'Untitled', 120);
+    const what = n === 1 ? `1 document will be deleted on ${plainDay(items[0].goes_at)}` : `${n} documents will be deleted, the first on ${plainDay(items[0].goes_at)}`;
     await sendMail({
       to: p.email,
-      subject: n === 1 ? `An envelope will be purged on ${day(p.items[0].goes_at)}` : `${n} envelopes will be purged, the first on ${day(p.items.map((e) => e.goes_at).sort()[0])}`,
-      heading: n === 1 ? 'An envelope will be purged in 14 days' : `${n} envelopes will be purged in 14 days`,
+      subject: what,
+      heading: what,
       lines: [
-        asked.length === n ? `Someone asked to purge ${n === 1 ? 'this closed envelope' : 'these closed envelopes'}.` : `Your account's retention rule says to ${ruleText(policy, policy.days || 0)}, counted from the day each one closed.${asked.length ? ' For some of them, someone asked for it.' : ''}`,
-        'On the day given, GrowSigning removes from each envelope what is named after it. That cannot be undone.',
-        ...p.items.map((e) => `"${e.subject || 'Untitled'}" (envelope ${e.id}): on ${day(e.goes_at)}, ${LEVEL_NAME[e.level as PurgeLevel].toLowerCase()}${e.asked_by ? `, asked for by ${e.asked_by}` : ''}${e.hidden_at ? '. Its sender removed it from their lists; the admins find it under Removed by its sender' : ''}.`),
-        'To keep one: open it and choose "Keep it", with a reason. It is then kept for another period. A purge someone asked for can be called off on the envelope page. An admin can also put an envelope or a folder on legal hold: nothing held is purged.',
-        'What stays after a purge:',
-        ...stays.map((s) => `- ${s}`),
+        asked.length === n ? `${asked[0].asked_by} asked to delete ${n === 1 ? 'the files of this document' : 'the files of these documents'}.`
+          : `Your account has a deletion schedule for finished documents. ${n === 1 ? 'This one is' : 'These are'} next.${asked.length ? ' For some, someone asked for it.' : ''}`,
       ],
-      cta: { label: n === 1 ? 'Open the envelope' : 'Open your envelopes', url: `${baseUrl()}/app/envelopes${n === 1 ? `/${p.items[0].id}` : ''}` },
+      links: items.map((e) => ({
+        label: `Keep "${title(e)}"`, url: `${baseUrl()}/app/envelopes/${e.id}?ask=keep`,
+        note: `Otherwise, on ${plainDay(e.goes_at)}, ${LEVEL_DOES[e.level as PurgeLevel]}.${e.asked_by && asked.length !== n ? ` ${e.asked_by} asked for it.` : ''}${e.hidden_at ? ' Its sender deleted it from their account: admins find it under Documents, Removed by its sender.' : ''}`,
+      })),
+      footnote: `Keeping one asks for a reason and stops its deletion. After the day given, what was deleted cannot be brought back. ${STAYS_SHORT} The full list: ${baseUrl()}/security/processing`,
+      cta: n === 1 ? { label: `Open "${title(items[0])}"`, url: `${baseUrl()}/app/envelopes/${items[0].id}` } : { label: 'Open Documents', url: `${baseUrl()}/app/envelopes` },
     });
     sent++;
   }
@@ -513,6 +540,11 @@ function removeValues(e: any, gone: string): string[] {
   if (v) (texts.push(v), run('UPDATE envelopes SET void_reason=? WHERE id=?', gone, e.id));
   run('UPDATE comments SET body=? WHERE envelope_id=?', gone, e.id);
   forgetCommentHooks(e.id);
+  // Our stored copies of the emails about it quote the reasons, the comments and sometimes an answer. Their words go
+  // as a whole; who each went to, its subject line, when it went and whether it arrived stay. Without its stored
+  // parts an email is never tried again (mail.ts). One still waiting for the mail server is left to go out.
+  for (const m of all(`SELECT id, subject FROM emails WHERE envelope_id=? AND ${NOT_WAITING}`, e.id))
+    run('UPDATE emails SET html=?, payload=NULL, link=NULL, archive_draft=NULL, subject=? WHERE id=?', `<p>The words of this email were deleted on ${gone.replace('Removed on ', '')}, with the files of its document.</p>`, scrub(m.subject, texts, gone, false), m.id);
   return texts;
 }
 
@@ -601,7 +633,7 @@ export function purgeEnvelope(envelopeId: string, level: PurgeLevel, by: { name:
     run('DELETE FROM retention_queue WHERE envelope_id=?', e.id);
     const sha = get('SELECT purged_sha256 s FROM envelopes WHERE id=?', e.id)?.s || null;
     // The line that says what happened is written after the others changed, as an ordinary line of the chain.
-    audit(e.id, SYSTEM, 'Purged', `${by.why} Removed: ${LEVEL_NAME[level].toLowerCase()}. ${KEPT_AT[level]}${sha ? ` The fingerprint of the signed PDF stays: ${sha}.` : ''}`);
+    audit(e.id, SYSTEM, 'Files deleted', `${by.why} What happened: ${LEVEL_DOES[level]}. ${KEPT_AT[level]}${sha ? ` The fingerprint of the signed PDF stays: ${sha}.` : ''}`);
     logLine(e.account_id, e.id, 'purged', { level, sha256: sha, who: personal ? by.name.replace(/<[^>]*>/g, '').trim() : by.name, detail: by.why });
     return { files, account: e.account_id };
   });
@@ -622,53 +654,64 @@ export function sweepArchiveCopies(): number {
 }
 
 /**
- * Run from the timer (cron.ts): emails what reaches its date within 14 days, once, and purges what is due. A purge
- * waits for its email by 14 days at least, whatever happened to the rule in between.
+ * Run from the timer (cron.ts): emails what reaches its date soon, and deletes what is due. An account gets that
+ * email at most once every RETENTION_MAIL_EVERY_DAYS days (accounts.retention_mailed_at), and it lists everything
+ * due within the 14 days of notice plus those days, so a document is announced before its 14 days start and nothing
+ * waits past its date for the next email. A deletion waits for its email by 14 days at least, whatever happened to
+ * the schedule in between.
  */
 export async function retentionTick(): Promise<{ noticed: number; purged: number }> {
-  const rows = all(`SELECT e.id, e.account_id, e.sender_id, e.subject, e.status, e.hidden_at, e.template_id, ${CLOSED_AT} closed_at, a.retention_days acct_days,
+  const rows = all(`SELECT e.id, e.account_id, e.sender_id, e.subject, e.status, e.hidden_at, e.template_id, ${CLOSED_AT} closed_at, a.retention_mailed_at mailed_at,
       q.envelope_id q, q.noticed_at, q.goes_at, q.level q_level, q.kept_until, q.asked_at, q.asked_level, q.asked_by
     FROM envelopes e JOIN accounts a ON a.id=e.account_id LEFT JOIN retention_queue q ON q.envelope_id=e.id
-    WHERE e.kind='envelope' AND e.purged_at IS NULL AND e.status IN ('completed','voided','declined','expired') AND (a.retention_days IS NOT NULL OR q.asked_at IS NOT NULL OR q.noticed_at IS NOT NULL)`);
+    WHERE e.kind='envelope' AND e.purged_at IS NULL AND e.status IN ('completed','voided','declined','expired')
+      AND (a.retention_days IS NOT NULL OR a.retention_stopped_days IS NOT NULL OR q.asked_at IS NOT NULL OR q.noticed_at IS NOT NULL)`);
   const t = Date.now();
   const fresh = new Map<string, any[]>();
   const due: { id: string; level: PurgeLevel; why: string; by: string }[] = [];
   for (const r of rows) {
     const blocked = isHeld([r.id]).size > 0 || disputeOpen(r.id);
     if (blocked) {
-      if (r.noticed_at || r.asked_at) tx(() => cancelQueued(r.id, isHeld([r.id]).size ? 'It is on legal hold.' : 'A person named on it disputes it.'));
+      if (r.noticed_at || r.asked_at) tx(() => cancelQueued(r.id, isHeld([r.id]).size ? 'It is on hold.' : 'A person named on it disputes it.'));
       continue;
     }
     if (r.asked_at) {
-      // At the personal level the name of who asked stays out of the record of the envelope too: the account's own
-      // retention record keeps it.
-      if (r.goes_at && Date.parse(r.goes_at) <= t) due.push({ id: r.id, level: r.asked_level, why: `${r.asked_level === 'personal' ? 'The sender or an admin of the account' : r.asked_by} asked for this purge on ${day(r.asked_at)}, and nobody called it off in the 14 days after.`, by: r.asked_by });
+      // At the personal level the name of who asked stays out of the record of the document too: the account's own
+      // deletion record keeps it.
+      if (r.goes_at && Date.parse(r.goes_at) <= t) due.push({ id: r.id, level: r.asked_level, why: `${r.asked_level === 'personal' ? 'The sender or an admin of the account' : r.asked_by} asked for this on ${plainDay(r.asked_at)}, and nobody called it off in the 14 days after.`, by: r.asked_by });
       continue;
     }
     const period = periodFor(r);
     const policy = policyOf(r.account_id);
     let ruleDue = period ? Date.parse(dueAt(r.closed_at, period.days)) : null;
     if (ruleDue !== null && r.kept_until && Date.parse(r.kept_until) > ruleDue) ruleDue = Date.parse(r.kept_until);
-    if (ruleDue === null || ruleDue - NOTICE_MS > t) {
-      // Off, kept, or a longer period now: what was announced does not happen.
-      if (r.noticed_at) tx(() => cancelQueued(r.id, ruleDue === null ? 'The account\'s retention rule was switched off.' : 'The period that applies to it is longer now.'));
-      continue;
-    }
     if (!r.noticed_at) {
+      // Not in reach of the next email yet, or this account had its email less than a week ago: it waits.
+      if (ruleDue === null || ruleDue - NOTICE_MS - MAIL_EVERY_MS > t) continue;
+      if (r.mailed_at && Date.parse(r.mailed_at) + MAIL_EVERY_MS > t) continue;
       const goes = new Date(Math.max(ruleDue, t + NOTICE_MS)).toISOString();
       run('INSERT OR IGNORE INTO retention_queue (envelope_id, account_id) VALUES (?,?)', r.id, r.account_id);
       if (!run('UPDATE retention_queue SET noticed_at=?, goes_at=?, level=? WHERE envelope_id=? AND noticed_at IS NULL', new Date(t).toISOString(), goes, policy.level, r.id).changes) continue;
-      logLine(r.account_id, r.id, 'noticed', { level: policy.level, detail: `Emailed to the sender and the admins. Goes on ${day(goes)}.` });
+      logLine(r.account_id, r.id, 'noticed', { level: policy.level, detail: `Emailed to the sender and the admins. Goes on ${dayText(goes)}.` });
       fresh.set(r.account_id, [...(fresh.get(r.account_id) || []), { ...r, goes_at: goes, level: policy.level }]);
       continue;
     }
-    // A purge never removes more than its email said: a level raised since applies from the next email on.
+    if (ruleDue === null || ruleDue > Date.parse(r.noticed_at) + NOTICE_MS + MAIL_EVERY_MS) {
+      // Off, kept, or a longer period now: what was announced does not happen.
+      tx(() => cancelQueued(r.id, ruleDue === null ? 'The account\'s deletion schedule was switched off for it.' : 'The period that applies to it is longer now.'));
+      continue;
+    }
+    // A deletion never removes more than its email said: a level raised since applies from the next email on.
     const goesAt = Math.max(ruleDue, Date.parse(r.noticed_at) + NOTICE_MS);
-    if (goesAt <= t) due.push({ id: r.id, level: lower(isPurgeLevel(r.q_level) ? r.q_level : 'documents', policy.level), why: `The account's retention rule: ${ruleText(policy, period!.days)}${period!.from === 'template' ? ` (the period of the template "${period!.template}")` : ''}. The sender and the admins were emailed on ${day(r.noticed_at)}.`, by: 'The retention rule' });
+    if (goesAt <= t) due.push({ id: r.id, level: lower(isPurgeLevel(r.q_level) ? r.q_level : 'documents', policy.level), why: `The account's deletion schedule: ${ruleText(policy, period!.days, r.status)}${period!.from === 'template' ? ` (the period of the template "${period!.template}")` : ''}. The sender and the admins were emailed on ${plainDay(r.noticed_at)}.`, by: 'The deletion schedule' });
     else if (r.goes_at !== new Date(goesAt).toISOString()) run('UPDATE retention_queue SET goes_at=? WHERE envelope_id=?', new Date(goesAt).toISOString(), r.id);
   }
   let noticed = 0;
-  for (const [accountId, list] of fresh) (await notify(accountId, list), (noticed += list.length));
+  for (const [accountId, list] of fresh) {
+    run('UPDATE accounts SET retention_mailed_at=? WHERE id=?', new Date(t).toISOString(), accountId);
+    await notify(accountId, list);
+    noticed += list.length;
+  }
   let purged = 0;
   for (const d of due) if (purgeEnvelope(d.id, d.level, { name: d.by, why: d.why })) purged++;
   dropOldRetentionLog();
@@ -693,5 +736,5 @@ export function assertMayClose(userId: string, who: string) {
     if (!get('SELECT 1 x FROM retention_log WHERE account_id=? AND what=? AND detail=? AND at > ?', h.account_id, 'refused', detail, new Date(Date.now() - DAY).toISOString()))
       logLine(h.account_id, h.envelope_id, 'refused', { who, detail });
   }
-  throw bad(`Your account cannot be closed while something in it is on legal hold: ${holds.map(holdName).join('; ')}. ${HOLD_TRUTH} An admin lifts a hold under Settings, Your data. Nothing was changed, and this attempt was recorded.`, 409, { code: 'legal_hold', holds: holds.map((h) => h.id) });
+  throw bad(`Your account cannot be closed while something in it is on hold: ${holds.map(holdName).join('; ')}. Lift the hold first, under Settings, Your data, if what it covers may go. ${HOLD_TRUTH} Nothing was changed, and this attempt was recorded.`, 409, { code: 'legal_hold', holds: holds.map((h) => h.id) });
 }

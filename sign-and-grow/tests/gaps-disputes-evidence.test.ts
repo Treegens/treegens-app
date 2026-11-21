@@ -61,7 +61,7 @@ test('A: the pages say what a match shows and what it does not, list the causes 
   assert.match(CHAIN_TRUTH, /whoever can write to that database/);
   assert.match(CHAIN_TRUTH, /chain head printed on the certificate/);
   assert.match(CHAIN_TRUTH, /browser description stored with a line is not part of its fingerprint/);
-  assert.match(src('src/app/features/page.tsx'), /Every completed envelope gets a certificate of completion/);
+  assert.match(src('src/app/features/page.tsx'), /Every completed document gets a signing record \(its certificate of completion\)/);
   assert.doesNotMatch(src('README.md'), /Editing any past event breaks the chain, and the app shows it\./);
 });
 

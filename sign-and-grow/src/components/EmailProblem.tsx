@@ -96,11 +96,14 @@ export function EmailProblemBanner({ me }: { me: any }) {
 /** Settings, Profile: the address of the login, and the way to move it. */
 export function EmailAddressCard({ me }: { me: any }) {
   const [open, setOpen] = useState(false);
+  const id = useId();
+  // The button stays on the page while the form is open, and says so (aria-expanded): pressing it again closes the form.
   return (
     <div className="card">
       <h2 style={{ marginBottom: 4 }}>Email address</h2>
       <p className="muted small">You sign in with {me.user.email}, and our emails to you go there.{me.email_problem ? ' Our last email to it came back, see the notice at the top.' : ''}</p>
-      {open ? <EmailChangeForm me={me} onCancel={() => setOpen(false)} /> : <button className="btn sm" style={TAP} onClick={() => setOpen(true)} aria-expanded={false}>Change email address</button>}
+      <button type="button" className="btn sm" style={TAP} onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={`${id}-change`} data-more="item">Change email address</button>
+      <div id={`${id}-change`} hidden={!open}>{open && <EmailChangeForm me={me} onCancel={() => setOpen(false)} />}</div>
     </div>
   );
 }

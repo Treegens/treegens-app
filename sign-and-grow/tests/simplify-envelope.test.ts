@@ -113,8 +113,16 @@ test('the More of the page holds what the row of header buttons held, in one ord
   assert.deepEqual(labels({ status: 'draft', isTemplate: true, hasFiles: true, mayChange: true }), ['Open the PDF', 'Use', 'Delete']);
   assert.deepEqual(labels({ status: 'draft', isTemplate: true, hasFiles: true, mayChange: false, main: 'copy' }), ['Open the PDF']);
   assert.deepEqual(labels({ status: 'draft', isTemplate: true, hasFiles: true, mayChange: true, mayDelete: false }), ['Open the PDF', 'Use']);
-  // Removed by its sender: an admin reads it and downloads its record, and changes nothing until it is back.
-  assert.deepEqual(labels({ status: 'completed', removed: true, hasFiles: true, mayChange: true, main: 'restore' }), ['Full record for disputes']);
+  // Removed by its sender: an admin opens its PDF and downloads its record, and changes nothing until it is back.
+  // (The main button is Put it back there, not Download, so the PDF has to be in More.)
+  assert.deepEqual(labels({ status: 'completed', removed: true, hasFiles: true, mayChange: true, main: 'restore' }), ['Open the PDF', 'Full record for disputes']);
+  // Who may delete its files for good can start that from here, without putting it back into everyone's lists
+  // first. Like Keep it and Hold, only when a deletion schedule is on (the ds-retention work decided that).
+  assert.deepEqual(labels({ status: 'completed', removed: true, hasFiles: true, mayChange: true, main: 'restore', mayPurge: true, schedule: true }), ['Open the PDF', 'Full record for disputes', 'Delete its files for good']);
+  assert.deepEqual(labels({ status: 'voided', removed: true, hasFiles: true, mayChange: true, main: 'restore', mayPurge: true, schedule: true }), ['Open the PDF', 'Full record for disputes', 'Delete its files for good']);
+  assert.deepEqual(labels({ status: 'completed', removed: true, hasFiles: true, mayChange: true, main: 'restore', mayPurge: true }), ['Open the PDF', 'Full record for disputes']);
+  // Not removed: that line stays inside the Delete dialog, so More never shows two ways to delete side by side.
+  assert.ok(!labels({ status: 'completed', hasFiles: true, mayChange: true, main: 'download', mayPurge: true, schedule: true }).includes('Delete its files for good'));
   // After its files were deleted: nothing to open, copy or download.
   assert.deepEqual(labels({ status: 'completed', purged: true, hasFiles: false, mayChange: true }), ['Delete']);
 });
@@ -139,12 +147,14 @@ test('in every state the More stays within nine lines, and never repeats the mai
   for (const status of ['draft', 'sent', 'completed', 'expired', 'declined', 'voided'])
     for (const isTemplate of [false, true]) for (const removed of [false, true]) for (const purged of [false, true]) for (const schedule of [false, true]) for (const mayHold of [false, true]) for (const heldHere of [false, true]) {
       const main = mainButton({ status, isTemplate, removed, purged, people: [person()] });
-      const l = pageMore({ status, isTemplate, removed, purged, hasFiles: !purged, mayChange: true, main: main?.kind || null, schedule, mayKeep: schedule, mayHold, heldHere });
+      const l = pageMore({ status, isTemplate, removed, purged, hasFiles: !purged, mayChange: true, main: main?.kind || null, schedule, mayKeep: schedule, mayHold, heldHere, mayPurge: true });
       most = Math.max(most, l.length);
       assert.ok(l.length <= PAGE_MORE_CAP, `${status}: ${l.map((x) => x.label).join(', ')}`);
       assert.equal(new Set(l.map((x) => x.key)).size, l.length, 'no line twice');
       if (main) assert.ok(!l.some((x) => x.label === main.label), `${status}: ${main.label} is not in More as well`);
-      if (status === 'completed' && !purged) assert.ok(!l.some((x) => x.key === 'open_pdf'), 'no Open the PDF next to Download');
+      if (main?.kind === 'download') assert.ok(!l.some((x) => x.key === 'open_pdf'), 'no Open the PDF next to Download');
+      // Whenever there is a file and Download is not the main button, the file can be opened from More: it never vanishes.
+      else if (!purged && !(isTemplate && status !== 'draft')) assert.ok(l.some((x) => x.key === 'open_pdf'), `${status}${removed ? ' removed' : ''}: the PDF can be opened`);
     }
   assert.ok(most <= PAGE_MORE_CAP && most >= 7, `the busiest state has ${most} lines`);
   assert.equal(PAGE_MORE_CAP, 9);
@@ -160,8 +170,8 @@ test('the page draws one More, one filled button, and no row of header buttons',
   // The main button comes from the rule, and each state's card draws that one and no other.
   assert.match(page, /const main = mainButton\(\{ status: e\.status, isTemplate: isTpl, removed: !!removed, purged: !!e\.purged_at, people \}\);/);
   const filled = noComments(page).match(/className="btn primary"/g)?.length || 0;
-  // In the source: the seven shapes of the one main button, and the three of a template's card. Never two at once.
-  assert.equal(filled, 10);
+  // In the source: the eight shapes of the one main button, and the three of a template's card. Never two at once.
+  assert.equal(filled, 11);
   assert.doesNotMatch(page, /sn-edit|Edit envelope<\/Link>|Give more time<\/button>|Send reminder/);
   // Everything the header had is reachable: the lines of More are wired to the same calls as before.
   for (const call of ['/download?inline=1`', '/evidence`', "setDialog('extend')", "clone('envelope')", "clone('template')", "setDialog('void')", "setDialog('delete')", '/restore`'])
@@ -224,8 +234,11 @@ test('no internet address, fingerprint or device report on the page; they stay i
 
 test('comments, history, files, details and checks are folded, and closed when the page opens', () => {
   const fold = read('src/components/sender/More.tsx');
-  assert.match(fold, /<details className="card sn-fold" data-fold="" id=\{id\}>/);
-  assert.doesNotMatch(fold, /<details[^>]* open/);
+  assert.match(fold, /<details className="card sn-fold" data-fold="" id=\{id\} open=\{open\} onToggle=/);
+  assert.match(fold, /const \[open, setOpen\] = useState\(false\);\s*return \(\s*<details className="card sn-fold"/, 'closed every time the page opens');
+  // What is inside a fold is drawn only while it is open: nothing hidden for a keyboard or a count to land on.
+  assert.match(fold, /\{open && <div className="sn-fold-in">\{children\}<\/div>\}/);
+  assert.match(read('src/components/sender/Comments.tsx'), /\{open && <div className="sn-fold-in">/);
   const page = read(PAGE);
   assert.match(page, /<History audit=\{data\.audit\} deliveries=\{deliveries\} chain=\{data\.chain\}/);
   assert.match(page, /<Fold title="Files" count=\{nFiles\}>/);
@@ -235,7 +248,8 @@ test('comments, history, files, details and checks are folded, and closed when t
   // It opens by itself only for someone who came for it: the link in the email about a new comment.
   assert.match(comments, /if \(arrived && window\.location\.hash === '#comments'\) \(setOpen\(true\)/);
   // Its count, and who waits for an answer, are said on the closed line.
-  assert.match(comments, /Questions and comments\{data \? ` \(\$\{threads\.length\}\)` : ''\}/);
+  // (No "(0)": the line reads the same before and after the comments have loaded.)
+  assert.match(comments, /Questions and comments\{threads\.length \? ` \(\$\{threads\.length\}\)` : ''\}/);
   assert.match(comments, /<\/span>\s*\{waiting\.length > 0 && <span className="cm-tag warn">/);
   assert.doesNotMatch(comments, /className="btn primary"/, 'the page keeps one filled button when a fold is open');
   for (const f of ['src/components/sender/CustomDetails.tsx', 'src/components/sender/FileChecks.tsx']) assert.match(read(f), /data-fold=""/, f);
@@ -297,8 +311,8 @@ test('a completed document has one Download: the signed PDF with its signing rec
   const head = page.slice(page.indexOf('<div className="pagehead sn-head"'), page.indexOf('{removed && ('));
   assert.equal((head.match(/<button|<a |<MoreMenu/g) || []).length, 1);
   assert.match(read('src/app/styles/envelope.css'), /\.sn > \.pagehead\.sn-head \{ flex-wrap: nowrap;/);
-  // An admin without a schedule still finds the hold, in the folded Files section, so nothing became impossible.
-  assert.match(page, /!!ret\?\.may_hold && !schedule && [^\n]*onClick=\{\(\) => setKeeping\('hold'\)\}>Put on hold<\/button>/);
+  // Hold is listed only with a deletion schedule on (in More); the page has no bare hold button of its own.
+  assert.doesNotMatch(page, />Put on hold</);
 });
 
 test('with a deletion schedule, the page lists Keep it and Hold for an admin, and Delete says the date', async () => {
@@ -311,14 +325,12 @@ test('with a deletion schedule, the page lists Keep it and Hold for an admin, an
   assert.ok(ret.period && ret.due_at, 'the schedule reaches this document');
   const more = pageMore({ status: 'completed', hasFiles: true, mayChange: true, main: 'download', schedule: true, mayKeep: !!ret.closed_at && !ret.held && !!(ret.noticed_at || ret.due_at) && !ret.asked, mayHold: !!ret.may_hold });
   assert.deepEqual(more.map((l) => l.label), ['Full record for disputes', 'Copy', 'Save as template', 'Keep it', 'Hold', 'Delete']);
+  // Inside the one Delete dialog: keeping it past the schedule, and deleting its files for good, each wired to its
+  // dialog. (Their words belong to the ds-retention work and are pinned in tests/retention*.test.ts, not here.)
   const card = read('src/components/sender/Retention.tsx');
-  // The Delete dialog says what the schedule does by itself and offers Keep it instead; removing the files for
-  // good is one more step from there, for who may. The card itself has no buttons of its own for these any more.
-  assert.match(card, /Your account&apos;s deletion schedule removes its contents on \{longDate\(day\)\} without you doing anything\. To stop that, keep it instead\. <button type="button" className="btn sm" onClick=\{onKeep\}>Keep it<\/button>/);
-  assert.match(card, /onClick=\{onPurge\}>Remove the files for good<\/button>/);
-  assert.doesNotMatch(card, />Purge now<|>Put on legal hold<|>Keep it<\/button>\}\n\s*\{r\.asked/);
-  assert.match(card, /if \(!news && !\(r\.due_at && r\.period\)\) return dialogs;/, 'nothing on the page when there is nothing to say');
-  assert.match(card, /<details className="card sn-fold ret" data-fold="" data-feature="ds-retention">/);
+  assert.match(card, /onClick=\{onKeep\}>/);
+  assert.match(card, /onClick=\{onPurge\}>/);
+  assert.doesNotMatch(card, />Purge now<|>Put on legal hold</);
   // The hold really holds, and can be lifted from More afterwards.
   assert.equal((await c.post(`/envelopes/${e.id}/hold`, { reason: 'A case is open' })).status, 200);
   const held = (await c.get(`/envelopes/${e.id}`)).data.retention;
@@ -422,4 +434,151 @@ test('a stranger gets nothing from the page\'s calls, and a member cannot hold o
   assert.equal((await nobody.get(`/envelopes/${e.id}`)).status, 401);
   // The menu is drawn in the browser, so the server is what decides: `from=templates` in the address is only a label.
   assert.equal((await owner.get(`/envelopes/${e.id}?from=templates&sent=1`)).status, 200);
+});
+
+// ---- 9. After the skeptic and the simplicity reviewer (repair) -----------------------------------------------------
+
+test('a completed document its sender removed: an admin can still open the PDF, get the full record and start removing the files', async () => {
+  const c = await signUp('Ria Removed', 'ria-removed@example.com', ip());
+  const e = await simple(c, 'sol-removed@example.com');
+  await c.post(`/envelopes/${e.id}/send`);
+  await signAll(e.id, 'sol-removed@example.com');
+  assert.equal((await c.call('DELETE', `/envelopes/${e.id}`)).status, 200);
+  // With no deletion schedule the removed document offers its PDF and its record, and nothing about deleting files.
+  const bare = (await c.get(`/envelopes/${e.id}`)).data.retention;
+  assert.deepEqual(pageMore({ status: 'completed', removed: true, hasFiles: true, mayChange: true, main: 'restore', mayPurge: !!bare.may_purge, schedule: !!(bare.schedule_on || bare.period || bare.noticed_at || bare.asked) }).map((l) => l.label), ['Open the PDF', 'Full record for disputes']);
+  assert.equal((await c.put('/account/retention', { days: 365 })).status, 200);
+  const got = await c.get(`/envelopes/${e.id}`);
+  assert.equal(got.status, 200);
+  assert.ok(got.data.removed_at, 'kept, and marked as removed by its sender');
+  // What the page offers there, from the server's own answer.
+  const ret = got.data.retention;
+  const main = mainButton({ status: 'completed', removed: true, people: [] });
+  assert.equal(main?.kind, 'restore');
+  const more = pageMore({ status: 'completed', removed: true, hasFiles: true, mayChange: true, main: main!.kind, mayPurge: !!ret.may_purge && !ret.asked && !ret.disputed, schedule: !!(ret.schedule_on || ret.period || ret.noticed_at || ret.asked) }).map((l) => l.label);
+  assert.deepEqual(more, ['Open the PDF', 'Full record for disputes', 'Delete its files for good']);
+  // And each of the three answers for the removed document.
+  const pdf = await c.get(`/envelopes/${e.id}/download?inline=1`);
+  assert.equal(pdf.status, 200);
+  assert.equal(Buffer.from(pdf.data.slice(0, 5)).toString(), '%PDF-');
+  assert.equal((await c.get(`/envelopes/${e.id}/evidence`)).status, 200);
+  const asked = await c.post(`/envelopes/${e.id}/purge`, { level: 'documents' });
+  assert.equal(asked.status, 200);
+  assert.ok(asked.data.goes_at);
+  // The page wires the new line to the dialog, and says on the removed card where the PDF is.
+  const page = read(PAGE);
+  assert.match(page, /l\.key === 'remove_files' \? \{ onPick: \(\) => setKeeping\('purge'\) \}/);
+  assert.match(page, /mayPurge: deleteOffers\(ret\)\.purge/);
+  assert.match(page, /its PDF and its full record are in More\./);
+});
+
+test('no mail server: no reminder is offered or claimed; one waiting person gets "Copy the link for <name>" as the main button', () => {
+  const ada = person({ id: 'a', name: 'Ada Sponsor', remindable: false, noMail: true });
+  assert.deepEqual(mainButton({ status: 'sent', people: [ada] }), { kind: 'copy_link', label: 'Copy the link for Ada Sponsor', personId: 'a' });
+  assert.equal(personRemind([ada], mainButton({ status: 'sent', people: [ada] }), ada), false, 'and no Remind in their More');
+  // Two such people at once: no one link is the next step, so no main button; the notice points at each More.
+  assert.equal(mainButton({ status: 'sent', people: [ada, person({ id: 'b', name: 'Ben', remindable: false, noMail: true })] }), null);
+  // Someone a reminder does reach comes first.
+  assert.equal(mainButton({ status: 'sent', people: [ada, person({ id: 'b', name: 'Ben' })] })?.label, 'Remind Ben');
+  // The sender's own turn and a person signing here still come before it.
+  assert.equal(mainButton({ status: 'sent', people: [ada, person({ id: 'me', me: true, remindable: false })] })?.kind, 'sign');
+  const page = read(PAGE);
+  // "Not delivered" is the server's own word about the last email to them (status outbox).
+  assert.match(page, /const noMail = \(r: any\) => out && hasTurn\(r\) && r\.role !== 'inperson' && !ownLink\(r\) && lastEmailTo\(deliveries, r\.email, r\.id\)\?\.status === 'outbox';/);
+  assert.match(page, /&& !mine\(r\) && !noMail\(r\),\s*noMail: noMail\(r\),/);
+  assert.match(page, /emails are saved but not delivered, and no reminder can go out\./);
+  const people = read(PEOPLE);
+  // The main button and the More of that person never both offer the copy; the copy itself is the one in the list.
+  assert.match(people, /\{reachable && <button[^\n]*style=\{mainCopies === r\.id \? \{ display: 'none' \} : undefined\}[^\n]*>Copy link<\/button>\}/);
+  assert.match(people, /if \(r\) copy\(r\);\s*\}, \[askedN\]\);/);
+  // If the browser refuses to copy, their More opens, because that is where the link is shown.
+  assert.match(people, /if \(!ownLink\(r\)\) setMore\(r\.id\);\s*toast\('Your browser did not let us copy\./);
+  // The notice is said once above the list: not again as a line and a hint on every person.
+  assert.match(people, /: turn && mail\?\.status === 'outbox' && !own \? null/);
+  assert.doesNotMatch(people, /No email reached them\. Send them the link yourself/);
+});
+
+test('the Delete dialog never has two buttons called Keep it, and removing the files is said in plain words', () => {
+  const page = read(PAGE);
+  // The button that only closes the Delete dialog is Cancel; the one that stops the schedule is "Keep it instead".
+  const dlg = page.slice(page.indexOf("{dialog === 'delete' && ("));
+  assert.match(dlg.slice(0, 600), /keepLabel="Cancel"/);
+  // Whatever the button that stops the schedule is called, it is not the bare "Keep it" of a closing button, and
+  // no dialog of this page closes with "Keep it" next to a different Keep it.
+  const card = read('src/components/sender/Retention.tsx');
+  assert.doesNotMatch(card, /onClick=\{onClose\}[^>]*>Keep it<\/button>/);
+  assert.doesNotMatch(noComments(card), /Purge this envelope|Purge on \$|>Purge now</);
+  // A held document is not offered Delete at all, so no toast promises what a button two lines away contradicts.
+  assert.ok(!pageMore({ status: 'completed', hasFiles: true, mayChange: true, main: 'download', schedule: true, mayHold: true, held: true, heldHere: true }).some((l) => l.key === 'delete'));
+});
+
+test('History speaks the page\'s language; the record itself, and what a person wrote, stay as written', async () => {
+  const lines = historyLines([
+    { seq: 1, at: '2026-01-01T10:00:00Z', action: 'Envelope sent', detail: '1 recipient, 1 page', actor: 'Rosa' },
+    { seq: 2, at: '2026-01-01T10:01:00Z', action: 'Viewed', detail: 'Ada opened the envelope', actor: 'Ada' },
+    { seq: 3, at: '2026-01-01T10:02:00Z', action: 'Envelope voided', detail: 'Reason: \u201cwrong envelope, 3 recipients\u201d', actor: 'Rosa' },
+    { seq: 4, at: '2026-01-01T10:03:00Z', action: 'Envelope completed', detail: '2 recipients finished. The envelope page has the document.', actor: 'System' },
+    { seq: 5, at: '2026-01-01T10:04:00Z', action: 'Envelope completed', detail: 'All recipients have finished', actor: 'System' },
+  ], [{ at: '2026-01-01T10:02:30Z', subject: 'Voided: The envelope budget', to_email: 'ada@example.com', state: 'Delivered.' }]);
+  assert.deepEqual(lines.map((l) => l.title), ['Sent', 'Viewed', 'Request cancelled', 'Email: Cancelled: The envelope budget', 'Completed', 'Completed']);
+  assert.equal(lines[5].detail, 'Everyone has finished');
+  assert.equal(lines[0].detail, '1 person, 1 page');
+  assert.equal(lines[1].detail, 'Ada opened the document');
+  assert.equal(lines[2].detail, 'Reason: \u201cwrong envelope, 3 recipients\u201d', 'a reason somebody wrote is not reworded');
+  assert.equal(lines[4].detail, '2 people finished. The document page has the document.');
+  // A real document: the page's lines carry none of the old words, the stored record keeps its own.
+  const c = await signUp('Hedy History', 'hana-hist3@example.com', ip());
+  const e = await simple(c, 'hal-hist2@example.com');
+  await c.post(`/envelopes/${e.id}/send`);
+  await c.post(`/envelopes/${e.id}/void`, { reason: 'A mistake in the price' });
+  const got = (await c.get(`/envelopes/${e.id}`)).data;
+  assert.ok(got.audit.some((a: any) => a.action === 'Envelope voided'), 'the record keeps its words');
+  const shown = historyLines(got.audit, (got.deliveries || []).map((d: any) => ({ at: d.at, subject: d.subject, to_email: d.to_email, state: '' })));
+  for (const l of shown) assert.doesNotMatch(`${l.title} ${l.detail}`, /\benvelope\b|\brecipients?\b|\bVoided\b/i, `${l.title}: ${l.detail}`);
+});
+
+test('the words on the page point at places that exist: Documents, not Envelopes; document, not envelope', () => {
+  const page = noComments(read(PAGE));
+  assert.doesNotMatch(page, /under Envelopes/);
+  assert.equal(page.match(/under Documents, in the tab/g)?.length, 3);
+  assert.doesNotMatch(read('src/components/sender/Comments.tsx'), /Everyone on the envelope/);
+  const own = read('src/components/sender/OwnLink.tsx');
+  assert.doesNotMatch(noComments(own), /The envelope closed/);
+  // Someone whose link you send yourself: four ways to pass it on (the link shows under them once copied), and
+  // the card says it once.
+  assert.deepEqual([...own.matchAll(/>([^<>{}]+)<\/button>/g)].map((m) => m[1]), ['Copy link', 'QR code', 'WhatsApp', 'Text']);
+  const people = read(PEOPLE);
+  assert.match(people, /: own && \(turn \|\| \(r\.status === 'completed' && \(e\.status === 'sent' \|\| e\.status === 'completed'\)\)\) \? null/);
+  assert.match(people, /emailFact\.replace\(\/\^None\\\. \/, ''\)/);
+});
+
+test('a person with nothing left to do has no empty More: the facts are on their card, and their role is in the past', () => {
+  const people = read(PEOPLE);
+  assert.match(people, /const acts = turn \|\| \(out && r\.status === 'pending'\) \|\| \(e\.status !== 'draft' && !!r\.access_code\);/);
+  assert.match(people, /const hasMore = e\.status !== 'draft' && \(acts \|\| r\.role === 'witness' \|\| texts\.some\(\(t\) => t\.recipient_id === r\.id\)\);/);
+  assert.match(people, /\{hasMore && <MorePanel label=/);
+  assert.match(people, /\{!hasMore && settled && <p className="muted small sn-person-line">\{emailFact\} \{openedFact\}<\/p>\}/);
+  assert.match(people, /r\.status === 'completed' \? ROLE_DONE\[r\.role\] \|\| ROLE_LABEL\[r\.role\] : ROLE_LABEL\[r\.role\]/);
+});
+
+test('Templates: when nobody is left to fill in, the Use dialog names who it goes to', async () => {
+  const tpl = read(TEMPLATES);
+  assert.match(tpl, /use\.open\.length === 0 && <p>This goes to <b>\{joinNames\(use\.recipients\.filter\(\(r: any\) => r\.email\)/);
+  assert.doesNotMatch(tpl, /Everyone who signs is already set in this template/);
+  // Save as template keeps the people of the document (as before): this is the case the dialog now names.
+  const c = await signUp('Tia Template', 'tia-template@example.com', ip());
+  const e = await simple(c, 'cy-template@example.com');
+  const t = await c.post(`/envelopes/${e.id}/clone`, { kind: 'template' });
+  assert.equal(t.status, 200);
+  const saved = (await c.get(`/envelopes/${t.data.id}`)).data.envelope;
+  assert.ok(saved.recipients.every((r: any) => r.email), 'every person is set, so the dialog has no field and says their names');
+});
+
+test('phone and pointer sizes: More on the line of the back link, 44 px back link, row buttons and New template', () => {
+  const css = read('src/app/styles/envelope.css');
+  const phone = css.slice(css.indexOf('@media (max-width: 900px)'));
+  assert.match(phone, /\.sn-head \.sn-headactions \{ position: absolute; top: 0; right: 0; padding-top: 0; \}/);
+  assert.match(phone, /\.sn-head \.sn-back \{ min-height: 44px; \}/);
+  assert.match(css, /\.sn-rowactions \.btn, \.sn-newtpl \{ min-height: 44px; \}/);
+  assert.match(css, /\.sn-linkbtn \{[^}]*min-height: 44px;/);
 });

@@ -7,7 +7,7 @@ import { api, useLoad, toast } from '@/components/ui';
 import { useAllowance, voidCostLine } from '@/components/sender/allowance';
 import { BatchView } from '@/components/sender/BatchView';
 import { ConfirmDialog } from '@/components/sender/dialogs';
-import { headerFor, readRecipients, MAX_ROWS, type BulkRow, type Role } from '@/components/sender/csv';
+import { headerFor, readRecipients, bulkLanguageHint, MAX_ROWS, type BulkRow, type Role } from '@/components/sender/csv';
 import { readFieldColumns, fillableColumns } from '@/components/sender/fieldColumns';
 // Columns named like one of the account's custom fields fill it for that row (customColumns.ts).
 import { readCustomColumns } from '@/components/sender/customColumns';
@@ -177,7 +177,7 @@ function BulkSend({ preset }: { preset: string }) {
               {fileNote && <span className="small muted" role="status">{fileNote}</span>}
             </div>
             <p className="muted small" id="sn-csv-help">
-              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.{fillableColumns(loaded?.fields).size ? ` A column named like a field of the template (${[...fillableColumns(loaded?.fields).values()].slice(0, 4).join(', ')}) fills that field in each envelope, as if you had typed it in, and anything that depends on it shows or hides from the start.` : ''}{customs?.fields?.length ? ` A column named like one of your account's details (${customs.fields.slice(0, 4).map((f: any) => f.name).join(', ')}) fills it for that envelope, in place of the template's value.${customs.fields.some((f: any) => f.required) ? ' Every envelope needs a value for the required ones, from a column or from the template.' : ''}` : ''}
+              Start with a header row and name the columns {roles.map((r, i) => <span key={r.key}>{i > 0 ? ', ' : ''}<b>{r.label} name</b>, <b>{r.label} email</b>{r.phone ? <>, <b>{r.label} phone</b></> : null}</span>)}.{roles.some((r) => r.phone) ? ' This template sends text messages, so every row needs a mobile number with its country code, like +44 7700 900123.' : ''} They can be in any order, in capitals or not, and extra columns are fine.{bulkLanguageHint()}{fillableColumns(loaded?.fields).size ? ` A column named like a field of the template (${[...fillableColumns(loaded?.fields).values()].slice(0, 4).join(', ')}) fills that field in each envelope, as if you had typed it in, and anything that depends on it shows or hides from the start.` : ''}{customs?.fields?.length ? ` A column named like one of your account's details (${customs.fields.slice(0, 4).map((f: any) => f.name).join(', ')}) fills it for that envelope, in place of the template's value.${customs.fields.some((f: any) => f.required) ? ' Every envelope needs a value for the required ones, from a column or from the template.' : ''}` : ''}
               {' '}No header row? Then use exactly that order.
             </p>
 

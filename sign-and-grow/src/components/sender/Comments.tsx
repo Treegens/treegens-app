@@ -90,10 +90,11 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
   return (
     <details className="card sn-fold cm-card" id="comments" data-fold="" open={open} onToggle={(ev) => setOpen((ev.currentTarget as HTMLDetailsElement).open)} aria-labelledby={`${ids}-h`}>
       <summary>
-        <span id={`${ids}-h`}>Questions and comments{data ? ` (${threads.length})` : ''}</span>
+        <span id={`${ids}-h`}>Questions and comments{threads.length ? ` (${threads.length})` : ''}</span>
         {waiting.length > 0 && <span className="cm-tag warn">{waiting.length === 1 ? '1 waits for your answer' : `${waiting.length} wait for your answer`}</span>}
       </summary>
-      <div className="sn-fold-in">
+      {/* Drawn only while open: a closed fold holds no box to type in and nothing to count. */}
+      {open && <div className="sn-fold-in">
       {data?.not_signed && <p className="muted small" style={{ marginTop: 4 }}>{data.not_signed}</p>}
       {problem && <div className="notice err" role="alert">{problem} <button type="button" className="btn sm" onClick={load}>Try again</button></div>}
       {!data && !problem && <p className="muted" role="status">Loading the comments</p>}
@@ -124,7 +125,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
               if (await post({ thread_id: t.id, text: reply })) (setReply(''), setReplyTo(''));
             }}>
               <label className="f"><span>Your answer</span><textarea dir="auto" rows={3} maxLength={COMMENT_MAX_CHARS} value={reply} onChange={(ev) => setReply(ev.target.value)} autoFocus /></label>
-              <p className="muted small">{t.private ? `Only ${t.with?.name || 'this person'} can read it${t.with?.emailed ? ', and they are emailed.' : `. ${t.with?.not_emailed || 'They are not emailed. They see it on their signing page.'}`}` : 'Everyone on the envelope can read it on their signing page. Whoever wrote in this conversation is emailed if we can email them, and under your answer it says who was.'}</p>
+              <p className="muted small">{t.private ? `Only ${t.with?.name || 'this person'} can read it${t.with?.emailed ? ', and they are emailed.' : `. ${t.with?.not_emailed || 'They are not emailed. They see it on their signing page.'}`}` : 'Everyone on the document can read it on their signing page. Whoever wrote in this conversation is emailed if we can email them, and under your answer it says who was.'}</p>
               <div className="row wrap">
                 <button className="btn" disabled={busy}>{busy ? 'Sending' : 'Send answer'}</button>
                 <button type="button" className="btn" onClick={() => (setReplyTo(''), setReply(''))}>Cancel</button>
@@ -162,7 +163,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
           <button className="btn" disabled={busy}>{busy ? 'Sending' : 'Send comment'}</button>
         </form>
       )}
-      </div>
+      </div>}
     </details>
   );
 }

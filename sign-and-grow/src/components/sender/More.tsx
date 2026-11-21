@@ -73,12 +73,17 @@ export function MorePanel({ label, panelId, open, onToggle, buttonRef }: { label
   return <button ref={buttonRef} type="button" className="btn sm mo-btn" data-more="item" aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={label} onClick={onToggle}>More</button>;
 }
 
-/** A folded section of the page: closed every time the page opens (data-fold). `count` is said in the summary. */
+/**
+ * A folded section of the page: closed every time the page opens (data-fold). `count` is said in the summary.
+ * What is inside is drawn only while the fold is open, so a closed fold holds nothing a keyboard, a screen reader
+ * or a count of the page's choices could land on.
+ */
 export function Fold({ title, count, id, children, note }: { title: string; count?: number | null; id?: string; children: ReactNode; note?: ReactNode }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="card sn-fold" data-fold="" id={id}>
+    <details className="card sn-fold" data-fold="" id={id} open={open} onToggle={(ev) => setOpen((ev.currentTarget as HTMLDetailsElement).open)}>
       <summary><span>{title}{typeof count === 'number' ? ` (${count})` : ''}</span>{note}</summary>
-      <div className="sn-fold-in">{children}</div>
+      {open && <div className="sn-fold-in">{children}</div>}
     </details>
   );
 }

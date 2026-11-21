@@ -27,10 +27,25 @@
   .pub-menu-btn { display: inline-flex; }
   .pub-head .btn { min-height: 44px; padding-left: 14px; padding-right: 14px; }
 }
+/* On a phone Sign in stays in the bar as a plain link next to Start free, and the menu button keeps only its icon
+   (screen readers still hear "Menu" or "Close"). Help and Pricing are in the menu. */
+.pub-logo-mark { display: none; }
 @media (max-width: 460px) {
-  .pub-signin { display: none; }
-  .pub-head .nav-top { padding-left: 16px; padding-right: 16px; }
+  .pub-head .nav-top { padding-left: 16px; padding-right: 16px; gap: 8px; }
+  .pub-actions { gap: 6px; }
+  .pub-head .btn.pub-signin { border-color: transparent; background: none; padding-left: 8px; padding-right: 8px; text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+  .pub-head .btn.primary { white-space: nowrap; }
+  .pub-head .logo > svg:not(.pub-logo-mark) { height: 20px; width: auto; }
+  .pub-head .logo .pub-logo-mark { height: 30px; width: 30px; }
+  .pub-head .pub-menu-btn { font-size: 0; gap: 0; min-width: 44px; justify-content: center; padding-left: 12px; padding-right: 12px; }
 }
+@media (max-width: 379px) {
+  .pub-head .logo > svg:not(.pub-logo-mark) { display: none; }
+  .pub-logo-mark { display: block; }
+}
+.pub-fold { margin-top: 12px; }
+.pub-fold > summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-weight: 600; color: var(--green-deep); }
+.pub-fold > ul { margin-top: 4px; }
 
 .pub-foot-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)); gap: 28px; align-items: start; }
 .pub-foot-brand p { margin: 8px 0 0; max-width: 340px; }
@@ -265,3 +280,7 @@
   .pub .wrap.hero.home-hero { padding-top: 24px; padding-bottom: 16px; gap: 22px; }
   .pub .wrap.section { padding-top: 24px; padding-bottom: 24px; }
 }
+
+/* Thumb-sized targets where people sign in and sign up, and in the top bar at every width. */
+.authbox input:not([type='checkbox']):not([type='radio']), .authbox select, .authbox .btn { min-height: 44px; }
+.pub-head .btn { min-height: 44px; }

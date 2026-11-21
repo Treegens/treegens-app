@@ -22,7 +22,7 @@ import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { ownLink } from '@/components/sender/OwnLink';
 import { Disputed } from '@/components/sender/Disputed';
 import { EnvelopeComments } from '@/components/sender/Comments';
-import { RetentionCard, DeleteNotes, type RetentionAsk } from '@/components/sender/Retention';
+import { RetentionCard, RetentionLine, DeleteNotes, deleteOffers, scheduleOn, askAllowed, deletedToast, copiesLine, type RetentionAsk } from '@/components/sender/Retention';
 import { CustomDetails } from '@/components/sender/CustomDetails';
 import { FileChecks } from '@/components/sender/FileChecks';
 import { closingSoon, deadlineLine, hasTurn, howLong, joinNames, longDate, neverOpened } from '@/components/sender/lib';
@@ -37,10 +37,23 @@ export default function EnvelopeDetail() {
   const [busy, setBusy] = useState(false);
   // Which of the keeping dialogs is open (Keep it, Hold, Lift the hold, remove the files): they live in Retention.tsx.
   const [keeping, setKeeping] = useState<RetentionAsk>('');
+  // The email about the deletion schedule links here with ?ask=keep, and Settings with ?ask=hold or ?ask=purge: the
+  // dialog opens once, when it applies to this document and this person, and the address is cleaned.
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current || !data?.retention) return;
+    asked.current = true;
+    const want = new URLSearchParams(window.location.search).get('ask');
+    if (!want) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    setKeeping(askAllowed(want, data.retention, id));
+  }, [data, id]);
   // Sent from Templates (the Use dialog sends people here with ?from=templates): the way back is Templates.
   const [fromTemplates, setFromTemplates] = useState(false);
   useEffect(() => setFromTemplates(new URLSearchParams(window.location.search).get('from') === 'templates'), []);
   const askedForTime = useRef(false);
+  // The main button "Copy the link for <name>": the people list copies it, so there is one way of copying a link.
+  const [copyAsk, setCopyAsk] = useState<{ id: string; n: number } | null>(null);
 
   // Emails about deadlines link here with ?extend=1, so the dialog is already open when the page loads.
   useEffect(() => {
@@ -134,10 +147,14 @@ export default function EnvelopeDetail() {
   });
 
   // One main button by state, and everything else in the page's one More (src/lib/envelopepage.ts).
+  // The last email to them was saved, not delivered, because this server has no mail server: a reminder would end
+  // the same way, so none is offered and none is claimed. Their link is offered instead.
+  const noMail = (r: any) => out && hasTurn(r) && r.role !== 'inperson' && !ownLink(r) && lastEmailTo(deliveries, r.email, r.id)?.status === 'outbox';
   const mine = (r: any) => r.role !== 'inperson' && (r.email || '').toLowerCase() === me.user.email.toLowerCase();
   const people: PagePerson[] = e.recipients.map((r: any) => ({
     id: r.id, name: actingName(r) || r.name || r.role_name || 'them', role: r.role, status: r.status, turn: out && hasTurn(r), me: mine(r),
-    remindable: out && hasTurn(r) && !r.muted && !stopped.includes(r) && !ownLink(r) && r.role !== 'inperson' && !mine(r),
+    remindable: out && hasTurn(r) && !r.muted && !stopped.includes(r) && !ownLink(r) && r.role !== 'inperson' && !mine(r) && !noMail(r),
+    noMail: noMail(r),
   }));
   const main = mainButton({ status: e.status, isTemplate: isTpl, removed: !!removed, purged: !!e.purged_at, people });
   const mainPerson = main?.personId ? e.recipients.find((r: any) => r.id === main.personId) : null;
@@ -148,15 +165,16 @@ export default function EnvelopeDetail() {
     : main.kind === 'sign' || main.kind === 'host' ? <button className="btn primary" disabled={busy} onClick={() => (setBusy(true), openToSign(e.id, mainPerson).catch((err) => (fail(err), setBusy(false))))}>{main.label}</button>
     : main.kind === 'remind' ? <button className="btn primary" disabled={busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out.' : undefined} onClick={remindAll}>{main.label}</button>
     : main.kind === 'download' ? <a className="btn primary" href={`/api/envelopes/${e.id}/download`}>{main.label}</a>
+    : main.kind === 'copy_link' ? <button className="btn primary" disabled={busy} onClick={() => setCopyAsk({ id: main.personId!, n: (copyAsk?.n || 0) + 1 })}>{main.label}</button>
     : main.kind === 'reopen' ? <button className="btn primary" disabled={paused} title={whyNot} onClick={() => setDialog('extend')}>{main.label}</button>
     : <button className="btn primary" disabled={busy} onClick={() => clone('envelope')}>{main.label}</button>;
   // A deletion schedule applies to it: only then are Keep it and Hold listed (src/components/sender/Retention.tsx).
   const ret = isTpl ? null : data.retention;
-  const schedule = !!ret && !!(ret.period || ret.due_at || ret.noticed_at);
+  const schedule = scheduleOn(ret);
   const more: MenuLine[] = pageMore({
     status: e.status, isTemplate: isTpl, removed: !!removed, purged: !!e.purged_at, hasFiles: e.documents.length > 0, mayChange, mayDelete: !isTpl || e.access?.may_delete !== false,
-    main: isTpl && (tplLocked || tplHeld) ? 'copy' : main?.kind || null, schedule, mayKeep: !!ret && !!ret.closed_at && !ret.held && !!(ret.noticed_at || ret.due_at) && !ret.asked,
-    mayHold: !!ret?.may_hold, held: !!ret?.held, heldHere: !!ret?.holds?.some((h: any) => h.envelope_id === e.id),
+    main: isTpl && (tplLocked || tplHeld) ? 'copy' : main?.kind || null, schedule, mayKeep: deleteOffers(ret).keep,
+    mayHold: !!ret?.may_hold, held: !!ret?.held, heldHere: !!ret?.holds?.some((h: any) => h.envelope_id === e.id), mayPurge: deleteOffers(ret).purge,
   }).map((l): MenuLine => ({
     ...l,
     ...(l.key === 'open_pdf' ? { href: `/api/envelopes/${e.id}/download?inline=1`, newTab: true }
@@ -169,6 +187,7 @@ export default function EnvelopeDetail() {
       : l.key === 'keep' ? { onPick: () => setKeeping('keep') }
       : l.key === 'hold' ? { onPick: () => setKeeping('hold') }
       : l.key === 'lift_hold' ? { onPick: () => setKeeping('lift') }
+      : l.key === 'remove_files' ? { onPick: () => setKeeping('purge') }
       : { onPick: () => setDialog('delete') }),
   }));
   const title = e.subject || (isTpl ? 'Untitled template' : 'Untitled');
@@ -189,7 +208,7 @@ export default function EnvelopeDetail() {
           <div className="sn-now-main">
             <div>
               <p className="sn-now-line">Removed from its sender&apos;s lists on {longDate(removed)}.</p>
-              <p className="sn-now-sub">It is only under Envelopes, in the tab Removed by its sender: in no other list, search, export or report of your team. Everyone who was on it still has their link and their copy. You can open it because you are an admin of this account.</p>
+              <p className="sn-now-sub">It is only under Documents, in the tab Removed by its sender: in no other list, search, export or report of your team. Everyone who was on it still has their link and their copy. You can open it because you are an admin of this account: its PDF and its full record are in More.</p>
               <p className="sn-now-sub">Put it back and it is an ordinary document again, for its sender and for the admins. Its history records who removed it and who put it back.</p>
             </div>
             <div className="sn-now-actions">{mainEl}</div>
@@ -287,6 +306,9 @@ export default function EnvelopeDetail() {
         </div>
       )}
 
+      {/* The day its files are deleted, or that it is on hold: one sentence, only when there is one (Retention.tsx). */}
+      {!isTpl && <RetentionLine envelopeId={e.id} r={ret} onChanged={reload} onAsk={setKeeping} />}
+
       <section className="card pad0" aria-labelledby="sn-rcpt-h">
         <div className="sn-cardhead">
           <h2 id="sn-rcpt-h">{isTpl ? 'Roles' : 'People'}</h2>
@@ -294,17 +316,17 @@ export default function EnvelopeDetail() {
         </div>
         {noMailServer && (
           <div className="notice warn sn-inset" role="note">
-            This server has no mail server set up, so emails are saved but not delivered. Share each link yourself: it is in each person&apos;s More.
+            This server has no mail server set up, so emails are saved but not delivered, and no reminder can go out. Share each link yourself: it is in each person&apos;s More.
             {me.outbox && <> You can read the saved emails in the <a href="/dev/outbox" target="_blank" rel="noreferrer">dev outbox</a>.</>}
           </div>
         )}
         {e.recipients.length === 0 ? <div className="empty">Nobody has been added yet.</div> : (
           <Recipients envelope={e} deliveries={deliveries} texts={data.texts || []} myEmail={me.user.email} onChanged={reload} onCorrect={setFix} paused={paused}
-            mainPersonId={main?.personId || ''} remindOne={(r: any) => { const p = people.find((x) => x.id === r.id); return !!p && personRemind(people, main, p); }} />
+            mainPersonId={main?.personId || ''} copyAsk={copyAsk} mainCopies={main?.kind === 'copy_link' ? main.personId : ''} remindOne={(r: any) => { const p = people.find((x) => x.id === r.id); return !!p && personRemind(people, main, p); }} />
         )}
       </section>
 
-      {/* How long it is kept, and what a deletion left. Keep it, Hold and Delete are in More (src/components/sender/Retention.tsx). */}
+      {/* The dialogs that More opens (Keep it, Hold), and what a deletion left, folded (src/components/sender/Retention.tsx). */}
       {!isTpl && <RetentionCard envelopeId={e.id} r={data.retention} onChanged={reload} ask={keeping} onAsk={setKeeping} />}
 
       {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
@@ -324,8 +346,6 @@ export default function EnvelopeDetail() {
         {out && !paused && <p className="muted small" id="sn-reminders">{reminderText(e.reminder_days)}{e.reminder_days > 0 && e.recipients.some(ownLink) ? ' For someone whose link you send yourself, the reminder comes to you instead.' : ''} To change it, choose Edit in More.</p>}
         {e.message && <p className="muted" style={{ whiteSpace: 'pre-wrap' }}>&ldquo;{e.message}&rdquo;</p>}
         {e.status !== 'draft' && <p className="muted small" style={{ marginBottom: 0 }}>{e.sent_at ? `Sent ${fmtDate(e.sent_at, true)}. ` : ''}If you write to us about it, its number is <span className="sn-id">{e.id}</span>.</p>}
-        {/* Without a deletion schedule, an admin still finds the hold here (with one, it is in More). */}
-        {!!ret?.may_hold && !schedule && !ret.holds?.some((h: any) => h.envelope_id === e.id) && !e.purged_at && <p style={{ marginBottom: 0 }}><button type="button" className="btn sm" onClick={() => setKeeping('hold')}>Put on hold</button></p>}
       </Fold>
       {/* The account's own details on this envelope, such as a case number, folded (src/components/sender/CustomDetails.tsx). */}
       <CustomDetails envelope={e} editHref={mayChange ? editHref : null} onSaved={reload} />
@@ -346,10 +366,12 @@ export default function EnvelopeDetail() {
         </VoidDialog>
       )}
       {dialog === 'delete' && (
-        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this document'} confirmLabel={kept ? 'Delete from my account' : 'Delete for good'} onClose={() => setDialog('')}
+        <ConfirmDialog title={isTpl ? 'Delete this template' : 'Delete this document'} confirmLabel={kept ? 'Delete from my account' : 'Delete for good'}
+          // "Keep it" only ever means stopping a scheduled deletion, so the button that closes this dialog says Cancel.
+          keepLabel="Cancel" onClose={() => setDialog('')}
           onConfirm={async () => {
             await api(`/envelopes/${e.id}`, { method: 'DELETE' });
-            toast(kept ? (keptForDispute ? 'Deleted from your account. It is kept while the dispute about it is open.' : 'Deleted from your account. Everyone who was on it keeps their copy.') : 'Deleted.');
+            toast(kept ? (keptForDispute ? 'Deleted from your account. It is kept while the dispute about it is open.' : deletedToast(ret)) : 'Deleted.');
             router.push(isTpl ? '/app/templates' : '/app/envelopes');
           }}>
           {kept ? (
@@ -357,10 +379,10 @@ export default function EnvelopeDetail() {
               {/* It is hidden, not destroyed: the account is a party to the document too, so its admins can still find it
                   and put it back. A member cannot do that themselves, and is told who can. */}
               {isAdmin
-                ? <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves the lists, the search, the export and the reports. It is not destroyed: you and the other admins of this account still find it under Envelopes, in the tab <b>Removed by its sender</b>, and can put it back from there.</p>
-                : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back yourself. An admin of your team still finds it under Envelopes, in the tab <b>Removed by its sender</b>, and can put it back, so ask one of them if you need it again. Download the PDF first if you want to keep a copy of your own.</p>}
+                ? <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves the lists, the search, the export and the reports. It is not destroyed: you and the other admins find it under Documents, in the tab <b>Removed by its sender</b>, and can put it back.</p>
+                : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; leaves your lists, your search, your export and your reports. You cannot bring it back yourself. An admin of your team still finds it under Documents, in the tab <b>Removed by its sender</b>, and can put it back, so ask one of them if you need it again. Download the PDF first if you want to keep a copy of your own.</p>}
               {/* Kept only because a dispute is open (keptOnDelete in src/server/deleting.ts): said as that, not as a copy someone keeps. */}
-              {keptForDispute ? <p className="muted">A person named on it disputes it, and GrowSigning has not closed that dispute yet, so it cannot be deleted for good until then.</p> : <p className="muted">{done ? 'It is a completed document, so it is not only yours.' : 'Someone on it has already done their part (signed, approved, witnessed or confirmed they viewed it), so it is not only yours.'} Everyone who was on it keeps their copy: the link in their email and their download keep working, and it stays in their list of documents sent to them. It is removed for everyone when this account is closed.</p>}
+              {keptForDispute ? <p className="muted">A person named on it disputes it, and GrowSigning has not closed that dispute yet, so it cannot be deleted for good until then.</p> : <p className="muted">{copiesLine(ret)}</p>}
             </>
           ) : <p>&ldquo;{e.subject || 'Untitled'}&rdquo; and its history will be removed for good. This cannot be undone.</p>}
           {/* One Delete: what the deletion schedule will do by itself, and the way to remove the files for good, are said here. */}

@@ -16,8 +16,8 @@ const STATE: Record<string, (r: any) => { title: string; text: string; good: boo
   // What is kept after a deletion is days, not moments (keepFingerprint and keepDispute in src/server/evidence.ts).
   // Purged under its account's retention rule or at its sender's request (src/server/records.ts): its record is kept.
   deleted: (r) => (r.purged ? (r.completed_at
-    ? { good: true, title: `Completed on ${day(r.completed_at)}, deleted since`, text: `Its documents were removed on ${day(r.deleted_at)}, under its account's retention rule or at its sender's request. We keep its fingerprint and these days with its record, and this page says nothing about who signed it.` }
-    : { good: false, title: 'Never completed, deleted since', text: `It was ${WAS[r.was] || 'not completed'} when its documents were removed on ${day(r.deleted_at)}. It is not a signed document, whatever a copy of it shows.` })
+    ? { good: true, title: `Completed on ${day(r.completed_at)}, deleted since`, text: `Its files were deleted on ${day(r.deleted_at)}, by its account's deletion schedule or at the request of its sender or an admin. We keep its fingerprint and these days with its record, and this page says nothing about who signed it.` }
+    : { good: false, title: 'Never completed, deleted since', text: `It was ${WAS[r.was] || 'not completed'} when its files were deleted on ${day(r.deleted_at)}. It is not a signed document, whatever a copy of it shows.` })
     : r.completed_at
     ? { good: true, title: `Completed on ${day(r.completed_at)}, deleted since`, text: `Its sender deleted it with their account on ${day(r.deleted_at)}. We kept only its fingerprint and this day, until ${day(r.kept_until)}, and nothing about who signed it.` }
     : { good: false, title: 'Never completed, deleted since', text: `It was ${WAS[r.was] || 'not completed'} when its sender deleted it with their account on ${day(r.deleted_at)}. It is not a signed document, whatever a copy of it shows. We keep this only while the dispute below is open, and nothing about who was on it.` }),

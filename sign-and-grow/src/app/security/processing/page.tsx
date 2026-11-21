@@ -6,6 +6,7 @@ import { mailEventsOn, BOUNCE_WARN_DAYS } from '@/lib/policy';
 import { ProcessorTable, Stated } from '../DataPlace';
 import { PrintButton } from './PrintButton';
 import { CHAT_KEPT_PAGE } from '@/lib/chat';
+import { dayText } from '@/lib/dates';
 import { fileEncryptionOn, PROCESSING_ENCRYPTED, databaseText, processingNotDone } from '@/lib/storedfiles';
 import { PURGE_LEVELS, LEVEL_NAME, LEVEL_REMOVES, retentionStays, HOLD_TRUTH, HOLD_BACKUPS, HOLD_OVERRIDE, RETENTION_MIN_DAYS, RETENTION_MAX_DAYS, RETENTION_NOTICE_DAYS } from '@/lib/retention';
 
@@ -20,7 +21,7 @@ export const dynamic = 'force-dynamic';
 
 export default function ProcessingSummary() {
   const d = dataPlace();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayText(new Date());
   return (
     <div className="pub pub-print">
       <PublicNav />
@@ -61,9 +62,9 @@ export default function ProcessingSummary() {
         <ul className="pub-list">
           <li><b>As long as the account exists.</b> Cancelling a plan or a failed payment deletes nothing.</li>
           <li><b>A draft, a template, or a closed envelope that nobody signed</b> is deleted for good when you delete it.</li>
-          <li><b>An envelope that somebody signed</b> cannot be erased by itself. Deleting it takes it out of your lists, search and export, and its recipients keep their link and their copy. It is deleted when the account is, or purged earlier by the account&apos;s retention rule or at its sender&apos;s request (below).</li>
+          <li><b>An envelope that somebody signed</b> cannot be erased by itself. Deleting it takes it out of your lists, search and export, and its recipients keep their link and their copy until its files are deleted. That happens when the account is deleted, or earlier by the account&apos;s deletion schedule or at the request of its sender or an admin (below). The recipients are not told.</li>
           {/* The account's retention rule and legal holds (src/server/records.ts, the words in src/lib/retention.ts). */}
-          <li><b>A closed envelope, under the account&apos;s retention rule</b> (off unless an admin switches it on, under Settings, Your data): kept for the days the admin sets, from {RETENTION_MIN_DAYS} to {RETENTION_MAX_DAYS.toLocaleString('en-US')}, counted from the day it closed, or for a template&apos;s own period. The sender and the admins are emailed {RETENTION_NOTICE_DAYS} days before, and can keep it. The sender or an admin can also ask to purge one closed envelope; that waits {RETENTION_NOTICE_DAYS} days and can be called off until then. Something on legal hold is never purged or deleted by the software while the hold is on.</li>
+          <li><b>A finished document, under the account&apos;s deletion schedule</b> (off unless an admin switches it on, under Settings, Your data, Keep and delete): an admin sets after how many days completed documents are deleted, and after how many days cancelled, declined and expired ones are, each from {RETENTION_MIN_DAYS} to {RETENTION_MAX_DAYS.toLocaleString('en-US')} days, counted from the day the document ended, or a template&apos;s own period. The sender and the admins get an email at least {RETENTION_NOTICE_DAYS} days before (at most one a week for an account), and can keep any of them. The sender or an admin can also ask to delete the files of one finished document; that waits {RETENTION_NOTICE_DAYS} days and can be called off until then. While a hold is on, the software refuses to delete what it covers.</li>
           <li><b>Our copies of emails that belong to no document</b> (invitations, notices, receipts) are deleted after {MAIL_COPY_DAYS} days. Copies of emails about a document stay with that document.</li>
           {mailEventsOn() && <li><b>An address at which an email came back for good</b> stays on its account&apos;s list for {BOUNCE_WARN_DAYS} days, so that a new envelope to it warns the sender first. To count &quot;try later&quot; answers on separate days, only a keyed fingerprint of the address is kept, for the same {BOUNCE_WARN_DAYS} days. When an envelope is deleted, the number of each of its emails, the account that sent it and a keyed fingerprint of the address (not the address) are kept for {BOUNCE_WARN_DAYS} days, so a spam complaint about it still counts against that account.</li>}
           {mailEventsOn() && <li><b>An address that marked an email from an account as spam</b> stays on that account&apos;s list, so the account does not email it again, until the person asks for our emails again on a signing page or the account is deleted.</li>}
@@ -79,10 +80,10 @@ export default function ProcessingSummary() {
         <p>This stays, and why:</p>
         <ul className="pub-list">{KEPT_AFTER_DELETION.map((x) => <li key={x}>{x}</li>)}</ul>
 
-        <h2>Purging a closed envelope</h2>
-        <p>The admin chooses what a purge removes. Each level removes what the one before it does, and more:</p>
+        <h2 id="deleted">Deleting the files of a finished document</h2>
+        <p>The admin, or whoever asks for one document, chooses what is deleted. Each choice deletes what the one before it does, and more (the one in the middle is only offered through the API):</p>
         <ul className="pub-list">{PURGE_LEVELS.map((l) => <li key={l}><b>{LEVEL_NAME[l]}.</b> {LEVEL_REMOVES[l].join(' ')}</li>)}</ul>
-        <p>What stays after a purge:</p>
+        <p>What stays:</p>
         <ul className="pub-list">{retentionStays(d.backups).map((x) => <li key={x}>{x}</li>)}</ul>
         <p>{HOLD_TRUTH} {HOLD_BACKUPS} {HOLD_OVERRIDE}</p>
 

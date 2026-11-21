@@ -106,6 +106,12 @@ What stops working, from reading the code (`src/server/util.ts` has the function
   given a second time), which addresses bounced or asked for no more mail, which phone numbers asked for no more
   texts, and the "same device" mark of witnesses.
 
+- The security record of every account (Settings, Security) is fingerprinted with it. Set `APP_SECRET_RETIRED` to
+  the old value when you rotate, and the lines written before still check. Without it, every account's admins are
+  told that a line of their record does not match, until those lines have gone after `SECURITY_LOG_DAYS`. If the
+  old secret leaked, whoever has it and can write the database could have rewritten lines made under it: say so
+  to the accounts concerned.
+
 What keeps working: logins and sessions, API keys, signing links, webhooks (each has its own secret), stored files
 (they use `FILE_ENCRYPTION_KEY`), audit trails and their chains, and `/verify`.
 

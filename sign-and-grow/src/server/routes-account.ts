@@ -27,7 +27,7 @@ import { forgottenFile, disputeFacts } from './evidence.ts';
 import { sealForVerify } from './seal.ts';
 import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe, sessionMade, passwordChanged } from './twostep.ts';
 // The security record of each account: one line where something happens (seclog.ts).
-import { record, signedIn, signInFailed, settingsChanged } from './seclog.ts';
+import { record, signedIn, signedUp, signInFailed, settingsChanged } from './seclog.ts';
 import { converterOn } from './convert.ts';
 import { newConfirmCode, confirmWithCode, codesOpen } from './confirmcode.ts';
 import { showCode, CONFIRM_CODE_HOURS } from '../lib/confirm.ts';
@@ -146,6 +146,8 @@ export async function createLogin(c: Ctx, p: { name: string; email: string; pass
   const user = get('SELECT * FROM users WHERE id=?', uid);
   if (!user.email_verified) await sendVerification(user, p.via);
   c.cookies.push(createSession(uid, accountId, c.secure));
+  // A new login is signed in at once: that is a sign-in in the security record too (seclog.ts).
+  signedUp(c, user, p.via);
   return { user, joined: (invite?.account_name as string) || null };
 }
 
@@ -445,7 +447,9 @@ route('PATCH', '/account', async (c) => {
   if (b.brand_color && !/^#[0-9a-f]{6}$/i.test(b.brand_color)) throw bad('Brand colour must look like #1f6f43.');
   if (b.brand_logo && !okImage(b.brand_logo, 300_000)) throw bad('Logo must be a PNG or JPEG under 200 KB.');
   const a = c.account;
-  const days = (v: any, lo: number, hi: number, d: number) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : d);
+  // Nothing sent, null, an empty string or anything that is not a number leaves the setting as it is: Number(null)
+  // and Number('') are 0, and 0 would switch reminders off without anyone having asked for that.
+  const days = (v: any, lo: number, hi: number, d: number) => (v == null || typeof v === 'boolean' || String(v).trim() === '' || !Number.isFinite(Number(v)) ? d : Math.min(hi, Math.max(lo, Math.round(Number(v)))));
   // The account's name is the brand line of every email, also for envelopes that are already out: see PATCH /me.
   const renamed = b.name != null && str(b.name, 120).trim() !== a.name && hasNotPaid(a) ? nameRefusal([str(b.name, 120)]) : null;
   if (renamed) throw bad(`${renamed} Nothing was changed.`, 422);
@@ -507,7 +511,9 @@ route('POST', '/invites/accept', async (c) => {
 });
 
 route('DELETE', '/account/invites/:id', (c) => {
-  run('DELETE FROM invites WHERE id=? AND account_id=?', c.params.id, c.account.id);
+  // Withdrawing an invitation changes who can get in: a line in the security record, by role, never the address.
+  const inv = get('SELECT role FROM invites WHERE id=? AND account_id=? AND accepted_at IS NULL', c.params.id, c.account.id);
+  if (run('DELETE FROM invites WHERE id=? AND account_id=?', c.params.id, c.account.id).changes && inv) record('member.invite_withdrawn', { c, about: ['invite', c.params.id], details: { role: inv.role } });
 }, 'admin');
 
 route('PATCH', '/account/members/:id', async (c) => {

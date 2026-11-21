@@ -112,7 +112,7 @@ test('the rule: off by default, only admins change it, 30 to 9,999 days, a level
   const tpl = (await owner.post('/envelopes', { kind: 'template', subject: 'Contract template' })).data.envelope;
   const set = await owner.put('/account/retention', { days: 365, level: 'values', name: 'Contracts', code: 'GRS 2.1 item 050', templates: { [tpl.id]: 3650 } });
   assert.equal(set.status, 200, JSON.stringify(set.data));
-  assert.deepEqual(set.data.policy, { on: true, days: 365, level: 'values', name: 'Contracts', code: 'GRS 2.1 item 050' });
+  assert.deepEqual(set.data.policy, { on: true, days: 365, stopped_days: null, level: 'values', name: 'Contracts', code: 'GRS 2.1 item 050' });
   assert.equal((await owner.get('/account/retention')).data.templates.find((t: any) => t.id === tpl.id).days, 3650);
   assert.equal((await owner.put('/account/retention', { templates: { tpl_nothere: 400 } })).status, 404);
   const log = (await owner.get('/account/retention/log')).data.lines;
@@ -130,7 +130,7 @@ test('the rule: off by default, only admins change it, 30 to 9,999 days, a level
 
 test('due dates for each way of closing, counted from when it closed, and a template\'s own period', async () => {
   const owner = await person('Dee Dates', 'dee@ret.test');
-  assert.equal((await owner.put('/account/retention', { days: 100 })).status, 200);
+  assert.equal((await owner.put('/account/retention', { days: 100, stopped_days: 100 })).status, 200);
   const done = await completed(owner, 'rosa2@ret.test');
   const at = db.get('SELECT completed_at c FROM envelopes WHERE id=?', done.id).c;
   let f = (await owner.get(`/envelopes/${done.id}`)).data.retention;
@@ -197,12 +197,16 @@ test('the 14-day email goes once, to the sender and the admins, and nothing goes
   const sol = mailTo('sol@ret.test').slice(before.sol), nia = mailTo('nia@ret.test').slice(before.nia);
   assert.equal(sol.length, 1, 'one email to the sender with both');
   assert.equal(nia.length, 1, 'one to the admin');
-  assert.match(sol[0].subject, /2 envelopes will be purged/);
+  assert.match(sol[0].subject, /^2 documents will be deleted, the first on \d+ \w+ \d{4}$/);
   assert.match(sol[0].html, new RegExp(e.id));
   assert.match(sol[0].html, new RegExp(soon.id));
   assert.doesNotMatch(sol[0].html, new RegExp(later.id));
-  assert.match(sol[0].html, /Keep it/);
-  assert.match(sol[0].html, /What stays after a purge/);
+  assert.match(sol[0].html, new RegExp(`/app/envelopes/${e.id}\\?ask=keep`), 'a Keep link on each row');
+  assert.match(sol[0].html, new RegExp(`/app/envelopes/${soon.id}\\?ask=keep`));
+  assert.match(sol[0].html, /Keep (&quot;|")Lease for Rosa Lind/);
+  assert.match(sol[0].html, /What stays:/);
+  // Plain words: nothing of the first vocabulary, and no technical names, in an email to a sender.
+  assert.doesNotMatch(`${sol[0].subject} ${sol[0].html.replace(/<[^>]+>/g, ' ')}`, /purg|retention|legal hold|envelope\b|SHA-256|audit trail|evidence pack|\d{4}-\d{2}-\d{2}/i);
   assert.doesNotMatch(sol[0].html, /deleted everywhere/i);
   for (const id of [e.id, soon.id]) {
     const q = queue(id);
@@ -221,7 +225,7 @@ test('the 14-day email goes once, to the sender and the admins, and nothing goes
   assert.equal((await owner.put('/account/retention', { days: null })).status, 200);
   await rec.retentionTick();
   assert.equal(queue(soon.id).noticed_at, null);
-  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Purge called off'", soon.id));
+  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Deletion called off'", soon.id));
   noticePassed(soon.id);
   await rec.retentionTick();
   assert.ok(!purgedAt(soon.id));
@@ -254,7 +258,7 @@ test('Keep it: a reason in the audit trail, one more period, and nobody keeps wh
   const k = await member.post(`/envelopes/${e.id}/keep`, { reason: 'Tenant still lives there' });
   assert.equal(k.status, 200, JSON.stringify(k.data));
   assert.ok(Math.abs(Date.parse(k.data.kept_until) - (Date.now() + 30 * DAY)) < 60_000);
-  const line = db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Kept past its retention date'", e.id);
+  const line = db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Kept'", e.id);
   assert.match(line.detail, /Tenant still lives there/);
   assert.equal(queue(e.id).noticed_at, null);
   noticePassed(e.id);
@@ -272,7 +276,7 @@ test('Keep it: a reason in the audit trail, one more period, and nobody keeps wh
 test('legal hold: every way of deleting is refused and recorded, a folder hold follows what leaves it, only an admin lifts it with a reason', async () => {
   const owner = await person('Hal Hold', 'hal@ret.test');
   const member = await join(owner, 'Hu Member', 'hu@ret.test');
-  await owner.put('/account/retention', { days: 30 });
+  await owner.put('/account/retention', { days: 30, stopped_days: 30 });
   // One nobody signed: deleting it would remove it for good.
   const v = await simple(member, 'vhold@ret.test');
   await member.post(`/envelopes/${v.id}/send`);
@@ -322,7 +326,7 @@ test('legal hold: every way of deleting is refused and recorded, a folder hold f
   assert.equal((await owner.call('DELETE', `/account/retention/holds/${fh.data.hold.id}`, { reason: '' })).status, 400);
   assert.equal((await owner.call('DELETE', `/account/retention/holds/${fh.data.hold.id}`, { reason: 'Settled in court' })).status, 200);
   assert.equal(rec.isHeld([f1.id, f2.id]).size, 0);
-  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Legal hold lifted'", f1.id));
+  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Hold lifted'", f1.id));
   assert.equal((await owner.call('DELETE', `/envelopes/${v.id}/hold`, { reason: 'Claim dropped' })).status, 200);
   assert.equal((await member.call('DELETE', `/envelopes/${v.id}`)).status, 200, 'deleting works again');
   const log = (await owner.get('/account/retention/log')).data.lines.map((l: any) => l.what);
@@ -334,7 +338,7 @@ test('legal hold: every way of deleting is refused and recorded, a folder hold f
   assert.equal((await member.post(`/envelopes/${w.id}/purge`, { level: 'documents' })).status, 200);
   assert.equal((await owner.post(`/envelopes/${w.id}/hold`, { reason: 'Before it goes' })).status, 200);
   assert.equal(queue(w.id).asked_at, null);
-  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Purge called off'", w.id));
+  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Deletion called off'", w.id));
   // An integration key with the "send" scope neither places nor lifts a hold, whoever made it.
   const made = await owner.post('/api-keys', { name: 'Website' });
   const key = new Client();
@@ -351,12 +355,12 @@ test('legal hold: closing the account is refused with the list of holds, also on
   await owner.post(`/envelopes/${e.id}/hold`, { reason: 'Audit by the regulator', matter: 'R-1' });
   const r = await owner.post('/me/delete', { password: PW, now: true });
   assert.equal(r.status, 409);
-  assert.match(r.data.error, /legal hold/);
+  assert.match(r.data.error, /is on hold/);
   assert.match(r.data.error, /R-1/);
   const uid = db.get('SELECT id FROM users WHERE email=?', 'cy@ret.test').id;
   assert.equal(db.get('SELECT closing_at c FROM users WHERE id=?', uid).c, null, 'nothing changed');
   const trust = await import('../src/server/routes-trust.ts');
-  assert.throws(() => trust.purgeUser(uid), /legal hold/);
+  assert.throws(() => trust.purgeUser(uid), /is on hold/);
   // A login that is closing when a hold is on (set by hand here) is not deleted by the timer either.
   db.run('UPDATE users SET closing_at=? WHERE id=?', ago(1), uid);
   await trust.purgeClosedAccounts();
@@ -390,7 +394,7 @@ test('the people who run the server lift a hold only as two, and both are on the
     const lifted = db.get('SELECT * FROM legal_holds WHERE id=?', h.id);
     assert.match(lifted.lifted_by, /Opal One and Otto Two/);
     assert.ok(db.get("SELECT 1 x FROM retention_log WHERE what='override_asked' AND detail LIKE '%Court order%'"));
-    assert.match(mailTo('ann@ret.test').pop().subject, /legal hold .* was lifted/);
+    assert.match(mailTo('ann@ret.test').pop().subject, /hold .* was lifted/);
   } finally {
     delete process.env.OPERATOR_EMAILS;
   }
@@ -500,7 +504,7 @@ test('after a purge: /verify says completed here and deleted since, the link say
   assert.ok(page.chain.redacted > 0);
   assert.equal(page.chain.redacted_on, today());
   assert.match(redactedNote(page.chain.redacted_on), /Some details were removed on .*can no longer be recomputed for those lines/);
-  assert.ok(page.audit.some((a: any) => a.action === 'Purged'));
+  assert.ok(page.audit.some((a: any) => a.action === 'Files deleted'));
   assert.equal(page.retention.purged_level, 'personal');
   assert.equal(page.retention.purged_sha256, e.final);
   // Downloads, the evidence pack and copies say what happened.
@@ -540,13 +544,15 @@ test('Purge now: closed only, 14 days, called off in that time, then for good', 
   // Called off within the 14 days: nothing happens.
   const off = await member.call('DELETE', `/envelopes/${e.id}/purge`);
   assert.equal(off.status, 200);
-  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Purge called off'", e.id));
+  assert.ok(db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Deletion called off'", e.id));
   noticePassed(e.id);
   await rec.retentionTick();
   assert.ok(!purgedAt(e.id));
   assert.equal((await member.call('DELETE', `/envelopes/${e.id}/purge`)).status, 409, 'nothing left to call off');
-  // Asked again and left: it goes, and cannot be undone.
+  // Asked again and left: it goes, and cannot be undone. Asking again on the same day sends no second email.
+  const mailsBefore = mailTo('pam@ret.test').length;
   await owner.post(`/envelopes/${e.id}/purge`, { level: 'values' });
+  assert.equal(mailTo('pam@ret.test').length, mailsBefore, 'ask, call off, ask again: one email a day for one document');
   await rec.retentionTick();
   assert.ok(!purgedAt(e.id), 'not before the 14 days');
   noticePassed(e.id);
@@ -554,7 +560,7 @@ test('Purge now: closed only, 14 days, called off in that time, then for good', 
   assert.ok(purgedAt(e.id));
   assert.equal((await member.call('DELETE', `/envelopes/${e.id}/purge`)).status, 409);
   assert.equal((await member.post(`/envelopes/${e.id}/keep`, { reason: 'Oops' })).status, 409);
-  assert.match(db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Purged'", e.id).detail, /Pam Now asked for this purge/);
+  assert.match(db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Files deleted'", e.id).detail, /Pam Now asked for this on/);
   const logged = db.get("SELECT * FROM retention_log WHERE envelope_id=? AND what='purged'", e.id);
   assert.equal(logged.level, 'values');
   assert.equal(logged.sha256, e.final);
@@ -591,7 +597,7 @@ test('the export lists what was purged instead of calling it a PDF that could no
   await rec.retentionTick();
   const zip = (await owner.get('/export')).data as Uint8Array;
   const text = Buffer.from(zip).toString('latin1');
-  assert.match(text, /had their documents purged/);
+  assert.match(text, /had their files deleted/);
   assert.doesNotMatch(text, /could not be made so far/);
 });
 
@@ -612,4 +618,277 @@ test('today\'s delete and restore are unchanged with the rule on', async () => {
   assert.equal((await member.call('DELETE', `/envelopes/${v.id}`)).status, 200);
   assert.equal(db.get('SELECT 1 x FROM envelopes WHERE id=?', v.id), null, 'gone for good, as before');
   assert.ok(retentionStays(null).some((s) => /have not said/.test(s)), 'without DATA_BACKUPS the page says the operator has not said');
+});
+
+// ---- Repairs after the skeptic and the simplicity review -----------------------------------------------------------
+
+import { LEVEL_NAME, LEVEL_DOES, LEVEL_REMOVES, HOLD_TRUTH, HOLD_SHORT, HOLD_OVERRIDE, HOLD_BACKUPS, STAYS_SHORT, copiesKept, daysProblem, removedDay, plainDay, SCREEN_LEVELS, RETENTION_MAIL_EVERY_DAYS } from '../src/lib/retention.ts';
+import { pageMore } from '../src/lib/envelopepage.ts';
+
+const accountOf = (email: string) => db.get('SELECT a.id FROM accounts a JOIN memberships m ON m.account_id=a.id JOIN users u ON u.id=m.user_id WHERE u.email=?', email).id;
+const lastMailAgo = (email: string, days: number) => db.run('UPDATE accounts SET retention_mailed_at=? WHERE id=?', ago(days), accountOf(email));
+
+test('two lines: completed documents and stopped ones each have their own days, and an empty line keeps them', async () => {
+  const owner = await person('Tess Two', 'tess@ret.test');
+  assert.equal((await owner.put('/account/retention', { days: 60 })).status, 200);
+  const done = await completed(owner, 'rosa20@ret.test');
+  const v = await simple(owner, 'void20@ret.test');
+  await owner.post(`/envelopes/${v.id}/send`);
+  await owner.post(`/envelopes/${v.id}/void`, { reason: 'Wrong one' });
+  let f = (await owner.get(`/envelopes/${v.id}`)).data.retention;
+  assert.equal(f.period, null, 'the line for stopped ones is empty: a cancelled one has no date');
+  assert.equal(f.due_at, null);
+  assert.equal(f.schedule_on, true);
+  assert.equal((await owner.get(`/envelopes/${done.id}`)).data.retention.period.days, 60);
+  db.run("UPDATE audit SET at=? WHERE envelope_id=? AND action='Envelope voided'", ago(900), v.id);
+  await rec.retentionTick();
+  assert.equal(queue(v.id), null, 'and is never announced');
+  // The other line alone.
+  const set = await owner.put('/account/retention', { days: null, stopped_days: 45 });
+  assert.deepEqual([set.data.policy.on, set.data.policy.days, set.data.policy.stopped_days], [true, null, 45]);
+  f = (await owner.get(`/envelopes/${v.id}`)).data.retention;
+  assert.equal(f.period.days, 45);
+  assert.equal((await owner.get(`/envelopes/${done.id}`)).data.retention.period, null);
+  assert.equal((await owner.put('/account/retention', { stopped_days: 12 })).status, 400);
+  // "on": false switches both off.
+  assert.equal((await owner.put('/account/retention', { on: false })).data.policy.on, false);
+  assert.ok(db.get("SELECT 1 x FROM retention_log WHERE account_id=? AND what='policy' AND detail LIKE '%cancelled, declined and expired after 45 days%'", accountOf('tess@ret.test')));
+});
+
+test('the email about the schedule goes to an account at most once a week, and announces a document before its 14 days start', async () => {
+  const owner = await person('Wim Weekly', 'wim@ret.test');
+  await owner.put('/account/retention', { days: 100 });
+  const a = await completed(owner, 'rosa21@ret.test', { subject: 'First lease' });
+  closedDaysAgo(a.id, 95); // due in 5 days
+  // Only the emails about the schedule: the owner also gets one each time a document is completed.
+  const mails = () => mailTo('wim@ret.test').filter((m: any) => /will be deleted/.test(m.subject));
+  const start = mails().length;
+  await rec.retentionTick();
+  assert.equal(mails().length, start + 1);
+  assert.match(mails().pop().subject, /^1 document will be deleted on /);
+  assert.match(mails().pop().link, new RegExp(`/app/envelopes/${a.id}$`), 'the button opens the document');
+  // A second one comes into reach the next day: no email per document, it waits for the week to pass.
+  const b = await completed(owner, 'rosa22@ret.test', { subject: 'Second lease' });
+  closedDaysAgo(b.id, 99);
+  await rec.retentionTick();
+  assert.equal(mails().length, start + 1, 'no second email inside the week');
+  assert.equal(queue(b.id), null);
+  assert.ok(!purgedAt(b.id), 'and nothing is deleted without its email, although its day has come');
+  lastMailAgo('wim@ret.test', RETENTION_MAIL_EVERY_DAYS + 1);
+  // One that is due in 18 days is in the same email, so its 14 days start before its day and it goes on its day.
+  const c = await completed(owner, 'rosa23@ret.test', { subject: 'Third lease' });
+  closedDaysAgo(c.id, 82);
+  const far = await completed(owner, 'rosa24@ret.test', { subject: 'Far lease' });
+  closedDaysAgo(far.id, 70); // due in 30 days: not in this email
+  await rec.retentionTick();
+  assert.equal(mails().length, start + 2, 'one email for both');
+  assert.match(mails().pop().subject, /^2 documents will be deleted/);
+  assert.equal(queue(far.id), null);
+  const due = Date.parse(db.get('SELECT completed_at c FROM envelopes WHERE id=?', c.id).c) + 100 * DAY;
+  assert.equal(Date.parse(queue(c.id).goes_at), due, 'on its day, not later');
+  assert.ok(Date.parse(queue(b.id).goes_at) >= Date.now() + RETENTION_NOTICE_DAYS * DAY - 5000, 'the late one still gets its 14 days');
+});
+
+test('a deletion never washes the disputed mark off /verify, by file or by number', async () => {
+  const owner = await person('Dora Dispute', 'dora@ret.test');
+  const e = await completed(owner, 'rosa25@ret.test');
+  const pdf = (await owner.get(`/envelopes/${e.id}/download`)).data as Uint8Array;
+  const on = ago(3);
+  db.run("INSERT INTO disputes (id, envelope_id, recipient_id, name, via, detail, at, closed_at, closed_how) VALUES ('dsp_wash', ?, (SELECT id FROM recipients WHERE envelope_id=?), 'Rosa Lind', 'link', 'It was not me', ?, ?, 'handled')", e.id, e.id, on, ago(1));
+  db.run('UPDATE envelopes SET disputed_at=? WHERE id=?', on, e.id);
+  assert.equal((await new Client().get(`/public/verify/${e.id}`)).data.disputed_at, on, 'said before');
+  assert.equal((await owner.post(`/envelopes/${e.id}/purge`, { level: 'personal' })).status, 200, 'a closed dispute does not stop the deletion');
+  noticePassed(e.id);
+  await rec.retentionTick();
+  assert.ok(purgedAt(e.id));
+  const look = (await new Client().get(`/public/verify/${e.id}`)).data;
+  assert.equal(look.status, 'deleted');
+  assert.equal(look.disputed_at, on, 'and said after, by number');
+  assert.equal(look.disputes, 1);
+  assert.equal(look.disputes_open, 0);
+  const f = new FormData();
+  f.append('file', new Blob([pdf], { type: 'application/pdf' }), 'signed.pdf');
+  const v = (await new Client().call('POST', '/public/verify', f)).data;
+  assert.equal(v.deleted.disputed_on, on.slice(0, 10), 'and by file');
+  assert.equal(v.deleted.dispute_open, false, 'without saying it is still open');
+  // What the highest level does to the account's copy of the dispute is what the list says.
+  assert.equal(db.get("SELECT detail d FROM disputes WHERE id='dsp_wash'").d, removedOn(today()));
+  assert.ok(LEVEL_REMOVES.personal.some((x) => /name and the words of a person who disputed it/.test(x)));
+  assert.ok(retentionStays(null).some((x) => /mark that someone disputes the document stays, also at Verify a document/.test(x)));
+});
+
+test('"the answers" level takes the decline and cancel reasons out of our stored emails too, and keeps who got which email', async () => {
+  const owner = await person('Rae Reason', 'rae@ret.test');
+  const d = await simple(owner, 'decl26@ret.test');
+  await owner.post(`/envelopes/${d.id}/send`);
+  const s = signer();
+  const tok = tokenFor(d.id, 'decl26@ret.test');
+  await s.post(`/sign/${tok}/consent`);
+  await s.post(`/sign/${tok}/decline`, { reason: 'The rent in clause four is wrong' });
+  const v = await simple(owner, 'void26@ret.test');
+  await owner.post(`/envelopes/${v.id}/send`);
+  await owner.post(`/envelopes/${v.id}/void`, { reason: 'Sent to the wrong cousin' });
+  const words = (eid: string) => db.all('SELECT subject, html, payload, archive_draft FROM emails WHERE envelope_id=?', eid).map((m) => `${m.subject} ${m.html} ${m.payload} ${m.archive_draft}`).join(' ');
+  assert.match(words(d.id), /rent in clause four/, 'the reason was in an email before');
+  assert.match(words(v.id), /wrong cousin/);
+  for (const [eid, re] of [[d.id, /rent in clause four/], [v.id, /wrong cousin/]] as [string, RegExp][]) {
+    const rows = db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id=?', eid).n;
+    assert.equal((await owner.post(`/envelopes/${eid}/purge`, { level: 'values' })).status, 200);
+    noticePassed(eid);
+    await rec.retentionTick();
+    assert.ok(purgedAt(eid));
+    assert.doesNotMatch(words(eid), re, 'gone from the stored emails');
+    assert.doesNotMatch(JSON.stringify(db.all('SELECT * FROM audit WHERE envelope_id=?', eid)), re, 'and from the history');
+    assert.ok(db.get('SELECT COUNT(*) n FROM emails WHERE envelope_id=?', eid).n >= rows, 'the rows stay: who got which email, and when');
+    assert.ok(db.get('SELECT to_email t FROM emails WHERE envelope_id=? LIMIT 1', eid).t, 'with the address');
+  }
+  assert.ok(LEVEL_REMOVES.values.some((x) => /words of our stored copies of the emails/.test(x)), 'and the list says so');
+  // An email whose words are gone is never tried again.
+  const m = db.get('SELECT id, payload FROM emails WHERE envelope_id=?', d.id);
+  assert.equal(m.payload, null);
+});
+
+test('a hold freezes a draft, keeps a held document in its sender\'s lists, and the pages offer no Delete on it', async () => {
+  const owner = await person('Fay Freeze', 'fay@ret.test');
+  const dr = await simple(owner, 'draft27@ret.test');
+  assert.equal((await owner.post(`/envelopes/${dr.id}/hold`, { reason: 'Keep the draft as it is' })).status, 200);
+  const before = (await owner.get(`/envelopes/${dr.id}`)).data.envelope;
+  const put = await owner.put(`/envelopes/${dr.id}`, { subject: 'Emptied', documents: [], recipients: [], fields: [] });
+  assert.equal(put.status, 409, 'saving a held draft is refused');
+  assert.equal(put.data.code, 'legal_hold');
+  assert.match(put.data.error, /on hold, so the software refuses to change it\. Ask an admin/);
+  assert.equal((await owner.get(`/envelopes/${dr.id}`)).data.envelope.documents.length, before.documents.length, 'nothing was emptied');
+  assert.equal((await owner.call('DELETE', `/envelopes/${dr.id}`)).status, 409);
+  // A completed one: deleting would only take it out of the lists, and that is refused too while it is held.
+  const e = await completed(owner, 'rosa27@ret.test');
+  await owner.post(`/envelopes/${e.id}/hold`, { reason: 'Claim 27' });
+  const del = await owner.call('DELETE', `/envelopes/${e.id}`);
+  assert.equal(del.status, 409);
+  assert.match(del.data.error, /on hold, so the software refuses to delete it\. Ask an admin/);
+  assert.equal(db.get('SELECT hidden_at h FROM envelopes WHERE id=?', e.id).h, null, 'still in the lists');
+  assert.ok(db.get("SELECT 1 x FROM retention_log WHERE envelope_id=? AND what='refused'", e.id));
+  // The page's More: no Delete while held, Lift the hold for the admin.
+  const more = pageMore({ status: 'completed', hasFiles: true, mayChange: true, schedule: false, mayHold: true, held: true, heldHere: true }).map((l) => l.key);
+  assert.ok(!more.includes('delete') && more.includes('lift_hold'));
+  // The words say what the software does, and who else can end a hold.
+  for (const t of [HOLD_TRUTH, HOLD_SHORT]) assert.doesNotMatch(t, /cannot be deleted or purged|every way of deleting|legal hold/);
+  assert.match(HOLD_TRUTH, /the software refuses to delete/);
+  assert.match(HOLD_TRUTH, /cannot stop someone with access to the server's database, disk or backups/);
+  assert.match(HOLD_OVERRIDE, /people who run this server can end one too/);
+  assert.match(HOLD_BACKUPS, /does not reach the backups/);
+  assert.match(db.get("SELECT detail d FROM audit WHERE envelope_id=? AND action='Put on hold'", e.id).d, /the software refuses to delete it/);
+});
+
+test('with no schedule nothing is offered on the page; with one, Keep it and Hold are listed and there is one Delete', () => {
+  const zero = pageMore({ status: 'completed', hasFiles: true, mayChange: true, schedule: false, mayKeep: false, mayHold: true, mayPurge: true }).map((l) => l.key);
+  assert.deepEqual(zero.filter((k) => ['keep', 'hold', 'lift_hold', 'remove_files'].includes(k)), [], 'zero setup: nothing of keep and delete');
+  assert.equal(zero.filter((k) => k === 'delete').length, 1);
+  const removedZero = pageMore({ status: 'completed', removed: true, hasFiles: true, mayChange: true, schedule: false, mayHold: true, mayPurge: true }).map((l) => l.key);
+  assert.ok(!removedZero.includes('remove_files'), 'nor on one its sender removed');
+  const on = pageMore({ status: 'completed', hasFiles: true, mayChange: true, schedule: true, mayKeep: true, mayHold: true, mayPurge: true });
+  assert.deepEqual(on.filter((l) => ['keep', 'hold'].includes(l.key)).map((l) => l.label), ['Keep it', 'Hold']);
+  assert.equal(on.filter((l) => /delete/i.test(l.label)).length, 1, 'one Delete');
+  assert.ok(on.length <= 9);
+  // The screens: what must be there, and what must not.
+  const read = (f: string) => fs.readFileSync(path.join(import.meta.dirname, '..', f), 'utf8');
+  const settings = read('src/components/settings/RetentionSettings.tsx'), page = read('src/components/sender/Retention.tsx'), envelope = read('src/app/app/envelopes/[id]/page.tsx');
+  for (const w of ['Keep and delete', 'Delete completed documents after', 'Delete cancelled, declined and expired ones after', 'At the end', '>Holds<', '>Deletion record<', 'Download the deletion record', 'How this works', 'Off: nothing is deleted automatically.']) assert.ok(settings.includes(w), w);
+  // No word of the first vocabulary between tags or in a quoted sentence of the two components.
+  for (const src of [settings, page]) {
+    const seen = [...src.matchAll(/>([^<>{}]+)</g), ...src.matchAll(/'([^'\n]{12,})'/g), ...src.matchAll(/"([^"\n]{12,})"/g)].map((m) => m[1]).filter((x) => !x.startsWith('@/') && !x.startsWith('/') && !/api\(|\/account\/retention|\/envelopes\/|src\/server|^ds-retention$|[()=;]| \? /.test(x));
+    for (const x of seen) assert.doesNotMatch(x.replace(/\{[^{}]*\}/g, ' ').replace(/\{[^{}]*\}/g, ' ').replace(/\b\w*(_|[a-z][A-Z])\w*\b/g, ' '), /purg|retention|legal hold|\benvelopes?\b|voided|audit trail|evidence pack/i, `in a screen file: ${x}`);
+  }
+  assert.ok(!envelope.includes('Stop it from being deleted'), 'no hold line in the Files fold');
+  assert.ok(envelope.includes('keepLabel="Cancel"'), 'the Delete dialog closes with Cancel in every state');
+  assert.ok(page.includes('if (!r || r.purged_at || !scheduleOn(r)) return null;'), 'the Delete dialog gains nothing without a schedule');
+  assert.ok(!page.includes('<section className="card ret"'), 'no card on the document page: one sentence under the status');
+  assert.deepEqual(SCREEN_LEVELS, ['documents', 'personal'], 'two outcomes on the screens');
+  assert.equal(LEVEL_NAME.documents, 'Delete the files');
+  assert.equal(LEVEL_NAME.personal, 'Also remove names and answers, keep the record');
+});
+
+test('words: every shared sentence is in plain words, refusals say what to do, and dates are written out', async () => {
+  const all = [...Object.values(LEVEL_NAME), ...Object.values(LEVEL_DOES), ...Object.values(LEVEL_REMOVES).flat(), ...retentionStays('Kept 30 days.'), ...retentionStays(null), HOLD_TRUTH, HOLD_SHORT, HOLD_OVERRIDE, HOLD_BACKUPS, STAYS_SHORT, PURGED_LINK, copiesKept(), copiesKept('5 December 2026')];
+  for (const x of all) assert.doesNotMatch(x, /purg|retention|legal hold|\benvelopes?\b|voided|audit trail|evidence pack|deleted everywhere|—/i, x);
+  assert.ok(retentionStays(null).some((x) => /address book: the people you sent to stay under Contacts/.test(x)), 'the address book is named');
+  assert.equal(plainDay('2026-12-05T10:00:00.000Z'), '5 December 2026');
+  assert.equal(removedDay(removedOn('2026-11-21')), '2026-11-21');
+  assert.equal(removedDay('Rosa Lind'), null);
+  // A wrong number of days: what is wrong, then what to do.
+  assert.equal(daysProblem(''), '');
+  assert.equal(daysProblem('365'), '');
+  assert.match(daysProblem('5'), /^5 days is too short\. Type a whole number from 30 to 9,999/);
+  assert.match(daysProblem('10000'), /is too long\. Type/);
+  assert.match(daysProblem('1.5'), /is not a whole number of days\. Type/);
+  // Every refusal a person can meet: two sentences or more, none of the first vocabulary.
+  const owner = await person('Wendy Words', 'wendy@ret.test');
+  const member = await join(owner, 'Will Member', 'will@ret.test');
+  const e = await completed(owner, 'rosa28@ret.test');
+  const out = await simple(owner, 'out28@ret.test');
+  const said: string[] = [];
+  const no = async (r: Promise<any>) => { const x = await r; assert.ok(x.status >= 400, JSON.stringify(x.data)); said.push(x.data.error); };
+  await no(owner.put('/account/retention', { days: 3 }));
+  await no(owner.put('/account/retention', { level: 'x' }));
+  await no(owner.post(`/envelopes/${e.id}/keep`, { reason: 'Because I want to' }));
+  await no(owner.post(`/envelopes/${e.id}/keep`, { reason: '' }));
+  await no(owner.post(`/envelopes/${out.id}/purge`, { level: 'documents' }));
+  await no(owner.post(`/envelopes/${e.id}/purge`, { level: 'most' }));
+  await no(owner.call('DELETE', `/envelopes/${e.id}/purge`));
+  await no(member.post('/account/retention/holds', { folder: 'X', reason: 'Because' }));
+  await no(owner.post('/account/retention/holds', { reason: 'No target' }));
+  await no(owner.post(`/envelopes/${e.id}/hold`, { reason: '' }));
+  await no(owner.call('DELETE', `/envelopes/${e.id}/hold`, { reason: 'Nothing there' }));
+  await owner.post(`/envelopes/${e.id}/purge`, { level: 'documents' });
+  await no(owner.post(`/envelopes/${e.id}/purge`, { level: 'documents' }));
+  await owner.post(`/envelopes/${e.id}/hold`, { reason: 'Held now' });
+  await no(owner.post(`/envelopes/${e.id}/hold`, { reason: 'Twice' }));
+  await no(owner.post(`/envelopes/${e.id}/purge`, { level: 'documents' }));
+  await no(owner.post('/me/delete', { password: PW, now: true }));
+  for (const x of said) {
+    assert.doesNotMatch(x, /purg|retention rule|legal hold|\benvelopes?\b|\d{4}-\d{2}-\d{2}T/i, x);
+    assert.ok(x.split(/[.!?] /).length >= 2 || /Nothing changed\.$/.test(x), `two sentences: ${x}`);
+  }
+  // The history of a document reads the same way.
+  const lines = db.all("SELECT action, detail FROM audit WHERE envelope_id=? AND action IN ('Deletion asked for','Deletion called off','Put on hold')", e.id);
+  assert.equal(lines.length, 3);
+  for (const l of lines) assert.doesNotMatch(`${l.action} ${l.detail}`, /purg|retention|legal hold|\d{4}-\d{2}-\d{2}/i);
+});
+
+test('what recipients keep is said with its end: the day their link stops, in the dialog words and in the record', async () => {
+  const owner = await person('Lin Link', 'lin@ret.test');
+  await owner.put('/account/retention', { days: 400 });
+  const e = await completed(owner, 'rosa29@ret.test');
+  const r = (await owner.get(`/envelopes/${e.id}`)).data.retention;
+  assert.match(copiesKept(plainDay(r.due_at)), new RegExp(`keeps their link and their download until ${plainDay(r.due_at)}\\. On that day its files are deleted here, and they are not told`));
+  assert.match(copiesKept(null), /keep working unless its files are deleted later/);
+  assert.equal((await owner.call('DELETE', `/envelopes/${e.id}`)).data.kept_for_recipients, true);
+  assert.match(db.get("SELECT detail d FROM audit WHERE envelope_id=? AND action='Removed from the sender''s lists'", e.id).d, /keeps their link and their copy, unless its files are deleted later/);
+  // The admin deletes its files although its sender removed it: the link then says so, as the words promised.
+  assert.equal((await owner.post(`/envelopes/${e.id}/purge`, { level: 'documents' })).status, 200);
+  assert.equal((await new Client().get(`/sign/${e.tok}`)).status, 200, 'until the day');
+  noticePassed(e.id);
+  await rec.retentionTick();
+  assert.equal((await new Client().get(`/sign/${e.tok}`)).status, 410);
+  const dev = fs.readFileSync(path.join(import.meta.dirname, '..', 'src/app/developers/page.tsx'), 'utf8');
+  assert.match(dev, /keep their link and their copy until its files are deleted/);
+});
+
+test('a link with ?ask= opens only what applies, and Settings offers the deletion record once it has a line', async () => {
+  const { askAllowed, deleteOffers, scheduleOn } = await import('../src/components/sender/Retention.tsx').catch(() => ({ askAllowed: null, deleteOffers: null, scheduleOn: null } as any));
+  const owner = await person('Ask Admin', 'ask@ret.test');
+  assert.equal((await owner.get('/account/retention')).data.has_record, false, 'no record yet: no download offered');
+  await owner.put('/account/retention', { days: 90 });
+  assert.equal((await owner.get('/account/retention')).data.has_record, true);
+  const csv = await owner.call('GET', '/account/retention/log?format=csv');
+  assert.match(String(csv.headers?.get?.('content-disposition') || 'deletion-record'), /deletion-record/);
+  if (askAllowed) {
+    const base = { closed_at: 'x', period: null, due_at: null, rule_level: null, noticed_at: null, goes_at: null, level: null, kept_until: null, kept_reason: null, kept_by: null, asked: null, holds: [], held: false, disputed: false, purged_at: null, purged_level: null, purged_sha256: null, may_purge: true, may_hold: false, stays: [] };
+    assert.equal(askAllowed('keep', base, 'e1'), '', 'nothing to keep it from');
+    assert.equal(askAllowed('hold', base, 'e1'), '', 'not an admin');
+    assert.equal(askAllowed('purge', base, 'e1'), 'purge');
+    assert.equal(askAllowed('keep', { ...base, due_at: 'd', period: { days: 30, from: 'account' } }, 'e1'), 'keep');
+    assert.equal(askAllowed('anything', base, 'e1'), '');
+    assert.equal(scheduleOn(base), false);
+    assert.deepEqual(deleteOffers({ ...base, purged_at: 'x' }), { keep: false, purge: false });
+  }
 });

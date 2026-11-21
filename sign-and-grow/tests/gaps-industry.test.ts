@@ -117,7 +117,7 @@ test('on a team, the owner and admins can open what a member sends, and a member
 
 test('public forms are not sold for consent forms any more, and the missing health agreement is said in three places from one text', () => {
   // The feature list moved from the home page to /features on 21 November 2026 (simplify-public).
-  const landing = read('src/app/features/page.tsx');
+  const landing = read('src/app/features/page.tsx') + read('src/app/pricing/page.tsx');
   assert.doesNotMatch(landing, /consent forms/i);
   assert.match(landing, /Not for patient forms/);
   // One text, kept once.
@@ -153,7 +153,7 @@ test('bulk send is no longer "on every plan, including free" without its price',
   const landing = read('src/app/features/page.tsx') + read('src/app/pricing/page.tsx');
   assert.doesNotMatch(landing, /Every plan, including free/);
   assert.match(landing, /Send one template to hundreds of people from a spreadsheet\. \$\{BULK_COST_NOTE\}/);
-  assert.match(landing, /<li id="bulk-cost"><b>What a bulk send costs\.<\/b> \{BULK_COST_NOTE\}/);
+  assert.match(landing, /<li id="bulk-cost"><b>What Send to many costs\.<\/b> \{BULK_COST_NOTE\}/);
   assert.match(policy.BULK_COST_NOTE, /Each person who signs uses one signature/);
   assert.match(policy.BULK_COST_NOTE, /only goes out when all of its signatures are already in your balance/);
   assert.match(read('src/app/help/page.tsx'), /<b>Bulk send:<\/b> \{BULK_COST_NOTE\}/);
@@ -203,7 +203,7 @@ test('"automatic nudges" is true: a new account reminds every 3 days, says so, a
   assert.match(read('src/components/editor/ReviewParts.tsx'), /reminderDays: env\.reminder_days,/);
   assert.match(read('src/components/editor/ReminderChoice.tsx'), /reminderText\(n\)/);
   assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /id="sn-reminders">\{reminderText\(e\.reminder_days\)\}/, 'and on the envelope');
-  assert.match(read('src/app/app/settings/page.tsx'), /id="set-reminders"><b>New envelopes start like this\.<\/b> \{reminderText\(f\.default_reminder_days\)\}/, 'and under Settings');
+  assert.match(read('src/components/settings/SendingDefaults.tsx'), /id="set-reminders"><b>New documents start like this\.<\/b> \{reminderText\(reminders \?\? a\.default_reminder_days\)\}/, 'and under Settings, Sending');
   const landing = read('src/app/features/page.tsx');
   assert.doesNotMatch(landing, /Automatic nudges/);
   assert.match(landing, /A new account reminds whoever has not finished by email every \$\{DEFAULT_REMINDER_DAYS\} days/);

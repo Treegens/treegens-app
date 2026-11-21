@@ -4,7 +4,14 @@
 import { looksLikeEmail } from './lib.ts';
 import { normalPhone, premiumPhone } from '../../lib/checks.ts';
 // A "language" column: the language of our screens for that person (src/lib/i18n.ts, src/server/locales.ts).
-import { isShipped, localeFromWords } from '../../lib/i18n.ts';
+import { isShipped, localeFromWords, languageOf, shippedLocales, SUPPORTED_LOCALES, type Language } from '../../lib/i18n.ts';
+
+/** One sentence for the bulk page about the "language" column, or nothing while there is only one language to choose. */
+export function bulkLanguageHint(langs: Language[] = SUPPORTED_LOCALES): string {
+  const on = shippedLocales(langs);
+  if (on.length < 2) return '';
+  return ` A column called language sets the language of what we show that person (with more than one role, name it like the others: "Client language"). Write ${on.map((t) => languageOf(t, langs)?.own || t).join(' or ')}. Left empty, their browser decides.`;
+}
 
 // `phone` is true for a role the template checks with a code by text message, or texts the signing link to: every
 // row then needs that person's mobile number, in a column of its own.

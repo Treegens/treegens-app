@@ -155,7 +155,8 @@ export function momentForReader(iso: string | Date | null | undefined, tz?: stri
 export function localStamp(iso: string | null | undefined, tz?: string | null): string {
   const zone = validZone(tz);
   const c = iso && zone ? clockIn(iso, zone) : null;
-  return c ? `${c.y}-${pad(c.m + 1)}-${pad(c.d)} ${pad(c.hh)}:${pad(c.mm)} ${c.offset}${byOffset(c.zone) ? '' : `, ${c.zone}`}` : '';
+  // The day with the month as a word, as everywhere a person reads a date: "21 Mar 2027 06:40 UTC+14:00".
+  return c ? `${c.d} ${MONTHS[c.m]} ${c.y} ${pad(c.hh)}:${pad(c.mm)} ${c.offset}${byOffset(c.zone) ? '' : `, ${c.zone}`}` : '';
 }
 
 /** Whether it is daytime in a zone at a moment: from 8:00 up to 20:00. A reminder that falls outside waits. */
@@ -222,4 +223,10 @@ export function dayText(iso: string | Date | null | undefined): string {
   if (!iso) return '';
   const text = typeof iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00Z` : iso;
   return formatDate(text, DEFAULT_DATE_FORMAT, 'UTC');
+}
+
+/** The locale app screens write a date in (fmtDate in src/components/ui.tsx): day first for every English browser, the browser's own otherwise. */
+export function fmtDateTag(browserLanguage: string | null | undefined): string | undefined {
+  const l = String(browserLanguage || '');
+  return !l || /^en(-|$)/i.test(l) ? 'en-GB' : undefined;
 }

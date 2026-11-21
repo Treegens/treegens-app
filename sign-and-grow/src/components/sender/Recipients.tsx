@@ -12,6 +12,7 @@ import { GroupMembers } from './GroupMembers';
 import { actingName } from '@/lib/groups';
 import { MorePanel } from './More';
 import { dayText } from '@/lib/dates';
+import { removedDay } from '@/lib/retention';
 
 export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent', witness: 'Witnessed' };
 const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view', witness: 'witness a signature on' };
@@ -56,8 +57,8 @@ function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: stri
 
 function EmailFact({ d, role, purged }: { d: Delivery | null; role: string; purged?: string | null }) {
   if (role === 'inperson') return <>No email goes to them. They sign on your device when you are together. {IN_PERSON_LOCK}</>;
-  // A purge at the personal level took our copies of the emails away (src/server/records.ts), not the emails themselves.
-  if (!d && purged) return <>Our copies of the emails about it were removed by the purge on {dayText(purged)}.</>;
+  // Deleting names and answers took our copies of the emails away (src/server/records.ts), not the emails themselves.
+  if (!d && purged) return <>Our copies of the emails about it were deleted on {dayText(purged)}.</>;
   if (!d) return <>No email has gone to this address yet.</>;
   const subject = <span className="muted"> &ldquo;{d.subject}&rdquo;</span>;
   const tries = d.tries && d.tries > 1 ? `, on try ${d.tries}` : '';
@@ -101,9 +102,14 @@ export async function openToSign(envelopeId: string, r: any, link?: string) {
   else window.location.href = url;
 }
 
+/** The role of someone who has finished: said as what they were, not as something they still need to do. */
+const ROLE_DONE: Record<string, string> = { signer: 'Signer', approver: 'Approver', viewer: 'Viewer', inperson: 'Signed in person', witness: 'Witness' };
+
 // `mainPersonId`: whose "Sign now" is the page's main button already, so their card does not repeat it.
 // `remindOne`: whether this person gets a Remind of their own in their More (src/lib/envelopepage.ts, personRemind).
-export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onChanged, onCorrect, paused, mainPersonId = '', remindOne }: { envelope: any; deliveries: Delivery[]; texts?: TextDelivery[]; myEmail: string; onChanged: () => void; onCorrect: (r: any) => void; paused?: boolean; mainPersonId?: string; remindOne?: (r: any) => boolean }) {
+export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onChanged, onCorrect, paused, mainPersonId = '', remindOne, copyAsk, mainCopies = '' }: { envelope: any; deliveries: Delivery[]; texts?: TextDelivery[]; myEmail: string; onChanged: () => void; onCorrect: (r: any) => void; paused?: boolean; mainPersonId?: string; remindOne?: (r: any) => boolean;
+  /** The page's main button asked to copy this person's link (n counts the presses). `mainCopies`: whose link that button copies, so their More does not offer the same. */
+  copyAsk?: { id: string; n: number } | null; mainCopies?: string }) {
   const ids = useId();
   // Whose More is open. Closed for everyone each time the page opens.
   const [more, setMore] = useState('');
@@ -154,6 +160,8 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
         await navigator.clipboard.writeText(url);
         toast(`Link for ${r.name} copied. Paste it into any message to them.`);
       } catch {
+        // The link field is inside their More (or, for someone whose link you send yourself, on their card).
+        if (!ownLink(r)) setMore(r.id);
         toast('Your browser did not let us copy. The link is shown under their name, so you can select and copy it.', true);
       }
     } catch (err) {
@@ -194,6 +202,13 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
       setBusy('');
     }
   }
+
+  // The page's main button "Copy the link for <name>" (a server with no mail server): the same copy as in their More.
+  const askedN = copyAsk?.n || 0;
+  useEffect(() => {
+    const r = askedN && copyAsk ? e.recipients.find((x: any) => x.id === copyAsk.id) : null;
+    if (r) copy(r);
+  }, [askedN]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function nudge(r: any) {
     setBusy(`nudge:${r.id}`);
@@ -254,7 +269,16 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
           : r.status === 'completed' && r.role !== 'cc' ? <>{DONE[r.role]} on {dayTime(r.completed_at)}.</>
           : r.status === 'declined' ? <>Declined on {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</>
           : r.status === 'viewed' ? openedFact
+          // No mail server: the notice above the list says it once, and their badge says it for them.
+          : turn && mail?.status === 'outbox' && !own ? null
+          // Someone whose link you send yourself, while their card says so with the buttons: not said twice.
+          : own && (turn || (r.status === 'completed' && (e.status === 'sent' || e.status === 'completed'))) ? null
+          : own && typeof emailFact === 'string' ? emailFact.replace(/^None\. /, '')
           : emailFact;
+        // A More is worth its button only when it holds something to do, or facts the card has no room for.
+        const acts = turn || (out && r.status === 'pending') || (e.status !== 'draft' && !!r.access_code);
+        const hasMore = e.status !== 'draft' && (acts || r.role === 'witness' || texts.some((t) => t.recipient_id === r.id));
+        const settled = (r.status === 'completed' && r.role !== 'cc') || r.status === 'declined';
         const signHere = turn && (isMe || r.role === 'inperson') && r.id !== mainPersonId;
         return (
           <li key={r.id} className={`sn-person${stale || undelivered || stopped ? ' warn' : ''}`} data-item="person">
@@ -262,12 +286,13 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               {!!e.ordered && <span className="sn-step" aria-label={`Step ${r.routing_order}`}>{r.routing_order}</span>}
               <div className="grow">
                 <div className="sn-person-name">
-                  <b>{name}</b>
+                  {/* Names removed with the files (records.ts): said once, with the day written out. */}
+                  <b>{removedDay(r.name) ? `Name and address removed on ${dayText(removedDay(r.name)!)}` : name}</b>
                   {isMe && <span className="muted"> (you)</span>}
-                  <span className="sn-person-email">{own ? 'No email address. You send the link.' : openGroup ? 'A group: every member has their own email' : r.email}</span>
+                  <span className="sn-person-email">{own ? 'No email address. You send the link.' : openGroup ? 'A group: every member has their own email' : removedDay(r.email) ? '' : r.email}</span>
                 </div>
                 <div className="muted small">
-                  {ROLE_LABEL[r.role]}
+                  {r.status === 'completed' ? ROLE_DONE[r.role] || ROLE_LABEL[r.role] : ROLE_LABEL[r.role]}
                   {r.reassigned_from ? ` · handed over by ${r.reassigned_from}` : ''}
                   {r.access_code ? <> · Access code <b className="sn-code">{r.access_code}</b> (give it to them yourself, it is not in the email)</> : null}
                   {r.access_code && r.code_frozen_at ? <> · <b>This code is frozen</b> after too many wrong tries and opens nothing now. Choose Change person, in their More, and set a new one to let them in.</> : null}
@@ -281,9 +306,11 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                 <Status s={b.s} label={b.label} />
                 {!!r.muted && <span className="badge sn-muted">Turned off reminders</span>}
               </div>
-              {e.status !== 'draft' && <MorePanel label={`More for ${name}`} panelId={panelId} open={isOpen} onToggle={() => setMore(isOpen ? '' : r.id)} buttonRef={(el) => { moreBtn.current[r.id] = el; }} />}
+              {hasMore && <MorePanel label={`More for ${name}`} panelId={panelId} open={isOpen} onToggle={() => setMore(isOpen ? '' : r.id)} buttonRef={(el) => { moreBtn.current[r.id] = el; }} />}
             </div>
             {line && <p className="sn-person-line">{line}</p>}
+            {/* Nothing left to do for them: the two facts their More would hold, in one small line. */}
+            {!hasMore && settled && <p className="muted small sn-person-line">{emailFact} {openedFact}</p>}
 
             {!!r.group_name && <GroupMembers e={e} r={r} deliveries={deliveries} onChanged={onChanged} />}
             {stale && (
@@ -298,10 +325,10 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                 {' '}{r.role === 'inperson' ? 'Open it with Host signing now and let them finish.' : r.muted ? 'They turned reminder emails off, so send them the link yourself and say that one button is left.' : 'A reminder tells them that one button is left.'}
               </p>
             )}
-            {!stale && undelivered && (
+            {!stale && undelivered && mail!.status === 'failed' && (
               <p className="sn-hint warn">
                 {mail!.status === 'failed' && mail!.next_try_at ? <>The email has not gone out yet. We keep trying. If the address is wrong, fix it with <b>Change person</b>, or send them the link yourself in the meantime. Both are in their More.</>
-                  : mail!.status === 'failed' ? <>The email did not go out and we have stopped trying. Check the address with <b>Change person</b>, or send them the link yourself. Both are in their More.</> : <>No email reached them. Send them the link yourself, from their More.</>}
+                  : mail!.status === 'failed' ? <>The email did not go out and we have stopped trying. Check the address with <b>Change person</b>, or send them the link yourself. Both are in their More.</> : null}
               </p>
             )}
             {reachable && r.muted && !stale ? <p className="sn-hint">They asked for no more reminder emails. You can still send them the link yourself, from their More.</p> : null}
@@ -341,7 +368,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               <div className="sn-person-actions" role="group" aria-labelledby={reachable && !openGroup ? `${panelId}-share` : undefined}>
                 {/* A group nobody has taken on has no link of its own: each member's is on its card (GroupMembers.tsx). */}
                 {!openGroup && <>
-                {reachable && <button className="btn sm" disabled={!!busy} onClick={() => copy(r)} aria-label={`Copy signing link for ${r.name}`}>Copy link</button>}
+                {reachable && <button className="btn sm" disabled={!!busy} style={mainCopies === r.id ? { display: 'none' } : undefined} onClick={() => copy(r)} aria-label={`Copy signing link for ${r.name}`}>Copy link</button>}
                 {reachable && <button className="btn sm qr-tap" disabled={!!busy} onClick={(ev) => showQr(r, ev.currentTarget)} aria-haspopup="dialog" aria-label={`Show a QR code with the signing link for ${r.name}`}>QR code</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>WhatsApp</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'sms')} aria-label={`Share link with ${r.name} by text message`}>Text</button>}

@@ -13,7 +13,8 @@ export function PurgedLink({ day }: { day?: string | null }) {
     <Shell>
       <StateCard tone="stop" title={t(lang, 'sign.purged.title')}>
         <p>{t(lang, 'sign.purged.body')}</p>
-        {day && <p className="muted small">{t(lang, 'sign.purged.day', { day })}</p>}
+        {/* The day in the reader's own format: "21 November 2026", not 2026-11-21. */}
+        {day && <p className="muted small">{t(lang, 'sign.purged.day', { day: /^\d{4}-\d{2}-\d{2}/.test(day) ? new Date(`${day.slice(0, 10)}T00:00:00Z`).toLocaleDateString(lang, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : day })}</p>}
         <p className="muted small">{t(lang, 'sign.purged.ask')}</p>
         <p><Link className="btn" href="/help?topic=signing#contact">{t(lang, 'sign.purged.help')}</Link></p>
       </StateCard>

@@ -9,7 +9,7 @@ import { twoStepTick } from './twostep.ts';
 import { flushComments } from './routes-comments.ts';
 import { pruneStampImages } from './stamps.ts';
 import { sweepSignIns } from './reclaim.ts';
-import { purgeSecurityLog } from './seclog.ts';
+import { purgeSecurityLog, sendHeldAlerts } from './seclog.ts';
 import { retentionTick, sweepArchiveCopies } from './records.ts';
 import { noteTickStart, noteTick } from './selfhost.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
@@ -56,6 +56,8 @@ async function tickOnce() {
     stamp_pictures: pruneStampImages(),
     // Lines of the security record older than SECURITY_LOG_DAYS (seclog.ts).
     security_lines_purged: purgeSecurityLog(),
+    // What a security alert held back during its hour, said in one email once the hour is over (seclog.ts).
+    security_alerts_followed: await sendHeldAlerts(),
     // Closed envelopes at the end of their retention period: the email 14 days before, then the purge (records.ts).
     retention: await retentionTick(),
     // Our stored archive copies about envelopes deleted or purged since, once they have left (archivemail.ts).

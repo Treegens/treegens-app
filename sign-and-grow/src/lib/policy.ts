@@ -174,7 +174,7 @@ export const KEPT_AFTER_DELETION: string[] = [
   'A fingerprint of your email address and the day you were given the welcome signatures, if your address was confirmed. The welcome signatures are given once per address, and this is how we know after your login is gone, or after it moved to another address (that fingerprint is kept from the day it moved). It is made with a key only this server has, cannot be turned back into your address, and holds no name.',
   `Our stored copies of emails to other people are deleted with your login when we marked them as being about you when they were sent: an invitation you sent, a notice to a team about your API keys or that you left, or our note to the people who answer help requests about a request of yours. Any other copy, such as one where somebody else typed your name or address, and any email still waiting to be delivered at that moment, is deleted like every copy that is not part of a document's record: ${MAIL_COPY_DAYS} days after it was sent.`,
   // The disposition record of src/server/records.ts (forgetRetentionLog, and the trigger in db.ts that keeps it a year).
-  'The retention record of your accounts (Settings, Your data): which envelope was purged, kept or put on hold, when, at which level, and the fingerprint of each signed PDF that was purged, without the names of the people who did it and without the reasons they wrote, for one year.',
+  'The deletion record of your accounts (Settings, Your data, Keep and delete): which document had its files deleted, was kept or was put on hold, when, what was deleted, and the fingerprint of each signed PDF that was deleted, without the names of the people who did it and without the reasons they wrote, for one year.',
 ];
 
 /**
@@ -329,8 +329,24 @@ export const consentWordingAsRecorded = (sender: string, signs: boolean, version
  */
 export const consentAuditNote = (version: string, stated = true, language: string = SOURCE_LOCALE, named = true): string =>
   `${stated ? `Wording ${version}` : `The screen did not say which wording it showed. The wording in use was ${version}`}, in ${languageWords(language)}, as printed on the help page under "What do I agree to before I sign?".${named ? '' : ' The screen named a language this wording does not exist in, so this names the English wording.'}`;
+// An audit line is "<the person's name>. <consentAuditNote>", and a name is whatever a sender or a signer typed. So the
+// wording and the language are read from the END of the line, at the fixed words consentAuditNote closes with: a
+// name that holds "Wording 2026-11, in French (fr), as printed" cannot stand in for them.
+const CONSENT_NOTE_TAIL = /(?:Wording|The wording in use was) (\S+), in [^(),]*\(([A-Za-z0-9-]{2,35})\), as printed on the help page under "What do I agree to before I sign\?"\.(?: The screen named a language this wording does not exist in, so this names the English wording\.)?$/;
+const CONSENT_NOTE_OLD = /(?:Wording|The wording in use was) (\S+), as printed on the help page under "What do I agree to before I sign\?"\.$/;
+/** The version an audit line written by consentAuditNote names, or null for a line from before versions were recorded. */
+export const consentVersionOf = (detail: unknown): string | null => {
+  const d = String(detail ?? '').trimEnd();
+  return CONSENT_NOTE_TAIL.exec(d)?.[1] || CONSENT_NOTE_OLD.exec(d)?.[1] || null;
+};
 /** The language an audit line written by consentAuditNote names, or English for a line from before languages were recorded. */
-export const consentLanguageOf = (detail: unknown): string => normalizeLocale(/, in [^(),]*\(([A-Za-z0-9-]{2,35})\), as printed/.exec(String(detail ?? ''))?.[1]) || SOURCE_LOCALE;
+export const consentLanguageOf = (detail: unknown): string => normalizeLocale(CONSENT_NOTE_TAIL.exec(String(detail ?? '').trimEnd())?.[2]) || SOURCE_LOCALE;
+/** Whether the line says the screen did not name its wording (the words consentAuditNote puts right before the tail). */
+export const consentUnstated = (detail: unknown): boolean => {
+  const d = String(detail ?? '').trimEnd();
+  const m = CONSENT_NOTE_TAIL.exec(d) || CONSENT_NOTE_OLD.exec(d);
+  return !!m && m[0].startsWith('The wording in use was') && d.slice(0, m.index).endsWith('The screen did not say which wording it showed. ');
+};
 /** The line next to "Sign" in the signature dialog. It says what the mark is, not what a court will make of it. */
 export const adoptLine = (word: 'signature' | 'initials'): string => `I agree that this mark stands for my ${word}.`;
 
@@ -408,7 +424,7 @@ export const IN_PERSON_ONLINE = 'It needs an internet connection from opening th
 // ---- Bulk send: what it costs -------------------------------------------------------------------------
 // "Bulk send is on every plan" is true of the feature and misleading about the price unless this is said with it.
 // The server holds a batch to it (POST /bulk and POST /bulk/check in src/server/routes-envelopes.ts).
-export const BULK_COST_NOTE = 'Each person who signs uses one signature, like on any envelope, and a batch only goes out when all of its signatures are already in your balance.';
+export const BULK_COST_NOTE = 'Each person who signs uses one signature, like on any document, and a batch only goes out when all of its signatures are already in your balance.';
 
 // ---- Not for patient information ------------------------------------------------------------------------
 // One statement, kept here once. /security prints it under "What this is not", the landing page under the pricing

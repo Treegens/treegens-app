@@ -331,7 +331,7 @@ test('every format writes a typed date the same way it writes the date of signin
 test('an account sets the date format its new envelopes start with', async () => {
   const c = await signUp('Ines Admin', 'ines-dates@example.com', ip());
   assert.equal((await c.get('/me')).data.account.default_date_format, null);
-  assert.equal((await simple(c, 'd0@example.com')).date_format, null, 'nothing chosen: year-month-day, as before');
+  assert.equal((await simple(c, 'd0@example.com')).date_format, 'D MMM YYYY', 'nothing chosen: 20 Nov 2026, the default since 21 November 2026 (simplify-public)');
   // One that does not exist is refused and nothing changes.
   const bad = await c.call('PATCH', '/account', { default_date_format: 'DD.MM.YYYY' });
   assert.equal(bad.status, 400);
@@ -350,7 +350,7 @@ test('an account sets the date format its new envelopes start with', async () =>
   assert.equal(tpl.date_format, 'DD/MM/YYYY');
   // Back to none.
   assert.equal((await c.call('PATCH', '/account', { default_date_format: '' })).status, 200);
-  assert.equal((await simple(c, 'd3@example.com')).date_format, null);
+  assert.equal((await simple(c, 'd3@example.com')).date_format, 'D MMM YYYY');
 });
 
 // ---- E. Numbers as people write them ----------------------------------------------------------------
@@ -430,10 +430,10 @@ test('the date of signing is the calendar day where the signer is, and the certi
   const cert = pages.slice(1).join(' ');
   assert.ok(cert.includes(`Time zone ${zone}, as reported by their device`), cert.slice(0, 1800));
   assert.ok(cert.includes(`Completed, their time ${localStamp(rows['mele@example.com'].completed_at, zone)}`));
-  assert.match(cert, /Consent, their time \d{4}-\d\d-\d\d \d\d:\d\d UTC[+-]\d\d:\d\d, Pacific\//);
-  assert.ok(cert.includes(`Completed ${rows['mele@example.com'].completed_at.replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}`));
+  assert.match(cert, /Consent, their time \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d UTC[+-]\d\d:\d\d, Pacific\//);
+  assert.ok(cert.includes(`Completed ${formatDate(rows['mele@example.com'].completed_at, 'D MMM YYYY', 'UTC')} ${rows['mele@example.com'].completed_at.slice(11, 19)} UTC`));
   // Her audit lines carry her local time too, and the zone itself is part of the hash-chained record.
-  assert.match(cert, /Mele Far <mele@example\.com> · [^·]+ · [0-9a-f]{16} · their time \d{4}-\d\d-\d\d \d\d:\d\d UTC[+-]\d\d:\d\d, Pacific\//);
+  assert.match(cert, /Mele Far <mele@example\.com> · [^·]+ · [0-9a-f]{16} · their time \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d UTC[+-]\d\d:\d\d, Pacific\//);
   const audit = (await c.get(`/envelopes/${e.id}`)).data.audit;
   const told = audit.filter((a: any) => a.action === 'Time zone reported');
   assert.equal(told.length, 1, 'said once, not again when Finish repeats the same zone');
@@ -820,7 +820,7 @@ test('a zone is printed with its capitals right, and a zone named after an offse
   assert.equal(validZone('+05:30'), null);
   // "Etc/GMT-14" is fourteen hours ahead of UTC: written as UTC+14:00 so nobody reads it as minus 14.
   assert.equal(momentText('2027-03-20T16:40:00Z', 'Etc/GMT-14'), '21 March 2027 at 06:40 UTC+14:00');
-  assert.equal(localStamp('2027-03-20T16:40:00Z', 'Etc/GMT-14'), '2027-03-21 06:40 UTC+14:00');
+  assert.equal(localStamp('2027-03-20T16:40:00Z', 'Etc/GMT-14'), '21 Mar 2027 06:40 UTC+14:00');
   assert.equal(momentText('2027-03-20T16:40:00Z', 'Etc/GMT+12'), '20 March 2027 at 04:40 UTC-12:00');
   for (const z of ['Etc/UTC', 'GMT0']) assert.equal(momentForEmail('2027-03-20T16:40:00Z', z), '20 March 2027 at 16:40 UTC', z);
   // Named zones read as before.

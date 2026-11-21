@@ -1,64 +1,69 @@
 'use client';
-// How long this envelope is kept, and what may happen to it (src/server/records.ts): the account's rule or its
-// template's period, the purge the timer announced or someone asked for, "Keep it", "Purge now", legal holds, and,
-// once a purge ran, what it removed and what stays. The words are in src/lib/retention.ts, which the server and the
-// emails use too.
+// Keep and delete, on the page of one document (src/server/records.ts): one sentence under its status that carries
+// the delete or hold date, the notes inside the page's one Delete dialog, and the dialogs that the page's More opens
+// (Keep it, Hold, Lift the hold, Delete its files for good). With no deletion schedule, no hold and nothing asked
+// for, none of this draws anything. The words are in src/lib/retention.ts, which the server and the emails use too.
 import { useState } from 'react';
 import { api, toast } from '@/components/ui';
 import { Dialog } from './Dialog';
 import { explain, longDate } from './lib';
-import { LEVEL_NAME, removesAt, KEPT_AT, HOLD_TRUTH, HOLD_BACKUPS, PURGE_LEVELS, RETENTION_NOTICE_DAYS, daysText, type PurgeLevel } from '@/lib/retention';
+import { LEVEL_NAME, LEVEL_DOES, removesAt, KEPT_AT, HOLD_SHORT, HOLD_TRUTH, HOLD_BACKUPS, HOLD_OVERRIDE, SCREEN_LEVELS, RETENTION_NOTICE_DAYS, daysText, copiesKept, type PurgeLevel } from '@/lib/retention';
 
 type R = {
   closed_at: string | null; period: { days: number; from: 'account' | 'template'; template?: string } | null; due_at: string | null; rule_level: PurgeLevel | null;
   noticed_at: string | null; goes_at: string | null; level: PurgeLevel | null; kept_until: string | null; kept_reason: string | null; kept_by: string | null;
-  asked: { at: string; by: string; level: PurgeLevel } | null; holds: any[]; held: boolean; disputed: boolean;
+  asked: { at: string; by: string; level: PurgeLevel } | null; holds: any[]; held: boolean; disputed: boolean; schedule_on?: boolean;
   purged_at: string | null; purged_level: PurgeLevel | null; purged_sha256: string | null; may_purge: boolean; may_hold: boolean; stays: string[];
 };
 
-const Stays = ({ r, open }: { r: R; open?: boolean }) => (
-  <details className="ret-stays" open={open} data-fold="">
-    <summary>What stays after a purge</summary>
-    <ul className="rules small">{r.stays.map((s) => <li key={s}>{s}</li>)}</ul>
-  </details>
-);
-
-/** Which of the dialogs is open. The document page's More and its Delete dialog open them (simplify-envelope). */
+/** Which of the dialogs is open. The document page's More, its Delete dialog and a link with ?ask= open them. */
 export type RetentionAsk = '' | 'keep' | 'purge' | 'hold' | 'lift';
 
-/**
- * Inside the page's one Delete dialog: what the deletion schedule will do by itself, with Keep it, and for those who
- * may, the way to remove the files for good. Nothing is shown when neither applies, so with no schedule and no such
- * right the dialog is as short as before.
- */
-export function DeleteNotes({ r, onKeep, onPurge }: { r: R | null | undefined; onKeep: () => void; onPurge: () => void }) {
-  if (!r || r.purged_at) return null;
-  const day = r.goes_at || r.due_at;
-  const mayKeep = !!r.closed_at && !r.held && !!(r.noticed_at || r.due_at) && !r.asked;
-  const mayPurge = r.may_purge && !r.asked && !r.disputed;
-  if (!(day && mayKeep) && !mayPurge) return null;
-  return (
-    <div className="ret-in-delete">
-      {day && mayKeep && <p>Your account&apos;s deletion schedule removes its contents on {longDate(day)} without you doing anything. To stop that, keep it instead. <button type="button" className="btn sm" onClick={onKeep}>Keep it</button></p>}
-      {mayPurge && <p className="muted">Deleting takes it out of your lists and keeps the files. To remove the files themselves for good, for everyone, after a {RETENTION_NOTICE_DAYS}-day wait: <button type="button" className="btn sm ghost danger" onClick={onPurge}>Remove the files for good</button></p>}
-    </div>
-  );
+/** Whether a deletion schedule or a request reaches this document: only then are Keep it and Hold listed anywhere. */
+export const scheduleOn = (r: R | null | undefined): boolean => !!r && !!(r.schedule_on || r.period || r.noticed_at || r.asked);
+
+/** What the page may offer: keeping it past the schedule, and deleting its files for good. */
+export function deleteOffers(r: R | null | undefined): { keep: boolean; purge: boolean } {
+  if (!r || r.purged_at) return { keep: false, purge: false };
+  return { keep: !!r.closed_at && !r.held && !!(r.noticed_at || r.due_at || r.asked), purge: !!r.may_purge && !r.asked && !r.disputed };
 }
 
-export function RetentionCard({ envelopeId, r, onChanged, ask, onAsk }: { envelopeId: string; r: R | null | undefined; onChanged: () => void; ask?: RetentionAsk; onAsk?: (a: RetentionAsk) => void }) {
-  const [own_, setOwn_] = useState<RetentionAsk>('');
-  // The page may hold which dialog is open (its More opens them); without that, the card holds it itself.
-  const open = onAsk ? ask || '' : own_;
-  const setOpen = onAsk || setOwn_;
+/** What a link with ?ask= may open on this document for this person, or '' when it does not apply (then nothing opens). */
+export function askAllowed(ask: string | null, r: R | null | undefined, envelopeId: string): RetentionAsk {
+  if (!r || r.purged_at) return '';
+  const o = deleteOffers(r);
+  if (ask === 'keep') return o.keep ? 'keep' : '';
+  if (ask === 'purge') return o.purge ? 'purge' : '';
+  if (ask === 'hold') return r.may_hold && !r.holds.some((h) => h.envelope_id === envelopeId) ? 'hold' : '';
+  return '';
+}
+
+/** The day the links of the people on it stop, when one is set: what the Delete dialog says they keep until. */
+export const linkEnds = (r: R | null | undefined): string | null => (!r || r.purged_at || r.held ? null : r.goes_at || r.due_at || null);
+
+/** What the page tells its sender after deleting it from their account. */
+export const deletedToast = (r: R | null | undefined) => (linkEnds(r) ? `Deleted from your account. Everyone who was on it keeps their link until ${longDate(linkEnds(r))}.` : 'Deleted from your account. Everyone who was on it keeps their copy.');
+/** The sentence of the Delete dialog about the copies of the people on it, with the day in the reader's own format. */
+export const copiesLine = (r: R | null | undefined) => copiesKept(linkEnds(r) ? longDate(linkEnds(r)) : null);
+
+// When a dialog that the page's More opened closes, the line that opened it is gone: focus goes to More itself.
+const backToMore = () => requestAnimationFrame(() => {
+  if (document.activeElement && document.activeElement !== document.body) return;
+  document.querySelector<HTMLElement>('.sn-headactions [data-more="screen"]')?.focus();
+});
+
+/**
+ * One sentence under the status of the document: the day its files are deleted, that it is on hold, or that they
+ * were deleted. Nothing with no schedule, no hold and nothing asked for.
+ */
+export function RetentionLine({ envelopeId, r, onChanged, onAsk }: { envelopeId: string; r: R | null | undefined; onChanged: () => void; onAsk: (a: RetentionAsk) => void }) {
   const [busy, setBusy] = useState(false);
   if (!r) return null;
-  const closed = !!r.closed_at;
-  const own = r.holds.find((h) => h.envelope_id === envelopeId);
   const cancel = async () => {
     setBusy(true);
     try {
       await api(`/envelopes/${envelopeId}/purge`, { method: 'DELETE' });
-      toast('Called off. Nothing will be purged.');
+      toast('Called off. Nothing will be deleted.');
       onChanged();
     } catch (e) {
       toast(explain(e, 'Nothing was changed.'), true);
@@ -66,72 +71,73 @@ export function RetentionCard({ envelopeId, r, onChanged, ask, onAsk }: { envelo
       setBusy(false);
     }
   };
+  const level = (r.level || r.rule_level || 'documents') as PurgeLevel;
+  const h = r.holds[0];
+  const line = r.purged_at ? <>Its files were deleted on {longDate(r.purged_at)}. This cannot be undone.</>
+    : r.held ? <>On hold since {longDate(h.set_at)} ({h.set_by}{h.folder ? <>, with its folder &ldquo;{h.folder}&rdquo;</> : null}). It cannot be deleted until the hold ends.</>
+    : r.asked ? <>{r.asked.by} asked to delete its files. On {longDate(r.goes_at)}, {LEVEL_DOES[r.asked.level]}. <button type="button" className="sn-linkbtn" disabled={busy} onClick={cancel}>Call it off</button></>
+    : r.disputed && r.period ? <>Not deleted while the dispute about it is open.</>
+    : r.noticed_at && r.goes_at ? <>On {longDate(r.goes_at)}, {LEVEL_DOES[level]}. {deleteOffers(r).keep && <button type="button" className="sn-linkbtn" onClick={() => onAsk('keep')}>Keep it</button>}</>
+    : r.due_at && r.period ? <>On {longDate(r.due_at)}, {LEVEL_DOES[level]}.{r.kept_until && r.kept_by ? ` Kept until then by ${r.kept_by}.` : ''}</>
+    : null;
+  return line ? <p className="sn-ret-line" data-feature="ds-retention">{line}</p> : null;
+}
+
+/**
+ * Inside the page's one Delete dialog, only when a deletion schedule or a request reaches the document: the day
+ * its files go anyway, with "Keep it instead", and the way to delete its files for good.
+ */
+export function DeleteNotes({ r, onKeep, onPurge }: { r: R | null | undefined; onKeep: () => void; onPurge: () => void }) {
+  if (!r || r.purged_at || !scheduleOn(r)) return null;
+  const day = r.goes_at || r.due_at;
+  const { keep, purge } = deleteOffers(r);
+  if (!(day && keep) && !purge) return null;
+  return (
+    <div className="ret-in-delete" data-feature="ds-retention">
+      {day && keep && <p>Rather keep it past {longDate(day)}? <button type="button" className="btn sm" onClick={onKeep}>Keep it instead</button></p>}
+      {purge && <p className="muted">Need the files gone for everyone? <button type="button" className="sn-linkbtn" onClick={onPurge}>Delete its files for good</button> ({RETENTION_NOTICE_DAYS}-day wait)</p>}
+    </div>
+  );
+}
+
+const Lists = ({ r, level }: { r: R; level: PurgeLevel }) => (
+  <>
+    <p className="small"><b>Deleted:</b></p>
+    <ul className="rules small">{removesAt(level).map((s) => <li key={s}>{s}</li>)}</ul>
+    <p className="small">{KEPT_AT[level]}</p>
+    <p className="small"><b>What stays:</b></p>
+    <ul className="rules small">{r.stays.map((s) => <li key={s}>{s}</li>)}</ul>
+  </>
+);
+
+/** The dialogs, and for a document whose files were deleted one folded section that says what went and what stays. */
+export function RetentionCard({ envelopeId, r, onChanged, ask, onAsk }: { envelopeId: string; r: R | null | undefined; onChanged: () => void; ask?: RetentionAsk; onAsk?: (a: RetentionAsk) => void }) {
+  const [own_, setOwn_] = useState<RetentionAsk>('');
+  // The page may hold which dialog is open (its More opens them); without that, this holds it itself.
+  const open = onAsk ? ask || '' : own_;
+  const setOpen = onAsk || setOwn_;
+  if (!r) return null;
+  const close = () => (setOpen(''), backToMore());
 
   if (r.purged_at) {
     const level = (r.purged_level || 'documents') as PurgeLevel;
     return (
-      <section className="card ret" aria-labelledby="ret-h">
-        <h2 id="ret-h">Purged on {longDate(r.purged_at)}</h2>
-        <p>{LEVEL_NAME[level]}: removed for good. This cannot be undone. {KEPT_AT[level]}</p>
-        <ul className="rules small">{removesAt(level).map((s) => <li key={s}>{s}</li>)}</ul>
-        {r.purged_sha256 && <p className="small">The fingerprint (SHA-256) of the signed PDF it removed: <span className="mono ret-sha">{r.purged_sha256}</span>. Anyone who still has that file can check it at Verify a document.</p>}
-        <Stays r={r} open />
-      </section>
+      <details className="card sn-fold ret" data-fold="" data-feature="ds-retention">
+        <summary><span>What was deleted and what stays</span></summary>
+        <div className="sn-fold-in">
+          <Lists r={r} level={level} />
+          {r.purged_sha256 && <p className="small">The fingerprint (SHA-256) of the signed PDF that was deleted: <span className="mono ret-sha">{r.purged_sha256}</span>. Anyone who still has that file can check it at Verify a document.</p>}
+        </div>
+      </details>
     );
   }
 
-  const goes = r.goes_at ? longDate(r.goes_at) : '';
-  const level = (r.level || r.rule_level || 'documents') as PurgeLevel;
-  const dialogs = (
+  return (
     <>
-      {open === 'keep' && <ReasonDialog title="Keep this document" label="Why it is kept" note={`It is kept for ${r.period ? daysText(r.period.days) : 'another period'} from today, and any deletion announced or asked for is called off. The reason goes into its history, which its sender and the admins can read.`} confirm="Keep it" url={`/envelopes/${envelopeId}/keep`} onClose={() => setOpen('')} onDone={() => (setOpen(''), toast('Kept. Nothing will be deleted from it for now.'), onChanged())} />}
-      {open === 'hold' && <HoldDialog url={`/envelopes/${envelopeId}/hold`} what="this document" onClose={() => setOpen('')} onDone={() => (setOpen(''), toast('On hold. It cannot be deleted until an admin lifts the hold.'), onChanged())} />}
-      {open === 'lift' && <ReasonDialog title="Lift the hold" label="Why it may be lifted" note="Once the hold is lifted, it can be deleted again by the usual rules. If the deletion schedule had reached it, the sender and the admins are emailed again 14 days before anything is removed." confirm="Lift the hold" method="DELETE" url={`/envelopes/${envelopeId}/hold`} onClose={() => setOpen('')} onDone={() => (setOpen(''), toast('The hold is lifted.'), onChanged())} />}
-      {open === 'purge' && <PurgeDialog envelopeId={envelopeId} r={r} onClose={() => setOpen('')} onDone={(at) => (setOpen(''), toast(`Its files will be removed on ${longDate(at)}. You can call it off until then.`), onChanged())} />}
-    </>
-  );
-  // With no deletion schedule, no hold and nothing asked for, there is nothing to say: the page stays as short as
-  // it is for an account that never set any of this up. The dialogs still open from the page's More.
-  const news = r.held || r.disputed || !!r.asked || (!!r.noticed_at && !!r.goes_at);
-  if (!news && !(r.due_at && r.period)) return dialogs;
-  const body = (
-    <>
-      {r.held ? (
-        <div className="notice ret-held" role="note">
-          <b>On legal hold</b> since {longDate(r.holds[0].set_at)}, set by {r.holds[0].set_by}{r.holds[0].folder ? <> on the folder &ldquo;{r.holds[0].folder}&rdquo;</> : null}. {HOLD_TRUTH} Only an admin of the account can lift a hold.
-          {r.holds.map((h) => h.reason && <div key={h.id} className="small ret-reason">Reason: {h.reason}{h.matter ? `. Matter: ${h.matter}` : ''}</div>)}
-        </div>
-      ) : r.disputed ? (
-        <p>A person named on it disputes it, so it is not purged while that dispute is open.</p>
-      ) : r.asked ? (
-        <p className="warn-text"><b>{r.asked.by} asked to purge it.</b> On {goes}, this will be removed: {LEVEL_NAME[r.asked.level].toLowerCase()}. Until then the sender or an admin can call it off. After that it cannot be undone.</p>
-      ) : r.noticed_at && r.goes_at ? (
-        <p className="warn-text"><b>The account&apos;s retention rule reaches it.</b> On {goes}, this will be removed: {LEVEL_NAME[level].toLowerCase()}. The sender and the admins were emailed on {longDate(r.noticed_at)}. To keep it, choose Keep it and give a reason.</p>
-      ) : r.due_at && r.period ? (
-        <p>Kept until {longDate(r.due_at)}: {r.period.from === 'template' ? <>the period of the template &ldquo;{r.period.template}&rdquo;, </> : 'the account\'s rule, '}{daysText(r.period.days)} after it closed{r.kept_until ? `, and kept on by ${r.kept_by} (${r.kept_reason})` : ''}. Then this is removed: {LEVEL_NAME[level].toLowerCase()}, after an email to the sender and the admins {RETENTION_NOTICE_DAYS} days before.</p>
-      ) : closed ? (
-        <p>The account keeps closed envelopes without an end date. Nothing is purged unless someone asks for it.</p>
-      ) : (
-        <p>It is still out. The retention rule only counts from the day an envelope closes.</p>
-      )}
-      {r.asked && !r.held && <div className="row wrap ret-actions"><button className="btn" disabled={busy} onClick={cancel}>Call it off</button></div>}
-      {closed && <Stays r={r} />}
-    </>
-  );
-  // Something is about to happen to it, or it is held: said in the open. A date far away is folded.
-  return news ? (
-    <section className="card ret" aria-labelledby="ret-h" data-feature="ds-retention">
-      <h2 id="ret-h">How long it is kept</h2>
-      {body}
-      {dialogs}
-    </section>
-  ) : (
-    <>
-      <details className="card sn-fold ret" data-fold="" data-feature="ds-retention">
-        <summary><span>How long it is kept</span></summary>
-        <div className="sn-fold-in">{body}</div>
-      </details>
-      {dialogs}
+      {open === 'keep' && <ReasonDialog title="Keep this document" label="Why it is kept" note={`It is kept for ${r.period ? daysText(r.period.days) : 'now'}${r.period ? ' from today' : ''}, and any deletion announced or asked for is called off. The reason goes into its history, which its sender and the admins can read.`} confirm="Keep it" url={`/envelopes/${envelopeId}/keep`} onClose={close} onDone={() => (close(), toast('Kept. Nothing will be deleted from it for now.'), onChanged())} />}
+      {open === 'hold' && <HoldDialog url={`/envelopes/${envelopeId}/hold`} title="Hold this document" onClose={close} onDone={() => (close(), toast('On hold. The software refuses to delete it until an admin lifts the hold.'), onChanged())} />}
+      {open === 'lift' && <ReasonDialog title="Lift the hold" label="Why it may be lifted" note="Once the hold is lifted, it can be deleted again by the usual rules. If the deletion schedule had reached it, the sender and the admins are emailed again at least 14 days before anything is deleted." confirm="Lift the hold" method="DELETE" url={`/envelopes/${envelopeId}/hold`} onClose={close} onDone={() => (close(), toast('The hold is lifted.'), onChanged())} />}
+      {open === 'purge' && <PurgeDialog envelopeId={envelopeId} r={r} onClose={close} onDone={(at) => (close(), toast(`Its files will be deleted on ${longDate(at)}. You can call it off until then.`), onChanged())} />}
     </>
   );
 }
@@ -141,7 +147,7 @@ export function ReasonDialog({ title, label, note, confirm, url, method = 'POST'
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function go() {
-    if (reason.trim().length < 3) return setError('Write the reason in a few words first.');
+    if (reason.trim().length < 3) return setError('The reason is missing. Write it in a few words, then try again.');
     setBusy(true);
     setError('');
     try {
@@ -166,17 +172,27 @@ export function ReasonDialog({ title, label, note, confirm, url, method = 'POST'
   );
 }
 
-export function HoldDialog({ url, what, folder, onClose, onDone }: { url: string; what: string; folder?: string; onClose: () => void; onDone: () => void }) {
+/** The long truth about holds, folded: what the software refuses, what it cannot stop, backups, and who can end one. */
+export const HoldRules = () => (
+  <details className="ret-stays" data-fold="">
+    <summary>How holds work</summary>
+    <p className="small">{HOLD_TRUTH}</p>
+    <p className="small">{HOLD_BACKUPS}</p>
+    <p className="small">{HOLD_OVERRIDE}</p>
+  </details>
+);
+
+export function HoldDialog({ url, title, folder, envelopeId, onClose, onDone }: { url: string; title: string; folder?: string; envelopeId?: string; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState('');
   const [matter, setMatter] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function go() {
-    if (reason.trim().length < 3) return setError('Write why it is held in a few words first.');
+    if (reason.trim().length < 3) return setError('The reason is missing. Write why it is held in a few words, then try again.');
     setBusy(true);
     setError('');
     try {
-      await api(url, { body: { reason: reason.trim(), matter: matter.trim(), ...(folder ? { folder } : {}) } });
+      await api(url, { body: { reason: reason.trim(), matter: matter.trim(), ...(folder ? { folder } : {}), ...(envelopeId ? { envelope_id: envelopeId } : {}) } });
       onDone();
     } catch (e) {
       setError(explain(e, 'Nothing was put on hold.'));
@@ -185,11 +201,11 @@ export function HoldDialog({ url, what, folder, onClose, onDone }: { url: string
     }
   }
   return (
-    <Dialog title={`Put ${what} on legal hold`} onClose={onClose}>
-      <p>{HOLD_TRUTH}</p>
-      <p className="muted small">{HOLD_BACKUPS}</p>
-      <label className="f"><span>Why it is held <span className="hint">(for the admins: the sender sees only that it is held)</span></span><textarea value={reason} maxLength={500} data-autofocus="" onChange={(e) => (setReason(e.target.value), setError(''))} /></label>
-      <label className="f"><span>Matter or case reference <span className="hint">(optional)</span></span><input value={matter} maxLength={120} onChange={(e) => setMatter(e.target.value)} /></label>
+    <Dialog title={title} onClose={onClose}>
+      <p>{HOLD_SHORT}</p>
+      <label className="f"><span>Why it is held <span className="hint">(only admins see this)</span></span><textarea value={reason} maxLength={500} data-autofocus="" onChange={(e) => (setReason(e.target.value), setError(''))} /></label>
+      <label className="f"><span>Case reference <span className="hint">(optional)</span></span><input value={matter} maxLength={120} onChange={(e) => setMatter(e.target.value)} /></label>
+      <HoldRules />
       {error && <div className="notice err" role="alert">{error}</div>}
       <div className="actions">
         <button className="btn" onClick={onClose}>Cancel</button>
@@ -217,24 +233,25 @@ function PurgeDialog({ envelopeId, r, onClose, onDone }: { envelopeId: string; r
     }
   }
   return (
-    <Dialog title="Purge this envelope" onClose={onClose} wide>
-      <p>It waits {RETENTION_NOTICE_DAYS} days, until {longDate(day)}. The sender and the admins are emailed now, and either can call it off until then. After that it cannot be undone.</p>
+    <Dialog title="Delete its files for good" onClose={onClose}>
+      <p>It waits {RETENTION_NOTICE_DAYS} days, until {longDate(day)}. You or an admin can call it off until then. After that it cannot be undone, and the links of the people on it stop working. They are not told.</p>
       <fieldset className="ret-levels">
-        <legend>What to remove</legend>
-        {PURGE_LEVELS.map((l) => (
+        <legend className="sg-vh">What to delete</legend>
+        {SCREEN_LEVELS.map((l) => (
           <label key={l} className="check ret-level">
             <input type="radio" name="ret-level" checked={level === l} onChange={() => setLevel(l)} />
-            <span><b>{LEVEL_NAME[l]}</b><span className="muted small"> {KEPT_AT[l]}</span></span>
+            <span>{LEVEL_NAME[l]}</span>
           </label>
         ))}
       </fieldset>
-      <p className="small"><b>Removed:</b></p>
-      <ul className="rules small">{removesAt(level).map((s) => <li key={s}>{s}</li>)}</ul>
-      <Stays r={r} />
+      <details className="ret-stays" data-fold="">
+        <summary>What exactly is deleted</summary>
+        <Lists r={r} level={level} />
+      </details>
       {error && <div className="notice err" role="alert">{error}</div>}
       <div className="actions">
-        <button className="btn" onClick={onClose} data-autofocus="">Keep it</button>
-        <button className="btn primary sn-danger" disabled={busy} onClick={go}>{busy ? 'Working…' : `Purge on ${longDate(day)}`}</button>
+        <button className="btn" onClick={onClose} data-autofocus="">Cancel</button>
+        <button className="btn primary sn-danger" disabled={busy} onClick={go}>{busy ? 'Working…' : `Delete on ${longDate(day)}`}</button>
       </div>
     </Dialog>
   );

@@ -27,7 +27,7 @@ import { LanguageSettings } from '@/components/settings/LanguageSettings';
 import { CustomFieldSettings } from '@/components/settings/CustomFieldSettings';
 import { SecurityLog } from '@/components/settings/SecurityLog';
 // Sections, cards, "Saved" next to what saved, and the one More options of a section (research/ux-charter.md, 2.2).
-import { sectionsFor, landingFor } from '@/lib/settingsnav';
+import { sectionsFor, landingFor, closingCount, nextTab, KEYS_AND_TWO_STEP, MEMBER_READS } from '@/lib/settingsnav';
 import { Card, MoreOptions, useSaved } from '@/components/settings/Frame';
 import { SendingDefaults } from '@/components/settings/SendingDefaults';
 
@@ -81,9 +81,16 @@ function Profile() {
         </div>
       </div></Card>
       <Card><Notifications /></Card>
-      <p className="muted small" style={{ margin: 0 }}>Your password, two-step login and the places you are signed in are under Security, the next section.</p>
+      <p className="muted small" style={{ margin: '12px 0 0' }}>Your password, two-step login and the places you are signed in are under Security, the next section.</p>
       {/* A member has no Your data section: what was theirs to do there is here, behind the one More options. */}
-      {member && <MoreOptions><YourData /></MoreOptions>}
+      {member && <MoreOptions>
+        <div className="card" data-item="card">
+          <h2 style={{ marginBottom: 4 }}>What the admins set</h2>
+          <p className="muted small">The plan and the stamps of {me.account.name} are set by its owner and admins. You can read them here.</p>
+          <div className="row wrap">{MEMBER_READS.map(([k, l]) => <Link key={k} className="btn sm" style={{ minHeight: 44 }} href={`/app/settings?tab=${k}`} onClick={(e) => { e.preventDefault(); window.location.assign(`/app/settings?tab=${k}`); }}>{l}</Link>)}</div>
+        </div>
+        <YourData />
+      </MoreOptions>}
       {adopt &&<AdoptSignature kind={adopt} name={me.user.name} doneLabel="Save" onClose={() => setAdopt('')} onDone={(png) => (save({ [`${adopt}_png`]: png }), setAdopt(''))} />}
     </div>
   );
@@ -212,7 +219,7 @@ function Notifications() {
   };
   return (
     <div className="card" id="notifications">
-      <h2 style={{ marginBottom: 4 }}>Emails about your envelopes</h2>
+      <h2 style={{ marginBottom: 4 }}>Emails about your documents</h2>
       <p className="muted small">You choose how much we email you. Everything is always visible in the app either way.</p>
       {NOTIFY.map(([k, title, hint]) => (
         <label key={k} className="setting-row">
@@ -220,7 +227,7 @@ function Notifications() {
           <span><b>{title}</b> {last === k && said}<span className="muted small" style={{ display: 'block' }}>{hint}</span></span>
         </label>
       ))}
-      <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>People you send to get one request, the reminders you set on the envelope, and one copy when it is complete. They can turn reminders off for themselves.</p>
+      <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>People you send to get one request, the reminders you set on the document, and one copy when it is complete. They can turn reminders off for themselves.</p>
     </div>
   );
 }
@@ -281,14 +288,14 @@ function Team() {
         </div>
       )}
       {admin && (
-        <form className="card row wrap" style={{ alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); api('/account/invites', { body: inv }).then(() => (toast('Invitation sent'), setInv({ email: '', role: 'member' }), reload())).catch(oops); }}>
+        <form className="card row wrap set-invite" data-item="card" style={{ alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); api('/account/invites', { body: inv }).then(() => (toast('Invitation sent'), setInv({ email: '', role: 'member' }), reload())).catch(oops); }}>
           <label className="f grow" style={{ margin: 0 }}><span>Invite by email</span><input type="email" required value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} style={{ minHeight: 44 }} /></label>
           <label className="f" style={{ margin: 0 }}><span>Role</span><select value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })} style={{ minHeight: 44 }}><option value="member">Member</option><option value="admin">Admin</option></select></label>
           <button className="btn primary" disabled={!!inviteHeld} aria-describedby={inviteHeld ? 'invite-held' : undefined} style={{ minHeight: 44 }}>Send invite</button>
           {inviteHeld && <p id="invite-held" className="muted small" style={{ flexBasis: '100%', margin: 0 }}>{inviteHeld}</p>}
         </form>
       )}
-      <div className="card pad0">
+      <div className="card pad0" data-item="card">
         <div className="tablewrap"><table className="t">
           <thead><tr><th>Member</th><th>Role</th><th /></tr></thead>
           <tbody>
@@ -311,7 +318,7 @@ function Team() {
           </tbody>
         </table></div>
       </div>
-      {admin && <TeamTwoStep />}
+      {admin && <Card><TeamTwoStep /></Card>}
       <p className="muted small">Documents belong to the account, not to one login. Members see what they sent, admins see everything. Templates are shared: everyone can use them, and only the person a template belongs to or an admin can change or delete it. Everyone on the team is covered by the one plan: there is no charge per person.</p>
       {me.role !== 'owner' && members.length > 1 && (
         <div className="card row wrap" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
@@ -398,9 +405,10 @@ function Developers() {
   };
   return (
     <div className="stack">
-      <div className="card">
+      <div className="card" data-item="card">
         <div className="row between wrap"><h2>API keys</h2><a href="/developers" target="_blank">API reference ↗</a></div>
         <p className="muted small">Included on every plan, with the same limits as the app. A key works straight away: there is no review step and no separate test environment.{admin ? ' As an admin you see every key in this account and who made it. The key itself is shown once, to the person who creates it, and never again.' : ''}</p>
+        <p className="muted small">{KEYS_AND_TWO_STEP}</p>
         {fresh && <div className="notice" style={{ marginBottom: 12 }}>Copy your key now. It is not shown again:<div className="mono" style={{ marginTop: 4 }}>{fresh}</div></div>}
         {(keys?.keys || []).map((k: any) => (
           <div key={k.id} className="row between wrap" style={{ padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
@@ -439,7 +447,7 @@ function Developers() {
         </Modal>
       )}
       {admin && (
-        <div className="card">
+        <div className="card" data-item="card">
           <h2>Webhooks</h2>
           <p className="muted small">We POST JSON to your URL when an envelope is sent, opened, signed, corrected, completed, declined, voided or expires. Check the <span className="mono">X-GrowSigning-Signature</span> header with the signing secret. Each payload also carries a one-line <span className="mono">text</span> summary for tools that just want a message to show.</p>
           {(hooks?.webhooks || []).map((h: any) => (
@@ -880,7 +888,7 @@ function YourData({ only }: { only?: 'export' | 'close' } = {}) {
       {only !== 'close' && <div className="card row between wrap" data-item="card">
         <div style={{ maxWidth: 600 }}>
           <h2>Take everything with you</h2>
-          <p className="muted" style={{ margin: '6px 0 0' }}>One ZIP file with every signed PDF and its certificate, the full audit trail of every envelope, and a spreadsheet listing them all. Free on every plan, as often as you like, and it keeps working if you cancel.</p>
+          <p className="muted" style={{ margin: '6px 0 0' }}>One ZIP file with every signed PDF with its signing record, the full history of every document, and a spreadsheet listing them all. Free on every plan, as often as you like, and it keeps working if you cancel.</p>
         </div>
         <a className="btn" href="/api/export">Export everything</a>
       </div>}
@@ -902,8 +910,8 @@ function YourData({ only }: { only?: 'export' | 'close' } = {}) {
               <li>Any subscription is cancelled at once. If the payment provider still takes a payment before it has confirmed that, the software refunds it by itself.</li>
               <li><b>Nothing is deleted for {CLOSE_GRACE_DAYS} days.</b> If you change your mind, or closed it by mistake, sign in again and the account comes straight back. We email you {CLOSING_REMINDER_DAYS} days before the end with the date and how to keep it.</li>
               <li>While it is closing, nothing new starts in it: nothing can be sent, nobody can be invited or join, and public forms take no new signatures.</li>
-              <li>After {CLOSE_GRACE_DAYS} days {owned.length ? `the account and its ${owned.reduce((n, a) => n + a.envelopes, 0)} envelope(s) are` : 'your login is'} removed for good. Export first if you want copies. &quot;What is kept&quot; below says exactly what goes and what stays.</li>
-              {inFlight > 0 && <li>{inFlight} envelope(s) are still out for signature. People can keep signing during the {CLOSE_GRACE_DAYS} days.</li>}
+              <li>After {CLOSE_GRACE_DAYS} days {owned.length ? `the account and ${closingCount(owned.reduce((n, a) => n + a.envelopes, 0))} are` : 'your login is'} removed for good. Export first if you want copies. &quot;What is kept&quot; below says exactly what goes and what stays.</li>
+              {inFlight > 0 && <li>{inFlight === 1 ? '1 document is' : `${inFlight} documents are`} still out for signature. People can keep signing during the {CLOSE_GRACE_DAYS} days.</li>}
               {keys.length > 0 && <li><b>{keys.length === 1 ? 'Your API key stops' : `Your ${keys.length} API keys stop`} working at once:</b> {keys.map((k) => `"${k.name}" in ${k.account}`).join(', ')}. Whatever uses {keys.length === 1 ? 'it' : 'them'} starts failing straight away, and {keys.length === 1 ? 'it works' : 'they work'} again only if you sign in within the 30 days.{keys.some((k) => k.team) ? ' The admins of a team a key belongs to are told by email.' : ''}</li>}
             </ul>
             <WhatIsKept />
@@ -946,6 +954,8 @@ export default function Settings() {
   const [note, setNote] = useState('');
   // The sections this person has: an owner or admin at most 10, a member at most 4.
   const TABS = sectionsFor(me.role);
+  // A member reading the plan or the stamps is in a section that has no tab of its own.
+  const listed = TABS.some(([k]) => k === tab);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const to = landingFor(me.role, q.get('tab'), window.location.hash, !!(q.get('signin') || q.get('signin_error')));
@@ -981,8 +991,16 @@ export default function Settings() {
   return (
     <div>
       <div className="pagehead"><h1 className="serif">Settings</h1></div>
-      <div className="tabs" role="tablist">{TABS.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>{l}</button>)}</div>
+      {/* Real tabs: Left, Right, Home and End move between them, Tab goes on into the section that is open. */}
+      <div className="tabs" role="tablist" aria-label="Settings sections" onKeyDown={(e) => {
+        const to = nextTab(TABS.map(([k]) => k), listed ? tab : TABS[0][0], e.key);
+        if (!to) return;
+        e.preventDefault();
+        pick(to);
+        setTimeout(() => document.getElementById(`set-tab-${to}`)?.focus(), 0);
+      }}>{TABS.map(([k, l]) => <button key={k} id={`set-tab-${k}`} role="tab" aria-selected={tab === k} aria-controls="set-panel" tabIndex={tab === k || (!listed && k === TABS[0][0]) ? 0 : -1} className={tab === k ? 'on' : ''} onClick={() => pick(k)}>{l}</button>)}</div>
       {note && <div className="notice" role="status" style={{ marginBottom: 16 }}>{note}</div>}
+      <div id="set-panel" role="tabpanel" aria-labelledby={listed ? `set-tab-${tab}` : undefined} aria-label={listed ? undefined : 'What the admins set'}>
       {tab === 'profile' && <Profile />}
       {tab === 'security' && <Security />}
       {tab === 'account' && <Card><Account /></Card>}
@@ -997,6 +1015,7 @@ export default function Settings() {
       {tab === 'data' && <MoreOptions><YourData only="close" /></MoreOptions>}
       {tab === 'developers' && <Developers />}
       {tab === 'stamps' && <Card><StampSettings /></Card>}
+      </div>
     </div>
   );
 }

@@ -2182,9 +2182,10 @@ export async function reassignRecipient(e: any, r: any, to: { name: string; emai
   // Another person is the next person on the request, whose signature is their own (sigRef in credits.ts). The same
   // name (or a spelling of it) at the same address stays the same person, as takeOverCost decided.
   const pg = sameSigner(r, { email, name }) ? null : personGen(r, name, email);
+  // So is the language the sender chose for the first one: nobody chose it for this person, so their browser decides.
   // The time zone the first one's device reported is theirs, like their answers: the new person's date of signing,
   // certificate times and reminder hours come from their own device, or from the sender's zone until it reports one.
-  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, tz=NULL, reminder_held_at=NULL, reassigned_from=?, free=?, link_by_sender=0${pg ? ', person_gen=?, person_gens=?' : ''} WHERE id=?`,
+  run(`UPDATE recipients SET name=?, email=?, token=?, check_code=?, status='sent', sent_at=?, viewed_at=NULL, consent_at=NULL, access_code=NULL, muted=0, unopened_alerted_at=NULL, dead_link_alerted_at=NULL, tz=NULL, locale=NULL, reminder_held_at=NULL, reassigned_from=?, free=?, link_by_sender=0${pg ? ', person_gen=?, person_gens=?' : ''} WHERE id=?`,
     name, email, token(), checkCode(), now(), labelOf(r), free, ...(pg ? [pg.gen, pg.gens] : []), r.id);
   noteReached(e, [email]);
   audit(e.id, actor, 'Reassigned', `${labelOf(r)} assigned this to ${name} <${email}>${to.reason ? `: ${str(to.reason, 300)}` : ''}${/[.!?]$/.test(str(to.reason, 300).trim()) ? '' : '.'} Nothing that ${r.name} had filled in or signed was passed on.`);

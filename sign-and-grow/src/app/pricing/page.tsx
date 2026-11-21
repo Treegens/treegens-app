@@ -3,6 +3,7 @@ import { refundRuleText, PRICE_NOTICE_DAYS } from '@/lib/policy';
 import { expiryShortText } from '@/lib/policy';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
+import { OpenOnHash } from '@/components/OpenOnHash';
 import { PLANS, PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
 import { BULK_COST_NOTE, NO_BAA_TITLE, NO_BAA_TEXT } from '@/lib/policy';
@@ -13,7 +14,7 @@ export const dynamic = 'force-dynamic';
 
 const COMPARE: [string, string, string][] = [
   ['Where your money goes', '100% of what you pay goes to tree planting', 'Company profit'],
-  ['A mistake after sending', 'Corrected in place, signatures kept', 'Often void and start again'],
+  ['A mistake after sending', 'Corrected in place, signatures kept', 'Often cancel and start again'],
   ['Signing links', 'Work while the document is open, with no click limit', 'Often expire after a few days or a few opens'],
   ['Signers', 'Never need an account, never pay', 'Often nudged to register'],
   ['Billing', 'Month to month', 'Often a yearly commitment'],
@@ -24,9 +25,9 @@ const COMPARE: [string, string, string][] = [
   ['Refunds', 'Automatic for what you have not used', 'Usually decided case by case'],
   ['If you stop paying', 'Nothing is deleted or locked', 'Access can be cut off'],
   ['Taking your documents with you', 'One free export, any time', 'Often one at a time, or a paid add-on'],
-  ['API, webhooks, bulk send, public forms', 'On both plans. Each person who signs uses one signature, as on any envelope', 'Often a separate, pricier plan'],
+  ['API, webhooks, Send to many, forms', 'On both plans. Each person who signs uses one signature, as on any document', 'Often a separate, pricier plan'],
   ['Check a signed PDF', 'Public page, no account needed', 'Usually needs an account or the sender'],
-  ['Audit trail', 'Hash chained, tampering is detectable', 'Event log'],
+  ['History of each document', 'Hash chained, tampering is detectable', 'Event log'],
   ['Paper and trees', 'The paper each document saves, as an estimate, with the working published', 'Rarely shown'],
 ];
 
@@ -86,22 +87,29 @@ export default function Pricing() {
 
           <div className="card pub-rules">
             <h2 id="rules">The rules</h2>
+            {/* Three lines say the most of it. The rest is one press away, and a link to one of them opens the fold (OpenOnHash). */}
             <ul>
-              <li><b>What a signature is.</b> One person signing one envelope. An envelope can hold several documents, and that is still one signature for each signer.</li>
-              <li><b>Only real signatures are used up.</b> Sending holds one signature for each signer, so nobody is stopped halfway. It is used when that person signs. If the envelope is voided, declined or left to expire, the ones held for people who had not signed yet come back, unless their own date has passed by then.</li>
+              <li><b>What a signature is.</b> One person signing one document. A document can hold several files, and that is still one signature for each person who signs.</li>
+              <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at {usd(P.topUpUsd)} a signature, with the total shown before you pay. There are no overage charges.</li>
+              <li><b>Refunds are automatic.</b> {refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>
+            </ul>
+            <details className="pub-fold" id="all-rules" data-fold="">
+            <summary>All the rules</summary>
+            <ul>
+              <li><b>Only real signatures are used up.</b> Sending holds one signature for each person who has to sign, so nobody is stopped halfway. It is used when that person signs. If the document is cancelled, declined or left to expire, the ones held for people who had not signed yet come back, unless their own date has passed by then.</li>
               <li><b>What is always free.</b> Signing your own documents. Approvers, viewers and people who get a copy. Corrections, reminders and more time. And signing, for everyone you send to.</li>
               <li id="expiry"><b>When signatures expire.</b> {expiryShortText()} <Link href="/help#expiry">How signatures expire</Link>.</li>
-              <li><b>Nothing is charged unless you choose it.</b> When signatures run out, sending pauses and we tell you. On {PLANS.seedling.name} you carry on by starting {P.planName}. On {P.planName} you can top up: a one-off payment at {usd(P.topUpUsd)} a signature, with the total shown before you pay. There are no overage charges.</li>
               <li><b>Month to month.</b> {P.planName} is {usd(P.monthlyUsd)} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
-              <li><b>Refunds are automatic.</b> {refundRuleText(refundDays)} A charge that arrives after you cancelled refunds itself. <Link href="/help#refunds">The full rule</Link>.</li>
               <li><b>No surprise price rises.</b> If the monthly price ever goes up, you are told by email at least {PRICE_NOTICE_DAYS} days before your first renewal at the new price, and a renewal that charges more without that notice refunds the difference by itself.</li>
               {dormantStopDays > 0 && <li><b>We do not charge for a plan nobody uses.</b> If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you.</li>}
-              <li><b>Same features on both plans.</b> Templates, bulk send, public forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
-              <li id="bulk-cost"><b>What a bulk send costs.</b> {BULK_COST_NOTE} A list of {LIST} people needs {sigs(LIST)}: starting from none on {P.planName}, that is the {P.monthlySignatures} of the month and {listTopUp} more at {usd(P.topUpUsd)} each, {usd(listUsd)} in all, paid before the batch goes out. The bulk send page shows your own numbers before you press Send. What nobody signs comes back to your balance when you void the batch or it runs out of time (unless its own date has passed by then), and the refund rule applies to it. An account that has not paid yet can newly email {firstWeekDaily} people a day in its first week and {unpaidDaily} a day after that.</li>
+              <li><b>Same features on both plans.</b> Templates, Send to many, forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
+              <li id="bulk-cost"><b>What Send to many costs.</b> {BULK_COST_NOTE} A list of {LIST} people needs {sigs(LIST)}: starting from none on {P.planName}, that is the {P.monthlySignatures} of the month and {listTopUp} more at {usd(P.topUpUsd)} each, {usd(listUsd)} in all, paid before the batch goes out. The Send to many page shows your own numbers before you press Send. What nobody signs comes back to your balance when you cancel the batch or it runs out of time (unless its own date has passed by then), and the refund rule applies to it. An account that has not paid yet can newly email {firstWeekDaily} people a day in its first week and {unpaidDaily} a day after that.</li>
               <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is free.</li>
               <li><b>Where the money goes.</b> 100% of what you pay goes to Treegens tree planting. Every dollar plants {P.treesPerUsd} mangrove trees, whether its signatures are used or not.</li>
               <li id="not-for-patients"><b>{NO_BAA_TITLE}</b> {NO_BAA_TEXT} <Link href="/security#not">What would have to be true first</Link>.</li>
             </ul>
+            </details>
+            <OpenOnHash />
           </div>
         </section>
 

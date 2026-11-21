@@ -279,7 +279,7 @@ test('the witness ticks their own statement before they can sign, and cannot dec
   const wtok = tokenFor(e.id, row(wit).email);
   const b = browser();
   const first = (await b.get(`/sign/${wtok}`)).data;
-  const date = (await import('../src/lib/dates.ts')).formatDate(row(ann).completed_at, null, null);
+  const date = (await import('../src/lib/dates.ts')).formatDate(row(ann).completed_at, 'D MMM YYYY', null); // what a new document starts with since 21 November 2026 (simplify-public)
   assert.equal(first.recipient.witness_of.statement, `I was physically present and saw Ann Signer sign this document on ${date}.`);
   assert.equal(first.recipient.witness_of.said, false);
   await b.post(`/sign/${wtok}/consent`);
@@ -367,7 +367,7 @@ test('the certificate lists the witness under the signer, with the statement as 
   assert.match(words, /Witnessed by Will Witness, listed next/);
   assert.match(words, /Witness for Ann Signer/);
   assert.ok(words.includes(`"${row(wit).witness_statement}"`), 'the statement exactly as ticked');
-  assert.match(words, /Statement ticked \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/);
+  assert.match(words, /Statement ticked \d{1,2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} UTC/);
   assert.match(words, /GrowSigning recorded what the witness stated\. It cannot check that they were physically present\./);
   assert.match(words, /Role Witness/);
   assert.match(words, /Status Witnessed/);

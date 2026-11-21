@@ -846,13 +846,13 @@ test('a first password is set through a link to the mailbox, and then the provid
   const link = await c.post('/me/signin/password-link');
   assert.equal(link.status, 200);
   assert.equal(link.data.sent_to, 'pia@gmail.com');
-  const mail = mailTo('pia@gmail.com').filter((m) => /Choose a password for Sign/.test(m.subject)).at(-1)!;
+  const mail = mailTo('pia@gmail.com').filter((m) => /Choose a password for GrowSigning/.test(m.subject)).at(-1)!;
   assert.match(mail.html, /has no password yet\. It is opened by signing in with Google\. With this link you choose a password/);
   assert.match(mail.html, /Signing in with Google keeps working as before/);
   assert.match(mail.html, /works for one hour\. If you did not ask for it, ignore this email and nothing changes/);
   // The "Forgot password" page sends the same email to someone who does not remember how they sign in.
   assert.equal((await browser().post('/auth/forgot', { email: 'pia@gmail.com' })).status, 200);
-  assert.equal(mailTo('pia@gmail.com').filter((m) => /Choose a password for Sign/.test(m.subject)).length, 2);
+  assert.equal(mailTo('pia@gmail.com').filter((m) => /Choose a password for GrowSigning/.test(m.subject)).length, 2);
   assert.equal(mailTo('pia@gmail.com').filter((m) => /Reset your Sign/.test(m.subject)).length, 0, 'it does not talk about resetting a password that never was');
   const reset = await browser().post('/auth/reset', { token: new URL(mail.link).searchParams.get('token'), password: PW });
   assert.equal(reset.status, 200);
@@ -884,7 +884,7 @@ test('a first password is set through a link to the mailbox, and then the provid
   assert.equal(cold.data.code, 'sign_in_first');
   assert.equal((await m.post('/auth/verify', { token: user('una@corp.example').verify_token })).status, 200);
   assert.equal((await m.post('/me/signin/password-link')).status, 200);
-  const una = mailTo('una@corp.example').filter((x) => /Choose a password for Sign/.test(x.subject)).at(-1)!;
+  const una = mailTo('una@corp.example').filter((x) => /Choose a password for GrowSigning/.test(x.subject)).at(-1)!;
   const done = await browser().post('/auth/reset', { token: new URL(una.link).searchParams.get('token'), password: PW });
   assert.deepEqual(done.data.disconnected, []);
   landed(await signIn(browser(), 'microsoft', microsoft('una@corp.example')));
@@ -1148,7 +1148,7 @@ test('a signed-in person whose Connect took too long goes back to Settings, and 
   const late = await go(c, `/auth/google/callback?${new URLSearchParams({ code, state: auth.searchParams.get('state')! })}`);
   const to = new URL(late.location);
   assert.equal(to.pathname, '/app/settings');
-  assert.deepEqual([to.searchParams.get('tab'), to.searchParams.get('signin_error'), to.searchParams.get('provider')], ['profile', 'expired', 'google']);
+  assert.deepEqual([to.searchParams.get('tab'), to.searchParams.get('signin_error'), to.searchParams.get('provider')], ['security', 'expired', 'google']);
   // A newer start in another tab replaced the cookie: the older one ends in Settings as well.
   const first = await c.post('/me/signin/google/connect');
   await c.post('/me/signin/google/connect');
