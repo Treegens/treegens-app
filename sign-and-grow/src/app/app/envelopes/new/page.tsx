@@ -17,7 +17,8 @@ export default function NewEnvelope() {
     const body: any = { kind };
     if (q.get('self')) body.recipients = [{ id: 'me', role: 'signer', name: me.user.name, email: me.user.email, routing_order: 1 }];
     api('/envelopes', { body })
-      .then((d) => router.replace(`/app/${kind === 'template' ? 'templates' : 'envelopes'}/${d.envelope.id}/edit`))
+      // ?write=1 ("Write a template" on the empty Templates page) opens step 1 on the writing view (editor/WriteDoc.tsx).
+      .then((d) => router.replace(`/app/${kind === 'template' ? 'templates' : 'envelopes'}/${d.envelope.id}/edit${q.get('write') ? '?write=1' : ''}`))
       .catch((e) => (oops(e), router.replace('/app')));
   }, [router, me]);
   return <div className="muted center" style={{ padding: 80 }}>Starting a new {'envelope'}…</div>;

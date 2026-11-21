@@ -6,6 +6,8 @@ import { phoneWeight } from '@/lib/phone';
 import { acceptList, convertNotes } from '@/lib/convert';
 import { plural, type Ed } from './shared';
 import { PageTools } from './PageTools';
+import { openWriting } from './WriteDoc';
+import { writtenLine } from '@/lib/writedoc';
 
 // One file in step 1 (research/ux-charter.md, 2.3): its name, how many pages, and one More with what is done to a
 // file now and then (replace it, move it, remove it). Under the row at most one note; when more than one applies,
@@ -28,6 +30,8 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
   // Made from a Word file or the like: the PDF is what is signed, and what may look different. Each sentence is a
   // note of its own, so the rule of this row holds for them too: one shows, the rest fold (src/lib/convert.ts).
   for (const line of convertNotes(d.converted)) notes.push(<p key={line} className="notice warn small ed-file-note" data-feature="ds-convert">{line}</p>);
+  // Written in the app (WriteDoc.tsx): said to the sender only, last, since it is no warning.
+  if (d.written) notes.push(<p key="written" className="muted small ed-file-note" data-feature="ds-write-doc">{writtenLine(!!d.written.ai)}</p>);
 
   return (
     <div data-item="file">
@@ -40,6 +44,8 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
       </div>
       {more && !ed.wording && (
         <div id={panel} className="row wrap ed-file-more" role="group" aria-label={`More options for ${name}`}>
+          {/* A document written here opens its text again (WriteDoc.tsx); after sending, saving it is a correction. */}
+          {d.written && <button type="button" className="btn sm" data-feature="ds-write-doc" onClick={() => (setMore(false), openWriting(d.id, d.file_id))}>Edit the text</button>}
           <label className="btn sm" title="Swap in a corrected version. Your fields stay where they are.">
             Replace file
             <input type="file" className="ed-sr" accept={acceptList(!!me.converts)} aria-label={`Replace the file for ${name}`} onChange={(e) => (ed.replaceDoc(d.id, e.target.files?.[0]), (e.target.value = ''))} />

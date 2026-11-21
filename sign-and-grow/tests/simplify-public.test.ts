@@ -189,7 +189,8 @@ test('Settings: "Saved" stands next to what saved, the long lists are folded, an
   assert.doesNotMatch(data, /DELETED_WITH_ACCOUNT\.map/);
   assert.match(data, /&quot;What is kept&quot; below says exactly what goes and what stays\./);
   // An admin closes the account from the one More options of Records and data; nothing on any section is open on arrival.
-  assert.match(page, /\{tab === 'data' && <MoreOptions><YourData only="close" \/><\/MoreOptions>\}/);
+  // The archive format switch (only with veraPDF on the server) sits behind the same More options (repair-ds-pdfa).
+  assert.match(page, /\{tab === 'data' && <MoreOptions>(?:<ArchiveFormat \/>)?<YourData only="close" \/><\/MoreOptions>\}/);
   assert.doesNotMatch(mine + frame + read('src/components/settings/SendingDefaults.tsx'), /<details[^>]* open/);
   // The plan rules are behind "How signatures work" (the payment owner's part, checked here so it stays).
   assert.match(page, /<details className="card" data-fold="">\s*<summary[^>]*>How signatures work<\/summary>/);

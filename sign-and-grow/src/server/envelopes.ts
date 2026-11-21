@@ -132,12 +132,13 @@ export function loadEnvelope(envelopeId: string): any {
   const e = get('SELECT * FROM envelopes WHERE id=?', envelopeId);
   if (!e) return null;
   e.documents = all(
-    'SELECT d.id, d.name, d.position, d.file_id, f.pages, f.page_sizes, f.sha256, f.size, f.scan_pages, f.converted FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=? ORDER BY d.position',
+    'SELECT d.id, d.name, d.position, d.file_id, f.pages, f.page_sizes, f.sha256, f.size, f.scan_pages, f.converted, (SELECT w.ai FROM written_docs w WHERE w.file_id=d.file_id) written_ai FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=? ORDER BY d.position',
     envelopeId,
     // Which pages are pictures with no text is kept with the file and said wherever the file is listed, so the
     // warning about a scan does not disappear when a draft is opened again.
   // ocr: where reading the text of those pages stands, only when this server reads it (src/server/ocr.ts).
-  ).map((d) => ({ ...d, page_sizes: JSON.parse(d.page_sizes), ...scanFlag(d.scan_pages), converted: convertedOf(d.converted), ...ocrField(d.file_id, d.scan_pages) }));
+  // written: the document was written in the app (writedoc.ts), and whether an AI helped. For the sender's screens only.
+  ).map(({ written_ai, ...d }) => ({ ...d, page_sizes: JSON.parse(d.page_sizes), ...scanFlag(d.scan_pages), converted: convertedOf(d.converted), ...ocrField(d.file_id, d.scan_pages), ...(written_ai == null ? {} : { written: { ai: !!written_ai } }) }));
   e.recipients = all('SELECT * FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', envelopeId);
   // A recipient that is a group carries its members (without their links): see attachGroups in groups.ts.
   attachGroups(e);

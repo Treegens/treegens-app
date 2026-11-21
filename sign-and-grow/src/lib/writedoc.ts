@@ -63,7 +63,7 @@ export const tagChip = (t: Pick<Tag, 'type' | 'signer' | 'label'>) => `${t.label
 export const signersNeeded = (text: string) => tagsIn(text).reduce((n, t) => Math.max(n, t.signer), 0);
 
 export type Blank = { start: number; end: number; label: string };
-const BLANK = /\[([^[\]\n]{1,80})\]/g;
+const BLANK = /\[([^[\]\n]{1,160})\]/g;
 /** The [blanks] still in a text, in order. A link written the Markdown way, [words](address), is not one. */
 export function blanksIn(text: string): Blank[] {
   const s = String(text ?? '');
@@ -191,6 +191,7 @@ Either of us can end this agreement by telling the other in writing [number] day
   {
     id: 'freelance', name: 'A freelance job', title: 'Freelance agreement',
     text: `**Client:** [client's name]
+
 **Freelancer:** [your name]
 
 ## The work
@@ -265,6 +266,7 @@ This lasts for [number] years from the date it is signed.
     text: `I, [name of the person receiving the money], confirm that I received **[amount]** from [name of the person paying] on [date].
 
 **For:** [what the payment is for]
+
 **Paid by:** [cash, bank transfer or another way]
 
 ## Signed

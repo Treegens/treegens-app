@@ -16,6 +16,7 @@ import { useTemplateDetails, draftNeedsDetails } from '@/components/sender/UseDe
 // Ready-made templates: a list inside this page, opened on purpose (src/lib/starters/).
 import { Starters, StartersInvite, StartersLink } from '@/components/templates/Starters';
 import { SOURCE_LOCALE, t as say } from '@/lib/i18n';
+import { WRITE_TEMPLATE_LINK } from '@/lib/writedoc';
 
 // With a waiver form for each state or client, one flat list stops working at about twenty. So the page has what
 // the envelope list has: a search (every word has to be found in the name, the folder, a role or the document), a
@@ -187,7 +188,7 @@ export default function Templates() {
           // The list above is open: one quiet way to make your own instead, not a second main button.
           <div className="empty rmt-own"><Link href="/app/envelopes/new?kind=template">{say(SOURCE_LOCALE, 'starters.or_own')}</Link></div>
         ) : rows.length === 0 ? (
-          <div className="empty"><h3>No templates yet</h3>Good for contracts, NDAs, waivers and anything else you send more than once.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new?kind=template" className="btn primary">Create your first template</Link></div>{!ready && <StartersInvite onOpen={() => setReady(true)} />}</div>
+          <div className="empty"><h3>No templates yet</h3>Good for contracts, NDAs, waivers and anything else you send more than once.<div style={{ marginTop: 14 }}><Link href="/app/envelopes/new?kind=template" className="btn primary">Create your first template</Link></div><p className="small" style={{ margin: '10px 0 0' }} data-feature="ds-write-doc"><Link href="/app/envelopes/new?kind=template&write=1">{WRITE_TEMPLATE_LINK}</Link></p>{!ready && <StartersInvite onOpen={() => setReady(true)} />}</div>
         ) : (
           <div className="tablewrap"><table className="t sn-list">
             <thead><tr><th>Template</th><th className="hide-sm">Roles</th><th className="hide-sm">Folder</th><th className="hide-sm">Pages</th><th className="hide-sm">Updated</th><th><span className="sn-vh">Actions</span></th></tr></thead>

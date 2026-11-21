@@ -74,6 +74,8 @@ export type Ed = {
   moveDoc: (index: number, by: number) => void;
   /** Pages removed, turned or moved (PageTools.tsx): the document takes the new file and its fields go with their pages. */
   pagesChanged: (id: string, file: any, plan: { from: number; turn: number }[]) => void;
+  /** A document written in the app (WriteDoc.tsx): added, or put in the place of `replaceId`, with the fields its tags make. */
+  addWritten: (file: any, found: { type: string; signer: number; label: string; required: boolean; page: number; x: number; y: number; w: number; h: number }[], replaceId?: string) => void;
   addRcp: (p?: any) => void;
   /** "Add me": the sender as someone who signs. */
   addMe: () => void;

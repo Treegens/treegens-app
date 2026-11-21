@@ -14,7 +14,7 @@ import { PhotoAsk } from './editor/PhotoAsk';
 import { StepAdd } from './editor/StepAdd';
 import { StepFields } from './editor/StepFields';
 import { StepReview } from './editor/StepReview';
-import { MAX_DOCS, SIGNS, clamp, plural, who, type Confirm, type Ed, type Upload } from './editor/shared';
+import { MAX_DOCS, SIGNS, clamp, plural, who, makeField, type Confirm, type Ed, type Upload } from './editor/shared';
 import { sendAnywayAsk } from '@/lib/mailnews';
 import { stackedFields } from '@/lib/stacked';
 import { WordingBanner, type WordingLock } from './templates/WhoCanUse';
@@ -306,6 +306,28 @@ export function Editor({ id }: { id: string }) {
     dirty();
     toast(correcting ? 'Pages changed. Review and save to keep the change.' : hadFields ? 'Pages changed. Check that your fields are where you want them.' : 'Pages changed.');
   }
+  // A document written in the app (editor/WriteDoc.tsx): added like an upload, or in the place of the one it was
+  // written from. Its tags become fields: Signer 1 is the first person who signs in step 1, Signer 2 the second, and a
+  // row is added for each signer the text names and step 1 does not have yet. One step, so one Undo takes the fields.
+  function addWritten(f: any, found: { type: string; signer: number; label: string; required: boolean; page: number; x: number; y: number; w: number; h: number }[], replaceId?: string) {
+    const did = replaceId || newId('doc');
+    const list = [...rcps];
+    const signers = list.filter(SIGNS);
+    const need = found.reduce((n, x) => Math.max(n, x.signer), 0);
+    while (signers.length < need) {
+      const r = newRcp(list, isTpl);
+      list.push(r);
+      signers.push(r);
+    }
+    if (list.length !== rcps.length) setRcps(list);
+    const doc = { file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: false, scan_pages: [], size: f.size, converted: null, existing_signatures_note: undefined, written: f.written || { ai: false } };
+    if (replaceId) setDocs((l) => l.map((x) => (x.id === did ? { ...x, ...doc, name: x.name } : x)));
+    else setDocs((d) => [...d, { id: did, ...doc }]);
+    const fresh = found.map((x) => makeField(x.type, did, x.page, signers[x.signer - 1].id, { x: x.x, y: x.y, w: x.w, h: x.h }, { label: x.label || '', required: x.required }));
+    fields.set((l) => [...l.filter((x) => x.document_id !== did), ...fresh]);
+    if (!replaceId) setEnv((e: any) => (e.subject ? e : { ...e, subject: e.kind === 'template' ? f.name : `Please sign: ${f.name}` }));
+    dirty();
+  }
   function removeDoc(did: string) {
     const d = docs.find((x) => x.id === did);
     const n = fields.current().filter((f) => f.document_id === did).length;
@@ -593,7 +615,7 @@ export function Editor({ id }: { id: string }) {
 
   const ed: Ed = {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, wording, docs, rcps, fields, contacts, uploads, color,
-    patchEnv, isIdle, addMe, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, pagesChanged, addRcp, patchRcp, removeRcp, removed, undoRemove,
+    patchEnv, isIdle, addMe, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, pagesChanged, addWritten, addRcp, patchRcp, removeRcp, removed, undoRemove,
     setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
     showField: (fid) => (setJump(fid), void go(2)), jump, clearJump: () => setJump(null),
   };
