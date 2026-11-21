@@ -595,7 +595,8 @@ test('the settings page shows the switches under Account, and the AI one only wh
   assert.match(sw, /aria-labelledby=\{`policy-\$\{key\}-title`\} aria-describedby=\{`policy-\$\{key\}-hint`\}/);
   assert.match(sw, /<b id=\{`policy-\$\{key\}-title`\}>\{title\}<\/b>/);
   const rec = read('src/components/settings/TreesOnRecord.tsx');
-  assert.match(rec, /aria-labelledby="trees-record-title" aria-describedby="trees-record-hint"/);
+  // When a level above set the switch (multi-agency, gov G13), who set it is read first, then the hint.
+  assert.match(rec, /aria-labelledby="trees-record-title" aria-describedby=\{d\.set_by \? 'trees-record-by trees-record-hint' : 'trees-record-hint'\}/);
   assert.match(rec, /<b id="trees-record-title">Trees on the signing record<\/b>/);
   // The hint promises only what a signer sees everywhere: the paper. Trees only when a payment paid for some.
   assert.doesNotMatch(sw, /what their signature plants/);
