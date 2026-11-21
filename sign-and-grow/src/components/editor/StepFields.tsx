@@ -89,6 +89,14 @@ export function StepFields({ ed }: { ed: Ed }) {
     if (r.focus) el.focus({ preventScroll: true });
   });
 
+  // Arriving from the review step's list of unfinished formats (ChecksCheck.tsx): More options opens, focus on Format and limits.
+  const openChecks = (id: string) => {
+    const jf = fields.value.find((f) => f.id === id);
+    if (!jf || !checksSendProblem(jf, fields.value)) return false;
+    setFieldMore(true);
+    setTimeout(() => document.querySelector<HTMLElement>('#ed-field-more .ed-checks-fold > summary')?.focus({ preventScroll: true }), 50);
+    return true;
+  };
   // Arriving from the review step's list of fields without a label: that field is selected, its settings are
   // open, and once its page is drawn it is brought into view with the cursor in the Label box.
   useEffect(() => {
@@ -109,13 +117,7 @@ export function StepFields({ ed }: { ed: Ed }) {
         const top = panel.getBoundingClientRect().top, r = el.getBoundingClientRect();
         if (r.bottom > top - 12) window.scrollBy({ top: r.bottom - top + 24 });
       }
-      // From the review step's list of unfinished formats (ChecksCheck.tsx): its More options opens on Format and limits.
-      const jf = fields.value.find((f) => f.id === id);
-      if (jf && checksSendProblem(jf, fields.value)) {
-        setFieldMore(true);
-        setTimeout(() => document.querySelector<HTMLElement>('#ed-field-more .ed-checks-fold > summary')?.focus({ preventScroll: true }), 50);
-        return;
-      }
+      if (openChecks(id)) return; // an unfinished format: its More options opens on Format and limits
       document.getElementById('ed-label')?.focus({ preventScroll: true });
     }, 100);
     return () => clearInterval(t);

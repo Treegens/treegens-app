@@ -863,7 +863,7 @@ test('the screens offer the choice, hand the sender the link, and never promise 
   assert.match(card, /\{qr === r\.id && links\[r\.id\] && \(turn \|\| own\) && <QrDialog/);
   assert.match(src('app/styles/abroad.css'), /\.sn-myself \.btn \{ min-height: 44px; \}/);
   const own = src('components/sender/OwnLink.tsx');
-  for (const b of ['Copy link', 'QR code', 'WhatsApp', 'Text']) assert.ok(own.includes(`>${b}</button>`), b);
+  for (const b of ['Copy link', 'QR code', 'Share on WhatsApp', 'Text']) assert.ok(own.includes(`>${b}</button>`), b);
   assert.match(own, /const done = r\.status === 'completed' && \(envelopeStatus === 'sent' \|\| envelopeStatus === 'completed'\);/);
   assert.doesNotMatch(own, /Nudge/);
   assert.match(src('components/sender/AfterSend.tsx'), /const own = acting\.filter\(\(r: any\) => ownLink\(r\) && r\.status === 'sent'\);/);

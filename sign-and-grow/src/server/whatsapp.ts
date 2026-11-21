@@ -267,6 +267,65 @@ function waProblem(r: any, e: any, strict: boolean): string | null {
   return null;
 }
 
+const samePhone = (a: any, b: any) => (normalPhone(a) || '') === (normalPhone(b) || '');
+/** Whether this row is no longer the person, at the number, that the WhatsApp tick and messages were for. */
+export const waMoved = (old: any, cur: any) => !!old && !!cur && (!samePhone(old.phone, cur.phone)
+  || String(old.email || '').trim().toLowerCase() !== String(cur.email || '').trim().toLowerCase() || (Number(old.person_gen) || 0) !== (Number(cur.person_gen) || 0));
+
+/**
+ * WhatsApp ends for this person: the choice, the tick and the line on the certificate ("Link sent by email and by
+ * WhatsApp to ..."), which would otherwise name a message that went to someone else. The audit trail keeps what was
+ * sent. Called when the person or their number changes: a reassign (passCheckOn), Change person, a correction.
+ */
+export function waEnds(e: any, rid: string, why: string, actor: Actor = SYSTEM) {
+  const row = get('SELECT id, name, wa_link, wa_agreed_for, wa_sent_to FROM recipients WHERE id=?', rid);
+  if (!row || (!row.wa_link && !row.wa_agreed_for && !row.wa_sent_to)) return;
+  run('UPDATE recipients SET wa_link=0, wa_agreed_at=NULL, wa_agreed_for=NULL, wa_sent_to=NULL WHERE id=?', rid);
+  if (row.wa_link) audit(e.id, actor, 'WhatsApp switched off', `${row.name}: the signing link is no longer sent by WhatsApp, because ${why}. Email is not affected.`);
+}
+
+/**
+ * Change person (POST /envelopes/:id/correct), before anything is changed. "whatsapp": false switches WhatsApp off
+ * for them; switching it on needs the tick for a number, which the editor's correction takes (PUT /envelopes/:id).
+ * The link by text message is refused while WhatsApp stays on, because the two are never on together.
+ */
+export function assertWaCorrection(e: any, rid: string, b: any) {
+  const r = e?.recipients?.find((x: any) => x.id === rid);
+  if (!r) return;
+  const on = b?.whatsapp === true || b?.whatsapp === 1 || b?.whatsapp === 'true';
+  if (on || b?.whatsapp_agreed !== undefined)
+    throw bad(`WhatsApp is switched on with the tick that ${r.name || 'the person'} agreed, for their number, and Change person does not take that. Nothing was changed. Use the envelope's correction instead (PUT /envelopes/:id with "whatsapp" and "whatsapp_agreed"). Here, only "whatsapp": false is taken.`, 400, { code: 'whatsapp_correct' });
+  const off = b?.whatsapp === false || b?.whatsapp === 0 || b?.whatsapp === 'false';
+  const textOn = b?.text_link === true || b?.text_link === 1 || b?.text_link === 'true';
+  if (r.wa_link && textOn && !off)
+    throw bad(`${r.name || 'This person'} gets the link by WhatsApp, and the link by text message and by WhatsApp are never on together. Nothing was changed. Send "whatsapp": false in the same call to text it instead.`, 400, { code: 'whatsapp_and_text' });
+}
+
+/**
+ * Change person around `fix` (the correction itself). Nothing goes by WhatsApp while it runs, so the new email to
+ * another person never brings a WhatsApp message to the number typed for the one before. Afterwards WhatsApp ends
+ * when the sender asked ("whatsapp": false) or when it is now another person or another number, and is otherwise
+ * kept as it was. A refused correction leaves it as it was.
+ */
+export async function correctWithWa(e: any, rid: string, b: any, actor: Actor, fix: () => Promise<void>) {
+  assertWaCorrection(e, rid, b);
+  const old = get('SELECT * FROM recipients WHERE id=? AND envelope_id=?', rid, e?.id);
+  const had = old && (old.wa_link || old.wa_sent_to || old.wa_agreed_for) ? old : null;
+  if (had?.wa_link) run('UPDATE recipients SET wa_link=0 WHERE id=?', rid);
+  const restore = () => had && run('UPDATE recipients SET wa_link=? WHERE id=?', had.wa_link, rid);
+  try {
+    await fix();
+  } catch (err) {
+    restore();
+    throw err;
+  }
+  if (!had) return;
+  restore();
+  const off = b?.whatsapp === false || b?.whatsapp === 0 || b?.whatsapp === 'false';
+  if (off) return waEnds(e, rid, 'the sender switched it off', actor);
+  if (waMoved(had, get('SELECT * FROM recipients WHERE id=?', rid))) waEnds(e, rid, 'the person or their number changed, and they agreed to WhatsApp for the one before', actor);
+}
+
 /**
  * Called by writeContent() in envelopes.ts after saveChecks, inside its transaction. Reads "whatsapp" (true or
  * false) and "whatsapp_agreed" (the sender's tick) of every recipient in the request. Leaving them out keeps what
@@ -274,8 +333,17 @@ function waProblem(r: any, e: any, strict: boolean): string | null {
  */
 export function saveWhatsApp(e: any, asked: { rid: string; r: any; i: number }[], before: Map<string, any>, correcting: boolean) {
   for (const { rid, r } of asked) {
-    if (r?.whatsapp === undefined && r?.whatsapp_agreed === undefined) continue;
     const old = before.get(rid);
+    // On an envelope that is out, another person or another number ends what was agreed and sent for the old one.
+    // Without a new choice in the request WhatsApp goes off; with one, the line on the certificate starts again.
+    if (correcting && old && waMoved(old, get('SELECT * FROM recipients WHERE id=?', rid))) {
+      if (r?.whatsapp === undefined && r?.whatsapp_agreed === undefined) {
+        waEnds(e, rid, 'the person or their number changed, and they agreed to WhatsApp for the one before');
+        continue;
+      }
+      run('UPDATE recipients SET wa_sent_to=NULL WHERE id=?', rid);
+    }
+    if (r?.whatsapp === undefined && r?.whatsapp_agreed === undefined) continue;
     const row = get('SELECT * FROM recipients WHERE id=?', rid);
     if (!row) continue;
     const on = r.whatsapp === undefined ? !!row.wa_link : r.whatsapp === true || r.whatsapp === 1 || r.whatsapp === 'true';
@@ -347,14 +415,23 @@ export function twilioSignatureOk(url: string, form: URLSearchParams, header: st
   return safeEqual(String(header), crypto.createHmac('sha1', token).update(data).digest('base64'));
 }
 
-/** A reply from a number: STOP stops WhatsApp to it from every account that wrote to it, START lets them write again. */
-export function waReply(from: string, text: string): 'stopped' | 'started' | 'ignored' {
+/**
+ * A reply from a number: STOP stops WhatsApp to it from the account whose message it answers, START lets that
+ * account write again. Which account: the message the reply quotes (`repliedTo`, the provider's id of our message:
+ * Meta's context.id, Twilio's OriginalRepliedMessageSid), or else the account that wrote to the number last (for START: the stop said last). Other
+ * accounts that wrote to the same number are not stopped: one stranger must not cut someone off from their landlord.
+ */
+export function waReply(from: string, text: string, repliedTo?: string | null): 'stopped' | 'started' | 'ignored' {
   const phone = normalPhone(from.replace(/^whatsapp:/i, '').replace(/^(?!\+)/, '+'));
   if (!phone) return 'ignored';
   const stop = isStopWord(text), start = !stop && isStartWord(text);
   if (!stop && !start) return 'ignored';
   const key = phoneKey(phone);
-  for (const { account_id } of all('SELECT DISTINCT account_id FROM wa_messages WHERE dest_hash=?', key)) {
+  const quoted = repliedTo ? get('SELECT account_id FROM wa_messages WHERE provider_id=? AND dest_hash=?', String(repliedTo), key) : null;
+  // START without a quote is for the stop they said last, which need not be the account that wrote last.
+  const latest = quoted || (start ? get('SELECT account_id FROM wa_stops WHERE dest_hash=? ORDER BY at DESC LIMIT 1', key) : null)
+    || get('SELECT account_id FROM wa_messages WHERE dest_hash=? ORDER BY id DESC LIMIT 1', key);
+  for (const { account_id } of latest ? [latest] : []) {
     const last = get('SELECT envelope_id FROM wa_messages WHERE account_id=? AND dest_hash=? AND envelope_id IS NOT NULL ORDER BY id DESC LIMIT 1', account_id, key);
     if (stop) {
       run('INSERT OR REPLACE INTO wa_stops (account_id, dest_hash, at) VALUES (?,?,?)', account_id, key, now());

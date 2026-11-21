@@ -43,7 +43,7 @@ export function OwnLinkActions({ r, envelopeStatus, busy, link, onCopy, onQr, on
       <div className="sn-person-actions">
         <button className="btn sm" disabled={!!busy} onClick={onCopy} aria-label={`Copy signing link for ${r.name}`}>Copy link</button>
         <button className="btn sm qr-tap" disabled={!!busy} onClick={(ev) => onQr(ev.currentTarget)} aria-haspopup="dialog" aria-label={`Show a QR code with the signing link for ${r.name}`}>QR code</button>
-        <button className="btn sm" disabled={!!busy} onClick={() => onShare('whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>WhatsApp</button>
+        <button className="btn sm" disabled={!!busy} onClick={() => onShare('whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>Share on WhatsApp</button>
         <button className="btn sm" disabled={!!busy} onClick={() => onShare('sms')} aria-label={`Share link with ${r.name} by text message`}>Text</button>
       </div>
       {link && (

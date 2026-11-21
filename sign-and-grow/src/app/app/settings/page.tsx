@@ -20,6 +20,7 @@ import { StampSettings } from '@/components/stamps/StampSettings';
 import { RetentionSettings } from '@/components/settings/RetentionSettings';
 import { ArchiveSettings } from '@/components/settings/ArchiveSettings';
 import { SealStatus } from '@/components/settings/SealStatus';
+import { ChannelsStatus } from '@/components/settings/ChannelsStatus';
 import { ArchiveFormat } from '@/components/settings/ArchiveFormat';
 import { TenantSwitches } from '@/components/settings/TenantSwitches';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
@@ -1021,6 +1022,8 @@ export default function Settings() {
       {tab === 'account' && <Card><Account /></Card>}
       {tab === 'account' && <LanguageSettings />}
       {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><CustomFieldSettings /><MoreOptions><Disclosure /></MoreOptions></div>}
+      {/* Admins, where the operator set up WhatsApp or calls with a code: one read-only Connections card. */}
+      {tab === 'sending' && <ChannelsStatus />}
       {tab === 'team' && <Team />}
       {tab === 'billing' && <Billing />}
       {tab === 'data' && <Card><RetentionSettings /></Card>}
@@ -1028,9 +1031,8 @@ export default function Settings() {
       {tab === 'data' && <ListDaysSetting />}
       {tab === 'data' && <ArchiveSettings />}
       {tab === 'data' && <SealStatus />}
-      {tab === 'data' && <ArchiveFormat />}
       {tab === 'data' && <YourData only="export" />}
-      {tab === 'data' && <MoreOptions><YourData only="close" /></MoreOptions>}
+      {tab === 'data' && <MoreOptions><ArchiveFormat /><YourData only="close" /></MoreOptions>}
       {tab === 'developers' && <Developers />}
       {tab === 'stamps' && <Card><StampSettings /></Card>}
       {tab === 'organisation' && me.org_admin && <Organisation />}

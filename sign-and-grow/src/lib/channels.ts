@@ -7,8 +7,7 @@
 export const WA_AGREE = 'They agreed to get messages about this by WhatsApp';
 
 /** Said under the WhatsApp choice in the editor, before anyone relies on it. */
-export const WA_HOW =
-  'We also send their signing link by WhatsApp, to this mobile number, as well as by email. Reminders and the link to the finished document follow the same way. They can reply STOP to get no more. A text message link and WhatsApp cannot both be on for one person.';
+export const WA_HOW = 'We send their signing link by WhatsApp as well as email, and reminders and the finished link too. They can reply STOP.';
 
 /** What becomes of a WhatsApp message, in the words the sender reads. "Read" is never shown: it proves nothing. */
 export const WA_STATUS_WORDS: Record<string, string> = {
@@ -30,14 +29,15 @@ export const isStartWord = (s: any) => WA_START_WORDS.includes(String(s ?? '').t
 /**
  * The message texts. With the Meta WhatsApp Business Platform the operator registers these as templates (named in
  * WHATSAPP_TEMPLATE_INVITE, _REMIND, _DONE and _DEADLINE) with three numbered blanks: {{1}} the sender, {{2}} the
- * document, {{3}} the link. Without approved templates WhatsApp does not deliver a message nobody asked for, so the
+ * document, {{3}} the link, each used once and in that order, and each text starts and ends with fixed words (Meta
+ * does not take a template that starts or ends with a blank). Without approved templates WhatsApp does not deliver a message nobody asked for, so the
  * README prints exactly these texts for the operator to submit.
  */
 export const WA_TEXTS: Record<'invite' | 'remind' | 'deadline' | 'done', string> = {
-  invite: '{sender} asked you to sign {subject}. Open: {link} This message comes from GrowSigning for {sender}. Reply STOP to get no more messages about documents from {sender}.',
-  remind: 'Reminder: {sender} is waiting for you to sign {subject}. Open: {link} Reply STOP to get no more messages about documents from {sender}.',
-  deadline: '{subject} from {sender} closes soon. Open it before then: {link} Reply STOP to get no more messages about documents from {sender}.',
-  done: '{subject} from {sender} is complete. Your copy is here: {link} Reply STOP to get no more messages about documents from {sender}.',
+  invite: 'Hello. {sender} asked you to sign {subject} with GrowSigning. Open it here: {link} Reply STOP to get no more of these WhatsApp messages.',
+  remind: 'Reminder: {sender} is waiting for you to sign {subject}. Open it here: {link} Reply STOP to get no more of these WhatsApp messages.',
+  deadline: 'Closing soon: {sender} asked you to sign {subject}, and it closes soon. Open it here: {link} Reply STOP to get no more of these WhatsApp messages.',
+  done: 'Complete: {sender} sent you {subject}, and it is now complete. Your copy is here: {link} Reply STOP to get no more of these WhatsApp messages.',
 };
 export const fillWa = (kind: keyof typeof WA_TEXTS, v: { sender: string; subject: string; link: string }) =>
   WA_TEXTS[kind].replace(/\{sender\}/g, v.sender).replace(/\{subject\}/g, v.subject).replace(/\{link\}/g, v.link);

@@ -34,7 +34,7 @@ const PDFTOTEXT = has('pdftotext');
 const PDFSIG = has('pdfsig');
 const REAL = process.env.VERAPDF_TEST_CMD || (has('verapdf', '--version') ? 'verapdf' : '');
 
-function checker(mode: 'pass' | 'fail' | 'slow' | 'noversion' | null) {
+function checker(mode: 'pass' | 'passslow' | 'fail' | 'slow' | 'noversion' | null) {
   if (mode) process.env.VERAPDF_CMD = `node ${FAKE} ${mode} ${LOG}`;
   else delete process.env.VERAPDF_CMD;
   delete (globalThis as any).__sgpdfaversion;
@@ -88,7 +88,9 @@ async function complete(c: Client, file: Uint8Array, name = 'Lease', subject = '
   const id = r.data.envelope.id;
   assert.equal((await c.post(`/envelopes/${id}/send`)).status, 200);
   assert.equal((await signAll(id, email)).status, 200);
-  const row = s.db.get('SELECT status, final_sha256, pdfa, pdfa_note, pdfa_checker FROM envelopes WHERE id=?', id);
+  // With the switch on, the signed file follows in the background once the check is done (completesLater).
+  await pdfa.idle();
+  const row = s.db.get('SELECT status, final_sha256, pdfa, pdfa_note, pdfa_code, pdfa_checker FROM envelopes WHERE id=?', id);
   assert.equal(row.status, 'completed');
   assert.ok(row.final_sha256, 'the signed PDF is made whatever the archive format did');
   return { id, pdf: s.db.readBlob(row.final_sha256), row };
@@ -214,7 +216,7 @@ test('setting off changes nothing: no checker set, the switch is not offered and
   checker(null);
   const c = await account();
   const g = await c.get('/account/pdfa');
-  assert.deepEqual(g.data, { available: false, on: false });
+  assert.deepEqual(g.data, { available: false, on: false, notice: null });
   const put = await c.put('/account/pdfa', { on: true });
   assert.equal(put.status, 409);
   assert.match(put.data.error, /veraPDF/);
@@ -233,7 +235,7 @@ test('setting off with a checker on the server: still nothing changes, and veraP
   checker('pass');
   fs.rmSync(LOG, { force: true });
   const c = await account();
-  assert.deepEqual((await c.get('/account/pdfa')).data, { available: true, on: false });
+  assert.deepEqual((await c.get('/account/pdfa')).data, { available: true, on: false, notice: null });
   const res = await complete(c, await embeddedPdf());
   assert.equal((await catalogOf(res.pdf)).cat.get(PDFName.of('OutputIntents')), undefined);
   assert.equal(res.row.pdfa, null);
@@ -246,7 +248,7 @@ test('who may switch it: an admin signed in, not an API key; anything but true o
   assert.equal((await owner.put('/account/pdfa', { on: 'yes' })).status, 400);
   const on = await owner.put('/account/pdfa', { on: true });
   assert.equal(on.status, 200);
-  assert.deepEqual(on.data, { available: true, on: true });
+  assert.deepEqual(on.data, { available: true, on: true, notice: null });
   const ev = s.db.get("SELECT details FROM security_events WHERE kind='settings.changed' AND details LIKE '%archive_format_pdfa%' ORDER BY seq DESC LIMIT 1");
   assert.ok(ev, 'the security record says who switched it');
   const key = await owner.post('/api-keys', { name: 'robot', scope: 'admin' });
@@ -289,7 +291,10 @@ test('veraPDF does not pass it: the file is made again as a normal PDF, and noth
   assert.equal((await catalogOf(res.pdf)).cat.get(PDFName.of('OutputIntents')), undefined, 'the stored file is the normal one');
   assert.equal(res.row.pdfa, 'not');
   assert.equal(res.row.pdfa_note, 'the check found 3 problems');
-  assert.deepEqual((await c.get(`/envelopes/${res.id}`)).data.archive_format, { pdfa: false, why: 'the check found 3 problems' });
+  const af = (await c.get(`/envelopes/${res.id}`)).data.archive_format;
+  assert.equal(af.pdfa, false);
+  assert.equal(af.why, 'the check found 3 problems');
+  assert.match(af.next, /Saving the file as PDF\/A in the program that made it/);
   if (PDFTOTEXT) {
     const t = text(res.pdf);
     assert.match(t, /Archive format: not PDF\/A \(the check found 3 problems\)\./);
@@ -308,6 +313,13 @@ test('an upload with a font that is not inside it: made as a normal PDF, and the
   assert.equal((await catalogOf(res.pdf)).cat.get(PDFName.of('OutputIntents')), undefined);
   if (PDFTOTEXT) assert.match(text(res.pdf), /Archive format: not PDF\/A \(a font in Rental terms is not inside the file\)\./);
   assert.ok(!calls().some((l) => l.includes('--flavour')), 'nothing to check: no PDF/A was made');
+  // What to do next time, under the reason; and the history speaks of the signing record, not a certificate.
+  const env = (await c.get(`/envelopes/${res.id}`)).data;
+  assert.equal(res.row.pdfa_code, 'font');
+  assert.match(env.archive_format.next, /^Next time, save the file as PDF\/A in the program that made it/);
+  const line = env.audit.find((a: any) => a.action === 'Archive format: not PDF/A');
+  assert.match(line.detail, /Its signing record says so\. Next time, save the file as PDF\/A/);
+  assert.doesNotMatch(line.detail, /certificate/);
 });
 
 test('the checker cannot start or does not answer in time: the document still completes, as a normal PDF that says why', async () => {
@@ -370,18 +382,165 @@ test('the seal still validates after the PDF/A step, and the seal keeps the file
   }
 });
 
-test('real veraPDF passes the file this server makes as PDF/A-2b (skipped when veraPDF is not installed)', { skip: !REAL && 'veraPDF is not installed (set VERAPDF_TEST_CMD)' }, async () => {
+test('a font a file only lists, and never draws with, does not stop PDF/A; one it draws with does', async () => {
+  // DejaVu draws the text; Helvetica is listed in the page's fonts but no Tf selects it.
+  const listed = await PDFDocument.load(await embeddedPdf());
+  const helv = listed.context.register(listed.context.obj({ Type: 'Font', Subtype: 'Type1', BaseFont: 'Helvetica' }));
+  const fonts = listed.getPages()[0].node.Resources()!.lookup(PDFName.of('Font'), PDFDict);
+  fonts.set(PDFName.of('Unused'), helv);
+  const onlyListed = await listed.save();
+  assert.equal(await pdfa.sourceProblem(onlyListed), null);
+  // The same font, now drawn with on the page.
+  const drawn = await PDFDocument.load(onlyListed);
+  const p = drawn.getPages()[0];
+  const extra = drawn.context.register(drawn.context.flateStream('BT /Unused 12 Tf 72 600 Td (Hello) Tj ET'));
+  const contents = p.node.get(PDFName.of('Contents'));
+  p.node.set(PDFName.of('Contents'), drawn.context.obj([...(contents instanceof PDFArray ? contents.asArray() : [contents!]), extra]));
+  assert.equal(await pdfa.sourceProblem(await drawn.save()), 'font');
+  // A name written with #-escapes is the same name.
+  const esc = await PDFDocument.load(onlyListed);
+  const q = esc.getPages()[0];
+  const s2 = esc.context.register(esc.context.flateStream('BT /Un#75sed 12 Tf (x) Tj ET'));
+  const c2 = q.node.get(PDFName.of('Contents'));
+  q.node.set(PDFName.of('Contents'), esc.context.obj([...(c2 instanceof PDFArray ? c2.asArray() : [c2!]), s2]));
+  assert.equal(await pdfa.sourceProblem(await esc.save()), 'font');
+});
+
+test('the signer is not kept waiting for the check: Finish answers at once, the file and the emails follow', async () => {
+  checker('pass');
+  const c = await account();
+  await c.put('/account/pdfa', { on: true });
+  checker('slow');
+  process.env.VERAPDF_TIMEOUT_MS = '6000';
+  try {
+    const f = new FormData();
+    f.append('file', new Blob([await embeddedPdf()], { type: 'application/pdf' }), 'Lease.pdf');
+    const up = await c.call('POST', '/files', f);
+    const email = `waiting${++n}@example.com`;
+    const r = await c.post('/envelopes', { subject: 'Waiting test', documents: [{ id: 'd', file_id: up.data.id, name: 'Lease' }], recipients: [{ id: 'r', role: 'signer', name: 'Wendy Waiting', email }], fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+    const id = r.data.envelope.id;
+    await c.post(`/envelopes/${id}/send`);
+    const before = calls().filter((l) => l.includes('--flavour')).length;
+    const t0 = Date.now();
+    const done = await signAll(id, email);
+    const took = Date.now() - t0;
+    assert.equal(done.status, 200);
+    assert.equal(done.data.envelope_status, 'completed', 'the envelope is completed at once');
+    assert.ok(took < 5000, `Finish answered in ${took} ms, not after the 6 second check`);
+    assert.equal(s.db.get('SELECT final_sha256 f FROM envelopes WHERE id=?', id).f, null, 'the file is still being made');
+    // The timer comes round while the check runs: it waits for the same run, no second check, history written once.
+    const envMod = await import('../src/server/envelopes.ts');
+    await envMod.buildFinal(id);
+    await pdfa.idle();
+    const row = s.db.get('SELECT final_sha256, pdfa, pdfa_note, pdfa_code FROM envelopes WHERE id=?', id);
+    assert.ok(row.final_sha256);
+    assert.equal(row.pdfa_note, 'the check took longer than 6 seconds');
+    assert.equal(row.pdfa_code, 'slow');
+    assert.equal(calls().filter((l) => l.includes('--flavour')).length - before, 1, 'the check that was running is the only one');
+    assert.equal(s.db.all("SELECT 1 FROM audit WHERE envelope_id=? AND action LIKE 'Archive format%'", id).length, 1);
+    // The completed email went out after the file was made, with the file attached.
+    const mail = s.db.all("SELECT subject, html FROM emails WHERE to_email=? AND subject LIKE 'Completed:%'", email);
+    assert.equal(mail.length, 1);
+    assert.match(mail[0].html, /certificate of completion are ready/, 'it went out once the file was made, not as "being prepared"');
+    // The settings card says the last check could not be done, and what to do.
+    const g = (await c.get('/account/pdfa')).data;
+    assert.match(g.notice, /^The last check could not be done \(the check took longer than 6 seconds\), so that document is not PDF\/A\. Tell whoever runs GrowSigning/);
+    const env = (await c.get(`/envelopes/${id}`)).data;
+    assert.match(env.archive_format.next, /^This is about the server, not your file/);
+  } finally {
+    delete process.env.VERAPDF_TIMEOUT_MS;
+  }
+});
+
+test('many documents completing at once: at most 2 checks run at a time, and one account cannot fill the line', async () => {
+  checker('pass');
+  const c = await account();
+  await c.put('/account/pdfa', { on: true });
+  checker('passslow');
+  await pdfa.checkerVersion();
+  pdfa.checkLine(true);
+  // Eight envelopes of one account, all signed at the same moment.
+  const ids: string[] = [];
+  const emails: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const f = new FormData();
+    f.append('file', new Blob([await embeddedPdf()], { type: 'application/pdf' }), 'Lease.pdf');
+    const up = await c.call('POST', '/files', f);
+    const email = `many${++n}@example.com`;
+    const r = await c.post('/envelopes', { subject: `Many ${i}`, documents: [{ id: 'd', file_id: up.data.id, name: 'Lease' }], recipients: [{ id: 'r', role: 'signer', name: 'Mo Many', email }], fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] });
+    await c.post(`/envelopes/${r.data.envelope.id}/send`);
+    ids.push(r.data.envelope.id);
+    emails.push(email);
+  }
+  const answers = await Promise.all(ids.map((id, i) => signAll(id, emails[i])));
+  assert.ok(answers.every((a) => a.status === 200));
+  await pdfa.idle();
+  const line = pdfa.checkLine();
+  assert.ok(line.most <= pdfa.CHECKS_AT_ONCE, `at most ${pdfa.CHECKS_AT_ONCE} at once, saw ${line.most}`);
+  assert.equal(line.running, 0);
+  assert.equal(line.waiting, 0);
+  const rows = ids.map((id) => s.db.get('SELECT final_sha256, pdfa, pdfa_code FROM envelopes WHERE id=?', id));
+  assert.ok(rows.every((r) => r.final_sha256), 'every document completed with its file');
+  const passed = rows.filter((r) => r.pdfa === 'passed').length;
+  const busy = rows.filter((r) => r.pdfa_code === 'busy').length;
+  assert.equal(passed + busy, 8);
+  assert.ok(passed >= 1 && passed <= pdfa.PER_ACCOUNT_IN_LINE, `${passed} passed, at most ${pdfa.PER_ACCOUNT_IN_LINE} of one account in the line`);
+  assert.ok(busy >= 8 - pdfa.PER_ACCOUNT_IN_LINE, 'the rest are normal files that say the check was busy');
+  const b = rows.findIndex((r) => r.pdfa_code === 'busy');
+  assert.equal((await c.get(`/envelopes/${ids[b]}`)).data.archive_format.why, 'the check was busy with other files');
+});
+
+test('the checker taken away while the switch is on: the card stays and says so, and can be switched off', async () => {
+  checker('pass');
+  const c = await account();
+  await c.put('/account/pdfa', { on: true });
+  checker(null);
+  const g = (await c.get('/account/pdfa')).data;
+  assert.equal(g.available, false);
+  assert.equal(g.on, true);
+  assert.match(g.notice, /^This server can no longer check files, so documents completed now are made as normal PDFs\. Tell whoever runs GrowSigning for you\. You can switch this off\.$/);
+  assert.equal((await c.put('/account/pdfa', { on: true })).status, 409, 'cannot be switched on again');
+  const off = await c.put('/account/pdfa', { on: false });
+  assert.equal(off.status, 200);
+  assert.deepEqual(off.data, { available: false, on: false, notice: null });
+  // A document completed meanwhile: made as before, and the signer was not put in the background line.
+  const res = await complete(c, await embeddedPdf());
+  assert.equal(res.row.pdfa, null);
+});
+
+test('real veraPDF passes the file this server makes as PDF/A-2b, sealed, and fails one that is not (skipped when veraPDF is not installed)', { skip: !REAL && 'veraPDF is not installed (set VERAPDF_TEST_CMD)' }, async () => {
   process.env.VERAPDF_CMD = REAL;
   delete (globalThis as any).__sgpdfaversion;
   process.env.VERAPDF_TIMEOUT_MS = '180000';
+  const root: Made = makeCert({ cn: 'Real Root CA', ca: true });
+  const leaf: Made = makeCert({ cn: 'Real Operator Seal', issuer: root });
+  const w = (name: string, t: string) => (fs.writeFileSync(path.join(dir, name), t), path.join(dir, name));
   try {
     const c = await account();
     await c.put('/account/pdfa', { on: true });
-    const res = await complete(c, await embeddedPdf());
+    // Other scripts in the title (our own render draws them with Noto), and a font the upload lists but never draws
+    // with (the render copies the upload's resources). (An upload drawn with a font that lacks some of its letters is
+    // failed by veraPDF, rightly: 6.2.11.8, glyphs that are not in the font. It is then made as a normal PDF.)
+    const listed = await PDFDocument.load(await embeddedPdf('Agreement'));
+    const helv = listed.context.register(listed.context.obj({ Type: 'Font', Subtype: 'Type1', BaseFont: 'Helvetica' }));
+    listed.getPages()[0].node.Resources()!.lookup(PDFName.of('Font'), PDFDict).set(PDFName.of('Unused'), helv);
+    const res = await complete(c, await listed.save(), 'Lease', 'Lease 日本 & "Annex"');
     assert.equal(res.row.pdfa, 'passed', res.row.pdfa_note);
     assert.match(res.row.pdfa_checker, /^veraPDF \d/);
+    // Sealed: the seal's incremental update keeps it PDF/A-2b.
+    Object.assign(process.env, { SEAL_KEY_PEM: w('rkey.pem', leaf.keyPem), SEAL_CERT_PEM: w('rcert.pem', leaf.pem), SEAL_CHAIN_PEM: w('rchain.pem', root.pem) });
+    sealkey.forgetSealKey();
+    const sealed = await complete(c, await embeddedPdf());
+    assert.equal(sealed.row.pdfa, 'passed', sealed.row.pdfa_note);
+    assert.ok(await seal.checkSeal(sealed.pdf));
+    // Not a rubber stamp: a file with a font that is not inside it, given PDF/A metadata, is failed.
+    const bad = await pdfa.toPdfA(await helveticaPdf(), 'Not archive ready');
+    const verdict = await pdfa.checkPdfA(bad);
+    assert.equal(verdict.passed, false);
+    assert.equal((verdict as any).code, 'failed');
   } finally {
-    delete process.env.VERAPDF_TIMEOUT_MS;
+    for (const k of ['SEAL_KEY_PEM', 'SEAL_CERT_PEM', 'SEAL_CHAIN_PEM', 'VERAPDF_TIMEOUT_MS']) delete process.env[k];
+    sealkey.forgetSealKey();
     checker(null);
   }
 });

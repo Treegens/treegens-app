@@ -1341,6 +1341,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['envelopes', 'pdfa', 'TEXT'],
   ['envelopes', 'pdfa_note', 'TEXT'],
   ['envelopes', 'pdfa_checker', 'TEXT'],
+  // With 'not': why as a code (font, cmyk, media, attached, failed, convert, slow, checker_down, busy), which picks
+  // the next step the page shows under the reason (nextStep in pdfa.ts).
+  ['envelopes', 'pdfa_code', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

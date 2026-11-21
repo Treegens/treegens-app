@@ -166,8 +166,14 @@ export function imageOf(doc: PDFDocument, pageIndex: number): { ext: 'jpg' | 'pn
   // PNG predictors: the stream already is what a PNG holds (rows that each start with their filter byte).
   if (predictor >= 10) return { ext: 'png', data: png(w, h, colors, bpc, bytes) };
   if (predictor !== 1) return null;
-  const raw = zlib.inflateSync(bytes);
   const row = Math.ceil((w * colors * bpc) / 8);
+  // Never inflate more than the picture can hold: a small stream can unpack to gigabytes (a "zip bomb").
+  let raw: Buffer;
+  try {
+    raw = zlib.inflateSync(bytes, { maxOutputLength: row * h + 1 });
+  } catch {
+    return null; // broken data, or more than the picture's size: no text for this page
+  }
   if (raw.length < row * h) return null;
   const out = Buffer.alloc((row + 1) * h);
   for (let y = 0; y < h; y++) raw.copy(out, y * (row + 1) + 1, y * row, y * row + row);
@@ -188,7 +194,8 @@ export function cleanOcr(s: string): string {
 
 /** The command of OCR_CMD as a program and its arguments, with {file} and {lang} filled in. No shell is used. */
 export function commandFor(cmd: string, file: string, lang: string): [string, string[]] {
-  const parts = cmd.trim().split(/\s+/).filter(Boolean);
+  // A part in double quotes keeps its spaces, for a program path such as "/opt/My Reader/ocr".
+  const parts = (cmd.trim().match(/"[^"]*"|\S+/g) || []).map((p) => (p.length > 1 && p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1) : p)).filter(Boolean);
   let named = false;
   const args = parts.map((p) => {
     if (p.includes('{file}')) named = true;
@@ -208,7 +215,12 @@ function runCommand(cmd: string, file: string, lang: string, timeout: number): P
   });
 }
 
-async function readWithCommand(cmd: string, bytes: Uint8Array, pages: number[], lang: string): Promise<Record<string, string>> {
+/**
+ * `used.lang` says the language the pages were read in. When the reader fails in the document's language (often: its
+ * language pack is not installed) but not by running out of time, the page is tried once in English and the rest of
+ * the file is read in English too, with a line in the server log saying so.
+ */
+async function readWithCommand(cmd: string, bytes: Uint8Array, pages: number[], lang: string, used = { lang }): Promise<Record<string, string>> {
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gs-ocr-'));
   const out: Record<string, string> = {};
@@ -220,7 +232,16 @@ async function readWithCommand(cmd: string, bytes: Uint8Array, pages: number[], 
       const file = path.join(dir, `page-${p}.${img.ext}`);
       fs.writeFileSync(file, img.data, { mode: 0o600 });
       try {
-        const t = cleanOcr(await runCommand(cmd, file, lang, ocrTimeout()));
+        let said: string;
+        try {
+          said = await runCommand(cmd, file, used.lang, ocrTimeout());
+        } catch (e: any) {
+          if (used.lang === 'eng' || /took longer/.test(String(e?.message))) throw e;
+          console.warn(`[ocr] the text reader failed in language "${used.lang}" (${String(e?.message).slice(0, 160)}); reading in English instead. Is its language pack installed?`);
+          used.lang = 'eng';
+          said = await runCommand(cmd, file, used.lang, ocrTimeout());
+        }
+        const t = cleanOcr(said);
         if (t) out[String(p)] = t;
       } finally {
         fs.rmSync(file, { force: true });
@@ -258,7 +279,9 @@ async function readOne(job: any): Promise<void> {
   const bytes = readBlob(f.sha256);
   const cmd = (process.env.OCR_CMD || '').trim();
   const url = (process.env.OCRMYPDF_URL || '').trim();
-  const text = cmd ? await readWithCommand(cmd, bytes, pages, lang) : await readWithService(url, bytes, pages, lang);
+  const used = { lang };
+  const text = cmd ? await readWithCommand(cmd, bytes, pages, lang, used) : await readWithService(url, bytes, pages, lang);
+  if (used.lang !== lang) run('UPDATE ocr_jobs SET lang=? WHERE file_id=?', used.lang, f.id);
   const kept = keepText(`${f.id}#ocr`, JSON.stringify(text));
   run("UPDATE ocr_jobs SET state='done', done_at=?, error=NULL, text=?, text_sealed=?, text_key=? WHERE file_id=?", nowIso(), kept.text ?? (kept.sealed ? null : '{}'), kept.sealed, kept.key, f.id);
   // For the sender's search: the words are added to what the file already keeps (never instead of it).
@@ -290,6 +313,23 @@ let current: Promise<number> | null = null;
  * over. A job that fails is tried again on the next run, up to OCR_MAX_TRIES times, and then left as failed: the
  * pages keep saying they have no text, as they did before.
  */
+/**
+ * For the timer: starts a run and waits for it at most `waitMs`. A batch of large scans can take hours, and the timer
+ * (and an outside scheduler calling POST /cron) must not wait that long: the run goes on by itself, and the answer
+ * says "still reading". A run already going is never waited for.
+ */
+export async function ocrTick(waitMs = 20_000): Promise<number | 'still reading'> {
+  if (current) return 'still reading';
+  const p = runOcr().catch((e) => (console.error('[ocr]', e?.message), 0));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'still reading'>((r) => (timer = setTimeout(() => r('still reading'), waitMs)));
+  try {
+    return await Promise.race([p, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function runOcr(limit = 5): Promise<number> {
   if (current) return current;
   current = (async () => {
@@ -306,6 +346,8 @@ export function runOcr(limit = 5): Promise<number> {
       } catch (e: any) {
         const tries = (get('SELECT tries FROM ocr_jobs WHERE file_id=?', job.file_id)?.tries || 0) as number;
         run('UPDATE ocr_jobs SET state=?, error=? WHERE file_id=?', tries >= OCR_MAX_TRIES ? 'failed' : 'queued', String(e?.message || e).slice(0, 300), job.file_id);
+        // Said in the server log too, so whoever runs the server learns that the reader is missing or broken.
+        console.error(`[ocr] reading the text of a scanned file failed (try ${tries} of ${OCR_MAX_TRIES}): ${String(e?.message || e).slice(0, 200)}`);
       }
     }
     return n;

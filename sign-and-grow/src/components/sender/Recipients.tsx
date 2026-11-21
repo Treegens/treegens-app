@@ -5,6 +5,7 @@ import { fail } from './feedback';
 import { dayTime, howLong, neverOpened } from './lib';
 import { QrDialog } from './QrDialog';
 import { IN_PERSON_LOCK } from '@/lib/phone';
+import { maskPhone } from '@/lib/checks';
 import { BackNews, MailStopHint, TryAgainButton, deliveredLine } from './MailNews';
 import { ownLink, ownLinkFact, OwnLinkActions } from './OwnLink';
 import { WitnessFact, witnessWait } from './WitnessFacts';
@@ -304,7 +305,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                   {r.verify === 'sms_code' || r.verify === 'email_code' ? <> · Checked with a one-time code by {r.verify === 'sms_code' ? <>text message to <b className="sn-code">{r.phone}</b></> : 'email'}{r.check?.passed_at ? <>, passed on {dayTime(r.check.passed_at)}</> : ', not typed in yet'}</> : null}
                   {r.check?.stopped ? <> · <b>Someone using one of your signing links said this is not their number</b>, so no more texts are sent to it. Choose Change person, in their More, and put in the right number, or confirm it with them if it is right after all, to let them in.</> : null}
                   {r.text_link && r.role !== 'inperson' ? <> · Link also sent by text message{r.verify === 'sms_code' ? '' : <> to <b className="sn-code">{r.phone}</b></>}</> : null}
-                  {r.whatsapp ? <> · Link also goes by WhatsApp to <b className="sn-code">{r.phone}</b></> : null}
+                  {r.whatsapp && r.phone ? <> · Link also goes by WhatsApp to <b className="sn-code">{r.phone}</b></> : null}
                 </div>
               </div>
               <div className="sn-person-badges">
@@ -351,7 +352,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               {/* The latest text message to this person, when there was one: what really became of it. */}
               {texts.find((t) => t.recipient_id === r.id) && <div><dt>Text message</dt><dd><TextFact t={texts.find((t) => t.recipient_id === r.id)!} /></dd></div>}
               {/* The latest WhatsApp message (src/server/whatsapp.ts): Sent, Delivered to the phone, or why not. Never "read". */}
-              {r.whatsapp_status && <div><dt>WhatsApp</dt><dd>{r.whatsapp_status.to}: <b className={r.whatsapp_status.status === 'failed' || r.whatsapp_status.stopped ? 'sn-bad' : undefined}>{r.whatsapp_status.said}</b>{r.whatsapp_status.error ? <> ({r.whatsapp_status.error})</> : null}{r.whatsapp_status.stopped ? <>. They replied STOP, so nothing more goes to them by WhatsApp from your account. Email is not affected.</> : '.'}</dd></div>}
+              {r.whatsapp_status && <div><dt>Our WhatsApp message</dt><dd>{r.whatsapp_status.to !== maskPhone(r.phone) ? <>{r.whatsapp_status.to}: </> : null}<b className={r.whatsapp_status.status === 'failed' || r.whatsapp_status.stopped ? 'sn-bad' : undefined}>{r.whatsapp_status.said}</b>{r.whatsapp_status.error ? <> ({r.whatsapp_status.error})</> : null}{r.whatsapp_status.stopped ? <>. They replied STOP, so nothing more goes to them by WhatsApp from your account. Email is not affected.</> : '.'}</dd></div>}
               {r.status !== 'pending' && r.role !== 'cc' && <div><dt>Opened</dt><dd>{openedFact}</dd></div>}
               {r.status === 'completed' && r.role !== 'cc' && <div><dt>{DONE[r.role]}</dt><dd>On {dayTime(r.completed_at)}.</dd></div>}
               {/* A witness: whose signature, their statement, "not there", and what a challenge would look at (WitnessFacts.tsx). */}
@@ -378,7 +379,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                 {!openGroup && <>
                 {reachable && <button className="btn sm" disabled={!!busy} style={mainCopies === r.id ? { display: 'none' } : undefined} onClick={() => copy(r)} aria-label={`Copy signing link for ${r.name}`}>Copy link</button>}
                 {reachable && <button className="btn sm qr-tap" disabled={!!busy} onClick={(ev) => showQr(r, ev.currentTarget)} aria-haspopup="dialog" aria-label={`Show a QR code with the signing link for ${r.name}`}>QR code</button>}
-                {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>WhatsApp</button>}
+                {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>Share on WhatsApp</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'sms')} aria-label={`Share link with ${r.name} by text message`}>Text</button>}
                 </>}
               </div>

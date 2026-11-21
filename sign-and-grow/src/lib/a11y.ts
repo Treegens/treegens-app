@@ -26,18 +26,18 @@ export const WORKS: string[] = [
   'The document can be read as text instead of as pictures of the pages: "Read the document as text instead" is the first thing the keyboard reaches on the document, and the view can also be changed under More. The text view holds every field as an ordinary form.',
   'A signature can be typed instead of drawn, and a stamp can be chosen as a file instead of taking a photo.',
   'The pages work at 320 pixels wide, which is a large screen at 400 percent zoom, without scrolling sideways.',
-  'The buttons of the signing page are at least 44 pixels tall. On a phone every field takes a tap 44 pixels across, and on a large screen a small tick box or round button still takes one 24 pixels across.',
+  'The buttons of the signing page are at least 44 pixels tall. On a phone every field on the document takes a tap 44 pixels across, and on a large screen a small tick box or round button on the document still takes one 24 pixels across. The tick to agree before signing can be pressed anywhere on its sentence.',
   'Placing fields in the editor does not need dragging: choose a field type with the keyboard and it lands on the page in view, the arrow keys move it, and its size can be typed in.',
 ];
 
 /** What does not work yet, or was not checked. Said plainly, so nobody finds it out halfway through a document. */
 export const NOT_YET: string[] = [
   'A document is only as readable as the file the sender uploaded. A scan or a photo of a page has no text, so a screen reader has nothing to read there unless the people who run this server have set up text reading for scanned pages.',
-  'The signed PDF that everyone receives is not a tagged PDF: a screen reader can read its words in the order they are printed, but it has no headings or reading order marked in it. While signing, the text view is the readable version.',
+  'The signed PDF that everyone receives has no marked headings or reading order, so a screen reader reads it from top to bottom. While signing, use the text view.',
   'Drawing a signature needs a mouse, a finger or a pen. Typing it is offered next to drawing.',
-  'We could not try the pages with VoiceOver on an iPhone or with NVDA on Windows. We checked what a screen reader is told with the accessibility tree of a Chromium browser, which is the closest we could run. Some screen readers may say things in a different order.',
-  'Screens for the people who run this server (the operator screens) and the emails were not part of the check.',
-  'Some screens have content outside a landmark region, which can make jumping by region with a screen reader less useful there. Headings work on every screen we checked.',
+  'We could not try the pages with VoiceOver on an iPhone or with NVDA on Windows. We checked what a screen reader is told using the tools built into the Chrome browser. Some screen readers may say things in a different order.',
+  'Screens for the people who run this server, and the emails, were not checked.',
+  'Some screens are not split into named regions, so jumping from region to region with a screen reader helps less there. Headings work on every screen we checked.',
 ];
 
 /** The warning printed beside text that was read by a machine from a picture of a page. Word for word, everywhere. */

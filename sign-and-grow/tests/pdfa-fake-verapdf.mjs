@@ -1,7 +1,7 @@
 // Stands in for veraPDF in tests/ds-pdfa.test.ts: VERAPDF_CMD="node tests/pdfa-fake-verapdf.mjs <mode> <log>".
 // Answers --version like veraPDF, and "--flavour 2b --format mrr <file>" with a report in veraPDF's machine-readable
 // form. mode "pass" passes a file only when it carries what toPdfA writes (the PDF/A-2b XMP and an output intent);
-// "fail" fails every file with 3 rules; "slow" never answers; "noversion" cannot say its version. Every call is
+// "passslow" does the same after 700 ms; "fail" fails every file with 3 rules; "slow" never answers; "noversion" cannot say its version. Every call is
 // written to <log>, one line each.
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -18,10 +18,12 @@ if (args[0] === '--version') {
 }
 if (mode === 'slow') setTimeout(() => {}, 600_000);
 else {
+  // "passslow": like "pass", after 700 ms, so several checks overlap in time.
+  if (mode === 'passslow') await new Promise((r) => setTimeout(r, 700));
   const file = args[args.length - 1];
   const pdf = fs.readFileSync(file).toString('latin1');
   let ok = false;
-  if (mode === 'pass') {
+  if (mode === 'pass' || mode === 'passslow') {
     const d = await PDFDocument.load(fs.readFileSync(file), { updateMetadata: false });
     const meta = d.catalog.lookup(PDFName.of('Metadata'));
     const xmp = meta instanceof PDFRawStream ? Buffer.from(meta.contents).toString('utf8') : '';

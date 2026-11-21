@@ -13,7 +13,7 @@ import {
 import { hmac, safeEqual } from './util.ts';
 import { bouncedBefore, bouncedRefusal, bouncedLine, mailStop, mailStopText } from './bounces.ts';
 import { correctWithCheck, assertBulkChecks, bulkChecksRefusal, assertFormChecks, textsOf } from './signercode.ts';
-import { waOf } from './whatsapp.ts';
+import { waOf, correctWithWa } from './whatsapp.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
 import { memberLink, memberInbox, groupReach, assertNoGroupCheck, membersNotReminded, assertTemplateGroups } from './groups.ts';
 import { assertBySenderCorrection } from './bysender.ts';
@@ -499,13 +499,14 @@ route('POST', '/envelopes/:id/correct', async (c) => {
   assertCorrectionKept(c, e, str(b.recipient_id), b);
   // Their language ("locale"): checked first, saved after; another person does not keep the first one's (locales.ts).
   const lang = correctionLocale(e, str(b.recipient_id), b);
-  if (lang.only) {
+  if (lang.only && b.whatsapp === undefined && b.whatsapp_agreed === undefined) {
     const said = lang.apply();
     if (said) audit(e.id, c.actor, 'Recipient corrected', `${e.recipients.find((r: any) => r.id === str(b.recipient_id)).name}: ${said}.`);
     return { ok: true };
   }
   // With their check too ("verify", "phone", "text_link"): correctWithCheck does all of the call or none of it.
-  await correctWithCheck(e, str(b.recipient_id), b, c.actor);
+  // WhatsApp ("whatsapp": false only) around it: it ends for another person or another number (whatsapp.ts).
+  await correctWithWa(e, str(b.recipient_id), b, c.actor, () => correctWithCheck(e, str(b.recipient_id), b, c.actor));
   const said = lang.apply();
   if (said) audit(e.id, c.actor, 'Recipient corrected', `${get('SELECT name FROM recipients WHERE id=?', str(b.recipient_id))?.name}: ${said}.`);
   // A witness who is now another person starts clean, and is asked at once if their signer has signed (witness.ts).

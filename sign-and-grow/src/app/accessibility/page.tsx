@@ -14,6 +14,8 @@ export const dynamic = 'force-dynamic';
 
 // A link inside a sentence still gets a 44 px tall target.
 const TAP = { padding: '13px 0' } as const;
+// The report button is 44 px tall on every screen size.
+const BTN = { minHeight: 44, display: 'inline-flex', alignItems: 'center' } as const;
 
 export default function Accessibility() {
   const reachable = supportReachable();
@@ -34,7 +36,7 @@ export default function Accessibility() {
         <h2>What works</h2>
         <ul className="pub-list">
           {WORKS.map((w) => <li key={w}>{w}</li>)}
-          {ocr && <li>Pages that are pictures, such as scans, are read by a machine on this server, so a screen reader and search have their text. Beside that text it says: &quot;{OCR_WARNING}&quot;</li>}
+          {ocr && <li>This server is set up to read the words of pages that are pictures, such as scans, by machine, so a screen reader and search can have their text. When a page could not be read, it says it has no text, as it would without this. Beside that text it says: &quot;{OCR_WARNING}&quot;</li>}
         </ul>
 
         <h2>What does not work yet</h2>
@@ -47,17 +49,17 @@ export default function Accessibility() {
         {reachable ? (
           <>
             <p>If something on these pages is hard for you to read or use, tell us what you were trying to do and what happened. It becomes a help request that a person reads, and you do not need an account.</p>
-            <p><Link href="/help?topic=accessibility#contact" className="btn">Report an accessibility problem</Link></p>
+            <p><Link href="/help?topic=accessibility#contact" className="btn" style={BTN}>Report an accessibility problem</Link></p>
             {email && <p>Or email <a href={`mailto:${email}`} style={TAP}>{email}</a>.</p>}
-            <p>If you are signing a document and cannot finish it here, you can also tell its sender: Decline to sign, under Other actions on the signing page, sends them your reason, so they can offer you another way.</p>
+            <p>If you are signing a document and cannot finish it here, tell its sender: choose Other actions, then Questions and comments, and say what is in your way. They can offer you another way. If you cannot go on at all, Decline to sign, in the same menu, sends them your reason.</p>
           </>
         ) : (
-          <p>The people who run this server have not set up help requests, so nobody would read a message sent from this website. If you are signing a document and cannot finish it here, tell its sender: Decline to sign, under Other actions on the signing page, sends them your reason, so they can offer you another way.</p>
+          <p>The people who run this server have not set up help requests, so nobody would read a message sent from this website. If you are signing a document and cannot finish it here, tell its sender: choose Other actions, then Questions and comments, and say what is in your way. They can offer you another way. If you cannot go on at all, Decline to sign, in the same menu, sends them your reason.</p>
         )}
 
         <h2>How and when it was checked</h2>
         <p>Last checked on {checkedOn()}. {LAST_CHECK.method}</p>
-        <p>The authors ran axe-core in a browser on every state of the signing page (access code, consent, the document, the signature box, the stamp box, the check before finishing, done and declined), on the editor and on the page of a sent document, at 320 and 1280 pixels wide. They then signed with the keyboard alone and checked what each field tells a screen reader. The steps are written down with the software, so anyone can repeat them.</p>
+        <p>The authors ran an automatic checker (axe-core) on every step of the signing page, on the screen for placing fields and on the page of a sent document, on a narrow and a wide screen. Then they signed a whole document with the keyboard alone and listened to what each field tells a screen reader. The steps are written down with the software, so anyone can repeat them.</p>
         <p>A draft report of how each guideline is met, written by the authors and not audited, is among the <Link href="/procurement" style={TAP}>procurement documents</Link>.</p>
       </main>
       <PublicFooter />

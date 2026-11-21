@@ -10,7 +10,7 @@ import { sendText, smsMode, phoneKey, textsLeft, numbersToday, linkTextsToday, t
 import { audit, emailRefusal, hasNotPaid, dailyCap, signUrl, notifySender, senderOf, correctRecipient, loadEnvelope, samePerson, type Actor } from './envelopes.ts';
 import { reporterKey } from './bysender.ts';
 import { callCode } from './voice.ts';
-import { lastWa } from './whatsapp.ts';
+import { lastWa, waEnds } from './whatsapp.ts';
 import { voiceProvider } from '../lib/channels.ts';
 import { CHECKS, isCodeCheck, CHANNEL_WORDS, normalPhone, PHONE_HOW, maskPhone, maskEmail, checkLine, plainTime, SMS_OFF } from '../lib/checks.ts';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODE_WAIT_SECONDS, SIGNER_CODES_PER_HOUR, SIGNER_CODES_PER_CALLER_HOUR, SIGNER_CODES_PER_DESTINATION_DAY, LINK_TEXTS_PER_NUMBER_DAY, SIGNER_PASS_HOURS, smsDailyPerAccount } from '../lib/policy.ts';
@@ -129,6 +129,8 @@ export function lockedView(view: any, r: any, accessLocked: boolean, gate: strin
       stopped: r.verify === 'sms_code' && stoppedFor(r),
       // "Call me with the code": this server can call the same number and read the code out (voice.ts).
       call: r.verify === 'sms_code' && !!voiceProvider(),
+      // How the code that works now reached them, so the screen still says "from the call" after a reload.
+      by: live?.channel === 'call_code' ? 'call' : 'text',
       // We have no address for this person: their link came from the sender, so the screen never mentions an email.
       shared: !!r.link_by_sender && !r.email,
     },
@@ -441,6 +443,8 @@ export async function correctWithCheck(e: any, recipientId: string, patch: any, 
  * the first person passed does not count for the second. The record says all of it and the sender is told.
  */
 export async function passCheckOn(e: any, old: any, actor: Actor) {
+  // The link by WhatsApp was agreed for the first person at their number: it ends here (whatsapp.ts).
+  waEnds(e, old.id, `the number and their agreement to WhatsApp were for ${old.name}`, actor);
   if (!old.phone && !isCodeCheck(old.verify) && !old.text_link) return;
   const cur = get('SELECT name, email FROM recipients WHERE id=?', old.id);
   if (!cur) return;

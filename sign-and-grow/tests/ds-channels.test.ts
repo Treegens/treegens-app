@@ -88,10 +88,12 @@ test('1. WhatsApp and calls are off until set up, and /me says which are on', as
   const me = (await ada.get('/me')).data;
   assert.equal(me.whatsapp, true);
   assert.equal(me.phone_calls, true);
+  assert.equal(me.whatsapp_daily, 100, 'the limit, for the admin line in Settings');
   provider({});
   const off = (await ada.get('/me')).data;
   assert.equal(off.whatsapp, false);
   assert.equal(off.phone_calls, false);
+  assert.equal(off.whatsapp_daily, undefined);
   const r = await tryWa(ada, { whatsapp_agreed: true });
   assert.equal(r.status, 400);
   assert.equal(r.data.code, 'whatsapp_off');
@@ -99,6 +101,7 @@ test('1. WhatsApp and calls are off until set up, and /me says which are on', as
   provider(META);
 });
 
+const readme = (await import('node:fs')).readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 test('1b. every message text names the sender and how to stop, and the completed one carries a link, never the PDF', () => {
   for (const k of Object.keys(WA_TEXTS) as (keyof typeof WA_TEXTS)[]) {
     const t = fillWa(k, { sender: 'Ada', subject: '"Lease"', link: 'https://x/sign/abc' });
@@ -106,6 +109,13 @@ test('1b. every message text names the sender and how to stop, and the completed
     assert.match(t, /Reply STOP/);
     assert.match(t, /https:\/\/x\/sign\/abc/);
     assert.doesNotMatch(t, /—/, 'no em dashes');
+    // As a Meta template: fixed words first and last, and each blank once, in the order 1, 2, 3.
+    const tpl = WA_TEXTS[k].replace('{sender}', '{{1}}').replace('{subject}', '{{2}}').replace('{link}', '{{3}}');
+    assert.doesNotMatch(tpl, /\{(sender|subject|link)\}/, `${k}: each blank once`);
+    assert.match(tpl, /^[A-Z][a-z ]+[.:] /, `${k}: starts with fixed words`);
+    assert.match(tpl, /[a-z]\.$/, `${k}: ends with fixed words`);
+    assert.ok(tpl.indexOf('{{1}}') < tpl.indexOf('{{2}}') && tpl.indexOf('{{2}}') < tpl.indexOf('{{3}}'), `${k}: blanks in order`);
+    assert.ok(readme.includes(`\`${tpl}\``), `${k}: the README prints the same text for the operator`);
   }
 });
 
@@ -217,8 +227,8 @@ test('3b. a message the provider would not take is tried again by the timer, and
 
 test('4. a reply STOP stops WhatsApp from that account to that number, not email, and not other accounts', async () => {
   const bea = await sender('Bea Wa');
+  const theirs = await oneWa(bea, { phone: '+44 7700 900555' });
   const mine = await oneWa(ada, { phone: '+44 7700 900555' });
-  const theirs = await oneWa(bea, { phone: '+44 7700 900666' });
   const raw = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '447700900555', type: 'text', text: { body: 'Stop' } }] } }] }] });
   assert.equal((await postRaw(raw, sign(raw))).status, 200);
   assert.ok((await actions(ada, mine.id)).includes('WhatsApp stopped'));
@@ -228,11 +238,13 @@ test('4. a reply STOP stops WhatsApp from that account to that number, not email
   assert.equal(metaBodies().length, 0, 'no WhatsApp after STOP');
   assert.ok((await actions(ada, mine.id)).includes('WhatsApp not sent'));
   assert.ok((await actions(ada, mine.id)).some((a: string) => /Reminder/.test(a)) || true, 'the email reminder is unaffected');
-  // Another account that never wrote to that number is not stopped by it.
+  // Another account that also wrote to that number is not stopped by a STOP that answered Ada's message.
+  assert.ok(!(await actions(bea, theirs.id)).includes('WhatsApp stopped'));
   db.run('UPDATE recipients SET wa_sent_at=NULL WHERE id=?', theirs.rid);
   await bea.post(`/envelopes/${theirs.id}/remind`, {});
-  assert.equal(metaBodies().filter((m) => m.to === '447700900666').length, 1);
+  assert.equal(metaBodies().filter((m) => m.to === '447700900555').length, 1, "Bea's reminder still goes by WhatsApp");
   assert.equal(metaBodies()[0].template.name, 'gs_remind');
+  assert.notEqual((await bea.get(`/envelopes/${theirs.id}`)).data.envelope.recipients[0].whatsapp_status?.said, 'Not sent: they replied STOP');
   // A new envelope from the same account to the stopped number is held too, and the record says why.
   const again = await oneWa(ada, { phone: '+44 7700 900555' });
   assert.ok((await actions(ada, again.id)).includes('WhatsApp not sent'));
@@ -243,6 +255,19 @@ test('4. a reply STOP stops WhatsApp from that account to that number, not email
   // A forged STOP (no signature) does nothing.
   assert.equal((await postRaw(raw, 'sha256=bad')).status, 403);
   assert.equal(db.get('SELECT COUNT(*) n FROM wa_stops').n, 0);
+});
+
+test('4c. a STOP that quotes a message stops the account that sent that one, even when another wrote last', async () => {
+  const cal = await sender('Cal Wa');
+  const dot = await sender('Dot Wa');
+  const first = await oneWa(cal, { phone: '+44 7700 900588' });
+  await oneWa(dot, { phone: '+44 7700 900588' });
+  const wamid = db.get('SELECT provider_id p FROM wa_messages WHERE envelope_id=?', first.id).p;
+  const raw = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '447700900588', type: 'text', text: { body: 'STOP' }, context: { id: wamid } }] } }] }] });
+  assert.equal((await postRaw(raw, sign(raw))).status, 200);
+  const stopped = db.all('SELECT account_id FROM wa_stops WHERE dest_hash=(SELECT dest_hash FROM wa_messages WHERE envelope_id=?)', first.id).map((x: any) => x.account_id);
+  assert.deepEqual(stopped, [db.get('SELECT account_id a FROM envelopes WHERE id=?', first.id).a], 'only the account whose message was answered');
+  db.run('DELETE FROM wa_stops');
 });
 
 test('4b. Twilio: signed form posts are believed, unsigned ones are refused', async () => {
@@ -372,4 +397,83 @@ test('7b. no call for an email code or when calls are off; Twilio reads the digi
 test('8. checkLine without WhatsApp is unchanged', () => {
   assert.equal(checkLine({}, null), 'Link sent by email only');
   assert.equal(checkLine({ wa_sent_to: '+44 *** *** 0123' }, null), 'Link sent by email and by WhatsApp to +44 *** *** 0123');
+});
+
+// ---- 9. Another person or another number ends WhatsApp -----------------------------------------------------------------
+
+const recOf = async (c: Client, id: string) => (await c.get(`/envelopes/${id}`)).data.envelope.recipients[0];
+test('9. a signer who passes the document on: the new person gets no WhatsApp and the certificate does not claim one', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900802' });
+  assert.match((await recOf(ada, e.id)).check.line, /WhatsApp/);
+  calls.length = 0;
+  const v = new Client();
+  v.ip = ip();
+  const r = await v.post(`/sign/${e.tok}/reassign`, { name: 'Other Person', email: fresh('other') });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const rec = await recOf(ada, e.id);
+  assert.equal(rec.whatsapp, false);
+  assert.equal(rec.check.line, 'Link sent by email only');
+  assert.equal(metaBodies().length, 0, 'no WhatsApp to the first person\'s number for the new person');
+  assert.ok((await actions(ada, e.id)).includes('WhatsApp switched off'));
+});
+
+test('9b. Change person to someone else, or another number: WhatsApp ends, nothing goes to the old number', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900803' });
+  calls.length = 0;
+  const r = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, name: 'New Person', email: fresh('newp') });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  let rec = await recOf(ada, e.id);
+  assert.equal(rec.whatsapp, false);
+  assert.doesNotMatch(rec.check.line, /WhatsApp/);
+  assert.equal(metaBodies().length, 0, 'the new email to the new person brings no WhatsApp to the old number');
+  const f = await oneWa(ada, { phone: '+44 7700 900804' });
+  const p = await ada.post(`/envelopes/${f.id}/correct`, { recipient_id: f.rid, phone: '+44 7700 900899' });
+  assert.equal(p.status, 200, JSON.stringify(p.data));
+  rec = await recOf(ada, f.id);
+  assert.equal(rec.whatsapp, false, 'the tick was for the old number');
+  assert.doesNotMatch(rec.check.line, /WhatsApp/);
+  // A name fix for the same person keeps it.
+  const g = await oneWa(ada, { phone: '+44 7700 900805' });
+  assert.equal((await ada.post(`/envelopes/${g.id}/correct`, { recipient_id: g.rid, name: 'Sam Signer-Jones' })).status, 200);
+  assert.equal((await recOf(ada, g.id)).whatsapp, true);
+});
+
+test('9c. Change person: never text and WhatsApp together, and it says plainly what it does not take', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900806' });
+  const both = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, text_link: true });
+  assert.equal(both.status, 400);
+  assert.equal(both.data.code, 'whatsapp_and_text');
+  let row = db.get('SELECT text_link, wa_link FROM recipients WHERE id=?', e.rid);
+  assert.deepEqual([row.text_link, row.wa_link], [0, 1], 'nothing changed');
+  const on = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, whatsapp: true, whatsapp_agreed: true });
+  assert.equal(on.status, 400);
+  assert.equal(on.data.code, 'whatsapp_correct');
+  assert.match(on.data.error, /PUT \/envelopes\/:id/);
+  const swap = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, text_link: true, whatsapp: false });
+  assert.equal(swap.status, 200, JSON.stringify(swap.data));
+  row = db.get('SELECT text_link, wa_link FROM recipients WHERE id=?', e.rid);
+  assert.deepEqual([row.text_link, row.wa_link], [1, 0]);
+  calls.length = 0;
+  db.run('UPDATE recipients SET wa_sent_at=NULL, texted_at=NULL WHERE id=?', e.rid);
+  await ada.post(`/envelopes/${e.id}/remind`, {});
+  assert.equal(metaBodies().length, 0, 'a reminder no longer goes by WhatsApp');
+});
+
+test('9d. the editor correction (PUT) to another number without a new tick switches WhatsApp off', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900807' });
+  const env = (await ada.get(`/envelopes/${e.id}`)).data.envelope;
+  const rec = env.recipients[0];
+  const put = await ada.put(`/envelopes/${e.id}`, { subject: env.subject, documents: env.documents.map((x: any) => ({ id: x.id, file_id: x.file_id })), recipients: [{ id: rec.id, role: 'signer', name: rec.name, email: rec.email, phone: '+44 7700 900898' }], fields: env.fields });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  const after = await recOf(ada, e.id);
+  assert.equal(after.whatsapp, false);
+  assert.doesNotMatch(after.check.line, /WhatsApp/);
+});
+
+test('9e. after a call, the code screen still says it was a call when the page is opened again', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900808', whatsapp: false, verify: 'sms_code' });
+  const v = new Client();
+  v.ip = ip();
+  assert.equal((await v.post(`/sign/${e.tok}/code/call`)).status, 200);
+  assert.equal((await v.get(`/sign/${e.tok}`)).data.check.by, 'call');
 });

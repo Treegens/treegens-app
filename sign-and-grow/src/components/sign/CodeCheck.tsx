@@ -20,6 +20,7 @@ export type CodeState = {
   stopped: boolean;
   shared?: boolean; // the sender passed this link on themselves: we never emailed this person
   call?: boolean; // this server can call the number and read the code out instead (src/server/voice.ts)
+  by?: 'text' | 'call'; // how the code that works now reached them
 };
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -30,7 +31,7 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
   const byText = check.kind === 'sms_code';
   const what = byText ? 'text message' : 'email';
   const [sent, setSent] = useState(check.sent);
-  const [heard, setHeard] = useState(false); // the newest code was read out on a call
+  const [heard, setHeard] = useState(check.by === 'call'); // the newest code was read out on a call
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState<'' | 'send' | 'call' | 'check' | 'no_code' | 'not_mine'>('');
   const [error, setError] = useState('');
@@ -77,7 +78,8 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
       if (r?.passed) return void (await onOpen());
       setUntil(Date.now() + (r.resend_in || 60) * 1000);
       setCode('');
-      setNote(`${by === 'call' ? `We are calling ${check.to} now, and the call reads the code out twice.` : `${sent ? 'A new code' : 'A code'} is on its way to ${check.to}.`} ${sent ? 'Only the new one works now.' : ''}${r.delivery === 'outbox' ? ' This is a development server: it was not really sent, and you can read it in the outbox at /dev/outbox.' : ''}`);
+      // A call is said once, in the line under the heading; the note only adds what is new.
+      setNote(`${by === 'call' ? '' : `${sent ? 'A new code' : 'A code'} is on its way to ${check.to}. `}${sent ? 'Only the new one works now.' : ''}${r.delivery === 'outbox' ? ' This is a development server: it was not really sent, and you can read it in the outbox at /dev/outbox.' : ''}`.trim());
       setSent(true);
       setHeard(by === 'call');
       window.setTimeout(() => input.current?.focus(), 50);
@@ -156,9 +158,11 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
   return (
     <form className="card sg-narrow sg-code" noValidate onSubmit={sent ? open : (e) => (e.preventDefault(), send())}>
       <div className="sg-state-icon lock"><Icon name={byText ? 'lock' : 'mail'} size={26} /></div>
-      <h1 className="serif" id="sg-h1" tabIndex={-1}>{sent ? 'Type the code we sent you' : 'First, a quick check that it is you'}</h1>
+      <h1 className="serif" id="sg-h1" tabIndex={-1}>{!sent ? 'First, a quick check that it is you' : heard ? 'Type the code from the call' : 'Type the code we sent you'}</h1>
       {sent ? (
-        <p>{heard ? 'We called' : `We sent a ${check.digits}-digit code by ${what} to`} <b className="sg-code-to">{check.to}</b>{heard ? ` to read out a ${check.digits}-digit code` : ''}. It works for {check.minutes} minutes.</p>
+        heard
+          ? <p>We are calling <b className="sg-code-to">{check.to}</b> now. The call reads the {check.digits}-digit code out twice. It works for {check.minutes} minutes.</p>
+          : <p>We sent a {check.digits}-digit code by {what} to <b className="sg-code-to">{check.to}</b>. It works for {check.minutes} minutes.</p>
       ) : (
         <p>{sender.name} asked us to check who opens this document. We send a {check.digits}-digit code by {what} to <b className="sg-code-to">{check.to}</b>, and you type it in here.</p>
       )}
@@ -186,19 +190,20 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
       ) : (
         <>
           <button className="btn primary lg" disabled={!!busy || left > 0}>{busy === 'send' ? 'Sending' : 'Send me the code'}</button>
-          {byText && check.call && <button type="button" className="btn lg sg-code-again" disabled={!!busy || left > 0} onClick={() => send('call')}>{busy === 'call' ? 'Calling' : CALL_ME}</button>}
           {again}
         </>
       )}
 
       {toldNote || (
         <div className="sg-code-trouble">
-          <button type="button" className="sg-link sg-code-toggle" aria-expanded={trouble} aria-controls="sg-code-help" onClick={() => setTrouble(!trouble)}>{sent ? 'The code does not arrive?' : 'Cannot get a code this way?'}</button>
+          <button type="button" className="sg-link sg-code-toggle" aria-expanded={trouble} aria-controls="sg-code-help" onClick={() => setTrouble(!trouble)}>{!sent ? 'Cannot get a code this way?' : heard ? 'No call came?' : 'The code does not arrive?'}</button>
           {trouble && (
             <div id="sg-code-help" className="sg-code-help">
               {byText ? (
                 <>
-                  <p>A text can take a minute. Check that your phone has a signal and that your number ends in the digits shown above.</p>
+                  <p>{heard ? 'A call can take a minute. Check that the line is free and that your number ends in the digits shown above.' : 'A text can take a minute. Check that your phone has a signal and that your number ends in the digits shown above.'}</p>
+                  {/* A landline cannot get a text: before any code is sent, the call is offered here, not next to "Send me the code". */}
+                  {!sent && check.call && <div className="sg-code-outs"><button type="button" className="btn" disabled={!!busy || left > 0} onClick={() => send('call')}>{busy === 'call' ? 'Calling' : 'I have a landline: call me with the code'}</button></div>}
                   <p>If it still does not come, or the number is not yours, tell {sender.name}. They typed the number, and only they can change it or choose another way to check that it is you. We cannot change it for you.</p>
                   <div className="sg-code-outs">
                     <button type="button" className="btn" disabled={!!busy} onClick={() => tell('no_code')}>{busy === 'no_code' ? 'Telling them' : 'I do not get the code'}</button>

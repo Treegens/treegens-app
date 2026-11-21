@@ -12,7 +12,7 @@ import type { KeptForPerson } from '@/lib/tplroles';
 const says = (key: string) => CHECK_PROVES.find((p) => p.key === key)!.text;
 const NO_TEXTS = 'This server cannot send text messages, because its operator has not switched them on.';
 
-function PhoneBox({ r, onChange }: { r: any; onChange: (p: any) => void }) {
+export function PhoneBox({ r, onChange }: { r: any; onChange: (p: any) => void }) {
   const typed = String(r.phone || '');
   const bad = !!typed.trim() && !normalPhone(typed);
   return (
@@ -29,7 +29,7 @@ function PhoneBox({ r, onChange }: { r: any; onChange: (p: any) => void }) {
 const TPL_PHONE = 'The mobile number comes with the person each time this template is used: a "phone" column in a bulk send, or "phone" next to the name and email in the API. A public form cannot use text messages, because its visitors type their own details.';
 
 /** "Check who signs": none, an access code, a one-time code, or both. `open`: a template role filled in each time. */
-export function CheckPick({ r, name, kept, textsOn, open, onChange }: { r: any; name: string; kept?: KeptForPerson; textsOn: boolean; open: boolean; onChange: (p: any) => void }) {
+export function CheckPick({ r, name, kept, textsOn, open, onChange, callsOn }: { r: any; name: string; kept?: KeptForPerson; textsOn: boolean; open: boolean; onChange: (p: any) => void; callsOn?: boolean }) {
   const saysId = useId();
   // Picking a choice with an access code shows its box before anything is typed in it.
   const [wants, setWants] = useState(false);
@@ -51,6 +51,8 @@ export function CheckPick({ r, name, kept, textsOn, open, onChange }: { r: any; 
         {value === 'none' ? NO_CHECK_SAYS : verify !== 'none' ? `${says(verify)} Nothing is sent until they open the link and ask for the code.` : ACCESS_CODE_SAYS}
       </p>
       {verify === 'sms_code' && open && <p className="muted small ed-check-says">{TPL_PHONE}</p>}
+      {/* Only where this server can place calls (src/lib/channels.ts voiceProvider). */}
+      {verify === 'sms_code' && textsOn && callsOn && <p className="muted small ed-check-says">They can also ask for a call that reads the code out, for a landline.</p>}
       {verify === 'sms_code' && !textsOn && <p className="notice warn small ed-check-says" role="status">{NO_TEXTS} Choose a code by email or no check.</p>}
     </div>
   );

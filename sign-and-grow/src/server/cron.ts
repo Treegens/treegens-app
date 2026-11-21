@@ -16,7 +16,7 @@ import { retentionTick, sweepArchiveCopies } from './records.ts';
 import { noteTickStart, noteTick } from './selfhost.ts';
 import { monthlyReports } from './routes-reports.ts';
 import { purgeOldLists } from './bulklists.ts';
-import { runOcr } from './ocr.ts';
+import { ocrTick } from './ocr.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -75,5 +75,6 @@ async function tickOnce() {
     // Saved lists for Send to many that nobody used for the account's number of days (bulklists.ts).
     lists_deleted: purgeOldLists(),
     // Text of scanned pages still waiting to be read, when OCR_CMD or OCRMYPDF_URL is set (ocr.ts).
-    ocr_read: await runOcr().catch((e) => (console.error('[cron] ocr', e?.message), 0)) };
+    // It waits at most 20 seconds: a long batch goes on by itself and never holds up the timer (ocrTick).
+    ocr_read: await ocrTick() };
 }

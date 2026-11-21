@@ -25,7 +25,7 @@ route('POST', '/whatsapp/webhook', async (c) => {
     const form = new URLSearchParams(raw);
     if (!twilioSignatureOk(`${baseUrl()}/api/whatsapp/webhook`, form, c.req.headers.get('x-twilio-signature'))) throw bad('The signature does not match, so nothing was changed.', 403);
     const status = form.get('MessageStatus') || form.get('SmsStatus');
-    if (form.get('Body') != null && /^whatsapp:/i.test(form.get('From') || '')) waReply(form.get('From')!, form.get('Body')!);
+    if (form.get('Body') != null && /^whatsapp:/i.test(form.get('From') || '')) waReply(form.get('From')!, form.get('Body')!, form.get('OriginalRepliedMessageSid'));
     else if (status && form.get('MessageSid')) waStatus(form.get('MessageSid')!, status, form.get('ErrorMessage') || (form.get('ErrorCode') ? `Error ${form.get('ErrorCode')}` : undefined));
     return new Response('<Response/>', { status: 200, headers: { 'content-type': 'text/xml' } });
   }
@@ -41,7 +41,7 @@ route('POST', '/whatsapp/webhook', async (c) => {
       const v = ch?.value || {};
       for (const m of v.messages || []) {
         const text = m?.text?.body ?? m?.button?.text ?? m?.button?.payload ?? m?.interactive?.button_reply?.title ?? '';
-        if (m?.from) waReply(String(m.from), String(text));
+        if (m?.from) waReply(String(m.from), String(text), m?.context?.id ? String(m.context.id) : null);
       }
       for (const s of v.statuses || []) waStatus(String(s?.id || ''), String(s?.status || ''), s?.errors?.[0]?.title || s?.errors?.[0]?.message);
     }

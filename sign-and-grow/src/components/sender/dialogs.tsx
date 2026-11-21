@@ -111,7 +111,7 @@ export function VoidDialog({ title, children, confirmLabel, onClose, onVoid }: {
 }
 
 // The quick fix for one person: a typo in the name, a different address, or an access code.
-export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { envelopeId: string; recipient: { id: string; name: string; email: string; role?: string; status?: string; access_code?: string | null; code_frozen_at?: string | null; verify?: string | null; phone?: string | null; text_link?: boolean | null; check?: { stopped?: boolean } | null; code_only?: boolean }; onClose: () => void; onDone: () => void }) {
+export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { envelopeId: string; recipient: { id: string; name: string; email: string; role?: string; status?: string; access_code?: string | null; code_frozen_at?: string | null; verify?: string | null; phone?: string | null; text_link?: boolean | null; whatsapp?: boolean | null; check?: { stopped?: boolean } | null; code_only?: boolean }; onClose: () => void; onDone: () => void }) {
   const me = useMe();
   // For someone who has finished, and once the envelope is finished or closed, the access code is the one thing that
   // can still change: it is not part of what was signed, and it stands between them and their copy.
@@ -159,8 +159,10 @@ export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { enve
       // The check goes along when it was changed here, and when the address was: a number typed for one person is
       // never used for another without the sender saying so.
       const checks = checkChanged || newAddress ? { verify: check.verify, phone: String(check.phone || '').trim(), text_link: !!check.text_link } : {};
+      // The link by text and by WhatsApp are never on together: ticking the text here takes WhatsApp off (whatsapp.ts).
+      const wa = recipient.whatsapp && 'text_link' in checks && checks.text_link ? { whatsapp: false } : {};
       const reopen = confirmed && !checkChanged && !newAddress ? { number_confirmed: true } : {};
-      const res = await api(`/envelopes/${envelopeId}/correct`, { body: { recipient_id: recipient.id, name: f.name.trim(), email: f.email.trim(), access_code: f.access_code, ...checks, ...reopen } });
+      const res = await api(`/envelopes/${envelopeId}/correct`, { body: { recipient_id: recipient.id, name: f.name.trim(), email: f.email.trim(), access_code: f.access_code, ...checks, ...wa, ...reopen } });
       const again = checkChanged && check.verify !== 'none' ? ' They are asked for a new one-time code.' : 'number_confirmed' in reopen ? ' Texts go to their number again.' : '';
       // An address that marked an email from this account as spam is not emailed, whatever the sender does.
       if (res?.not_emailed === 'marked_as_spam') toast(`Updated, but no email went out: ${f.email.trim()} marked an earlier email from your account as spam. Copy their link and send it yourself.`, true);
@@ -190,6 +192,8 @@ export function CorrectDialog({ envelopeId, recipient, onClose, onDone }: { enve
             <label className="check sn-check-confirm"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I checked with {recipient.name} that this is their number. Send texts to it again.</label>
           )}
           <CheckFields value={check} role={recipient.role} textsOn={!!me.text_messages} onChange={(p) => setCheck({ ...check, ...p })} />
+          {recipient.whatsapp && !!check.text_link && <p className="notice small" role="status" style={{ margin: 0 }}>Their link then goes by text message, and no longer by WhatsApp.</p>}
+          {recipient.whatsapp && !check.text_link && (newAddress || String(check.phone || '').trim() !== String(was.phone || '')) && <p className="notice small" role="status" style={{ margin: 0 }}>WhatsApp stops for them: {recipient.name} agreed to it for the number on file. The link still goes by email.</p>}
           {newAddress && !!was.phone && String(check.phone || '').trim() === was.phone && <p className="notice warn small" role="status" style={{ margin: 0 }}>This mobile number was typed for {recipient.name}. If the person at the new address has another number, change it here, or texts for them go to the wrong phone.</p>}
         </fieldset>}
         <p className="small muted" aria-live="polite">

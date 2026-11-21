@@ -13,7 +13,9 @@ import { createRequire } from 'node:module';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { boot, signUp, Client, tokenFor } from './helpers.ts';
 import { encodePng } from '../src/server/png.ts';
-import { runOcr, ocrLang, commandFor, cleanOcr, OCR_MAX_TRIES } from '../src/server/ocr.ts';
+import { runOcr, ocrTick, imageOf, ocrLang, commandFor, cleanOcr, OCR_MAX_TRIES } from '../src/server/ocr.ts';
+import zlib from 'node:zlib';
+import { PDFName } from 'pdf-lib';
 import { LAST_CHECK, checkedOn, WORKS, NOT_YET, OCR_WARNING, ocrOn } from '../src/lib/a11y.ts';
 import { scanWarning } from '../src/lib/scans.ts';
 import { SUPPORT_TOPICS } from '../src/lib/policy.ts';
@@ -135,8 +137,9 @@ test('OCR_CMD: a scanned page is read in the background, in the account language
   // The sender's screens: the document says its text was read by machine, with the mistakes warning.
   const doc = (await c.get(`/envelopes/${id}`)).data.envelope.documents[0];
   assert.equal(doc.ocr, 'done');
-  assert.match(scanWarning(doc), /This server read its text by machine/);
-  assert.match(scanWarning(doc), /may contain mistakes/);
+  assert.match(scanWarning(doc), /We read its words by machine/);
+  assert.match(scanWarning(doc), /may have mistakes/);
+  assert.doesNotMatch(scanWarning(doc), /This server|text view/, 'the sender is not told about system parts');
   // The signing page: the text of page 1, with the warning, word for word.
   const s = new Client();
   s.ip = '198.51.100.21';
@@ -226,6 +229,115 @@ test('the command is run without a shell: the picture path is one argument and n
   assert.equal(ocrLang('zh-TW'), 'chi_tra');
   assert.equal(ocrLang('xx'), null);
   assert.equal(ocrLang(null), null);
+});
+
+// A one-page PDF whose only picture is a 100x100 grey Flate image holding `inflated` bytes once unpacked.
+async function flatePdf(inflated: number): Promise<PDFDocument> {
+  const d = await PDFDocument.create();
+  const page = d.addPage([200, 200]);
+  const s = d.context.stream(zlib.deflateSync(Buffer.alloc(inflated, 200)), { Type: 'XObject', Subtype: 'Image', Width: 100, Height: 100, ColorSpace: 'DeviceGray', BitsPerComponent: 8, Filter: 'FlateDecode' });
+  page.node.setXObject(PDFName.of('Im0'), d.context.register(s));
+  return d;
+}
+
+test('a picture that unpacks to far more than its size (a "zip bomb") is skipped without unpacking it', async () => {
+  // The right size: read as a PNG.
+  const ok = imageOf(await flatePdf(100 * 100), 0);
+  assert.equal(ok?.ext, 'png');
+  // 200 MB from a stream of about 200 KB: never unpacked past the picture's 10 000 bytes.
+  const bomb = await flatePdf(200_000_000);
+  const heap0 = process.memoryUsage().rss;
+  const t0 = Date.now();
+  assert.equal(imageOf(bomb, 0), null);
+  assert.ok(Date.now() - t0 < 1000, `took ${Date.now() - t0} ms`);
+  assert.ok(process.memoryUsage().rss - heap0 < 100_000_000, 'memory did not grow by the unpacked size');
+});
+
+test('the timer never waits for a long batch of scans: it waits a short while and the batch goes on by itself', async () => {
+  clearOcr();
+  process.env.OCR_CMD = STUB_CMD;
+  process.env.STUB_SLEEP = '1500';
+  const c = await signUp('Tim Timer', 'tim@timer.example', '198.51.100.45');
+  const f = await uploadPicture(c, pagePng());
+  const t0 = Date.now();
+  // A run may already have been started by the upload: either way the answer comes within the wait.
+  assert.equal(await ocrTick(200), 'still reading');
+  assert.equal(await ocrTick(5000), 'still reading', 'a run already going is not waited for');
+  assert.ok(Date.now() - t0 < 1000, `the timer waited ${Date.now() - t0} ms`);
+  await runOcr();
+  if (job(f.id).state !== 'done') await runOcr();
+  assert.equal(job(f.id).state, 'done', job(f.id).error);
+  delete process.env.STUB_SLEEP;
+  // With nothing left to read, it answers with a number at once.
+  assert.equal(await ocrTick(5000), 0);
+  // The timer uses it.
+  assert.match(read('src/server/cron.ts'), /ocr_read: await ocrTick\(\)/);
+});
+
+test('a reader without the document language (a missing language pack) reads in English and says so in the log', async () => {
+  clearOcr();
+  const NOLANG = path.join(tmp, 'eng-only.mjs');
+  fs.writeFileSync(NOLANG, `const [, lang] = process.argv.slice(2); if (lang !== 'eng') { process.stderr.write('Failed loading language ' + lang); process.exit(1); } process.stdout.write('Read in ' + lang);`);
+  process.env.OCR_CMD = `${process.execPath} ${NOLANG} {file} {lang}`;
+  const c = await signUp('Dirk Deutsch', 'dirk@nolang.example', '198.51.100.46');
+  run('UPDATE accounts SET default_locale=? WHERE id IN (SELECT m.account_id FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email=?)', 'de', 'dirk@nolang.example');
+  const warn = console.warn;
+  const said: string[] = [];
+  console.warn = (...a: any[]) => void said.push(a.join(' '));
+  try {
+    const f = await uploadPicture(c, pagePng());
+    await runOcr();
+    if (job(f.id).state !== 'done') await runOcr();
+    const j = job(f.id);
+    assert.equal(j.state, 'done', j.error);
+    assert.equal(j.lang, 'eng', 'the job says the language it was really read in');
+    assert.ok(said.some((l) => /language "deu".*English.*language pack/.test(l)), said.join('\n'));
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('a reader that fails is named in the server log, not only in the database', async () => {
+  clearOcr();
+  process.env.OCR_CMD = `${process.execPath} ${path.join(tmp, 'no-such-reader.mjs')} {file}`;
+  const c = await signUp('Leo Log', 'leo@log.example', '198.51.100.47');
+  const error = console.error;
+  const said: string[] = [];
+  console.error = (...a: any[]) => void said.push(a.join(' '));
+  try {
+    const f = await uploadPicture(c, pagePng());
+    await runOcr();
+    if (job(f.id).tries === 0) await runOcr();
+    assert.ok(said.some((l) => /\[ocr\] reading the text of a scanned file failed \(try 1 of 3\)/.test(l)), said.join('\n'));
+  } finally {
+    console.error = error;
+  }
+});
+
+test('a program path with spaces can be given in double quotes', () => {
+  assert.deepEqual(commandFor('"/opt/My Reader/ocr" {file} -l {lang}', '/tmp/a.png', 'eng'), ['/opt/My Reader/ocr', ['/tmp/a.png', '-l', 'eng']]);
+});
+
+test('on a phone, tick boxes and round buttons take a 44 pixel tap: the phone rule outranks the 24 pixel one', () => {
+  const css = read('src/app/styles/sign.css');
+  const small = css.indexOf('.sg-doc .field.fill.box:not(.sg-auto)::before { content');
+  const phone = css.search(/\.sg-doc \.field\.fill\.box:not\(\.sg-auto\)::before \{[^}]*max\(100%, 44px\)/);
+  assert.ok(small > 0 && phone > small, 'a rule as specific as the 24 px one, with 44 px, comes after it');
+  // and it is inside the phone media query
+  const media = css.lastIndexOf('@media', phone);
+  assert.match(css.slice(media, media + 40), /max-width: 600px/);
+});
+
+test('the statement sends a stuck signer to Questions and comments first, and speaks plainly', () => {
+  const page = read('src/app/accessibility/page.tsx');
+  const all = page + WORKS.join(' ') + NOT_YET.join(' ');
+  for (const branch of page.split('reachable ?')[1].split(') : (')) {
+    const q = branch.indexOf('Questions and comments'), d = branch.indexOf('Decline to sign');
+    assert.ok(q > 0 && d > q, 'Questions and comments comes before Decline in both versions');
+  }
+  assert.doesNotMatch(all, /landmark|tagged PDF|Chromium|accessibility tree|operator screens/);
+  assert.match(page, /className="btn" style=\{BTN\}/);
+  assert.match(page, /const BTN = \{ minHeight: 44/);
 });
 
 test('GET /sign/:token/ocr is readable exactly when the documents are: not with an unknown link, not behind an access code, not once the envelope is closed', async () => {

@@ -50,6 +50,7 @@ import { ruleOf, logicKey } from '../lib/logic.ts';
 import { closedFormStart, closedStartText } from './formstart.ts';
 import { finalsDue, finalFailed, finalMadeLate } from './finalretry.ts';
 import { finishPdf, sealStored } from './finalpipe.ts';
+import { completesLater, later } from './pdfa.ts';
 import { notSealedLines } from '../lib/seal.ts';
 // A stamp next to a signature: a recipient's own, or the sender's, printed like ink (stamps.ts).
 import { isSenderStamp, printedStamp, stampOnSave, copyStamps, stampProblem, stampsSent, stampsFinished, senderStampChange } from './stamps.ts';
@@ -1509,7 +1510,8 @@ export async function advance(envelopeId: string): Promise<void> {
     const e = loadEnvelope(envelopeId);
     if (!e || e.status !== 'sent') return;
     const open = e.recipients.filter((r: any) => r.status !== 'completed');
-    if (!open.length) return completeEnvelope(e);
+    // With PDF/A on, the signed file waits for veraPDF: the last person is not kept waiting for it (pdfa.ts).
+    if (!open.length) return completesLater(e) ? later('completing an envelope', () => completeEnvelope(e)) : completeEnvelope(e);
     // A witness is asked straight after their own signer has signed, whatever the order says, and holds nobody up.
     // Until then, and while they are unnamed or said they were not there, they wait (witnessDue in witness.ts).
     const turn = e.ordered ? Math.min(...open.filter((r: any) => r.role !== 'witness').map((r: any) => r.routing_order)) : null;

@@ -1,5 +1,5 @@
 import { route, json, type Ctx } from './router.ts';
-import { whatsappProvider, voiceProvider } from '../lib/channels.ts';
+import { whatsappProvider, voiceProvider, waDailyPerAccount } from '../lib/channels.ts';
 import { adminOrgs, refuseOrgAdminRole, orgMe } from './orgs.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 import { chosenLocale, defaultFor } from './locales.ts';
@@ -382,6 +382,8 @@ route('GET', '/me', (c) => {
     // Whether this server sends the signing link by WhatsApp, and can call a number to read a code (src/lib/channels.ts).
     whatsapp: !!whatsappProvider(),
     phone_calls: !!voiceProvider(),
+    // How many WhatsApp messages one account can cause in 24 hours, for the admin's line in Settings. Only when on.
+    ...(whatsappProvider() ? { whatsapp_daily: waDailyPerAccount() } : {}),
     // Whether this server turns Word, Excel and other files into a PDF on upload. When not, nothing offers them.
     converts: converterOn(),
     // Set when an email to this login came back for good ({ address, since, reason }), so every page can say so

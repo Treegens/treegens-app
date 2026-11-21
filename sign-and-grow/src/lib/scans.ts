@@ -25,7 +25,7 @@ export function scanWarning(d: ScanInfo): string {
     : `${pageList(pages).replace(/^p/, 'P')} of this document ${one ? 'has' : 'have'} no real text: ${one ? 'it looks like a scan or a photo of a page' : 'they look like scans or photos of pages'}.`;
   const it = whole ? 'it' : one ? 'that page' : 'those pages';
   // The server read (or is reading) the text of those pages by machine: say that, and that it may have mistakes.
-  if (d.ocr === 'done') return `${what} This server read its text by machine, so it can be searched and a screen reader can read it from the text view, with a note that it may contain mistakes. If you have the original file, export a PDF from that and use Replace file.`;
-  if (d.ocr === 'queued' || d.ocr === 'running') return `${what} This server is reading its text by machine now, so that it can be searched and read out. If you have the original file, export a PDF from that and use Replace file.`;
+  if (d.ocr === 'done') return `${what} We read its words by machine so it can be searched and read aloud, but it may have mistakes. If you have the original file, use Replace file.`;
+  if (d.ocr === 'queued' || d.ocr === 'running') return `${what} We are reading its words by machine now so it can be searched and read aloud, but it may have mistakes. If you have the original file, use Replace file.`;
   return `${what} People who use a screen reader will not be able to have ${it} read to them, ${whole ? 'it' : one ? 'it' : 'they'} cannot be found by searching, and Place fields for me has nothing to work with there. If you have the original file, export a PDF from that and use Replace file.`;
 }

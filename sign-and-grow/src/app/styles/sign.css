@@ -228,7 +228,8 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 
   /* Fields on a phone are a few millimetres tall. Give each a finger-sized area around it. */
   .sg-doc .field.fill:not(.sg-auto) { overflow: visible; }
-  .sg-doc .field.fill:not(.sg-auto)::before { content: ''; position: absolute; z-index: -1; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+  /* The .box selector is listed too, so it outranks the 24 px rule for tick boxes above. */
+  .sg-doc .field.fill:not(.sg-auto)::before, .sg-doc .field.fill.box:not(.sg-auto)::before { content: ''; position: absolute; z-index: -1; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
 
   /* Dialogs come up from the bottom and stay above the keyboard. */
   .sg-dialog-bg { align-items: flex-end; padding: 0 0 var(--sg-kb, 0px); }

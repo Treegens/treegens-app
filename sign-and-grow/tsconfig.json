@@ -77,12 +77,10 @@
     ".next-repair-ds-seal-ltv/dev/types/**/*.ts",
     ".next-ux-ds-fields-checks/types/**/*.ts",
     ".next-ux-ds-fields-checks/dev/types/**/*.ts",
-    ".next-ux-ds-channels/types/**/*.ts",
-    ".next-ux-ds-channels/dev/types/**/*.ts",
-    ".next-repair-ds-fields-checks/types/**/*.ts",
-    ".next-repair-ds-fields-checks/dev/types/**/*.ts",
-    ".next-verify-ds-a11y/types/**/*.ts",
-    ".next-verify-ds-a11y/dev/types/**/*.ts"
+    ".next-uxdsa11y/types/**/*.ts",
+    ".next-uxdsa11y/dev/types/**/*.ts",
+    ".next-repair-ds-a11y/types/**/*.ts",
+    ".next-repair-ds-a11y/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

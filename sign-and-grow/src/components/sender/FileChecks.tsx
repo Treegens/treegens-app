@@ -15,11 +15,17 @@ type Seal = { by: string; issuer: string | null; time_stamp: boolean; time_stamp
 
 // The archive format (`archive_format`, src/server/pdfa.ts), when the account asked for PDF/A: one line, PDF/A only
 // when veraPDF passed the stored file, otherwise "not PDF/A" and why in a few words.
-type Archive = { pdfa: true; checker: string } | { pdfa: false; why: string };
+type Archive = { pdfa: true; checker: string } | { pdfa: false; why: string; next?: string };
 
 export function FileChecks({ seal, archive }: { seal?: Seal | null; archive?: Archive | null }) {
   if (!seal?.by && !archive) return null;
-  const archiveLine = archive ? <p className="small" data-feature="ds-pdfa" style={{ margin: '4px 0 0', overflowWrap: 'anywhere' }}>{archive.pdfa ? t(ui, 'pdfa.line.passed', { checker: archive.checker }) : t(ui, 'pdfa.line.not', { why: archive.why })}</p> : null;
+  // Not PDF/A: the reason, then one line on what to do so the next file can be.
+  const archiveLine = archive ? (
+    <>
+      <p className="small" data-feature="ds-pdfa" style={{ margin: '4px 0 0', overflowWrap: 'anywhere' }}>{archive.pdfa ? t(ui, 'pdfa.line.passed', { checker: archive.checker }) : t(ui, 'pdfa.line.not', { why: archive.why })}</p>
+      {!archive.pdfa && archive.next && <p className="muted small" data-feature="ds-pdfa" style={{ margin: '2px 0 0', overflowWrap: 'anywhere' }}>{archive.next}</p>}
+    </>
+  ) : null;
   if (!seal?.by) return (
     <details className="card cf-details" style={{ marginTop: 16 }} data-fold="" data-feature="ds-pdfa">
       <summary>{t(ui, 'seal.checks.title')}</summary>
