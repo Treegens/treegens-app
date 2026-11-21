@@ -1,0 +1,232 @@
+/* Styles for the sender screens. Shared tokens and components live in ../globals.css.
+   Every class here starts with "sn-". Pages in this area wrap their content in ".sn". */
+
+/* ---- Small helpers ---- */
+.sn-vh { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.sn-bad { color: var(--red); }
+.sn-good { color: var(--green); font-weight: 600; }
+.sn-cold { color: #8a5a0c; }
+.sn-break { overflow-wrap: anywhere; }
+.sn-fit { width: 1%; white-space: nowrap; text-align: right; }
+.sn .btn.primary.sn-danger { background: var(--red); border-color: var(--red); }
+.sn .btn.primary.sn-danger:hover { background: #962e26; border-color: #962e26; }
+.sn .btn.sn-amber { border-color: #e0b64e; background: #fff6e0; }
+.sn button:focus-visible, .sn summary:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.sn .tabs button:focus-visible { outline-offset: -2px; border-radius: 6px; }
+.sn .modal .actions { flex-wrap: wrap; }
+.sn .notice a { color: inherit; font-weight: 600; }
+@media (min-width: 901px) { .sn-only-sm { display: none !important; } }
+
+/* ---- Page head ---- */
+.sn-back { display: inline-flex; align-items: center; min-height: 28px; }
+.sn-title { margin-top: 2px; overflow-wrap: anywhere; }
+.sn-id { overflow-wrap: anywhere; }
+/* The title keeps room to be read: beside many buttons the buttons go to the next line, the title is not squeezed letter by letter. */
+.sn > .pagehead > .grow { flex: 1 1 320px; min-width: min(100%, 320px); }
+.sn-headactions { justify-content: flex-end; }
+.sn-cardhead { padding: 14px 16px; }
+.sn-cardhead p { margin: 4px 0 0; }
+.sn-inset { margin: 0 16px 14px; }
+
+/* ---- Right after sending: what the sender hears from us, and the one switch ---- */
+.sn-sent { border-color: #cfe3d2; background: var(--green-soft); }
+.sn-sent h2 { margin-bottom: 4px; }
+.sn-sent p { margin: 0; }
+.sn-switch { min-height: 44px; margin-top: 10px; border-top: 1px solid #cfe3d2 !important; }
+.sn-switch input { width: 22px; height: 22px; }
+
+/* ---- Signing in person: "hand the device back" on the signer's last screen, and the lock screen of the app ---- */
+.hb { border: 2px solid var(--green); background: var(--green-soft); }
+.hb h2 { font-size: 24px; line-height: 1.25; margin-bottom: 8px; overflow-wrap: anywhere; }
+.hb p { margin: 0 0 14px; font-size: 16px; }
+.hb-row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.hb-row .btn { min-height: 52px; white-space: normal; overflow-wrap: anywhere; }
+.hb-row > span { flex: 1 1 220px; }
+.ho .card h1 { overflow-wrap: anywhere; }
+.ho-more { margin-top: 14px; font-size: 14px; color: var(--muted); }
+.ho-more summary { cursor: pointer; padding: 12px 0; }
+.ho-more ul { margin: 6px 0 0; padding-left: 20px; }
+.ho-more li { margin-bottom: 4px; }
+
+/* ---- Where an envelope stands ---- */
+.sn-now { padding: 0; overflow: hidden; }
+.sn-now-main { display: flex; gap: 14px 24px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; padding: 18px 20px; }
+.sn-now-main > div:first-child { flex: 1 1 320px; min-width: 0; }
+.sn-now-main p { margin: 0; }
+.sn-now-line { font-family: var(--serif); font-size: 21px; line-height: 1.3; overflow-wrap: anywhere; }
+.sn-now-sub { margin-top: 6px !important; color: var(--muted); }
+.sn-now-sub.warn { color: #6f4706; }
+.sn-now-sub b { color: var(--ink); }
+.sn-now-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sn-now.expired { border-color: #e0b64e; background: #fffaf0; }
+.sn-now.closed { border-color: #ecc9c4; background: #fff8f7; }
+.sn-edit { display: flex; gap: 12px 20px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 14px 20px; background: var(--green-soft); border-top: 1px solid #cfe3d2; color: var(--green-deep); }
+.sn-edit > div { flex: 1 1 300px; min-width: 0; }
+.sn-edit-lock { margin-top: 3px; }
+
+/* ---- One card per recipient ---- */
+.sn-people { list-style: none; margin: 0; padding: 0; }
+.sn-person { padding: 14px 16px 16px; border-top: 1px solid var(--line); }
+.sn-person.warn { background: #fffaf0; box-shadow: inset 3px 0 0 #e0b64e; }
+.sn-person-head { display: flex; gap: 12px; align-items: flex-start; }
+.sn-step { flex: none; width: 26px; height: 26px; border-radius: 50%; background: #eeeae0; color: #4d5a52; font-weight: 700; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; }
+.sn-person-name { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; }
+.sn-person-email { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.sn-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink); }
+.sn-person-badges { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; flex: none; }
+.badge.sn-muted { background: #eeeae0; color: #4d5a52; }
+.sn-facts { margin: 10px 0 0; display: grid; gap: 4px; font-size: 14px; }
+.sn-facts > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; }
+.sn-facts dt { color: var(--muted); font-size: 13px; font-weight: 600; padding-top: 1px; }
+.sn-facts dd { margin: 0; overflow-wrap: anywhere; }
+.sn-hint { margin: 10px 0 0; font-size: 14px; }
+.sn-hint.warn { color: #6f4706; }
+.sn-person-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.sn-link { display: block; margin-top: 12px; font-size: 13px; font-weight: 600; }
+.sn-link input { margin-top: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; font-weight: 400; }
+
+.sn-mails { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 8px; }
+.sn-mails summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 6px 0; border-radius: 4px; }
+.sn-mails ul { list-style: none; margin: 4px 0 0; padding: 0; max-height: 260px; overflow: auto; }
+.sn-mails li { padding: 7px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.sn-audit { margin-top: 10px; max-height: 320px; overflow: auto; border-radius: 6px; }
+.sn-audit:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+/* Audit lines carry SHA-256 fingerprints, 64 characters with nowhere to break. They wrap anywhere, so the page stays
+   as wide as the phone it is read on. */
+.sn-audit-item { padding: 7px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.sn-audit-item:last-child { border-bottom: 0; }
+
+/* ---- Lists ---- */
+table.sn-list td { vertical-align: top; }
+table.sn-list tr.click:hover .sn-subject { text-decoration: underline; }
+.sn-tick { width: 1%; padding-right: 0 !important; }
+.sn-check { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: -6px 0 -6px -6px; cursor: pointer; border-radius: 8px; }
+.sn-check:hover { background: rgba(23, 36, 28, 0.06); }
+.sn-check input { width: 18px; height: 18px; margin: 0; cursor: pointer; }
+.sn-main { min-width: 0; }
+.sn-subject { font-weight: 700; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.sn-subject:hover { text-decoration: underline; }
+.sn-to { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.sn-waiting b { font-weight: 600; }
+.sn-batchlink { display: inline-block; margin-top: 3px; }
+.sn-rowmeta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.sn-inlineactions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.sn-rowactions { width: 1%; white-space: nowrap; text-align: right; }
+.sn-rowactions .btn + .btn { margin-left: 6px; }
+.sn-filters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.sn-filters select { width: auto; max-width: 240px; }
+.sn-search { display: flex; gap: 6px; align-items: center; flex: 1 1 260px; max-width: 440px; min-width: 0; }
+.sn-selbar { min-height: 38px; display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+
+/* ---- Home ---- */
+.sn-wait h2 { margin-bottom: 6px; }
+.sn-wait.you { border-color: #e0b64e; background: #fffaf0; }
+.sn-wait ul { list-style: none; margin: 0; padding: 0; }
+.sn-wait li { display: flex; gap: 12px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+.sn-wait li:first-child { border-top: 0; }
+.sn-wait li > .grow { overflow-wrap: anywhere; }
+.sn-statlink { text-decoration: none; color: inherit; }
+.sn-statlink:hover { border-color: #cfc8b8; }
+
+.sn-usage-top { display: flex; gap: 10px 16px; align-items: flex-start; flex-wrap: wrap; }
+.sn-usage-top > .grow { flex: 1 1 260px; }
+.sn-usage-line { margin: 6px 0 0; font-size: 15.5px; }
+.sn-meter { height: 10px; border-radius: 6px; background: #ece8dd; overflow: hidden; margin: 12px 0 14px; max-width: 460px; }
+.sn-meter > i { display: block; height: 100%; background: var(--green); border-radius: 6px; }
+.sn-usage.low .sn-meter > i { background: var(--amber); }
+.sn-usage.full .sn-meter > i { background: var(--red); }
+.sn-usage-note { background: var(--amber-soft); color: #6f4706; border-radius: 10px; padding: 10px 12px; font-size: 14px; margin: 0 0 14px; }
+.sn-rules { margin: 0; padding-left: 18px; font-size: 14px; color: #3d4a42; columns: 2; column-gap: 36px; }
+.sn-rules li { margin-bottom: 4px; break-inside: avoid; }
+.sn-usage-top + .sn-rules, .sn-usage-top + .sn-usage-note { margin-top: 14px; }
+
+/* ---- Contacts ---- */
+.sn-addcontact { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 12px; align-items: end; }
+.sn-addcontact label.f { margin: 0; }
+.sn-contacts-head { display: flex; gap: 10px 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.sn-count { font-size: 14px; font-weight: 400; margin-left: 4px; }
+.sn-contacts { list-style: none; margin: 0; padding: 0; }
+.sn-contacts li { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 16px; border-top: 1px solid var(--line); }
+.sn-contact-who { display: flex; flex-wrap: wrap; gap: 0 10px; align-items: baseline; min-width: 0; }
+.sn-contact-email { color: #3d4a42; overflow-wrap: anywhere; }
+.sn-contact-co::before { content: '· '; }
+.sn-contact-actions { display: flex; gap: 6px; flex: none; }
+.sn-contacts li.editing { display: block; background: #fbfaf6; padding: 14px 16px; }
+.sn-contacts li.editing form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 10px 12px; align-items: end; }
+.sn-contacts li.editing label.f { margin: 0; }
+.sn-wide { grid-column: 1 / -1; margin: 0; }
+
+/* ---- Bulk send ---- */
+.sn-csv { min-height: 150px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre; overflow: auto; }
+.sn-csvtools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.sn-file { cursor: pointer; position: relative; }
+.sn-file:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
+.sn-verify { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+.sn-verify h3 { margin-bottom: 6px; }
+.sn-verify .notice { margin-bottom: 12px; }
+.sn-problems { margin: 6px 0 0; padding-left: 18px; }
+.sn-problems li { margin-bottom: 2px; overflow-wrap: anywhere; }
+.sn-preview-table { border: 1px solid var(--line); border-radius: 10px; max-height: 280px; overflow: auto; margin-bottom: 14px; }
+.sn-preview-table:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.sn-preview-table tr.bad td { background: #fff8f7; }
+.sn-sendrow { display: flex; gap: 12px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; }
+.sn-sendrow label.f { margin: 0; flex: 1 1 240px; max-width: 380px; }
+
+.sn-batchbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+.sn-batchactions p { margin: 12px 0 0; }
+.sn-batchfilters { display: flex; gap: 8px 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 0 16px 10px; border-bottom: 1px solid var(--line); }
+.sn-batchfilters .tabs { margin-bottom: 0; border-bottom: 0; max-width: 100%; }
+table.sn-batch tr.cont td { border-bottom: 0; padding-bottom: 2px; }
+
+/* ---- Dialogs ---- */
+.sn-choices { border: 0; padding: 0; margin: 0 0 14px; min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sn-choices legend { font-size: 13px; font-weight: 600; margin-bottom: 6px; padding: 0; }
+.sn-choice { display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; min-height: 44px; }
+.sn-choice.on { border-color: var(--green); background: var(--green-soft); }
+.sn-choice:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
+.sn-choice input { margin: 0; outline: none !important; flex-shrink: 0; } /* a long label that wraps never squeezes the radio */
+.sn-preview { margin: 0 0 12px; }
+.sn-rolefill { border: 0; padding: 0; margin: 0 0 4px; min-width: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.sn-rolefill legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 6px; }
+
+/* ---- Phones and small tablets ---- */
+@media (max-width: 900px) {
+  /* 44 px: the smallest a finger can hit reliably. */
+  .sn .btn { min-height: 44px; }
+  /* 16px keeps phones from zooming the page when a box is tapped. */
+  .sn input:not([type='checkbox']):not([type='radio']), .sn select, .sn textarea { font-size: 16px; min-height: 44px; }
+  .sn .btn.sm { padding: 8px 13px; font-size: 14px; }
+  .sn .tabs { flex-wrap: wrap; overflow: visible; }
+  .sn .tabs button { min-height: 44px; }
+  .sn-back { min-height: 40px; }
+  .sn-mails summary { min-height: 40px; display: flex; align-items: center; gap: 6px; }
+  .sn-mails summary::before { content: '▸'; }
+  .sn-mails[open] summary::before { content: '▾'; }
+  table.sn-list th, table.sn-list td { padding-left: 14px; padding-right: 14px; }
+  .sn-check { width: 40px; height: 40px; margin: -8px -4px -8px -10px; }
+  .sn-headactions { justify-content: flex-start; }
+  .sn-headactions .btn, .sn-now-actions .btn, .sn-person-actions .btn, .sn-batchbtns .btn { flex: 1 1 auto; }
+  .sn-now-actions { width: 100%; }
+  .sn-edit .btn { width: 100%; }
+  .sn-now-line { font-size: 19px; }
+  .sn-person-head { flex-wrap: wrap; }
+  .sn-person-head > .grow { flex: 1 1 200px; }
+  .sn-person-badges { flex-direction: row; flex-wrap: wrap; align-items: center; width: 100%; }
+  .sn-facts > div { grid-template-columns: 64px minmax(0, 1fr); }
+  .sn-filters select { flex: 1 1 140px; max-width: none; }
+  .sn-search { max-width: none; flex-basis: 100%; }
+  .sn-rules { columns: 1; }
+  .sn-addcontact, .sn-contacts li.editing form { grid-template-columns: minmax(0, 1fr); }
+  .sn-contacts li { flex-direction: column; align-items: stretch; gap: 8px; }
+  .sn-contact-who { flex-direction: column; gap: 0; }
+  .sn-contact-co::before { content: ''; }
+  .sn-sendrow .btn { width: 100%; }
+  .sn-sendrow label.f { max-width: none; flex-basis: 100%; }
+  .sn-rolefill { grid-template-columns: minmax(0, 1fr); }
+  .sn-wait li { align-items: flex-start; }
+}
+
+/* Home, under the count: when the signatures reset, and one link to the rules on the Plan page. */
+.sn-usage-when { margin: 10px 0 0; font-size: 14px; }
+.sn-usage-when a { display: inline-block; padding: 12px 0; margin: -12px 0; }
+.sn-usage-when + .sn-usage-note { margin: 12px 0 0; }

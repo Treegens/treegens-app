@@ -1,0 +1,50 @@
+/* growsigning: the heading font.
+   Lora (Cyreal, SIL Open Font License 1.1) is the face the wordmark is drawn in, so headings and logo share one voice.
+   The two files are copied from @fontsource/lora into public/fonts by scripts/copy-assets.mjs on install.
+   Imported last in src/app/layout.tsx, after globals.css, so the --serif below replaces the one there. */
+
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/lora-500.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/lora-600.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Lora first, then the stack the app used before, which also covers any letter outside Lora's Latin files
+   (a name in Cyrillic or Vietnamese, say) one character at a time. */
+:root {
+  --serif: 'Lora', 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+}
+
+/* Headings ask for bold (700) by default and Lora ships here in 500 and 600. Saying 600 outright stops a browser from
+   thickening the 600 into a fake bold. */
+.serif {
+  font-weight: 600;
+}
+
+/* The logo links (src/components/Brand.tsx <Logo>): a 44 px target around a drawing 20 to 26 px tall, which never
+   shrinks to make room (flex: none on the drawing). */
+.logo, .side .brand, .mobilebar-logo { min-height: 44px; display: inline-flex; align-items: center; }
+.mobilebar-logo { flex: none; text-decoration: none; }
+.side .brand { display: flex; padding: 0 10px 12px; }
+/* On the deep green of the side bar and the phone's top bar the forest focus ring was 1.67 to 1 against its ground,
+   too faint to find with the keyboard. Light leaf there is 6.2 to 1. */
+.side :focus-visible, .mobilebar :focus-visible { outline-color: #9ed88f; }
+
+/* The narrowest phones (under 360 px, down to 320) have the logo, "Start free" and the menu button in one row of the
+   public header. The logo drops to 20 px tall (the brand kit's smallest is 16) and keeps its shape, and the menu button
+   keeps only its icon, so nothing is cut off at the right. Screen readers still hear "Menu" or "Close". */
+@media (max-width: 359px) {
+  .pub-head .logo svg { height: 20px; width: auto; }
+  .pub-head .pub-menu-btn { font-size: 0; gap: 0; min-width: 44px; justify-content: center; padding-left: 12px; padding-right: 12px; }
+}

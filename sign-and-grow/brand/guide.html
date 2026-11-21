@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>growsigning brand guide</title>
+<!-- The page behind brand/guide.png. scripts/build-brand.mjs renders it at 1600 px wide, deviceScaleFactor 2, after the
+     exports, because it shows them (public/brand). Opened straight from disk it works too, except that Chromium will not
+     load the Lora files from a file:// page, so the headings fall back to Georgia there. -->
+<style>
+  @font-face { font-family: 'Lora'; font-weight: 500; src: url('../node_modules/@fontsource/lora/files/lora-latin-500-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Lora'; font-weight: 600; src: url('../node_modules/@fontsource/lora/files/lora-latin-600-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Sig Vibes'; src: url('../node_modules/@fontsource/great-vibes/files/great-vibes-latin-400-normal.woff2') format('woff2'); }
+  :root {
+    --forest: #1f6f43; --deep: #134a2c; --ink: #17241c; --paper: #f6f3ec; --light-leaf: #9ed88f; --leaf: #6fb35f; --yellow: #ffd24a;
+    --muted: #5f6d64; --line: #e3ded2; --no: #b3392f;
+    /* The app's text face is each device's own; this machine has none of the usual ones, so Inter stands in. */
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif;
+    --serif: 'Lora', Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { width: 1600px; background: #ece8de; color: var(--ink); font: 15px/1.5 var(--sans); padding: 56px 56px 48px; -webkit-font-smoothing: antialiased; }
+  h1, h2, h3 { margin: 0; font-family: var(--serif); font-weight: 600; letter-spacing: -0.005em; }
+  p { margin: 0; }
+  .label { font: 600 11.5px/1 var(--sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .grid { display: grid; gap: 24px; margin-top: 24px; }
+  .g2 { grid-template-columns: 1fr 1fr; }
+  .g3 { grid-template-columns: 1fr 1fr 1fr; }
+  .g-wide { grid-template-columns: 1.25fr 1fr; }
+  .card { background: var(--paper); border: 1px solid var(--line); border-radius: 18px; padding: 26px 28px 28px; position: relative; }
+  .card.white { background: #fff; }
+  .card.deep { background: var(--deep); border-color: var(--deep); color: var(--paper); }
+  .card.deep .label { color: rgba(246, 243, 236, 0.7); }
+  .note { font-size: 13px; color: var(--muted); margin-top: 14px; line-height: 1.5; }
+  .deep .note { color: rgba(246, 243, 236, 0.75); }
+  .stage { display: flex; align-items: center; justify-content: center; min-height: 230px; }
+  .row { display: flex; align-items: flex-end; gap: 30px; }
+  .cap { font-size: 12px; color: var(--muted); text-align: center; margin-top: 8px; }
+  .px { image-rendering: pixelated; border: 1px solid var(--line); background: #fff; display: block; }
+  code { font: 12.5px/1.4 ui-monospace, 'JetBrains Mono', Menlo, monospace; background: rgba(23, 36, 28, 0.06); padding: 1px 5px; border-radius: 5px; }
+
+  /* header */
+  header { display: grid; grid-template-columns: 1fr 470px; gap: 48px; align-items: end; }
+  header h1 { font-size: 46px; line-height: 1.1; margin: 18px 0 14px; }
+  header .idea { font-size: 18px; line-height: 1.55; color: #3d4a42; max-width: 860px; }
+  .name { background: var(--paper); border: 1px solid var(--line); border-radius: 18px; padding: 22px 24px; }
+  .name dl { display: grid; grid-template-columns: 116px 1fr; gap: 10px 14px; margin: 14px 0 0; font-size: 15px; }
+  .name dt { color: var(--muted); }
+  .name dd { margin: 0; }
+  .name .never { color: var(--no); text-decoration: line-through; text-decoration-thickness: 1.5px; }
+
+  /* colours */
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin-top: 16px; }
+  th { text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 0 8px 8px 0; }
+  td { padding: 7px 8px 7px 0; border-top: 1px solid var(--line); vertical-align: middle; }
+  td.sw span { display: inline-block; width: 30px; height: 30px; border-radius: 8px; border: 1px solid rgba(23, 36, 28, 0.12); vertical-align: middle; }
+  td.r { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ok { color: var(--forest); font-weight: 600; }
+  .meh { color: #8a6a12; font-weight: 600; }
+  .bad { color: var(--no); font-weight: 600; }
+
+  /* mock ups */
+  .mail { background: #fff; border: 1px solid #e4dfd3; border-radius: 14px; overflow: hidden; box-shadow: 0 1px 2px rgba(23,36,28,.06), 0 8px 24px rgba(23,36,28,.06); }
+  .mail .top { padding: 18px 26px; border-bottom: 1px solid #ece8de; }
+  .mail .body { padding: 22px 26px 24px; }
+  .mail h3 { font-family: var(--sans); font-weight: 650; font-size: 18px; margin-bottom: 8px; }
+  .btn { display: inline-block; background: var(--yellow); color: var(--ink); font-weight: 650; font-size: 15px; padding: 11px 20px; border-radius: 10px; margin: 14px 0 12px; }
+  .signhead { background: #fff; border: 1px solid #e4dfd3; border-radius: 14px; overflow: hidden; box-shadow: 0 1px 2px rgba(23,36,28,.06), 0 8px 24px rgba(23,36,28,.06); }
+  .signhead .bar { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid #ece8de; }
+  .cust { display: flex; align-items: center; gap: 10px; }
+  .cust i { width: 30px; height: 30px; border-radius: 50%; background: #2f5f9e; display: inline-block; position: relative; }
+  .cust i::after { content: ''; position: absolute; inset: 9px 7px; border-top: 2.5px solid #fff; border-bottom: 2.5px solid #fff; border-radius: 40%; }
+  .cust b { font-size: 16px; color: #1d3557; }
+  .sentwith { color: var(--muted); font-size: 12px; line-height: 18px; white-space: nowrap; }
+  .sentwith img { height: 18px; vertical-align: -5.7px; margin-left: 2px; }
+  .signhead .doc { background: var(--paper); padding: 20px 22px; display: flex; gap: 20px; }
+  .sheet { width: 120px; height: 150px; background: #fff; border: 1px solid #e4dfd3; border-radius: 6px; padding: 14px 12px; flex: none; }
+  .sheet s { display: block; height: 5px; background: #e6e2d8; border-radius: 3px; margin-bottom: 8px; text-decoration: none; }
+  .sheet s.hl { background: #ffe9a3; width: 55%; height: 12px; margin-top: 18px; }
+
+  .page { background: #fff; border: 1px solid #e4dfd3; border-radius: 6px; box-shadow: 0 6px 20px rgba(23,36,28,.08); position: relative; overflow: hidden; }
+  .page .lines { padding: 26px 30px 0; }
+  .page .lines s { display: block; height: 6px; background: #ece9e1; border-radius: 3px; margin-bottom: 10px; text-decoration: none; }
+  .page .sig { font: 34px/1 'Sig Vibes', 'Brush Script MT', cursive; color: #233a7a; margin: 8px 0 0 30px; }
+  .foot { position: absolute; left: 22px; right: 22px; bottom: 14px; display: flex; align-items: center; gap: 12px; color: #6b776f; font-size: 10.5px; }
+  .foot img { height: 18px; }
+  .cert .band { background: var(--deep); padding: 18px 22px 16px; color: #fff; }
+  .cert .band img { height: 24px; display: block; }
+  .cert .band div { font: 700 17px/1.2 var(--sans); margin-top: 10px; }
+  .cert .kv { padding: 14px 22px; font-size: 11.5px; color: #3d4a42; display: grid; grid-template-columns: 90px 1fr; gap: 4px 10px; }
+  .cert .kv span { color: var(--muted); }
+
+  /* clear space */
+  .clear { position: relative; display: inline-block; flex: none; padding: 30px; background: repeating-linear-gradient(45deg, rgba(31,111,67,.07) 0 6px, transparent 6px 12px); outline: 1px dashed rgba(31,111,67,.5); }
+  .clear img { display: block; height: 60px; outline: 1px solid rgba(31,111,67,.35); background: var(--paper); }
+  .clear .x { position: absolute; font: 600 12px/1 var(--sans); color: var(--forest); }
+
+  /* don'ts */
+  .dont { background: #fff; border: 1px solid var(--line); border-radius: 12px; height: 120px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+  .dont.dark { background: var(--deep); }
+  .dont::after { content: ''; position: absolute; left: -10%; right: -10%; top: 50%; border-top: 2px solid rgba(179, 57, 47, 0.75); transform: rotate(-12deg); }
+  .dont-cap { font-size: 13px; margin-top: 8px; }
+  .dont-cap b { color: var(--no); }
+
+  .rules { margin: 14px 0 0; padding: 0; list-style: none; counter-reset: r; }
+  .rules li { counter-increment: r; padding: 10px 0 10px 34px; border-top: 1px solid var(--line); position: relative; font-size: 14.5px; }
+  .rules li::before { content: counter(r); position: absolute; left: 0; top: 10px; font: 600 15px/1.4 var(--serif); color: var(--forest); }
+  .rules li q { display: block; color: var(--muted); font-size: 13px; margin-top: 3px; quotes: '\201C' '\201D'; }
+
+  footer { display: grid; grid-template-columns: 1.3fr 1fr; gap: 24px; margin-top: 24px; font-size: 13.5px; color: #3d4a42; }
+  footer .card { padding: 20px 24px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <img src="logo.svg" alt="growsigning" style="height:44px;display:block">
+    <h1>A leaf that is also the nib of a pen.</h1>
+    <p class="idea">The outline is a leaf; its midrib is the slit of a fountain pen nib, and the round hole sits where the vein begins. You sign on screen, and something grows: every dollar paid to GrowSigning plants mangroves with Treegens.</p>
+  </div>
+  <div class="name">
+    <div class="label">The name</div>
+    <dl>
+      <dt>In the logo</dt><dd><b>growsigning</b>, one word, lower case, drawn, never typed</dd>
+      <dt>In a sentence</dt><dd><b>GrowSigning</b></dd>
+      <dt>Never</dt><dd><span class="never">Growsigning</span> &nbsp; <span class="never">Grow Signing</span> &nbsp; <span class="never">GS</span></dd>
+    </dl>
+  </div>
+</header>
+
+<div class="grid g2">
+  <section class="card">
+    <div class="label">Logo on paper or white &middot; logo.svg</div>
+    <div class="stage" style="min-height:250px"><img src="logo.svg" alt="" style="height:92px"></div>
+    <p class="note">"grow" in forest, "signing" in ink, so the one word reads as two. The leaf is lit from the top left: forest above the midrib, deep green below.</p>
+  </section>
+  <section class="card deep">
+    <div class="label">Logo on deep green or ink &middot; logo-dark.svg</div>
+    <div class="stage" style="min-height:250px"><img src="logo-dark.svg" alt="" style="height:92px"></div>
+    <p class="note">The lit half turns paper and the shaded half light leaf; "grow" in light leaf, "signing" in paper.</p>
+  </section>
+</div>
+
+<div class="grid g-wide">
+  <section class="card white">
+    <div class="label">One colour &middot; logo-mono.svg, mark-mono.svg (currentColor)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px">
+      <div style="height:120px;border-radius:12px;background:#fff;border:1px solid var(--line);display:grid;place-items:center;color:var(--ink)"><img src="logo-mono.svg" alt="" style="height:40px"></div>
+      <div style="height:120px;border-radius:12px;background:var(--ink);display:grid;place-items:center"><img src="logo-mono.svg" alt="" style="height:40px;filter:invert(96%) sepia(6%) saturate(250%) hue-rotate(5deg)"></div>
+      <div style="height:120px;border-radius:12px;background:var(--paper);display:flex;gap:22px;align-items:center;justify-content:center"><img src="mark-mono.svg" alt="" style="height:64px"><img src="mark-mono.svg" alt="" style="height:32px"></div>
+      <div style="height:120px;border-radius:12px;background:#fff;border:1px solid var(--line);display:grid;place-items:center"><img src="stamp.svg" alt="" style="height:34px"></div>
+    </div>
+    <p class="note">For faxes, stamps, PDF footers and anything printed in one ink. Inline, the files take the CSS colour of their parent; as an image they are black.</p>
+  </section>
+  <section class="card">
+    <div class="label">Stacked &middot; logo-stacked.svg, for square spaces</div>
+    <div class="stage" style="min-height:330px"><img src="logo-stacked.svg" alt="" style="height:200px"></div>
+  </section>
+</div>
+
+<div class="grid g2">
+  <section class="card">
+    <div class="label">The mark &middot; mark.svg from 24 px, mark-small.svg below</div>
+    <div class="row" style="margin-top:22px;align-items:flex-end;gap:34px">
+      <div><img src="mark.svg" alt="" width="128" height="128"><div class="cap">128</div></div>
+      <div><img src="mark.svg" alt="" width="64" height="64"><div class="cap">64</div></div>
+      <div><img src="mark.svg" alt="" width="32" height="32"><div class="cap">32</div></div>
+      <div><img src="mark.svg" alt="" width="24" height="24"><div class="cap">24</div></div>
+      <div><img src="mark-small.svg" alt="" width="20" height="20"><div class="cap">20</div></div>
+      <div><img src="mark-small.svg" alt="" width="16" height="16"><div class="cap">16</div></div>
+      <div style="margin-left:auto"><canvas class="px" data-src="mark-small.svg" data-size="16" data-bg="#f6f3ec" style="width:112px;height:112px"></canvas><div class="cap">16 px, real pixels, enlarged</div></div>
+    </div>
+    <p class="note">Below 24 px use the small drawing: the same leaf with the hole 31% and the slit 57% wider, so both still show at 16 px. The React &lt;Mark&gt; switches by itself.</p>
+  </section>
+  <section class="card">
+    <div class="label">App icon &middot; icon.svg and its exports</div>
+    <div class="row" style="margin-top:22px;align-items:flex-end;gap:30px">
+      <div><img src="../public/brand/apple-touch-icon.png" alt="" width="128" height="128" style="border-radius:28px;display:block"><div class="cap">180 (home screen)</div></div>
+      <div><img src="icon.svg" alt="" width="64" height="64"><div class="cap">64</div></div>
+      <div><img src="icon.svg" alt="" width="32" height="32"><div class="cap">32</div></div>
+      <div><img src="../public/brand/icon-16.png" alt="" width="16" height="16"><div class="cap">16</div></div>
+      <div style="margin-left:auto">
+        <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:10px 10px 0 0;padding:9px 14px;font-size:13px;width:230px"><img src="../public/brand/icon-16.png" alt="" width="16" height="16"> Sign: Tenancy agreement</div>
+        <div style="display:flex;gap:14px;margin-top:12px;align-items:flex-end"><img class="px" src="../public/brand/icon-16.png" alt="" style="width:96px;height:96px"><div class="cap" style="text-align:left;width:120px">icon-16.png, real pixels, enlarged</div></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="grid g2">
+  <section class="card">
+    <div class="label">Clear space and smallest sizes</div>
+    <div style="display:flex;gap:40px;align-items:center;margin-top:20px">
+      <div class="clear"><img src="logo.svg" alt="">
+        <span class="x" style="left:9px;top:50%;transform:translateY(-50%)">&frac12;</span><span class="x" style="right:9px;top:50%;transform:translateY(-50%)">&frac12;</span>
+        <span class="x" style="top:9px;left:50%">&frac12;</span><span class="x" style="bottom:9px;left:50%">&frac12;</span>
+      </div>
+      <div style="font-size:14px;line-height:1.6;flex:1">
+        Keep <b>half the logo's height</b> clear on every side (about the height of its lower case letters). For the mark alone, half its width.
+      </div>
+    </div>
+    <table style="margin-top:22px">
+      <tr><th></th><th>Screen</th><th>PDF and print</th><th>Below that</th></tr>
+      <tr><td>Logo</td><td class="r"><b>16 px</b> tall</td><td class="r">12 pt tall</td><td>the word blurs; use the mark</td></tr>
+      <tr><td>Mark, small drawing</td><td class="r"><b>16 px</b></td><td class="r">10 pt</td><td>the hole closes up</td></tr>
+      <tr><td>Mark, mark.svg</td><td class="r"><b>24 px</b> (hole reads from 20)</td><td class="r">10 pt</td><td>switch to the small drawing</td></tr>
+      <tr><td>Stamp</td><td class="r"><b>18 px</b> tall</td><td class="r">14 pt tall</td><td>"Signed with" stops being legible</td></tr>
+    </table>
+  </section>
+  <section class="card white">
+    <div class="label">Colours and contrast (WCAG 2.1)</div>
+    <table>
+      <tr><th></th><th>Colour</th><th>Hex</th><th>For</th><th>On paper</th><th>On white</th><th>On deep</th></tr>
+      <tr><td class="sw"><span style="background:#1f6f43"></span></td><td>Forest</td><td class="r">#1f6f43</td><td>lit half, "grow", links</td><td class="r">5.55 <span class="ok">AA</span></td><td class="r">6.15 <span class="ok">AA</span></td><td class="r">1.67 <span class="bad">no</span></td></tr>
+      <tr><td class="sw"><span style="background:#134a2c"></span></td><td>Deep green</td><td class="r">#134a2c</td><td>shaded half, icon, dark ground</td><td class="r">9.27 <span class="ok">AAA</span></td><td class="r">10.28 <span class="ok">AAA</span></td><td class="r">&nbsp;</td></tr>
+      <tr><td class="sw"><span style="background:#17241c"></span></td><td>Ink</td><td class="r">#17241c</td><td>"signing", all text</td><td class="r">14.51 <span class="ok">AAA</span></td><td class="r">16.09 <span class="ok">AAA</span></td><td class="r">1.57 <span class="bad">no</span></td></tr>
+      <tr><td class="sw"><span style="background:#f6f3ec"></span></td><td>Paper</td><td class="r">#f6f3ec</td><td>the page; text on dark</td><td class="r">&nbsp;</td><td class="r">1.11 <span class="bad">no</span></td><td class="r">9.27 <span class="ok">AAA</span></td></tr>
+      <tr><td class="sw"><span style="background:#9ed88f"></span></td><td>Light leaf</td><td class="r">#9ed88f</td><td>mark and "grow" on dark</td><td class="r">1.50 <span class="bad">no</span></td><td class="r">1.66 <span class="bad">no</span></td><td class="r">6.20 <span class="ok">AA</span></td></tr>
+      <tr><td class="sw"><span style="background:#6fb35f"></span></td><td>Leaf</td><td class="r">#6fb35f</td><td>illustration only</td><td class="r">2.29 <span class="bad">no</span></td><td class="r">2.53 <span class="bad">no</span></td><td class="r">4.06 <span class="meh">large</span></td></tr>
+      <tr><td class="sw"><span style="background:#ffd24a"></span></td><td>Warm yellow</td><td class="r">#ffd24a</td><td>the main button, ink text (11.16)</td><td class="r">1.30 <span class="bad">no</span></td><td class="r">1.44 <span class="bad">no</span></td><td class="r">7.13 <span class="ok">AAA</span></td></tr>
+    </table>
+    <p class="note">AA: 4.5 for text. "large": 3.0, for text from 24 px (19 px bold) and for shapes only. The mark itself, as a shape, needs 3.0 and has 5.55 or more on every ground it is made for.</p>
+  </section>
+</div>
+
+<div class="grid g2">
+  <section class="card">
+    <div class="label">Type</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:16px">
+      <div>
+        <div style="font:600 34px/1.15 var(--serif)">Tenancy agreement, Flat 4</div>
+        <div style="font:500 19px/1.4 var(--serif);margin-top:8px;color:#3d4a42">Every dollar plants 10 mangrove trees</div>
+        <p class="note">Lora, SemiBold 600 for headings, Medium 500 for quieter ones. The face the wordmark is drawn in, so the logo belongs to the page. Calm, open, made for screens. SIL Open Font License 1.1.</p>
+      </div>
+      <div>
+        <div style="font:600 15px/1.5 var(--sans)">Nothing sent yet</div>
+        <div style="font:400 15px/1.5 var(--sans);margin-top:4px">Upload a PDF, add who needs to sign and place the fields. It takes about a minute.</div>
+        <p class="note">Everything else in the device's own sans (San Francisco, Segoe UI, Roboto; Inter stands in here). It is what each screen draws best at small sizes, costs no download and covers every script people sign in.</p>
+      </div>
+    </div>
+  </section>
+  <section class="card">
+    <div class="label">The stamp &middot; stamp.svg, one colour</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:16px">
+      <div class="page cert" style="height:236px">
+        <div class="band"><img src="logo-dark.svg" alt=""><div>Certificate of completion</div></div>
+        <div class="kv"><span>Envelope ID</span>env_7Q2K9XW4<span>Subject</span>Tenancy agreement, Flat 4<span>Completed</span>2026-11-20 14:32 UTC</div>
+        <div class="foot"><img src="stamp.svg" alt="" style="opacity:.75"><span>Certificate of completion &middot; Envelope env_7Q2K9XW4</span></div>
+      </div>
+      <div class="page" style="height:236px">
+        <div class="lines"><s style="width:62%"></s><s></s><s style="width:92%"></s><s style="width:80%"></s><s style="width:88%"></s></div>
+        <div class="sig">Amara Diallo</div>
+        <div class="foot"><img src="stamp.svg" alt="" style="opacity:.75"><span>Envelope ID env_7Q2K9XW4</span></div>
+      </div>
+    </div>
+    <p class="note">At the foot of every page of a signed copy and of the certificate, in muted ink, beside the envelope ID that the server writes. Never larger than the document's own text.</p>
+  </section>
+</div>
+
+<div class="grid g2">
+  <section class="card" style="background:#efede7">
+    <div class="label">Email header, logo 22 px tall on its own tile &middot; email-logo.png</div>
+    <div class="mail" style="margin-top:16px">
+      <div class="top"><img src="../public/brand/email-logo.png" alt="GrowSigning" style="height:32px;display:block"></div>
+      <div class="body">
+        <h3>Amara Diallo sent you a document to sign: Tenancy agreement, Flat 4</h3>
+        <div class="btn">Review and sign</div>
+        <div style="font-size:13px;color:var(--muted)">Signed digitally, so no paper, no printer and no courier. Sent with GrowSigning.</div>
+      </div>
+    </div>
+  </section>
+  <section class="card" style="background:#efede7">
+    <div class="label">Signing page, beside the sender's logo &middot; &lt;SentWith /&gt;</div>
+    <div class="signhead" style="margin-top:16px">
+      <div class="bar"><div class="cust"><i></i><b>Tidewater Housing Co-op</b></div><span class="sentwith">sent with <img src="logo.svg" alt="growsigning"></span></div>
+      <div class="doc">
+        <div class="sheet"><s style="width:70%"></s><s></s><s style="width:90%"></s><s></s><s style="width:60%"></s><s class="hl"></s></div>
+        <div>
+          <div style="font:600 21px/1.25 var(--serif)">Tenancy agreement, Flat 4</div>
+          <div style="color:#3d4a42;margin-top:6px;font-size:14.5px">Choose <b>Next</b> and we take you to each place that needs you, one at a time.</div>
+          <div class="btn" style="margin-bottom:0">Next</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="grid g-wide">
+  <section class="card white">
+    <div class="label">Three things not to do</div>
+    <div class="grid g3" style="margin-top:16px;gap:18px">
+      <div><div class="dont"><img src="logo.svg" alt="" style="height:24px;transform:scale(1.35,0.78)"></div><div class="dont-cap"><b>Do not</b> stretch, squash or tilt it. The 45 degree lean is part of the drawing.</div></div>
+      <div><div class="dont dark"><img src="logo.svg" alt="" style="height:30px"></div><div class="dont-cap"><b>Do not</b> put logo.svg on a dark ground: ink on deep green is 1.57 to 1. Use logo-dark.svg.</div></div>
+      <div><div class="dont"><span style="display:flex;align-items:center;gap:8px"><img src="mark.svg" alt="" style="height:34px"><span style="font:700 25px/1 Georgia, serif;color:var(--forest)">Grow Signing</span></span></div><div class="dont-cap"><b>Do not</b> type the name next to the mark, or split it in two. Use the drawn logo.</div></div>
+    </div>
+    <p class="note">Also: no outlines, shadows or gradients; do not swap the two halves' colours; nothing inside the clear space.</p>
+  </section>
+  <section class="card white">
+    <div class="label">Voice, as the product already writes</div>
+    <ol class="rules">
+      <li>Plain words. <q>Upload a PDF, add who needs to sign and place the fields. It takes about a minute.</q></li>
+      <li>Say what happened and what to do next. <q>We could not open this envelope. It may have been deleted, or it belongs to someone else on your team. Ask them to share it, or go back to your list.</q></li>
+      <li>Never promise what the code does not do. <q>Every dollar plants 10 mangrove trees with Treegens. (A fact from the price list, not "every signature saves a tree".)</q></li>
+      <li>No em dashes. Commas, colons and full stops do the work. <q>Signed digitally, so no paper, no printer and no courier.</q></li>
+      <li>No jargon. <q>Do not forward this email. The link is personal to you.</q></li>
+    </ol>
+  </section>
+</div>
+
+<footer>
+  <div class="card"><b>Files.</b> brand/: mark.svg, mark-small.svg, mark-mono.svg, logo.svg, logo-dark.svg, logo-mono.svg, logo-stacked.svg, icon.svg, stamp.svg. public/brand/: favicon.ico, icon-16, 32, 48, 192, 512.png, icon-maskable-512.png, apple-touch-icon.png, email-logo.png, email-logo-dark.png, og-image.png. In code: src/lib/brandMark.ts (paths and colours), src/components/Brand.tsx (&lt;Mark&gt;, &lt;Logo&gt;, &lt;SentWith&gt;), src/app/styles/brand.css (Lora). Rebuild every export with <code>node scripts/build-brand.mjs</code>.</div>
+  <div class="card"><b>Licences.</b> Lora by Cyreal, SIL Open Font License 1.1: free to use, embed and outline; the font files may not be sold on their own. The logo, the mark and this guide belong to the owner of GrowSigning.</div>
+</footer>
+
+<script>
+  // Draws an SVG into a canvas at its real pixel size, so the enlarged view shows the pixels a screen would show.
+  window.__ready = Promise.all([...document.querySelectorAll('canvas.px')].map((c) => new Promise((done) => {
+    const n = +c.dataset.size; c.width = n; c.height = n;
+    const im = new Image();
+    im.onload = () => { const g = c.getContext('2d'); if (c.dataset.bg) { g.fillStyle = c.dataset.bg; g.fillRect(0, 0, n, n); } g.drawImage(im, 0, 0, n, n); done(); };
+    im.onerror = done;
+    im.src = c.dataset.src;
+  })));
+</script>
+</body>
+</html>

@@ -1,0 +1,857 @@
+{
+ "verify:billing-terms": {
+  "checks": [
+   {
+    "item": "First monthly payment is lost when the provider's 'invoice paid' event arrives before 'checkout completed'",
+    "holds": false,
+    "evidence": "Original P1 re-run (tests/out/verify-billing-terms/p1-activation.ts, 'B0 original'): invoice.paid with no account named on it, then checkout.session.completed: plan grove, balance 12, 1 payment, 90 mangroves, 'Welcome to Grove' and 'Receipt: $9.00 for 9 signatures'. So it is fixed when the two messages are handled one after the other. The author's tests cover that order and the browser coming back first.",
+    "still_broken": "Two new angles fail. (a) Two at once ('RACE checkout-first'): checkout.session.completed starts 5 ms before invoice.paid with a 20 ms provider delay. Result: plan grove, balance still 3, payment row credits 0 and refunded_cents 900, $9.00 really refunded at the provider, emails 'Welcome to Grove' then 'Refund sent: $9.00', history line 'Refund sent: $9.00: this plan was already cancelled', subscription still active at the provider. Cause: settleInvoice() reads the account, waits for GET subscriptions, then adopt() answers false because the other message adopted the same subscription a moment earlier, and false is read as 'already cancelled' (src/server/routes-billing.ts lines 746 to 751, adopt line 418). The provider sends these two messages in the same second, so this will be common. (b) Provider failing at another step ('UNMATCHED' in p5-more.ts): invoice names no account and GET invoices fails while the checkout is handled. Result after 30 timer runs and the next month's renewal: plan grove, first payment row still account_id NULL and applied_at NULL, its 9 signatures never added, never refunded, not on the Plan page, one alert only. Nothing on the timer calls claimPayments()."
+   },
+   {
+    "item": "Signatures for free: send to yourself, then change the address",
+    "holds": true,
+    "evidence": "p2-credits.ts: L1 at balance 0: honest send 402, five self-addressed envelopes each corrected to another person all 402, 0 completed, balance 0. L2 reassign on the signing screen 402. New angles: full correction (PUT) that turns an approver into a signer at zero 402; hold 12, void 5, refund them ($5.00), remaining 7 sign: balance ends 0, never negative; expire 9, refund ($9.00), reopen: 3 reopen, then 402, balance 0; hand-over of a member's own document keeps free=1 and a name fix afterwards costs nothing. A different free route still exists (in-person signer under the sender's own address), listed under new bugs."
+   },
+   {
+    "item": "A negative balance blocks signing your own documents, with a self-contradicting message",
+    "holds": false,
+    "evidence": "Original O2 re-run (p2-credits.ts 'B2 original'): available -1, sending your own document answers 200. A single approver envelope below zero also 200.",
+    "still_broken": "The same test is still wrong in three other places (p2-credits.ts and p6-recheck.ts, re-run on the latest code). Available -1: POST /bulk with a template whose only open role is an approver answers 402 'This needs 0 signatures and you have 0 left. ... Signing your own documents stays free.' (routes-envelopes.ts: perRow * rows.length > have, with 0 > -1). POST /envelopes/:id/extend to reopen an expired document addressed to yourself answers the same 402 (envelopes.ts extendEnvelope: need > have). A public form whose open role is an approver answers 503 'cannot take new signatures' at balance 0 and emails the owner that the form 'has run out of signatures', although approvals cost nothing. Fix: only refuse when need > 0."
+   },
+   {
+    "item": "The code GROWalition: a paying customer who adds it and then takes the offered refund ends up stuck",
+    "holds": true,
+    "evidence": "p4-code-tools.ts 'B3 original': subscribe, pay, redeem, refund: refunded $9.00, plan_ended false, plan grove, free_with GROWalition, top-up 200. Angles that pass: code on a cancelled-but-running plan (subscription ended at once, plan free); code while a payment is failing (open invoice voided, a late charge refunded $9.00 with reason 'your plan is free with the code'); provider down (502, nothing applied); a renewal of the old subscription landing after the redeem is refunded; dispute on a code account leaves the free plan on. A different combination does get stuck (code later switched off for someone who used to pay), listed under new bugs. The dispute email to a code account still says the monthly plan ended, listed under overclaims."
+   },
+   {
+    "item": "A mistyped code at sign-up is silently ignored",
+    "holds": true,
+    "evidence": "p4-code-tools.ts 'B4': sign-up with 'GROWaliton' answers 400 'We do not recognise that code. Check the spelling, or leave the code box empty and add it later on the Plan page.' and no user is created. A correct code is confirmed by email (author's test). Small leftover: a sign-up through an invitation with any code typed, right or wrong, answers 200 and the code is dropped without a word."
+   },
+   {
+    "item": "An event about an old subscription ends the plan while a new one is being paid for",
+    "holds": true,
+    "evidence": "p1-activation.ts 'B5 original': refund ends sub 1, sub 2 started and paid, late 'deleted' for sub 1: plan stays grove/active on sub 2, no 'ended' email, next charge kept with 9 signatures. The opposite mistake now exists: a late 'updated: active' about an old subscription is believed and turns a dead plan on ('STALE'), listed under new bugs."
+   },
+   {
+    "item": "Returning subscriber: first payment is refunded as 'already cancelled' when events arrive in the other order",
+    "holds": false,
+    "evidence": "Original P2 re-run (p1-activation.ts 'B6 original'), one message after the other: plan grove, balance 12 to 21, payment kept, 'Welcome to Grove' and a receipt, no refund.",
+    "still_broken": "With the two messages overlapping ('B6 race'): checkout.session.completed 5 ms ahead of invoice.paid, 20 ms provider delay. Result: plan grove, balance stays 12, payment row credits 0 and refunded_cents 900, $9.00 refunded at the provider, emails 'Welcome to Grove' then 'Refund sent: $9.00'. That is exactly the original symptom. Same cause as in the first item (settleInvoice lines 746 to 751)."
+   },
+   {
+    "item": "'The plan ends now' after a refund, but a failed provider call is swallowed and the customer is charged next month",
+    "holds": true,
+    "evidence": "p3-refunds.ts 'B7 original': DELETE and GET subscriptions fail once: 502 'nothing was refunded and nothing changed', plan grove, subscription active, nothing refunded, balance 12. Angle 1: plan ended, then POST refunds fails: 502 'The monthly plan has been ended ... press Refund again', balance back to 12, offer still $9.00, second press refunds $9.00 once. Angle 2: dispute while DELETE keeps failing: queued in billing_todo, and the next charge on the live subscription is refunded and the subscription ended then. Leftovers: the queued cancellation stops being retried after 40 tries (row stays tries 40, done_at NULL), and a refund whose answer is lost gives money back and leaves the signatures (new bug)."
+   },
+   {
+    "item": "Two refund requests at once pay out twice",
+    "holds": true,
+    "evidence": "p3-refunds.ts 'B8 original': $10 top-up with 4 unused, two POSTs together with a 15 ms provider delay: one 200 '$4.00', one 400, one refund of 400 at the provider, one email, balance 0, an idempotency key is sent. Angles: two different payments refunded at the same moment by two admins: $6.00 and $4.00, 10 signatures for $10.00 in total, balance 0. Refund and a send at the same moment: refund $9.00 for 9, send 200, balance 3 with 1 held."
+   },
+   {
+    "item": "Our own refund, echoed back by the provider, marks an older payment as refunded too",
+    "holds": false,
+    "evidence": "Original L6 re-run (p3-refunds.ts 'B9 original'): two $9 payments, second refunded in the app, echo with no invoice named: only the second row shows $9.00 refunded, mangroves 90. A refund made by hand lands on the right row (author's test).",
+    "still_broken": "The echo can still corrupt the record when it arrives before our own call returns ('ECHO'): 12 signatures, 8 used, refund of $4.00; charge.refunded for that charge is handled while POST refunds is still open. Result: provider refunded 400, payment row refunded_cents 800, Plan page says '$8.00 refunded', mangroves 10 instead of 50. Cause: the handler sets refunded_cents to 400, then refundPayment() adds 400 again (routes-billing.ts line 162 uses refunded_cents + cents). Fix: record the refund by its id, or set refunded_cents from the value read before the call."
+   },
+   {
+    "item": "Replaying an old checkout link turns the plan back on without paying",
+    "holds": true,
+    "evidence": "p1-activation.ts 'B10 original': subscribe, cancel, plan ended, POST /billing/sync with the old session: applied null, plan seedling, top-up 400, one welcome email. Angles: replay while GET subscriptions fails: 502, plan stays seedling. Replay of a top-up session twice plus the provider's message: balance 17, one receipt."
+   },
+   {
+    "item": "Top-ups paid with a delayed payment method are never credited",
+    "holds": true,
+    "evidence": "p1-activation.ts 'B11 original': completed with payment_status unpaid adds nothing (12), async_payment_succeeded adds 5 (17), row recorded. Angles: the success message delivered twice plus a late 'completed': still 17, one receipt. Monthly plan paid by a slow method: nothing on 'completed (unpaid)'; the provider's 'subscription active' turns the plan on with a welcome email and allows top-ups before any money has arrived (3 signatures); when the debit fails the plan ends with 'Your payment did not go through' and 'Your monthly plan has ended'. Top-ups paid in another currency are short-changed, see the Stripe doubts."
+   },
+   {
+    "item": "Money that cannot be matched, and refunds that fail, reach nobody",
+    "holds": false,
+    "evidence": "p3-refunds.ts 'B12': with SUPPORT_EMAIL unset an unmatched $9 invoice now writes one alert to the operator queue. A top-up for a deleted account is refunded and reported (author's test). L7 is fixed: the charge-after-cancel row gets credits 0 and the Plan page offers nothing for it (400), balance stays 12.",
+    "still_broken": "(a) The unmatched payment is never refunded and never mentioned again: after 80 timer runs the row is still account_id NULL, refunded 0, one alert in total. (b) The automatic refund is queued but given up for good after 40 tries: 60 failing timer runs, then the provider recovers and the timer runs 5 more times: billing_todo row tries 40, done_at NULL, refunded_cents 0, nothing refunded at the provider, one alert (after try 3), no email to the customer (routes-billing.ts line 846, 'tries < 40'). (c) The alert only reaches a person if SUPPORT_EMAIL or OPERATOR_EMAILS is set: the queue page is open only to addresses in OPERATOR_EMAILS (routes-trust.ts isOperator), so with neither set it is a console line."
+   },
+   {
+    "item": "Free-code grants: quiet months are skipped, two codes stack, a switched-off code keeps paying out",
+    "holds": true,
+    "evidence": "p4-code-tools.ts 'B13': two quiet months plus this one give 3 + 27 = 30; redeeming a second valid code leaves 30; a switched-off code adds nothing and the timer ends the plan with an email. Leftovers, all small: entering a second valid code as the first action after quiet months moves promo_at to today and the quiet months are lost (12 instead of 30); between switching a code off and the next timer run the Plan page still says 'Free with GROWalition' and names a date for the next 9 signatures that will not come; ending a code for someone who used to pay leaves the account stuck (new bug)."
+   },
+   {
+    "item": "A charge landing within an hour after the paid month ended is kept",
+    "holds": true,
+    "evidence": "p1-activation.ts 'B14 original': cancelled, end of the paid month set to 10 minutes ago, $9 invoice.paid: refunded_cents 900, credits 0, balance unchanged, 'Refund sent: $9.00'. Leftover ('B14c'): the charge is refunded but the subscription that made it is left active at the provider and nobody is told. Two such charges in a row were both refunded, billing_todo empty, no alert. It is only ended when the account already says 'canceled' (line 760)."
+   },
+   {
+    "item": "Any paid invoice adds 9 signatures, whatever its amount",
+    "holds": true,
+    "evidence": "p1-activation.ts 'B15': $0.50 adds 0, $4.50 adds 4, $8.99 adds 8, $9.72 adds 9, $18.00 adds 9, each with an operator alert 'was not the plan price', and the refund offer is the amount paid. Leftovers: the currency is ignored (an invoice of 900 yen adds 9 signatures and the receipt reads 'Receipt: \u00a59 for 9 signatures'; 850 euro cents add 8), and the Plan page counts those cents as dollars for mangroves. A first invoice of 0 (full discount) turns the plan on with no signatures and no receipt."
+   },
+   {
+    "item": "Stopping by card: guess limits rest on a header the caller controls",
+    "holds": true,
+    "evidence": "p7-ip.ts: eight guesses with a different made-up address on the left of X-Forwarded-For each time and the proxy's entry constant: 404 five times, then 429. p4-code-tools.ts: the per-email limit holds across addresses (five 404, then 429 from a second address too). Stop links die when their admin is removed (author's test). Limits are still in memory and reset on restart. With TRUSTED_PROXY_HOPS=0 everyone shares one budget of 5 an hour. The new path without an email (card digits, date, amount) is weak by design: every plan charge is $9.00 and the date window is five days, so the four digits are the only secret; a match cancels a stranger's renewal (the owners are emailed and can resume)."
+   },
+   {
+    "item": "Overclaim: receipt emails say unused signatures from this payment are refunded in full within 30 days from the Plan page",
+    "holds": false,
+    "evidence": "p3-refunds.ts 'OC0': after a later top-up, the older monthly payment is refunded by naming it: 200, $9.00. The Plan page lists a refund link per payment.",
+    "still_broken": "One self-serve refund per payment (self_refund_at) is a rule nobody is told. 'OC0 angle': 12 signatures, 5 held, refund gives $7.00; the 5 envelopes are voided and the signatures come back (5 unused, $2.00 of the $9.00 kept); the page offers nothing and POST /billing/refund answers 400 '... There is nothing unused inside that window for this payment right now ... use the contact form'. The sentence in every receipt says 'refunded in full ... without talking to anyone'."
+   },
+   {
+    "item": "Overclaim: Plan page 'Every billing email has a link that stops the renewal without logging in'",
+    "holds": true,
+    "evidence": "The sentence now says 'While a plan is renewing, every email about a payment'. p4-code-tools.ts 'LINKS': welcome, monthly receipt, top-up receipt, 'Your monthly payment did not go through', 'Your payment did not go through', the reminder and 'Refund sent' all contain /billing/stop?token=. A second admin gets a link of their own (author's test)."
+   },
+   {
+    "item": "Overclaim: 'Charged after cancelling? ... the software refunds it by itself' and 'If a charge ever appears after this date, we refund it automatically'",
+    "holds": false,
+    "evidence": "P15 (within the hour) and O1 (refund with a failed provider call) are fixed, see above. A failing refund is now queued and retried.",
+    "still_broken": "The page now adds 'and keeps trying until the refund has gone through' (settings/page.tsx line 506, help/page.tsx lines 125 and 134). It stops after 40 tries: after the provider recovered the refund was never made and the customer never told (p3-refunds.ts 'B12 / OC2'). Also a refund made this way does not end the subscription that charged (see the item on the hour of grace)."
+   },
+   {
+    "item": "Overclaim: top-up error text 'Start it for $9.00 a month and you get 9 signatures straight away'",
+    "holds": false,
+    "evidence": "Author's test: POST /billing/sync with a session that names its invoice answers applied 'plan' and balance 12.",
+    "still_broken": "p6-recheck.ts 'STRAIGHT': one failed GET invoices while the browser comes back: applied 'plan', plan grove, balance 3; the page then thanks for the payment while the signatures are missing until the provider's message arrives. With the overlap described in the first item the signatures never arrive and the money is sent back."
+   },
+   {
+    "item": "Overclaim: toast 'Welcome to the monthly plan. Thank you for planting mangroves.' / 'Signatures added.' shown whatever happened",
+    "holds": true,
+    "evidence": "Browser run (tests/out/verify-billing-terms/shots/plan-return-unconfirmed-desktop.png): returning with a session that cannot be confirmed shows 'We could not confirm that payment yet. If you paid, it shows here within a minute and nothing is charged twice. If it does not, contact us.' Small leftover: opening the old return link again a week later answers applied 'plan' again, so the thank-you toast is shown every time (p5-more.ts 'AGAIN')."
+   },
+   {
+    "item": "Overclaim: code accounts '9 signatures are added to your balance every month at no charge'",
+    "holds": true,
+    "evidence": "Quiet months are now made up (30 after two quiet months). The page says when the next ones come. For a viewer west of UTC the page reads '...at the start of every month at no charge (the next on November 30, 2026)', see screens."
+   },
+   {
+    "item": "Overclaim: 'There is no card on file for the plan and nothing to cancel'",
+    "holds": false,
+    "evidence": "The Plan page no longer says it, the code-accepted email tells a former payer 'The card you paid with is still saved in case you top up. You can remove it on the Plan page', and the page shows 'Remove card' for a code account that has a customer (screenshot plan-free-code-was-paying-desktop.png).",
+    "still_broken": "The help page still says it for everyone: src/app/help/page.tsx line 155, 'With a code ... nothing is charged. There is no card on file for it and nothing to cancel. If you were paying before, the renewal is stopped for you.' For someone who was paying, the card stays with the provider until they remove it."
+   },
+   {
+    "item": "Overclaim: Plan page heading 'The rules, all of them'",
+    "holds": false,
+    "evidence": "The Plan page now has 'The limits, as numbers': 500 per top-up, 500 bulk rows, top-ups need the monthly plan, 50 people a day in the first week.",
+    "still_broken": "Still missing there: one self-serve refund per payment; the limit of 200 people a day after the first week for accounts that have not paid (src/lib/policy.ts unpaidDailyRecipients, added by the abuse work during this review). The words '(that is you, for now)' are still shown to a first-week code account after it paid $100 for a top-up, although 51 people were then sent to on day one without refusal (p4-code-tools.ts 'GROLIMIT': billingState.limits.first_week_daily stays 50). The landing page has its own 'The rules, all of them' (src/app/page.tsx) with none of the limits."
+   },
+   {
+    "item": "Overclaim: 'Signing your own documents stays free.' and 'This envelope uses none of your signatures.'",
+    "holds": false,
+    "evidence": "Sending your own document below zero now works (200).",
+    "still_broken": "The sentence 'Signing your own documents stays free.' is still printed inside the 402 'This needs 0 signatures and you have 0 left' that refuses a bulk send of approvals and the reopening of an expired own document when available is -1 (p6-recheck.ts 'RECHECK below zero')."
+   },
+   {
+    "item": "Overclaim: 'You have used all your signatures' email says 'Your plan adds 9 more with each monthly payment' to code accounts",
+    "holds": true,
+    "evidence": "p2-credits.ts 'TOLD code account': the email now reads 'Your plan is free with the code GROWalition: 9 more arrive at the start of next month at no charge, and you can top up any time at $1 a signature.' The old sentence is still sent to a plan that has been cancelled and will take no further payment, listed under overclaims."
+   },
+   {
+    "item": "Overclaim: refund answer 'plan_ended: true' and 'the plan ends now' even when the provider call failed",
+    "holds": true,
+    "evidence": "p3-refunds.ts: provider cannot end the subscription: 502, plan grove, nothing refunded. Second try: plan_ended true and the subscription is cancelled at the provider. Related leftover: 'Remove card' cancels the plan first and then fails with 502 when the provider cannot list the cards, so the customer sees an error while the plan has been cancelled and the cancellation email sent ('CARD')."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "A legitimate first payment is refunded as 'already cancelled' when the checkout message and the paid-invoice message overlap",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts settleInvoice() lines 746 to 751 and adopt() lines 414 to 442",
+    "detail": "Steps (tests/out/verify-billing-terms/p1-activation.ts, 'RACE checkout-first' and 'B6 race'): new account; stripe.delayMs = 20; start applyStripeEvent(checkout.session.completed) and 5 ms later applyStripeEvent(invoice.paid) for the same subscription. Result: plan grove, balance 3 (no signatures added), payment row credits 0 / refunded_cents 900, $9.00 refunded at the provider, emails 'Welcome to Grove' then 'Refund sent: $9.00', plan history 'Refund sent: $9.00: this plan was already cancelled', subscription left active. Same for a returning subscriber. In the opposite order, and with the browser's /billing/sync in the mix, nothing is refunded but 'Welcome to Grove' is sent twice and 'Monthly plan started' is logged twice. Why: both paths read the account before waiting for the provider; whichever resumes second sees the subscription already adopted, adopt() returns false, and settleInvoice() treats false as 'should never have been charged'. The real provider sends both messages within the same second, and each handler waits for a provider call, so this will hit a large share of new subscribers. Fix: in settleInvoice(), after adopt(), re-read the account and refund only if it is still not on subscription S (or S is not alive); make adopt() re-read the account after its provider call, change the row with one conditional UPDATE, and send the welcome only when that UPDATE changed a row. Add a test with stripe.delayMs and Promise.all in both orders."
+   },
+   {
+    "title": "A card dispute returns the money and leaves every signature in place (up to 500 per top-up), automatically",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts handleEvent(), charge.dispute.created, lines 967 to 985",
+    "detail": "Steps (p3-refunds.ts 'DISPUTE'): subscribe, top up 500 signatures for $500.00 (balance 512), deliver charge.dispute.created for the top-up's charge. Result: the dispute is closed in the customer's favour by the software (disputes/dp_big/close), payment marked $500.00 refunded, balance still 512 available, a new envelope still sends (200), email says 'the signatures you have stay yours' and 'you can start the plan again from the Plan page at any time'. Anyone can repeat this: pay, dispute, keep the signatures, start again; the business also pays the bank's dispute fee each time. Fix: when a dispute is accepted, take back the unused signatures of that payment (the same sum a refund would take), pause sending for a person to review when used signatures exceed what was paid for, and do not offer to start again without review. Consider not auto-accepting disputes on top-ups."
+   },
+   {
+    "title": "Refund whose answer is lost on the way back: the money goes back and the signatures stay",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/refund catch block lines 565 to 570, charge.refunded lines 956 to 962",
+    "detail": "Steps (p5-more.ts 'LOST 2', with a wrapper that lets the stand-in carry out POST refunds and then answers 504): subscribe (12 signatures), POST /billing/refund. Result: 502 'The monthly plan has been ended ... but the refund itself did not go through just now. Nothing is lost: press Refund again in a minute.', $9.00 refunded at the provider, the 9 signatures put back (balance 12). Then the provider's charge.refunded arrives: payment shows '$9.00 refunded', no offer left, balance still 12, and 12 envelopes were sent afterwards. 'LOST 3': if the customer holds 4 signatures and presses Refund again, the amount is now $8.00, the idempotency key differs (sg-refund-in_2_1-0-800), and the provider answers 'Refund amount is greater than what is left on the charge.' on every try (502 shown raw to the customer). Fix: when the outcome of POST refunds is unknown (network error, timeout, 5xx), keep the signatures out and the claim in place, queue the payment in billing_todo, and settle it by asking the provider for the refunds on that charge or by the charge.refunded message; in the charge.refunded handler, when a refund appears that is not on record for a payment with credits, deduct the signatures."
+   },
+   {
+    "title": "A free code that is switched off leaves former payers stuck: the Start button fails and the account is treated as a paid plan on hold",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts endRemovedCodes() line 353, hasSub() line 69, POST /billing/checkout line 373",
+    "detail": "Steps (p4-code-tools.ts 'CODEOFF'; browser shots plan-code-ended-was-paying-*.png and stop-code-ended-was-paying-*.png): subscribe and pay, redeem GROWalition, set FREE_PLAN_CODES to another code, run the timer. Result: account plan seedling, subscription_status NULL, old stripe_subscription_id kept, so hasSub() is true. The email says 'To keep getting 9 signatures a month you can start the monthly plan for $9.00' and carries a 'Do not renew' link although nothing renews. The Plan page shows 'Not started' and 'Start the monthly plan for $9'; pressing it gives 400 'The last payment for this plan did not go through. Update the card ... or cancel the plan first and start again.' There is no Cancel button in that state. 'Find my subscription' lists it as 'Stop renewal for ... $9.00 a month'; the stop page says 'Grove, $9 a month (on hold: the last payment did not go through)'. POST /billing/cancel on it sends 'The last payment had not gone through, so the plan ends today and that payment will not be tried again', none of which is true; only after that does checkout work. Fix: endRemovedCodes() should set subscription_status='canceled' (or clear stripe_subscription_id), and hasSub() should not count an empty status. Add this combination to the code test."
+   },
+   {
+    "title": "Closing an account: former payers on the free code can never close, and a plan on hold is not stopped and can still charge during the 30 days",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts POST /me/delete (the block that calls DELETE subscriptions itself, around line 219); stopBillingFor() in routes-billing.ts line 209 is exported and never used",
+    "detail": "Steps (p6-recheck.ts 'RECHECK closing an account', run on the latest code). (a) Subscribe, pay, redeem GROWalition, POST /me/delete with the right password. Result: 502 'We could not stop your subscription with the payment provider just now, so nothing was closed. Try again in a minute, or cancel the plan first.', every time, because the old subscription is already gone at the provider and the DELETE fails; POST /billing/cancel answers 400 'nothing to cancel'. The account cannot be closed. (b) Subscribe, provider marks the subscription 'unpaid' (plan on hold), POST /me/delete. Result: 200, email 'Any subscription has been stopped and you will not be charged again', but the subscription is still 'unpaid' at the provider because the code only acts when plan is 'grove'. The provider's retry then succeeds: invoice.paid is accepted, plan back to grove/active, $9.00 kept, 'Receipt: $9.00 for 9 signatures' sent to a person who closed the account. Fix: call stopBillingFor(account) for every owned account (it handles 'already gone' and queues a retry), set the account to canceled when it returns, and in settleInvoice() refund and end the subscription when the account has closing_at set."
+   },
+   {
+    "title": "'We stop the renewal and tell you, with one click to keep it': the click is undone at the next timer run",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts remindRenewal() lines 810 to 820 (the dormant branch never marks the renewal as handled), POST /billing/resume",
+    "detail": "Steps (p5-more.ts 'DORMANT 2'): account older than 90 days with nothing sent, renewal in 6 days, run the timer: renewal stopped, email 'We stopped your renewal ... one click on the Plan page turns it back on'. Customer presses 'Keep the plan after all' (POST /billing/resume 200). Run the timer again: stopped again, second email. Repeated three times: 4 'We stopped your renewal' emails, 4 different references, the plan ends up cancelled. The customer cannot keep the plan unless they send an envelope. Fix: remember the choice. On resume record that this renewal was kept (for example a flag next to renewal_reminded for that date) and skip the dormant stop for that renewal; also write the stage in the dormant branch so one renewal is stopped at most once."
+   },
+   {
+    "title": "Signatures for free: an in-person signer entered under the sender's own email address",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/credits.ts isChargeable() lines 71 to 72 and reserved(); sendEnvelope() in src/server/envelopes.ts sets free=1 whenever the address equals the sender's",
+    "detail": "Steps (p2-credits.ts 'INPERSON', again in p6-recheck.ts): balance 0. Create an envelope with one recipient {role:'inperson', name:'Walk-in Client', email: the sender's own address} and one signature field, send, complete. Result three times in a row: send 200, signing 200, envelope completed with signer 'Walk-in Client', balance 0, no 'Signature used' line. The same envelope with the client's own address is refused: 402 'This needs 1 signature and you have 0 left'. In-person signing is by definition somebody else signing on the sender's device, and the notice for it already goes to the sender, so typing the sender's address is the natural thing to do. Fix: never treat role 'inperson' as the sender's own signature (free only for role 'signer' at the sender's address), in isChargeable(), reserved() and where free is stored."
+   },
+   {
+    "title": "Against the real provider every top-up is recorded twice: mangroves and the public total are overstated and operators get a false alarm",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/topup ('invoice_creation[enabled]': 'true', line 403) together with settleInvoice() lines 715 to 741",
+    "detail": "The top-up asks the provider to create an invoice. The provider then also announces that invoice as paid (invoice.paid, billing reason 'manual'), and the README tells the operator to subscribe to invoice.paid. The stand-in never sends it. Steps (p4-code-tools.ts 'TOPINV'): subscribe, deliver checkout.session.completed for a $10 top-up, then invoice.paid {id:'in_topinv', billing_reason:'manual', amount_paid:1000, same customer}. Result: a second payment row in_topinv of kind 'other' for $10.00 with 0 signatures (the Plan page lists it as 'Monthly plan, 0 signatures'), mangroves go from 90 to 290 instead of 190, the public total rises by $20, and operators get 'An invoice that is not the monthly plan was paid by ... No signatures were added for it. If it was meant to buy signatures, add them or refund it.' Refunding the top-up afterwards leaves the second row counting: mangroves 190 instead of 90. I am fairly sure (not certain, I could not call the provider) that it sends this message. Fix: in settleInvoice() return early when the invoice's charge or payment already belongs to a top-up row, or mark the invoice at checkout (invoice_creation[invoice_data][metadata][kind]=topup) and use the message only to store the invoice link on the top-up row."
+   },
+   {
+    "title": "A late message about an old, dead subscription turns the plan on without payment",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts customer.subscription.updated lines 924 to 931 and adopt() line 419 (trusts the copy inside the message)",
+    "detail": "Steps (p1-activation.ts 'STALE'): subscribe (sub 1), refund (ends it), subscribe again (sub 2), refund (ends it): plan seedling, canceled. Deliver customer.subscription.updated {id: sub 1, status:'active'} created a day earlier (the provider retries failed deliveries for days). Result: plan grove, status active, stripe_subscription_id sub 1 (canceled at the provider), a third 'Welcome to Grove', top-up allowed (200), dollars kept 0. Fix: for a subscription that is not the account's current one, never use the message's copy; ask the provider for the subscription's state now."
+   },
+   {
+    "title": "The app's own cancel and resume are not protected against older provider messages",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts cancelPlan() line 295 and POST /billing/resume line 533 do not set sub_event_at; handler lines 934 to 943",
+    "detail": "Steps (p1-activation.ts 'WIPE'): subscribe, POST /billing/cancel (cancel_at set, provider has cancel_at_period_end true), then deliver an older customer.subscription.updated for the same subscription (created 30 s earlier, cancel_at_period_end false). Result: cancel_at wiped, the Plan page shows the plan as renewing while the provider will end it, and the timer sends 'Heads up: your plan renews on ... for $9.00' to someone who cancelled. It heals when the provider's own message about the cancellation arrives after the old one. Fix: store the time of the app's own change in sub_event_at when cancelling or resuming."
+   },
+   {
+    "title": "Overlapping clicks send duplicate emails and log lines",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts cancelPlan(), redeemCode(), adopt()",
+    "detail": "p4-code-tools.ts: two POST /public/billing/stop at once: two 'Your Grove plan is cancelled' emails. Two POST /billing/redeem at once on a paying account: two 'Code GROWalition accepted' emails and two 'Cancelled' history lines. Overlapping checkout messages: two 'Welcome to Grove'. Fix: change the row with a conditional UPDATE and send only when it changed a row."
+   },
+   {
+    "title": "Refund offered on a payment whose signatures were never added",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts offerFor() lines 127 to 139 (does not look at applied_at)",
+    "detail": "Steps (p5-more.ts 'WEBHOOK a paid invoice ...'): invoice.paid for an account whose subscription lookup fails (502 each time, the provider will retry). The payment row exists with applied_at NULL and the Plan page offers 'Refund $3.00: 3 of its 9 signatures have not been used', which would take the 3 welcome signatures. Fix: offer nothing while applied_at is empty."
+   },
+   {
+    "title": "When the provider cannot be reached, the card tools say the details are wrong",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /public/billing/stop-by-card line 661 and accountsByCard() line 638 (.catch returns an empty list)",
+    "detail": "Steps (p4-code-tools.ts 'TOOLS provider down'): correct email and last four digits while GET payment_methods fails: 404 'Those details do not match a paid plan. Check them against your card statement ...'. Same with card, date and amount while the search fails. A locked-out payer is told their details are wrong. Fix: answer 502 'try again in a minute' when the provider call failed."
+   },
+   {
+    "title": "Cancelling on the provider's own page gives no confirmation, no reference and no history line",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts customer.subscription.updated lines 941 to 943",
+    "detail": "The Plan page links to the provider's page ('Invoices and card'), where a customer can cancel. Steps (p5-more.ts 'PORTAL'): deliver customer.subscription.updated with cancel_at_period_end true. Result: ends_at set, cancel_ref null, 0 emails, history only 'Monthly plan started'. Fix: when this message first sets the end date, make a reference, log it and send the cancellation email."
+   },
+   {
+    "title": "Amounts in other currencies are shown and counted wrongly",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts money() line 26, applyTopUp() line 461, settleInvoice() line 717, billingState() mangroves line 217",
+    "detail": "p1-activation.ts: a top-up reported as 1500 yen is mailed as 'Receipt: \u00a515 for 10 signatures'; an invoice of 900 yen adds 9 signatures and reads 'Receipt: \u00a59 for 9 signatures'; mangroves add up cents of every currency as US cents. Fix: refuse or convert non-USD amounts (the provider reports the merchant-currency amount separately), and format zero-decimal currencies correctly."
+   }
+  ],
+  "stripe_doubts": [
+   {
+    "what": "A top-up created with invoice_creation[enabled]=true makes Stripe create and pay an Invoice, and send invoice.paid for it (billing_reason 'manual'). The code treats that as a second payment.",
+    "why": "Post-payment invoices from Checkout are ordinary Invoice objects and go through the normal invoice events; the README tells the operator to subscribe to invoice.paid. The stand-in never emits events on its own, so no test sees it. Simulated in p4-code-tools.ts 'TOPINV': double row, mangroves 290 instead of 190, false operator alert.",
+    "confidence": "likely",
+    "suggested_fix": "Mark the invoice at checkout with invoice_creation[invoice_data][metadata][kind]=topup and return early from settleInvoice() for it (store only its link on the top-up row), or match on the charge/payment already recorded."
+   },
+   {
+    "what": "Newer API versions (2025-03-31 'basil' and later, the default for a new Stripe account) no longer put charge or payment_intent on the Invoice, nor invoice on the Charge. chargeOf() then finds nothing and chargeTarget() refunds 'the newest unrefunded charge of the same amount'.",
+    "why": "The code reads invoice.payments only if it is expanded, and webhook payloads are not expanded. Simulated in p5-more.ts 'SAME AMOUNT': monthly payment in the new shape (understood: plan on, 12 signatures) plus a $9 top-up; refunding the monthly payment sent the refund to the top-up's charge (ch_cs_same_top), and the monthly charge was never refunded. The stand-in then allowed a second refund on the same charge because it tracks charge and payment_intent separately; the real API refuses it ('already refunded'), so the second refund would fail for the customer.",
+    "confidence": "likely",
+    "suggested_fix": "When a payment has no charge on record, fetch it: GET /v1/invoice_payments?invoice=in_... (or GET the invoice with expand[]=payments) and store the payment_intent. Never match by amount when more than one candidate exists. Send a Stripe-Version header so the shape is known."
+   },
+   {
+    "what": "The idempotency key on refunds makes the timer's retries return the first failure again for 24 hours.",
+    "why": "Stripe stores the first result for a key, including 5xx and most 4xx answers produced after the request started executing, and replays it for 24 hours. The retry in billingRetries() uses the same key (sg-refund-<payment>-<refunded>-<cents>). With the 40-try limit and a timer that runs hourly or more often, a refund that failed once at Stripe gets one or two real attempts in total, then is dropped.",
+    "confidence": "likely",
+    "suggested_fix": "Before retrying, list refunds for the charge (GET /v1/refunds?charge=...) to see whether it already exists; if not, retry with a key that includes the attempt day. Remove the 40-try limit or alert again when it is reached."
+   },
+   {
+    "what": "Checkout may charge a top-up in the customer's own currency (Adaptive Pricing); session.amount_total and session.currency are then in that currency.",
+    "why": "applyTopUp() caps the signatures at floor(amount_total / 100), assuming US cents. Simulated in p1-activation.ts: 10 signatures paid as GBP 7.90 are credited as 7 ('Receipt: \u00a37.90 for 7 signatures'). Whether this happens depends on the account's Adaptive Pricing setting, which is on by default for many accounts.",
+    "confidence": "likely",
+    "suggested_fix": "Send adaptive_pricing[enabled]=false on both checkouts, or read the merchant-currency amount from session.currency_conversion and refuse a top-up whose currency is not usd."
+   },
+   {
+    "what": "DELETE /v1/subscriptions/{id} on a subscription that is already cancelled returns an error, not the subscription.",
+    "why": "routes-billing.ts handles this ('No such subscription' counts as gone, else it re-reads the status). routes-trust.ts POST /me/delete does not: any non-2xx answer blocks closing. I believe Stripe answers 404 resource_missing here; the stand-in does the same. If Stripe instead answers 400 with another message, endSubscription() still copes through its GET, but closing an account stays blocked.",
+    "confidence": "likely",
+    "suggested_fix": "Use stopBillingFor() in POST /me/delete."
+   },
+   {
+    "what": "'Remove card' and stop-by-card with an email only look at payment methods of type card.",
+    "why": "Checkout offers Link, wallets and bank debits depending on dashboard settings. Those are not listed by GET /v1/payment_methods?type=card. POST /billing/remove-card then answers {removed: 0} (p3-refunds.ts 'CARD') and the page still prints 'Card removed. Nothing can be charged to it.'; stop-by-card with an email cannot match such a payer at all.",
+    "confidence": "likely",
+    "suggested_fix": "List without the type filter and detach everything; say so on the page when nothing was removed; set payment_method_types=['card'] on the checkouts if only cards are wanted."
+   },
+   {
+    "what": "The charge search used by stop-by-card and the operator lookup.",
+    "why": "Query sent: payment_method_details.card.last4:9911 AND status:'succeeded' AND created>... AND created<... AND amount:900. The fields exist in Stripe's search language as far as I know, but: digits are sent unquoted, so last four digits starting with 0 may be read as a number; search is not available in every region and lags behind real time by up to a minute or more; only the first 50 results are read (has_more is ignored); errors are swallowed and reported as 'details do not match'. The stand-in ignores the date entirely (a charge date of 2019-01-01 stopped a plan in p4-code-tools.ts), so the date window has never been exercised.",
+    "confidence": "unsure",
+    "suggested_fix": "Quote the value (last4:\"0042\"), page through results, return 502 on failure, and try it in test mode before launch."
+   },
+   {
+    "what": "Webhook signature check during a secret roll.",
+    "why": "While a rolled secret is kept alive Stripe sends one v1 signature per secret in the same header. verifyStripeSignature() keeps only the last v1 (Object.fromEntries). p5-more.ts 'WEBHOOK': good signature first and another after it: 400; good one last: 200. Every delivery could be refused for up to 24 hours after rolling the secret.",
+    "confidence": "likely",
+    "suggested_fix": "Collect all v1 values and accept if any matches."
+   },
+   {
+    "what": "The top-up's invoice link.",
+    "why": "applyTopUp() reads s.invoice from checkout.session.completed. With invoice_creation the invoice is made after the payment, and I am not sure the id is already in that message. If it is not, the receipt has no invoice link, and a later /billing/sync cannot add it because the function returns as soon as the row exists (p4-code-tools.ts 'TOPLINK': receipt_url stays null).",
+    "confidence": "unsure",
+    "suggested_fix": "Store the link when the invoice's own message arrives, or when sync sees an invoice on a row that has none."
+   },
+   {
+    "what": "A cancellation expressed as cancel_at (a date) instead of cancel_at_period_end.",
+    "why": "The dashboard's 'cancel on a date' and possibly newer portal versions set cancel_at. The handler only reads cancel_at_period_end, so the Plan page shows the plan as renewing and the timer sends 'Heads up: your plan renews on ... for $9.00' for a plan that will end (p5-more.ts 'PORTAL cancel_at').",
+    "confidence": "unsure",
+    "suggested_fix": "Treat a cancel_at in the future as a planned end too."
+   },
+   {
+    "what": "No timeout and no pinned API version on calls to Stripe; network failures surface as a generic error.",
+    "why": "stripe() uses fetch with no AbortSignal and no Stripe-Version header. When the host cannot be reached fetch throws, which is not an HttpError, so the customer sees 'Something went wrong on our side ...' instead of the careful 'the payment provider did not confirm' texts (seen in the browser run: Cancel plan and the stop page, with no provider reachable). A hanging connection holds the request and the webhook open.",
+    "confidence": "sure",
+    "suggested_fix": "Add AbortSignal.timeout(15000), catch network errors in stripe() and throw bad(..., 502), and send a fixed Stripe-Version."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Plan page rules list (/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx line 506); help page lines 125 and 134; comment at the top of routes-billing.ts",
+    "claim": "'If it does, the software refunds it by itself, and keeps trying until the refund has gone through.'",
+    "reality": "It tries 40 times and then never again (routes-billing.ts line 846). After 60 failing timer runs the provider recovered and 5 more runs changed nothing: nothing refunded, no email to the customer, one operator alert from try 3 (p3-refunds.ts 'B12 / OC2')."
+   },
+   {
+    "where": "Plan page rules list line 505; help page line 138; email 'We stopped your renewal so you are not charged for nothing'",
+    "claim": "'we stop the renewal and tell you, with one click to keep it' and 'one click on the Plan page turns it back on'",
+    "reality": "The next timer run stops it again and sends the email again; after three clicks the plan was still cancelled, with 4 emails (p5-more.ts 'DORMANT 2')."
+   },
+   {
+    "where": "Plan page rules list line 506; help page line 134",
+    "claim": "'The same goes for being charged twice, or more than the reminder said.'",
+    "reality": "Only when a reminder amount is on record. With no reminder sent (timer not called), a renewal of $19.00 was kept in full: refunded 0, 9 signatures, 'Receipt: $19.00 for 9 signatures', operators alerted only (p6-recheck.ts 'MORE'). 'Charged twice' covers a second subscription only; the same top-up paid twice from two tabs is kept twice (p6-recheck.ts 'TWICE')."
+   },
+   {
+    "where": "Help page, 'Can I get a refund?' (/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx lines 131 to 132); every receipt; checkout text",
+    "claim": "'Signatures you have not used are refunded in full within 30 days of the payment that bought them, from the Plan page, without talking to anyone.' and, one bullet later, 'It covers your latest payment'",
+    "reality": "The two bullets contradict each other (any payment in the window can be refunded by naming it). And each payment can be refunded once only: signatures that come back after that (voided or expired envelopes) cannot be refunded, the answer is 400 'use the contact form' (p3-refunds.ts 'OC0 angle')."
+   },
+   {
+    "where": "Help page, 'I was given a code' (src/app/help/page.tsx line 155)",
+    "claim": "'There is no card on file for it and nothing to cancel.'",
+    "reality": "For someone who was paying before, the card stays saved with the provider until they press 'Remove card'; the code-accepted email itself says so."
+   },
+   {
+    "where": "Landing page, 'The rules, all of them' (/home/user/treegens-app/sign-and-grow/src/app/page.tsx)",
+    "claim": "'The rules, all of them'",
+    "reality": "None of the limits are there: 50 people a day in the first week and 200 a day after it for accounts that have not paid, 500 signatures per top-up, 500 rows per bulk send, one refund per payment. The Plan page list also lacks the 200-a-day rule and the one-refund rule."
+   },
+   {
+    "where": "Plan page rules list line 507 and billingState().limits in routes-billing.ts line 247",
+    "claim": "'an account that has not paid anything can send to 50 people a day in its first week (that is you, for now); a payment ... lifts that'",
+    "reality": "After a first-week code account paid $100 for a top-up, the limit was lifted (51 people sent to, none refused) but the page still says '(that is you, for now)' (p4-code-tools.ts 'GROLIMIT'): first_week_daily ignores payments."
+   },
+   {
+    "where": "Email 'We stopped all billing on your account' (routes-billing.ts lines 979 to 983)",
+    "claim": "'Your monthly plan has ended and nothing more will be charged.'",
+    "reality": "Sent in those words to an account on the code GROWalition after a disputed top-up; its plan stays on and free (p3-refunds.ts 'DISPUTEGRO': plan grove, free_with GROWalition)."
+   },
+   {
+    "where": "Email 'You have used all your signatures' (sendEnvelope in src/server/envelopes.ts)",
+    "claim": "'Your plan adds 9 more with each monthly payment, and you can top up any time at $1 a signature.'",
+    "reality": "Sent to an account whose plan is cancelled and will take no further payment (p2-credits.ts 'TOLD cancelled plan')."
+   },
+   {
+    "where": "Answer of POST /billing/refund when the refund call fails after the plan was ended (routes-billing.ts line 568)",
+    "claim": "'the refund itself did not go through just now. Nothing is lost: press Refund again in a minute.'",
+    "reality": "When only the answer was lost the money did go back ($9.00 at the provider), and pressing again after using or holding a signature fails every time with the provider's raw text 'Refund amount is greater than what is left on the charge.' (p5-more.ts 'LOST 3')."
+   },
+   {
+    "where": "Emails after a code is switched off, for someone who used to pay (endRemovedCodes and cancelPlan in routes-billing.ts)",
+    "claim": "'To keep getting 9 signatures a month you can start the monthly plan for $9.00.' with a 'Do not renew: Stops the monthly plan in one click' link; and after cancelling: 'The last payment had not gone through, so the plan ends today and that payment will not be tried again.'",
+    "reality": "Starting the plan answers 400; nothing is renewing; there was no failed payment (p4-code-tools.ts 'CODEOFF')."
+   },
+   {
+    "where": "Reminder email subject and heading (remindRenewal, routes-billing.ts lines 805 and 824)",
+    "claim": "'Tomorrow: your plan renews for $9.00' / 'Your plan renews tomorrow'",
+    "reality": "Sent for any renewal within 36 hours: 30 minutes before the charge and 35 hours before it both got 'Tomorrow' (p5-more.ts 'LATE'). The date in the body is right."
+   },
+   {
+    "where": "Plan page notice after 'Remove card' (src/app/app/settings/page.tsx line 374)",
+    "claim": "'Card removed. Nothing can be charged to it.'",
+    "reality": "Printed whatever the server answered. With nothing of type card on file the server answers {removed: 0} (p3-refunds.ts 'CARD')."
+   },
+   {
+    "where": "README, SUPPORT_EMAIL row, and the comment above tellOperators() in routes-billing.ts",
+    "claim": "'Those alerts ... always appear in the operator queue, so they are seen even when this is not set.'",
+    "reality": "The queue can only be opened by addresses in OPERATOR_EMAILS (default nobody). With neither variable set an alert is a database row nobody can see and a console line."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/help/tools.tsx, comment on billDay(), used by the stop page",
+    "claim": "'Billing dates are whole days in UTC, written the same way as in our emails so the two never disagree.'",
+    "reality": "Emails now use each reader's own time zone. For a reader in Los Angeles with a renewal at 02:00 UTC the email and the Plan page say December 1, 2026 and the stop page opened from that email says December 2, 2026, with no mention of UTC."
+   },
+   {
+    "where": "Operator alert for an invoice that is not the monthly plan (routes-billing.ts line 739)",
+    "claim": "'No signatures were added for it. If it was meant to buy signatures, add them or refund it.'",
+    "reality": "Against the real provider this would be raised for the invoice of every ordinary top-up, whose signatures were already added; following the advice doubles the signatures or refunds a good payment."
+   }
+  ],
+  "screens": [
+   "How this was looked at: dev server on port 3442 with no payment provider behind it, accounts put into each state in the SQLite file, Playwright at 390x844 (phone) and 1280x900 (desktop), browser time zone America/Los_Angeles. Script tests/out/verify-billing-terms/ui.cjs, pictures in tests/out/verify-billing-terms/shots/, text in ui-notes.json. Server stopped and .next-verify-verify-billing-terms deleted. States seen: new account, on the plan, cancelled, payment failed (plan still on), payment failed (plan on hold), free with the code, free with the code after paying before, after a refund, code ended for a former payer, more out than paid for, plain member. The round black 'N' in the pictures is the Next.js development badge, not part of the product.",
+   "Phone, every state with a payment: the Payments table is wider than its card (379 to 413 px in 360). The last column is cut off at the right edge ('Invoic', 'Refunc $25.00') and can only be reached by dragging the table sideways, with nothing to show that it moves. That column holds the only way to refund an earlier payment.",
+   "Phone, Plan history: the reference column is cut off ('sub__K8Q', 're_3NvK'), although the reference is the point of the table; the date column takes half the width and the description is squeezed to one or two words a line ('Refund / sent / $123.00: / 123 of its / 300 / signatures ...'). With a long refund reference the table is 671 px wide in a 360 px card.",
+   "Phone, all states: the tab row is wider than the window (636 in 362). The open tab 'Plan' shows as 'Pl' at the right edge; 'Your data' and 'API and webhooks' are out of sight with no hint that the row scrolls.",
+   "Dates disagree for the same moment (renewal at 02:00 UTC, viewer in Los Angeles), both sizes: the Plan page says 'Next charge: $9.00 on December 1, 2026 at 6:00 PM' and the email says 'next charge December 1, 2026', but the stop page opened from that email says 'Next charge $9 on December 2, 2026' and, when cancelled, 'ends on December 2, 2026'. On the Plan page itself the card says 'The plan runs until December 1, 2026' while Plan history says 'Runs until 2026-12-02'.",
+   "Cancelled state, both sizes: the end is given as a day only ('The plan runs until December 1, 2026', badge 'Ends Dec 1, 2026'), while the active state and the cancel dialog give the minute ('December 1, 2026 at 6:00 PM').",
+   "Free with the code, both sizes, viewer west of UTC: '9 signatures are added to your balance at the start of every month at no charge (the next on November 30, 2026)'. The start of the month is printed as the last day of the month before.",
+   "Payment failed with the plan on hold, both sizes: the Top up card says 'Top-ups come with the monthly plan. Start the plan above and you can add signatures whenever you need them.' There is no start button above in this state, only 'Update the card' and 'Cancel plan'.",
+   "Code ended for a former payer, both sizes: badge 'Not started' and a green 'Start the monthly plan for $9' button. Pressing it shows 'The last payment for this plan did not go through. Update the card with \"Invoices and card\" on the Plan page, or cancel the plan first and start again.' No payment failed and there is no Cancel button on the page. The stop page for the same account says 'Grove, $9 a month (on hold: the last payment did not go through)'.",
+   "More out than paid for, both sizes: the page shows '0 signatures' and 'More envelopes are out than you have signatures for. People can still sign them. You will need to top up before sending anything new.' It does not say how many are missing (38 in the state shown), so a top-up of 10 changes nothing visible, and the sentence about envelopes being out is shown even when none are out.",
+   "Provider unreachable, both sizes: pressing 'Cancel plan' in the dialog shows the general error 'Something went wrong on our side. Please try again. If it keeps happening, tell us this reference: req_...' and the dialog stays open. On the stop page the same text appears inside the red box, followed by 'Nothing was changed. Press the button again in a minute...'. The specific 'the payment provider did not confirm the cancellation' text is never reached when the provider cannot be contacted at all.",
+   "After a refund that ended the plan, both sizes: the badge reads 'Not started' for a plan that was started and ended; the rest is right ('$7.00 refunded', Refund -7, 'Monthly plan ended', 20 mangroves).",
+   "Things that were fine: no sideways scrolling of the whole page at either size in any state; desktop tables fit; the cancel dialog for a failing payment says the plan ends today; the refund dialog on a code account says 'Your free plan is not affected'; a plain member sees the plan and 'Only account admins can change the plan' with no buttons; returning with a session that cannot be confirmed shows the honest 'We could not confirm that payment yet' message; the stop page without a token and with a bad token both offer the two other ways to stop; the stop-by-card form fits a phone."
+  ]
+ },
+ "verify:billing-core": {
+  "checks": [
+   {
+    "item": "B0: First payment adds nothing when the provider reports the paid invoice before the finished checkout",
+    "holds": false,
+    "evidence": "Original order is fixed. /home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p1-order.ts, section 'B0 original': invoice.paid with no account named, then checkout.session.completed, gives plan grove, balance 12, mails 'Welcome to Grove' and 'Receipt: $9.00 for 9 signatures'; redelivery changes nothing. Also fine: the newest invoice shape (parent.subscription_details, no invoice.subscription), and the browser coming back after a failed invoice fetch.",
+    "still_broken": "The symptom comes back when two provider messages are handled at the same moment, which is how they arrive after a checkout. /home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p7-more.ts: invoice.paid together with customer.subscription.updated (status active), provider answering in 5 ms, 10 runs: 10 of 10 first payments ended with refunded_cents=900, credits=0, balance 3 instead of 12, mail 'Refund sent: $9.00 ... (this plan was already cancelled)', plan shown active. p1-order.ts 'race C' (checkout message + browser sync + invoice at once): same result while POST /billing/sync answered applied:'plan'. One after the other, in either order: fine. See new bug 1. Smaller: 'race B' sends 'Welcome to Grove' twice; an unmatched payment whose claim fails is not retried by anything on the timer."
+   },
+   {
+    "item": "B1: A returning customer's first payment is refunded as 'already cancelled' and the new plan starts empty",
+    "holds": false,
+    "evidence": "Original order is fixed. p1-order.ts 'B1 original': cancel, subscription.deleted, then invoice.paid for the new subscription before the checkout message: plan grove on the new subscription, 9 signatures added, refunded 0, mails Welcome + Receipt. A late message about the old subscription does not end the new plan (author's test, re-run green).",
+    "still_broken": "/home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p8-last.ts: returning customer, invoice.paid of the new subscription handled together with its customer.subscription.updated (active): payment refunded 900, credits 0, 0 signatures added, mails 'Welcome to Grove' then 'Refund sent: $9.00', new subscription still active at the provider (so it bills again next month). Also p1-order.ts 'B1 angle 1': an invoice that names no subscription at all is refunded as 'this plan was already cancelled' and the later checkout turns the plan on with 0 signatures (only matters if a provider version uses a field the four lookups in subOf() miss)."
+   },
+   {
+    "item": "B2: Two refund requests sent together are both paid",
+    "holds": true,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p4-refunds.ts. Original (4 of 9 unused, two POST /billing/refund together, 30 ms provider delay): one 200 '$5.00' (my run had 5 unused), one 400, one refund at the provider, one mail. Angle 1, two admins refund two different payments at the same moment (7 unused): $4.00 + $3.00 = $7.00, never more than the unused count. Angle 2, refund racing a send of the last signature: refund $1.00, send 200, balance 1 held 1, no double use. Angle 3 (p2-cancel.ts), second admin refunds the same payment at the same moment while the plan is cancelled but running: one 200, one 400, 900 refunded once. The refund carries an idempotency key.",
+    "still_broken": "The race itself is closed. A different door to 'paid and kept' exists when the provider's answer is lost: see new bug 10."
+   },
+   {
+    "item": "B3: Refunding a monthly payment says the plan ended even when the provider did not end it; next month's charge is kept",
+    "holds": true,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p2-cancel.ts 'B3/O9 original': provider refuses DELETE and GET: answer 502 'nothing was refunded and nothing changed', plan still grove/active, balance 12, 0 refunded. Angle 1: provider ends the plan, then the refund call fails once: 502 says the plan has ended and to press again; second press 200 '$9.00', balance 3, one refund.",
+    "still_broken": "The order of steps creates a new problem (new bug 11): the plan is ended before the code knows the refund can be made. When the charge cannot be found, the plan is gone, nothing is refunded, and the second press says 'We could not find that charge automatically. Use the contact form'."
+   },
+   {
+    "item": "B4: Cancelling while a payment is failing: told 'you will not be charged again', then charged",
+    "holds": false,
+    "evidence": "Original is fixed. p2-cancel.ts 'B4/O3 original': status past_due, cancel answers ended_now:true, subscription cancelled and open invoice voided at the provider, mail says 'The last payment had not gone through, so the plan ends today and that payment will not be tried again', a late invoice.paid is refunded 900 and adds 0.",
+    "still_broken": "Two angles still end with 'cancelled' followed by a kept charge. (1) p2-cancel.ts 'B4 angle 1': payment failing AND the subscription already marked to end at period end (set by the provider portal, or by a cancel that failed half way, see angle 2 in the same file). POST /billing/cancel answers 200 {ends_at, reference:'', ended_now:false} without calling the provider (early return, routes-billing.ts line 266); subscription stays past_due, open invoice stays open; the retry is paid: refunded 0, 9 signatures added, receipt sent. In a browser the page then says 'Cancelled. You will not be charged again ... because that month is already paid for ... Reference . We emailed you this too.' with an empty reference and no email. (2) 'B4 angle 3' (provider timing, likely): the period has just rolled over and the renewal invoice is still a draft; cancel says 'runs until December 20, 2026, because that month is already paid for'; the invoice is then paid: kept, mail order 'Your Grove plan is cancelled' then 'Receipt: $9.00 for 9 signatures'."
+   },
+   {
+    "item": "B5: A failed automatic refund is never retried and nobody is told",
+    "holds": false,
+    "evidence": "Original is fixed. p2-cancel.ts 'B5/O4 original': refund fails once, billing_todo row written, redelivery does nothing, next timer run refunds 900 and mails 'Refund sent: $9.00'. Angle 2, provider took the refund but the answer was lost: the retry uses the same idempotency key, provider total stays 900, one mail. Operators get an alert at the third failure, in the queue even with no SUPPORT_EMAIL.",
+    "still_broken": "(1) 'B5 angle 1': with the provider down for 41 calls, after 40 timer runs the row sits at tries=40, done_at null; provider back, 5 more runs: still tries=40, refunded 0. README says to run the timer hourly, so the refund is dropped after 40 hours with one alert (routes-billing.ts line 846, 'tries < 40'). (2) p7-more.ts last section: every retry sends the same key 'sg-refund-<payment>-0-900'; if the provider replays the first saved error for that key (documented for the real one), all 41 tries fail and nothing is refunded. (3) 'B5 angle 3': a second subscription paid under another provider customer: refunded 0 after 4 runs, alert 'A refund we owe keeps failing', because the charge is looked up under the account's first customer (new bug 7)."
+   },
+   {
+    "item": "B6: Paying member adds GROWalition, takes the refund the Plan page offers, and ends up half on the plan",
+    "holds": true,
+    "evidence": "p4-refunds.ts 'B6 original': after the code the offer is $9.00; refund answers plan_ended:false; state plan grove, free_with GROWalition, status free, balance 12; top-up 200; checkout says 'already free'. Refund dialog in the browser says 'Your free plan is not affected.'",
+    "still_broken": "Side effect, reported as new bug 16: a payment whose 9 signatures were all used becomes refundable in full once the code's free signatures land ('none of its 9 signatures have been used')."
+   },
+   {
+    "item": "B7: An account that is 'free with a code' can have a live paid subscription the Plan page hides",
+    "holds": true,
+    "evidence": "p4-refunds.ts. (1) Open checkout, enter the code, pay the open checkout: new subscription cancelled at the provider, payment refunded 900, mails 'Code accepted' then 'Refund sent'. Angle: invoice first and the provider refuses to end it once: refund 900, a 'cancel' row is queued, the next timer run ends it, a later charge is refunded too. (2) POST /billing/resume on a code account: 400 'There is no paid plan to resume'. Angle: a second admin redeems while the provider is down: 502 'the code was not applied and nothing changed', then works; the owner gets the mail with the cancellation reference.",
+    "still_broken": ""
+   },
+   {
+    "item": "B8: The provider's 'charge refunded' event after an in-app refund marks an older payment as refunded too",
+    "holds": true,
+    "evidence": "p4-refunds.ts 'B8 original': two $9 payments, refund the latest in the app, then charge.refunded for it: older payment refunded_cents 0, mangroves 90. p8-last.ts: newer shape with no charge ids on file, a person refunds the OLDER payment in the dashboard: the older one is marked 900, the newer stays 0 and stays refundable.",
+    "still_broken": "Root cause survives on newer provider versions: monthly payments are stored with charge_id NULL, and the in-app refund then picks a charge by amount. p4-refunds.ts 'B8 angle': plan $9 then a $9 top-up; refunding the plan payment sent the money back on the top-up's charge ({charge:'ch_cs_nvs_top', amount:'900'}). See stripe doubt 1."
+   },
+   {
+    "item": "B9: Anyone can lock up a sender's whole balance through a public form",
+    "holds": false,
+    "evidence": "Other engineers changed this while I was testing (src/server/envelopes.ts around line 1303, src/server/routes-envelopes.ts around line 464, src/lib/policy.ts powerformIdleHours and POWERFORM_OPEN_STARTS). /home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p5c-form.ts after their change: a start left untouched for 25 hours is closed by the timer and the 3 held signatures come back; a fourth start from the same address gets 429.",
+    "still_broken": "The limit is 3 open starts per address and a new account has 3 signatures. p5c-form.ts: three made-up addresses from one address: balance 3, held 3, available 0; the owner's own send gets 402 with the plan pitch and the mails '2 signatures left' and 'You have used all your signatures'. A timer run the same hour releases nothing. After the 24 hour release the same visitor did it again: [200,200,200], available 0 again. So one visitor can keep a free account from sending, one day at a time, without ever opening the email."
+   },
+   {
+    "item": "B10: 'Running low' and 'all used' emails reach only the member who sent",
+    "holds": true,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p5-count.ts 'B10 original': a member uses the last three: member and owner both get '2 signatures left' and 'You have used all your signatures'. Angle: a bulk send of the last three by the owner also sends both mails.",
+    "still_broken": ""
+   },
+   {
+    "item": "B11: A plain name fix is refused with 'This needs 1 signature' when the account is over-committed",
+    "holds": true,
+    "evidence": "p5-count.ts 'B11 original': at available -1 a name fix through PUT /envelopes/:id answers 200; swapping one paid signer for another answers 200; re-addressing the sender's own free document to someone else at 0 available answers 402; adding a signer at exactly 0 answers 402 and changes nothing.",
+    "still_broken": ""
+   },
+   {
+    "item": "B12: A subscription the provider marks 'unpaid' cannot be cancelled from the app",
+    "holds": true,
+    "evidence": "p2-cancel.ts 'B12': for provider status unpaid, paused and incomplete: page state can_cancel true, stop page can_cancel true, emailed stop link answers 200 ended_now true, provider subscription cancelled, mails 'Your monthly plan is on hold' then 'Your Grove plan is cancelled'.",
+    "still_broken": ""
+   },
+   {
+    "item": "B13: A charge on a closed and deleted account is neither refunded nor noticed unless SUPPORT_EMAIL is set",
+    "holds": false,
+    "evidence": "p2-cancel.ts 'B13 original': an invoice that names the account (subscription metadata) on a deleted account is refunded 900 and an alert 'A payment arrived for an account that no longer exists' lands in the operator queue with no SUPPORT_EMAIL set.",
+    "still_broken": "(1) Same section: an invoice that does not name the account (every subscription started before the rewrite has no account id in its metadata) on a deleted account: refunded 0, account null, alert 'A payment could not be matched to an account yet', still 0 after 3 timer runs. (2) 'B13 angle 1': closing an account whose plan is on hold (provider status unpaid): the provider subscription is left alive (status still 'unpaid'), the closing mail says 'Any subscription has been stopped and you will not be charged again', and when the open invoice is paid during the 30 days the account goes back to plan grove with the payment kept. (3) A payer who moved to the free code cannot close the account at all: POST /me/delete answers 502 'We could not stop your subscription' every time (new bug 9)."
+   },
+   {
+    "item": "B14: A card dispute stops billing but tells nobody unless SUPPORT_EMAIL is set, and hides a provider failure",
+    "holds": true,
+    "evidence": "p2-cancel.ts 'B14': with the provider refusing to end the subscription: customer mail 'We stopped all billing on your account', a 'cancel' row queued, operator alert says 'the provider did not confirm the subscription ended (we keep trying)', the next timer run ends it at the provider.",
+    "still_broken": "New problems on the same path: the disputed payment's signatures stay on the balance (new bug 2), disputes on charges that are not ours are conceded too (new bug 3), and on a free-code account the mail says 'Your monthly plan has ended' when it has not."
+   },
+   {
+    "item": "B15: Renewal reminder is sent again when the provider repeats the event; dates in billing emails are in UTC while the Plan page uses local time",
+    "holds": false,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p3-timers.ts 'B15 original': the same upcoming-invoice message four times (same id twice, no id, another id): one 'Heads up' mail. Emails now use the reader's time zone (author's test, re-run green).",
+    "still_broken": "(1) The stop page still prints UTC days (src/app/help/tools.tsx billDay). In a browser set to Los Angeles, end of month 2027-03-08T02:00Z: Plan page 'The plan runs until March 7, 2027', the email to that reader says March 7, the stop page opened from that email says 'ends on March 8, 2027' (ui-flows.cjs). (2) p3-timers.ts 'Reminder angle 3': period ends 23:30 UTC and the provider's message quotes the attempt an hour later: three 'Heads up' mails for one renewal (dated Nov 25, Nov 26, Nov 25), because the reminder marker is keyed on the UTC date of whichever time was passed in. (3) 'Tomorrow: your plan renews' is sent up to 36 hours ahead: reader in Auckland got it at 11:33 PM on Nov 20 for a charge at 11:03 AM on Nov 22 (p6-misc.ts)."
+   },
+   {
+    "item": "O0: Every billing email carries a no-login stop link",
+    "holds": true,
+    "evidence": "The claim was narrowed to 'While a plan is renewing, every email about a payment has a link that stops it'. /home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p6-misc.ts first section: Welcome, monthly receipt, top-up receipt, both payment-failed mails, renewal reminder, refund mail, overcharge receipt and 'on hold' mail all contain /billing/stop?token=. Author's test covers the link dying when the admin is removed.",
+    "still_broken": ""
+   },
+   {
+    "item": "O1: Each payment can be refunded from the Plan page for 30 days",
+    "holds": true,
+    "evidence": "p4-refunds.ts 'O1 original': after a later top-up the earlier monthly payment is offered in the payments list ($9.00) and refunded by id, plan_ended true. The receipts now quote refundRuleText, which says a monthly refund ends the plan. Amounts that are not $9: a $4.50 invoice buys 4 and refunds $4.50; a $12.00 invoice buys 9 and refunds $12.00.",
+    "still_broken": "Small: a $0.99 invoice sends 'Receipt: $0.99 for 0 signatures', adds nothing and can never be refunded in the app. The help page still has the bullet 'It covers your latest payment', next to the one that says earlier ones are in the list."
+   },
+   {
+    "item": "O2: Voiding, a decline or an expiry returns the envelope's signatures",
+    "holds": false,
+    "evidence": "The Plan page now says the ones held for people who had not signed come back and 'One that was already used stays used' (seen in the browser). Behaviour is unchanged: p5-count.ts, two signers, one signs, void: 11 of 12.",
+    "still_broken": "The old wording is still on two public pages. /home/user/treegens-app/sign-and-grow/src/app/help/page.tsx #signatures: 'If the envelope is voided, declined or left to expire, it comes back by itself.' /home/user/treegens-app/sign-and-grow/src/app/page.tsx: the promise card 'so voided, declined and expired envelopes cost nothing' and the rule 'If the envelope is voided, declined or left to expire, it comes back by itself.'"
+   },
+   {
+    "item": "O3: After cancelling there are no more charges, and the remaining time is already paid",
+    "holds": false,
+    "evidence": "Fixed for a plain failing payment (ends today, different mail text, late payment refunded).",
+    "still_broken": "Still said and then broken in the two cases under B4: payment failing with the subscription already set to end (page notice 'because that month is already paid for', retry kept), and a cancel in the hour between the period rolling over and the charge (mail 'because that month is already paid for', then a receipt)."
+   },
+   {
+    "item": "O4: Any charge after cancelling is refunded automatically",
+    "holds": false,
+    "evidence": "Now retried on the timer and applied on a deleted account when the invoice names it.",
+    "still_broken": "The text was strengthened to 'keeps trying until the refund has gone through' (Plan page rule, help page twice) and that is not what the code does: it stops after 40 timer runs (p2-cancel.ts B5 angle 1), it repeats one idempotency key (p7-more.ts), it cannot find a charge made under another customer (B5 angle 3), it does not refund the charge in the rollover hour or in the failing-and-set-to-end state (B4 angles), and it does not refund an unnamed invoice on a deleted account (B13)."
+   },
+   {
+    "item": "O5: On the free code there is no card and nothing that could be charged",
+    "holds": false,
+    "evidence": "Fixed in the mail and on the Plan page: the mail to a former payer says 'The card you paid with is still saved in case you top up. You can remove it on the Plan page', and the page shows 'Invoices and card' and 'Remove card' for that account (browser, state freepayer). The paid subscription is ended at once with a reference.",
+    "still_broken": "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx #code still says 'There is no card on file for it and nothing to cancel. If you were paying before, the renewal is stopped for you.' For a former payer the card is on file (p4-refunds.ts 'O5': has_customer true, 1 card at the provider)."
+   },
+   {
+    "item": "O6: With the code GROWalition, 9 signatures arrive every month and unused ones accumulate",
+    "holds": true,
+    "evidence": "p4-refunds.ts 'O6': code entered 13 months ago across a year boundary, nobody looked since: first look shows 120 (3 + 9 x 13), with one ledger line per month dated the first of that month. A second account back-dated to January shows 102 on first look. A switched-off code adds nothing more (author's test).",
+    "still_broken": "The grant is written when something reads the balance, not by the timer (after a timer run alone there is still 1 ledger row). Nothing is lost by that."
+   },
+   {
+    "item": "O7: Toast 'Signatures added' or 'Welcome to the monthly plan' shown whatever the sync answered",
+    "holds": true,
+    "evidence": "Browser, /app/settings?tab=billing&topped=1&session_id=cs_never_paid, &upgraded=1&session_id=cs_never_paid and &topped=1: toast 'We could not confirm that payment yet. If you paid, it shows here within a minute and nothing is charged twice. If it does not, contact us.' Server: POST /billing/sync with an unpaid session, an unknown one, an empty one and a path-like one all answer applied:null (p6-misc.ts).",
+    "still_broken": "One hole from the other side: in the overlap race (p1-order.ts race C) sync answers applied:'plan', so the page says 'Welcome to the monthly plan' while the first payment is being refunded."
+   },
+   {
+    "item": "O8: A reminder is sent before every charge",
+    "holds": false,
+    "evidence": "Sign&Grow now sends its own reminders from the timer a week before and the day before, once each, writes each to the plan history, and the provider's message for the same renewal does not double them (author's test; p3-timers.ts).",
+    "still_broken": "(1) p3-timers.ts 'Reminder angle 4': with the mail server down the timer still reports renewals:1, the email row is status 'failed', the marker is set, and the later charge raises no alert. (2) 'Reminder angle 1': a renewal that WAS reminded twice raises 'renewed without a reminder going out first' when the provider reports the new period before the paid invoice, which is its normal order; the alarm fires for everyone and so tells nobody anything. (3) Still depends on an outside scheduler calling POST /api/cron; with none, only the provider's one message is left."
+   },
+   {
+    "item": "O9: Refund answer plan_ended: true and 'the plan ends now' when the provider did not end it",
+    "holds": true,
+    "evidence": "p2-cancel.ts 'B3/O9 original': provider refuses to end the subscription: 502, plan unchanged, nothing refunded. plan_ended:true is only returned after endSubscription() confirmed it.",
+    "still_broken": ""
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "First payment is refunded as 'this plan was already cancelled' when two provider messages are handled at the same moment",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, settleInvoice() lines 746 to 752 ('if (!(await adopt(...))) why = ...') and adopt() line 418",
+    "detail": "Steps: new account, paid checkout. Deliver invoice.paid and customer.subscription.updated (status active) for the new subscription so that they overlap (probe: /home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p7-more.ts, provider answering in 5 ms, Promise.all of the two messages). The invoice handler reads the account (no subscription yet) and waits for GET subscriptions/S. Meanwhile the other message adopts the subscription. When the invoice handler continues, adopt() returns false because the account is already on S, and the code reads 'false' as 'this subscription should not exist'. Result, 10 runs out of 10: payments.refunded_cents=900, credits=0, balance 3 instead of 12, $9.00 sent back at the provider, mails 'Welcome to Grove' then 'Refund sent: $9.00 ... (this plan was already cancelled)', plan shown Active with a next charge. Same with checkout message + browser sync + invoice together (p1-order.ts race C, where sync even answers applied:'plan'), and for a returning customer (p8-last.ts). One after the other, in either order: no refund. After a real checkout the provider sends these messages within the same second, so this is the common case, not a corner. Fix: make adopt() return three answers (adopted now, already on it, refused) or, after a false, re-read the account and treat stripe_subscription_id === S with a live status as fine. Better still, take a per-account lock (or run the whole decision in one transaction after all provider reads) so two messages for one account never interleave. Add a test with stripe.delayMs and Promise.all."
+   },
+   {
+    "title": "A card dispute returns the money and leaves every signature it bought on the balance",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, 'charge.dispute.created' branch, lines 967 to 985",
+    "detail": "Steps (p2-cancel.ts, 'B14 original + angles'): subscribe, buy a top-up of 500 signatures for $500.00, then the provider reports a dispute on that charge. Result: the dispute is closed (accepted) with the provider automatically, the payment is marked refunded $500.00, the balance stays 512 and a send after the dispute answers 200. The $9.00 plan payment is still offered for a self-serve refund on top. The mail says 'the signatures you have stay yours'. So a customer gets $500 back from the bank, by code and without a person looking, and keeps 500 signatures. Fix: when a dispute is accepted, take the unused signatures of that payment off the balance (same rule as a refund: min(credits, available), ledger reason 'refund'), tell operators how many were already used, and leave ACCEPT_DISPUTES off above a small amount so a person decides."
+   },
+   {
+    "title": "Disputes on charges that are not Sign&Grow payments are conceded too, and foreign invoices count as donations",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts line 971 (disputes/{id}/close runs before any match) and settleInvoice() lines 718 to 733; /home/user/treegens-app/sign-and-grow/src/server/routes-account.ts line 374",
+    "detail": "Steps (p6-misc.ts, 'Traffic that is not ours'): send charge.dispute.created for a charge whose customer belongs to no account and to no payment row, and invoice.paid for $499.00 from an unknown customer. Result: the dispute is closed with the provider anyway (stripe.disputesClosed gets 'dp_other_product') and the public total on /public/impact rises by 499. This only bites when the provider account is shared with another product, which is common for a small organisation. Fix: close a dispute only when paymentForCharge() found a Sign&Grow payment; keep unmatched invoices out of the public sum (WHERE account_id IS NOT NULL AND kind IN ('plan','topup'))."
+   },
+   {
+    "title": "Cancel does nothing when a payment is failing and the subscription is already set to end, but says 'Cancelled'",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts cancelPlan() line 266 (early return), billingState() can_cancel line 237, GET /public/billing/stop line 594; /home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx lines 397 to 430",
+    "detail": "State: plan grove, status past_due, cancel_at set. It is reached when the customer cancels in the provider portal while a payment fails, or when POST /billing/cancel fails half way (p2-cancel.ts 'B4 angle 2': the provider accepted cancel_at_period_end=true, then refused the DELETE; the customer was told 'Nothing changed'). Steps: POST /billing/cancel. Result: 200 {ends_at, reference:'', ended_now:false}, no provider call, no email, the open invoice stays open, the retry is paid and kept (refunded 0, 9 added, receipt). In the browser (ui-flows.cjs) the page shows two badges ('Ends Dec 10, 2026' and 'Payment failed'), both 'Cancel plan' and 'Keep the plan after all', and after the click: 'Cancelled. You will not be charged again. The plan runs until December 10, 2026 because that month is already paid for ... Reference . We emailed you this too.' The emailed stop link opens 'Already stopped ... that month is already paid for' with no button. Fix: in cancelPlan() only return early when the stored status is active or trialing; otherwise go on to the provider and end it now. Show one state on the page (payment failed wins) and pass 'problem' to the stop page."
+   },
+   {
+    "title": "'Keep my plan' after an automatic stop is undone by the next timer run",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts remindRenewal() lines 808 to 820, called from renewalReminders()",
+    "detail": "Steps (p3-timers.ts, 'Dormant'): account older than 90 days with nothing sent, renewal in 5 days. Timer run: renewal stopped, mail 'We stopped your renewal ... one click on the Plan page turns it back on'. POST /billing/resume: 200, cancel_at null. Next timer run: stopped again, second mail. After two more rounds: 4 'We stopped your renewal' mails and a plan history of 'Renewal stopped for you / Cancellation undone' four times. The customer cannot keep the plan without sending something. The Plan page rule and the help page promise 'with one click to keep it'. Related: an account created 200 days ago that started paying three weeks ago is stopped at its first renewal, because the rule looks at accounts.created_at, not at when the plan started. Fix: remember the renewal date the customer kept (for example dormant_kept_for = renews_at on resume) and skip the rule for that date; measure the quiet spell from the later of plan start and last send."
+   },
+   {
+    "title": "When a free code is switched off, former payers are left in a state that blocks paying and says a payment failed",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts endRemovedCodes() line 353 (sets subscription_status=NULL and keeps stripe_subscription_id) together with hasSub() line 69",
+    "detail": "Steps (p3-timers.ts, 'endRemovedCodes'): subscribe, redeem GROWalition (paid subscription ended, id kept), remove the code from FREE_PLAN_CODES, run the timer. Result: plan seedling, status NULL, old subscription id still there, so hasSub() is true. POST /billing/checkout answers 400 'The last payment for this plan did not go through. Update the card ... or cancel the plan first and start again.' The Plan page shows 'Not started' with a Start button and no Cancel button (browser, state codeended). The stop page says 'Grove, $9 a month (on hold: the last payment did not go through)'. 'Find my subscription' lists it as '$9.00 a month'. The 'code has ended' mail carries 'Do not renew: Stops the monthly plan in one click' under 'Nothing was charged and nothing will be'. The only way out is a pointless cancel (stop link or Remove card), which mails 'The last payment had not gone through, so the plan ends today'; after that checkout works. Fix: in endRemovedCodes() set subscription_status='canceled' (the paid subscription was ended when the code was applied). Also treat a NULL status with a subscription id as not live in hasSub()."
+   },
+   {
+    "title": "A refund the software owes is charged to the wrong provider customer and never found",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts refundPayment() line 160 ('account?.stripe_customer_id || p.customer_id') and chargeTarget() lines 147 to 155",
+    "detail": "Steps (p2-cancel.ts, 'B5 angle 3'): two checkouts are opened before either is paid (two tabs or two admins), so each uses customer_email and the provider makes two customers. Both are paid. The second subscription is ended correctly, but its $9.00 is looked up among the charges of the account's first customer, where it is not. Result: refunded 0 after 4 timer runs, provider refunded 0, no mail to the customer, alert 'A refund we owe keeps failing', and after 40 runs it is dropped. It needs the invoice to carry no charge id, which is the normal case on current provider versions (stripe doubt 1). Fix: use p.customer_id first; and store the payment's own charge or payment intent when the invoice arrives."
+   },
+   {
+    "title": "An older subscription message delivered late undoes a cancellation made in the app (and the reverse)",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts 'customer.subscription.updated' branch lines 934 to 943; cancelPlan() and POST /billing/resume do not touch accounts.sub_event_at",
+    "detail": "Steps (p3-timers.ts, 'Event order'): a subscription message created 10 minutes ago has been applied. The customer cancels in the app (cancel_at set, provider set to end, mail 'Cancelled. You will not be charged again'). Then a message the provider created 5 minutes BEFORE the cancellation arrives (a retry after a blip) with cancel_at_period_end:false. It is newer than the last message seen, so it is applied: cancel_at becomes NULL, the page shows Active with a next charge, and the next timer run mails 'Heads up: your plan renews on November 26, 2026 for $9.00' after the cancellation mail. The provider is still set to end, so no money moves, but the customer is told the opposite of what they did. Mirror image: resume, then a late 'set to end' message: page says 'Cancelled. You will not be charged again' while the provider will charge. Fix: set sub_event_at to the current time in cancelPlan(), resume, redeem and refund, so a message created before the local action is ignored; or re-read the subscription from the provider instead of trusting the message body."
+   },
+   {
+    "title": "Closing an account: a payer on the free code can never close it, and a plan on hold is not stopped",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts POST /me/delete (the loop that calls DELETE subscriptions only when plan === 'grove' and treats any non-200 as failure); /home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts line 209 stopBillingFor() is exported for this and used nowhere",
+    "detail": "Steps 1 (p2-cancel.ts, 'B13 angle 1'): subscribe, redeem GROWalition (plan stays grove, the ended subscription id stays on the account), POST /me/delete. Result: 502 'We could not stop your subscription with the payment provider just now, so nothing was closed' on every try, with and without now:true, because DELETE on a subscription that is already cancelled is an error. The account cannot be closed. Steps 2: plan on hold (provider status unpaid, local plan seedling), POST /me/delete: closed 'scheduled', the provider subscription is untouched, the mail says 'Any subscription has been stopped and you will not be charged again'; when its open invoice is paid during the 30 days the account returns to plan grove and the money is kept. Fix: call stopBillingFor(account) (hasSub + endOrQueue, which already treats 'already gone' as done) and then mark the account cancelled."
+   },
+   {
+    "title": "Self-serve refund: if the provider's answer is lost, the customer ends up with the money and the signatures",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/refund catch block lines 565 to 570 (puts the signatures back on any error) and the 'charge.refunded' branch line 960 (records money only)",
+    "detail": "Steps (p4-refunds.ts, 'NEW: the provider carries out the refund but its answer is lost'): press Refund on a $9.00 plan payment; the provider performs the refund and the connection drops before the answer arrives. Result: 502 'The monthly plan has been ended ... Nothing is lost: press Refund again in a minute', balance back to 12, provider has refunded 900, local record 0. The customer uses 4 signatures and presses again: the amount is now different, so the idempotency key is different, and the provider answers 'Refund amount is greater than what is left on the charge' (502, every time). When the provider's own notice arrives the payment is marked refunded and the offer disappears. End state: paid $9.00, got $9.00 back, used 4 since and still holds 8. A full refund made by a person in the provider dashboard has the same shape (balance stays 12, plan stays Active). Fix: on an error whose outcome is unknown (network error, timeout, 5xx) keep the signatures off the balance and queue the same refund in billing_todo with the same key; only put them back on a definite refusal. In 'charge.refunded', when the refunded amount grows and no ledger line with reason 'refund' exists for that payment, remove min(credits, available) or alert a person."
+   },
+   {
+    "title": "Refunding a monthly payment ends the plan before the code knows the refund can be made",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/refund lines 554 to 562 and chargeTarget() lines 150 to 152 (limit 20, match by amount)",
+    "detail": "Steps (p2-cancel.ts, 'B3 angle 2'): a monthly payment whose charge is not among the customer's latest 20 charges with that exact amount (a team that tops up often, an amount with tax, or the lookup failing). Press Refund. Result: the subscription is cancelled at the provider and the account drops to seedling; then 502 'The monthly plan has been ended ... press Refund again in a minute'; the second press answers 502 'We could not find that charge automatically. Use the contact form and a person will refund it by hand.' Nothing refunded, the rest of the paid month gone, and no alert reaches operators (0 rows in support_requests). Fix: resolve the charge first (chargeTarget) and fail before touching the plan; if the refund fails after the plan ended, queue it with owe() and tell operators."
+   },
+   {
+    "title": "Charged more than the reminder said, and no difference comes back, when the provider's notice arrives after our reminder",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts remindRenewal() line 802 (stores the new quote before deciding whether a mail goes out) and settleInvoice() lines 775 to 779",
+    "detail": "Steps (p3-timers.ts, 'Reminder angle 2'): the timer sends 'Heads up: your plan renews on November 26, 2026 for $9.00'. The provider's upcoming-invoice message for the same renewal then says amount_due 1200. Result: no new mail (the week-before stage is already marked), renewal_quoted_cents becomes 1200, the Plan page silently changes to '$12.00'. The charge of $12.00 is kept in full: refunded 0, no refund mail, only the operator alert 'not the plan price'. The reminder had promised 'if more than this is ever taken we send the difference back'. If the timer also runs in the last 36 hours, the day-before mail does say $12.00. Fix: when a quote changes after a reminder has gone out, send a correction mail and only then raise the stored quote; compare the charge with the lowest amount the customer was actually told."
+   },
+   {
+    "title": "A stale 'active' message about an old subscription brings a dead plan back",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts 'customer.subscription.updated' branch lines 924 to 931 (adopt() is given the message body as the truth)",
+    "detail": "Steps (p7-more.ts): customer subscribes (S1), cancels, S1 ends; subscribes again (S2), takes the refund, S2 ends. Then the provider retries a weeks-old message 'S1 active'. Result: plan grove, status active, subscription S1, renews_at five days in the past, mail 'Welcome to Grove', top-up unlocked (200). Nothing exists at the provider. The same-subscription case is protected; a different, older subscription id is not. Fix: in that branch call adopt() without the message body so it reads the subscription from the provider, as the checkout path does."
+   },
+   {
+    "title": "If the provider's 'subscription ended' message is lost, the account stays 'cancelled, ends <past date>' for ever and cannot subscribe again",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts: nothing in renewalReminders(), billingRetries() or cron.ts reconciles a cancel_at that has passed; POST /billing/checkout line 372",
+    "detail": "Steps (p3-timers.ts, 'Stuck'): cancelled plan, end date three days ago, provider subscription cancelled, no message received. Three timer runs later: plan grove, 'Ends Nov 17, 2026', POST /billing/checkout answers 400 'Your plan is cancelled but still running ... Press Keep the plan after all', top-ups still allowed. 'Keep the plan after all' updates a subscription that no longer exists: the stand-in accepts it and the page turns Active with no subscription behind it; the real provider refuses updates to a cancelled subscription, so the customer would get a raw provider error. Fix: on the timer, for accounts with cancel_at in the past (and for past renews_at with no payment), GET the subscription and apply its real state."
+   },
+   {
+    "title": "Free-code signatures make a fully used payment refundable",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts offerFor() lines 131 to 137",
+    "detail": "Steps (p4-refunds.ts, 'B6 angle'): pay $9.00, use all 12 signatures (balance 0, no offer), then redeem GROWalition (9 free signatures arrive). Result: the Plan page offers 'Refund $9.00: none of its 9 signatures have been used'; the refund goes through; the customer has used 12 signatures and paid net $0. The same works every month for a code member who tops up, uses the top-up, and refunds it after the first of the month. Each refunded dollar does remove one signature, so it is a swap of free signatures for cash rather than free money, but the stated reason is false. Fix: cap 'unused' for a payment at the signatures that were on the balance from paid sources (exclude ledger lines with reason 'code' and 'welcome' granted after the payment), or word the reason as what it is."
+   },
+   {
+    "title": "One timer run with FREE_PLAN_CODES empty ends every free plan for good",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/credits.ts freeCodes() line 21 ('?? GROWalition' does not cover an empty string) and routes-billing.ts endRemovedCodes()",
+    "detail": "Steps (p3-timers.ts, 'endRemovedCodes angle'): set FREE_PLAN_CODES='' for a single timer run (a deploy slip), then restore it. Result: codes_ended 1, promo_code NULL, plan seedling, mail 'The code GROWalition has ended'. Putting the setting back restores nothing; every member has to enter the code again. Fix: require a code to be missing for some days, or keep an 'ended at' date and re-apply when the code returns, and treat an empty setting as unset."
+   },
+   {
+    "title": "Small things that mislead",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/resume (line 528), POST /public/billing/stop-by-card (line 671), POST /billing/remove-card (line 579), cancelPlan(), remindRenewal() line 824",
+    "detail": "All from /home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/p6-misc.ts and p7-more.ts. (1) Resume sends no email: admin A cancels (every admin gets 'Cancelled. You will not be charged again'), admin B presses 'Keep the plan after all', nobody is told that charging is back on; A's last word from us is the cancellation. Fix: mail all admins on resume, with the stop link. (2) Stop by card with an email address that manages two paid teams on the same card: answers stopped for the first only; the second keeps renewing. Fix: stop all matches or say how many are left. (3) Remove card detaches type=card only; with a wallet or bank debit it answers removed:0 and the page still says 'Card removed. Nothing can be charged to it.' (the plan is cancelled, which is right). Fix: list all payment method types and report what was removed. (4) Two admins pressing Cancel together get two different references and two mails each; the one on file is the second. (5) The day-before reminder subject says 'Tomorrow' when sent up to 36 hours ahead (11:33 PM Nov 20 for a charge at 11:03 AM Nov 22). (6) The nudge 'pays $9.00 a month' goes to a payer whose payments are failing. (7) The dispute mail tells a free-code account 'Your monthly plan has ended'."
+   }
+  ],
+  "stripe_doubts": [
+   {
+    "what": "Monthly payments will have no charge id on current API versions, and the fallback picks a charge by amount",
+    "why": "From API version 2025-03-31 (basil) the Invoice object has no 'charge' and no 'payment_intent'; they moved to invoice payments, and 'payments' is only present when expanded, which webhook payloads are not. chargeOf() (routes-billing.ts line 64) reads o.charge, o.payment_intent and o.payments.data[0], so it returns null and every plan payment is stored with charge_id NULL. chargeTarget() then lists the customer's last 20 charges and takes the first paid, not fully refunded one with the same amount, guarded by '!c.invoice || c.invoice === p.id'; the same version removed 'invoice' from Charge, so the guard passes for every charge. Probe p4-refunds.ts 'B8 angle': plan $9 then a 9-signature top-up ($9): refunding the plan payment refunded the top-up's charge. The stand-in then also allowed the top-up refund (it counts refunds by charge and by payment intent separately); the real API would refuse it as already refunded, so the customer is $9 short and the plan charge is never refunded. The author already handles the other basil moves (period end on items, parent.subscription_details), so this version is the target.",
+    "confidence": "likely",
+    "suggested_fix": "When the invoice arrives, call GET /v1/invoice_payments?invoice=<id> (or GET /v1/invoices/<id>?expand[]=payments) and store the payment intent in payments.charge_id. Keep the amount match only as a last resort and restrict it to charges whose payment intent is not already tied to another payments row. Make the stand-in share one refunded total per charge."
+   },
+   {
+    "what": "Every top-up also produces an invoice.paid message, which is recorded as a second payment",
+    "why": "The top-up checkout sets invoice_creation[enabled]=true. Stripe then creates and pays an invoice for the one-off payment and sends invoice.paid for it with billing_reason 'manual'. settleInvoice() matches it by customer, stores it as kind 'other' with 0 signatures and alerts operators. Probe p4-refunds.ts 'NEW (provider behaviour)': after a $9 plan payment and a $5 top-up the payments list has three rows (the extra one shows as 'Monthly plan, 0 signatures, $5.00'), the Plan page says 190 mangroves instead of 140, the public total is inflated, the alert 'An invoice that is not the monthly plan was paid' fires for each top-up, and after refunding the top-up the page still counts the phantom $5. The extra row is also the latest payment, so the 'Want your money back?' card disappears after any top-up. The stand-in never sends this message.",
+    "confidence": "likely",
+    "suggested_fix": "In settleInvoice(), before inserting, look for a top-up row with the same payment intent or with the session whose 'invoice' is this id and attach the receipt link to it instead of creating a row. Or drop invoice_creation and link the charge's receipt_url."
+   },
+   {
+    "what": "At a renewal the provider reports the new period first and takes the money about an hour later",
+    "why": "Stripe creates the renewal invoice as a draft at the period boundary, sends customer.subscription.updated with the new period end, and finalises and charges the invoice roughly an hour later. Three effects, each shown by a probe that plays the messages in that order: (a) settleInvoice() compares renewal_reminded with renews_at after renews_at has already moved a month on, so 'renewed without a reminder going out first' is raised for a renewal that was reminded twice (p3-timers.ts 'Reminder angle 1'); (b) a customer who cancels in that hour is told 'the plan runs until <next month>, because that month is already paid for', then charged, and the charge is kept (p2-cancel.ts 'B4 angle 3'); (c) the Plan page line 'Next charge: $9.00 on December 2, 2026 at 10:35 AM ... cancel right up to the charge' names the period end, not the charge.",
+    "confidence": "likely",
+    "suggested_fix": "Do the reminder check against the invoice's own period start (lines.data[0].period.start), not accounts.renews_at. In cancelPlan(), when the latest invoice of the subscription is draft or open, end the subscription now and void that invoice, or say plainly that one more payment is in progress. Show the charge time as 'about an hour after'."
+   },
+   {
+    "what": "The upcoming-invoice message quotes the attempt time, about an hour after the period end, and the reminder marker is keyed on that",
+    "why": "handleEvent uses o.next_payment_attempt || o.period_end. On upcoming invoices next_payment_attempt is the period end plus about an hour. The marker 'YYYY-MM-DD|stages' is the UTC date of whichever time was passed in, while the timer uses renews_at (the period end). For a period that ends between 23:00 and 24:00 UTC the two dates differ. Probe p3-timers.ts 'Reminder angle 3': three 'Heads up' mails for one renewal, dated Nov 25, Nov 26, Nov 25.",
+    "confidence": "likely",
+    "suggested_fix": "Use o.period_end for the reminder key and for the date in the mail, and key the marker on the subscription period end stored on the account."
+   },
+   {
+    "what": "Refund retries reuse one idempotency key, and the provider replays the first answer for that key, errors included",
+    "why": "refundPayment() sends 'sg-refund-<payment>-<refunded so far>-<cents>'. Stripe documents that it saves the status and body of the first request for a key once the endpoint started executing, and returns the same result for 24 hours, including 500s. A first attempt that fails for a passing reason (not enough balance at the provider, an internal error) is therefore replayed on every retry. Probe p7-more.ts with a wrapper that behaves that way: 41 tries, one key, tries=40, refunded 0. The stand-in remembers keys only for successes. Second half: keys are forgotten after 24 hours, so a retry later than that after a lost answer would pay a partial refund twice.",
+    "confidence": "likely",
+    "suggested_fix": "Keep the same key only for retries after a network error or timeout. After a definite error answer use a new key (for example add the try number) and first check GET /v1/refunds?charge=... for an existing refund of that amount. Remove the 40-try cap or alert again when it is reached."
+   },
+   {
+    "what": "Deleting or updating a subscription that is already cancelled is an error at the provider",
+    "why": "endSubscription() copes with it ('No such subscription' or a GET that says canceled). Two places do not. POST /me/delete in routes-trust.ts treats any non-200 as 'could not stop your subscription', so a former payer on the free code can never close (probe, with the stand-in, which also answers 404). POST /billing/resume updates cancel_at_period_end=false on a subscription that may already be gone; the stand-in accepts that and the page turns Active (p3-timers.ts 'Stuck'), while Stripe answers 400 that a canceled subscription can only update its cancellation details and metadata, which would reach the customer as a raw 502 message.",
+    "confidence": "likely",
+    "suggested_fix": "Use endOrQueue() in /me/delete. In resume, on an error re-read the subscription and, if it is cancelled, mark the account ended and tell the customer to start the plan again."
+   },
+   {
+    "what": "Webhook signature check fails while the signing secret is being rolled",
+    "why": "verifyStripeSignature() builds an object from the header parts, so with two v1 values only the last survives. Stripe sends one v1 per active secret during a roll. Probe p6-misc.ts: header 'v1=<new>,v1=<old>' with the new secret: false; the other order: true. While it fails every message gets 400 and is retried.",
+    "confidence": "sure",
+    "suggested_fix": "Collect all v1 values and accept if any matches."
+   },
+   {
+    "what": "A cancellation made in the provider portal may arrive as 'cancel_at' and not as 'cancel_at_period_end'",
+    "why": "The code reads only cancel_at_period_end (lines 430 and 943). Newer billing modes and the portal can express 'ends at the end of the period' as a cancel_at timestamp. If so, the Plan page keeps saying Active, reminders say 'we will charge $9.00', and the plan then simply ends. I could not confirm which field the portal sets on the account's API version.",
+    "confidence": "unsure",
+    "suggested_fix": "Treat a non-null o.cancel_at as set to end at that time, in adopt() and in the subscription branch."
+   },
+   {
+    "what": "'Remove card' only removes cards",
+    "why": "GET /v1/payment_methods is called with type=card. Checkout in subscription mode can save other methods (Link, bank debits) depending on dashboard settings. Probe p6-misc.ts: with no card on file the answer is removed:0 and the page still shows 'Card removed. Nothing can be charged to it.'",
+    "confidence": "likely",
+    "suggested_fix": "List without a type filter (or per enabled type), detach all, and word the result from the count."
+   },
+   {
+    "what": "Charge search for 'stop by card' and the operator lookup",
+    "why": "The query syntax (payment_method_details.card.last4:4242 AND status:'succeeded' AND created>.. AND amount:900) matches the documented search fields and uses only AND. Search data is eventually consistent (a charge from the last minute can be missing) and the Search API is not offered in every region. The stand-in ignores the date clauses, so the window of minus 2 to plus 3 days is untested. README already calls this the least certain part.",
+    "confidence": "unsure",
+    "suggested_fix": "Test once in Stripe test mode; on an empty result within a few minutes of a charge, say 'try again in a few minutes'."
+   },
+   {
+    "what": "Zero-amount and tiny invoices",
+    "why": "applyInvoice() ignores an invoice with amount_paid 0 (a coupon or customer credit at the provider): the plan turns on, 'Welcome to Grove' says '$9.00 a month adds 9 signatures ... with every payment', and no signatures arrive that month (p6-misc.ts). An invoice under $1 sends 'Receipt: $0.99 for 0 signatures' and cannot be refunded in the app. Both need a coupon, credit or proration at the provider, which the app never creates itself.",
+    "confidence": "sure",
+    "suggested_fix": "Decide the rule: either grant the month's signatures for a paid-in-full $0 invoice of the plan price, or alert operators; refund sub-dollar invoices automatically."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx rule 'Charged after cancelling?'; /home/user/treegens-app/sign-and-grow/src/app/help/page.tsx #cancel and #refunds; header comment of routes-billing.ts lines 21 to 22",
+    "claim": "A charge after cancelling, a double charge, or more than the reminder said is refunded by the software, which 'keeps trying until the refund has gone through'.",
+    "reality": "It tries on up to 40 timer runs and then stops for good (provider back afterwards: still 0 refunded). Every try reuses one idempotency key. A charge made under a second provider customer is never found. A charge in the hour after the period rolls over, or while a payment is failing with the plan set to end, is kept. An invoice that does not name its account on a deleted account is only reported. 'More than the reminder said' is not refunded when the provider's own notice raised the quote after our reminder (told $9.00, charged $12.00, refunded 0)."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts cancelPlan() mail lines 299 to 305; Plan page notice line 371; StopView.tsx and tools.tsx result texts",
+    "claim": "'Cancelled. You will not be charged again.' and 'The plan runs until <date>, because that month is already paid for.'",
+    "reality": "Not true in two reproduced cases: payment failing with the subscription already set to end (Cancel is a no-op, the retry is paid and kept, the page prints an empty reference and claims an email was sent), and a cancel in the hour between the period rolling over and the charge (cancel mail, then 'Receipt: $9.00 for 9 signatures')."
+   },
+   {
+    "where": "Plan page rule 'We do not charge for a plan nobody uses ... with one click to keep it'; help page #refunds last paragraph; the 'We stopped your renewal' mail ('one click on the Plan page turns it back on')",
+    "claim": "One click keeps the plan.",
+    "reality": "The next timer run stops it again and mails again. Four stop mails after three clicks in the probe. The plan can only be kept by sending something."
+   },
+   {
+    "where": "Plan page: 'We remind you by email a week before and again the day before'; Welcome mail and monthly receipt: 'We remind you a week before and again the day before'; landing page rule 'Before each renewal we email you the exact amount and the date'",
+    "claim": "Two reminders with the exact amount reach the customer before every charge.",
+    "reality": "They are sent only if an outside scheduler calls POST /api/cron. A reminder whose email fails is still marked as sent and nothing notices (email row 'failed', no alert at the charge). The amount is the plan price or last month's quote until the provider's notice arrives. The alert for a missing reminder fires on every ordinary renewal, so it cannot be used to catch a real one."
+   },
+   {
+    "where": "Renewal reminder mail, routes-billing.ts line 825",
+    "claim": "'That is the full amount: there are no extras, and if more than this is ever taken we send the difference back.' and, in the subject, 'Tomorrow'.",
+    "reality": "See above for the difference. 'Tomorrow' goes out up to 36 hours ahead: sent 11:33 PM Nov 20 reader time for a charge at 11:03 AM Nov 22."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx #signatures; /home/user/treegens-app/sign-and-grow/src/app/page.tsx promise card 'No overage charges, ever' and rule 'Only real signatures are used up'",
+    "claim": "'If the envelope is voided, declined or left to expire, it comes back by itself' and 'voided, declined and expired envelopes cost nothing'.",
+    "reality": "Only signatures held for people who have not signed come back. Two signers, one signs, void: 11 of 12. The Plan page was corrected; these two pages were not."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx #code",
+    "claim": "'There is no card on file for it and nothing to cancel. If you were paying before, the renewal is stopped for you.'",
+    "reality": "For someone who was paying, the card stays on file until they press Remove card (the code mail itself says so), and the paid subscription is ended at once, not just its renewal."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx #close ('Any subscription stops at once'); closing mails in /home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts ('Any subscription has been stopped and you will not be charged again')",
+    "claim": "Closing the account stops every subscription.",
+    "reality": "A plan on hold after failed payments is left alive at the provider and can charge during the 30 days (the account then goes back on the plan). A former payer on the free code gets 502 and cannot close at all."
+   },
+   {
+    "where": "Refund reason on the Plan page and in the refund dialog and mail (routes-billing.ts offerFor() line 137)",
+    "claim": "'none of its 9 signatures have been used', so $9.00 goes back.",
+    "reality": "After the customer used all 12 and then got 9 free ones from the code, the same sentence is shown and the full $9.00 is refunded."
+   },
+   {
+    "where": "'Refund sent' mail, routes-billing.ts line 166, as sent by the first-payment race",
+    "claim": "'We refunded $9.00 to the card it was paid with (this plan was already cancelled).'",
+    "reality": "Sent to a customer who subscribed seconds earlier; the plan is active and was never cancelled."
+   },
+   {
+    "where": "cancelPlan() mail for the 'ended now' path, routes-billing.ts line 287",
+    "claim": "'The last payment had not gone through, so the plan ends today and that payment will not be tried again.'",
+    "reality": "Also sent when there was no failed payment at all: to a former payer whose code was switched off and who had to 'cancel' a subscription that ended long ago."
+   },
+   {
+    "where": "'The code X has ended' mail, routes-billing.ts lines 355 to 359, and the 'Your monthly plans' mail from POST /public/billing/find",
+    "claim": "'Nothing was charged and nothing will be', next to a link 'Do not renew: Stops the monthly plan in one click'; and '<account>: $9.00 a month'.",
+    "reality": "There is no paid plan on that account. The link and the listing come from hasSub() being true for a status of NULL."
+   },
+   {
+    "where": "Dispute mail, routes-billing.ts lines 979 to 983",
+    "claim": "'Your monthly plan has ended and nothing more will be charged ... the signatures you have stay yours.'",
+    "reality": "On a free-code account the plan has not ended. On any account the signatures bought with the disputed payment stay too, so the customer has the money and the signatures."
+   },
+   {
+    "where": "Plan page notice after removing a card, settings/page.tsx line 374",
+    "claim": "'Card removed. Nothing can be charged to it.'",
+    "reality": "Shown when the server removed 0 payment methods (only type card is looked at)."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/help/tools.tsx comment and billDay(); /home/user/treegens-app/sign-and-grow/src/app/billing/stop/StopView.tsx",
+    "claim": "'Billing dates are whole days in UTC, written the same way as in our emails so the two never disagree.'",
+    "reality": "Emails now use each reader's time zone. For a Los Angeles reader the email and the Plan page say March 7, 2027 and the stop page says March 8, 2027."
+   },
+   {
+    "where": "StopByCard result in tools.tsx; help page #stop-by-card",
+    "claim": "'Renewal stopped for <account>. You will not be charged again.'",
+    "reality": "When the email address manages two paid teams on that card, only the first is stopped; the second keeps renewing and is not mentioned."
+   },
+   {
+    "where": "Plan page hero ('So far <account> has planted N mangroves') and /impact totals",
+    "claim": "The number is ten per dollar actually paid.",
+    "reality": "Likely inflated with the real provider: each top-up's own invoice message adds a second payment row ($9 + $5 shows 190, not 140), and invoices from unknown customers are added to the public total."
+   },
+   {
+    "where": "Plan page: 'Next charge: $9.00 on <date> at <time> ... you can cancel right up to the charge'; reminder mail 'works right up to the charge'",
+    "claim": "The charge happens at that minute and a cancel before it prevents it.",
+    "reality": "The time shown is the end of the period; the provider charges about an hour later, and a cancel in that hour does not stop that charge (likely, see stripe doubts)."
+   }
+  ],
+  "screens": [
+   "Screenshots: /home/user/treegens-app/sign-and-grow/tests/out/verify-billing-core/shots/ (plan-<state>-desktop.png and -phone.png, dialog-*.png, stop-<state>-*.png, flow-*.png). Driver scripts ui-seed.mjs, ui-run.cjs, ui-flows.cjs in the same folder. Sizes: 1280x900 and 390x844. Dev server stopped, .next-verify-verify-billing-core deleted, temp data folder deleted.",
+   "No state at either size made the whole page scroll sideways, and the Cancel, Refund and Remove card dialogs fit on the phone. New account, on the plan, cancelled, free with the code (never paid and former payer) and after a refund all read correctly on desktop.",
+   "Payment failing AND set to end (plan grove, past_due, cancel_at set), both sizes: two badges side by side ('Ends Dec 10, 2026' and 'Payment failed'); the warning 'To stop it, cancel: the failed payment is then not tried again' directly above 'Cancelled. You will not be charged again. The plan runs until December 10, 2026'; buttons 'Update the card', 'Cancel plan' and 'Keep the plan after all' together. Pressing Cancel plan and confirming (real server answer) shows 'Cancelled. You will not be charged again. The plan runs until December 10, 2026 because that month is already paid for, and your signatures stay yours. Reference . We emailed you this too.' with an empty reference; nothing was cancelled and no email was sent.",
+   "Code switched off for a former payer (plan seedling, status empty, old subscription id), both sizes: badge 'Not started' and a 'Start the monthly plan for $9' button. Pressing it shows the error 'The last payment for this plan did not go through. Update the card with \"Invoices and card\" on the Plan page, or cancel the plan first and start again.' There is no Cancel button anywhere on the page. The Remove card dialog says 'Your plan is cancelled at the same time, so it does not renew' although there is no plan.",
+   "Cancelled with the end date in the past (the provider's 'ended' message never came), both sizes: badge 'Ends Nov 17, 2026' three days after that date, 'The plan runs until November 17, 2026', a 'Keep the plan after all' button, and the top-up form still active.",
+   "On hold (provider status unpaid, plan seedling), both sizes: the Top up card says 'Top-ups come with the monthly plan. Start the plan above and you can add signatures whenever you need them', but the plan card above has no start button, only 'Update the card' and 'Cancel plan'.",
+   "Over-committed (more out than signatures), both sizes: balance '0 signatures' with the warning, fine; the Cancel dialog says 'The 0 signatures you have never expire.'",
+   "Phone 390x844, every state: the Settings tab strip is cut at the right edge. The selected tab 'Plan' ends at x=404 in a 390 wide window and shows as 'Pl'; 'Your data' and 'API and webhooks' are off screen. The strip does scroll sideways but nothing hints at it and the selected tab is not scrolled into view.",
+   "Phone 390x844, states with payments: the Payments table is 379 px wide in a 360 px box. The last column is cut off: 'Invoice' shows as 'Invo' and 'Refund $500.00' as 'Refu $500', so the per-payment refund link is half hidden unless the table is dragged sideways.",
+   "Phone 390x844, Plan history: the date column takes about half the width without wrapping, the description wraps into a column roughly 70 px wide (one or two words per line, a single row becomes 7 lines tall) and the reference on the right is cut off ('sub_activ').",
+   "Stop page, payment failing (past_due), both sizes, before pressing: 'Next charge $9 on December 2, 2026' and 'You are not charged again. The plan runs until the end of the month you already paid for.' Pressing the button actually ends the plan today because the month is not paid. The page is not told about the failed payment unless the plan is already off 'grove'.",
+   "Stop page, payment failing AND set to end, both sizes: 'Already stopped. You will not be charged again ... The plan runs until December 10, 2026, because that month is already paid for', with no button. The provider is still retrying the payment.",
+   "Stop page for the former payer whose code was switched off: 'Plan: Grove, $9 a month (on hold: the last payment did not go through)' and a 'Stop renewing' button, on an account with no paid plan.",
+   "Stop page for the cancelled plan whose end date has passed: 'ends on November 17, 2026' and 'Sign in and resume the plan any time before November 17, 2026', three days after that date.",
+   "Dates, browser set to Los Angeles, end of the paid month 2027-03-08T02:00Z: Plan page 'Ends Mar 7, 2027' and 'The plan runs until March 7, 2027'; the stop page for the same account in the same browser 'Grove for Tess's workspace ends on March 8, 2027'.",
+   "Back from checkout with nothing paid (/app/settings?tab=billing&topped=1&session_id=cs_never_paid, and upgraded=1): the page shows 'We could not confirm that payment yet. If you paid, it shows here within a minute and nothing is charged twice. If it does not, contact us.' and the address is cleaned up. Correct. In the dev server the message appears twice (development double run of the effect); not checked in a production build.",
+   "Long workspace name (88 characters) and six payments including $500.00 top-ups: wraps cleanly on the Plan page and on the stop page at both sizes; only the Payments and Plan history tables have the phone problems above."
+  ]
+ }
+}

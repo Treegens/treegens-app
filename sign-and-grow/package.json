@@ -1,0 +1,50 @@
+{
+  "name": "growsigning",
+  "version": "0.1.0",
+  "private": true,
+  "description": "E-signatures without paper. 100% of subscription revenue funds Treegens tree planting.",
+  "scripts": {
+    "postinstall": "node scripts/copy-assets.mjs",
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev",
+    "prebuild": "node scripts/sbom.mjs",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
+    "sbom": "node scripts/sbom.mjs",
+    "backup": "node scripts/backup.mjs",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "i18n:check": "node --experimental-strip-types --no-warnings scripts/i18n-check.mjs",
+    "test": "node --experimental-strip-types --no-warnings --test tests/*.test.ts",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@fontsource-variable/noto-sans-jp": "^5.3.1",
+    "@fontsource-variable/noto-sans-kr": "^5.3.1",
+    "@fontsource-variable/noto-sans-sc": "^5.3.1",
+    "@fontsource/caveat": "^5.3.0",
+    "@fontsource/dancing-script": "^5.3.0",
+    "@fontsource/great-vibes": "^5.3.0",
+    "@fontsource/lora": "5.3.0",
+    "@fontsource/noto-sans-devanagari": "^5.3.0",
+    "@fontsource/noto-sans-khmer": "^5.3.0",
+    "@fontsource/noto-sans-thai": "^5.3.0",
+    "@fontsource/sacramento": "^5.3.0",
+    "@pdf-lib/fontkit": "^1.1.1",
+    "dejavu-fonts-ttf": "^2.37.3",
+    "next": "^16.4.6",
+    "nodemailer": "^10.6.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "4.10.38",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/nodemailer": "^8.0.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,19 @@
+/* Who can use a template, and the lock on its wording (src/components/templates/WhoCanUse.tsx). */
+.tr-marks { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: 8px; vertical-align: 1px; }
+.badge.tr-mark { background: #f3ead2; color: #6b4e00; }
+.badge.tr-lock::before { display: none; }
+.badge.tr-lock svg { margin-right: -2px; }
+.tr-tap { min-height: 44px; }
+label.check.tr-tap { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.tr-form { display: grid; gap: 14px; }
+.tr-set { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
+.tr-set legend { font-weight: 700; margin-bottom: 6px; padding: 0; }
+.sn-choice.tr-off { opacity: 0.55; cursor: not-allowed; }
+.tr-people { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.tr-people li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; border-bottom: 1px solid var(--line); padding: 4px 0; }
+.tr-who { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.tr-preview { margin: 0; }
+.tr-banner { display: flex; gap: 8px; align-items: flex-start; }
+.tr-banner svg { margin-top: 2px; }
+.tr-line { margin-bottom: 10px; }
+.sn-rowactions .btn.tr-tap, .sn-inlineactions .btn.tr-tap { min-height: 44px; }

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="growsigning">
+  <title>growsigning</title>
+  <!-- One flat colour. Set the CSS color of the parent, or replace currentColor. -->
+  <path fill="currentColor" fill-rule="evenodd" d="M4 60C19.26 54.6 34.4 57.52 47.74 44.18C57.97 33.95 62.19 19.17 58.91 5.09C44.83 1.81 30.05 6.03 19.82 16.26C6.48 29.6 9.4 44.74 4 60ZM7.16 56.84L12.1 50.41L33.49 27.72A5.4 5.4 0 1 1 36.28 30.51L13.59 51.9Z"/>
+</svg>

@@ -1,0 +1,78 @@
+/* Help requests: the customer's view of one request (help page and the private link) and the operators' queue.
+   Shared tokens and components live in ../globals.css. */
+
+/* ---- One request, as its writer sees it -------------------------------------------------------- */
+.rq-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.rq-head .rq-meta { color: var(--muted); font-size: 13.5px; }
+.rq-state { margin: 12px 0 0; }
+.rq-state b { display: block; font-size: 15.5px; margin-bottom: 2px; }
+.rq-state.late { background: var(--red-soft); color: #7d241d; }
+.rq-thread { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+.rq-msg { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: #fbfaf6; }
+.rq-msg.us { background: var(--green-soft); border-color: rgba(19, 74, 44, 0.16); }
+.rq-msg.question { background: var(--amber-soft); border-color: rgba(185, 119, 18, 0.25); }
+.rq-who { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.rq-who b { color: var(--ink); }
+.rq-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rq-reply { margin-top: 16px; }
+.rq-reply textarea { min-height: 110px; }
+.rq-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 4px; }
+.rq-note { margin: 12px 0 0; }
+.rq-list { list-style: none; margin: 0; padding: 0; }
+.rq-list > li { border-top: 1px solid var(--line); }
+.rq-item > summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 12px 0; cursor: pointer; min-height: 44px; }
+.rq-item > summary { list-style: none; }
+.rq-item > summary::-webkit-details-marker { display: none; }
+/* The arrow that says a request can be unfolded. It turns when it is. */
+.rq-item > summary > span:first-child::before { content: ''; display: inline-block; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); margin: 0 10px 2px 2px; transition: transform 0.12s; }
+.rq-item[open] > summary > span:first-child::before { transform: rotate(45deg); }
+.rq-item > summary:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; border-radius: 6px; }
+.rq-item[open] { padding-bottom: 16px; }
+.rq-sum-state { font-size: 13px; font-weight: 600; }
+.rq-sum-state.late { color: var(--red); }
+
+/* ---- The operators' queue ---------------------------------------------------------------------- */
+.tk-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 12px; }
+.tk-filters button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--muted); padding: 7px 13px; min-height: 36px; cursor: pointer; }
+.tk-filters button[aria-pressed='true'] { background: var(--green); border-color: var(--green); color: #fff; }
+.tk-filters button:focus-visible, .tk-row:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.tk-row { display: block; width: 100%; text-align: left; border: 0; background: none; font: inherit; color: inherit; padding: 12px 16px; cursor: pointer; min-height: 44px; }
+.tk-row:hover { background: #fbfaf6; }
+.tk-row[aria-expanded='true'] { background: #fbfaf6; }
+.tk-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
+.tk-line + .tk-line { margin-top: 3px; }
+/* A name and an address are typed by anyone, and can be one very long word: they wrap instead of running out of the card. */
+.tk-line > span { min-width: 0; }
+.tk-line b, .tk-facts > div { overflow-wrap: anywhere; }
+.tk-mark { display: inline-block; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; border-radius: 999px; padding: 2px 8px; margin-right: 6px; vertical-align: 1px; }
+.tk-mark.late { background: var(--red); color: #fff; }
+.tk-mark.urgent { background: var(--amber-soft); color: #6f4706; }
+.tk-mark.alert { background: var(--blue-soft); color: var(--blue); }
+.tk-open { padding: 4px 16px 18px; border-top: 1px dashed var(--line); background: #fbfaf6; }
+.tk-facts { font-size: 13.5px; margin: 10px 0; display: grid; gap: 4px; }
+.tk-thread { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
+.tk-thread li { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
+.tk-thread li.answer, .tk-thread li.question { background: var(--green-soft); border-color: rgba(19, 74, 44, 0.16); }
+.tk-thread li.note { background: var(--amber-soft); border-color: rgba(185, 119, 18, 0.25); }
+.tk-thread li.event { border: 0; background: none; padding: 0 2px; font-size: 13px; color: var(--muted); }
+.tk-kinds { border: 0; padding: 0; margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.tk-kinds legend { font-size: 13px; font-weight: 600; padding: 0; margin-bottom: 6px; }
+.tk-kinds label { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; font-size: 14px; cursor: pointer; }
+.tk-kinds input { width: 18px; height: 18px; flex: none; }
+.tk-write textarea { width: 100%; min-height: 120px; }
+.tk-buttons { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.tk-buttons select { max-width: 240px; }
+
+/* On a phone, and on anything used by touch, everything that can be tapped is at least 44 px high. */
+@media (max-width: 900px), (pointer: coarse) {
+  .tk .btn, .tk select, .tk input[type='search'], .tk-filters button, .tk-kinds label, .rq .btn, .rq-item > summary { min-height: 44px; }
+  .tk textarea, .tk select, .rq textarea { font-size: 16px; }
+  .rq .pub-link, .rq .linklike { display: inline-flex; align-items: center; min-height: 44px; }
+  /* "Do not mention the document" sits just above the Send button of the help form. */
+  .pub-contact .pub-link { display: inline-flex; align-items: center; min-height: 44px; }
+}
+@media (max-width: 700px) {
+  .tk-open { padding-left: 12px; padding-right: 12px; }
+  .tk-buttons .btn { flex: 1 1 auto; }
+  .rq-actions .btn { flex: 1 1 100%; }
+}

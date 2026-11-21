@@ -1,0 +1,290 @@
+'use client';
+// The page a website's visitors accept click-to-agree terms on, at /agree/<slug>. With ?embed=1 it is the same page
+// inside a frame on the website (public/clickwrap.js): narrower, and it tells the page around it how tall it is and
+// when the visitor has accepted. The rules are in src/server/clickwrap.ts, the words in src/lib/clickwrap.ts.
+import { useEffect, useRef, useState } from 'react';
+import { useParams } from 'next/navigation';
+import { api, fmtDate } from '@/components/ui';
+import { Mark } from '@/components/Brand';
+import { PdfDoc } from '@/components/PdfDoc';
+import { ClickwrapTerms } from '@/components/ClickwrapTerms';
+
+const tell = (msg: Record<string, any>) => {
+  // Only to a page around this frame, and never anything secret: the receipt stays in this frame.
+  if (window.parent !== window) window.parent.postMessage({ source: 'growsigning-clickwrap', ...msg }, '*');
+};
+// The receipt is given once, in the answer to this browser's press, and the server never hands it out again. It is
+// kept in this browser so a reload still offers the copy. Storage can be missing or blocked (a private window, a frame
+// on another site): then the copy is offered only until the page is left.
+const keepReceipt = (id: string, receipt: string) => {
+  try {
+    localStorage.setItem(`cwr:${id}`, receipt);
+  } catch {}
+};
+// Whether this browser can say if something covers the button (IntersectionObserver v2: Chrome and Edge).
+const canTell = () => typeof IntersectionObserver !== 'undefined' && typeof IntersectionObserverEntry !== 'undefined' && 'isVisible' in IntersectionObserverEntry.prototype;
+// A reading counts as uncovered only when the whole box of the button is in view and the browser says nothing covers
+// it or makes it see-through. Cropped by a few pixels, scrolled half away or transparent: covered.
+const uncovered = (e: IntersectionObserverEntry) => e.isIntersecting && e.intersectionRatio > 0.99 && !!(e as any).isVisible;
+const COVERED = 'Part of this button is out of view, or something on the page around these terms covers it, so it cannot be pressed. Scroll so that the whole button shows. If it still cannot be pressed, open the terms on their own page with the link below, or tell the website.';
+const keptReceipt = (id: string): string | null => {
+  try {
+    return localStorage.getItem(`cwr:${id}`);
+  } catch {
+    return null;
+  }
+};
+
+export default function Agree() {
+  const { slug } = useParams<{ slug: string }>();
+  const [q, setQ] = useState<URLSearchParams | null>(null);
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [ticked, setTicked] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+  const [who, setWho] = useState({ name: '', email: '' });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [done, setDone] = useState<any>(null);
+  const [mailed, setMailed] = useState('');
+  const [report, setReport] = useState(false);
+  // Whether the browser says the button can be seen: true, false, or null where it cannot tell.
+  const [visible, setVisible] = useState<boolean | null>(null);
+  const seen = useRef<boolean | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const go = useRef<HTMLDivElement>(null);
+  // A frame counts as one only when this page really is inside a frame and was asked to be: only ?embed=1 may be
+  // framed at all (next.config.mjs), and ?embed=1 opened on its own is our own page, and recorded as such.
+  const [framed, setFramed] = useState(false);
+  useEffect(() => {
+    try {
+      setFramed(window.self !== window.top);
+    } catch {
+      setFramed(true);
+    }
+  }, []);
+  const embed = q?.get('embed') === '1' && framed;
+
+  const load = (params: URLSearchParams) => {
+    setError('');
+    api(`/public/agree/${slug}?${params.toString()}`).then(setData).catch((e) => setError(e.message));
+  };
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    setQ(p);
+    setReport(p.get('report') === '1');
+    load(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
+  // Inside a frame: the page around it learns how tall the terms are, so it can make the frame fit.
+  useEffect(() => {
+    if (!embed) return;
+    // The page itself is measured, not the document: a document is never shorter than its frame, so a frame that
+    // was made tall would never shrink again after the visitor accepted.
+    const main = document.querySelector('main');
+    if (!main) return;
+    const ro = new ResizeObserver(() => tell({ type: 'height', height: Math.ceil(main.getBoundingClientRect().height) + 2 }));
+    ro.observe(main);
+    return () => ro.disconnect();
+  }, [embed]);
+
+  // Terms that must be read to the end: the button waits until the box has been scrolled to its end. Terms that fit
+  // without scrolling count as read to the end.
+  const checkEnd = () => {
+    const el = box.current;
+    if (el && el.scrollTop + el.clientHeight >= el.scrollHeight - 8) setScrolled(true);
+  };
+  useEffect(() => {
+    const t = setTimeout(checkEnd, 400);
+    return () => clearTimeout(t);
+  }, [data]);
+
+  // Inside a frame, where the browser can tell (Chrome and Edge), the button can be pressed only while the whole of it
+  // is in view and nothing on the page around the frame covers it or makes it see-through. Every reading counts: one
+  // that says the button is cropped, half scrolled away, transparent or covered stops it at once, whatever came before.
+  // Elsewhere this cannot be known, and the record says so. On our own page nothing is around the terms to cover them.
+  useEffect(() => {
+    // The box around the button is watched, not the button: a button that waits is drawn see-through, and the browser
+    // would count that as covered.
+    const el = go.current;
+    if (!embed || !el || !canTell()) return;
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) (seen.current = uncovered(e)), setVisible(seen.current);
+    }, { trackVisibility: true, delay: 100, threshold: [0, 1] } as any);
+    io.observe(el);
+    return () => io.disconnect();
+  }, [data, done, embed]);
+  // One more reading, taken at the press by a new observer, which reports at once what the browser sees now. A page
+  // that makes the frame see-through for the moment of a click is caught by this one or by the one before it.
+  const pressReading = (): Promise<boolean | null> => new Promise((resolve) => {
+    const el = go.current;
+    if (!el) return resolve(null);
+    const io = new IntersectionObserver((entries) => {
+      clearTimeout(t);
+      io.disconnect();
+      resolve(uncovered(entries[entries.length - 1]));
+    }, { trackVisibility: true, delay: 100, threshold: [0, 1] } as any);
+    const t = setTimeout(() => (io.disconnect(), resolve(null)), 1500);
+    io.observe(el);
+  });
+
+  async function accept(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setMsg('');
+    let page: string | null = null;
+    try {
+      page = embed ? (window.location as any).ancestorOrigins?.[0] || document.referrer || null : document.referrer || null;
+    } catch {}
+    // Uncovered only when the last reading before the press and a fresh one at the press both say so. Null where the
+    // browser cannot tell, or gave no fresh reading in time: the record then says it did not report it.
+    let unobscured: boolean | null = null;
+    if (embed && canTell()) {
+      const now = await pressReading();
+      if (seen.current !== true || now === false) {
+        seen.current = false;
+        setVisible(false);
+        setMsg(COVERED);
+        setBusy(false);
+        return;
+      }
+      unobscured = now;
+    }
+    try {
+      const r = await api(`/public/agree/${slug}/accept`, {
+        body: { view: data.view, agree: ticked, scrolled: data.version.scroll ? scrolled : undefined, embed, page_url: page, unobscured,
+          who: q?.get('who') || undefined, sig: q?.get('sig') || undefined, ...(data.identity === 'typed' ? who : {}) },
+      });
+      if (r.receipt) keepReceipt(r.acceptance.id, r.receipt);
+      setDone(r);
+      tell({ type: 'accepted', acceptance: r.acceptance.id, version: r.acceptance.version });
+    } catch (err: any) {
+      setMsg(err.message);
+      // The terms changed while the page was open, or it stood open too long: show the current ones.
+      if (err.code === 'terms_changed' || err.code === 'view_old') (setTicked(false), setScrolled(false), q && load(q));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function mailCopy(receipt: string) {
+    try {
+      const r = await api('/public/agree/receipt/email', { body: { receipt } });
+      setMailed(r.sent || r.status === 'outbox' ? `A copy is on its way to ${r.to}.` : `We could not hand the email to the mail server yet. It is tried again by itself, so it may arrive later at ${r.to}.`);
+    } catch (err: any) {
+      setMailed(err.message);
+    }
+  }
+
+  const v = data?.version;
+  const finished = done || data?.already;
+  const ref = done?.acceptance.id || data?.already?.id;
+  const receipt: string | null = done?.receipt || (ref ? keptReceipt(ref) : null);
+  const covered = visible === false;
+  const blocked = !ticked || (v?.scroll && !scrolled) || covered || busy;
+  // Accepted an earlier version that still counts: what they accepted is shown, not the newer text (the server sends
+  // that version's words, or for a PDF its name, with the notes of what changed).
+  const older = !done && data?.already?.changes ? data.already : null;
+
+  return (
+    <main className={`cw-page${embed ? ' cw-embed' : ''}`}>
+      {error ? (
+        <div className="card" role="alert"><h1 className="cw-title">These terms cannot be shown</h1><p style={{ marginTop: 8 }}>{error}</p></div>
+      ) : !data ? (
+        <div className="muted center" role="status">Loading the terms…</div>
+      ) : data.closed ? (
+        <div className="card" role="status"><h1 className="cw-title">These terms cannot be accepted here right now</h1><p style={{ marginTop: 8 }}>{data.text}</p></div>
+      ) : (
+        <div className="card">
+          <div className="cw-head">
+            {data.account.logo ? <img src={data.account.logo} alt="" /> : <Mark size={24} label="" />}
+            <span className="muted small">{data.account.name}</span>
+          </div>
+          <h1 className="cw-title serif">{older?.title || v.title}</h1>
+          <div className="muted small">{older ? `Version ${older.version}, the one you accepted. Version ${v.number} is in force now.` : `Version ${v.number}, published ${fmtDate(v.published_at)}`}</div>
+          {older && (
+            <div className="notice" style={{ marginTop: 12 }}>
+              You accepted version {older.version} on {fmtDate(older.at)}. These terms have changed since, and the people who wrote them said the change does not ask you to accept again, so your acceptance still counts.
+              {older.changes.filter((c: any) => c.note).map((c: any) => <div key={c.number} style={{ marginTop: 4 }}>What changed in version {c.number}: {c.note}</div>)}
+              <div style={{ marginTop: 4 }}>{older.format === 'text' ? `Below are the terms as you accepted them. To read version ${v.number}, ask ${data.account.name}.` : `The pages below are version ${v.number}. The version you accepted is in your copy of the record.`}</div>
+            </div>
+          )}
+          {data.earlier && (
+            <div className="notice warn" style={{ marginTop: 12 }}>
+              You accepted version {data.earlier.version} on {fmtDate(data.earlier.at)}. These terms have changed since, so you are asked to accept them again.
+              {data.earlier.changes.filter((c: any) => c.note).map((c: any) => <div key={c.number} style={{ marginTop: 4 }}>What changed in version {c.number}: {c.note}</div>)}
+            </div>
+          )}
+          {/* The terms, in a box a keyboard can scroll (Tab to it, then the arrow keys). */}
+          <div ref={box} className={`cw-terms${v.format === 'pdf' && !older?.text ? ' cw-pdf' : ''}`} tabIndex={0} role="region" aria-label={`The terms: ${older?.title || v.title}`} onScroll={checkEnd}>
+            {older?.text != null ? <ClickwrapTerms text={older.text} /> : v.format === 'pdf' ? <PdfDoc url={v.pdf} maxWidth={720} onPages={() => setTimeout(checkEnd, 300)} /> : <ClickwrapTerms text={v.text} />}
+          </div>
+          {finished ? (
+            <div className="cw-done" role="status" aria-live="polite">
+              <div className="notice">{done?.already === false ? 'Recorded.' : 'You have accepted these terms.'} {done ? `You accepted version ${done.acceptance.version} on ${fmtDate(done.acceptance.at, true)}.` : `You accepted version ${data.already.version} on ${fmtDate(data.already.at, true)}.`} The reference of the record is {ref}.</div>
+              {receipt ? <>
+                <div className="cw-actions">
+                  <a className="btn" href={`/api/public/agree/receipt/${receipt}/certificate`}>Download your copy (PDF)</a>
+                  {(done ? done.email : data.already.email) && !mailed && <button className="btn" type="button" onClick={() => mailCopy(receipt)}>Email me a copy</button>}
+                </div>
+                {mailed && <p className="small" style={{ marginTop: 8 }} role="status">{mailed}</p>}
+                <p className="cw-why">The copy holds the terms and everything the record says. Only the browser you accepted in was given the way to it, and we do not hand it out again, so download it now if you want to keep it. If you lose it, ask {data.account.name}: they keep the record.</p>
+              </> : <p className="cw-why">Your copy was offered in the browser you accepted in, and only there. This browser does not have it. If you need one, ask {data.account.name}: they keep the record and can give you its certificate.</p>}
+            </div>
+          ) : (
+            <form onSubmit={accept} noValidate>
+              {/* Said before the click: what is recorded, what the record will show and what it will not. */}
+              <div className="cw-recorded">
+                <p>{data.recorded}</p>
+                <p>{data.shows} {data.not}</p>
+                <p>{data.law}</p>
+              </div>
+              {data.identity === 'website' ? (
+                <p className="cw-as">You accept as <b>{[data.person.name, data.person.email].filter(Boolean).join(', ') || data.person.id}</b>, as {data.account.name} knows you. If that is not you, do not accept: go back and tell them.</p>
+              ) : (
+                <div className="cw-grid" style={{ gap: 10 }}>
+                  <label className="f"><span>Your full name</span><input dir="auto" value={who.name} onChange={(e) => setWho({ ...who, name: e.target.value })} required autoComplete="name" /></label>
+                  <label className="f"><span>Your email <span className="hint">(kept with the record; we do not write to it)</span></span><input type="email" value={who.email} onChange={(e) => setWho({ ...who, email: e.target.value })} required autoComplete="email" /></label>
+                </div>
+              )}
+              <label className="cw-tick"><input type="checkbox" checked={ticked} onChange={(e) => setTicked(e.target.checked)} /> <span>{v.checkbox}</span></label>
+              {msg && <div className="notice err" role="alert" style={{ marginBottom: 10 }}>{msg}</div>}
+              <div ref={go}><button className="btn primary cw-go" type="submit" disabled={!!blocked} aria-describedby="cw-why">{busy ? 'Recording…' : v.button}</button></div>
+              <p id="cw-why" className="cw-why" aria-live="polite">
+                {covered ? COVERED : v.scroll && !scrolled ? 'Scroll to the end of the terms to accept them.' : !ticked ? `Tick "${v.checkbox}" to accept.` : ''}
+              </p>
+              {covered && <p className="cw-foot" style={{ textAlign: 'left' }}><a href={`/agree/${slug}${q?.get('who') ? `?who=${encodeURIComponent(q.get('who')!)}&sig=${encodeURIComponent(q.get('sig') || '')}` : ''}`} target="_blank" rel="noopener">Open these terms on their own page</a></p>}
+            </form>
+          )}
+        </div>
+      )}
+      <ReportPage slug={slug} open={report} setOpen={setReport} />
+      {!embed && <p className="cw-foot">Powered by GrowSigning, where every dollar plants mangrove trees. <a href="/help">Get help</a></p>}
+    </main>
+  );
+}
+
+// "Report this page", like "Report this email" in our signing emails. A person in the review queue reads it.
+function ReportPage({ slug, open, setOpen }: { slug: string; open: boolean; setOpen: (b: boolean) => void }) {
+  const [f, setF] = useState({ reason: 'phishing', detail: '', email: '' });
+  const [sent, setSent] = useState('');
+  if (!open) return <p className="cw-foot"><button type="button" className="cw-linkish" onClick={() => setOpen(true)}>Report this page</button> if it looks like a scam or is not what you expected.</p>;
+  if (sent) return <p className="cw-foot" role="status">{sent}</p>;
+  return (
+    <form className="card cw-report" onSubmit={(e) => (e.preventDefault(), api(`/public/agree/${slug}/report`, { body: f }).then(() => setSent('Thank you. A person who reviews reports will look at this page.')).catch((err) => setSent(err.message)))}>
+      <h2 style={{ fontSize: 17, marginBottom: 8 }}>Report this page</h2>
+      <label className="f"><span>What is wrong</span>
+        <select value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })}>
+          <option value="phishing">It looks like a scam or asks for money</option>
+          <option value="spam">I did not ask for this</option>
+          <option value="not-for-me">It is not meant for me</option>
+          <option value="other">Something else</option>
+        </select>
+      </label>
+      <label className="f"><span>Anything else we should know <span className="hint">(optional)</span></span><textarea rows={3} value={f.detail} onChange={(e) => setF({ ...f, detail: e.target.value })} /></label>
+      <label className="f"><span>Your email <span className="hint">(optional, if you want an answer)</span></span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} autoComplete="email" /></label>
+      <div className="row wrap"><button className="btn primary cw-go" style={{ width: 'auto' }}>Send the report</button><button type="button" className="btn ghost cw-go" style={{ width: 'auto' }} onClick={() => setOpen(false)}>Cancel</button></div>
+    </form>
+  );
+}

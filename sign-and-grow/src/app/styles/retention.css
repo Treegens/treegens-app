@@ -1,0 +1,39 @@
+/* Keep and delete, and holds: the line and dialogs on the document page (src/components/sender/Retention.tsx) and
+   the Settings card (src/components/settings/RetentionSettings.tsx). Shared tokens live in ../globals.css. */
+.ret h2 { margin-bottom: 8px; }
+.ret p { margin: 0 0 10px; }
+.ret .warn-text { color: var(--ink); }
+.ret-held { margin-bottom: 10px; }
+.ret-reason { margin-top: 6px; overflow-wrap: anywhere; }
+.ret-actions { gap: 8px; margin: 4px 0 6px; }
+.ret-actions .btn, .ret-settings .btn { min-height: 44px; }
+.ret-stays { margin-top: 8px; }
+.ret-stays summary { cursor: pointer; color: var(--green); min-height: 44px; display: flex; align-items: center; }
+.ret-sha { overflow-wrap: anywhere; word-break: break-all; }
+.ret-levels { border: 0; padding: 0; margin: 0 0 10px; }
+.ret-levels legend { font-weight: 600; margin-bottom: 6px; }
+.ret-level { min-height: 44px; align-items: flex-start !important; padding: 6px 0; }
+.ret-level input { margin-top: 3px; }
+.ret-settings label.f select, .ret-settings label.f input { width: 100%; min-height: 44px; }
+.ret-settings .ret-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 14px; }
+.ret-list { list-style: none; padding: 0; margin: 8px 0 0; }
+.ret-list > li { padding: 10px 0; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.ret-list > li > div { min-width: 0; overflow-wrap: anywhere; }
+.ret-audit-mark { display: inline-block; margin-top: 2px; }
+
+/* One sentence under the status of a document: the day its files are deleted, or that it is on hold. Not a card. */
+.sn-ret-line { margin: -4px 0 0; padding: 0 4px; color: var(--muted); font-size: 14.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.sn-ret-line .sn-linkbtn { margin-left: 4px; font-weight: 600; }
+.ret-lines { display: grid; gap: 4px; margin: 4px 0 8px; }
+.ret-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; min-height: 44px; }
+.ret-line > span:first-child { flex: 1 1 200px; }
+.ret-num { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.ret-num input { width: 104px; min-height: 44px; }
+.ret-lines .notice { margin: 0 0 6px; }
+.ret-level input { width: 20px; height: 20px; flex: none; }
+.ret-settings .check input[type="radio"] { width: 20px; height: 20px; }
+.ret-link { display: inline-flex; align-items: center; min-height: 44px; }
+.ret-find { margin-top: 10px; }
+.ret-settings a.btn { display: inline-flex; align-items: center; min-height: 44px; }
+.ret-settings h4 { margin: 16px 0 4px; font-size: 15px; }
+.ret-settings .set-fold, .ret-stays summary { font-weight: 600; }

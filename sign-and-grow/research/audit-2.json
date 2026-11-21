@@ -1,0 +1,1134 @@
+{
+ "audit:support-account": {
+  "results": [
+   {
+    "theme_id": "support-no-human-reachable",
+    "requirement": "Every plan, including free, shows a support email address and contact form reachable in at most two clicks from any page.",
+    "verdict": "partly",
+    "evidence": "Contact form: ContactForm in /home/user/treegens-app/sign-and-grow/src/app/help/tools.tsx posts to POST /public/support in /home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts, which has no login or plan check. Every public page footer links straight to /help#contact (PublicFooter in src/components/Public.tsx), the app sidebar has Help (src/components/AppShell.tsx), the signing screen footer has Help (src/components/sign/parts.tsx). Browser run (tests/out/audit-support-account/ui1.mjs): landing -> 'Contact a person' showed the form in one click; I sent it logged out and got a reference. Shipped test: tests/trust.test.ts 'support is open to anyone, and an account can be closed for good'.",
+    "gap": "(1) A support email address appears only when SUPPORT_EMAIL is set (default: none), and only inside the form on /help; my server without it showed no address anywhere. /me returns support_email but no screen uses it. (2) The public form page /f/[slug] has no link at all (browser: zero links). /verify-email links only to /app. /signup, /forgot and /reset have no Help link (two clicks via the logo and the footer). The full-screen editor has none (Save and close, then Help, then scroll).",
+    "suggested_fix": "Add a Help link to src/app/f/[slug]/page.tsx, src/app/verify-email/page.tsx, every mode of src/components/AuthForm.tsx and the editor top bar. Print the support address in PublicFooter and in the AppShell sidebar. Make the server log a loud warning (or refuse to start in production) when SUPPORT_EMAIL is empty."
+   },
+   {
+    "theme_id": "support-no-human-reachable",
+    "requirement": "Any chatbot offers 'talk to a person' on its first screen and hands the transcript to the human agent.",
+    "verdict": "not_applicable",
+    "evidence": "There is no chatbot or automated assistant anywhere: a search of /home/user/treegens-app/sign-and-grow/src for chat/bot finds only copy saying 'No chatbot'. Help is one static page plus a form that goes to people.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "support-no-human-reachable",
+    "requirement": "First-response targets are published (one business day; four business hours for billing and lockouts) and the target and current status are shown on each ticket in the app.",
+    "verdict": "not_met",
+    "evidence": "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx only says 'a person replies'; README.md ('Things to decide before launch') says the pages 'deliberately promise no response time'. GET /support/mine in src/server/routes-trust.ts returns a signed-in user's requests with open/closed, but no page calls it: in the browser I filed a request while signed in and found it on none of /app, Settings, Plan, Inbox or /help.",
+    "gap": "No target is published or stored per request, there is no ticket view in the app, and someone who is logged out cannot see the state of their request at all.",
+    "suggested_fix": "Decide the targets, put them in src/lib/policy.ts and quote them on /help and in the acknowledgement email. Add due_at to support_requests (by topic) in src/server/db.ts. Add a 'Your requests' card (Settings or /help when signed in) fed by /support/mine showing status and target, and a status link in the acknowledgement email for people without an account."
+   },
+   {
+    "theme_id": "support-no-human-reachable",
+    "requirement": "A ticket has one named owner and a visible history; it can be closed only by the customer or after an 'is this solved?' message goes unanswered for 7 days.",
+    "verdict": "not_met",
+    "evidence": "support_requests in /home/user/treegens-app/sign-and-grow/src/server/db.ts has only a status column. POST /operator/support/:id in src/server/routes-trust.ts lets any operator close with one click ('Mark as answered' in src/app/app/operator/page.tsx). My run (tests/out/audit-support-account/audit1.ts, section O): an operator closed a request without replying, the customer got 0 emails, and /support/mine flipped to 'closed'.",
+    "gap": "No owner, no history (replies are mailto links outside the product), no 'is this solved?' step, no customer say in closing, no way for the customer to reopen.",
+    "suggested_fix": "Add owner_id and a support_events table; record replies sent from the queue; replace 'Mark as answered' with 'Ask if solved', which emails a yes/no link and lets tick() in src/server/cron.ts close after 7 silent days; let the customer reopen from the same link."
+   },
+   {
+    "theme_id": "support-no-human-reachable",
+    "requirement": "Billing-queue agents can issue refunds without escalation, and support conversations contain no sales offers.",
+    "verdict": "policy",
+    "evidence": "What the software gives: customers refund themselves with no agent (refundOffer and POST /billing/refund in /home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts; test 'unused signatures from the latest payment are refunded on request, to the cent'); a charge after cancelling refunds itself; a refund made in the payment provider's dashboard is recorded (charge.refunded in applyStripeEvent). The automatic acknowledgement email carries no offer.",
+    "gap": "The operator queue (GET /operator/queue, src/app/app/operator/page.tsx) has no refund action and shows no plan or payment for a billing request, so any refund outside the self-serve rule needs someone with access to the payment provider. Who has that access, and what agents write in replies, is for the people running it.",
+    "suggested_fix": "Add POST /operator/accounts/:id/refund that calls refundPayment in routes-billing.ts, and show the account's plan and last payments beside billing requests in the queue. Write a one-line rule for agents: no offers in support replies."
+   },
+   {
+    "theme_id": "support-blocked-without-active-login",
+    "requirement": "A logged-out support form is available to anyone and verifies identity by an emailed link or by card last four plus the date and amount of a recent charge.",
+    "verdict": "partly",
+    "evidence": "The form is open to anyone: POST /public/support is registered as 'public' in /home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts; shipped test 'support is open to anyone, and an account can be closed for good'; I submitted it logged out in a browser (tests/out/audit-support-account/ui1.mjs).",
+    "gap": "No identity check of any kind. Any address can be typed; the server stores the request as coming from it and at once emails that address a copy of the typed text. Operators cannot tell an owner from an impersonator, and the copy can be aimed at third parties (see bugs). Card details are only checked in the separate stop-billing tool.",
+    "suggested_fix": "In POST /public/support, for logged-out senders: store the request as unconfirmed, email a confirm link (signed like stopToken in routes-billing.ts) without echoing the message, and show 'address confirmed' in the operator queue. For billing topics offer optional last-four plus charge date and amount, checked against the provider."
+   },
+   {
+    "theme_id": "support-blocked-without-active-login",
+    "requirement": "Free users, suspended accounts and former customers (for at least 12 months after closure) can open billing and access-recovery tickets.",
+    "verdict": "met",
+    "evidence": "POST /public/support in /home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts checks no account, plan or pause state; SUPPORT_TOPICS includes 'billing' and 'cannot-log-in'. Shipped test 'support is open to anyone...' posts anonymously with topic cannot-log-in and gets a reference, an acknowledgement and a stored row. My runs: logged-out browser submission; a free account and a paused account use the same public route; after an account was purged the same address could still write in, and credits/payment rows are kept so a charge can be traced (audit1.ts sections M, F, G/D).",
+    "gap": "None in the software. Whether anyone reads the queue is covered under the first theme.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "support-blocked-without-active-login",
+    "requirement": "Billing and account-access support is never gated behind a paid plan or paid support tier.",
+    "verdict": "met",
+    "evidence": "There is one support route for everyone (POST /public/support, /home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts) and no plan field is read in it; there is no support tier in src/lib/impact.ts (PRICING, PLANS). The no-login billing tools (/public/billing/find, /public/billing/stop, /public/billing/stop-by-card in src/server/routes-billing.ts) are public too; tests 'support is open to anyone...' and 'locked out? stop billing by card, or find every subscription by email' pass.",
+    "gap": "None.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "support-blocked-without-active-login",
+    "requirement": "A signer who is not a customer can report a signing problem through the same form and the sender is notified.",
+    "verdict": "partly",
+    "evidence": "The form has the topic 'Signing a document' and takes an envelope id (ContactForm in /home/user/treegens-app/sign-and-grow/src/app/help/tools.tsx reads ?envelope=); the request is stored and shown to operators.",
+    "gap": "The sender is not told. My run (audit1.ts, Q1-Q3): a signer's request with topic 'signing' and the envelope id produced 0 emails to the sender and no entry in the envelope's audit trail. The signing screen's own 'Ask the sender' and 'Report' do notify, but they need a link that works, which is exactly what a stuck signer may not have. The envelope id is not validated.",
+    "suggested_fix": "In POST /public/support (src/server/routes-trust.ts): when the topic is 'signing' and envelope_id names an envelope on which the typed email is a recipient, email the sender (as askSender does in src/server/envelopes.ts) and add an audit entry. Give the same answer whether or not it matched."
+   },
+   {
+    "theme_id": "account-lock-cuts-off-signed-documents",
+    "requirement": "Billing status (unpaid, disputed, cancelled) never blocks viewing or downloading completed documents and audit trails; only new sends are paused, and only after a grace period of at least 14 days with warnings.",
+    "verdict": "met",
+    "evidence": "applyStripeEvent in /home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts only changes plan and subscription_status; nothing in src/server/routes-envelopes.ts (mine, GET /envelopes/:id, /download), GET /export or src/server/routes-sign.ts reads either. Sending is limited by the signature balance (src/server/credits.ts), never by billing status, so there is no billing pause at all. Shipped tests: 'cancelling keeps every signature; a charge after cancellation refunds itself and adds nothing' (export and a new send after the plan ended) and '...a card dispute stops all further billing'. My run (audit1.ts section E): after payment_failed, status 'unpaid' and a dispute, download 200, audit trail 200, export 200, a signer finished an envelope, and a new send still went out on the remaining balance.",
+    "gap": "None.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "account-lock-cuts-off-signed-documents",
+    "requirement": "No account is locked or restricted without an in-app banner and an email stating the reason, the action required and the deadline.",
+    "verdict": "partly",
+    "evidence": "Pausing writes suspended_at and a reason (reportAbuse in /home/user/treegens-app/sign-and-grow/src/server/envelopes.ts; POST /operator/accounts/:id in src/server/routes-trust.ts), emails owners and admins the reason, what still works and how to contest, and src/components/AppShell.tsx shows a banner with the reason. I read the email and /me in my run (audit1.ts F1-F3).",
+    "gap": "Neither the banner nor the email gives a deadline or a review time ('A person reviews every pause' is all). Plain members, who are also stopped from sending, get no email. The error at send time always says 'while we look into a report from a recipient', even when an operator paused for another reason. Other restrictions (first-week daily limit, the payment-notice filter) only appear as an error when hit.",
+    "suggested_fix": "Add review_due_at to accounts when pausing and print it in both pause emails and the banner; email every member; have tick() in src/server/cron.ts chase operators when a pause is overdue; use the stored suspended_reason in sendEnvelope's message."
+   },
+   {
+    "theme_id": "account-lock-cuts-off-signed-documents",
+    "requirement": "During any lock, documents already out for signature can still be signed and completed.",
+    "verdict": "met",
+    "evidence": "Only sendEnvelope in /home/user/treegens-app/sign-and-grow/src/server/envelopes.ts checks suspended_at; completeRecipient, advance and completeEnvelope never look at the account. My run (audit1.ts): a signer finished while the account was paused (F7, 200), while it was 'unpaid' (E6) and after a dispute (E12); during the closing grace period the signer's copy still opened (G4).",
+    "gap": "No shipped test pins this down (the pause test only checks send is refused and export works).",
+    "suggested_fix": "Add an assertion to tests/trust.test.ts that signAll succeeds on a paused account."
+   },
+   {
+    "theme_id": "account-lock-cuts-off-signed-documents",
+    "requirement": "Account closure is a soft delete: the owner can restore the account and all documents self-serve for 90 days, and closure requires explicit confirmation and sends an email with an undo link.",
+    "verdict": "partly",
+    "evidence": "POST /me/delete in /home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts asks for the password, sets closing_at 30 days ahead (CLOSE_GRACE_DAYS in src/lib/policy.ts) and emails 'Sign in to keep my account'; /auth/login in src/server/routes-account.ts clears it. Shipped test 'support is open to anyone, and an account can be closed for good' covers close, restore and purge; my run G1-G2 read the email.",
+    "gap": "30 days, not 90. The same dialog has a tick box 'Delete everything right now... This cannot be undone' (now:true runs purgeUser at once: no grace, no undo). Nothing is sent before the purge runs (0 emails in my run).",
+    "suggested_fix": "Raise CLOSE_GRACE_DAYS (the pages read it from policy.ts). Make 'delete now' confirm through an emailed link or keep a restorable copy for a short period. Send reminders 7 days and 1 day before purge from tick()."
+   },
+   {
+    "theme_id": "data-no-bulk-export",
+    "requirement": "Every plan, including free, has an 'Export everything' action that produces a ZIP of all signed PDFs, audit certificates and a CSV index at no extra cost.",
+    "verdict": "met",
+    "evidence": "GET /export in /home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts streams signed/*.pdf (each with its certificate), audit/*.json, envelopes.csv and README.txt; no plan is read. Buttons: 'Export everything (ZIP)' on src/app/app/envelopes/page.tsx and Settings, Your data. Shipped test 'everything can be exported, and the sender sees whether emails went out'. My run (audit1.ts M2-M4): a free-plan account with paying switched on got signed PDF, audit files, CSV and README; a selection export worked.",
+    "gap": "None for the requirement. Small print: a plain member's 'everything' is only what they sent; drafts and templates are not included.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "data-no-bulk-export",
+    "requirement": "After cancellation, payment failure or closure, read-only access and export remain available for at least 12 months, and a download link is emailed before any deletion.",
+    "verdict": "partly",
+    "evidence": "Cancellation and failed payment: nothing is removed or locked, with no time limit (tests and my section E run under the account-lock theme). Closure: purgeClosedAccounts in /home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts removes the account after 30 days.",
+    "gap": "On closure the data lives 30 days, not 12 months. During those days the owner is signed out and the only way in is to sign in, which cancels the closure, so exporting means un-closing and closing again. No export or download link is emailed at closing or before the purge (my run: 0 emails at purge).",
+    "suggested_fix": "At closing, email a signed, expiring export link (a token like stopToken in routes-billing.ts on a public export route) and again a week before purge; or allow a read-only sign-in during the grace period with a separate 'Restore' button; lengthen the period."
+   },
+   {
+    "theme_id": "data-no-bulk-export",
+    "requirement": "No document is deleted by a retention rule without notice to its owner at least 30 days ahead with a download link; the retention date is shown on each document.",
+    "verdict": "not_applicable",
+    "evidence": "There are no retention rules: nothing in /home/user/treegens-app/sign-and-grow/src mentions retention, and tick() in src/server/cron.ts only expires, reminds and purges accounts their owner closed. A document goes only when a person deletes it or closes the account.",
+    "gap": "Related, not a retention rule: a sender can delete a completed envelope and the signers' links die without the signers being told (see overclaims).",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "data-no-bulk-export",
+    "requirement": "The account shows a total document count, and completed documents can be auto-synced to a connected cloud drive.",
+    "verdict": "partly",
+    "evidence": "Count: GET /reports/summary in /home/user/treegens-app/sign-and-grow/src/server/routes-account.ts and src/app/app/reports/page.tsx show 'Envelopes sent' and a count per status (browser run: 'Envelopes sent 3'); the home page shows drafts, waiting and completed.",
+    "gap": "No cloud drive sync exists (README.md lists Google Drive under 'not built'); the only route is webhooks plus the API for people who can write code. The Envelopes list itself shows at most 'the 200 most recently updated', not a total.",
+    "suggested_fix": "Add a drive connector that uploads the final PDF in completeEnvelope (src/server/envelopes.ts), or at least a documented no-code recipe using the envelope.completed webhook. Show the total on the Envelopes page."
+   },
+   {
+    "theme_id": "account-owner-email-lost",
+    "requirement": "Documents, templates and the subscription belong to the workspace, not to an individual login; a paid workspace with only one owner shows a persistent prompt to add a second owner.",
+    "verdict": "partly",
+    "evidence": "Envelopes and templates carry account_id and the subscription sits on accounts (/home/user/treegens-app/sign-and-grow/src/server/db.ts); a removed member's work passes on (DELETE /account/members/:id in src/server/routes-account.ts; test 'a team never loses documents when someone leaves, and ownership can move'). A warning 'This account depends on one person' exists in Team() in src/app/app/settings/page.tsx (seen in the browser).",
+    "gap": "The prompt lives only on Settings, Team; the home page and shell show nothing (browser check), although /me already returns the admin count. It asks for a second admin: there can be only one owner, and an admin cannot take ownership (POST /account/transfer-owner is owner-only), so the account can still end up behind one mailbox.",
+    "suggested_fix": "Show the warning in AppShell while me.admins < 2 on a paid plan. Allow two owners, or let an admin claim ownership after a waiting period with emails to the owner."
+   },
+   {
+    "theme_id": "account-owner-email-lost",
+    "requirement": "A logged-out 'stop billing' flow verifies the payer by card last four plus the amount and date of a recent charge and turns off renewal without access to the login mailbox.",
+    "verdict": "partly",
+    "evidence": "POST /public/billing/stop-by-card in /home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts and StopByCard in src/app/help/tools.tsx stop the renewal with no login and no mailbox; test 'locked out? stop billing by card, or find every subscription by email'. My run N1 repeated it.",
+    "gap": "It checks the account email plus the last four digits only: no amount, no date. Any member's address works, not just an admin's (my run used a plain member). Last four digits are printed on receipts, and the guess limit is 5 an hour per address held in memory. The effect is limited (renewal off, admins emailed, can be resumed).",
+    "suggested_fix": "Ask for the date and amount of a recent charge as well and compare with the payments table before calling cancelPlan; keep the failed-guess count in the database."
+   },
+   {
+    "theme_id": "account-owner-email-lost",
+    "requirement": "Workspace ownership can be recovered by domain verification (DNS record) or documented company proof, with a published turnaround time.",
+    "verdict": "not_met",
+    "evidence": "Nothing in /home/user/treegens-app/sign-and-grow/src does this. /help ('I cannot log in') says only 'write to us and a person will help with the account'. The operator routes in src/server/routes-trust.ts cover requests, reports and pausing; none can move ownership, so a person helping would have to edit the database.",
+    "gap": "No DNS or proof-based recovery, no operator tool, no published process or time.",
+    "suggested_fix": "Add an operator action that makes a named member (or a newly invited address) the owner, with emails to every existing admin and a waiting period; publish what proof is accepted and how long it takes on /help. DNS TXT verification for the owner's email domain can follow."
+   },
+   {
+    "theme_id": "account-owner-email-lost",
+    "requirement": "Changing the login email requires a second factor other than the old inbox and can be reverted for 30 days.",
+    "verdict": "not_met",
+    "evidence": "The login email cannot be changed at all: PATCH /me in /home/user/treegens-app/sign-and-grow/src/server/routes-account.ts never writes email (my run audit2.ts 3a: the address was unchanged after sending one), and the Profile tab has no email field (browser check).",
+    "gap": "The bad outcome named in the complaint (an email changed and not revertible) cannot happen, but the wider problem gets worse: someone whose mailbox is going away cannot move their login, and password reset keeps going to the dead address. The only route is inviting a new address and handing ownership over, which makes a second identity.",
+    "suggested_fix": "Add an email change in routes-account.ts: require the current password, confirm through a link sent to the new address, notify the old one, keep previous_email for 30 days with a one-click revert link."
+   },
+   {
+    "theme_id": "account-owner-email-lost",
+    "requirement": "A role that needs a paid seat says so at the moment it is assigned.",
+    "verdict": "not_applicable",
+    "evidence": "There are no paid seats: the price is per signature (PRICING in /home/user/treegens-app/sign-and-grow/src/lib/impact.ts) and the Team tab states 'there is no charge per person'.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "admin-offboarding-and-template-ownership",
+    "requirement": "A 'Remove member' flow moves all of the person's sent documents, drafts, templates and folders to a chosen successor in one action with folder structure preserved; in-flight documents stay signable and notifications go to the successor.",
+    "verdict": "partly",
+    "evidence": "DELETE /account/members/:id?to= in /home/user/treegens-app/sign-and-grow/src/server/routes-account.ts and the 'Remove and hand over' dialog in src/app/app/settings/page.tsx. Shipped test 'a team never loses documents when someone leaves...' covers the default successor. My run (audit1.ts H5-H10) with a chosen successor: draft, template, in-flight (folder kept) and completed envelopes all moved; the in-flight one was then signed and the completion email went to the successor.",
+    "gap": "Bulk batches are not handed over (bulk_batches.sender_id is left), so a non-admin successor gets 'Batch not found' on the batch page and on its remind/void actions. The hand-over leaves no audit entry. A wrong successor id silently falls back to the remover. The removed person's login is left unusable (see bugs).",
+    "suggested_fix": "In the same handler also update bulk_batches.sender_id, write an audit entry per envelope ('Handed over from X to Y'), reject an unknown ?to=, and run it in one transaction."
+   },
+   {
+    "theme_id": "admin-offboarding-and-template-ownership",
+    "requirement": "An admin can view and download the documents of a deactivated member at any time.",
+    "verdict": "met",
+    "evidence": "mine() and GET /envelopes in /home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts give admins every envelope in the account. My run (audit1.ts H4, H11): the admin downloaded the member's completed document before and after removing them (200 both times). Test 'accounts are isolated... members see only their own envelopes' pins the member/admin split.",
+    "gap": "After removal the documents show the successor as sender and the removed person disappears from the 'Sent by' filter, so they can no longer be picked out as that person's.",
+    "suggested_fix": "Keep the original sender in a column (original_sender_id) and offer it in the filter."
+   },
+   {
+    "theme_id": "admin-offboarding-and-template-ownership",
+    "requirement": "Templates live in a workspace library with per-template roles (use, edit, manage); an admin can always edit or archive any template.",
+    "verdict": "partly",
+    "evidence": "Templates are shared with the whole team (mine() in /home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts skips the sender check for templates) and an admin can edit any of them (my run audit2.ts 4c: 200).",
+    "gap": "No per-template roles: every plain member can rewrite or delete any template (my runs: J11 edit 200, 4a delete 200 and the template was gone). There is no archive, only permanent delete.",
+    "suggested_fix": "Add a template permission (at least 'who may edit': everyone or admins and the author) checked in PUT and DELETE /envelopes/:id for kind=template, and an archived flag instead of delete."
+   },
+   {
+    "theme_id": "admin-offboarding-and-template-ownership",
+    "requirement": "Removing a member frees the seat immediately and the screen says so.",
+    "verdict": "not_applicable",
+    "evidence": "There are no seats to free: nothing is charged per person (PRICING in /home/user/treegens-app/sign-and-grow/src/lib/impact.ts; the Team tab says so).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "account-duplicate-identities-per-email",
+    "requirement": "There is exactly one identity per email address; signing a document never creates a separate hidden account.",
+    "verdict": "met",
+    "evidence": "users.email is UNIQUE and case-insensitive (/home/user/treegens-app/sign-and-grow/src/server/db.ts); /auth/signup answers 409 for an existing address (src/server/routes-account.ts); nothing in src/server/routes-sign.ts creates a user. My run (audit1.ts K1-K2): signing up again with different capitals got 409; a stranger signing a document created 0 user rows.",
+    "gap": "None for the requirement. A different identity problem exists: a removed member's login is dead for good (see bugs).",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "account-duplicate-identities-per-email",
+    "requirement": "One identity can belong to several workspaces, with a workspace switcher always visible and the last-used workspace opened by default.",
+    "verdict": "partly",
+    "evidence": "memberships is many-to-many, POST /auth/switch changes workspace (/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts) and the sidebar shows a switcher when there is more than one (src/components/AppShell.tsx). My run K4-K10 and the browser run (ui2.mjs) confirmed joining a second workspace and switching.",
+    "gap": "Sign-in always opens the oldest workspace (ORDER BY created_at LIMIT 1 in /auth/login). Someone with their own empty workspace who then joins a company lands in the empty one every time (browser: 'FRESH LOGIN opens: Kim's workspace'), which is the complaint itself. On a phone the switcher and the workspace name are hidden until Menu is opened.",
+    "suggested_fix": "Store last_account_id on users in /auth/switch and /invites/accept and use it in /auth/login; show the workspace name in the mobile top bar."
+   },
+   {
+    "theme_id": "account-duplicate-identities-per-email",
+    "requirement": "A single inbox lists every document sent to that email across all workspaces.",
+    "verdict": "met",
+    "evidence": "GET /inbox in /home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts selects by recipient email across every account, once the address is confirmed; screen src/app/app/inbox/page.tsx. My run (audit1.ts L1-L2): documents from two different sending accounts appeared in the one inbox, identical whichever workspace was active; an unconfirmed address got nothing (A4).",
+    "gap": "None. No shipped test covers the inbox.",
+    "suggested_fix": "Add an inbox test to tests/trust.test.ts."
+   },
+   {
+    "theme_id": "account-duplicate-identities-per-email",
+    "requirement": "Granting a role picks from existing members; entering an email that matches an existing user never creates a second user.",
+    "verdict": "met",
+    "evidence": "Roles are changed with a select on each existing member row (PATCH /account/members/:id, /home/user/treegens-app/sign-and-grow/src/server/routes-account.ts; Team() in src/app/app/settings/page.tsx). Inviting an address that already has a login attaches the existing user (POST /invites/accept); signing up with it is refused. My run K3-K5: 409 on sign-up, accept 200, still 1 user row. Browser run: an existing user followed the invitation, signed in and landed in the team with both workspaces listed.",
+    "gap": "The invitation link always opens the sign-up form, so an existing user first sees 'An account with this email already exists' and has to find the small 'Sign in' link.",
+    "suggested_fix": "In POST /account/invites, link to /login?invite=... when the address already has a user."
+   },
+   {
+    "theme_id": "documents-hard-to-find-no-admin-view",
+    "requirement": "Admins have an 'All documents' view with one search across every sender, filterable by sender, status, template and date, with optional team-scoped visibility.",
+    "verdict": "partly",
+    "evidence": "GET /envelopes in /home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts shows admins the whole account with one search, a 'Sent by' filter, status tabs and folders (src/app/app/envelopes/page.tsx). My run J2-J5 and the browser run: an admin found another member's envelope by recipient and by document text and filtered by sender; shipped test 'small things that stop people getting stuck' checks the sender filter.",
+    "gap": "No filter by template or by date (my run J6-J7: those parameters change nothing). No team-scoped visibility: members see only their own, admins see everything, nothing in between. Rows do not say who sent each envelope (the API returns it; the table does not show it). The list stops at 200 with no paging.",
+    "suggested_fix": "Add from/to and template_id to GET /envelopes and to the filter bar; add a 'Sent by' column for admins; add paging; consider a 'manager' role limited to chosen members."
+   },
+   {
+    "theme_id": "documents-hard-to-find-no-admin-view",
+    "requirement": "The document list has full-text search, folders or tags, and filters that persist after a document is opened and closed.",
+    "verdict": "met",
+    "evidence": "Search covers subject, people, document names and the text inside uploaded PDFs (GET /envelopes in /home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts; text stored by storeUpload); shipped test 'envelopes can be found by the words inside their documents'. Folders: PATCH /envelopes/:id and the Move dialog. Persistence: restore() in src/app/app/envelopes/page.tsx keeps tab, search, folder and sender in localStorage. Browser run (ui1.mjs): chose 'Waiting for others' plus a search, opened an envelope, came back by Back and by the sidebar; tab and search were still set both times.",
+    "gap": "None for the requirement. Scanned PDFs have no text to search (flagged at upload).",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "documents-hard-to-find-no-admin-view",
+    "requirement": "Each row shows who has not yet signed and offers one-click remind, resend and download.",
+    "verdict": "partly",
+    "evidence": "The list has a 'Waiting on' column (waitingOn in /home/user/treegens-app/sign-and-grow/src/components/sender/lib.ts) and a one-click Remind on waiting rows; completed rows have Download (src/app/app/envelopes/page.tsx). Browser run: rows read 'Dee Careful for less than an hour' with Remind, and Remind answered 'Reminder emailed to 1 person'.",
+    "gap": "There is no resend separate from Remind: a signer who switched reminders off cannot be re-sent from the row (the toast says to open the envelope), and a completed copy cannot be re-sent to a recipient from the list. Download is offered only on completed rows. With a signing order, 'Waiting on' names only whoever has it now, not everyone still to sign.",
+    "suggested_fix": "Add a row menu with 'Send the link again' (uses the 'resent' notice in notifyRecipient, which ignores muting because the sender asked) and 'Download' on every sent row; list later signers in a tooltip."
+   }
+  ],
+  "bugs": [
+   {
+    "title": "A removed team member can never sign in, sign up or be invited again",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts: POST /auth/login (membership check), DELETE /account/members/:id, POST /auth/signup, POST /invites/accept; also purgeUser in src/server/routes-trust.ts",
+    "detail": "Someone who joined through an invitation has no workspace of their own. After an admin removes them, login answers 403 'This user no longer belongs to any account', sign-up answers 409 'An account with this email already exists', and a fresh invitation cannot be accepted because accepting needs a session. Password reset does not help. Their inbox of documents sent to them is unreachable too. The same dead end hits teammates of an account its owner deleted. Reproduce: tests/out/audit-support-account/audit1.ts section B (B1-B5) and audit2.ts 7g. Fix: when a user has no membership at login, create a personal workspace (as sign-up does), or do it at removal time."
+   },
+   {
+    "title": "Anyone can read another person's support messages by registering their email without confirming it",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts: GET /support/mine",
+    "detail": "The query is 'WHERE user_id=? OR email=?' and does not require the address to be confirmed. Reproduce (audit1.ts A1-A3): a logged-out person files a request from victim@example.com; an attacker signs up with victim@example.com (no confirmation needed to sign in) and GET /api/support/mine returns the victim's full message. Affects signers and former customers: after an account is purged the address is free again and its old requests are still in the table (D4, D8). Fix: match on email only when email_verified is set."
+   },
+   {
+    "title": "The caller chooses the IP address used for rate limits and written into the audit trail",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/router.ts: handle(), 'x-forwarded-for' first value",
+    "detail": "The leftmost X-Forwarded-For value is trusted. Most proxies append, so the leftmost value is whatever the client sent. On my dev server: 12 contact-form posts with a different header each time were all accepted, while 10 with a fixed header hit 429 at the ninth; a signer request with 'X-Forwarded-For: 9.9.9.9' was recorded in the envelope's audit trail with ip=9.9.9.9 (that IP is printed on the certificate; audit2.ts section 6 shows the same in-process). Every per-IP limit (support form, find-my-subscription emails, sign-up, code redemption) can be bypassed and a signer can forge 'where they signed from'. Fix: take the address from the platform's trusted header or the right-most hop behind a configured number of proxies."
+   },
+   {
+    "title": "The contact form sends attacker-written text to any email address under our name",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts: POST /public/support",
+    "detail": "The acknowledgement goes to whatever address is typed and repeats the typed message (up to 5,000 characters, links and phone numbers included) under the heading 'A person will reply to you'. Reproduce (audit1.ts section C): a post with email=target@example.org and a fake payment warning produced an email to that third party containing the text; with the header trick above, 20 more were accepted in a row. Fix: do not echo the message to unconfirmed addresses; send a confirm link instead."
+   },
+   {
+    "title": "A paused account can still email new people",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts: correctEnvelope (no suspended_at check), remindEnvelope, extendEnvelope",
+    "detail": "Only sendEnvelope checks the pause. Reproduce (audit1.ts F8-F9): with sending paused, PUT /envelopes/:id on an envelope already out, adding a brand-new signer, returned 200 and the new person got a signing request; reminders also went out to 2 people. A sender paused for suspected phishing keeps reaching new victims through any envelope that is still open. Fix: refuse added or changed recipients, and reminders, while suspended_at is set."
+   },
+   {
+    "title": "'Deleted for good' leaves names, emails, IP addresses and signer uploads behind",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts: purgeUser, removeUnusedBlobs; also DELETE /envelopes/:id in src/server/routes-envelopes.ts",
+    "detail": "After closing with 'delete now' (tests/out/audit-support-account/audit3.ts) and after the 30-day purge (audit1.ts D2-D5): the audit rows of the deleted envelopes remain (signer names, emails, IPs), the stored copy of every email remains (emails table, full HTML), files signers uploaded as attachments remain on disk and in the files table (they have no account id), and support requests and credit rows remain. Only the uploaded and signed PDFs go. Deleting a single completed envelope leaves its signed PDF on disk and its audit rows (audit2.ts 2f-2g). Fix: delete audit, emails, retired_tokens, idempotency keys, signer attachment files and their blobs for the account's envelopes inside purgeUser and the envelope delete."
+   },
+   {
+    "title": "A closed account's API keys keep working, and people can still be invited into it",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts: POST /me/delete, purgeClosedAccounts; src/server/auth.ts authenticate",
+    "detail": "Closing deletes sessions but not API keys, and closing_at is never checked. Reproduce (audit2.ts section 7, audit1.ts G3): during the grace period a key still exported, invited a new member, and that member joined and sent an envelope with no sign the account was closing; when the purge ran, their envelope was deleted and their login became unusable. Fix: disable keys while closing_at is set, refuse invites and sends, and have the purge skip or hand over accounts that gained members."
+   },
+   {
+    "title": "An admin can remove themselves through the API and keeps receiving the team's signed documents",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts: DELETE /account/members/:id",
+    "detail": "The screen hides the button, the API does not check. The successor defaults to the caller, who is the person being removed, so their envelopes stay assigned to them. Reproduce (audit1.ts section I): after self-removal a client signed and 'Completed: ...' with the PDF went to the departed admin's address. Fix: reject removing yourself, or require a different successor."
+   },
+   {
+    "title": "Handing over a removed member's work misses their bulk batches and leaves no trace",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts: DELETE /account/members/:id; batch() in src/server/routes-envelopes.ts",
+    "detail": "bulk_batches.sender_id is not reassigned: a non-admin successor gets 404 on GET /bulk/:id and on batch remind/void (audit1.ts H8), although the envelopes show 'Part of a bulk send'. No audit entry records the hand-over, and envelopes completed afterwards name the successor as sender."
+   },
+   {
+    "title": "Any plain member can delete or rewrite every shared template, and sees other members' folder and batch names",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts: mine(), DELETE and PUT /envelopes/:id, GET /envelopes (folders), GET /bulk",
+    "detail": "A member deleted the owner's template (audit2.ts 4a, permanent, no undo) and edited another member's (audit1.ts J11). GET /envelopes returns every folder name in the account to a member who can see none of the envelopes in them (J9), and GET /bulk lists other members' batches (J10), despite 'Members see what they sent'."
+   },
+   {
+    "title": "A public form on a paused or unconfirmed account tells visitors about the abuse review and leaves stray drafts",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts: POST /public/powerforms/:slug/start",
+    "detail": "When sendEnvelope refuses, the visitor is shown the sender's own error: 'Sending is paused on this account while we look into a report from a recipient...' (audit1.ts F10). The envelope copied for the attempt is not removed, so each try leaves a draft holding the visitor's name and email in the owner's account (F10b). Fix: check the account before copying, show the polite 'cannot take new signatures right now' text, and delete the copy on failure."
+   },
+   {
+    "title": "Support references can start with a dash or underscore",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts: POST /public/support (ref = last 8 characters of the id, upper-cased)",
+    "detail": "My runs produced '-7Y9WXDN' and '9BC-R7AY'. The subject line reads 'We got your message (-7Y9WXDN)'. Hard to read out, and upper-casing a random id tail means the reference cannot be matched back exactly. Use a short code from an unambiguous alphabet, as checkCode does."
+   },
+   {
+    "title": "Starting the dev server with NEXT_DIST_DIR rewrites tsconfig.json",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/tsconfig.json",
+    "detail": "Running 'next dev' as the audit instructions describe added two '.next-audit-support-account/...' lines to the tracked tsconfig.json. I removed my two lines after stopping the server and deleting the build folder. Two lines for '.next-audit-signer' from another audit's server were still in the file when I finished; I left those alone."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Closing email and 'Account closed and deleted' email (/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts), Settings > Your data (src/app/app/settings/page.tsx), /help#close, /security 'Closing an account...'",
+    "claim": "'After that date the account, its documents and its audit trails are removed for good' and 'Your account and everything in it has been deleted.'",
+    "reality": "The audit rows (signer names, emails, IP addresses), stored copies of every email, files signers uploaded and support requests all remain after the purge (audit3.ts, audit1.ts D2-D5). Only the uploaded and signed PDFs are removed."
+   },
+   {
+    "where": "Completion email (completeEnvelope in /home/user/treegens-app/sign-and-grow/src/server/envelopes.ts), /help#copy, /security 'You get your copy, also later'",
+    "claim": "'The link below keeps working for as long as [sender] keeps their Sign&Grow account' and 'Find my documents sends the link again to the same inbox at any time.'",
+    "reality": "The sender can delete a completed envelope and keep the account: the signer's link then answers 404 and Find my documents sends nothing (audit2.ts 2c-2e). The delete dialog warns the sender; the signer is never told."
+   },
+   {
+    "where": "/security 'Enough reports pause the sender', pause emails, app banner, README table",
+    "claim": "'New sends from it stop until a person has reviewed it' and 'Only new sends are paused.'",
+    "reality": "A paused account can add a brand-new recipient to an envelope that is already out and that person is emailed a signing request; reminders keep going out as well (audit1.ts F8-F9)."
+   },
+   {
+    "where": "/security 'Guessing is slowed down' and 'Every step is recorded'",
+    "claim": "'...the public forms on this site are rate limited' and steps are recorded 'with the time and the internet address they came from.'",
+    "reality": "Both use an address taken from a header the caller sets. Changing the header on each request got past the limit on my dev server, and a signer's chosen address was written into the audit trail."
+   },
+   {
+    "where": "Contact form result (/home/user/treegens-app/sign-and-grow/src/app/help/tools.tsx), acknowledgement email (src/server/routes-trust.ts), public footer",
+    "claim": "'A person will read it and reply by email', 'A person will reply to you', 'Reply to this email if you want to add anything.'",
+    "reality": "With the default settings (no SUPPORT_EMAIL, no OPERATOR_EMAILS) nobody is notified and nobody can open the queue; the request just sits in a table (audit1.ts O7). The acknowledgement's reply address then falls back to the no-reply sender (src/server/mail.ts). The software neither warns nor refuses to start; README lists it as a launch decision."
+   },
+   {
+    "where": "Settings > Team notice (/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx) and README row 'The account belonged to someone who left'",
+    "claim": "'Invite a second admin below so the account is never stuck behind one mailbox' and 'Ownership can be handed over.'",
+    "reality": "Only the current owner can hand over (POST /account/transfer-owner answers 403 for admins). If the owner has already gone, an admin cannot become owner or remove the owner, and there is no operator tool or recovery process. Admins can still cancel billing, export and manage members."
+   },
+   {
+    "where": "Remove member dialog, Settings > Team (/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx)",
+    "claim": "'They lose access to this account straight away. Nothing they sent is lost: their envelopes, drafts and templates pass to the person you choose.'",
+    "reality": "A person who joined by invitation loses their whole login, not just this account: they can never sign in or sign up again (audit1.ts B). Their bulk batches do not pass to the chosen person."
+   },
+   {
+    "where": "'Account closed and deleted' email sent to a team member who deletes their own login (/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts)",
+    "claim": "'Your account and everything in it has been deleted.'",
+    "reality": "For a member of someone else's team nothing they sent is deleted: their envelopes are handed to the team owner and stay there (audit2.ts 5b-5d). The same Settings text tells a member the account and its audit trails will be removed after 30 days."
+   }
+  ]
+ },
+ "audit:signer": {
+  "results": [
+   {
+    "theme_id": "signer-forced-account-or-login",
+    "requirement": "A signer can open, sign and download a document from the emailed link with no account, password or app install, on every plan including free and trial.",
+    "verdict": "met",
+    "evidence": "Every /sign/:token route in /home/user/treegens-app/sign-and-grow/src/server/routes-sign.ts is registered 'public' and authorised only by the link token (find()); the screen is an ordinary web page (src/app/sign/[token]/page.tsx). Repo test tests/flow.test.ts 'full signing flow: order, access code, completion, certificate, verification' signs with cookie-less clients. Own checks: tests/out/audit-signer/api1.ts S1 on a free account with STRIPE_SECRET_KEY set (signatures counted): open 200, download before consent 200, complete 200, download after 200 (%PDF), no cookie ever set on the signer. tests/out/audit-signer/phone1.mjs ran the whole flow in fresh Chromium profiles (Pixel 7 and iPhone 13 settings) with zero cookies and only /api/sign/* and /api/me calls.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "signer-forced-account-or-login",
+    "requirement": "No sender, admin or API setting can require a signer to log in to an account; stronger identity uses a one-time code instead.",
+    "verdict": "partly",
+    "evidence": "No setting can demand a login: the recipients table (src/server/db.ts) and the API Recipient schema (src/server/openapi.ts) hold only access_code, routes-sign.ts never reads the users table, and a search of src for login/SSO requirements on signers finds nothing. The access code path works (tests/flow.test.ts; browser run tests/out/audit-signer/draw.mjs unlocked with 4242 and finished).",
+    "gap": "The stronger identity is a fixed code the sender invents and passes on personally, not a one-time code. Any length is accepted (a 1-character code was accepted, api2.ts S10). With 8 tries per 15 minutes and no permanent lock, a 4-digit code can be tried exhaustively in under two weeks by anyone holding the link, for example the other person at a shared inbox, which is where the editor recommends access codes.",
+    "suggested_fix": "src/server/envelopes.ts writeContent() and correctRecipient(): refuse access codes shorter than 6 characters. src/server/routes-sign.ts POST /sign/:token/unlock: after about 20 failures in total lock the code until the sender resets it, and tell the sender. Consider an emailed one-time code as an option the sender can tick."
+   },
+   {
+    "theme_id": "signer-forced-account-or-login",
+    "requirement": "If the signer's email matches an existing account, the link still opens the document directly, and an account lockout never blocks signing.",
+    "verdict": "met",
+    "evidence": "find() in src/server/routes-sign.ts looks only at recipients and envelopes, never at accounts. Own check tests/out/audit-signer/api1.ts S1: created an account with the signer's address, drove its login into the 429 lock with 12 wrong passwords, then a cookie-less client opened the link (200), consented, completed (envelope completed) and downloaded the PDF (200).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "signer-forced-account-or-login",
+    "requirement": "The completion screen contains only a confirmation, a download button and a statement that a copy was emailed; no sign-up, trial or payment prompt appears anywhere in the signing flow.",
+    "verdict": "partly",
+    "evidence": "The 'done' stage in src/app/sign/[token]/page.tsx shows the confirmation, 'A copy has been emailed to <address>', View and Download. A Playwright survey of every control on the consent, signing, sheet, adopt, review, done and reopened screens (phone1.mjs, two phone profiles) found no sign-up, login, trial, pricing or payment control. Screenshot tests/out/audit-signer/shots/p-13-done.png.",
+    "gap": "The screen is not limited to those three things. It also shows the Impact card ('Everything paid to Sign&Grow goes to planting more. How we count'), and that link opens /impact in the same tab, a page with 'Start free', 'Sign in' and 'Start signing' buttons. So a signer who has just finished is one tap away from a sign-up call to action.",
+    "suggested_fix": "src/components/sign/parts.tsx Impact(): on signing screens drop the sentence about payments and either remove the /impact link or point it at a methodology-only view without the public navigation, opened in a new tab."
+   },
+   {
+    "theme_id": "signer-forced-account-or-login",
+    "requirement": "Signing a document never adds the signer's address to a marketing list; signers receive transactional emails only.",
+    "verdict": "met",
+    "evidence": "There is no marketing list or newsletter mailer: the full table list (api1.ts S3) has none, and every sendMail call in src/server is tied to an envelope, an account or a support request. The signer's address is stored only on the recipients row and in the sender's own address book (contacts insert in sendEnvelope(), src/server/envelopes.ts). Own check S3: across send, reminder and completion the signer received exactly three emails (request, 'Reminder: \u2026', 'Completed: \u2026') and no user row was created for them.",
+    "gap": "Note: each of those emails ends with the line 'Sent with Sign&Grow, where every dollar plants 10 mangrove trees with Treegens' (renderMail, src/server/mail.ts). Listed under overclaims against the 'no marketing' promise.",
+    "suggested_fix": "Shorten the footer in emails to recipients to 'Sent with Sign&Grow' plus the help link."
+   },
+   {
+    "theme_id": "signer-link-expired-dead-end",
+    "requirement": "A signing link stays valid until the document is completed, declined, voided or past the sender's deadline; there is no limit on the number of opens (test: a link opened 50 times still works).",
+    "verdict": "met",
+    "evidence": "Tokens have no expiry and no open counter (recipients.token; find() in src/server/routes-sign.ts). Repo test tests/trust.test.ts 'small things that stop people getting stuck' opens one link 50 times. Own checks: api1.ts S2, 600 opens in a row all 200; S5, a completed link still opened and downloaded after its dates were moved back to 2024; api3.ts P3, after expiry and reopening the same link worked with consent and typed values intact.",
+    "gap": "Caveat, filed as a bug: all signing calls from one IP share a limit of 600 per 10 minutes. The 601st call returned 429, and so did a different signer with a different document on the same IP.",
+    "suggested_fix": "src/server/routes-sign.ts find(): key the limit on token plus IP, or raise it well above what an office behind one address can produce."
+   },
+   {
+    "theme_id": "signer-link-expired-dead-end",
+    "requirement": "If a link is invalid for any reason, the same page lets the signer verify with a one-time code to their email or phone and continue into the document in the same session, with no action by the sender.",
+    "verdict": "partly",
+    "evidence": "src/components/sign/deadEnds.tsx: a replaced link (410) offers 'Email me the current link' (POST /public/links/resend), an unknown link (404) offers 'Email me my documents' (POST /public/links/find), both without the sender. Repo test 'lost and replaced links are recoverable without the sender'. Both screens seen in the browser (browser2.mjs D).",
+    "gap": "There is no one-time code and no carrying on in the same session: the person has to go back to the inbox, and for a replaced link the new one goes to whoever holds the document now. For a recipient who was removed, or when the envelope is closed, the page still answers 'Sent.' although nothing is sent (api2.ts S9: 0 emails). A link whose envelope the sender deleted says 'It may have been cut short when it was copied', which is untrue. An expired document still needs the sender.",
+    "suggested_fix": "src/server/routes-trust.ts: add a verify step that emails a 6-digit code to the recipient's address and, once typed on the same page, redirects to the current /sign/<token>. Let resendFromRetired() return why nothing was sent and have deadEnds.tsx say 'You were removed from this document' or 'This document was closed'. Keep a marker for deleted envelopes so the page can say the sender removed it."
+   },
+   {
+    "theme_id": "signer-link-expired-dead-end",
+    "requirement": "Field values are saved as the signer enters them and restored when the signer returns after a timeout or on another device.",
+    "verdict": "partly",
+    "evidence": "flush() in src/app/sign/[token]/page.tsx posts the values 1.5 s after each change, retries every 8 s on failure, and again when the tab is hidden or closed; POST /sign/:token/save in src/server/routes-sign.ts stores them. Repo test asserts 'saved values come back'. Browser check browser2.mjs A: typed text and consent were present on a second device with a fresh profile.",
+    "gap": "The adopted signature does not travel. The autosave body holds only 'values' (captured in tests/out/audit-signer/browser2c.json), so on another device or in a new tab every signature and initials field comes back empty, and opening the second device also wipes the 'signed' mark on the server. The server already accepts signature_png on /save and tests/trust.test.ts line 419 asserts 'the chosen signature is kept for another device', but the page never sends it.",
+    "suggested_fix": "page.tsx flush(): include signature_png and initials_png when they change (once, not on every keystroke). On a new device show the saved signature and ask for one confirming tap rather than emptying the fields."
+   },
+   {
+    "theme_id": "signer-link-expired-dead-end",
+    "requirement": "The sender is notified automatically when a signer hits an expired or failed link.",
+    "verdict": "partly",
+    "evidence": "noteDeadLink() in src/server/envelopes.ts emails the sender 'Could not open: \u2026' when a signer opens an expired envelope (GET /sign/:token) and after three wrong access codes. Own check api2.ts S9: first open of an expired link sent 1 email. The repo tests only cover the access-code case.",
+    "gap": "(a) It fires once per recipient for ever: after the sender reopened and the deadline passed again, the next open sent nothing, because dead_link_alerted_at is never cleared and is shared with the access-code alert. (b) Nothing is sent when the expired document has an access code not yet entered (the route returns before the notice). (c) Nothing for a replaced link (410) or an unknown link. (d) All of it is silent if the sender switched off 'When something needs you'.",
+    "suggested_fix": "envelopes.ts: clear dead_link_alerted_at in extendEnvelope() and correctRecipient(). routes-sign.ts GET /sign/:token: call noteDeadLink before the `if (locked)` return. routes-trust.ts /public/links/resend: tell the sender when a retired link is used. Add tests for the expired case."
+   },
+   {
+    "theme_id": "signer-identity-verification-dead-end",
+    "requirement": "When a verification fails, the signer sees the specific reason (for example glare, blur, name mismatch, code expired) and how to fix it.",
+    "verdict": "partly",
+    "evidence": "The only check is the sender's access code (POST /sign/:token/unlock in src/server/routes-sign.ts; locked screen in src/app/sign/[token]/page.tsx). Browser check browser2.mjs C: a wrong code shows 'That access code is not right. Check it and try again, or ask Demo Sender for the code.' with the sender's name and email on the same screen.",
+    "gap": "After 8 tries in 15 minutes the message becomes 'Too many attempts. Please wait a bit and try again.' It does not say how long (15 minutes) or whom to ask, and the correct code is then refused with the same message, also from another device (api2.ts S10), because the limit is per document link, not per person trying.",
+    "suggested_fix": "routes-sign.ts /unlock: count only failures, answer 429 with the minutes left and the sender's contact; page.tsx: show that text on the locked screen."
+   },
+   {
+    "theme_id": "signer-identity-verification-dead-end",
+    "requirement": "After two failed attempts the signer is offered an alternative method the sender pre-approved, and the sender is notified with the failure reason.",
+    "verdict": "partly",
+    "evidence": "After the third wrong code the sender gets 'Could not open: \u2026' naming the signer, the reason and the code (routes-sign.ts /unlock calling noteDeadLink). Repo test in tests/trust.test.ts; own check api2.ts S10 shows sender emails after tries 1, 2, 3 as 0, 0, 1.",
+    "gap": "The sender hears after three failures, not two, and only once per recipient ever. The signer is offered no other method. The only way forward is to reach the sender through the mailto link; 'Ask the sender a question' is not available on the locked screen because /ask needs the code.",
+    "suggested_fix": "Notify at the second failure. Let the sender tick a fallback per recipient (a one-time code emailed to that recipient) and offer it on the locked screen after two failures. Add an 'I do not have the code' button that emails the sender without needing the code."
+   },
+   {
+    "theme_id": "signer-identity-verification-dead-end",
+    "requirement": "The sender is charged only for successful verifications.",
+    "verdict": "not_applicable",
+    "evidence": "Nothing is charged per verification. Access codes are free, and a signature is only taken from the balance in completeRecipient() when the person actually signs (src/server/envelopes.ts, src/server/credits.ts, tests/billing.test.ts).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "signer-identity-verification-dead-end",
+    "requirement": "The signer can choose the one-time-code channel (SMS, voice call or email) with a visible resend timer; phone numbers are validated with country code when the sender enters them.",
+    "verdict": "not_applicable",
+    "evidence": "On purpose there is no one-time code, SMS or call, and no phone number is collected anywhere (no phone column in src/server/db.ts; src/app/security/page.tsx says 'we do not send codes by SMS or phone'), so undelivered codes and rejected numbers cannot happen.",
+    "gap": "What remains is the cousin of this complaint: the access code only arrives if the sender passes it on. See the two requirements above.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "signer-identity-verification-dead-end",
+    "requirement": "Public-record quiz verification is not offered, and no biometric check is the only route.",
+    "verdict": "met",
+    "evidence": "A search of src for quiz, biometric, liveness, selfie or ID checks finds nothing. The only identity option in the schema (recipients.access_code), the API description and the editor is the access code. The certificate prints 'Identity check: Email link' or 'Email link and access code' (drawCertificate in src/server/pdf.ts), confirmed in a rendered certificate (tests/out/audit-signer/pdfshot.mjs).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "signer-cannot-get-copy-later",
+    "requirement": "The completion email attaches the signed PDF and audit certificate (or a non-expiring link when the file is too large to attach).",
+    "verdict": "partly",
+    "evidence": "completeEnvelope() in src/server/envelopes.ts builds the PDF with its certificate and attaches it when under 8 MB. Own check api1.ts S15 with a stubbed mail transport: the signer's 'Completed:' email carried 'Attach me.pdf' (25,589 bytes, starts %PDF). A rendered signed file shows the certificate pages (pdfshot.mjs).",
+    "gap": "Above 8 MB only the link is sent, and that link is not non-expiring: it returns 404 as soon as the sender deletes the envelope (api1.ts S4) or closes the account. With two signers on one address only one completion email goes out, carrying the first person's link. The over-8-MB path was not exercised.",
+    "suggested_fix": "src/server/routes-envelopes.ts DELETE /envelopes/:id: for completed envelopes hide them from the sender instead of deleting the recipients and final PDF, so /sign/:token/download keeps working. In the completion email say plainly when the PDF was too large to attach."
+   },
+   {
+    "theme_id": "signer-cannot-get-copy-later",
+    "requirement": "A 'get my copy' page lets a signer enter the email they signed with, receive a one-time code and download the document with no account; it works for the full retention period, which is stated in the completion email.",
+    "verdict": "partly",
+    "evidence": "/help#find-documents (FindDocuments in src/app/help/tools.tsx, POST /public/links/find, emailMyLinks() in src/server/envelopes.ts) needs no account. Repo test 'lost and replaced links are recoverable without the sender'. Own check api1.ts S5: works whatever the letter case, and a document completed 'in 2024' was found, opened and downloaded. The completion email states the rule: 'for as long as <sender> keeps their Sign&Grow account'.",
+    "gap": "It emails links rather than giving a code and a download on the page. Left out of the list: documents the person has signed while others have not finished (S5: no email at all), anything past the 50 most recent, and anything the sender deleted (S4: nothing sent, yet the page says 'Check your inbox'). For two people on one address the entries are identical, with no names (api2.ts S6). The retention sentence is wrong when the sender deletes a single envelope.",
+    "suggested_fix": "emailMyLinks(): also include envelopes still in progress where the recipient's own status is 'completed', add 'for <recipient name>' to each line, and page or raise the cap. Fix the deletion problem as above or change the email wording."
+   },
+   {
+    "theme_id": "signer-cannot-get-copy-later",
+    "requirement": "Download and print are available to the signer before, during and after signing, and no sender, branding or API setting can hide them.",
+    "verdict": "partly",
+    "evidence": "Download and 'View or print' are on the consent screen, in the signing toolbar and menu, and on the done screen (src/app/sign/[token]/page.tsx), served by GET /sign/:token/download. No account, brand or API setting touches them (PATCH /account takes only name, colour, logo and defaults). Own check api1.ts S13: 200 before consent, 200 inline, 200 after signing; the done-screen download returned application/pdf in the browser.",
+    "gap": "For someone who has already signed, the copy disappears if the envelope later expires, is voided or is declined (403 'This envelope is closed', S13), or is deleted by the sender (404, S4). So a sender's action can still take the download away after signing, and the consent text 'You can download or print a copy at any time' is not always true.",
+    "suggested_fix": "src/server/routes-sign.ts assertViewable(): let a recipient whose own status is 'completed' keep downloading what they signed, marked 'not completed' or 'voided', and keep it after the sender deletes the envelope."
+   },
+   {
+    "theme_id": "signer-cannot-get-copy-later",
+    "requirement": "Once an email address is verified, every document ever sent to or signed by that address is listed, regardless of when an account was created.",
+    "verdict": "partly",
+    "evidence": "GET /inbox in src/server/routes-envelopes.ts lists by recipient address once the account's email is confirmed. Own check api1.ts S14: a document signed before the account existed appeared after confirming the address; unconfirmed accounts get nothing.",
+    "gap": "Hard cap of 100 rows with no paging in the route or in src/app/app/inbox/page.tsx, so older documents cannot be reached. Envelopes the sender deleted vanish. Two people on one address see identical rows with no names.",
+    "suggested_fix": "Add offset paging to /inbox and the page, and show the recipient name on each row."
+   },
+   {
+    "theme_id": "signer-mobile-signing-broken",
+    "requirement": "Signing works in iOS Safari, Android Chrome and in-app mail browsers with no app install, and no sender or template setting can block phones.",
+    "verdict": "partly",
+    "evidence": "No app, no device detection anywhere in src (no userAgent checks), and no sender or template setting about devices. The whole flow, with typed and finger-drawn signatures, completed in Chromium using Pixel 7 and iPhone 13 profiles (phone1.mjs, draw.mjs), with no sideways scrolling at 412, 390 and 320 px. The repo's tests/e2e.mjs also uses an iPhone 13 profile in Chromium.",
+    "gap": "Not shown on a real WebKit (iOS Safari) or inside in-app mail browsers. Only Chromium is installed here and the repo's own browser test uses Chromium too. The parts most likely to differ there (loading pdf.js and its worker, the save sent while the page closes, lifting sheets above the keyboard, the date input) are unverified.",
+    "suggested_fix": "tests/e2e.mjs: add a run with Playwright's webkit and a WebView user agent; see the release requirement below for real devices."
+   },
+   {
+    "theme_id": "signer-mobile-signing-broken",
+    "requirement": "A guided 'next field' mode scrolls and zooms to each required field, with the primary action pinned at the bottom of the screen and touch targets of at least 44 px.",
+    "verdict": "partly",
+    "evidence": "goTo() and bringIntoView() in src/app/sign/[token]/page.tsx and src/components/sign/parts.tsx, and the .sg-bottom bar in src/app/styles/sign.css. Playwright guided run (phone1.mjs): Next walked nine required items in order, the bar is sticky with 0 px gap to the bottom, the count went from '9 of 9 left' to 'Ready to finish', typed fields open a sheet with a 20 px input, and each field has a 44 px tap area (measured 44x44 around a 12x11 checkbox).",
+    "gap": "It scrolls but never zooms: the page is drawn at phone width (388 px), so the document's own text is about 7.6 px and field text 7 px; reading needs pinching or the Text view. Several controls are under 44 px: 'Report this request' 126x34, 'Not spelled right? Fix my name' 204x33, 'How we count' 108x20, the sender's email link 19 px high. The 'Sign here' pointer can cover page text (shots/p-06-at-signature.png).",
+    "suggested_fix": "sign.css: give .sg-link a 44 px minimum height and pad inline links. In the phone document view, enlarge the page around the current field on Next, or start phones in Text view with the page image beside each field."
+   },
+   {
+    "theme_id": "signer-mobile-signing-broken",
+    "requirement": "A signature can be typed or drawn, and a typed signature completes the document without any drawing step.",
+    "verdict": "met",
+    "evidence": "AdoptSignature in src/components/SignaturePad.tsx opens on the Type tab with the name filled in. Playwright phone run: no canvas present when the dialog opens, one tap on 'Adopt and sign', and the document completed (phone1.mjs). A signature drawn with real touch events also completed, and the page did not scroll while drawing (draw.mjs).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "signer-mobile-signing-broken",
+    "requirement": "Each release is tested on a small-screen Android and iOS device before shipping.",
+    "verdict": "policy",
+    "evidence": "What the software gives towards it: tests/e2e.mjs has a phone-profile section (iPhone 13 settings in Chromium) and tests/out/sign/shots holds phone screenshots; my runs at 412, 390 and 320 px passed.",
+    "gap": "Emulation in Chromium is not a real Android phone or an iPhone, and nothing in the repo (README.md has no release checklist) records a device pass per release.",
+    "suggested_fix": "Add a short release checklist to README.md: sign one document with typed and drawn signature on one small Android phone and one iPhone (Safari and the Gmail in-app browser), and note the result with the release."
+   },
+   {
+    "theme_id": "signer-accessibility-and-assistance",
+    "requirement": "The signing page meets WCAG 2.1 AA: the document is exposed as tagged text in reading order, fields are native labelled controls in the tab sequence, and there are no keyboard traps, including date entry.",
+    "verdict": "partly",
+    "evidence": "Text view (src/components/sign/TextView.tsx, TextFields.tsx, pdfText.ts) gives the document as headings and paragraphs in reading order with native labelled inputs, selects, checkboxes and radio groups (accessibility snapshot in tests/out/audit-signer/a11y.json). Keyboard-only run (a11y.mjs): consent, every field type including the native date input (typed, Tab leaves it), dialogs that hold focus, close on Escape and hand focus back, review and finish. A computed-colour sweep found no text below AA contrast, and nothing scrolls sideways at 320 px.",
+    "gap": "The default Document view gives assistive technology none of the document's words: pages are bare canvas elements with no text layer, role or label, and nothing tells a screen-reader user to switch to 'Text view'. In Document view checkboxes and radio buttons are divs with ARIA roles rather than native controls; radios have no group and arrow keys do nothing. Text view relies on extractable text, not tags, and is empty for scans. Every signing screen has the generic marketing page title. The repo has no automated accessibility test, and this was not a full WCAG audit.",
+    "suggested_fix": "src/components/PdfDoc.tsx: add the pdf.js text layer, or hide the canvas from assistive technology and add a visually hidden text block per page from pageTexts(). page.tsx: mention Text view in the #sg-guide line for screen readers, use real checkbox and radio inputs in docField(), and set the page title to the document subject."
+   },
+   {
+    "theme_id": "signer-accessibility-and-assistance",
+    "requirement": "Each release is verified by completing a signing flow with NVDA, JAWS, VoiceOver and TalkBack.",
+    "verdict": "policy",
+    "evidence": "What the software gives towards it: a Text view with native controls, full keyboard operation, focus management and live status messages (verified above).",
+    "gap": "Nothing in the repo records a screen-reader pass, and none can be run from here.",
+    "suggested_fix": "Per release, complete one signing in Text view and one in Document view with NVDA, JAWS, VoiceOver and TalkBack, and keep the notes with the release."
+   },
+   {
+    "theme_id": "signer-accessibility-and-assistance",
+    "requirement": "On upload, an image-only scan is detected and the sender is warned or OCR is applied.",
+    "verdict": "partly",
+    "evidence": "storeUpload() in src/server/routes-envelopes.ts returns is_scan when a PDF has no extractable text, and src/components/editor/StepAdd.tsx shows 'This looks like a scan\u2026'. Repo test asserts is_scan for a blank PDF; own check api2.ts S12 agrees.",
+    "gap": "A PNG or JPEG upload, which is always a picture, is never flagged (is_scan false, because the check starts with isPdf). A PDF with some text pages and some scanned pages is not flagged. The flag is not stored, so the warning is gone when the draft is reopened and is not repeated at Review. API callers receive it but it is missing from the File schema in src/server/openapi.ts. There is no OCR.",
+    "suggested_fix": "routes-envelopes.ts: set is_scan for converted images and whenever any page has no text; store it on the files row and return it with the envelope. Show it again in src/components/editor/StepReview.tsx and document it in openapi.ts."
+   },
+   {
+    "theme_id": "signer-accessibility-and-assistance",
+    "requirement": "The signing screen shows a progress count and a single 'next' action, with no separate signature-style chooser step.",
+    "verdict": "met",
+    "evidence": "src/app/sign/[token]/page.tsx: the count ('N of M left', then 'Ready to finish') with a progress bar, and one main button that is Next until nothing is left and then Finish (mainButton()); only one of the two bars is visible per screen size. Signature styles sit inside the single adopt dialog with one already chosen. Playwright guided run shows the count going from 9 to 0 with that one button and a typed signature adopted in one tap.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "signer-accessibility-and-assistance",
+    "requirement": "The sender can open a read-only view showing which field the signer has not yet completed, without being able to sign for them.",
+    "verdict": "partly",
+    "evidence": "GET /envelopes/:id adds progress {fields, filled, required_left} per recipient (src/server/routes-envelopes.ts), shown in src/components/sender/Recipients.tsx as '2 of 10 fields filled in so far' (sender.mjs, shots/s-detail-progress.png). Repo test asserts the numbers.",
+    "gap": "It is a count, not which field is still open, and it only appears once the person has opened the document. Nothing stops the sender signing for them: 'Copy link' (POST /envelopes/:id/recipient-view) gives the sender the signer's personal link, which opens the full signing screen; it is logged as 'Signing link issued' but not prevented. The sender's total (10) also differs from the signer's (9) because a radio group counts twice.",
+    "suggested_fix": "Return the labels and pages of unfilled required fields in progress and list them in Recipients.tsx. Add a sender-only preview that shows the document with field states and cannot save or complete."
+   },
+   {
+    "theme_id": "signer-signature-or-name-cannot-be-corrected",
+    "requirement": "A signer can redraw or retype their signature at any point before final submit, and the change applies immediately to every signature field in that document.",
+    "verdict": "met",
+    "evidence": "One signature and one initials image serve the whole document (sig and ini state in src/app/sign/[token]/page.tsx). It can be changed from a signed field (SignedFieldDialog), from 'Other actions' and from the review dialog (src/components/sign/dialogs.tsx). Playwright (phone1.mjs changeSignature): after Change, both signature fields showed the new image at once; Clear empties only the one field.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "signer-signature-or-name-cannot-be-corrected",
+    "requirement": "A stored signature is never applied without being shown to the signer for confirmation first.",
+    "verdict": "partly",
+    "evidence": "Before finishing, the review dialog always shows 'Your signature' with a Change button (ReviewDialog in src/components/sign/dialogs.tsx; shots/p-10-review.png).",
+    "gap": "A stored signature goes onto the page without asking. For someone signed in to an account whose email matches, page.tsx loads the account's saved signature and the first tap on a signature field applies it with no dialog (browser2.mjs B). The match is by email only, so at a shared address the account holder's saved signature landed in the other person's field (shots/b-shared-stored-signature.png). A signature saved through /save is likewise presented to a replacement signer as already applied (api2.ts S8).",
+    "suggested_fix": "page.tsx clickSig(): if the signature was not made in this session, open the adopt dialog showing the stored image with 'Use this signature' before applying. Offer the account signature only when the account name matches the recipient and nobody else on the envelope shares the address."
+   },
+   {
+    "theme_id": "signer-signature-or-name-cannot-be-corrected",
+    "requirement": "A review step shows all completed fields before 'Finish'.",
+    "verdict": "partly",
+    "evidence": "pressFinish() in src/app/sign/[token]/page.tsx always opens the review dialog for signers and approvers (shots/p-10-review.png).",
+    "gap": "The review shows name, email, signature, initials and a count ('9 of 9 filled in'), not what was entered in each field. Viewers skip it.",
+    "suggested_fix": "ReviewDialog in src/components/sign/dialogs.tsx: list every item with its label and value (text, choice, ticked, file attached) and a 'Change' link that jumps to the field."
+   },
+   {
+    "theme_id": "signer-signature-or-name-cannot-be-corrected",
+    "requirement": "A signer can correct the spelling of their own name during signing; the change is logged in the audit trail and the sender is notified.",
+    "verdict": "met",
+    "evidence": "renameSelf() in src/server/envelopes.ts, POST /sign/:token/name, and 'Not spelled right? Fix my name' in the review dialog (FixName, src/components/sign/dialogs.tsx). Repo test asserts the audit entry and the 'Name corrected:' email. Own checks: api2.ts S11 (audit line, sender email, new name used on the full-name field and the 'Signed' line; refused after finishing) and the fix made in the browser (phone1.mjs); the rendered certificate carries 'Signer corrected their name \u00b7 \"Jon Smyth\" is now \"John Smith\"'.",
+    "gap": "Notes: the email to the sender is skipped if they switched off 'When something needs you' (api2.ts S9); at a shared address the person can rename the slot to the other signer's name (api3.ts P2); a signature typed before the fix keeps the old spelling until changed.",
+    "suggested_fix": "envelopes.ts renameSelf(): send the notice with key 'always' and refuse a name equal to another recipient on the same envelope. After a rename, prompt to redo a typed signature."
+   },
+   {
+    "theme_id": "signer-shared-email-mixups",
+    "requirement": "Two signers with the same email each receive a separate email naming that signer, with its own link, its own fields and its own signature.",
+    "verdict": "met",
+    "evidence": "notifyRecipient() in src/server/envelopes.ts adds 'For <name>:' to the heading and 'This link is for <name> only' when another recipient has the same address; each recipient has their own token, and GET /sign/:token returns only that recipient's fields. Own check api2.ts S6: two request emails to the one address, each naming one person; each link opened only that person's fields; both signed with different images that stayed on their own rows.",
+    "gap": "Notes: both emails have the same subject line, so mail apps thread them as one conversation; only one completion email goes to the address.",
+    "suggested_fix": "When the address is shared, put the name in the subject ('For Blair Rivera: \u2026')."
+   },
+   {
+    "theme_id": "signer-shared-email-mixups",
+    "requirement": "One signer's signature is never applied to another signer's fields (automated test with two recipients on one address).",
+    "verdict": "partly",
+    "evidence": "On the server signatures are kept per recipient and applyValues() only touches the caller's own fields (src/server/envelopes.ts; drawField in src/server/pdf.ts uses the field's own recipient). Own check api2.ts S6: Alex sending values for Blair's fields changed nothing, and the finished document held two distinct signatures.",
+    "gap": "The repo has no automated test with two recipients on one address. Three paths still put one person's mark or identity on the other's line: (1) a stored account signature is applied by email match alone (browser2.mjs B); (2) a public form resumes by email, so the second person at the address is dropped into the first person's document (api2.ts S7); (3) 'Fix my name' lets whoever holds Alex's link rename that slot to 'Blair Rivera', leaving two Blairs (api3.ts P2). 'Find my documents' and the inbox also list both links without names.",
+    "suggested_fix": "Add a test like S6 to tests/trust.test.ts. Fix (1) in src/app/sign/[token]/page.tsx, (2) in POST /public/powerforms/:slug/start (never hand back an existing link by email alone), (3) in renameSelf(); add recipient names to emailMyLinks() and /inbox."
+   },
+   {
+    "theme_id": "signer-shared-email-mixups",
+    "requirement": "The sender is warned at send time when two signers share an address and is offered a per-person phone code.",
+    "verdict": "partly",
+    "evidence": "SharedInbox in src/components/editor/StepReview.tsx warns '<A> and <B> share <address>\u2026' on the review step and points to a per-person access code under step 1, More. Seen in the browser (sender.mjs, shots/s-review-shared.png).",
+    "gap": "What is offered is an access code the sender must hand over personally, not a phone code (there is no SMS on purpose). The warning exists only in the editor: sends through the API, bulk send, templates and public forms give none. No test covers it.",
+    "suggested_fix": "Return a warnings list from POST /envelopes/:id/send, POST /envelopes with send, and POST /bulk when signers share an address. In StepReview.tsx offer to set the two access codes right there."
+   }
+  ],
+  "bugs": [
+   {
+    "title": "Public form gives a stranger someone else's unfinished document (security)",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts, POST /public/powerforms/:slug/start (the 'again' lookup)",
+    "detail": "To avoid duplicate envelopes the form looks up an open envelope by email alone and returns its signing link. Anyone who types another person's email into the same public form gets that person's link. Reproduce with tests/out/audit-signer/api3.ts P1: 'Vera' starts the form, types 'date of birth, medication' and attaches a photo ID, then stops. A different client from a different IP posts {name:'Not Vera', email:'VERA@example.com'}: the answer is resumed:true with Vera's own token. The stranger sees her name, her typed answer, her consent already given, and GET /sign/<token>/download returns the document with her attachment appended (2 pages instead of 1). They could also finish it as her. The same lookup sends a second person at a shared address into the first person's document (api2.ts S7)."
+   },
+   {
+    "title": "Saved account signature is applied to a different person at a shared address",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx, the effect that calls /me, and clickSig()",
+    "detail": "If the browser is signed in to an account whose email equals the recipient's email, the account's saved signature is loaded and the first tap on a signature field applies it with no dialog. The check is the email only. Reproduce with tests/out/audit-signer/browser2.mjs B: Alex has an account at the family address with a saved signature; Blair opens her own link (page says Blair Rivera) in that browser and taps Sign; Alex's signature appears in Blair's field and the bar says 'Ready to finish' (shots/b-shared-stored-signature.png). The review step then labels it 'Your signature'."
+   },
+   {
+    "title": "A replacement signer inherits the previous person's answers and signature",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts: reassignRecipient(), correctRecipient(), correctEnvelope()",
+    "detail": "When a signer passes the document on, or the sender corrects the address to a different person, the field values the first person typed and any saved signature image stay on the recipient row. Reproduce in the browser with tests/out/audit-signer/inherit.mjs: Jon types 'my private number 12345' and 999, uses 'Assign to someone else'; the new person opens their own link and both answers are already filled in and counted as done. With a signature saved through /save (api2.ts S8) the new person also gets the old signature image with the signature field marked signed, for both reassign and sender correction. Private answers leak to another person and can be submitted under the new name unnoticed."
+   },
+   {
+    "title": "Sender deleting a completed envelope destroys every signer's copy",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts, DELETE /envelopes/:id",
+    "detail": "Only envelopes that are out for signature are protected. Deleting a completed one removes the recipients and the link. Reproduce with tests/out/audit-signer/api1.ts S4: after completion the signer's download is 200; the sender deletes; the signer's link is 404 with 'We do not recognise this link. It may have been copied incompletely.', download is 404, and 'Find my documents' sends nothing while still saying 'Check your inbox'. The sender's account still exists, so the completion email's promise is broken."
+   },
+   {
+    "title": "Client IP is taken from a header the client controls (security)",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/router.ts, handle(): ip = first entry of x-forwarded-for",
+    "detail": "The left-most X-Forwarded-For value is trusted. Against the dev server, `curl -X POST -H 'X-Forwarded-For: 6.6.6.6, 7.7.7.7' \u2026/api/sign/<token>/mute` wrote ip 6.6.6.6 into the audit trail. Two effects: a signer can put any address into the audit trail and certificate ('IP address' on the certificate), and every per-IP limit (signing calls, security-code checks, sign-up, support, find-my-documents per IP) can be sidestepped by changing the header (api1.ts S2: spoofed address got 200 while the real one was at 429). Behind a proxy that appends rather than overwrites, the first entry is still the client's."
+   },
+   {
+    "title": "Access codes: correct code locked out, any length accepted, guessable over days (security)",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-sign.ts POST /sign/:token/unlock; src/server/envelopes.ts writeContent()",
+    "detail": "The limit of 8 tries per 15 minutes is counted per recipient before the code is checked, so after 8 wrong tries by anyone holding the link the right code is refused too, from any device, with 'Too many attempts. Please wait a bit and try again.' (api2.ts S10; browser2.mjs C). There is no minimum length (a 1-character code was accepted) and no permanent lock, so a 4-digit code can be exhausted in under two weeks. The sender is emailed once, at the third failure, and never again. Each failure also adds a line to the audit trail."
+   },
+   {
+    "title": "All signers behind one IP share a single signing limit",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-sign.ts find(): rateLimit('sign:'+ip, 600, 10 minutes)",
+    "detail": "Every signing call (open, document fetch, each autosave, consent, complete, download) from one IP counts against one bucket. api1.ts S2: the 601st call in 10 minutes returned 429, and a different signer with a different document on the same IP also got 429 'Too many attempts'. An office or campus signing a bulk send together can reach this; the page then shows 'We could not open this just now' and autosave fails until the window passes."
+   },
+   {
+    "title": "'Fix my name' can turn one signer into the other",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts renameSelf()",
+    "detail": "Any new name of two or more characters is accepted. At a shared address, the person who opened Alex's link by mistake can 'fix' the name to 'Blair Rivera'; the envelope then has two recipients called Blair Rivera (api3.ts P2). The sender is emailed only if their 'When something needs you' emails are on."
+   },
+   {
+    "title": "The adopted signature is not saved with 'Finish later', although the server and a test say it is",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx flush(); src/server/routes-sign.ts /save; tests/trust.test.ts line 419",
+    "detail": "Autosave sends only {values}. On another device or a new tab the signature and initials fields are emptied and must be adopted again, and that second device then saves the emptied marks back to the server (browser2.mjs A: other device shows 'Signature, required. Sign here', 0 signed images; sender view dropped to '2 of 10'). The route comment and the test 'the chosen signature is kept for another device' describe behaviour only an API caller gets."
+   },
+   {
+    "title": "Sender is told about a dead link only once per recipient, and not at all in several cases",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts noteDeadLink(), extendEnvelope(); src/server/routes-sign.ts GET /sign/:token",
+    "detail": "api2.ts S9: first open of an expired link sends 'Could not open'; after the sender reopens and it expires again, nothing is sent (the flag is never cleared and is shared with the access-code alert). An expired document with an access code not yet entered sends nothing. A replaced link (410) sends nothing to the sender."
+   },
+   {
+    "title": "'Email me the current link' answers 'Sent.' when nothing is sent",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/components/sign/deadEnds.tsx ReplacedLink; src/server/envelopes.ts resendFromRetired()",
+    "detail": "For a recipient who was removed by a correction, or whose envelope is voided, expired or declined, POST /public/links/resend returns ok and the page says 'Sent. The current link is on its way\u2026' while no email is created (api2.ts S9 removedRecipient: emailsActuallySent 0). The person waits for an email that never comes."
+   },
+   {
+    "title": "'Find my documents' leaves out signed-but-unfinished documents and does not name people at a shared address",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts emailMyLinks()",
+    "detail": "Someone who has signed while others have not gets no email at all (api1.ts S5 halfDone), yet the page says to check the inbox. The list stops at 50. For two people on one address the email lists identical lines, for example 'Second joint doc, from Jo Sender \u00b7 waiting for you' twice, with nothing to say whose link is whose (api2.ts S6)."
+   },
+   {
+    "title": "Picture uploads are never flagged as scans, and the scan warning is not kept",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts storeUpload(); src/components/editor/StepAdd.tsx",
+    "detail": "is_scan is only set for PDFs with no text at all. A PNG or JPEG of a contract returns is_scan false, and a PDF mixing text pages and scanned pages also returns false (api2.ts S12). The flag lives only in the upload response, so the warning disappears when the draft is reopened and is not shown at Review."
+   },
+   {
+    "title": "Small things on the signing screen",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx; src/app/styles/sign.css; src/server/routes-envelopes.ts",
+    "detail": "Every signing screen has the browser title 'Sign&Grow \u00b7 e-signatures that plant trees' instead of the document name. The sender sees 'of 10 fields' where the signer sees 'of 9' (a radio group counts twice for the sender). The 'Sign here' pointer can cover page text (shots/p-06-at-signature.png). Several secondary controls are under 44 px on a phone ('Report this request' 126x34, 'Fix my name' 204x33)."
+   },
+   {
+    "title": "Running a dev server rewrites the tracked tsconfig.json",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/tsconfig.json",
+    "detail": "`next dev` with NEXT_DIST_DIR adds '<dir>/types/**/*.ts' lines to the include list of the tracked tsconfig.json. I removed the two lines my own server added and deleted .next-audit-signer. The file still differs from the last commit by two '.next-audit-developer' lines that belong to another audit server that was running at the same time; I left those alone."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Completion email (completeEnvelope in /home/user/treegens-app/sign-and-grow/src/server/envelopes.ts); /help 'How do I get a copy later?'; /security 'You get your copy, also later'",
+    "claim": "\"The link below keeps working for as long as <sender> keeps their Sign&Grow account\u2026 Lost it later? Any time, /help can send your documents to this address again.\" and \"Find my documents sends the link again to the same inbox at any time.\"",
+    "reality": "The sender can delete a completed envelope while keeping the account. The signer's link then answers 404 and Find my documents sends nothing (api1.ts S4)."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/security/page.tsx, 'Only the right people can open a document'",
+    "claim": "Only the people it was sent to, the sender and the sender's admins can open a document.",
+    "reality": "On a public form, anyone who types another person's email gets that person's unfinished document, answers and attachment (api3.ts P1)."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx, 'I cannot find the email, or my link stopped working'",
+    "claim": "\"We email you a link to every document that is waiting for you and every one you have completed.\"",
+    "reality": "Documents you have signed while others have not finished are left out, the list stops at 50, and when nothing is found no email is sent although the page says to check the inbox (api1.ts S5)."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/components/sign/deadEnds.tsx, ReplacedLink",
+    "claim": "\"Sent. The current link is on its way to the email address this document is assigned to now.\"",
+    "reality": "For a removed recipient or a closed envelope nothing is sent (api2.ts S9)."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/components/sign/dialogs.tsx (FixName, ReassignDialog) and the 'You passed this to\u2026' card in src/app/sign/[token]/page.tsx",
+    "claim": "\"The sender is told about the change and it is recorded in the audit trail.\" / \"\u2026yours stops working, and <sender> is told.\" / \"the sender has been told\"",
+    "reality": "These emails use the sender's 'When something needs you' setting. With it off, a name correction produced no email at all (api2.ts S9, senderWithProblemsOff); only the audit trail has it. The setting's description does not mention name corrections."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/page.tsx ('Signers never need an account') and src/app/security/page.tsx ('You are never sent marketing')",
+    "claim": "\"No sign-up, no password, no trial offer and no marketing.\"",
+    "reality": "No prompt appears in the flow, but every email to a signer ends with 'Sent with Sign&Grow, where every dollar plants 10 mangrove trees with Treegens', and the done screen's impact card says 'Everything paid to Sign&Grow goes to planting more' with a link to /impact, which carries 'Start free' and 'Start signing' buttons."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/security/page.tsx, 'Your link does not wear out'",
+    "claim": "\"There is no limit on clicks.\"",
+    "reality": "All signing calls from one IP share 600 per 10 minutes; past that every link from that IP answers 'Too many attempts', including other people's (api1.ts S2)."
+   },
+   {
+    "where": "Consent screen in /home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx",
+    "claim": "\"You can download or print a copy at any time\u2026\"",
+    "reality": "Download answers 403 once the envelope has expired, been voided or been declined, also for someone who had already signed (api1.ts S13), and 404 after the sender deletes it."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/security/page.tsx 'Every step is recorded'; consent screen 'We record the time, your IP address\u2026'; the certificate's 'IP address' line",
+    "claim": "Each step is recorded with the internet address it came from, in a tamper-evident trail.",
+    "reality": "The address is whatever the X-Forwarded-For header says first; a forged 6.6.6.6 was recorded in the audit trail."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx 'What else can I do on the signing page?'; menu item 'Finish later' in src/app/sign/[token]/page.tsx; comment in src/server/routes-sign.ts and assertion in tests/trust.test.ts",
+    "claim": "\"Stop for now and finish later. Your link brings you back to where you were.\" The code comment and test add that the chosen signature travels to another device.",
+    "reality": "Typed answers come back; on another device or in a new tab the signature and initials fields come back empty because the page never sends the signature with autosave (browser2.mjs A)."
+   }
+  ]
+ },
+ "audit:sender": {
+  "results": [
+   {
+    "theme_id": "delivery-signing-email-not-arriving",
+    "requirement": "The sender sees a per-recipient delivery status: sent, delivered, bounced (with the bounce reason), opened, or held.",
+    "verdict": "partly",
+    "evidence": "Code: sendMail() in src/server/mail.ts records every email as queued/outbox/sent/failed with the mail server's error text; GET /envelopes/:id (src/server/routes-envelopes.ts) returns them as `deliveries`; EmailFact() and badge() in src/components/sender/Recipients.tsx show one line per recipient ('Handed to the mail server on\u2026', 'Could not be sent: <error>', 'Opened on\u2026'). Checks I ran: tests/out/audit-sender/a5-delivery.ts with an unreachable mail server gave deliveries=[{status:'failed', error:'connect ECONNREFUSED'}] and email_failed=true in the list; browser run ui2.mjs showed the per-recipient card. Test 'everything can be exported, and the sender sees whether emails went out' passes. 'Opened' is tracked by markViewed().",
+    "gap": "Only what happens at hand-over to the mail server is known. There is no 'delivered' and no real 'bounced': a bounce, quarantine or spam verdict that comes back later from the recipient's mail system is never received (no inbound webhook or bounce parsing anywhere in src/server). A failed send is not retried and the sender is not emailed about it; they only see it if they open the envelope. The audit trail and certificate still say 'Sent to recipient' when the email failed. 'Held' does not exist as a state.",
+    "suggested_fix": "src/server/mail.ts: store the provider message id on `emails`; add a public, signed route (new file or routes-account.ts) that accepts the mail provider's delivery/bounce/complaint events and sets status delivered/bounced/complained with the reason. Show those in Recipients.tsx EmailFact, add them to WEBHOOK_EVENTS, call notifySender(e,'problems',\u2026) on a bounce or failed send, and retry transient failures from cronTick(). In advance() write 'Email could not be sent' to the audit trail instead of 'Sent to recipient' when sendMail failed."
+   },
+   {
+    "theme_id": "delivery-signing-email-not-arriving",
+    "requirement": "Every document gives the sender a copyable per-signer signing link, and SMS delivery is available on every paid plan.",
+    "verdict": "partly",
+    "evidence": "Link half is there and works: POST /envelopes/:id/recipient-view in src/server/routes-envelopes.ts returns signUrl(r) and writes 'Signing link issued' to the audit trail; copy() and shareVia() in src/components/sender/Recipients.tsx give 'Copy link', 'Share on WhatsApp' and 'Share by text message' per recipient. Browser check (tests/out/audit-sender/ui2.mjs): clicking 'Copy link' put the same URL on the clipboard as the one in the signer's email.",
+    "gap": "The service sends no SMS on any plan. 'Share by text message' only opens the sender's own phone messaging app (an sms: link). README 'What is not in it' and /security say SMS is not built. No automated test covers the recipient-view route.",
+    "suggested_fix": "Decide whether SMS is in scope. If yes: add a phone column to recipients, an SMS provider call next to sendMail() in notifyRecipient() (src/server/envelopes.ts), and a delivery row per SMS. If no: keep the copy/share buttons and say on /help#not-received that text messages are sent from the sender's own phone. Either way add a test for POST /envelopes/:id/recipient-view to tests/trust.test.ts."
+   },
+   {
+    "theme_id": "delivery-signing-email-not-arriving",
+    "requirement": "If an outbound request is held for review, the sender is told immediately with the reason and expected time, nothing is sent to recipients until release, and the sender can cancel it.",
+    "verdict": "partly",
+    "evidence": "There is no silent hold. sendEnvelope() in src/server/envelopes.ts either sends or refuses at once with the reason (403 unconfirmed email, 403 paused account, 429 daily limit, 422 looks like a scam). When an account is paused, reportAbuse() and POST /operator/accounts/:id (src/server/routes-trust.ts) email owners and admins. Check I ran (tests/out/audit-sender/a7-more.ts): after three reports the owner got 'Sending is paused on your Sign&Grow account' saying '3 different recipients reported\u2026'. Test 'recipients can check that an email is genuine\u2026' proves a paused account cannot send and can still export.",
+    "gap": "No expected time is given anywhere (pause email, 403 message, help page). A pause does not stop everything: a paused account can still email new people by correcting an envelope that is out, and can still send reminders (probe a1-phishing.ts F: correction 200, new addresses mailed, reminders 2). A request refused as a scam has no release path: the message promises 'a person will clear it' but the operator queue has no such action. There is no per-request hold the sender could cancel.",
+    "suggested_fix": "src/lib/policy.ts: add a review-time promise and quote it in the pause emails, the 403 text and /help#cannot-send. In correctEnvelope(), correctRecipient(), reassignRecipient() and remindEnvelope() refuse (or queue) any email to a new address while accounts.suspended_at is set. Turn the scam refusal into a real held state (envelopes.status='held', nothing sent, sender sees reason and a Cancel button) with a 'Release' action in src/app/app/operator/page.tsx."
+   },
+   {
+    "theme_id": "delivery-signing-email-not-arriving",
+    "requirement": "The sender is alerted when a recipient has not opened the request within a configurable time (default 24 hours).",
+    "verdict": "partly",
+    "evidence": "cronTick() in src/server/envelopes.ts emails the sender 'Not opened yet: \u2026' once per recipient, with advice to copy the link or correct the address. Test 'small things that stop people getting stuck' proves it fires once. My probe a2-corrections.ts (c7): no alert at 25 h or 47 h, one alert at 49 h.",
+    "gap": "The default is 48 hours, not 24. The time is one server-wide setting (UNOPENED_ALERT_HOURS); a sender cannot choose it (Settings has no such control, checked in the browser). The alert is skipped, and still marked as given, when the sender has 'When something needs you' emails off. Two bugs: after fixing an address with the quick 'Correct' dialog the alert fires within minutes because sent_at is not reset; after fixing an address in the editor it never fires for the new address because unopened_alerted_at is not reset.",
+    "suggested_fix": "src/server/envelopes.ts cronTick(): default 24 h and read a per-account value (new accounts.unopened_alert_hours, edited under Settings > Notifications in src/app/app/settings/page.tsx). In correctRecipient() set sent_at=now when the address changes; in correctEnvelope() and reassignRecipient() clear unopened_alerted_at. Do not set unopened_alerted_at when no email was actually sent to the sender."
+   },
+   {
+    "theme_id": "delivery-signing-email-not-arriving",
+    "requirement": "Outbound mail passes SPF, DKIM and DMARC; the sender can edit the subject and message, and paid plans can send from their own verified domain.",
+    "verdict": "partly",
+    "evidence": "Subject and message are editable per envelope (StepAdd in src/components/editor/StepAdd.tsx, stored by writeContent()) and appear in the email (notifyRecipient(); seen in the rendered email in ui2.mjs and in test 'recipients can check that an email is genuine\u2026'). fromHeader() in src/server/mail.ts sends from the service's own MAIL_FROM address as '<name> via Sign&Grow' with Reply-To set to the sender, which is the shape that can pass DMARC.",
+    "gap": "Nothing in the code or README checks, sets up or even mentions SPF, DKIM or DMARC; whether mail passes depends entirely on how MAIL_FROM's domain and the SMTP provider are configured, and nobody is warned if it does not. There is no sending from a customer's own verified domain on any plan (one global MAIL_FROM).",
+    "suggested_fix": "Add a startup/operator check (shown on /app/operator) that looks up the SPF and DMARC TXT records and the DKIM selector for the MAIL_FROM domain and warns when they are missing; document the DNS records in README 'Configuration'. For own-domain sending: accounts.mail_domain plus a DNS verification step in routes-account.ts, and use it in fromHeader() for paid accounts."
+   },
+   {
+    "theme_id": "phishing-brand-abuse-unverifiable-requests",
+    "requirement": "Every signing email shows the verified sender name and organisation and a short code; a public page on our own domain accepts that code and confirms whether the request is genuine and who sent it.",
+    "verdict": "partly",
+    "evidence": "notifyRecipient() in src/server/envelopes.ts passes the sender name, email and check_code to renderMail() (src/server/mail.ts), which prints 'Sent by <name> (<email>)', the account name and a 12-character code with 'type <host>/check yourself'. POST /public/check in src/server/routes-trust.ts and src/app/check/CheckForm.tsx answer genuine or not, with sender, account, recipient, subject and state. Test 'recipients can check that an email is genuine, stop reminders, and report a suspicious request' passes; I also looked at the rendered email (tests/out/audit-sender/email.png).",
+    "gap": "Only the sender's email address is verified. The name and the organisation are whatever the sender typed: probe a1-phishing.ts B signed up as 'PayPal Billing', renamed the account 'PayPal' (PATCH /account, 200) and the email went out headed 'PayPal Billing sent you a document to sign' under a 'PayPal' brand line; /check would then show a green 'Genuine' with those names. A code that was replaced by a correction answers 'does not match any email we have sent\u2026 treat the email as fake' although the email was genuine (probe I). Without APP_URL the address printed for the check page follows a forged Host header.",
+    "suggested_fix": "routes-account.ts PATCH /me and PATCH /account plus signup: refuse or flag names containing well-known brands for accounts without a verified domain; in renderMail() and CheckForm label the name as 'not verified by Sign&Grow' unless the sender's email domain is verified for that account. Keep retired codes (like retired_tokens) so POST /public/check can answer 'genuine, replaced by a newer email'. Refuse to start in production without APP_URL (src/server/util.ts baseUrl)."
+   },
+   {
+    "theme_id": "phishing-brand-abuse-unverifiable-requests",
+    "requirement": "Every signing email has a 'Report this request' link that reaches a monitored abuse queue; a report can pause that sender's outbound mail pending review.",
+    "verdict": "partly",
+    "evidence": "Reporting exists on the signing page: 'Report this request' in src/app/sign/[token]/page.tsx opens ReportDialog (src/components/sign/dialogs.tsx) which calls POST /sign/:token/report; reportAbuse() in src/server/envelopes.ts stores the report, emails ABUSE_EMAIL/SUPPORT_EMAIL when set, and pauses the account after reports from 3 different recipients (ABUSE_SUSPEND_AFTER). The queue is GET /operator/queue and src/app/app/operator/page.tsx, where an operator can also pause by hand. Test 'recipients can check that an email is genuine\u2026' proves the pause, the queue and lifting it.",
+    "gap": "The email itself has no report link (probe a1 J and browser check: the word 'report' does not occur in the email; the only link is 'Review and sign'). A wary recipient has to open the suspicious link, or find /help, to report. With neither ABUSE_EMAIL/SUPPORT_EMAIL nor OPERATOR_EMAILS set, a report is stored and nobody is told (probe K: 0 emails). The reporter gets no acknowledgement by email. A pause blocks new sends only: corrections to new addresses and reminders still go out (probe F). Reports an operator marks 'This was abuse' stop counting towards the automatic pause (a7-more.ts: two confirmed plus a third new report, not paused). Whether the queue is monitored is for the people running it.",
+    "suggested_fix": "src/server/mail.ts renderMail(): add 'Report this request' pointing at a page on our own domain that takes the security code (for example /check?code=\u2026&report=1) so nothing in the suspicious email has to be trusted. reportAbuse(): count upheld as well as open reports; email the reporter a receipt; log a loud warning at start-up when no abuse inbox and no operator is configured. Block correction and reminder emails while suspended_at is set."
+   },
+   {
+    "theme_id": "phishing-brand-abuse-unverifiable-requests",
+    "requirement": "New and free accounts are rate-limited on sends to external addresses until email plus payment identity or domain is verified, and the limits are published.",
+    "verdict": "partly",
+    "evidence": "sendEnvelope() in src/server/envelopes.ts requires a confirmed email and, for unpaid accounts (free plan or free code) in their first 7 days, caps recipients at newAccountDailyRecipients() = 50 a day (src/lib/policy.ts). Test 'signup, session and CSRF protection' proves the email check; my probe a1-phishing.ts E got 200 for the first 50 and 429 for the 51st with a clear message.",
+    "gap": "The cap is checked only when an envelope is first sent. Changing the addresses on an envelope that is out is not counted: probe E mailed 200 different addresses on day one from one new free account (three corrections of 50 addresses each, all 200 OK). After day 7 a free account has no limit at all, and viewers, approvers and copies cost no signatures, so probe G mailed 300 people in one go with billing on and nothing verified. The number is not on any public page: /help and /security say only 'a limited number of people a day'. Per-IP limits trust the first X-Forwarded-For value.",
+    "suggested_fix": "Put one check in a helper used by sendEnvelope(), correctEnvelope(), correctRecipient() and reassignRecipient(): count distinct addresses emailed for the account in the last 24 h from the `emails` table. Keep a cap for every unpaid account until a payment or a verified domain exists, not just for 7 days. Print the numbers on src/app/help/page.tsx (#cannot-send) and src/app/security/page.tsx from src/lib/policy.ts."
+   },
+   {
+    "theme_id": "phishing-brand-abuse-unverifiable-requests",
+    "requirement": "Outbound requests are scanned for invoice and payment-lure patterns before delivery and held with notice to the sender if flagged.",
+    "verdict": "partly",
+    "evidence": "looksLikeScam() in src/server/envelopes.ts flags a money word plus a phone number plus a brand name in the subject, message and document names; sendEnvelope() refuses with 422 and an explanation for unpaid accounts under 30 days old. Test 'new free accounts cannot send fake payment notices\u2026' passes and my probe A reproduced the 422.",
+    "gap": "The scan is easy to walk around (all in tests/out/audit-sender/a1-phishing.ts): B, put the brand in the sender name and account name instead of the subject (sent); C, put the whole lure in the per-recipient note, which is printed in the email (sent); D, send something clean, then correct the subject and message into 'PayPal invoice #4471\u2026 call +1 (888)\u2026' and change the address: the victim received it, plus a reminder; H, any free account older than 30 days or any paid account on day one sends the documented scam unchecked. The words inside the PDF are never looked at although files.text holds them. A flagged request is refused, not held: there is nothing for a person to release, although the error, /help and /security say a person can clear it.",
+    "suggested_fix": "Move the check into notifyRecipient() so every outgoing request, reminder and corrected request is scanned, over subject, message, recipient note, sender name, account name, document names and files.text. Apply it to every account without a verified payment or domain. On a hit set the envelope to a held state, tell the sender why, and add 'Release' and 'Reject' to the operator queue (routes-trust.ts, src/app/app/operator/page.tsx)."
+   },
+   {
+    "theme_id": "phishing-brand-abuse-unverifiable-requests",
+    "requirement": "The published abuse address accepts mail and returns an acknowledgement (test: a message to it never bounces).",
+    "verdict": "partly",
+    "evidence": "The published way to report is a form, not a mailbox: POST /public/support in src/server/routes-trust.ts (topic 'suspicious', linked from /help#unexpected and from /check) stores the message, shows a reference at once and emails the writer 'We got your message (REF)'. Test 'support is open to anyone, and an account can be closed for good' proves the storage, the reference and the acknowledgement email. SUPPORT_EMAIL is shown on /help when configured.",
+    "gap": "No abuse address is published: ABUSE_EMAIL is only used as the destination for report notifications and never shown. Mail sent to SUPPORT_EMAIL is handled by whatever mailbox the operators set up; the software cannot acknowledge it or stop it bouncing. A report made from the signing page is acknowledged on screen only. Policy part: someone has to own a real abuse mailbox and read the queue; the README says so under 'Things to decide before launch'.",
+    "suggested_fix": "Show ABUSE_EMAIL (falling back to SUPPORT_EMAIL) on src/app/help/page.tsx #unexpected and src/app/security/page.tsx #scams, or state plainly that the form is the abuse channel. Add an inbound-mail hook for that address that files the message into support_requests and sends the same acknowledgement. Operators: create the mailbox, set OPERATOR_EMAILS, and test it before launch."
+   },
+   {
+    "theme_id": "send-cannot-correct-after-sending",
+    "requirement": "Until the last signature, the sender can change a recipient's name, email, role or signing order without voiding and without losing signatures already collected.",
+    "verdict": "partly",
+    "evidence": "correctEnvelope() and correctRecipient() in src/server/envelopes.ts (PUT /envelopes/:id and POST /envelopes/:id/correct) update recipients in place; writeContent() never touches finished people. Tests 'a sent envelope can be corrected without voiding it', 'lost and replaced links are recoverable without the sender' and 'small things that stop people getting stuck' pass. My probe a2-corrections.ts c1: after Ada signed, Ben's name, email, role (signer to approver) and order were all changed in one save: 200, envelope still 'sent', Ada still completed with her signature, chain intact, Ben re-invited at the new address.",
+    "gap": "A changed signing order is saved but not enforced for someone who already has the document: probe c4 moved Ada behind Ben; both then had live links and Ada could still sign first (200). A person who has finished cannot have even a misspelled name fixed, and a request to do so answers 200 and silently does nothing (probe c1b). The audit entry for a correction made in the editor says only 'Now 3 recipients, 3 fields, 2 pages': the old and new address, role and order are not recorded.",
+    "suggested_fix": "src/server/envelopes.ts correctEnvelope(): on an ordered envelope, when someone with status sent/viewed is no longer in the current turn after the change, set them back to pending and tell them it is not their turn yet. Return 409 (as the API description promises) when a finished person's details differ instead of ignoring them. Write one audit line per changed person, for example 'Ben Signer <ben@\u2026> is now Benjamin Signer <benjamin@\u2026>, approver, order 3'."
+   },
+   {
+    "theme_id": "send-cannot-correct-after-sending",
+    "requirement": "The sender can add or move fields or replace the document; only signers whose already-signed content changed are asked to sign again, and they are shown what changed.",
+    "verdict": "partly",
+    "evidence": "Adding and moving fields for people who have not finished works at any time, and replacing the file works until the first person finishes: correctEnvelope() with lockedView()/askView() in src/server/envelopes.ts, 'Replace file' in src/components/editor/StepAdd.tsx. Probes: a3-fields-after-signature.ts (after Ada signed, a field added and one moved for Ben: 200, Ben got 'Updated:', Ada heard nothing); a2 c2 (document replaced before anyone signed: 200, same link, 'Updated:' email). Test 'a sent envelope can be corrected without voiding it' covers the lock.",
+    "gap": "There is no sign-again flow. Once anyone has finished, replacing the document is refused (409, probe c2b) and the only way is to void and lose the signatures, which is the original complaint. Nobody is shown what changed: the notice is one fixed sentence ('changed this document after sending it. Please look at it again'). Worse, the lock has holes: the sender can still add their own words to pages already signed (bug 1 and 2), and a signer whose page is already open can finish on a swapped document without seeing it (bug 3).",
+    "suggested_fix": "correctEnvelope(): allow a change to locked content by setting the affected finished signers back to 'sent' (keeping everyone else), with their earlier signature kept in the audit trail. Build a plain list of differences from lockedView()/askView() before and after (document replaced, pages, fields added, moved or removed) and put it in the 'Updated' email and in a banner on src/app/sign/[token]/page.tsx. Send a version stamp with GET /sign/:token and require it on POST /sign/:token/complete."
+   },
+   {
+    "theme_id": "send-cannot-correct-after-sending",
+    "requirement": "Every correction emails the affected signers a 'this document was updated' notice, makes old links open the latest version, and is recorded in the audit trail.",
+    "verdict": "partly",
+    "evidence": "correctEnvelope() sends notifyRecipient(\u2026,'updated') to everyone who has the document and whose part changed, keeps their token, retires replaced tokens (retireToken(); the sign page offers the new link via resendFromRetired()), and writes 'Envelope corrected' to the hash-chained audit trail. Tests 'a sent envelope can be corrected without voiding it' and 'lost and replaced links are recoverable without the sender' pass. Probe a2 c5: the unchanged link showed the moved field at its new place.",
+    "gap": "The audit entry is a count only ('Now 3 recipients, 6 fields, 2 pages'). It does not record a swapped address, a changed role, or that the document file was replaced (no old or new fingerprint). People who already signed are not told when something is added to the pages they signed (probe a4: Ada heard nothing until 'Completed'). A changed subject or message tells nobody. Nothing checks that a signer has seen the updated version before they finish (probe c3).",
+    "suggested_fix": "src/server/envelopes.ts correctEnvelope(): write what changed into the audit detail (per person old to new, per document old SHA-256 to new, fields added/moved/removed per person). Notify finished signers when anything on a page they signed changes, or refuse it. Add the version check on /sign/:token/complete described above and clear viewed_at for people whose part changed so the certificate shows they opened the new version."
+   },
+   {
+    "theme_id": "send-cannot-correct-after-sending",
+    "requirement": "Corrections and resends never consume allowance or incur a charge.",
+    "verdict": "met",
+    "evidence": "Code: correctEnvelope() in src/server/envelopes.ts only asks for signatures when the correction adds signers (available() < 0); correctRecipient(), remindEnvelope(), resendFromRetired() and extendEnvelope() write nothing to the credits ledger; a signature is only deducted in completeRecipient(). Test: tests/billing.test.ts 'a new account has 3 signatures to try\u2026' ('Fixing a name costs nothing', and a correction that adds a signer beyond the balance is refused and changes nothing). My check (tests/out/audit-sender/a2-corrections.ts c6, payments on): after a quick address fix, two reminders, an editor correction that changed an address and moved a field, and a deadline extension, the balance was 3 with 2 held before and after, and the ledger held only the welcome line.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "editor-templates-and-fields-fragile",
+    "requirement": "Fields are bound to signer roles, so swapping the person in a role keeps every field's position, size and type.",
+    "verdict": "met",
+    "evidence": "Code: every field carries recipient_id (fields table in src/server/db.ts); writeContent() in src/server/envelopes.ts updates the recipient row in place; copyEnvelope() maps each template role to the new recipient and fills name and email by role name; patchRcp() in src/components/Editor.tsx changes the person without touching fields. Test: 'templates, bulk send and PowerForms' (a template role filled with different people sends and signs). My check (tests/out/audit-sender/a2-corrections.ts c8): a template with a signature, an optional checkbox, a date and a labelled dropdown with options was used twice with different people, and the person in one role was then swapped on the draft; type, page, x, y, width, height, label and options were identical every time.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "editor-templates-and-fields-fragile",
+    "requirement": "'Replace document, keep fields' is available, with fields anchored to nearby text so they follow the content when the file changes.",
+    "verdict": "partly",
+    "evidence": "'Replace file' exists per document in src/components/editor/StepAdd.tsx; replaceDoc() in src/components/Editor.tsx swaps the file and keeps every field (fields on a page that no longer exists move to the last page). Browser check (tests/out/audit-sender/ui1.mjs): 8 fields before, 8 after, toast 'File replaced. Your fields are where you left them. Check they still line up.'",
+    "gap": "Fields are not anchored to anything. They keep their old page coordinates, so when the layout shifts they sit in the wrong place: in my run the replacement PDF had one paragraph added at the top and every field ended up off its blank (screenshot tests/out/audit-sender/ed-step2-after-replace.png). The sender has to drag each one again, which is the complaint. On a sent envelope the file can only be replaced until the first person finishes. No automated test covers replacing a file.",
+    "suggested_fix": "src/components/Editor.tsx replaceDoc(): before swapping, read the text of the old and the new file with scanPdf() from src/lib/autoplace.ts, remember for each field the nearest label or line of text and its offset, find that text in the new file and move the field with it. List the fields that could not be matched so the sender checks only those. Add a unit test next to tests/autoplace.test.ts."
+   },
+   {
+    "theme_id": "editor-templates-and-fields-fragile",
+    "requirement": "On upload the editor detects existing PDF form fields and signature, date and checkbox positions and proposes fields the sender can accept or adjust.",
+    "verdict": "partly",
+    "evidence": "src/lib/autoplace.ts: findInWidgets() turns PDF form fields (text, checkbox, radio, dropdown, signature) into fields; findInText() finds labels with a blank ('Signature: ____', 'Date: ____', name, title, company, email, initials) and {{tags}}. findForMe() in src/components/editor/StepFields.tsx adds them in one undoable step and never stacks on an existing field. Tests 1 to 9 in tests/autoplace.test.ts pass, including a real PDF read with pdf.js. Browser check (ui1.mjs): 'Found 6 places. Added 4 fields for Ada Sponsor. Undo takes them away again. 2 already had a field.'",
+    "gap": "It does not run on upload: the sender has to go to step 2 and press 'Find fields for me'. Checkboxes are only found when they are real PDF form fields or {{checkbox}} tags; boxes drawn in the text ('[ ] I agree', '\u2610 Yes \u2610 No', '( ) Monthly') are not detected (tests/out/audit-sender/a7-more.ts). Scanned documents give nothing, which the editor does say.",
+    "suggested_fix": "src/components/Editor.tsx addFiles(): after an upload finishes, run scanPdf()+findFields() and show 'We found N places for fields. Add them?' on step 1 or on entering step 2. src/lib/autoplace.ts findInText(): recognise \u2610, \u25a1, [ ], ( ) and small empty squares in front of text as checkbox or radio positions, with tests."
+   },
+   {
+    "theme_id": "editor-templates-and-fields-fragile",
+    "requirement": "Dragging a field always moves it; copying is a separate action; undo and redo work; templates autosave with version history; any sent or draft document can be duplicated.",
+    "verdict": "partly",
+    "evidence": "drag() in src/components/editor/StepFields.tsx only copies when Alt is held; dup(), Ctrl/Cmd+D and 'Copy to every page' are separate actions; useHistory() in src/components/editor/history.ts gives undo and redo; the autosave effect and save() in src/components/Editor.tsx run for drafts and templates; copyEnvelope() and POST /envelopes/:id/clone duplicate anything. Browser checks (ui1.mjs, ui3.mjs): one drag moved the field and the count stayed 7; 15 quick drags, still 7; undo moved it back and redo restored it; Alt+drag made 8; a template name typed in the editor was on the server 3 seconds later with 'All changes saved'. Probe a2 c8c: clone worked from draft, sent, completed, voided, declined and expired, with all fields and no signer-entered values.",
+    "gap": "There is no version history for templates (or anything else): no table, no screen, no way back. A save replaces the whole template, and nothing detects a stale save: in tests/out/audit-sender/a6-misc.ts one team member saved 6 fields, a colleague's older editor then saved, got 200, and 5 fields were gone for good. Undo covers fields only; removing a recipient deletes their fields and cannot be undone (there is a confirmation first).",
+    "suggested_fix": "src/server/db.ts: add envelope_versions (envelope_id, saved_at, saved_by, snapshot JSON); saveDraft() writes a snapshot when a template changes (at most one per editing session or per few minutes) and src/app/app/templates/page.tsx offers 'Earlier versions' with restore. PUT /envelopes/:id: accept the updated_at the editor loaded and answer 409 when the draft has changed since, so one editor cannot silently overwrite another."
+   },
+   {
+    "theme_id": "editor-templates-and-fields-fragile",
+    "requirement": "A pixel-accurate 'preview as signer' is available before sending, and the date format is selectable per field.",
+    "verdict": "partly",
+    "evidence": "Date format: five formats can be chosen per envelope or template (DATE_FORMATS in src/lib/dates.ts, the select in src/components/editor/StepAdd.tsx, envelopes.date_format, used by fieldDisplayValue() in src/server/pdf.ts and by the signing page). Test 'public forms do not multiply envelopes, and dates follow the chosen format' passes. So the date is not tied to the account's region.",
+    "gap": "There is no preview as signer at all: the review step (src/components/editor/StepReview.tsx) lists people and field counts and has only 'Back' and 'Send' (browser check ui1.mjs, screenshot ed-step3.png). The only preview is 'Preview PDF' on the envelope page, which shows the flat PDF without the fields a signer would fill. The date format is per envelope, not per field: the fields table has no format column and the field settings panel has no such control.",
+    "suggested_fix": "Add an authenticated GET /envelopes/:id/preview?recipient_id= that returns the same shape as GET /sign/:token for a draft, and a 'Preview as <name>' button in StepReview that renders the real signing components from src/components/sign read-only. Add fields.date_format (null means the envelope's format), a select in the field settings of StepFields.tsx for date fields, and pass it to fieldDisplayValue()."
+   }
+  ],
+  "bugs": [
+   {
+    "title": "A signer does not see sender-written text assigned to another signer, but it is printed on the PDF they both signed",
+    "severity": "high",
+    "where": "src/server/routes-sign.ts GET /sign/:token (`others` only shows a field once its owner has finished); src/server/pdf.ts drawField()",
+    "detail": "Reproduce: tests/out/audit-sender/a8-hidden-text.ts. Send to Ada and Ben at once. Give Ben a read-only text field with the value 'Ada also owes a fee of 5000 dollars'. Ada's signing data (fields and others) does not contain the sentence; she signs; Ben signs; the completed PDF contains the sentence. A read-only prefilled field is the sender's wording, like a note, and must be shown to everyone before they sign."
+   },
+   {
+    "title": "After someone has signed, the sender can still add words to the pages they signed",
+    "severity": "high",
+    "where": "src/server/envelopes.ts lockedView() and writeContent(); src/components/editor/StepFields.tsx (only notes are blocked)",
+    "detail": "Reproduce: tests/out/audit-sender/a4-text-after-signature.ts. Ada signs. The sender corrects the envelope and adds a read-only text field for Ben, 'The price is changed to 1 dollar', just above Ada's signature: PUT /envelopes/:id answers 200. Ada is told nothing until 'Completed'. Ben signs and the final PDF carries the sentence with both signatures. The audit trail says only 'Envelope corrected: Now 3 recipients, 6 fields, 2 pages'. Notes are refused with 409 in the same situation, so this is the same thing under another field type. Reachable from the editor too (Text field, Prefilled value, Read only)."
+   },
+   {
+    "title": "A signer can finish on a document that was swapped while their page was open",
+    "severity": "high",
+    "where": "src/server/envelopes.ts completeRecipient() and correctEnvelope(); src/app/sign/[token]/page.tsx complete()",
+    "detail": "Reproduce: tests/out/audit-sender/a2-corrections.ts c3. The signer opens the link and consents (their browser shows version one). The sender replaces the PDF with a different contract and moves the signature field (PUT 200). The signer presses Finish with the page they already had: 200, envelope completed, signature applied to the new document. The server keeps no record of which version a signer saw and /complete carries none. The sender can even time this, because the envelope page shows 'Opened' and how many fields are filled in."
+   },
+   {
+    "title": "The fake-payment-notice filter is bypassed three simple ways",
+    "severity": "high",
+    "where": "src/server/envelopes.ts looksLikeScam(), called only from sendEnvelope()",
+    "detail": "Reproduce: tests/out/audit-sender/a1-phishing.ts. B: sign up as 'PayPal Billing', rename the account 'PayPal', subject 'Invoice #4471', message with the amount and a phone number: sent, headed 'PayPal Billing sent you a document to sign' under a 'PayPal' brand line. C: put the lure in the recipient note, which the email prints as 'Note for you: \u2026': sent. D: send a clean envelope, then PUT a correction with subject 'PayPal invoice #4471', the phone message and a new address: the victim gets it, and a reminder with the same subject. Also (H) the filter never runs for free accounts older than 30 days or for any paid account."
+   },
+   {
+    "title": "The new-account daily limit does not count corrections, and free accounts have no limit after a week",
+    "severity": "high",
+    "where": "src/server/envelopes.ts sendEnvelope() (limit), correctEnvelope() and correctRecipient() (no limit)",
+    "detail": "Reproduce: a1-phishing.ts E and G. A brand-new free account sends one envelope to 50 viewers (allowed), is refused a 51st recipient (429), then changes all 50 addresses on the envelope that is out three times: each save is 200 and 200 different addresses were mailed on day one. With payments on, a free account 8 days old sent 6 envelopes to 50 viewers each (300 people) using 0 signatures, because viewers, approvers and copies are free and nothing else limits them."
+   },
+   {
+    "title": "A paused account can still email new people",
+    "severity": "high",
+    "where": "src/server/envelopes.ts correctEnvelope(), correctRecipient(), remindEnvelope() (none checks accounts.suspended_at)",
+    "detail": "Reproduce: a1-phishing.ts F. With suspended_at set, a new send is refused (403) but: PUT correction that changes an address and adds a recipient is 200 and both new addresses are mailed; POST /envelopes/:id/correct to a third address is 200 and mailed; POST /remind sends reminders. A sender paused for phishing keeps a working channel through any envelope that was already out."
+   },
+   {
+    "title": "Without APP_URL, a forged Host header rewrites the links in outgoing emails (password reset takeover)",
+    "severity": "high",
+    "where": "src/server/router.ts handle() setOrigin(); src/server/util.ts baseUrl()",
+    "detail": "Reproduce on a server started without APP_URL: curl -X POST /api/auth/forgot -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: https' with a victim's address. The reset email I captured linked to https://evil.example/reset?token=\u2026. The base address is a process-wide value taken from the latest request, so signing links, 'type <host>/check' in signing emails and emails sent by the timer can all be pointed at another site. README says to set APP_URL in production, but nothing enforces it."
+   },
+   {
+    "title": "Quick 'Correct' lets other people sign without signatures on the balance, then free self-signing is blocked",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts correctRecipient() (no balance check), sendEnvelope() (`need > before` with a negative balance)",
+    "detail": "Reproduce: tests/out/audit-sender/a6-misc.ts P3 (payments on). Send an envelope to your own address (free), then POST /envelopes/:id/correct to change the address to a client; the client signs and a signature is deducted. Four clients signed on a balance of 3, leaving -1. Sending many self-addressed envelopes first and correcting them afterwards scales this without limit. Once the balance is negative, even a self-signed envelope is refused with 'This needs 0 signatures and you have 0 left', which contradicts 'Signing your own documents stays free'."
+   },
+   {
+    "title": "A stale save silently wipes a colleague's work on a shared template",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts saveDraft()/writeContent(); PUT /envelopes/:id in src/server/routes-envelopes.ts",
+    "detail": "Reproduce: a6-misc.ts P11. Ann and Bob both open the same template. Ann adds 5 fields and saves (6 fields). Bob's editor, loaded earlier, saves a renamed subject: 200, and the template is back to 1 field. No warning, no version to restore. The same happens with two tabs."
+   },
+   {
+    "title": "/check tells the holder of a genuine email to treat it as fake after the sender corrects an address or role",
+    "severity": "medium",
+    "where": "src/server/routes-trust.ts POST /public/check; src/server/envelopes.ts correctRecipient()/correctEnvelope()/reassignRecipient() overwrite check_code",
+    "detail": "Reproduce: a1-phishing.ts I. The code in the first email is genuine before the correction and 'genuine: false' after it. The page then says 'Code \u2026 does not match any email we have sent' and 'treat the email as fake', with a small note about corrections underneath. Old codes are not kept, so a real email cannot be told apart from a forged one."
+   },
+   {
+    "title": "Reports an operator confirms as abuse stop counting towards the automatic pause",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts reportAbuse() counts only status='open'; POST /operator/reports/:id in src/server/routes-trust.ts",
+    "detail": "Reproduce: tests/out/audit-sender/a7-more.ts. Two recipients report a sender; the operator clicks 'This was abuse' on both; a third recipient reports: the account is not paused, because only open reports are counted. Confirming abuse makes the automatic pause less likely unless the operator also presses 'Pause this sender'."
+   },
+   {
+    "title": "The audit trail does not say what a correction changed",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts correctEnvelope() audit(\u2026'Envelope corrected', 'Now N recipients, M fields, P pages')",
+    "detail": "Seen in a2-corrections.ts c1 and a3: swapping a signer's address, changing a role, replacing the PDF or adding fields all leave the same kind of line with counts only. The old address and the old document fingerprint are not recorded anywhere, so the certificate cannot show who was removed or that the file was replaced. The quick 'Correct' route does log old and new values."
+   },
+   {
+    "title": "'Not opened yet' alert fires at the wrong time after an address is corrected",
+    "severity": "low",
+    "where": "src/server/envelopes.ts correctRecipient() (sent_at kept), correctEnvelope() and reassignRecipient() (unopened_alerted_at kept), cronTick()",
+    "detail": "Reproduce: a2-corrections.ts c7. Quick-correct an address on a request that is more than 48 hours old: the sender is told '\u2026 has not opened your document' at the next timer run, minutes after the new email went out. Correct the address in the editor instead: the sender is never alerted about the new address. Also (a6 P8) a sender who is a signer on their own envelope gets the alert about themselves."
+   },
+   {
+    "title": "Changing the signing order leaves the earlier signer active",
+    "severity": "low",
+    "where": "src/server/envelopes.ts correctEnvelope() and advance()",
+    "detail": "Reproduce: a2-corrections.ts c4. Ordered envelope, Ada has it. Move Ada to second and Ben to first: 200; Ben is invited, Ada keeps status 'sent' and can still complete first. The new order is not enforced for the person who already had the document."
+   },
+   {
+    "title": "API answers 200 while ignoring or dropping parts of the request",
+    "severity": "low",
+    "where": "src/server/envelopes.ts writeContent()",
+    "detail": "a2-corrections.ts c1b: a correction that changes a finished signer's email returns 200 and silently changes nothing (the API description says 409). a6-misc.ts P13: creating an envelope with three fields, one with a mistyped recipient id and one with an unknown type, returns 200 with one field kept and no warning."
+   },
+   {
+    "title": "Failed emails are not retried and the record still says 'Sent to recipient'",
+    "severity": "low",
+    "where": "src/server/mail.ts sendMail(); src/server/envelopes.ts advance()",
+    "detail": "tests/out/audit-sender/a5-delivery.ts: with the mail server refusing connections the send answers 200, the recipient is 'sent', the audit trail (and so the certificate) says 'Sent to recipient', nothing tries again and the sender gets no email about it. A row left 'queued' after a crash is shown as 'Waiting to go out' although nothing will send it."
+   },
+   {
+    "title": "Per-address rate limits trust the first X-Forwarded-For value",
+    "severity": "low",
+    "where": "src/server/router.ts handle() (`ip`), used by rateLimit() callers such as signup, /public/check, /public/support",
+    "detail": "The client address is the first value of X-Forwarded-For. Unless the proxy in front overwrites that header, a caller picks their own 'address' per request and the limits on sign-ups (10 an hour), security-code checks and public forms do not bind. My probes got past the sign-up limit simply by changing that header between accounts."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "README.md ('new free accounts \u2026 cannot send fake payment notices'); src/app/security/page.tsx ('Fake payment notices are stopped')",
+    "claim": "A new free account cannot send something that reads like a payment notice from a well-known brand with a phone number to call.",
+    "reality": "It can, three ways shown in tests/out/audit-sender/a1-phishing.ts: brand in the sender and account name, lure in the recipient note, or correct a clean envelope into the lure after sending. Only the exact pattern in the subject, message or file name at first send is caught."
+   },
+   {
+    "where": "src/server/envelopes.ts sendEnvelope() error text; src/app/help/page.tsx #cannot-send ('write to us and a person will clear it'); src/app/security/page.tsx ('A person can clear a genuine one')",
+    "claim": "If a flagged payment notice is genuine, a person will clear it.",
+    "reality": "The operator queue (src/server/routes-trust.ts, src/app/app/operator/page.tsx) can close help requests, mark reports and pause or unpause accounts. Nothing lets anyone clear or release a flagged envelope; the sender stays blocked until the account is 30 days old or paid."
+   },
+   {
+    "where": "src/app/security/page.tsx #scams ('These checks run on every send', 'New free accounts have a daily limit')",
+    "claim": "The anti-scam checks run on every send, and a new free account can only send to a limited number of people a day.",
+    "reality": "The checks run only when an envelope is first sent. Corrections and reminders are not checked: one new free account mailed 200 different people on day one by changing addresses on an envelope that was out."
+   },
+   {
+    "where": "src/app/security/page.tsx ('new sends from it stop until a person has reviewed it'); pause email in src/server/envelopes.ts reportAbuse(); src/app/app/operator/page.tsx ('Pausing only stops new sends')",
+    "claim": "When an account is paused, sending from it stops until a person has reviewed it.",
+    "reality": "A paused account can still email people it has never contacted, by changing or adding recipients on any envelope that is already out, and can still send reminders (a1-phishing.ts F)."
+   },
+   {
+    "where": "src/app/help/page.tsx #fix-after-sending; src/app/developers/page.tsx #correct; src/server/openapi.ts PUT /envelopes/{id}; envelope page ('what they signed is locked')",
+    "claim": "Once someone has finished, the documents and what that person signed are locked.",
+    "reality": "The sender can still put new wording on those pages as a read-only text field for a remaining signer; it is printed on the completed PDF and the person who already signed is not told (a4-text-after-signature.ts)."
+   },
+   {
+    "where": "src/app/developers/page.tsx ('A call that touches one of them returns 409 and changes nothing'); src/server/openapi.ts PUT /envelopes/{id}",
+    "claim": "A correction that touches a finished person's name, email, role or order returns 409.",
+    "reality": "Changing a finished signer's name or email returns 200 and is silently ignored (a2-corrections.ts c1b). Only moved fields, notes and documents give 409."
+   },
+   {
+    "where": "src/app/check/CheckForm.tsx ('This email is real \u2026 Sent by <name>, <account>', badge 'Genuine'); src/server/mail.ts ('We will tell you who sent it')",
+    "claim": "The check page tells you who sent the email.",
+    "reality": "It repeats the name and organisation the sender typed. Only the email address was confirmed. An account named 'PayPal' with a user named 'PayPal Billing' gets the same green 'Genuine' result."
+   },
+   {
+    "where": "src/app/check/CheckForm.tsx ('Code \u2026 does not match any email we have sent')",
+    "claim": "An unrecognised code means we never sent that email.",
+    "reality": "A code from a real email stops matching as soon as the sender corrects that recipient's address or role or the signer hands the document on, because old codes are overwritten (a1-phishing.ts I)."
+   },
+   {
+    "where": "src/app/security/page.tsx #proof ('Every step is recorded \u2026 corrections'); certificate audit trail (src/server/pdf.ts)",
+    "claim": "Corrections are written to the audit trail.",
+    "reality": "Only the fact and three counts are written ('Now 3 recipients, 6 fields, 2 pages'). Which address was replaced, that the document file was swapped, or what text was added is not recorded."
+   },
+   {
+    "where": "Audit trail and certificate of completion: 'Sent to recipient' (src/server/envelopes.ts advance())",
+    "claim": "The request was sent to the recipient at that time.",
+    "reality": "The line is written before and regardless of the email result. With the mail server refusing, or with no mail server configured, the record still says 'Sent to recipient' (a5-delivery.ts)."
+   },
+   {
+    "where": "src/app/help/page.tsx #unexpected and src/app/check/CheckForm.tsx ('Every report goes to a person'); src/components/sign/dialogs.tsx ('A person reads every report')",
+    "claim": "Every report reaches a person.",
+    "reality": "A report is stored. It is emailed to someone only if ABUSE_EMAIL or SUPPORT_EMAIL is set, and visible in the queue only to addresses in OPERATOR_EMAILS (default nobody). With none set, nothing is sent and nobody can see it (a1-phishing.ts K), and the server gives no warning about that at start-up."
+   },
+   {
+    "where": "src/server/envelopes.ts outOfSignatures() ('Signing your own documents stays free')",
+    "claim": "Signing your own documents is always free.",
+    "reality": "With a negative balance (reachable through the quick-correct gap) a self-signed envelope is refused with 'This needs 0 signatures and you have 0 left' (a6-misc.ts P3)."
+   }
+  ]
+ }
+}

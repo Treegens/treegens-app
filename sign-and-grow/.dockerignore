@@ -1,0 +1,17 @@
+# Never in an image: settings with secrets, data, backups, and what a build makes anyway.
+.env
+.env.*
+!.env.example
+data
+backups
+node_modules
+.next
+.next-*
+.git
+tests/out
+research
+*.tsbuildinfo
+public/pdfjs
+public/fonts
+public/security
+assets/fonts

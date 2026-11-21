@@ -1,0 +1,69 @@
+// The sign-in rules of an account: reading and changing them (owner and admins, in a browser), how long a browser
+// has left before the idle rule signs it out, and the signing page's second look at its link after a long break.
+// The rules themselves are in secpolicy.ts.
+import { route } from './router.ts';
+import { run } from './db.ts';
+import { bad, now } from './util.ts';
+import { needCode, twoStepOn } from './twostep.ts';
+import { find } from './routes-sign.ts';
+import { saveRules, idleLeft, awayMinutes } from './secpolicy.ts';
+import { pwnedOn } from './pwned.ts';
+import { rulesOf, wholeIn, PASSWORD_MIN, PASSWORD_RULE_MAX, IDLE_MIN_MINUTES, IDLE_MAX_MINUTES, IDLE_WARN_SECONDS } from '../lib/signinrules.ts';
+import { SOURCE_LOCALE, t } from '../lib/i18n.ts';
+
+const say = (key: string, vars: Record<string, string | number> = {}) => t(SOURCE_LOCALE, key, vars);
+const view = (c: any) => ({
+  ...rulesOf(c.account),
+  limits: { password: [PASSWORD_MIN, PASSWORD_RULE_MAX], idle_minutes: [IDLE_MIN_MINUTES, IDLE_MAX_MINUTES], warn_seconds: IDLE_WARN_SECONDS },
+  // Whether new passwords are looked up in the list of leaked passwords on this server. Off: the card says nothing of it.
+  leak_check: pwnedOn(),
+  two_step_required: !!c.account.two_step_required_at,
+  // Changing the rules asks for the code of two-step login from someone who has it.
+  code_needed: twoStepOn(c.user),
+});
+
+route('GET', '/account/rules', (c) => view(c), 'admin');
+
+route('PATCH', '/account/rules', async (c) => {
+  // The rules decide who gets into the account, so a leaked key must not be able to loosen them.
+  if (c.auth?.via !== 'session') throw bad('An API key cannot change the sign-in rules. That needs a person signed in to the app.', 403);
+  const b = await c.body();
+  const was = rulesOf(c.account);
+  const next = { ...was };
+  if (b.min_password_length !== undefined) {
+    const n = wholeIn(b.min_password_length, PASSWORD_MIN, PASSWORD_RULE_MAX);
+    if (n === null) throw bad(say('rules.refused.password', { lo: PASSWORD_MIN, hi: PASSWORD_RULE_MAX, kept: was.min_password_length }), 400, { field: 'min_password_length' });
+    next.min_password_length = n;
+  }
+  if (b.idle_minutes !== undefined) {
+    if (b.idle_minutes === null || b.idle_minutes === '' || b.idle_minutes === false || b.idle_minutes === 0) next.idle_minutes = null;
+    else {
+      const n = wholeIn(b.idle_minutes, IDLE_MIN_MINUTES, IDLE_MAX_MINUTES);
+      if (n === null) throw bad(say('rules.refused.idle', { lo: IDLE_MIN_MINUTES, hi: IDLE_MAX_MINUTES, kept: was.idle_minutes ? say('rules.kept.minutes', { count: was.idle_minutes }) : say('rules.kept.off') }), 400, { field: 'idle_minutes' });
+      next.idle_minutes = n;
+    }
+  }
+  if (b.one_session !== undefined) {
+    if (typeof b.one_session !== 'boolean') throw bad('Send "one_session": true or false.', 400, { field: 'one_session' });
+    next.one_session = b.one_session;
+  }
+  if (JSON.stringify(next) === JSON.stringify(was)) return { ok: true, signed_out: 0, ...view(c) };
+  await needCode(c, b.code, 'change the sign-in rules');
+  const r = saveRules(c, next);
+  return { ok: true, ...r, ...view({ ...c, account: { ...c.account, min_password_length: next.min_password_length, idle_minutes: next.idle_minutes, one_session: next.one_session ? 1 : 0 } }) };
+}, 'admin');
+
+// How long this browser has left. The app asks with the "x-quiet" header, so asking is not use.
+route('GET', '/me/idle', (c) => idleLeft(c));
+// "Stay signed in", and the page's note that someone is working: the request itself is the use.
+route('POST', '/me/idle/stay', (c) => {
+  if (c.auth?.sessionId) run('UPDATE sessions SET seen_at=? WHERE id=? AND seen_account=?', now(), c.auth.sessionId, c.account.id);
+  return idleLeft(c);
+});
+
+// The signing page of an account with the idle rule asks this on the first action after a long break: the link is
+// looked up again exactly as when the page was opened (and refused in the same words when it no longer opens).
+route('GET', '/sign/:token/away', (c) => {
+  const { e } = find(c);
+  return { ok: true, minutes: awayMinutes(e.account_id) };
+}, 'public');
