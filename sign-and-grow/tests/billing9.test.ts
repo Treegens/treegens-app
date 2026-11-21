@@ -408,8 +408,8 @@ test('a held signature does not expire while held; let go after its date, it is 
     assert.match(readFileSync(f, 'utf8'), /HELD_EXPIRY_TEXT|held_rule/, `${f} explains holds and says what happens after the date`);
   }
   // The price list and the editor say it in a few words of their own, and never that a held one always comes back.
-  assert.match(readFileSync('src/app/page.tsx', 'utf8'), /come back, unless their own date has passed by then\./);
-  for (const f of ['src/app/page.tsx', 'src/components/editor/StepReview.tsx', 'src/components/sender/UsageMeter.tsx']) assert.doesNotMatch(readFileSync(f, 'utf8'), /comes straight back|come back by themselves\. *<|It comes back if you void/, f);
+  assert.match(readFileSync('src/app/pricing/page.tsx', 'utf8'), /come back, unless their own date has passed by then\./);
+  for (const f of ['src/app/page.tsx', 'src/app/pricing/page.tsx', 'src/components/editor/StepReview.tsx', 'src/components/sender/UsageMeter.tsx']) assert.doesNotMatch(readFileSync(f, 'utf8'), /comes straight back|come back by themselves\. *<|It comes back if you void/, f);
   balanced(p);
 });
 
@@ -541,7 +541,7 @@ test('the expiry rule is written once and quoted on the Plan page, the pricing b
   assert.equal(state(p).expiry_rule, rule);
   assert.match(readFileSync('src/app/app/settings/page.tsx', 'utf8'), /\{b\.expiry_rule\}/, 'the Plan page shows it');
   // The price list says it in one line and links to the whole rule on /help (the first-send flow has a word ceiling).
-  assert.match(readFileSync('src/app/page.tsx', 'utf8'), /<li id="expiry"><b>When signatures expire\.<\/b> \{expiryShortText\(\)\} <Link href="\/help#expiry">How signatures expire<\/Link>\.<\/li>/);
+  assert.match(readFileSync('src/app/pricing/page.tsx', 'utf8'), /<li id="expiry"><b>When signatures expire\.<\/b> \{expiryShortText\(\)\} <Link href="\/help#expiry">How signatures expire<\/Link>\.<\/li>/);
   assert.equal(expiryShortText(), "A month's 9 signatures last for that month, top-ups last 12 months, and every date is on your Plan page.");
   assert.match(readFileSync('src/app/help/page.tsx', 'utf8'), /<p id="expiry">/);
   assert.match(readFileSync('src/app/help/page.tsx', 'utf8'), /\{expiryRuleText\(\)\}/, '/help shows it');
