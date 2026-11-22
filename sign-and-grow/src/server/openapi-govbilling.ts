@@ -10,7 +10,7 @@ const OP = 'Only for a confirmed login listed in OPERATOR_EMAILS; anyone else ge
 const statement = { type: 'object', properties: { year: int, sites: str, planted_from: day, planted_to: day, species: str, trees: int, evidence: { type: 'array', items: str, description: 'https links to the evidence Treegens provided.' } } };
 const commitment = { type: 'object', properties: { holder: str, agreement_ref: str, band: str, share_pct: { type: 'number' }, trees_per_year: int, starts_on: day, ends_on: { ...day, nullable: true }, signed_on: day, statements: { type: 'array', items: statement } } };
 
-export const BILLING_MODE_NOTE = 'On a server with BILLING_MODE=deployment (a public body paying one fixed fee a year under a contract), nothing is counted, held or expires, sending never answers 402, the payment provider is never called, and every route of the plan (/billing, /billing/*, /public/billing/*, /stripe/webhook, /operator/billing/*) answers 404 with a sentence saying so.';
+export const BILLING_MODE_NOTE = 'On a server with BILLING_MODE=deployment (a public body paying one fixed fee a year under a contract), nothing is counted, held or expires, sending never answers 402 and has no daily limit on people (429 for that limit never comes; the fake-notice filter still answers 422), the payment provider is never called, and every route of the plan (/billing, /billing/*, /public/billing/*, /stripe/webhook, /operator/billing/*) answers 404 with a sentence saying so.';
 
 export const govBillingPaths = () => ({
   '/billing-mode': {

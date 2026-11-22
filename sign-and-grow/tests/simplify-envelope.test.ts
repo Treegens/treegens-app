@@ -350,8 +350,11 @@ test('Templates: Use on each row, the other five in the row\'s More; a short int
   assert.equal(list.match(/aria-label=\{`Use \$\{name\}`\}>Use<\/button>/g)?.length, 1, 'one Use, on a phone and on a desktop');
   assert.equal(list.match(/<MorePanel /g)?.length, 1);
   const panel = list.slice(list.indexOf('<div className="sn-rowmore"'), list.indexOf('</Fragment>'));
-  for (const b of ['Send to many</Link>', '>Edit</Link>', '>Move</button>', '>Who can use this</button>', '>Delete</button>']) assert.ok(panel.includes(b) && !list.replace(panel, '').includes(b), b);
-  assert.equal((panel.match(/<button|<Link/g) || []).length, 5);
+  for (const b of ['Send to many</Link>', '>Edit</Link>', '>Move to folder</button>', '>Who can use this</button>', '>Delete</button>']) assert.ok(panel.includes(b) && !list.replace(panel, '').includes(b), b);
+  // The sixth, "Move to a colleague", is only on a team (2 or more members) and only for its owner or an admin
+  // (ds-colleagues): with zero setup the More holds the five above.
+  assert.match(panel, /\{mayHand\(t\) && <button [^\n]*\{MOVE_LABEL\}<\/button>\}/);
+  assert.equal((panel.match(/<button|<Link/g) || []).length, 6);
   assert.match(list, /<div className="muted">Set a document up once, then send it again in seconds\.<\/div>/);
   assert.doesNotMatch(list, /sn-use-reminders|reminderText|only the person it belongs to or an admin can change or delete it/);
   // Who may do what is still said where it matters: on the row (its marks) and in "Who can use this".

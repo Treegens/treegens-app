@@ -101,8 +101,6 @@
     ".next-g14/dev/types/**/*.ts",
     ".next-repair-ds-colleagues/types/**/*.ts",
     ".next-repair-ds-colleagues/dev/types/**/*.ts",
-    ".next-repair-ds-reading-view/types/**/*.ts",
-    ".next-repair-ds-reading-view/dev/types/**/*.ts",
     ".next-repair-g14/types/**/*.ts",
     ".next-repair-g14/dev/types/**/*.ts"
   ],

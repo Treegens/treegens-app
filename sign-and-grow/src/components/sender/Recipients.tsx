@@ -360,8 +360,8 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
             {reachable && may('links') && r.muted && !stale ? <p className="sn-hint">They asked for no more reminder emails. You can still send them the link yourself, from their More.</p> : null}
             {stopped && (may('edit') ? <MailStopHint r={r} /> : <p className="sn-hint warn"><b>The email to them could not be delivered.</b> Only the person this document belongs to, or an admin, can fix the address or send them the link.</p>)}
             {/* Their link, the only way it reaches them: while it is their turn and for their copy afterwards. */}
-            {own && may('links') && <OwnLinkActions r={r} envelopeStatus={e.status} busy={busy} link={shown === r.id ? links[r.id] || '' : ''}
-              onShow={() => linkFor(r).then(() => setShown(r.id)).catch(fail)} onCopy={() => copy(r)} onQr={(el) => showQr(r, el)} onShare={(how) => shareVia(r, how)} />}
+            {may('links') && <>{own && <OwnLinkActions r={r} envelopeStatus={e.status} busy={busy} link={shown === r.id ? links[r.id] || '' : ''}
+              onShow={() => linkFor(r).then(() => setShown(r.id)).catch(fail)} onCopy={() => copy(r)} onQr={(el) => showQr(r, el)} onShare={(how) => shareVia(r, how)} />}</>}
             {/* A second person who signs here, or the sender's own turn when the page's main button is someone else's. */}
             {signHere && <div className="sn-person-actions"><button className="btn sm" disabled={!!busy} onClick={() => signNow(r)}>{r.role === 'inperson' ? 'Host signing now' : `${r.role === 'approver' ? 'Review' : r.role === 'viewer' ? 'View' : 'Sign'} now`}</button></div>}
 
@@ -406,7 +406,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
             )}
             {/* An access code can still be changed when nothing else can: for someone who has finished, and once the
                 envelope is finished or closed. It stands between them and their copy, and a frozen one locks them out. */}
-            {!(turn || (out && r.status === 'pending')) && e.status !== 'draft' && !!r.access_code && may('edit') && (
+            {!(turn || (out && r.status === 'pending')) && may('edit') && e.status !== 'draft' && !!r.access_code && (
               <div className="sn-person-actions">
                 <button className="btn sm" disabled={!!busy} onClick={() => onCorrect({ ...r, code_only: true })} aria-label={`Change the access code of ${r.name}`}>Change the access code</button>
               </div>

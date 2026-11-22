@@ -37,7 +37,7 @@ export default function PublicImpact() {
         )}
         {/* Signed government contracts and their planting statements; absent until there is one. */}
         <Commitments />
-        <Methodology />
+        <Methodology perContract={gov} />
       </main>
       <PublicFooter />
     </div>

@@ -38,12 +38,15 @@ const out = { target: '_blank', rel: 'noreferrer' } as const;
 // - The Paper Calculator opens at c.environmentalpaper.org.
 // When any of these is read again, change the sentence, this note and TREEGENS_READ_ON together.
 
-export function Methodology() {
+// `perContract`: a server under a government agreement (BILLING_MODE=deployment). Nothing is paid per signature there,
+// so mangroves are not counted from payments: they are set per contract (TREE_RULES in src/lib/govpricing.ts).
+export function Methodology({ perContract = false }: { perContract?: boolean } = {}) {
   return (
     <div className="card">
       <h2 style={{ marginBottom: 10 }}>How we count</h2>
       <p>Two different things are counted here, and they are kept apart.</p>
       <h3 style={{ margin: '14px 0 6px' }}>1. Mangroves: what the money does</h3>
+      {perContract ? <p style={{ margin: 0 }}>On this server nothing is paid per signature, so no mangroves are counted from signatures. The trees of a government contract are set in the contract, whether or not the service is used, and each signed contract is listed on this page with its planting statements.</p> : (
       <ul style={{ paddingLeft: 20, lineHeight: 1.7, margin: 0 }}>
         <li>{MONEY_LINE} That is the monthly plan and top-ups alike. Every dollar funds {PRICING.treesPerUsd} mangroves, and a signature costs one dollar, so a signature that was paid for funds {PRICING.treesPerUsd}.</li>
         <li>A free signature funds none: the {PRICING.welcomeSignatures} signatures a new account starts with, a free code, or signing your own document. Nobody is told that a free signature planted anything.</li>
@@ -52,6 +55,7 @@ export function Methodology() {
         <li>The rate: <a href={TREEGENS_ORG_URL} {...out}>treegens.org</a> says ten cents is the average cost of planting a tree across a run, not an invoice for a named tree. That is where {PRICING.treesPerUsd} mangroves for a dollar comes from. It is an average Treegens states, not a price we can show for each tree.</li>
         <li>What you cannot check here yet: we do not publish receipts for the money sent to Treegens, or Treegens&apos; own statement of what it received. Until we do, the totals on this page are our own figures.</li>
       </ul>
+      )}
       <h3 style={{ margin: '14px 0 6px' }}>2. Paper: an estimate of what was not printed</h3>
       <ul style={{ paddingLeft: 20, lineHeight: 1.7, margin: 0 }}>
         <li><b>Sheets</b> = pages in the document × the people on it. On paper, each of them would get a printed copy. The sender&apos;s own copy, reprints and drafts are not counted, and only completed documents count. A total is shown from {fmtNum(TOTALS_FROM.sheets)} sheets up.</li>

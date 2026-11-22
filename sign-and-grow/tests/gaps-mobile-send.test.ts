@@ -496,7 +496,8 @@ test('the switch on the page after sending turns on one email per signature, and
   // The page: the editor sends the sender to ?sent=1, the envelope page draws the card there, and the switch on
   // it sets this preference and no other.
   assert.match(read('src/components/Editor.tsx'), /leave\(`\/app\/envelopes\/\$\{id\}\?sent=1`\)/);
-  assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /\{out && <AfterSend envelope=\{e\} \/>\}/);
+  // sentFor (ds-colleagues): sent for a colleague, the card names who is emailed instead of "you".
+  assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /\{out && <AfterSend envelope=\{e\}( sentFor=\{[^}]*\})? \/>\}/);
   const card = read('src/components/sender/AfterSend.tsx');
   assert.match(card, /q\.get\('sent'\) !== '1'/);
   assert.match(card, /api\('\/me', \{ method: 'PATCH', body: \{ notify: \{ signed: next \} \} \}\)/);

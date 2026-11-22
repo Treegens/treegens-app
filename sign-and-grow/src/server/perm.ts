@@ -123,7 +123,7 @@ const NEEDS: Record<Need, string[]> = {
     'POST /account/members/:id/two-step/reset',
     'POST /account/roles', 'PATCH /account/roles/:id', 'DELETE /account/roles/:id',
     'POST /account/member-groups', 'PATCH /account/member-groups/:id', 'DELETE /account/member-groups/:id',
-    'POST /account/members/:id/move-documents',
+    'GET /account/members/:id/move-documents', 'POST /account/members/:id/move-documents',
   ],
   settings: [
     'PATCH /account', 'PUT /account/ai-read', 'POST /account/archive-addresses', 'DELETE /account/archive-addresses/:id',
