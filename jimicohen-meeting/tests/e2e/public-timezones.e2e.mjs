@@ -297,7 +297,12 @@ export default defineSuite('public-timezones', { mockCreds: true }, async (t) =>
       const [mail] = await s.outbox({ kind: 'email', to: 'ada@example.com' });
       s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Mon, Mar 15, 10:00 AM EDT');
       s.expect(mail.text, 'invitee email').toContain('10:00 AM to 10:15 AM (Eastern Daylight Time)');
-      s.expect(mail.ics.content, 'calendar file').toContain('DTSTART:20270315T140000Z');
+      // Google invites her (the event below has her on it), so the email carries no file of its own. The calendar
+      // file she can download instead (Google's UID) holds the same instant.
+      s.expect(mail.hasIcs, 'no calendar file beside Google\'s invitation').toBe(false);
+      const file = await s.visitor().request('GET', `/public/bookings/${booking.id}/ics`, { query: { t: booking.manageToken } });
+      s.expect(file.text, 'calendar file').toContain('DTSTART:20270315T140000Z');
+      s.expect(file.text, 'calendar file UID').toContain(`UID:${booking.google.eventId}@google.com`);
       const [notice] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
       s.expect(notice.text, 'host email').toContain('2:00 PM to 2:15 PM (Greenwich Mean Time)');
       s.expect(notice.text, 'host email, their time').toContain('10:00 AM (Eastern Daylight Time)');

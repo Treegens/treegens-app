@@ -288,7 +288,10 @@ describe('completeGoogleAuth', () => {
     const forgedBody = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
     const otherPurpose = signPayload(ctx, 'session', { hostId: OWNER, returnTo: '/meeting/admin', gmail: false, n: 'x' }, 600);
 
-    for (const bad of [`${forgedBody}.${sig}`, `${body}.${sig.slice(0, -2)}xx`, otherPurpose, 'garbage', '']) {
+    // Change the first character: it carries six whole bits, so the signature always really changes
+    // (the last ones can differ only in padding bits, or already read "xx").
+    const tamperedSig = `${sig[0] === 'A' ? 'B' : 'A'}${sig.slice(1)}`;
+    for (const bad of [`${forgedBody}.${sig}`, `${body}.${tamperedSig}`, otherPurpose, 'garbage', '']) {
       const result = await completeGoogleAuth(ctx, callbackParams(bad));
       expect(result.ok).toBe(false);
       expect(result.returnTo).toBe('/meeting/admin');
