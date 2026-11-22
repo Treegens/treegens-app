@@ -1,3 +1,5 @@
+import { listName } from './docname.ts';
+
 // Round 6 of making GrowSigning simpler (build-simplicity-r6, tests/simplicity-r6.test.ts): the words and small rules
 // that several screens share, so a page and its test read the same thing. Nothing here decides a fact; each function
 // only turns facts the page already has into what a person reads. research/ux-charter.md is the rulebook.
@@ -42,7 +44,13 @@ export const STEP3_ORDER = ['preview', 'who', 'message', 'more', 'send'] as cons
  * The line under "Documents". It used to read "Free, also after you cancel. For everything, see Settings, Records and
  * data.", which explained the ZIP button without naming it. Now it names what it is about.
  */
-export const documentsIntro = (admin: boolean): string =>
+export const documentsIntro = (_admin?: boolean): string => 'Sent documents and drafts, most recently changed first.';
+
+/**
+ * repair-simplicity-r6: the line that goes with the ZIP button, under it and only when the button is shown. It used to
+ * be the page's intro, so a new account read about downloading with no download in sight.
+ */
+export const exportNote = (admin: boolean): string =>
   `Downloading your signed PDFs is free, also after you cancel.${admin ? ' The full export is in Settings, Records and data.' : ''}`;
 
 /**
@@ -52,7 +60,8 @@ export const documentsIntro = (admin: boolean): string =>
 export function countLine(rows: number, tickable: number, page: number): string {
   if (rows <= 0) return '';
   const full = rows === page;
-  return `${rows}${full ? ' most recently updated' : ''} document${rows === 1 ? '' : 's'}${full ? '. Search to find older ones' : ''}.${tickable > 0 ? ' Tick the boxes to download several as one ZIP.' : ''}`;
+  // "Several" needs two boxes: with one, its own Download is the way (repair-simplicity-r6).
+  return `${rows}${full ? ' most recently updated' : ''} document${rows === 1 ? '' : 's'}${full ? '. Search to find older ones' : ''}.${tickable > 1 ? ' Tick the boxes to download several as one ZIP.' : ''}`;
 }
 
 // ---- 5. Settings: one line under each email switch (charter 2.2: "One line of explanation under a control") ------
@@ -74,3 +83,44 @@ export const pagesButton = (pages: number): string => (pages > 0 ? `${pages.toLo
  */
 export const emailLine = (email: string, confirmed: boolean, bounced: boolean): string =>
   `You sign in with ${email}${confirmed ? '' : ', which is not confirmed yet'}, and our emails to you go there.${bounced ? ' Our last email to it came back, see the notice at the top.' : ''}`;
+
+// ---- 7. The signing page's top bar names the document (charter 2.6, Header) ------------------------------------------
+
+/**
+ * The words in the signing page's top bar. The bar is narrow on a phone, so the app's own "Please sign: " (which the
+ * consent heading and the email already say) is left out and the document's name is what shows: "Planting
+ * partnership", never "Please sign: Pla...". A subject the sender wrote in their own words is shown as written.
+ */
+export const barTitle = (subject: unknown): string => listName(subject);
+
+// ---- 13. Documents: a ZIP button that has something in it, and a search box that says what it finds ---------------
+
+/**
+ * "Download signed PDFs (ZIP)" is shown once something is completed (repair-simplicity-r6: it was "once something was
+ * sent", which showed it while nothing was signed yet). Before that it only ever answered "There is nothing to
+ * download yet", a button that did nothing on the first visit (charter P3: no dead buttons). While the answer is not
+ * in yet it stays hidden, so it never flashes. The page passes the answer of /envelopes?box=completed&limit=1.
+ */
+export const exportShown = (done: { envelopes?: unknown[] } | null | undefined): boolean => !!done?.envelopes?.length;
+
+/** The search box's hint, short enough for a phone: it used to be cut off at "document text or I". */
+export const SEARCH_HINT = 'Search names, people or words';
+
+// ---- repair-simplicity-r6: Home's one-person line --------------------------------------------------------------------
+
+/**
+ * Whether Home shows "Only you can manage this account" (src/components/sender/OnePersonLine.tsx). Only for an admin
+ * of a team of two or more people with fewer than two admins: a person who works alone has nobody to lock out, and a
+ * paid plan alone is no reason. The full explanation is on Settings, Team, for everyone it concerns.
+ */
+export const onePersonLineShown = (m: { role?: string; admins?: number; members?: number }): boolean =>
+  m.role !== 'member' && Number(m.admins ?? 0) < 2 && Number(m.members ?? 0) > 1;
+
+// ---- repair-simplicity-r6: Documents, the status chip of a row ------------------------------------------------------
+
+/**
+ * The chip of a waiting row. It said "Waiting for others" while the line under it said "Waiting on You" when the
+ * only person left was the sender. Now the chip says "Waiting for you" then, and is unchanged in every other case.
+ */
+export const rowStatusLabel = (status: string, w: { you?: boolean; people?: unknown[] } | null | undefined): string | undefined =>
+  status === 'sent' && w?.you && (w.people?.length ?? 0) === 1 ? 'Waiting for you' : undefined;

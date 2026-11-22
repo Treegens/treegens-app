@@ -17,6 +17,7 @@ import { ReviewPlus } from '../impact/SenderTrees';
 import { type Ed } from './shared';
 import { OwnDocsChoice } from './OwnDocsChoice';
 import { OWN_DOCS_LABEL } from '@/lib/owndocs';
+import { useCollectSummary } from './CollectChoice';
 
 // The parts of step 3 that came over from step 1 (research/ux-charter.md, 2.3): the subject and the message stand
 // where the Send button is, and what changes from one send to the next (reminders, the deadline, how dates are
@@ -57,13 +58,15 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
       live = false;
     };
   }, [env.id]);
+  // A payment asked for by card (CollectChoice.tsx): said next to the closed More options too, read again on closing.
+  const asked = useCollectSummary(env.id, open);
   if (closed) return null;
   const payShown = !!pay?.pay_link && pay.may && !pay.host_why;
   const payHidden = !!pay?.pay_link && !payShown;
   const said = reviewSummary({
     reminderDays: env.reminder_days, expireDays: correcting ? null : env.expire_days, closesOn: correcting && env.expires_at ? momentText(env.expires_at, zone) : '',
     dateFormat: format, defaults: { expireDays: me.account?.default_expire_days ?? null, dateFormat: me.account?.default_date_format || DEFAULT_DATE_FORMAT },
-    dateExample: formatDate(today, env.date_format, zone), signNow: ed.signNow, payLink: payShown,
+    dateExample: formatDate(today, env.date_format, zone), signNow: ed.signNow, payLink: payShown, collect: asked,
   });
   return (
     <div className="ed-review-more">

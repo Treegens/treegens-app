@@ -166,7 +166,7 @@ export default function PowerForm() {
     <div className={step === 'review' ? undefined : 'authbox'} style={step === 'review' ? { maxWidth: 900, margin: '3vh auto', padding: '0 16px' } : undefined}>
       {error ? <div className="card center"><h2>This form is not available</h2><p className="muted" style={{ marginTop: 8 }}>It may have been paused or removed by its owner.</p></div>
         : !form ? <div className="muted center">Loading…</div>
-        : form.closed ? <div className="card center"><h2>This form cannot take new signatures right now</h2><p className="muted" style={{ marginTop: 8 }}>Please contact whoever gave you the link.</p></div>
+        : form.closed ? <div className="card center"><h2>{form.closed_why ? 'This form is closed' : 'This form cannot take new signatures right now'}</h2><p className="muted" style={{ marginTop: 8 }}>{form.closed_why || 'Please contact whoever gave you the link.'}</p></div>
         : queued ? <div className="card center"><h2>Thank you</h2><p className="muted" style={{ marginTop: 8 }}>We will email {f.email} as soon as the document is ready for you to sign.</p></div>
         : step === 'questions' ? (
           <>

@@ -3,6 +3,7 @@ import { AUTO, LABEL, fieldName, groupKey, isMulti, isSig, problemWith, inputLim
 import { formatDateValue } from '@/lib/dates';
 import { NUMBER_HINT } from '@/lib/numbers';
 import { isStrike, strikeSays } from '@/lib/strike';
+import { sharedNote } from '@/lib/collab';
 
 // A signer's fields as an ordinary form, used by the text view. It reads and writes the same answers as the
 // fields on the document, so switching between the two views loses nothing.
@@ -28,7 +29,8 @@ export type FieldCtx = {
   stampUrl?: (f: any) => string | null;
 };
 
-const Need = ({ f }: { f: any }) => <span className="hint"> ({f.required ? 'required' : 'optional'})</span>;
+// A field anyone on the document can fill in says so, and who changed it last (src/lib/collab.ts).
+const Need = ({ f }: { f: any }) => <span className="hint"> ({f.required ? 'required' : 'optional'}){f.shared ? ` ${sharedNote(f)}` : ''}</span>;
 // Fields without a label are described by the words printed next to them on the page.
 const Near = ({ id, text }: { id: string; text?: string }) => (text ? <span id={id} className="sg-near">Next to: {text}</span> : null);
 
@@ -80,7 +82,7 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
       <div className="sg-row">
         <div className="sg-row-label">{name}<Need f={f} /></div>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        {c.values[f.id] ? <img src={c.values[f.id]} alt="Your drawing" style={{ maxWidth: '100%', maxHeight: 160 }} /> : <p className="muted small" style={{ margin: 0 }}>To draw this, open More and choose Page.</p>}
+        {c.values[f.id] ? <img src={c.values[f.id]} alt="Your drawing" style={{ maxWidth: '100%', maxHeight: 160 }} /> : <p className="muted small" style={{ margin: 0 }}>To draw this, open View and choose Page.</p>}
       </div>
     );
   if (f.date_from)

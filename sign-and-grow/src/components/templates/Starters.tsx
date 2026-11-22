@@ -8,23 +8,25 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, fmtDate, toast } from '../ui';
 import { explain } from '../sender/lib';
-import { SOURCE_LOCALE, t } from '@/lib/i18n';
-
-const ui = SOURCE_LOCALE;
+// t(ui, key) is senderT: the words in the sender's language (the one AppShell decided), test languages included.
+import { senderT as t } from '@/lib/senderlang';
+import { useSenderLangHere } from '@/components/senderLang';
 
 type Ask = { key: string; label: string; max: number; example: string | null };
 type Item = { id: string; title: string; purpose: string; place: string; reviewed_by: string | null; note: string; roles: string[]; asks: Ask[]; made: { id: string; subject: string; created_at: string }[] };
 
 /** Under "Nothing matches" when a search finds no template of the account's own: the ready-made ones may have it. */
 export function StartersLink({ onOpen }: { onOpen: () => void }) {
+  const ui = useSenderLangHere();
   return <button type="button" className="btn rmt-headlink" onClick={onOpen}>{t(ui, 'starters.open')}</button>;
 }
 
 // "Written for: Kenya." or, for one written for nowhere in particular, "Not written for any one country."
-const placeLine = (place: string) => (/^no particular country$/i.test(place) ? t(ui, 'starters.place_none') : t(ui, 'starters.place', { place }));
+const placeLine = (ui: string, place: string) => (/^no particular country$/i.test(place) ? t(ui, 'starters.place_none') : t(ui, 'starters.place', { place }));
 
 /** The words for the empty list, with the names of the first few starters. */
 export function StartersInvite({ onOpen }: { onOpen: () => void }) {
+  const ui = useSenderLangHere();
   return (
     <p className="rmt-invite">
       <button type="button" className="btn" onClick={onOpen}>{t(ui, 'starters.open')}</button>
@@ -34,6 +36,7 @@ export function StartersInvite({ onOpen }: { onOpen: () => void }) {
 }
 
 export function Starters({ onClose }: { onClose: () => void }) {
+  const ui = useSenderLangHere();
   const router = useRouter();
   const [data, setData] = useState<{ organisation: string; starters: Item[] } | null>(null);
   const [error, setError] = useState('');
@@ -86,7 +89,7 @@ export function Starters({ onClose }: { onClose: () => void }) {
         <button type="button" className="btn sm ghost" onClick={onClose}>{t(ui, 'starters.close')}</button>
       </div>
       {/* The note is said once here; a row repeats it only for a starter whose review or place is different. */}
-      {data && data.starters[0] && <p className="small rmt-lead"><b>{data.starters[0].note} {placeLine(data.starters[0].place)}</b> {t(ui, 'starters.lead')}</p>}
+      {data && data.starters[0] && <p className="small rmt-lead"><b>{data.starters[0].note} {placeLine(ui, data.starters[0].place)}</b> {t(ui, 'starters.lead')}</p>}
       {error ? <div className="notice err" role="alert">{error}</div> : !data ? <p role="status" className="muted">{t(ui, 'starters.loading')}</p> : (
         <ul className="rmt-items">
           {data.starters.map((s) => (
@@ -95,7 +98,7 @@ export function Starters({ onClose }: { onClose: () => void }) {
                 <div className="rmt-what">
                   <b>{s.title}</b>
                   <div className="small">{s.purpose}</div>
-                  {(s.note !== data.starters[0].note || s.place !== data.starters[0].place) && <div className="muted small">{s.note} {placeLine(s.place)}</div>}
+                  {(s.note !== data.starters[0].note || s.place !== data.starters[0].place) && <div className="muted small">{s.note} {placeLine(ui, s.place)}</div>}
                   {s.made.length > 0 && (
                     <div className="small rmt-made">
                       {t(ui, 'starters.made_before', { date: fmtDate(s.made[0].created_at) })} <Link href={`/app/templates/${s.made[0].id}/edit`}>{t(ui, 'starters.open_made')}</Link>
@@ -135,6 +138,7 @@ export function Starters({ onClose }: { onClose: () => void }) {
 
 /** The note in the editor of a template made from a ready-made one, as it was written the day it was made. */
 export function StarterNote({ note }: { note?: string | null }) {
+  const ui = useSenderLangHere();
   if (!note) return null;
   return <div className="ed-banner rmt-note" role="note">{note} {t(ui, 'starters.editor_more')}</div>;
 }

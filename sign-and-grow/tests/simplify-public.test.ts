@@ -10,9 +10,11 @@ import { sectionsFor, landingFor, SETTINGS_MAX, daysIn, refusedDays, nextTab, cl
 import { DEFAULT_DATE_FORMAT, DATE_FORMATS, DATE_FORMAT_CHOICES, dayText, formatDate, fmtDateTag } from '../src/lib/dates.ts';
 import { TOTALS_FROM, totalWorthShowing } from '../src/lib/impact.ts';
 import { finishLine, signerWords, reviewPlus } from '../src/lib/impactwords.ts';
+import { englishIf } from './words.ts';
 
 const { db } = await boot();
-const read = (f: string) => fs.readFileSync(f, 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (f: string) => englishIf(f, fs.readFileSync(f, 'utf8'));
 // What a person reads in a page's source: the text between tags and in strings, with code and comments left out.
 const words = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ').replace(/^import .*$/gm, ' ').split(/\s+/).filter((w) => /[A-Za-z]{2}/.test(w)).length;
 
@@ -27,7 +29,9 @@ test('the home page says one thing: one button, three points, and nothing of the
     assert.ok(!home.includes(gone), `"${gone}" is no longer on the home page`);
   assert.ok(words(home) < 450, `the source of the home page is short (${words(home)} words with its code)`);
   // The hero is about the mangroves a paid signature plants, with the leaf of the logo, and says what a free one does.
-  assert.match(home, /Every signature you pay for plants <em>\{TREES_PER_SIGNATURE\} mangroves\.<\/em>/);
+  // The words are in the catalogue since lang-sender-rest: the same sentence, with the number of trees in <em>.
+  assert.match(fs.readFileSync('src/app/page.tsx', 'utf8'), /T\.rich\('public\.home\.h1', \{ trees: <em>\{T\('public\.home\.h1_trees', \{ count: String\(TREES_PER_SIGNATURE\) \}\)\}<\/em> \}\)/);
+  assert.match(fs.readFileSync('src/locales/en.json', 'utf8'), /"public\.home\.h1": "Every signature you pay for plants \{trees\}",\n  "public\.home\.h1_trees": "\{count\} mangroves\."/);
   assert.match(home, /<Mark size=\{28\}(?: tone="dark")? label="" \/> Planted with Treegens/);
   assert.match(home, /Free signatures plant no trees\./);
   // Green claims: what happens is said as what happens. No generic word and nothing about carbon.
@@ -157,11 +161,11 @@ test('Settings: the page is built from those sections, with sign-in under Securi
   // A member keeps what was theirs to do under Records and data: export, and closing their own login.
   assert.match(profile, /\{member && <MoreOptions>[\s\S]*?<YourData \/>\s*<\/MoreOptions>\}/);
   // Sending: reminders, deadline and date format left Account.
-  assert.match(page, /\{tab === 'sending' && <div className="stack"><Card><SendingDefaults \/><\/Card><OwnDocsDefault \/><CustomFieldSettings \/><MoreOptions><Disclosure \/>(?:<[A-Za-z]+ \/>)*<\/MoreOptions><\/div>\}/);
+  assert.match(page, /\{tab === 'sending' && <div className="stack"><Card><SendingDefaults \/><\/Card><OwnDocsDefault \/><CustomFieldSettings \/>(?:<TakePayments \/>)?<MoreOptions><Disclosure \/>(?:<[A-Za-z]+ \/>)*<\/MoreOptions><\/div>\}/);
   const account = page.slice(page.indexOf('function Account()'), page.indexOf('function Team()'));
   assert.doesNotMatch(account, /default_reminder_days|default_expire_days|default_date_format/);
   const sending = read('src/components/settings/SendingDefaults.tsx');
-  assert.match(sending, /id="set-reminders"><b>New documents start like this\.<\/b> \{reminderText\(/);
+  assert.match(sending, /id="set-reminders"><b>New documents start like this\.<\/b> \{reminderWords\(T, /, 'reminderText in the screen\'s language (lang-sender-rest)');
   assert.match(sending, /<h2 id="set-new-h" style=\{\{ marginBottom: 4 \}\}>New documents<\/h2>/);
   // The Plan section is the payment owner's component, placed as it is.
   // BILLING_MODE=deployment shows the agreement line in place of the plan (gov-G14); anywhere else it is <Billing />.

@@ -103,6 +103,9 @@ export function shareLevelsWith(c: Ctx): Record<string, ShareLevel> {
 const NEEDS: [RegExp, ShareLevel][] = [
   // What shows the document's contents: the files, a summary of them, a stamp's picture. Not at 'see'.
   [/^GET \/envelopes\/[^/]+\/(download|evidence|ai-summary|stamp-image\/[^/]+)$/, 'manage'],
+  // A scan signed on paper shows the document's contents, and deciding about it is managing the document (paper.ts).
+  [/^GET \/envelopes\/[^/]+\/recipients\/[^/]+\/paper\/scan$/, 'manage'],
+  [/^POST \/envelopes\/[^/]+\/recipients\/[^/]+\/paper\/(accept|reject)$/, 'manage'],
   [/^GET \/envelopes\/[^/]+(\/[^/]+)*$/, 'see'],
   // The file itself, like a download: not at 'see', which follows the document without opening it.
   [/^GET \/files\/[^/]+\/content$/, 'manage'],

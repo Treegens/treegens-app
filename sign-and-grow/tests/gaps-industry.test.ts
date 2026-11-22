@@ -10,6 +10,7 @@ import * as policy from '../src/lib/policy.ts';
 import { resolver, specialAddress } from '../src/server/paydns.ts';
 import { payPrint } from '../src/server/paydrop.ts';
 import { checkPayUrl, PAY_SHORTENERS } from '../src/lib/paylink.ts';
+import { englishIf } from './words.ts';
 
 let s: Server;
 before(async () => {
@@ -18,7 +19,8 @@ before(async () => {
 
 let n = 0;
 const ip = () => `198.51.100.${++n}`;
-const read = (p: string) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 const days = (d: number) => new Date(Date.now() - d * 864e5).toISOString();
 
 // ---- A. What the pages say, and what the code does -------------------------------------------------------
@@ -82,7 +84,7 @@ test('what the people who run the server see in the app is what "Who can see you
   assert.deepEqual(who, ['The people it was sent to, and anyone they pass their link to.', 'The person who sent it.', 'The owner and the admins of the sender\'s account.', 'Addresses the sender\'s account sends copies of its emails to.', 'The people who run this server.', 'The companies that carry it.', 'Nobody else.']);
   const operator = policy.WHO_CAN_SEE[4].what;
   assert.match(operator, /no screen and no function that opens a document/);
-  assert.match(operator, /adds no encryption of its own/, 'and it says that the disk is another matter');
+  assert.match(operator, /encrypts at most part of the database/, 'and it says that the disk is another matter');
   assert.match(operator, /promise by the people who run the server/, 'a rule the software cannot enforce is called a promise');
   // Every fact the operator's account views return is named: the queue, a help request and the card dispute list.
   const theirs = (await sender.get('/me')).data.account;
@@ -203,7 +205,7 @@ test('"automatic nudges" is true: a new account reminds every 3 days, says so, a
   assert.match(read('src/components/editor/ReviewParts.tsx'), /reminderDays: env\.reminder_days,/);
   assert.match(read('src/components/editor/ReminderChoice.tsx'), /reminderText\(n\)/);
   assert.match(read('src/app/app/envelopes/[id]/page.tsx'), /id="sn-reminders">\{reminderText\(e\.reminder_days\)\}/, 'and on the envelope');
-  assert.match(read('src/components/settings/SendingDefaults.tsx'), /id="set-reminders"><b>New documents start like this\.<\/b> \{reminderText\(reminders \?\? a\.default_reminder_days\)\}/, 'and under Settings, Sending');
+  assert.match(read('src/components/settings/SendingDefaults.tsx'), /id="set-reminders"><b>New documents start like this\.<\/b> \{reminderWords\(T, reminders \?\? a\.default_reminder_days\)\}/, 'and under Settings, Sending (reminderText in the screen\'s language, lang-sender-rest)');
   const landing = read('src/app/features/page.tsx');
   assert.doesNotMatch(landing, /Automatic nudges/);
   assert.match(landing, /A new account reminds whoever has not finished by email every \$\{DEFAULT_REMINDER_DAYS\} days/);
@@ -324,9 +326,11 @@ test('with no payment provider nothing is counted, and the page that shows the c
   assert.match(cost, /api<BatchCheck>\('\/bulk\/check'/, 'the numbers come from the server');
   assert.ok(page.indexOf('<BatchCost check={check}') > 0 && page.indexOf('<BatchCost check={check}') < page.indexOf('onClick={() => setConfirming(ready)}'), 'and they stand before the Send button');
   assert.match(page, /\{listOk && <BatchCost/, 'for every list, not only one that is too long');
-  assert.match(cost, /This batch holds \{plural\(c\.need, 'signature'\)\} and you have \{c\.have\} ready, so \{c\.short\}/);
-  assert.match(cost, /Top up \{plural\(c\.short, 'signature'\)\} for \{usd\(cost\.top_up_usd\)\}/);
-  assert.match(page, /batchLine\(check\)/, 'and the confirm dialog says it once more');
+  // The words are in the catalogue since lang-sender-rest: the same sentences, from the same numbers.
+  assert.match(cost, /This batch holds \{count, plural, one \{# signature\} other \{# signatures\}\} and you have \{c\.have\} ready, so \{short, plural/);
+  assert.match(fs.readFileSync(new URL('../src/app/app/bulk/BatchCost.tsx', import.meta.url), 'utf8'), /T\('bulk\.cost\.short', \{ count: c\.need, have: c\.have, short: c\.short \}\)/);
+  assert.match(cost, /Top up \{count, plural, one \{# signature\} other \{# signatures\}\} for \{usd\(cost\.top_up_usd\)\}/);
+  assert.match(page, /batchLine\(check, T\.lang\)/, 'and the confirm dialog says it once more');
 });
 
 // ---- E. Two signers finishing at the same moment ----------------------------------------------------------

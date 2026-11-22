@@ -26,10 +26,24 @@
   <p>GrowSigning needs a connection to open your documents.</p>
   <p>Check your Wi-Fi or mobile data, then try again.</p>
   <button type="button" onclick="location.reload()">Try again</button>
-  <p id="in-person" hidden><a href="/in-person">Open the document you got ready to sign in person</a></p>
+  <p id="in-person" hidden><a href="/in-person">Open the document kept on this device to sign in person</a></p>
   <script>
-    // Shown only when this device holds a document got ready to sign without signal (src/components/sign/offlineInPerson.ts).
-    try { indexedDB.databases().then(function (l) { if (l.some(function (d) { return d.name === 'growsigning-in-person'; })) document.getElementById('in-person').hidden = false; }).catch(function () {}); } catch (e) {}
+    // Shown only when this device holds a copy to sign in person without signal (src/components/sign/offlineInPerson.ts).
+    // The database is opened only when it exists, and the link shows only when it holds a copy.
+    try {
+      indexedDB.databases().then(function (l) {
+        if (!l.some(function (d) { return d.name === 'growsigning-in-person'; })) return;
+        var q = indexedDB.open('growsigning-in-person');
+        q.onsuccess = function () {
+          var db = q.result;
+          try {
+            var g = db.transaction('kept', 'readonly').objectStore('kept').get('copy');
+            g.onsuccess = function () { if (g.result) document.getElementById('in-person').hidden = false; db.close(); };
+            g.onerror = function () { db.close(); };
+          } catch (e) { db.close(); }
+        };
+      }).catch(function () {});
+    } catch (e) {}
   </script>
 </main>
 </body>

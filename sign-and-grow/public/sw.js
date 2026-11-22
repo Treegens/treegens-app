@@ -2,12 +2,13 @@
 // alike: the built scripts and styles, the fonts, the brand icons, and one page that says there is no connection.
 // It never keeps a page, a document or an answer of the API, nothing under /sign, /api, /f or /agree, and no address
 // that carries a query or a token. Those go to the network as if there were no service worker at all.
-// It is registered by the app's own pages only, for /app (src/components/ShellWorker.tsx), so a signing page is
+// It is registered by the app's own pages only, for /app (src/components/ShellWorker.tsx), and for /in-person when a
+// document is got ready to sign in person without signal (src/components/sign/offlinePage.ts), so a signing page is
 // never under it. tests/ds-phone-app.test.ts runs the handlers below with a pretend browser.
 //
 // VERSION ends with the start of the SHA-256 of offline.html: change the page and the test asks for a new VERSION.
 // A new VERSION drops every cache of an older one when it takes over.
-const VERSION = 'growsigning-shell-2-71b893f6';
+const VERSION = 'growsigning-shell-3-3a8b223d';
 const OFFLINE = '/offline.html';
 const PRECACHE = [OFFLINE, '/brand/icon-192.png'];
 // The built files have their content's hash in their name, so a kept copy is always right. Kept up to this many.
@@ -19,6 +20,10 @@ const KEEP = /^\/(_next\/static\/|fonts\/|brand\/|pdfjs\/)/;
 // same for every visitor and holds nothing of anyone. What it shows comes from the device's own encrypted store
 // (src/components/sign/offlineInPerson.ts), never from this cache. Kept under its bare address only.
 const IN_PERSON = '/in-person';
+// What keepInPerson keeps for it lives in its own cache, which a new VERSION does not drop: a copy got ready before
+// an update still opens with no signal, with the files of the page as it was kept. It is replaced as a whole each
+// time a document is got ready, so it never grows.
+const KEPT = 'growsigning-in-person';
 
 /** Whether this request's answer may be kept. Only the same site's static files, asked for with GET and nothing more. */
 function mayKeep(request, origin) {
@@ -51,7 +56,7 @@ async function trim(cache) {
 
 async function fromCacheOrNetwork(request) {
   const cache = await caches.open(VERSION);
-  const kept = await cache.match(request);
+  const kept = (await cache.match(request)) || (await (await caches.open(KEPT)).match(request));
   if (kept) return kept;
   const fresh = await fetch(request);
   if (fitToKeep(fresh)) {
@@ -73,18 +78,74 @@ async function page(request) {
   }
 }
 
+/**
+ * Whether the in-person page's answer is fit to keep. It is the same for every visitor and holds nothing of anyone, so
+ * it is kept even when the app marks every page as not to be stored (a page built for each visitor's language).
+ */
+function fitPage(response) {
+  if (!response || !response.ok || response.status !== 200 || response.type !== 'basic') return false;
+  return /text\/html/i.test((response.headers && response.headers.get('content-type')) || '');
+}
+
 /** The in-person page: from the network when there is one (and kept), else the kept copy, else the offline page. */
 async function inPersonPage(request) {
-  const cache = await caches.open(VERSION);
   try {
-    const fresh = await fetch(request);
-    if (fitToKeep(fresh)) await cache.put(IN_PERSON, fresh.clone());
-    return fresh;
+    // Online it comes from the network. What is kept for no signal is only what keepInPerson kept, all together.
+    return await fetch(request);
   } catch (err) {
-    const kept = (await cache.match(IN_PERSON)) || (await cache.match(OFFLINE));
+    const kept = (await (await caches.open(KEPT)).match(IN_PERSON)) || (await (await caches.open(VERSION)).match(OFFLINE));
     if (kept) return kept;
     throw err;
   }
+}
+
+// The built files the in-person page loads, as its HTML and its styles name them: only our own addresses (a path that
+// follows another site's name is not ours).
+const BUILT = /(?<![\w.\-])\/_next\/static\/[A-Za-z0-9_\-.~%@\/]+\.(?:js|mjs|css|woff2?|ttf|otf|png|svg|jpg|webp)/g;
+const IN_PERSON_FILES = ['/pdfjs/pdf.min.mjs', '/pdfjs/pdf.worker.min.mjs'];
+
+/**
+ * Keeps the in-person page and every file it needs, asked for by the page that gets a document ready
+ * (src/components/sign/offlinePage.ts), while there is signal. A page never passes through a worker that was
+ * registered while it loaded, so it is fetched and kept here on purpose. Answers whether everything was kept.
+ */
+async function keepInPerson() {
+  const origin = self.location.origin;
+  const page = await fetch(origin + IN_PERSON, { credentials: 'same-origin', cache: 'no-cache' });
+  if (!fitPage(page)) return { ok: false, kept: 0 };
+  const html = await page.clone().text();
+  await caches.delete(KEPT);
+  const cache = await caches.open(KEPT);
+  const built = await caches.open(VERSION);
+  await cache.put(IN_PERSON, page);
+  const want = new Set(IN_PERSON_FILES);
+  for (const m of html.match(BUILT) || []) want.add(m);
+  let kept = 1;
+  let missed = 0;
+  const one = async (path) => {
+    const url = origin + path;
+    if (!mayKeep({ method: 'GET', url }, origin)) return;
+    try {
+      const had = await built.match(url);
+      const res = had || (await fetch(url, { credentials: 'same-origin' }));
+      if (!had && !fitToKeep(res)) return void missed++;
+      await cache.put(url, res.clone());
+      kept++;
+      // A style names its fonts and pictures: those are kept too.
+      if (/\.css$/.test(path)) for (const f of (await res.text()).match(BUILT) || []) if (!want.has(f)) (want.add(f), await one(f));
+    } catch {
+      missed++;
+    }
+  };
+  for (const path of [...want]) await one(path);
+  return { ok: missed === 0, kept };
+}
+
+function onMessage(event) {
+  if (!event.data || event.data.type !== 'keep-in-person') return;
+  const port = event.ports && event.ports[0];
+  const p = keepInPerson().catch(() => ({ ok: false, kept: 0 })).then((a) => port && port.postMessage(a));
+  if (event.waitUntil) event.waitUntil(p);
 }
 
 function onFetch(event) {
@@ -113,7 +174,7 @@ function onInstall(event) {
 function onActivate(event) {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('growsigning-') && k !== VERSION).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('growsigning-') && k !== VERSION && k !== KEPT).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 }
@@ -121,3 +182,4 @@ function onActivate(event) {
 self.addEventListener('install', onInstall);
 self.addEventListener('activate', onActivate);
 self.addEventListener('fetch', onFetch);
+self.addEventListener('message', onMessage);

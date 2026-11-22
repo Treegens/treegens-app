@@ -7,6 +7,7 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, Client, signUp, upload, mailTo, PNG, type Server } from './helpers.ts';
+import { englishIf } from './words.ts';
 
 let s: Server;
 let db: Server['db'];
@@ -327,7 +328,8 @@ test('two members who agree at the same moment: one takes it on, the other is to
 
 // ---- The API description and the screens that manage groups ------------------------------------------------------
 
-const read = (p: string) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 
 test('the API describes groups, and the Contacts page lets admins manage them', async () => {
   const { openapi } = await import('../src/server/openapi.ts');

@@ -51,12 +51,12 @@ export function PayLinkNote({ envelopeId, closed }: { envelopeId: string; closed
       <h2 id="sn-pay-h">Payment link</h2>
       {link ? (
         <>
-          <p>After they press Finish, each person who signs sees <b>{link.label}</b>, which opens <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-all' }}>{link.url}</code>{st.set_by ? <>, the payment page of <b>{st.set_by.name}</b></> : null}. Nobody on your team is asked. The address is never put in our emails, certificates or exports: the audit trail names it by its fingerprint, <code>{link.fingerprint}</code>.</p>
+          <p>After they press Finish, each person who signs sees <b>{link.label}</b>, which opens <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-all' }}>{link.url}</code>{st.set_by ? <>, the payment page of <b>{st.set_by.name}</b></> : null}. Nobody on your team is asked. The address is never put in our emails, signing records or exports: the History names it by its fingerprint, <code>{link.fingerprint}</code>.</p>
           {(!st.may || st.host_why) && <div className="notice warn" role="status"><b>Not shown to anyone right now.</b> {st.why || st.host_why}</div>}
         </>
       ) : st.gone ? (
         <div className="notice" role="status"><b>Taken off on {fmtDate(st.gone.at, true)}.</b> {st.gone.note}{closed ? '' : ' To ask for a payment on this envelope, add your own link on the last step of the editor.'}</div>
-      ) : <p>There is no payment link on this envelope now.</p>}
+      ) : <p>There is no payment link on this document now.</p>}
       {st.people.length > 0 && (link || st.people.some((p) => p.earlier.length)) && (
         <ul className="small" style={{ paddingLeft: 18, overflowWrap: 'anywhere' }}>
           {st.people.map((p) => <li key={p.id}><b>{p.name}</b>: {line(p, link || null)}</li>)}

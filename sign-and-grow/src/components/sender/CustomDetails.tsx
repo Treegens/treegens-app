@@ -54,8 +54,10 @@ export function CustomDetails({ envelope: e, editHref, onSaved }: { envelope: an
   const wrong = defs ? firstProblem(defs, typed) : null;
   const same = defs ? JSON.stringify(pairsFrom(defs, typed, rows)) === JSON.stringify(rows.map((p) => ({ name: p.name, value: p.value }))) : true;
   return (
-    <details className="card cf-details" style={{ marginTop: 16 }} data-fold="" data-feature="ds-custom-fields">
-      <summary>{t(ui, 'customfields.page.title')} ({rows.length})</summary>
+    <details className="card sn-fold cf-details" style={{ marginTop: 16 }} data-fold="" data-feature="ds-custom-fields">
+      {/* Styled like History and Files (sn-fold). With nothing in it yet it says what it offers, not "Details (0)". */}
+      <summary><span>{rows.length ? `${t(ui, 'customfields.page.title')} (${rows.length})` : t(ui, 'customfields.page.add')}</span></summary>
+      <div className="sn-fold-in">
       {defs ? (
         <form className="cf-step" onSubmit={(ev) => (ev.preventDefault(), void save())} noValidate>
           <p className="muted small">{t(ui, 'customfields.page.change_hint')}</p>
@@ -81,6 +83,7 @@ export function CustomDetails({ envelope: e, editHref, onSaved }: { envelope: an
           {draft && editHref && <p className="small" style={{ marginBottom: 0 }}><Link href={`${editHref}#details`} className="cf-link">{t(ui, 'customfields.page.change')}</Link></p>}
         </>
       )}
+      </div>
     </details>
   );
 }

@@ -1,6 +1,7 @@
 // Signing at a service counter (research/government.json, G18): the counter permission and the queue, the person's
 // own screen connected by a one-use code, each way an official records who is in front of them, each kind of help
 // and its lines on the certificate, the witness rule, the receipt, the lock between people, and a pen on the pad.
+import { readEnglish } from './words.ts';
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -559,7 +560,8 @@ test('the receipt prints at 80 mm with a page size the browser accepts, and the 
   assert.ok(!visit.includes("person&apos;s screen is connected"));
   assert.ok(!/ct-note">\{CANNOT_CHECK_ID\}/.test(visit));
   // The setting says what it does: only the Counter screen.
-  const set = fs.readFileSync(new URL('../src/components/settings/CounterSettings.tsx', import.meta.url), 'utf8');
+  // Read with its English put back: the card asks the catalogue for its words since lang-sender-rest (tests/words.ts).
+  const set = readEnglish('src/components/settings/CounterSettings.tsx');
   assert.ok(!set.includes('Officials may see what the person types'));
   assert.match(set, /on the Counter screen/);
 });

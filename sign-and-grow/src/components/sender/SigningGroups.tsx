@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import { api, useLoad, toast } from '@/components/ui';
 import { ConfirmDialog } from './dialogs';
 import { explain, looksLikeEmail } from './lib';
-import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUP_RULE } from '@/lib/policy';
+import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS } from '@/lib/policy';
+import { useST } from '@/components/senderLang';
+import { senderT } from '@/lib/senderlang';
 
 // Signing groups on the Contacts page: a named list of people, any one of whom can sign for the group ("HR team").
 // Everyone on the team sees them and can put them on an envelope. Only admins can add, change or delete one, and
@@ -12,28 +14,29 @@ import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUP_RULE } from '@/lib/policy';
 export type Group = { id: string; name: string; members: { id?: string; name: string; email: string }[]; used_by: number };
 type Draft = { id?: string; name: string; members: { name: string; email: string }[] };
 const blank = (): Draft => ({ name: '', members: Array.from({ length: GROUP_MIN_MEMBERS }, () => ({ name: '', email: '' })) });
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // What is wrong with a group before it goes to the server, in the server's own words where they overlap. The
 // server checks all of it again.
-function trouble(d: Draft): string {
-  if (!d.name.trim()) return 'Give the group a name, such as "HR team".';
+function trouble(d: Draft, lang = 'en'): string {
+  const T = (key: string, vars?: Record<string, string | number>) => senderT(lang, `contacts.groups.${key}`, vars);
+  if (!d.name.trim()) return T('need_name');
   const filled = d.members.filter((m) => m.name.trim() || m.email.trim());
   for (const [i, m] of filled.entries()) {
-    if (!m.name.trim()) return `Member ${i + 1} needs a name.`;
-    if (!looksLikeEmail(m.email.trim())) return `${m.name.trim()} needs a complete email address, such as name@example.org.`;
+    if (!m.name.trim()) return T('member_name', { n: String(i + 1) });
+    if (!looksLikeEmail(m.email.trim())) return T('member_email', { name: m.name.trim() });
   }
   const seen = new Set<string>();
   for (const m of filled) {
     const k = m.email.trim().toLowerCase();
-    if (seen.has(k)) return `${m.email.trim()} is in the group twice. Every member gets a link of their own, so each needs an address of their own.`;
+    if (seen.has(k)) return T('twice', { email: m.email.trim() });
     seen.add(k);
   }
-  if (filled.length < GROUP_MIN_MEMBERS) return `A group needs at least ${GROUP_MIN_MEMBERS} members. To send to one person, name that person as the recipient instead.`;
+  if (filled.length < GROUP_MIN_MEMBERS) return T('too_few', { min: GROUP_MIN_MEMBERS });
   return '';
 }
 
 export function SigningGroups() {
+  const T = useST();
   const [data, reload, error] = useLoad<{ groups: Group[]; may_change: boolean }>(() => api('/groups'));
   const [draft, setDraft] = useState<Draft | null>(null);
   const [problem, setProblem] = useState('');
@@ -57,14 +60,14 @@ export function SigningGroups() {
   async function save(ev: React.FormEvent) {
     ev.preventDefault();
     if (!draft) return;
-    const no = trouble(draft);
-    if (no) return setProblem(`${no} Nothing was saved.`);
+    const no = trouble(draft, T.lang);
+    if (no) return setProblem(T('contacts.groups.not_saved', { why: no }));
     setSaving(true);
     setProblem('');
     const body = { name: draft.name.trim(), members: draft.members.filter((m) => m.name.trim() || m.email.trim()).map((m) => ({ name: m.name.trim(), email: m.email.trim() })) };
     try {
       await api(draft.id ? `/groups/${draft.id}` : '/groups', { method: draft.id ? 'PUT' : 'POST', body });
-      toast(draft.id ? `${body.name} saved. Envelopes already sent keep the members they went out with.` : `${body.name} saved. You can now choose it as a recipient.`);
+      toast(draft.id ? T('contacts.groups.saved_change', { name: body.name }) : T('contacts.groups.saved_new', { name: body.name }));
       if (draft.id) backTo.current = `sn-group-edit-${draft.id}`;
       setDraft(null);
       reload();
@@ -79,59 +82,59 @@ export function SigningGroups() {
     <section className="card pad0" aria-labelledby="sn-groups-h">
       <div className="sn-cardhead sn-contacts-head">
         <div>
-          <h2 id="sn-groups-h">Signing groups <span className="muted sn-count">{data ? groups.length : ''}</span></h2>
-          <p className="muted small sn-groups-intro">A group is one person on a document, made of {GROUP_MIN_MEMBERS} to {GROUP_MAX_MEMBERS} people, any one of whom can act for it, such as &ldquo;HR team&rdquo;. {GROUP_RULE}</p>
-          {data && !admin && <p className="muted small sn-groups-intro">Only an admin of your team can add or change groups. You can add them as a person on your own documents and templates.</p>}
+          <h2 id="sn-groups-h">{T('contacts.groups.title')} <span className="muted sn-count">{data ? groups.length : ''}</span></h2>
+          <p className="muted small sn-groups-intro">{T('contacts.groups.intro', { min: GROUP_MIN_MEMBERS, max: GROUP_MAX_MEMBERS })} {T('contacts.groups.rule')}</p>
+          {data && !admin && <p className="muted small sn-groups-intro">{T('contacts.groups.admins_only')}</p>}
         </div>
-        {admin && !draft && <button id="sn-group-new" type="button" className="btn sn-group-btn" onClick={() => open(blank(), 'sn-group-new')}>New group</button>}
+        {admin && !draft && <button id="sn-group-new" type="button" className="btn sn-group-btn" onClick={() => open(blank(), 'sn-group-new')}>{T('contacts.groups.new')}</button>}
       </div>
 
       {draft && (
-        <form className="sn-group-form" noValidate onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), close())} aria-label={draft.id ? `Change ${draft.name || 'the group'}` : 'New group'}>
-          <label className="f"><span>Group name</span><input value={draft.name} maxLength={80} autoFocus autoComplete="off" placeholder="HR team" onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
+        <form className="sn-group-form" noValidate onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), close())} aria-label={draft.id ? T('contacts.groups.change_title', { name: draft.name || T('contacts.groups.the_group') }) : T('contacts.groups.new')}>
+          <label className="f"><span>{T('contacts.groups.name')}</span><input value={draft.name} maxLength={80} autoFocus autoComplete="off" placeholder={T('contacts.groups.name_placeholder')} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
           <fieldset className="sn-group-members">
-            <legend>Members <span className="hint">({GROUP_MIN_MEMBERS} to {GROUP_MAX_MEMBERS} people, each with their own email address)</span></legend>
+            <legend>{T('contacts.groups.members')} <span className="hint">{T('contacts.groups.members_hint', { min: GROUP_MIN_MEMBERS, max: GROUP_MAX_MEMBERS })}</span></legend>
             <ol role="list">
               {draft.members.map((m, i) => (
                 <li key={i}>
-                  <label className="f"><span>Name of member {i + 1}</span><input value={m.name} maxLength={120} autoComplete="off" onChange={(e) => patchMember(i, { name: e.target.value })} /></label>
-                  <label className="f"><span>Email of member {i + 1}</span><input type="email" value={m.email} autoComplete="off" onChange={(e) => patchMember(i, { email: e.target.value })} /></label>
-                  <button type="button" className="btn ghost danger sn-group-btn" disabled={draft.members.length <= 1} onClick={() => setDraft({ ...draft, members: draft.members.filter((_, j) => j !== i) })} aria-label={`Take ${m.name.trim() || `member ${i + 1}`} out of the group`}>Take out</button>
+                  <label className="f"><span>{T('contacts.groups.member_n_name', { n: String(i + 1) })}</span><input value={m.name} maxLength={120} autoComplete="off" onChange={(e) => patchMember(i, { name: e.target.value })} /></label>
+                  <label className="f"><span>{T('contacts.groups.member_n_email', { n: String(i + 1) })}</span><input type="email" value={m.email} autoComplete="off" onChange={(e) => patchMember(i, { email: e.target.value })} /></label>
+                  <button type="button" className="btn ghost danger sn-group-btn" disabled={draft.members.length <= 1} onClick={() => setDraft({ ...draft, members: draft.members.filter((_, j) => j !== i) })} aria-label={T('contacts.groups.take_out_label', { name: m.name.trim() || T('contacts.groups.member_n', { n: String(i + 1) }) })}>{T('contacts.groups.take_out')}</button>
                 </li>
               ))}
             </ol>
             {draft.members.length < GROUP_MAX_MEMBERS
-              ? <button type="button" className="btn sn-group-btn" onClick={() => setDraft({ ...draft, members: [...draft.members, { name: '', email: '' }] })}>Add a member</button>
-              : <p className="muted small">A group can have up to {GROUP_MAX_MEMBERS} members. For more, make a second group.</p>}
+              ? <button type="button" className="btn sn-group-btn" onClick={() => setDraft({ ...draft, members: [...draft.members, { name: '', email: '' }] })}>{T('contacts.groups.add_member')}</button>
+              : <p className="muted small">{T('contacts.groups.at_max', { max: GROUP_MAX_MEMBERS })}</p>}
           </fieldset>
-          {draft.id && <p className="muted small">Envelopes already sent to this group keep the members they went out with. To change who can act on one of those, open that document and choose More, then Edit. Drafts and templates that name the group use it as you save it here.</p>}
+          {draft.id && <p className="muted small">{T('contacts.groups.change_note')}</p>}
           {problem && <div className="notice err" role="alert">{problem}</div>}
           <div className="sn-contact-actions">
-            <button type="submit" className="btn primary sn-group-btn" disabled={saving}>{saving ? 'Saving…' : 'Save group'}</button>
-            <button type="button" className="btn sn-group-btn" onClick={close}>Cancel</button>
+            <button type="submit" className="btn primary sn-group-btn" disabled={saving}>{saving ? T('contacts.groups.saving') : T('contacts.groups.save')}</button>
+            <button type="button" className="btn sn-group-btn" onClick={close}>{T('contacts.groups.cancel')}</button>
           </div>
         </form>
       )}
 
       {error ? (
-        <div className="empty" role="alert"><h3>We could not load your groups</h3>Check your connection, then try again.<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>Try again</button></div></div>
+        <div className="empty" role="alert"><h3>{T('contacts.groups.load_failed')}</h3>{T('contacts.groups.load_failed_body')}<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>{T('contacts.groups.try_again')}</button></div></div>
       ) : !data ? (
-        <div className="empty" role="status">Loading…</div>
+        <div className="empty" role="status">{T('contacts.groups.loading')}</div>
       ) : groups.length === 0 ? (
-        <div className="empty"><h3>No groups yet</h3>{admin ? 'Choose New group to make one.' : 'When an admin makes one, it appears here.'}</div>
+        <div className="empty"><h3>{T('contacts.groups.none')}</h3>{admin ? T('contacts.groups.none_admin') : T('contacts.groups.none_member')}</div>
       ) : (
         <ul className="sn-contacts" role="list">
           {groups.map((g) => (
             <li key={g.id}>
               <div className="sn-group-who">
                 <b>{g.name}</b>
-                <span className="muted small">{plural(g.members.length, 'member')}: {g.members.map((m) => `${m.name} (${m.email})`).join(', ')}</span>
-                {g.used_by > 0 && <span className="muted small">Named on {plural(g.used_by, 'draft or template', 'drafts and templates')}.</span>}
+                <span className="muted small">{T('contacts.groups.member_list', { count: g.members.length, list: g.members.map((m) => `${m.name} (${m.email})`).join(', ') })}</span>
+                {g.used_by > 0 && <span className="muted small">{T('contacts.groups.named_on', { count: g.used_by })}</span>}
               </div>
               {admin && (
                 <div className="sn-contact-actions">
-                  <button id={`sn-group-edit-${g.id}`} type="button" className="btn sm sn-group-btn" disabled={!!draft} onClick={() => open({ id: g.id, name: g.name, members: g.members.map((m) => ({ name: m.name, email: m.email })) }, `sn-group-edit-${g.id}`)} aria-label={`Change ${g.name}`}>Change</button>
-                  <button type="button" className="btn sm ghost danger sn-group-btn" disabled={!!draft} onClick={() => setRemoving(g)} aria-label={`Delete ${g.name}`}>Delete</button>
+                  <button id={`sn-group-edit-${g.id}`} type="button" className="btn sm sn-group-btn" disabled={!!draft} onClick={() => open({ id: g.id, name: g.name, members: g.members.map((m) => ({ name: m.name, email: m.email })) }, `sn-group-edit-${g.id}`)} aria-label={T('contacts.groups.change_label', { name: g.name })}>{T('contacts.groups.change')}</button>
+                  <button type="button" className="btn sm ghost danger sn-group-btn" disabled={!!draft} onClick={() => setRemoving(g)} aria-label={T('contacts.groups.delete_label', { name: g.name })}>{T('contacts.groups.delete')}</button>
                 </div>
               )}
             </li>
@@ -140,15 +143,15 @@ export function SigningGroups() {
       )}
 
       {removing && (
-        <ConfirmDialog title={`Delete ${removing.name}`} confirmLabel="Delete group" keepLabel="Keep" onClose={() => setRemoving(null)}
+        <ConfirmDialog title={T('contacts.groups.delete_title', { name: removing.name })} confirmLabel={T('contacts.groups.delete_confirm')} keepLabel={T('contacts.groups.keep')} onClose={() => setRemoving(null)}
           onConfirm={async () => {
             await api(`/groups/${removing.id}`, { method: 'DELETE' });
-            toast(`${removing.name} deleted.`);
+            toast(T('contacts.groups.deleted', { name: removing.name }));
             setRemoving(null);
             reload();
           }}>
-          <p>Envelopes already sent to {removing.name} are not affected: they keep the members they went out with, and those people can still sign.</p>
-          {removing.used_by > 0 && <p><b>{plural(removing.used_by, 'draft or template names', 'drafts and templates name')} this group.</b> They cannot be sent until you choose another group or a person in its place.</p>}
+          <p>{T('contacts.groups.delete_body', { name: removing.name })}</p>
+          {removing.used_by > 0 && <p><b>{T('contacts.groups.used_by', { count: removing.used_by })}</b> {T('contacts.groups.used_by_rest')}</p>}
         </ConfirmDialog>
       )}
     </section>

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { boot, Client, signUp, simple, tokenFor, PNG, type Server } from './helpers.ts';
+import { boot, Client, signUp, simple, tokenFor, PNG, upload, type Server } from './helpers.ts';
 import { keyIdOf } from '../src/server/filecrypt.ts';
 import { decodeFileKey } from '../src/lib/storedfiles.ts';
 import { seal, sealWith, openStrict, openValue, isSealed, colKeys, PREFIX, SEALED_COLUMNS, SealedValueProblem } from '../src/server/colcrypt.ts';
@@ -311,4 +311,152 @@ test('the pages say exactly what is encrypted and what is not, and that the key 
   const DASH = String.fromCharCode(0x2014);
   for (const f of ['src/server/colcrypt.ts', 'src/server/colsweep.ts', 'src/lib/sealedcolumns.ts', 'scripts/encrypt-columns.mjs', 'scripts/setup.mjs'])
     assert.ok(!fs.readFileSync(path.join(ROOT, f), 'utf8').includes(DASH), `${f} has no em dash`);
+});
+
+test('SQL that looks inside a sealed value still works: a file a waiting email carries is kept, and a double tap of the same comment is stored once', async () => {
+  setKeys(K1, [K2]);
+  const { removeUnusedBlobs } = await import('../src/server/routes-trust.ts');
+  // A stored file only a queued email still carries (its attachment list is in the sealed payload).
+  const sha = crypto.randomBytes(32).toString('hex');
+  const blobs = path.join(process.env.DATA_DIR!, 'blobs');
+  fs.mkdirSync(blobs, { recursive: true });
+  fs.writeFileSync(path.join(blobs, sha), 'still needed');
+  const r = db.run("INSERT INTO emails (to_email, subject, html, status, at, payload) VALUES ('w@sealed.example','s',?,'queued',?,?)", seal('emails.html', '<p>x</p>'), new Date().toISOString(), seal('emails.payload', JSON.stringify({ attachments: [{ filename: 'a.pdf', sha256: sha }] })));
+  assert.ok(isSealed(rawValue('SELECT payload FROM emails WHERE id=?', Number(r.lastInsertRowid)).payload));
+  removeUnusedBlobs([sha]);
+  assert.ok(fs.existsSync(path.join(blobs, sha)), 'the file the email still has to carry is not deleted');
+  db.run('DELETE FROM emails WHERE id=?', Number(r.lastInsertRowid));
+  removeUnusedBlobs([sha]);
+  assert.ok(!fs.existsSync(path.join(blobs, sha)), 'once nothing carries it, it goes');
+  // The same words sent twice within seconds, as a double tap does.
+  const jo = await person('Jo Twice', 'jo@twice.example');
+  const e = await simple(jo, 'sid@twice.example');
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const sid = new Client();
+  sid.ip = '198.18.203.1';
+  const tok = tokenFor(e.id, 'sid@twice.example');
+  await sid.post(`/sign/${tok}/consent`);
+  assert.equal((await sid.post(`/sign/${tok}/comments`, { text: 'Is page 2 right?' })).status, 200);
+  assert.equal((await sid.post(`/sign/${tok}/comments`, { text: 'Is page 2 right?' })).status, 200);
+  assert.equal(db.get('SELECT COUNT(*) n FROM comments WHERE envelope_id=?', e.id).n, 1, 'stored once, though each copy on the disk looks different');
+});
+
+test('automatic alerts and the words left after a purge are written sealed too, not only later by the sweep', () => {
+  setKeys(K1, [K2]);
+  const src = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  for (const f of ['src/server/finalretry.ts', 'src/server/sealkey.ts', 'src/server/filestore.ts', 'src/server/evidence.ts'])
+    assert.match(src(f), /seal\('support_requests\.message'/, `${f} seals the alert it files`);
+  const rec = src('src/server/records.ts');
+  for (const c of ['recipients.decline_reason', 'comments.body', 'emails.html']) assert.ok(rec.includes(`seal('${c}'`), `records.ts seals ${c}`);
+});
+
+// Repair after review (tests/out/verify-ds-db-encrypt, tests/out/ux-ds-db-encrypt).
+test('a save while a key is missing never writes over what it could not open: the saved signature, and a signer\'s initials', async () => {
+  setKeys(K1, [K2]);
+  const kim = await person('Kim Keep', 'kim@keep.example');
+  const sig = uniquePng(), ini = uniquePng();
+  assert.equal((await kim.call('PATCH', '/me', { signature_png: sig, initials_png: ini })).status, 200);
+  const e = await simple(kim, 'rae@keep.example');
+  assert.equal((await kim.post(`/envelopes/${e.id}/send`)).status, 200);
+  const rae = new Client();
+  rae.ip = '198.18.203.1';
+  const tok = tokenFor(e.id, 'rae@keep.example');
+  await rae.post(`/sign/${tok}/consent`);
+  assert.equal((await rae.post(`/sign/${tok}/save`, { values: {}, signature_png: sig, initials_png: ini })).status, 200);
+  const before = rawValue('SELECT signature_png s, initials_png i FROM users WHERE email=?', 'kim@keep.example');
+  const rBefore = rawValue('SELECT initials_png i FROM recipients WHERE envelope_id=?', e.id).i;
+  assert.ok(isSealed(before.s) && isSealed(before.i) && isSealed(rBefore));
+  // The key is replaced by mistake at a restart. The person changes only their title; the signer saves a new signature only.
+  setKeys(K3, [K2]);
+  assert.equal((await kim.call('PATCH', '/me', { title: 'Manager' })).status, 200);
+  const sig2 = uniquePng();
+  assert.equal((await rae.post(`/sign/${tok}/save`, { values: {}, signature_png: sig2 })).status, 200);
+  const after = rawValue('SELECT signature_png s, initials_png i, title FROM users WHERE email=?', 'kim@keep.example');
+  assert.equal(after.title, 'Manager');
+  assert.equal(after.s, before.s, 'the saved signature is left exactly as stored');
+  assert.equal(after.i, before.i);
+  assert.equal(rawValue('SELECT initials_png i FROM recipients WHERE envelope_id=?', e.id).i, rBefore, 'the initials are left exactly as stored');
+  // The right key back: everything is there.
+  setKeys(K1, [K2]);
+  const me = (await kim.get('/me')).data.user;
+  assert.equal(me.signature_png, sig);
+  assert.equal(me.initials_png, ini);
+  // Clearing on purpose still works.
+  assert.equal((await kim.call('PATCH', '/me', { initials_png: null })).status, 200);
+  assert.equal(rawValue('SELECT initials_png i FROM users WHERE email=?', 'kim@keep.example').i, null);
+});
+
+test('typed numbers, help chats and public form drafts are sealed too, not kept in the clear next to the sealed answer', async () => {
+  setKeys(K1, [K2]);
+  // A number field: its plain number (typed_num) is as private as the text.
+  const jo = await person('Jo Num', 'jo@num.example');
+  const e = await simple(jo, 'sam@num.example', { fields: [
+    { id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 },
+    { id: 'n', document_id: 'd', recipient_id: 'r', type: 'number', label: 'Salary', page: 0, x: 0.1, y: 0.3, w: 0.3, h: 0.03, validation: { decimals: 2 } },
+  ] });
+  assert.equal((await jo.post(`/envelopes/${e.id}/send`)).status, 200);
+  const sam = new Client();
+  sam.ip = '198.18.204.1';
+  const tok = tokenFor(e.id, 'sam@num.example');
+  await sam.post(`/sign/${tok}/consent`);
+  const fields = (await sam.get(`/sign/${tok}`)).data.fields;
+  const values = Object.fromEntries(fields.map((f: any) => [f.id, f.type === 'number' ? '987654.31' : '1']));
+  const done = await sam.post(`/sign/${tok}/complete`, { values, signature_png: uniquePng() });
+  assert.equal(done.status, 200, JSON.stringify(done.data));
+  const num = rawValue("SELECT typed_num FROM fields WHERE envelope_id=? AND type='number'", e.id).typed_num;
+  assert.ok(isSealed(num), 'typed_num is sealed');
+  assert.equal(db.get("SELECT typed_num FROM fields WHERE envelope_id=? AND type='number'", e.id).typed_num, '987654.31', 'and reads back as the number');
+  // A help request with the chat attached.
+  assert.equal((await new Client().post('/public/support', { name: 'Ana', email: 'ana.chat@example.com', topic: 'other', message: 'help me please with this', chat: [{ from: 'you', text: 'My passport number is PASSPORT-ZEBRA-8821' }] })).status, 200);
+  const chat = rawValue('SELECT chat FROM support_requests WHERE email=?', 'ana.chat@example.com').chat;
+  assert.ok(isSealed(chat), 'the chat is sealed');
+  // A public form draft.
+  const owner = await person('Olga Form', 'olga@pform.example');
+  const file = await upload(owner, 1);
+  const tpl = await owner.post('/envelopes', { kind: 'template', subject: 'Form', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Visitor' }],
+    fields: [{ id: 's', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.3, h: 0.06 }, { id: 't', document_id: 'd', recipient_id: 'r', type: 'text', label: 'Medical condition', page: 0, x: 0.1, y: 0.3, w: 0.3, h: 0.03 }] });
+  const tplId = tpl.data.envelope.id;
+  const pf = await owner.post('/powerforms', { template_id: tplId, name: 'Health form' });
+  const slug = db.get('SELECT slug FROM powerforms WHERE id=?', pf.data.id)?.slug;
+  const fid = db.get("SELECT id FROM fields WHERE envelope_id=? AND label='Medical condition'", tplId).id;
+  const v = new Client();
+  v.ip = '198.18.205.1';
+  const put = await v.call('PUT', `/public/powerforms/${slug}/draft`, { name: 'Vee', email: 'vee@pform.example', answers: { [fid]: 'DIAGNOSIS-LYCHEE-42' } });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  assert.ok(isSealed(rawValue('SELECT answers FROM form_drafts WHERE powerform_id=?', pf.data.id).answers), 'the draft is sealed');
+  const disk = onDisk();
+  for (const w of ['987654.31', 'PASSPORT-ZEBRA-8821', 'DIAGNOSIS-LYCHEE-42']) assert.ok(!disk.includes(Buffer.from(w)), `${w} is not readable in the database file`);
+  // The archive copy of an email is sealed where it is written; the sweep covers every new column.
+  assert.match(fs.readFileSync(path.join(ROOT, 'src/server/mail.ts'), 'utf8'), /seal\('emails\.archive_draft', draft\)/);
+  for (const c of ['fields.typed_num', 'fields.calc_num', 'emails.archive_draft', 'support_requests.chat', 'form_drafts.answers'])
+    assert.ok(SEALED_COLUMNS.some((x) => `${x.table}.${x.column}` === c), c);
+});
+
+test('the operator line: short, plain, styled as a warning, also for a key that is not a key; no "value(s)" and no "us"', () => {
+  setKeys();
+  const off = databaseWarning()!;
+  assert.ok(off.split(/\s+/).length <= 45, off);
+  assert.match(off, /^Stored files and the signatures/);
+  assert.match(off, /npm run setup/);
+  setKeys('not-a-key');
+  assert.match(databaseWarning() || '', /is not a key/);
+  setKeys(K1, [K2]);
+  assert.match(fs.readFileSync(path.join(ROOT, 'src/app/app/operator/encryption.tsx'), 'utf8'), /className="notice warn small"/);
+  for (const f of ['src/server/colsweep.ts', 'scripts/setup.mjs', 'scripts/encrypt-columns.mjs', '.env.example']) {
+    const t = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    assert.ok(!t.includes('value(s)') && !t.includes('that includes us'), f);
+  }
+});
+
+test('no trust page says the software never encrypts the database, and the database point is two short lists', async () => {
+  const { notEncryptedPoint, processingNotDone } = await import('../src/lib/storedfiles.ts');
+  const policy = await import('../src/lib/policy.ts');
+  const all = [...policy.NO_BAA_FIRST, ...policy.WHO_CAN_SEE.map((w: any) => w.what), processingNotDone(false), processingNotDone(true), notEncryptedPoint(false).text, notEncryptedPoint(true).text];
+  for (const t of all) assert.doesNotMatch(t, /never encrypts the database|no encryption of its own to the database/, t);
+  setKeys(K1, [K2]);
+  const p = notEncryptedPoint();
+  assert.equal(p.lists?.length, 2);
+  assert.ok(p.text.split(/\s+/).length < 40 && (p.after || '').length > 0);
+  for (const l of p.lists!) for (const x of l.items) assert.ok(x.split(/\s+/).length <= 25, x);
+  assert.match(fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8'), /cp \.env\.example \.env[^\n]*\nnpm run setup/);
 });

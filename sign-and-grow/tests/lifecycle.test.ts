@@ -4,6 +4,7 @@
 // members cannot rewrite each other's templates or see each other's folders and batches, a completed envelope its
 // sender deleted stays with its recipients, help references can be read out loud, sign-in opens the workspace used
 // last, and a signer's cry for help reaches the sender.
+import { englishIf } from './words.ts';
 import { dayText } from '../src/lib/dates.ts'; // days in sentences read 21 Dec 2026 (simplify-public)
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -1250,7 +1251,8 @@ test('an alert the software files has a reference nobody can misread, and the qu
 
 // ---- The screens say what the server does ---------------------------------------------------------------------
 
-const source = (f: string) => fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const source = (f: string) => englishIf(`src/${f}`, fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8'));
 // The text of one function of a page, from its name to the next function at the start of a line.
 function part(text: string, name: string) {
   const at = text.indexOf(`function ${name}(`);

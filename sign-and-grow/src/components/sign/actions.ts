@@ -47,6 +47,14 @@ export function otherActions(me: Signer, o: { stage: string; deadline: boolean; 
   return keys;
 }
 
+/**
+ * The entries of `keys` that the sender's switches leave (src/lib/switches.ts, the signing page's "switches"): pass_on
+ * false takes Pass to someone else away, comments false takes Questions and comments away (also a witness's). Nothing
+ * on the page says so; Help's built-in answer does (chatscreens.ts). Left out, both are on, as before the switches.
+ */
+export const bySwitches = (keys: ActionKey[], sw?: { pass_on?: boolean; comments?: boolean } | null): ActionKey[] =>
+  keys.filter((k) => !(k === 'reassign' && sw?.pass_on === false) && !(k === 'ask' && sw?.comments === false));
+
 // ---- Finish --------------------------------------------------------------------------------------------------------
 
 /** Why "Check before you finish" opens when Finish is pressed. None: Finish signs and sends at once. */

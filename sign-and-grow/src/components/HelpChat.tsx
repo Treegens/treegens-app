@@ -2,6 +2,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Dialog } from './sign/Dialog';
 import { ContactForm } from '@/app/help/tools';
+import { ASK_OFF_IN_HELP } from '@/lib/switches';
 import {
   CHAT_SHORT_AI, CHAT_SHORT_BUILTIN, CHAT_DO_NOT_TYPE, CHAT_KEPT, CHAT_STARTERS, CHAT_KEEP_MESSAGES, CHAT_LINKABLE, HAND_OVER_TEXT,
   handOverTopic, limitText, redact, removedText, screenOf, type ChatLimit, type ChatLine, type ChatScreen, type HandOver, type Removed,
@@ -287,8 +288,13 @@ export function HelpChat({ screen, link, code, who, actions, onClose }: {
                     {m.content && m.id === 'hello' && i === msgs.length - 1 && starters}
                     {/* The answer names an entry this person's list does not have (a witness has no Finish later, a
                         document without a deadline no "more time"): say so, instead of sending them to look for it. */}
-                    {m.content && actions && (m.acts || []).length > 0 && !pageActs.some((a) => m.acts!.includes(a.key)) && (
+                    {m.content && actions && (m.acts || []).length > 0 && !pageActs.some((a) => m.acts!.includes(a.key)) && !(m.acts || []).includes('ask') && (
                       <p className="hc-why" style={{ margin: '6px 0 0' }}>{NOT_IN_LIST}</p>
+                    )}
+                    {/* The answer names Questions and comments, and this person's list has no such entry: the sender
+                        turned it off for this document (src/lib/switches.ts). A witness or anyone else always has it. */}
+                    {m.content && actions && (m.acts || []).includes('ask') && pageActs.length > 0 && !pageActs.some((a) => a.key === 'ask') && (
+                      <p className="hc-why" style={{ margin: '6px 0 0' }}>{ASK_OFF_IN_HELP}</p>
                     )}
                     {m.content && (
                       <div className="hc-under">
@@ -315,7 +321,7 @@ export function HelpChat({ screen, link, code, who, actions, onClose }: {
             <div className="hc-foot">
               {!lastAnswer && person}
               {msgs.length > 0 && <button type="button" className="btn sm ghost" disabled={busy} onClick={() => (setMsgs([]), said.current = 0, boxRef.current?.focus())}>Start again</button>}
-              <a className="btn sm ghost" href="/help" {...(newTab ? { target: '_blank', rel: 'noreferrer' } : {})}>The help page{newTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
+              <a className="btn sm ghost" href="/help" {...(newTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Open the help page{newTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
               <details className="hc-kept" data-fold><summary>What we keep</summary>{CHAT_DO_NOT_TYPE} {status?.kept || CHAT_KEPT}</details>
             </div>
           </>

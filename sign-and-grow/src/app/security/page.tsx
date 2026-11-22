@@ -19,6 +19,7 @@ import { WhereYourDataIs } from './DataPlace';
 import { WhatItConnectsTo } from './Outside';
 import { BY_SENDER_LINE } from '@/lib/bysender';
 import { encryptedFilesPoint, notEncryptedPoint } from '@/lib/storedfiles';
+import { DatabaseLists } from './dblists';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '@/lib/evidence';
 import { sealSet, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/seal';
 import { DEVICE_COOKIE_WORDS } from '@/lib/witness';
@@ -203,7 +204,7 @@ export default function Security() {
           {noneHeld()
             ? <Point title="No security certification.">We have not been audited against a security standard, and we will not hint that we have. {claimsSummary()} <Link href={CLAIMS_PAGE}>The full list, one sentence each</Link>.</Point>
             : <Point title="Certifications.">{claimsSummary()} <Link href={CLAIMS_PAGE}>The full list, one sentence each</Link>.</Point>}
-          <Point title={notEncrypted.title}>{notEncrypted.text}</Point>
+          <Point title={notEncrypted.title}>{notEncrypted.text}<DatabaseLists lists={notEncrypted.lists} after={notEncrypted.after} /></Point>
         </Block>
 
         <p className="muted" style={{ marginTop: 20 }}>Buying for an organization? <Link href="/procurement" style={{ padding: '13px 0' }}>Procurement documents</Link> and <Link href="/security/subprocessors" style={{ padding: '13px 0' }}>sub-processors</Link>. Found a security problem? <Link href="/security/disclosure">How to report a weakness</Link>. Something on this page that is not true? <Link href="/help?topic=other#contact">Tell us</Link>. A person reads every message.</p>

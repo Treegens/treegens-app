@@ -15,6 +15,7 @@ import { storeState } from './filestore.ts';
 import { notifySender } from './envelopes.ts';
 import { id, now, isEmail, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
+import { seal } from './colcrypt.ts';
 
 export const FINAL_TRIES = 5;
 export const FINALS_PER_TICK = 5;
@@ -67,7 +68,7 @@ function tellOperators(e: any, tries: number, err: any) {
   try {
     const to = [...new Set([process.env.SUPPORT_EMAIL || '', ...(process.env.OPERATOR_EMAILS || '').split(',')].map((s) => s.trim().toLowerCase()).filter(isEmail))];
     run("INSERT INTO support_requests (id, email, name, topic, message, account_id, envelope_id, status, at) VALUES (?,?,?,'other',?,?,?,'open',?)",
-      id('sup'), to[0] || 'files-alert@localhost', 'GrowSigning (automatic alert)', `${subject}\n\n${lines.join('\n')}`.slice(0, 5000), e.account_id, e.id, now());
+      id('sup'), to[0] || 'files-alert@localhost', 'GrowSigning (automatic alert)', seal('support_requests.message', `${subject}\n\n${lines.join('\n')}`.slice(0, 5000)), e.account_id, e.id, now());
     for (const t of to) sendMail({ to: t, subject, heading: subject, lines, cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } }).catch((x) => console.error('[pdf] could not email the operators', x?.message));
     if (!to.length) console.error('[pdf] NOBODY WAS TOLD BY EMAIL (set SUPPORT_EMAIL or OPERATOR_EMAILS). The alert is in the operator queue.');
   } catch (x: any) {

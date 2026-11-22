@@ -638,7 +638,7 @@ test('the pages say what is encrypted and what is not, from the setting the serv
   const off = notEncryptedPoint();
   assert.equal(off.title, 'Stored files and the database are not encrypted by the software on this server.');
   // Said of new files: a server where it was switched off still holds files encrypted while it was on (tests/qr-encrypt-repair.test.ts).
-  assert.match(off.text, /The software can encrypt the uploaded documents, signed PDFs and the files signers attach, and it is not switched on here, so new files are kept on the disk as they were uploaded and signed/);
+  assert.match(off.text, /The software can encrypt the uploaded documents, signed PDFs and the files signers attach and part of the database, and it is not switched on here, so new files are kept on the disk as they were uploaded and signed/);
   setKeys(K1);
   const on = encryptedFilesPoint()!;
   assert.equal(on.title, 'Stored files are encrypted by the software.');
@@ -650,10 +650,11 @@ test('the pages say what is encrypted and what is not, from the setting the serv
   const dbOnly = notEncryptedPoint();
   assert.equal(dbOnly.title, 'The database is only partly encrypted by the software.');
   // With the key, what stays readable is CLEAR_WORDS (tests/ds-db-encrypt.test.ts); without it the whole list below.
-  assert.match(dbOnly.text, /The rest of the database stays readable to whoever has a copy of the disk or of a backup: the names, email addresses and phone numbers/);
+  assert.match(dbOnly.after!, /Whoever has a copy of the disk or of a backup can read the rest/);
+  assert.ok(dbOnly.lists![1].items.some((x) => /names, email addresses and phone numbers/.test(x)));
   for (const t of [off.text]) {
     // The whole list of what stays readable is DATABASE_HOLDS (checked item by item in tests/qr-encrypt-repair.test.ts).
-    assert.match(t, /The software does not encrypt the database\. Whoever has a copy of the disk or of a backup can read what it holds: the names, email addresses and phone numbers of everyone on a document/);
+    assert.match(t, /The software does not encrypt the database on this server\. Whoever has a copy of the disk or of a backup can read what it holds: the names, email addresses and phone numbers of everyone on a document/);
     assert.match(t, /what people typed into fields, and their signatures and initials as pictures/);
     assert.match(t, /every audit trail, with the IP addresses and browsers it records/);
     assert.match(t, /So encrypt the disk itself as well\./);
@@ -665,15 +666,15 @@ test('the pages say what is encrypted and what is not, from the setting the serv
   const security = read('src/app/security/page.tsx');
   assert.match(security, /const encrypted = encryptedFilesPoint\(\);/);
   assert.match(security, /\{encrypted && <Point title=\{encrypted\.title\}>\{encrypted\.text\}<\/Point>\}/);
-  assert.match(security, /<Point title=\{notEncrypted\.title\}>\{notEncrypted\.text\}<\/Point>/);
+  assert.match(security, /<Point title=\{notEncrypted\.title\}>\{notEncrypted\.text\}<DatabaseLists lists=\{notEncrypted\.lists\} after=\{notEncrypted\.after\} \/><\/Point>/);
   assert.ok(security.indexOf('notEncrypted.title') > security.indexOf('id="not"'), 'under "What this is not"');
   assert.doesNotMatch(security, /No claim about encrypted storage/);
   const processing = read('src/app/security/processing/page.tsx');
   assert.match(processing, /\{fileEncryptionOn\(\) && <li>\{PROCESSING_ENCRYPTED\}<\/li>\}/);
   assert.match(processing, /<b>What the software does not do:<\/b> \{processingNotDone\(\)\}/);
   const policy = read('src/lib/policy.ts');
-  assert.match(policy, /the key to the stored files, where it encrypts them, is in the server\\'s settings, so whoever has the disk, the database and the settings of the server can read everything on them/);
-  assert.match(policy, /'The database encrypted by the software itself, not only the stored files\. Today the software can encrypt the files/);
+  assert.match(policy, /the software encrypts at most part of the database, and the key, where it is set, is in the server\\'s settings, so whoever has the disk, the database and the settings of the server can read everything on them/);
+  assert.match(policy, /'All of the database encrypted by the software itself, not only the stored files\. Today, when the people who run the server switch it on, the software encrypts the files and part of the database/);
   assert.doesNotMatch(policy, /saveBlob\(\) in src\/server\/db\.ts writes them as they are/);
   assert.match(read('src/instrumentation.ts'), /const files = fileStoreWarning\(\);\n\s+if \(files\) console\.error\(files\);/);
 });

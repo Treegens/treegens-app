@@ -42,12 +42,19 @@ export const DATABASE_HOLDS = [
 ];
 const KEPT_TEXT = 'the text read from every uploaded PDF, kept for search and for the check before sending';
 // With a key, part of the database is encrypted too (src/server/colcrypt.ts). The two lists are in sealedcolumns.ts.
-const PART_SEALED = `With the same key the software also encrypts, in the database: ${SEALED_WORDS.join('; ')}, and the text read from uploaded PDFs for search. Values written before the key was set are encrypted when the server starts and by its timer.`;
+const SEARCH_TEXT = 'the text read from uploaded PDFs for search';
+/** The two lists /security shows as bullets when the key is set: what is encrypted in the database, what is not. */
+export const databaseLists = (): { title: string; items: string[] }[] => [
+  { title: 'Encrypted', items: [...SEALED_WORDS, SEARCH_TEXT] },
+  { title: 'Kept readable, because search, mail and joining records need them', items: CLEAR_WORDS },
+];
+const PART_LEAD = 'Part of the database is encrypted with the same key. Values written before the key was set are encrypted when the server starts and by its timer.';
+const PART_TAIL = 'Whoever has a copy of the disk or of a backup can read the rest. So encrypt the disk itself as well. Whether it is encrypted depends on where the service is hosted.';
 /** The database, said the same way on /security and in the data processing summary. `on`: files are encrypted. */
 export const databaseText = (on = fileEncryptionOn()): string =>
   on
-    ? `${PART_SEALED} The rest of the database stays readable to whoever has a copy of the disk or of a backup: ${CLEAR_WORDS.join('; ')}. So encrypt the disk itself as well. Whether it is encrypted depends on where the service is hosted.`
-    : `The software does not encrypt the database. Whoever has a copy of the disk or of a backup can read what it holds: ${[...DATABASE_HOLDS, KEPT_TEXT].join('; ')}. So encrypt the disk itself as well. Whether it is encrypted depends on where the service is hosted.`;
+    ? `${PART_LEAD} Encrypted: ${[...SEALED_WORDS, SEARCH_TEXT].join('; ')}. Kept readable: ${CLEAR_WORDS.join('; ')}. ${PART_TAIL}`
+    : `The software does not encrypt the database on this server. Whoever has a copy of the disk or of a backup can read what it holds: ${[...DATABASE_HOLDS, KEPT_TEXT].join('; ')}. So encrypt the disk itself as well. Whether it is encrypted depends on where the service is hosted.`;
 
 /** The point on /security that says what is protected when the files are encrypted. Empty when they are not. */
 export function encryptedFilesPoint(on = fileEncryptionOn()): { title: string; text: string } | null {
@@ -61,16 +68,16 @@ export function encryptedFilesPoint(on = fileEncryptionOn()): { title: string; t
 /** The point under "What this is not" on /security: the database always, the files when they are not encrypted. */
 // Off is said of the files stored from now on: a server where encryption was switched off (the key moved to
 // FILE_ENCRYPTION_KEYS_OLD) still holds files that were encrypted while it was on, and they stay encrypted.
-export function notEncryptedPoint(on = fileEncryptionOn(), env: Record<string, string | undefined> = process.env): { title: string; text: string } {
+export function notEncryptedPoint(on = fileEncryptionOn(), env: Record<string, string | undefined> = process.env): { title: string; text: string; lists?: { title: string; items: string[] }[]; after?: string } {
   const wasOn = !!(env.FILE_ENCRYPTION_KEYS_OLD || '').trim();
   return on
-    ? { title: 'The database is only partly encrypted by the software.', text: databaseText(true) }
-    : { title: 'Stored files and the database are not encrypted by the software on this server.', text: `The software can encrypt the ${FILES}, and it is not switched on here, so new files are kept on the disk as they were uploaded and signed.${wasOn ? ' Files stored while it was switched on stay encrypted.' : ''} ${databaseText(false)}` };
+    ? { title: 'The database is only partly encrypted by the software.', text: PART_LEAD, lists: databaseLists(), after: PART_TAIL }
+    : { title: 'Stored files and the database are not encrypted by the software on this server.', text: `The software can encrypt the ${FILES} and part of the database, and it is not switched on here, so new files are kept on the disk as they were uploaded and signed.${wasOn ? ' Files stored while it was switched on stay encrypted.' : ''} ${databaseText(false)}` };
 }
 
 /** The line in the data processing summary, under "How it is protected", when the files are encrypted. The page
  *  says what is true when they are not, and prints databaseText() in both cases. */
-export const PROCESSING_ENCRYPTED = `Stored files (the ${FILES}) and the text read from uploaded PDFs for search are encrypted by the software with AES-256-GCM, and so are signatures, typed answers, comments, stored emails, decline reasons and help messages in the database. The rest of the database is not, so how the disk is protected still matters and depends on the host. The key is in the server's settings, so this protects copies of the disk and backups taken without them, not a running server someone has broken into.`;
+export const PROCESSING_ENCRYPTED = `Stored files (the ${FILES}) and the text read from uploaded PDFs for search are encrypted by the software with AES-256-GCM, and so are signatures, typed answers, comments, stored emails, decline reasons, help messages and form drafts in the database. The rest of the database is not, so how the disk is protected still matters and depends on the host. The key is in the server's settings, so this protects copies of the disk and backups taken without them, not a running server someone has broken into.`;
 /** "What the software does not do" in the data processing summary. */
 export const processingNotDone = (on = fileEncryptionOn()): string =>
-  on ? 'it does not encrypt the whole database: names, email addresses, subjects and the audit trail stay readable.' : 'on this server it does not encrypt the files it stores now, and it never encrypts the database, so how the disk is protected depends on the host.';
+  on ? 'it does not encrypt the whole database: names, email addresses, subjects and the audit trail stay readable.' : 'on this server it does not encrypt the files it stores now or any of the database, so how the disk is protected depends on the host.';

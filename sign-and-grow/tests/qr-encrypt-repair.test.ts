@@ -167,8 +167,8 @@ test('/security and the data processing summary list what stays readable in the 
   const dbOn = notEncryptedPoint();
   // With the key, part of the database is encrypted too (tests/ds-db-encrypt.test.ts); without it the whole list stays readable.
   for (const h of DATABASE_HOLDS) assert.ok(databaseText(false).includes(h), h);
-  assert.match(dbOn.text, /and the text read from uploaded PDFs for search\. /);
-  assert.match(dbOn.text, /So encrypt the disk itself as well\./);
+  assert.ok(dbOn.lists![0].items.includes('the text read from uploaded PDFs for search'));
+  assert.match(dbOn.after!, /So encrypt the disk itself as well\./);
   assert.match(PROCESSING_ENCRYPTED, /and the text read from uploaded PDFs for search are encrypted/);
   setKeys();
   const off = notEncryptedPoint();
@@ -178,14 +178,14 @@ test('/security and the data processing summary list what stays readable in the 
   setKeys(undefined, [K1]);
   assert.match(notEncryptedPoint().text, /new files are kept on the disk as they were uploaded and signed\. Files stored while it was switched on stay encrypted\./);
   assert.doesNotMatch(notEncryptedPoint().text, /those files are on the disk as they were uploaded/);
-  assert.match(processingNotDone(false), /does not encrypt the files it stores now, and it never encrypts the database/);
+  assert.match(processingNotDone(false), /does not encrypt the files it stores now or any of the database/);
   for (const t of [on.text, dbOn.text, off.text, databaseText(true), databaseText(false), PROCESSING_ENCRYPTED, processingNotDone(true), processingNotDone(false), ...DATABASE_HOLDS])
     assert.doesNotMatch(t, new RegExp(`${DASH}|bank-grade|military|fully secure|unbreakable|compliant|is valid|will hold up`, 'i'));
   // Both pages print the list, whatever the setting.
   const processing = read('src/app/security/processing/page.tsx');
   assert.match(processing, /<li>\{databaseText\(\)\}<\/li>/);
   assert.match(processing, /\{processingNotDone\(\)\}/);
-  assert.match(read('src/app/security/page.tsx'), /<Point title=\{notEncrypted\.title\}>\{notEncrypted\.text\}<\/Point>/);
+  assert.match(read('src/app/security/page.tsx'), /<Point title=\{notEncrypted\.title\}>\{notEncrypted\.text\}<DatabaseLists lists=\{notEncrypted\.lists\} after=\{notEncrypted\.after\} \/><\/Point>/);
 });
 
 // ---- 2. A signed PDF that cannot be made (medium) ------------------------------------------------------------------

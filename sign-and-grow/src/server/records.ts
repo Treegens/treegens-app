@@ -38,6 +38,7 @@ import { purgeKeyTerms } from './airepo.ts';
 import type { Ctx } from './router.ts';
 import { dataPlace } from '../lib/dataplace.ts';
 import { dayText } from '../lib/dates.ts';
+import { sharedValuesGone } from './collab.ts';
 import {
   RETENTION_NOTICE_DAYS, RETENTION_MAIL_EVERY_DAYS, RETENTION_CLOSED, PURGE_LEVELS, LEVEL_NAME, LEVEL_DOES, KEPT_AT, isPurgeLevel, retentionStays, removedOn,
   validDays, dueAt, daysText, plainDay, STAYS_SHORT, HOLD_TRUTH, RETENTION_MIN_DAYS, RETENTION_MAX_DAYS, type PurgeLevel,
@@ -545,17 +546,19 @@ function removeValues(e: any, gone: string): string[] {
   const texts: string[] = [];
   run('UPDATE fields SET value=NULL, calc_num=NULL, typed_num=NULL, prefill=NULL, stamp_meta=NULL WHERE envelope_id=?', e.id);
   run('UPDATE earlier_signatures SET answers=?, signature_png=NULL, initials_png=NULL WHERE envelope_id=?', '[]', e.id);
+  // A field anyone could fill in: what it said before and after each change goes, also where the audit trail quotes it (collab.ts).
+  texts.push(...sharedValuesGone(e.id));
   for (const r of all("SELECT id, decline_reason FROM recipients WHERE envelope_id=? AND decline_reason IS NOT NULL AND decline_reason!=''", e.id)) texts.push(r.decline_reason);
-  run('UPDATE recipients SET signature_png=NULL, initials_png=NULL, decline_reason=CASE WHEN decline_reason IS NULL OR decline_reason=\'\' THEN decline_reason ELSE ? END WHERE envelope_id=?', gone, e.id);
+  run('UPDATE recipients SET signature_png=NULL, initials_png=NULL, decline_reason=CASE WHEN decline_reason IS NULL OR decline_reason=\'\' THEN decline_reason ELSE ? END WHERE envelope_id=?', seal('recipients.decline_reason', gone), e.id);
   const v = get('SELECT void_reason FROM envelopes WHERE id=?', e.id)?.void_reason;
   if (v) (texts.push(v), run('UPDATE envelopes SET void_reason=? WHERE id=?', gone, e.id));
-  run('UPDATE comments SET body=? WHERE envelope_id=?', gone, e.id);
+  run('UPDATE comments SET body=? WHERE envelope_id=?', seal('comments.body', gone), e.id);
   forgetCommentHooks(e.id);
   // Our stored copies of the emails about it quote the reasons, the comments and sometimes an answer. Their words go
   // as a whole; who each went to, its subject line, when it went and whether it arrived stay. Without its stored
   // parts an email is never tried again (mail.ts). One still waiting for the mail server is left to go out.
   for (const m of all(`SELECT id, subject FROM emails WHERE envelope_id=? AND ${NOT_WAITING}`, e.id))
-    run('UPDATE emails SET html=?, payload=NULL, link=NULL, archive_draft=NULL, subject=? WHERE id=?', `<p>The words of this email were deleted on ${gone.replace('Removed on ', '')}, with the files of its document.</p>`, scrub(m.subject, texts, gone, false), m.id);
+    run('UPDATE emails SET html=?, payload=NULL, link=NULL, archive_draft=NULL, subject=? WHERE id=?', seal('emails.html', `<p>The words of this email were deleted on ${gone.replace('Removed on ', '')}, with the files of its document.</p>`), scrub(m.subject, texts, gone, false), m.id);
   return texts;
 }
 

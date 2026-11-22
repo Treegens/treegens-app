@@ -32,7 +32,7 @@ export function MailStopHint({ r, links = true }: { r: any; links?: boolean }) {
   const own = links ? '' : ` Only the person this document belongs to, or an admin, can send them the link.`;
   if (r.complained_at) return (
     <p className="sn-hint warn">
-      <b>Marked as spam.</b> {r.name} marked one of our emails for your account as spam, so we do not email them about its documents again, this one included: no reminders, no notice when you change it and no copy when it is completed. Correcting the address or sending a new envelope does not change that. Only they can undo it, with the button on their signing page.{links ? ' You can still send them their link yourself.' : own} <Link href="/help#bounced">What this means</Link>
+      <b>Marked as spam.</b> {r.name} marked one of our emails for your account as spam, so we do not email them about its documents again, this one included: no reminders, no notice when you change it and no copy when it is completed. Correcting the address or sending a new document does not change that. Only they can undo it, with the button on their signing page.{links ? ' You can still send them their link yourself.' : own} <Link href="/help#bounced">What this means</Link>
     </p>
   );
   if (r.bounced_at) return (

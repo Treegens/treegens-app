@@ -6,7 +6,7 @@
 // What the server does here:
 // - prepare: makes one "copy got ready" row for one person who signs in person, on an envelope that is out, by the
 //   host's own signed-in browser, and answers what the device keeps: the signing page's data and the files. One
-//   envelope per device: getting another one ready on the same browser ends the earlier copy.
+//   person at a time per device: getting another one ready on the same browser ends the earlier copy.
 // - finish: takes the result back, by the signing link like every other Finish. It is accepted only while that copy
 //   is still the one got ready, at most OFFLINE_DAYS days old, and only if the envelope is exactly as it was then
 //   (its content version). Otherwise nothing is signed and the host is told, plainly, that the person signs again.
@@ -36,6 +36,8 @@ export function needsSignal(e: any, r: any, gate: string | null): string | null 
   if (r.group_name) return 'A group signs this, and who takes it on is decided by GrowSigning. Host it with a connection instead.';
   if (e.recipients.some((x: any) => x.role === 'witness' && (!x.witness_for || x.witness_for === r.id))) return `${name} has a witness, who signs with their own link. Host it with a connection instead.`;
   if (e.documents.some(isSupplement)) return 'This document comes with files to read, which are opened from GrowSigning. Host it with a connection instead.';
+  // "Pay before finishing": the part completes only once Stripe confirms the payment, which needs a connection.
+  if (e.collect_currency && e.collect_when === 'before') return `${name} pays before finishing, and the payment needs a connection. Host it with a connection instead.`;
   const mine = e.fields.filter((f: any) => f.recipient_id === r.id);
   const odd = mine.find((f: any) => !OFFLINE_FIELD_TYPES.includes(f.type));
   if (odd) return `${name}'s part has a ${String(odd.label || odd.type).replace(/_/g, ' ')} field, which needs a connection. Host it with a connection instead.`;
@@ -47,7 +49,7 @@ export function needsSignal(e: any, r: any, gate: string | null): string | null 
 /** The copy got ready for this person that a result may come back for, or null. */
 const readyFor = (prepId: string, recipientId: string) => get("SELECT * FROM offline_preps WHERE id=? AND recipient_id=?", prepId, recipientId);
 
-/** Ends every copy still waiting on this browser (one envelope per device), saying why. */
+/** Ends every copy still waiting on this browser (one person at a time per device), saying why. */
 export function endOnSession(sessionId: string, why: string) {
   run("UPDATE offline_preps SET state='ended', ended_at=?, ended_why=? WHERE session_id=? AND state='ready'", now(), why, sessionId);
 }
@@ -66,7 +68,8 @@ export function prepare(c: Ctx, e: any, r: any, found: any, view: any) {
   if (why) throw bad(why, 409, { code: 'needs_signal' });
   if (view?.locked !== false || !Array.isArray(view?.fields)) throw bad('This document cannot be got ready right now. Open it with a connection to see why.', 409, { code: 'needs_signal' });
   const sid = c.auth.sessionId;
-  // One envelope per device: an earlier copy on this browser, for whoever, ends here.
+  // One person at a time per device: an earlier copy on this browser, for whoever (also another person of the same
+  // envelope), ends here.
   endOnSession(sid, 'Another document was got ready on the same device.');
   // And one device per person: a copy for this person on another device ends too, so only one result can come back.
   run("UPDATE offline_preps SET state='ended', ended_at=?, ended_why=? WHERE recipient_id=? AND state='ready'", now(), 'It was got ready again on another device.', r.id);

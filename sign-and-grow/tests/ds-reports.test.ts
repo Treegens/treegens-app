@@ -4,9 +4,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, signUp, Client, type Server } from './helpers.ts';
+import { englishIf } from './words.ts';
 
 let s: Server;
-const read = (p: string) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 const ok = (r: { status: number; data: any }) => (assert.equal(r.status, 200, JSON.stringify(r.data)), r.data);
 
 const accountOf = (email: string) => s.db.get('SELECT m.account_id a, u.id u FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email=?', email);

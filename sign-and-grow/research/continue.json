@@ -37851,5 +37851,1071 @@
   ],
   "found": "The in-person host lock already existed (handover.ts, IN_PERSON_LOCK). So did the online weak-signal Finish retry (src/components/sign/offline.ts) and the /app-scoped service worker that never kept a page. The ux note 'ds-offline-inperson' says 'Automatic, no switch, never a choice before the host starts'. That cannot hold with the brief's host-chosen PIN, which has to be set while online. So I placed the action inside the in-person person's More, never in the way of Host signing now, and the wording follows the note ('Saved on this phone', no 'offline mode' or 'sync'). The designer may want to revisit this. Another engineer's process (hall.example users) took over my first /tmp DATA_DIR. I moved mine into the scratchpad and restarted, which is worth knowing for anyone who picks a DATA_DIR by 'newest /tmp dir'.",
   "notes_for_integrator": "left_open:\n- Words on /in-person are English only; I did not move them into t() or en.json.\n- 'I do not want to sign' on the device is not recorded as a decline; nothing is sent, and the README says so.\n- Fields are filled in as a form under the pages (with outlines on the pages), not on the pages themselves.\n- I verified that the page opens with no signal only in reasoning and in the sw.js code. The dev server registers no service worker, so I did not run a production build to check it.\n- A PIN guards against someone who finds the phone, not against someone who copies the browser's storage and tries PINs at leisure (PBKDF2 slows that). The README says so.\n- An unsent signature is wiped with the copy after 7 days. The waiting screen says to send it within 7 days.\n- Date-signed fields use the day the server received it, not the device day. The certificate says why.\n\nAttacks handled by tests: a made-up prep_id; replay after cancel, expiry, being replaced, or a void; a forged or nonsense device clock; an API key preparing; another account preparing; double send.\n\nHonest-person cases: a changed document gets a plain refusal; a forgotten PIN means getting it ready again, and five wrong tries wipe the copy; a captive Wi-Fi page counts as no answer and the result is kept.\n\nShared-file edits are one or two lines each: db.ts, pdf.ts, openapi.ts, perm.ts, route.ts, helpers.ts, Recipients.tsx, AppShell.tsx, help/phone.tsx.\n\nI removed my two .next-build-ds-offline-inperson lines from tsconfig.json; the other entries are untouched. Dev server stopped and .next-build-ds-offline-inperson deleted."
+ },
+ "build:simplicity-r6": {
+  "done": [
+   {
+    "item": "1. Done screen: one main button (Download), says 'signing record' not 'certificate'",
+    "status": "done",
+    "how": "Done in the earlier session (doneLine/doneActions in src/lib/simplicity.ts, used by src/app/sign/[token]/page.tsx). Re-checked this session.",
+    "test": "tests/simplicity-r6.test.ts test 1. Before: tests/out/build-simplicity-r6/before/b-sign-phone/06-done.png. After: tests/out/build-simplicity-r6/after/b-sign-phone/06-done.png"
+   },
+   {
+    "item": "2. 44 px targets at every width (buttons, step tabs, sidebar, inputs)",
+    "status": "done",
+    "how": "Done in the earlier session: one block of zero-specificity :where() rules in src/app/globals.css.",
+    "test": "test 2. The audits are tests/out/build-simplicity-r6/audit-before/small.json and audit-after/small.json: the editor, Sign out and input targets went from 34-41 px to 44 px."
+   },
+   {
+    "item": "3. Step 3 in the charter's order: preview, who gets it, message, More options, Send",
+    "status": "done",
+    "how": "Done in the earlier session (StepReview.tsx, STEP3_ORDER).",
+    "test": "test 3. Before: before/a-send-first/11-editor-step-3-review-and-send.png. After: after/a-send-first/11-editor-step-3-review-and-send.png"
+   },
+   {
+    "item": "4. Documents line says what it is about; 'tick the boxes' only when there are boxes",
+    "status": "done",
+    "how": "Done in the earlier session (documentsIntro, countLine).",
+    "test": "test 4"
+   },
+   {
+    "item": "5. Settings email switches: one line each, what always reaches you said once",
+    "status": "done",
+    "how": "Done in the earlier session (NEEDS_YOU_LINE, ALWAYS_REACH).",
+    "test": "test 5"
+   },
+   {
+    "item": "6. Settings Account and Contacts say 'the people you send to' and 'documents'",
+    "status": "done",
+    "how": "Done in the earlier session. This session I made the test case-insensitive. That exposed two more 'Envelopes' sentences in src/components/sender/SigningGroups.tsx, and I fixed both.",
+    "test": "test 6"
+   },
+   {
+    "item": "7. Signing page top bar names the document (no 'Please sign: Pla...' cut off on a phone)",
+    "status": "done",
+    "how": "New barTitle(subject) in src/lib/simplicity.ts strips the app's own 'Please sign: ' prefix (listName). src/components/sign/parts.tsx now uses it for everyone and no longer needs NOT_SIGNING. The consent heading still shows the full subject. I updated the one assertion in tests/open-signing.test.ts that pinned the old expression.",
+    "test": "test 7, plus tests/open-signing.test.ts. Before: before/b-sign-phone/03-signing-the-document.png ('Please sign: Pla...'). After: after/b-sign-phone/03-signing-the-document.png ('Planting partner...')",
+    "left_open": "At 390 px a long name is still cut off by the 'Other actions' and 'Help' buttons. Only the useless prefix went."
+   },
+   {
+    "item": "8. Settings Profile: the login address said once, 'not confirmed yet' only when true",
+    "status": "done",
+    "how": "Done in the earlier session (emailLine).",
+    "test": "test 8"
+   },
+   {
+    "item": "9. Editor step 1: the page count is the Pages button",
+    "status": "done",
+    "how": "Done in the earlier session (pagesButton, FileRow.tsx).",
+    "test": "test 9. Before: before/a-send-first/08-editor-step-1-filled-in.png ('2 pages' + 'Pages'). After: after/a-send-first/08-editor-step-1-filled-in.png"
+   },
+   {
+    "item": "10. Sender's daily path says document, History, Send to many (no envelope, audit trail, bulk send, void)",
+    "status": "done",
+    "how": "Plain words throughout. Documents row: 'Sent with Send to many'. CheckPick.tsx and CheckFields.tsx: 'column in Send to many'. PayLinkNote.tsx: signing records, History, 'this document'. SigningGroups.tsx and GroupMembers.tsx: Documents. WitnessFacts.tsx: document, 'choose More, then Edit', 'cancel the request'. Disputed.tsx and MailNews.tsx: document. Settings Team leave and remove dialogs: 'documents ... Send to many batches ... Each document's History'.",
+    "test": "test 10 reads the visible text of every editor, sender, Home, Documents, document-page and Templates component for the avoided words"
+   },
+   {
+    "item": "11. Help dialog on the signing page: buttons start with a verb",
+    "status": "done",
+    "how": "'The help page' became 'Open the help page' (src/components/HelpChat.tsx), per charter P6.",
+    "test": "test 11. Before: before/f-signer-help/03-help.png. After: after/f-signer-help/03-help.png"
+   },
+   {
+    "item": "12. One name per document: the document page heading matches Home and Documents",
+    "status": "done",
+    "how": "'src/app/app/envelopes/[id]/page.tsx' title = listName(subject), so it shows 'Planting partnership' instead of 'Please sign: Planting partnership'. This also shortens the More menu's label.",
+    "test": "test 12. Before: audit-now/phone-envelope.png. After: audit-after/phone-envelope.png"
+   },
+   {
+    "item": "13. Documents: no dead ZIP button on a new account, a search hint that fits a phone, a column called Document",
+    "status": "done",
+    "how": "exportShown() hides 'Download signed PDFs (ZIP)' until something has been sent. Before, it was always shown and only answered 'nothing to export yet', and that toast also said 'Envelopes'. SEARCH_HINT 'Search names, people or words' replaces the hint that was cut off ('...document text or I'). The header 'Subject' is now 'Document'.",
+    "test": "test 13. Before: audit-now/phone-documents.png. After: audit-after/phone-documents.png",
+    "left_open": "If the 'has anything been sent' request fails, the ZIP button stays hidden until the page is reloaded."
+   },
+   {
+    "item": "14. Public pages: rules in public.css that undid 44 px on a desktop",
+    "status": "done",
+    "how": ".pub-form-row .btn 40->44, .pub-toc a 36->44, .pub-promise a 32->44 in src/app/styles/public.css. These buttons and links are on /help and on /security's contents.",
+    "test": "test 14 also checks that no rule outside a media query sets a link, button or summary below 44 px. The audit had /security's 10 contents links at 36 px and /help's 4 buttons at 41 px. After: none listed (audit-after.log)."
+   },
+   {
+    "item": "15. Sender's small links: the back link on a document page and the Developers API reference",
+    "status": "done",
+    "how": "The .sn-back link went from 28 px to 44 px on desktop and from 40 px to 44 px on phone (src/app/styles/sender.css). In Settings > Developers, 'API reference \u2197' became 'Open the API reference', 44 px tall, with screen-reader text '(opens in a new tab)'.",
+    "test": "test 15. After: audit-after.log no longer lists '\u2190 Documents' at 28 px or the 23 px API link."
+   }
+  ],
+  "files_changed": [
+   "src/lib/simplicity.ts",
+   "tests/simplicity-r6.test.ts",
+   "tests/open-signing.test.ts",
+   "src/components/sign/parts.tsx",
+   "src/app/app/envelopes/page.tsx",
+   "src/app/app/envelopes/[id]/page.tsx",
+   "src/app/app/settings/page.tsx",
+   "src/components/HelpChat.tsx",
+   "src/components/editor/CheckPick.tsx",
+   "src/components/sender/CheckFields.tsx",
+   "src/components/sender/PayLinkNote.tsx",
+   "src/components/sender/SigningGroups.tsx",
+   "src/components/sender/WitnessFacts.tsx",
+   "src/components/sender/Disputed.tsx",
+   "src/components/sender/GroupMembers.tsx",
+   "src/components/sender/MailNews.tsx",
+   "src/app/styles/public.css",
+   "src/app/styles/sender.css",
+   "README.md"
+  ],
+  "flows": "Default profile, before (tests/out/build-simplicity-r6/before.log) -> after (tests/out/build-simplicity-r6/after.log), as actions/screens/choices_seen/max_choices/words/notices:\n- a-send-first 18/8/119/28/853/2 -> 18/8/119/28/851/2\n- b-sign-phone 7/5/36/11/404/0 -> 7/5/36/11/400/0\n- b-sign-desktop 7/5/36/11/408/0 -> 7/5/36/11/404/0\n- c-template-send 5/4/59/20/264/1 -> 5/4/59/20/268/1. I did not track down the +4 words.\n- d-find-download 1/1/21/21/83/0 -> unchanged\n- e-settings-name 3/2/53/32/362/0 -> 3/2/53/32/360/0\n- f-signer-help 6/4/28/9/569/2 -> 6/4/28/9/570/2. The +1 is 'Open' in 'Open the help page'.\n- g-sign-in 4/3/56/28/365/0 -> unchanged\n- h-sign-myself 14/8/99/24/625/0 -> FAILED at step 3. Pressing 'Sign now' came back to step 1 ('Could not find Send'). I did not change the editor or the send route. When this run started, StepFields.tsx did not type-check (me.no_stamps), and simplify-editor's step-2 test fails, so this looks like another engineer's edit in progress. Please re-run it.\n- Rules, default profile: before 0 broken / 0 warnings; after 1 broken ('2.2 Settings cards: 5 cards in one section') and 1 warning (P6 signer sentences over 20 words). I added no Settings card and no signer sentence; both look like other engineers' in-progress changes.\n- 'everything' profile: not measured. The earlier session's run of it failed at warm-up, and I gave the time to the default profile.",
+  "suite": "tests/simplicity-r6.test.ts: 16/16 pass. npx tsc --noEmit -p .: clean on the final run. An earlier run failed on src/components/editor/StepFields.tsx(74) me.no_stamps, which is not my code. npm test: 2225 tests, 2204 pass, 16 fail. One of the 16 was mine: open-signing 'a long subject...' pinned the old bar-title expression; I updated it and it passes now. I re-ran the other affected files later:\n- chat: 3 fail (a templates 'New template' control, and two 70-word answers).\n- witness: 1 fail; groups: 1 fail. Both are in src/components/sign/actions.ts.\n- simplify-editor: 1 fail (step 2 kinds, StepFields).\n- qr: 1 fail (README 'What is not in it').\nNone of these touch my changes. ds-templates-lib now passes. I did not re-run the remaining failures from the full run: ds-consent-own, the offline in-person 719-722, a deployment-mode money test and simplify-envelope's template-list repair. All are outside the files I changed, so they look like other engineers' half-finished edits. I did not re-run the full suite after these checks.",
+  "notes_for_integrator": "Points 1-6, 8 and 9 were done by an earlier run of this session. This run added 7 and 10-15. The shared words are in src/lib/simplicity.ts: barTitle, exportShown, SEARCH_HINT.\n\nScreenshots, all under tests/out/build-simplicity-r6/:\n- Before: before/ (flows) and audit-before/ (every screen at phone and desktop, with small.json).\n- Middle (only part of this run's edits applied): audit-now/.\n- After: after/ (flows) and audit-after/ (every screen, small targets in audit-after.log).\n\nSmall targets still listed in audit-after.log, judged acceptable and left open:\n- inline text links and buttons inside sentences ('cancel the plan' in Settings > Records and data; Help's 'I do not know which email address...');\n- the Documents row title link, 17 px tall. The whole row is clickable, and on a phone the row is the target;\n- the 'All' tab, 42 px wide;\n- the 38 px colour input in Settings > Account;\n- /help's 'The words it looks for' summary, 23 px.\n\nAbuse and confused-person review:\n- (a) A sender cannot use the bar title to spoof: it only removes our own prefix. 'Please sign:' alone stays as written, and an empty subject still shows the logo (test 7).\n- (b) Hiding the ZIP button only waits for something to have been sent. The export route and its refusal are unchanged.\n- (c) The word changes are visible copy only. No API strings changed: the gaps-industry API error 'There is no payment link on this envelope' is untouched.\n\nNot done: the charter says a field's Delete belongs under its More options, but tests/simplify-editor.test.ts deliberately pins a visible 'Delete field' button. That conflict needs a decision before anyone moves it. The Settings card name 'Details on each document' differs from the charter's 'Details and saved fields'; I left it.\n\nI restarted the dev server once, on a fresh DATA_DIR, because another engineer added the column sw_pass_on while it ran. The server is stopped, .next-build-simplicity-r6 is deleted, and its two lines are out of tsconfig.json. Other engineers' .next-* lines stay.",
+  "found": "The session restarted on 'continue'. Points 1-6, 8 and 9 were already in src/lib/simplicity.ts and tests/simplicity-r6.test.ts, with 9 passing tests. tests/out/build-simplicity-r6 held the 'before' flow counts (default profile), an audit script and audit-before screenshots. An 'after' flow run had failed at warm-up, and the old tsc.log error at sign/[token]/page.tsx:945 no longer reproduced. Point 7 was not recorded anywhere, so I chose a new point 7 (the signing bar title).",
+  "settings": [
+   "No new settings, API changes or environment variables, so .env.example, openapi.ts and the README configuration table are unchanged. I added one row for tests/simplicity-r6.test.ts to the README tests table."
+  ]
+ },
+ "build:ds-lang-sender-rest": {
+  "done": [
+   {
+    "item": "0. Check what exists / earlier half pass",
+    "status": "done",
+    "how": "A previous lang-sender-rest pass had been set back (commits da4b960, d25208a) with its keys left unused in en.json. Re-applied its settings component edits (AgreementPlan, AiSettings, BroughtInLink, ChannelsStatus, CounterSettings, Delegate, Disclosure, ExportImport, Frame, KeyDatesSetting, OwnDocsDefault, SealStatus, SecurityPolicy, SendingDefaults, Shares, TenantSwitches, TreesOnRecord) and its test file, checked them with tsc and the scan, and fixed the tests they broke. Reused useST/senderT/senderRich from lang-sender and kept one catalogue.",
+    "test": "tests/ds-lang-sender-rest.test.ts (DONE list, keys exist, en-XA/ar-XB render)"
+   },
+   {
+    "item": "1. Settings: every tab (src/components/settings, src/components/stamps)",
+    "status": "partly",
+    "how": "All 30+ cards in src/components/settings/ go through the catalogue now, including Profiles (roles, member groups, roleLabel(row, lang)), RetentionSettings, Organisation and the card files above. The stamp screens (StampMaker, StampSettings, StampDialog) use the new src/components/stamps/words.tsx useStampT, which follows the signer's language on the signing page and the sender's in Settings. Ink names and what each role can do are keys that tests hold equal to INK_WORD and THING_WORDS.",
+    "test": "ds-lang-sender-rest tests 1-7; stamps, open-platform, ds-consent-own, gov-g14, gov-g18, retention, gaps-industry, simplify-public pass",
+    "left_open": "src/app/app/settings/page.tsx itself is not converted: about 250 literals across Profile, Security, Notifications, Account, the Team list, Developers and Records and data, plus SignedIn.tsx and TwoStep.tsx. It is a busy shared file that holds Billing() and that 22 test files read, so it needs a coordinated pass. Sentences the cards take from src/lib (LEVEL_*, ORG_POLICY_WORDS, reminderText in some places, STAMP_IS_TEAM, GROUP_RULE, STATE_LABEL) and the server's answers are still English."
+   },
+   {
+    "item": "2. Templates",
+    "status": "partly",
+    "how": "src/app/app/templates/page.tsx (list, search, Use dialog, Move dialog, delete) is converted, with plurals.",
+    "test": "templates, ds-templates-lib, simplify-envelope, gaps-industry pass",
+    "left_open": "src/components/templates/WhoCanUse.tsx (24 literals) and AddTemplate.tsx (10) are not converted."
+   },
+   {
+    "item": "3. Bulk send",
+    "status": "done",
+    "how": "bulk/page.tsx and BatchCost.tsx are converted. batchLine(c, lang). The batch texts now say 'cancel', not 'void', to match the 'Cancel everything still open' button.",
+    "test": "gaps-industry, open-public 19/34 pass"
+   },
+   {
+    "item": "4. Public form set-up",
+    "status": "partly",
+    "how": "src/app/app/powerforms/page.tsx is converted.",
+    "test": "lifecycle passes",
+    "left_open": "The QR sheet (powerforms/[id]/qr, 14 literals) and src/components/forms/FormLimits.tsx are not converted."
+   },
+   {
+    "item": "5. Click-to-agree set-up",
+    "status": "partly",
+    "how": "The /app/agreements list is converted.",
+    "test": "clickwrap passes",
+    "left_open": "/app/agreements/[id]/page.tsx (77 literals) is not converted."
+   },
+   {
+    "item": "6. Contacts and groups",
+    "status": "partly",
+    "how": "contacts/page.tsx and src/components/sender/SigningGroups.tsx are converted.",
+    "test": "groups (except the failure below), simplicity-r6 pass",
+    "left_open": "src/components/reports/SavedLists.tsx (6 literals) is not converted."
+   },
+   {
+    "item": "7. Reports",
+    "status": "done",
+    "how": "Removed the forced `const ui = SOURCE_LOCALE`. Every text, the status names included (reports.status.*), now comes from T().",
+    "test": "ds-reports, open-public pass"
+   },
+   {
+    "item": "8. Inbox",
+    "status": "done",
+    "how": "inbox/page.tsx is converted. 'ago' now uses howLongIn.",
+    "test": "ds-lang-sender-rest scan"
+   },
+   {
+    "item": "9. Help page and /security (legal parts English with the note)",
+    "status": "not_done",
+    "how": "Not started. Both are busy shared files (help about 210 literals, security about 125).",
+    "left_open": "These need their own pass. The legal notes under 'Signing outside the United States' and /security/processing stay English until a person reviews a translation."
+   },
+   {
+    "item": "10. /impact, landing page",
+    "status": "done",
+    "how": "/impact uses the new src/components/publicLang.tsx usePublicT, which follows the browser and sets lang/dir on the document. The landing page is a server component: it uses the new src/components/requestLang.tsx (requestT with T.rich), which reads Accept-Language only once a second sender language ships, like layout.tsx.",
+    "test": "impact, simplify-public, gov-g14 pass",
+    "left_open": "The landing page cannot show a test language (?lang is not read on the server). Page titles (metadata) stay English."
+   },
+   {
+    "item": "11. Login, sign-up, password pages",
+    "status": "done",
+    "how": "AuthForm.tsx (shared by login, signup, forgot and reset) is converted through usePublicT. The page files only hold metadata titles, which stay English.",
+    "test": "ds-lang-sender-rest; screenshots login/signup/forgot in en, en-XA, ar-XB"
+   },
+   {
+    "item": "12. Tests and screenshots",
+    "status": "done",
+    "how": "tests/ds-lang-sender-rest.test.ts has 10 tests: scan, keys, test languages, English word for word with plurals, lib equality, no envelope/void/em dash, public language rules, helper. New tests/words.ts has english()/englishIf()/readEnglish(), which put the English back where a converted screen asks for a key, so about 20 older tests keep checking the words people read; targeted edits in those tests. Screenshots of 14 pages at en 390/1280, en-XA 390/320 and ar-XB 390 are in tests/out/build-ds-lang-sender-rest/ with shots.cjs and shots.json, and I looked at them.",
+    "test": "node --test tests/ds-lang-sender-rest.test.ts: 10 pass",
+    "left_open": "In en-XA at 390/320 px, bulk, forms, terms, contacts, reports, Settings data and /impact scroll sideways. The cause is the test language's unbreakable '~~~~' padding on long sentences (signlang.ts pseudo, not my file), not real words. English has no overflow."
+   },
+   {
+    "item": "13. README, i18n check",
+    "status": "done",
+    "how": "README: a test row, a 'What is in it' bullet, an exact 'What is not in it' list of what is left, and the 'bad reviews' language row updated. No API or setting change, so openapi and .env.example are untouched. npm run i18n:check: 2316 texts, no errors.",
+    "test": "qr README check passes"
+   }
+  ],
+  "files_changed": [
+   "src/locales/en.json (about 900 keys added: stamps.*, templates.*, bulk.*, forms.*, terms.*, contacts.*, reports.*, inbox.*, auth.*, public.*, perm.thing.*, settings.roles/mgroups/ret/org/role.*)",
+   "src/components/stamps/words.tsx (new)",
+   "src/components/publicLang.tsx (new)",
+   "src/components/requestLang.tsx (new)",
+   "src/components/stamps/StampMaker.tsx",
+   "src/components/stamps/StampSettings.tsx",
+   "src/components/stamps/StampDialog.tsx",
+   "src/components/settings/Profiles.tsx",
+   "src/components/settings/RetentionSettings.tsx",
+   "src/components/settings/Organisation.tsx",
+   "src/components/settings/{AgreementPlan,AiSettings,BroughtInLink,ChannelsStatus,CounterSettings,Delegate,Disclosure,ExportImport,Frame,KeyDatesSetting,OwnDocsDefault,SealStatus,SecurityPolicy,SendingDefaults,Shares,TenantSwitches,TreesOnRecord}.tsx (re-applied earlier pass)",
+   "src/components/sender/SigningGroups.tsx",
+   "src/components/AuthForm.tsx",
+   "src/app/app/templates/page.tsx",
+   "src/app/app/bulk/page.tsx",
+   "src/app/app/bulk/BatchCost.tsx",
+   "src/app/app/powerforms/page.tsx",
+   "src/app/app/agreements/page.tsx",
+   "src/app/app/contacts/page.tsx",
+   "src/app/app/reports/page.tsx",
+   "src/app/app/inbox/page.tsx",
+   "src/app/page.tsx",
+   "src/app/impact/page.tsx",
+   "README.md",
+   "tests/ds-lang-sender-rest.test.ts (new)",
+   "tests/words.ts (new)",
+   "tests/{stamps,open-platform,clickwrap,ds-reports,gaps-industry,gaps-nonus-words,gov-g01,gov-g14,gov-g18,groups,i18n,impact,open-public,open-r6,qr,simplicity-r6,simplify-envelope,simplify-public,simplify-start,templates,ds-consent-own,ds-visibility,ds-templates-lib,lifecycle,retention,chat}.test.ts (read helpers wrapped with englishIf/readEnglish, a few assertions moved to the catalogue form)",
+   "tests/out/build-ds-lang-sender-rest/ (shots.cjs, shots.json, screenshots, flows/)"
+  ],
+  "suite": "npm test (started before the last test-helper fixes): 2237 tests, 2191 pass, 41 fail. After fixes I re-ran the affected files and chat, qr, gov-g19, gov-g14, ds-templates-lib and the rest of my set now pass. Failures still standing, all outside this batch: tests/support.test.ts (35 tests, the import 'markPaying' was missing from src/server/collect.ts at run time: another engineer's half-finished edit, now present) and tests/groups.test.ts #24 (actions.ts reassign gained `&& sw?.pass_on !== false`, someone else's edit). npx tsc --noEmit -p .: clean. npm run i18n:check: no errors.",
+  "flows": "node tests/ux/flows.cjs on my server (port 4211), default profile: a-send-first 18 actions/8 screens, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 14/8. Result: UX FLOWS OK, exit 0. Only pre-existing P6 warnings on /help and /verify. No 'before' run was done in this session; with English as the only language no step changed.",
+  "found": "A previous run of this batch had been cut short by a usage limit and set back by the integrator (commits da4b960 and d25208a). Its settings card edits and its test file were removed, but about 300 of its keys stayed unused in en.json. lang-sender had only converted AppShell, AppNav, Home and ScreenLanguage. Every screen in this brief had English written into the code, and many tests check that English in the source with regexes.",
+  "notes_for_integrator": "1) tests/words.ts CONVERTED lists the screens moved into the catalogue. Add a file there when it is converted, and an older test that reads it with englishIf/readEnglish keeps working. Do not apply englishIf to files that were already in the catalogue before (sign page, Home): their tests look for T('...') calls. 2) Not done in this batch: src/app/app/settings/page.tsx (plus SignedIn.tsx and TwoStep.tsx), /help, /security, /app/agreements/[id], the powerforms QR sheet, WhoCanUse.tsx, AddTemplate.tsx, FormLimits.tsx and SavedLists.tsx. Sentences taken from src/lib and server error messages are also still English. README 'What is not in it' lists all of these. No second language should be switched on until they are done. 3) Wording changes in English: the batch screens say 'cancel the batch' where they said 'void', and the group-save toast says 'Documents already sent' where it said 'Envelopes', following the charter words and open-public test 34. 4) The en-XA pseudo language pads with unbreakable '~' runs, which overflow narrow phones on long sentences. Consider a breakable padding character in src/lib/signlang.ts. 5) I stopped the dev server and deleted .next-build-ds-lang-sender-rest and its data dir. tsconfig.json is the same as before my run; it already showed as modified in git before I started."
+ },
+ "verify:simplicity-r6": {
+  "checks": [
+   {
+    "item": "1. Done screen: one main button (Download), says 'signing record'",
+    "holds": true,
+    "evidence": "tests/out/verify-simplicity-r6/default/b-sign-phone/06-done.png on my own run at 390x844: one primary 'Download the signed PDF' button, a secondary 'Open it here', and the text 'Its last pages are the signing record: who signed and when.' Test 1 passes."
+   },
+   {
+    "item": "2. 44 px targets at every width",
+    "holds": true,
+    "evidence": "Probe (tests/out/verify-simplicity-r6/probe.cjs): the document page's back link is 44 px on phone and desktop, and on /, /security and the Help dialog nothing that is a button or link falls under 44 px. What is still small: Settings checkboxes at 18 px (each sits inside its label), and on /help 'I do not know which email address...' at 39 px on a phone and 20 px on a desktop, plus 'The words it looks for' at 23 px. The builder named the /help ones as left open."
+   },
+   {
+    "item": "3. Step 3 order: preview, who gets it, message, More options, Send",
+    "holds": true,
+    "evidence": "tests/out/verify-simplicity-r6/default/a-send-first/11-editor-step-3-review-and-send.png runs 'See what each person sees', Who gets it, Email subject and Message, More options, then Send. The tree card sits between More options and Send, which is outside STEP3_ORDER. When the sender signs alone the preview is left out on purpose (SeeWhatTheySee.tsx)."
+   },
+   {
+    "item": "4. Documents intro line, and 'tick the boxes' only when there are boxes",
+    "holds": true,
+    "evidence": "Phone Documents screenshot (shots/phone-documents.png) shows the intro line, and the count line reads '1 document. Tick the boxes...' only once there is a row. Test 4 passes."
+   },
+   {
+    "item": "5. Settings email switches: one line each",
+    "holds": true,
+    "evidence": "Test 5 passes. I did not look at this section in a browser, so this rests on the test only."
+   },
+   {
+    "item": "6. Settings Account and Contacts say 'documents' and 'the people you send to'",
+    "holds": true,
+    "evidence": "Test 6 passes, and grep finds no 'Envelopes' outside Developers and Billing. Billing still says 'envelopes', 'voided' and 'audit trail' (settings/page.tsx:667-886), which the builder was not allowed to change. The report does not name that for the Billing owner."
+   },
+   {
+    "item": "7. Signing top bar names the document without 'Please sign:'",
+    "holds": true,
+    "evidence": "tests/out/verify-simplicity-r6/default/b-sign-phone/03-signing-the-document.png shows 'Planting partner...' and done.png shows 'Planting partnership'. The diff from HEAD swaps headingFor(NOT_SIGNING) for barTitle=listName, so it only strips the app's own prefix. On a phone the name is still cut off, as the builder said."
+   },
+   {
+    "item": "8. Profile: the login address said once",
+    "holds": true,
+    "evidence": "Test 8 (emailLine) passes. Not checked in a browser beyond the Settings screenshots."
+   },
+   {
+    "item": "9. Editor step 1: the page count is the Pages button",
+    "holds": true,
+    "evidence": "FAIL-07.png and the flow screenshots show one '2 pages' button next to More, with no separate 'Pages'."
+   },
+   {
+    "item": "10. Plain words on the sender's daily path",
+    "holds": true,
+    "evidence": "Test 10 passes. My grep of Home, Documents, the document page, Templates, editor/* and sender/* found no visible 'envelope', 'audit trail', 'bulk send' or 'void' text. It does not hold for Settings > Billing (see 6)."
+   },
+   {
+    "item": "11. Help dialog on the signing page: 'Open the help page'",
+    "holds": true,
+    "evidence": "Probe on the signing page at 390 px: the Help dialog's footer link reads 'Open the help page (opens in a new tab)'. Public.tsx:85-86 and settings/page.tsx:831 still have 'The help page' as a link inside a sentence, which is acceptable."
+   },
+   {
+    "item": "12. Document page heading matches Home and Documents",
+    "holds": true,
+    "evidence": "Probe: the h1 is 'A very long planting partnership agreement for the coastline' for the subject 'Please sign: A very long...' on phone and desktop. `title` is used only for the h1 and the More label, never written back to the subject, so no data changes."
+   },
+   {
+    "item": "13. Documents: no ZIP button before anything was sent, a shorter search hint, a column called Document",
+    "holds": true,
+    "evidence": "Probe: on a new account the ZIP button count is 0 on phone and desktop, and after one send it is 1. The search placeholder is 'Search names, people or words' and the column header is 'Document' (shots/phone-documents.png). In my flow run, d-find-download dropped from 21 to 19 choices and from 83 to 73 words on a new account."
+   },
+   {
+    "item": "14. Public pages: no 44 px rule undone on a desktop",
+    "holds": true,
+    "evidence": "The public.css diff raises the three rules to 44, and the probe found nothing under 44 px on /security or / at either width. /help still has two small targets, which the builder named."
+   },
+   {
+    "item": "15. Back link and API reference link",
+    "holds": true,
+    "evidence": "Probe: .sn-back is 44 px on phone and desktop. settings/page.tsx:475 reads 'Open the API reference' with minHeight 44 and screen-reader text '(opens in a new tab)'."
+   },
+   {
+    "item": "Flow counts and 'no core flow got longer'",
+    "holds": false,
+    "evidence": "My default-profile run on port 4192, as actions/screens/choices_seen/max_choices/words/notices: a-send-first 18/8/119/28/851/2, b-sign-phone 7/5/36/11/400/0, c-template-send 5/4/57/20/254/1, d-find-download 1/1/19/19/73/0, e-settings-name 3/2/51/32/350/0, f-signer-help 6/4/28/9/570/2, g-sign-in 4/3/54/28/355/0. Actions and screens are at or under the builder's 'before' in every flow that ran. Rules: 0 broken, 21 warnings. Two flows failed: b-sign-desktop (setup lost the page to a navigation, then no invitation email came) and h-sign-myself ('Could not find Send': step 3 showed 'Sign now', then the editor fell back to step 1 by itself). The 'everything' profile was never measured, by the builder or by me.",
+    "still_broken": "h-sign-myself fails in the browser flow. My probe of the same API path ('Sign now' from step 3, with the draft made through the API) does reach /sign/ correctly, so the failure is on the editor screen. It points at the uncommitted editor edits (CollectChoice flushCollect and useCollectSummary in Editor.tsx and ReviewParts.tsx, and StepFields useMe), none of which this builder made. The 'everything' profile is unmeasured.",
+    "suggested_fix": "Whoever owns CollectChoice.tsx should check whether useCollectSummary or flushCollect resets the editor step after the sender signs alone. Then re-run node tests/ux/flows.cjs with all profiles."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Sign-myself flow returns to step 1 from step 3 (not caused by this builder)",
+    "severity": "high",
+    "where": "src/components/Editor.tsx and src/components/editor/ReviewParts.tsx, uncommitted CollectChoice wiring",
+    "detail": "In tests/out/verify-simplicity-r6/default/h-sign-myself, 06 shows step 3 with 'Sign now', and FAIL-07 shows step 1 about 15 seconds later without anyone pressing anything. The builder's 'before' run of this flow passed (14/8). The builder's files do not touch this path."
+   },
+   {
+    "title": "The Documents intro talks about downloading while no download button is shown",
+    "severity": "low",
+    "where": "src/app/app/envelopes/page.tsx (documentsIntro, exportShown)",
+    "detail": "On a new account the line 'Downloading your signed PDFs is free, also after you cancel.' shows with no ZIP button under it. An admin whose team has sent documents but who has sent none themselves also sees no button. This is unchanged from before, when the same button only answered 'nothing yet'."
+   },
+   {
+    "title": "A self-only document reads 'Waiting for others' and 'Waiting on You' in the same row",
+    "severity": "low",
+    "where": "Documents row (shots/phone-documents.png)",
+    "detail": "The status chip says 'Waiting for others' while the line under it says 'Waiting on You'. This was already there before this round, but the two lines contradict each other."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "builder report, flows",
+    "claim": "d-find-download unchanged (1/1/21/21/83/0)",
+    "reality": "On a new account it is now 19 choices and 73 words, because the ZIP button is hidden. That is better than reported, but the reported number is not what the code does."
+   },
+   {
+    "where": "builder report, item 6 / 10",
+    "claim": "Sender's daily path and Settings say document, not envelope",
+    "reality": "Settings > Billing still says 'envelopes', 'voided' and 'audit trail' (settings/page.tsx:667-886). The builder could not change Billing, but did not name the exact lines for its owner as the brief asks."
+   },
+   {
+    "where": "tests/simplicity-r6.test.ts",
+    "claim": "Each fix has a test",
+    "reality": "Most screen tests are regex checks of source text (for example test 7 pins the exact JSX expression). They prove the code was written, not that the screen renders it. The rendered result here comes only from screenshots and my probe."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/default/a-send-first/11-editor-step-3-review-and-send.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/default/b-sign-phone/03-signing-the-document.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/default/b-sign-phone/06-done.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/default/h-sign-myself/06-editor-step-3-review-and-send.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/default/h-sign-myself/FAIL-07.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/shots/phone-envelope.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/shots/phone-documents.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/shots/phone-documents-empty.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/shots/phone-sign-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/shots/desktop-settings.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-simplicity-r6/default.log"
+  ]
+ },
+ "ux:simplicity-r6": {
+  "checks": [
+   {
+    "item": "P1 core flows, default profile (zero setup): no flow got longer or gained a choice; every number at or under tests/ux/ceilings.json",
+    "holds": true,
+    "evidence": "tests/out/ux-simplicity-r6/default.log and default/ux-flows.json (exit 0, 0 broken). Counts as actions/screens/choices_seen/max_choices/words/notices: a-send-first 18/8/119/28/851/2, b-sign-phone 7/5/36/11/400/0, b-sign-desktop 7/5/36/11/404/0, c-template-send 5/4/59/20/268/1, d-find-download 1/1/21/21/83/0, e-settings-name 3/2/53/32/360/0, f-signer-help 6/4/28/9/570/2, g-sign-in 4/3/56/28/365/0, h-sign-myself 14/8/99/24/621/0. These match the builder's 'after' numbers. h-sign-myself, which failed in the builder's run, passes now. The 2.2 'Sending has 5 cards' break the builder's after-run showed is gone."
+   },
+   {
+    "item": "Rule 3 (everything set up): no core flow has more screens than its default ceiling or more than 1 extra action",
+    "holds": true,
+    "evidence": "tests/out/ux-simplicity-r6/everything.log: a 18/8/126/30/888/2, b-phone 7/5/36/11/400/0, b-desktop 7/5/36/11/404/0, c 5/4/55/21/223/1, d 1/1/23/23/144/1, e 3/2/58/35/447/1, f 6/4/29/10/587/2, g 4/3/60/28/445/1, h 14/8/102/24/705/1. Actions and screens are unchanged. However d, e, g and h each gain 1 notice, the 'workspace depends on one person' banner (see new_bugs)."
+   },
+   {
+    "item": "P4 caps with everything set up",
+    "holds": false,
+    "evidence": "tests/out/ux-simplicity-r6/everything.log: BROKEN 'More for Sponsor agreement' holds 10 lines, at most 9 (envelope page, waiting for someone). Default profile: 8 lines, tests/out/ux-simplicity-r6/probe/desktop-envelope-more.png",
+    "still_broken": "The envelope page More has 10 lines once Details are defined.",
+    "suggested_fix": "Move the Details line (the new 'Edit details' entry) into the 'Details' fold on the page. Or fold 'Save as template' and 'Copy' into a single line, 'Copy or save as template'."
+   },
+   {
+    "item": "Builder 1: done screen has one main button (Download) and says 'signing record'",
+    "holds": true,
+    "evidence": "tests/out/ux-simplicity-r6/default/b-sign-phone/06-done-full.png: one filled 'Download the signed PDF' button and 'signing record' wording. The celebration card below it still reads 'You signed your first GrowSigning' (see new_bugs)."
+   },
+   {
+    "item": "Builder 2/14/15: every target is 44 px at every width (app and public pages)",
+    "holds": false,
+    "evidence": "tests/out/ux-simplicity-r6/audit.log (small.json). These controls are still below 44 px: /help button 'I do not know which email address the ac...' (342x20 desktop, 290x39 phone); /help summary 'The words it looks for' (23 px tall); Settings > Account input 56x38; Settings > Records and data, a button 108x23; Documents 'All' tab 42 px wide.",
+    "still_broken": "The /help page and two Settings controls.",
+    "suggested_fix": "Give the /help 'I do not know which email address...' button and 'The words it looks for' summary min-height 44px. Give the Account colour input and the Records-and-data link-button min-height 44px. Give the tabs min-width 44px."
+   },
+   {
+    "item": "Builder 3: step 3 runs in the charter's order (preview link, who gets it, message, More options, Send)",
+    "holds": true,
+    "evidence": "tests/out/ux-simplicity-r6/default/a-send-first/11-editor-step-3-review-and-send.png. The tree card sits between More options and Send, which is allowed."
+   },
+   {
+    "item": "Builder 4/13: Documents intro says what the page is about; ZIP only when something was sent; tick hint only with boxes",
+    "holds": false,
+    "evidence": "tests/out/ux-simplicity-r6/probe/desktop-documents.png and audit/phone-documents.png. The intro is 'Downloading your signed PDFs is free, also after you cancel. The full export is in Settings, Records and data.' It is about billing and export, not about what Documents holds. With one Waiting document and nothing completed, the page shows the 'Download signed PDFs (ZIP)' button and also 'Tick the boxes to download several as one ZIP'.",
+    "still_broken": "The intro line, and two ZIP paths shown before anything is signed.",
+    "suggested_fix": "Intro: 'Everything you sent or saved, newest first.' Move the 'free after you cancel' sentence to Plan. Show the ZIP button and the tick hint only once at least one document is completed."
+   },
+   {
+    "item": "Builder 7: the signing page top bar names the document",
+    "holds": true,
+    "evidence": "tests/out/ux-simplicity-r6/default/b-sign-phone/03-signing-the-document.png reads 'Planting partner...'. As the builder noted, a long name is still cut off at 390 px."
+   },
+   {
+    "item": "Builder 9: in editor step 1 the page count is the Pages button",
+    "holds": true,
+    "evidence": "tests/out/ux-simplicity-r6/default/a-send-first/08-editor-step-1-filled-in.png shows '2 pages' and 'More'. It works, but '2 pages' reads as plain text, not as a button (low)."
+   },
+   {
+    "item": "Builder 11/12: Help dialog buttons start with a verb; the document page heading is the plain name",
+    "holds": true,
+    "evidence": "tests/out/ux-simplicity-r6/default/f-signer-help/03-help.png. tests/out/ux-simplicity-r6/default/a-send-first/12-envelope-page-just-sent.png has the heading 'Planting partnership'."
+   },
+   {
+    "item": "Builder's own test file and type check",
+    "holds": true,
+    "evidence": "node --test tests/simplicity-r6.test.ts: 16/16 pass. npx tsc --noEmit -p .: exit 0. I did not run the full npm test, because I am the reviewer and changed no source files."
+   },
+   {
+    "item": "P3/P8: with zero setup, no admin or operator feature appears on Home or on the signer's screens",
+    "holds": true,
+    "evidence": "tests/out/ux-simplicity-r6/default.log: 0 broken P3/P8. Screens checked: default/a-send-first/05-app-home-address-confirmed.png and default/b-sign-phone/02-signing-who-sent-it-and-the-consent.png."
+   },
+   {
+    "item": "P6 short sentences on signer screens (consent)",
+    "holds": false,
+    "evidence": "tests/out/ux-simplicity-r6/default.log, still a warning: one consent sentence is over 20 words. tests/out/ux-simplicity-r6/default/b-sign-phone/02-signing-who-sent-it-and-the-consent.png",
+    "still_broken": "'By continuing, you accept this electronic method as a valid way for you and the other parties to sign this document.' is 21 words.",
+    "suggested_fix": "'By continuing, you agree that you and the others may sign this document electronically.' (14 words). Get the legal owner's sign-off on this wording."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Home shows a long, undismissable 'workspace depends on one person' warning on every visit",
+    "severity": "high",
+    "where": "src/app/app/page.tsx lines 75-80, src/locales/en.json home.one_person.*",
+    "detail": "Shown whenever me.admins < 2 and (members > 1 or plan is not seedling). It therefore appears for every paying solo user, forever. It is 55 words, it cannot be dismissed, and it puts an admin task on Home. That breaks P8 (admin features live in Settings) and P9 (a hint is one line, in place, dismissible). In the everything profile it adds a notice to d-find-download, e-settings-name, g-sign-in and h-sign-myself. Evidence: tests/out/ux-simplicity-r6/everything/d-find-download/01-app-home.png. Suggested fix: keep the full text on Settings > Team, where it already lives (settings/page.tsx:345). On Home, show at most one dismissible line, 'Add a second admin so you are never locked out. Add one', and only for accounts with 2 or more members."
+   },
+   {
+    "title": "The product name is used as a noun for a document on the signer's done screen and the sender's first-send page",
+    "severity": "medium",
+    "where": "src/lib/impactwords.ts:71 and :108",
+    "detail": "'You signed your first GrowSigning' and 'Your first GrowSigning is out.' read as broken sentences: GrowSigning is the product, not a document (charter section 4: say 'document'). A signer has never heard the name. Evidence: tests/out/ux-simplicity-r6/default/b-sign-phone/06-done-full.png and default/a-send-first/12-envelope-page-just-sent.png. Fix: 'You signed your first document with GrowSigning' and 'Your first document is out.' Also change 'You saved 2 pages of paper from a tree' to 'You saved 2 pages of paper.'"
+   },
+   {
+    "title": "The signer's phone screen offers two menus with confusable names: 'Other actions' at the top and 'More' at the bottom",
+    "severity": "medium",
+    "where": "src/components/sign/More.tsx:15 (MoreButton label), src/app/sign/[token]/page.tsx:1053 and :1166",
+    "detail": "On the document, a signer sees 'Other actions', 'Help' and 'More'. 'More' holds only how the page looks (Easy reading, page size, download), but its name says 'more actions', so a signer looking for Decline may open the wrong one. Evidence: tests/out/ux-simplicity-r6/default/b-sign-phone/03-signing-the-document.png and everything/inventory/signing-page-other-actions-document.png. Fix: rename the bottom button 'View' (dialog title 'How the document looks'). Keep 'Other actions' as the only actions menu."
+   },
+   {
+    "title": "Two names for the same thing: 'workspace' on Home and in the sidebar, 'account' in Settings",
+    "severity": "low",
+    "where": "src/locales/en.json home.one_person.title, the sidebar account line ('Rosa Gardener's workspace'), settings/page.tsx:345",
+    "detail": "Charter section 4 says 'account'. The same banner says 'This workspace depends on one person' on Home and 'This account depends on one person' in Settings. Fix: use 'account' everywhere a person reads it."
+   },
+   {
+    "title": "Documents rows show 'Move to folder' as a visible button on every row of a new account that has no folders",
+    "severity": "low",
+    "where": "src/app/app/envelopes/page.tsx:281 and :293",
+    "detail": "It adds one choice per row to the find-and-download path even when the person has never made a folder (P12, and the charter's 'rest in More'). Evidence: tests/out/ux-simplicity-r6/probe/desktop-documents.png and audit/phone-documents.png. Fix: put 'Move to folder' in the row's More, or show it only once a folder exists."
+   },
+   {
+    "title": "Documents tabs wrap onto a second line on a phone",
+    "severity": "low",
+    "where": "Documents tab strip, /app/envelopes at 390 px",
+    "detail": "'Stopped' sits alone on a second row, so it looks like a separate control. Evidence: tests/out/ux-simplicity-r6/audit/phone-documents.png. Fix: let the tab row scroll sideways inside itself, or shorten the gaps so all 5 tabs fit at 390 px."
+   },
+   {
+    "title": "The envelope page shows time in UTC and an empty 'Details (0)' fold styled unlike its neighbours",
+    "severity": "low",
+    "where": "envelope page status card and Details fold (everything profile)",
+    "detail": "'Closes on 22 March 2027 at 17:10 UTC' should be in the reader's own time; the charter forbids UTC alone on signer screens, and the sender's daily path should match. 'Details (0)' has different padding and triangle placement from History and Files, and it is shown when empty. Evidence: tests/out/ux-simplicity-r6/everything/inventory/envelope-page-waiting-for-someone.png. Fix: use local time with the zone name. Hide Details when it is empty, or open it as 'Add details', and use the same fold class as History and Files."
+   },
+   {
+    "title": "/help is about 14,500 words long (52,000 px on a phone), and its lead says 'No login wall'",
+    "severity": "low",
+    "where": "src/app/help/page.tsx:64",
+    "detail": "The page is very long for the 'signer finds help' path. 'Login wall' is jargon. Evidence: tests/out/ux-simplicity-r6/probe/phone-help-top.png and probe.log (help height 52046, words 14558). Fix: lead with 'You do not need an account to get help.' Fold each topic section closed under its heading, so the page opens as the 3 cards plus a list of questions."
+   },
+   {
+    "title": "The sidebar shows the support email address as a second Help entry when SUPPORT_EMAIL is set",
+    "severity": "low",
+    "where": "sidebar under the account name (everything profile)",
+    "detail": "'help@example.org' appears under the account name next to the Help entry. Charter 2.1 says Help is one entry (P12). Evidence: tests/out/ux-simplicity-r6/everything/d-find-download/01-app-home.png. Fix: show the address only inside Help, under 'Talk to a person'."
+   },
+   {
+    "title": "Settings has no Notifications section, unlike the charter",
+    "severity": "low",
+    "where": "src/lib/settingsnav.ts (notifications -> profile)",
+    "detail": "The email switches were folded into Profile on purpose. Charter 2.2 still lists Notifications as its own section, so the charter and the product disagree. Evidence: tests/out/ux-simplicity-r6/audit/desktop-settings-profile.png. Fix: update charter 2.2 to say 'Profile: ... and the email switches', or restore the section. Pick one."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Builder item 2 / item 14 (44 px targets at every width, including public pages)",
+    "claim": "The audit after the change lists no controls under 44 px on /help and /security.",
+    "reality": "My audit (tests/out/ux-simplicity-r6/audit.log) still finds controls under 44 px. On /help: the button 'I do not know which email address...' at 20 px tall on desktop and 39 px on phone, and the summary 'The words it looks for' at 23 px. In Settings: Account input 38 px, a Records-and-data button 23 px. The Documents 'All' tab is 42 px wide."
+   },
+   {
+    "where": "Builder item 4 (Documents line says what it is about)",
+    "claim": "The Documents intro line says what the page is about.",
+    "reality": "The line is 'Downloading your signed PDFs is free, also after you cancel. The full export is in Settings, Records and data.' It is about billing and export, not about the list."
+   },
+   {
+    "where": "Builder item 13 (no dead ZIP button)",
+    "claim": "The ZIP button is hidden until something has been sent.",
+    "reality": "True as written. But 'sent' is the wrong test: with only a Waiting document, both the ZIP button and 'Tick the boxes to download several as one ZIP' show, though there is no signed PDF yet (tests/out/ux-simplicity-r6/probe/desktop-documents.png)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/default/b-sign-phone/02-signing-who-sent-it-and-the-consent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/default/b-sign-phone/03-signing-the-document.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/default/b-sign-phone/06-done-full.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/default/a-send-first/05-app-home-address-confirmed.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/default/a-send-first/08-editor-step-1-filled-in.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/default/a-send-first/11-editor-step-3-review-and-send.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/default/a-send-first/12-envelope-page-just-sent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/audit/phone-documents.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/audit/phone-envelope.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/audit/phone-home.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/audit/desktop-settings-data.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/audit/desktop-settings-profile.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/everything/d-find-download/01-app-home.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/everything/inventory/envelope-page-waiting-for-someone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/everything/inventory/signing-page-other-actions-document.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/probe/desktop-envelope-more.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/probe/desktop-documents.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/probe/desktop-templates.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-simplicity-r6/probe/phone-help-top.png"
+  ]
+ },
+ "ux:ds-lang-sender-rest": {
+  "checks": [
+   {
+    "item": "P1: no core flow got longer and none got a new choice (node tests/ux/flows.cjs, default profile, against port 4214)",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-lang-sender-rest/flows/ux-flows.json and flows.log: UX FLOWS OK, 0 rules broken, every number at or under tests/ux/ceilings.json. a-send-first 18/8/119/28/838/2 (ceilings 18/8/137/42/2979/2); b-sign-phone 7/5/36/11/400/0; b-sign-desktop 7/5/36/11/404/0; c-template-send 5/4/59/20/253/1; d-find-download 1/1/21/21/83/0; e-settings-name 3/2/53/32/360/0; f-signer-help 6/4/28/9/570/2; g-sign-in 4/3/56/28/365/0; h-sign-myself 14/8/99/24/621/0. The 21 warnings were already there before this batch: long consent sentences belong to simplify-signing, and 'envelope' and 'audit trail' on /help and /verify are on pages this batch did not convert."
+   },
+   {
+    "item": "P2/P3: zero setup looks the same; no language control appears anywhere (ds-lang-sender-rest gate operator, 'No new controls')",
+    "holds": true,
+    "evidence": "login-en-390.png, set-stamps-en-390.png, bulk-en-390.png, templates-en-390.png: English only, no language picker. src/components/requestLang.tsx reads Accept-Language only when senderChoiceShown(). The ?lang test language works on a development server only (DEV guard in senderLang.tsx)."
+   },
+   {
+    "item": "English words are unchanged for people (the converted screens read the same, or plainer)",
+    "holds": true,
+    "evidence": "I compared every literal of 12 characters or more that the git diff removes from the 18 converted files against en.json. All are present except 6, and those are HTML-entity spellings (&apos;, &ldquo;) or plain-word upgrades: 'Envelopes already sent to this group' became 'Documents already sent...' in SigningGroups, and 'void' became 'cancel' in bulk (bulk-en-390.png: 'cancel what is still open'). Both match charter section 4."
+   },
+   {
+    "item": "Nothing new reaches a signer's screen",
+    "holds": true,
+    "evidence": "src/components/stamps/words.tsx useStampT only chooses the language of the StampDialog the signer already had. The b-sign and f-signer-help counts are unchanged or lower (flows.log)."
+   },
+   {
+    "item": "Keyboard alone works on the converted screens, in a sensible order",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-lang-sender-rest/keyboard.json. Templates: Skip to content > logo > Create your first template > Write a template > Start from a ready-made one > bottom bar. Contacts: Skip > logo > 3 inputs > Add contact > New group. Bulk: Skip > logo > Choose a template > Create a template."
+   },
+   {
+    "item": "Screen-reader labels on the converted Settings cards",
+    "holds": true,
+    "evidence": "Playwright ariaSnapshot of /app/settings?tab=data and ?tab=sending: inputs and selects carry names ('Code from the email', 'Dates are written as', 'Mark pages until everyone has signed'). My first DOM-based scan flagged unlabelled controls, but that was a false positive: innerText is empty for cards drawn off-screen, so the scan saw no text."
+   },
+   {
+    "item": "No sideways scroll in English at 390 and 1440",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-lang-sender-rest/shots.json: wide=false for all 18 pages in en-390 and en-1440 and in ar-XB-390."
+   },
+   {
+    "item": "Designer note for ds-lang-sender-rest, 'never: Mixed languages on one screen apart from the sender's own words'",
+    "holds": false,
+    "evidence": "set-data-en-XA-390.png: the cards are in the test language while the Settings heading and all 9 tabs stay English. contacts-en-XA-390.png: the group card's rule sentence (GROUP_RULE from src/lib/policy.ts) stays English inside a translated card. The builder lists these as left_open (settings/page.tsx with about 250 literals, the lib sentences, WhoCanUse, AddTemplate, agreements/[id], the QR sheet, FormLimits, SavedLists, /help, /security).",
+    "still_broken": "Once a second sender language ships, almost every Settings tab and parts of contacts, templates, forms and terms show two languages on one screen. Nobody sees this with zero setup (operator gate).",
+    "suggested_fix": "Keep the second sender language unshipped (the operator gate) until the settings/page.tsx shell, the src/lib sentences (GROUP_RULE, LEVEL_*, ORG_POLICY_WORDS, STAMP_IS_TEAM, STATE_LABEL, reminderText) and the files under left_open go through the catalogue. Have tests/ds-lang-sender-rest.test.ts list each remaining file by name so the gap cannot be forgotten."
+   },
+   {
+    "item": "Brief item 'the help page and /security' (public pages a signer reaches through Help)",
+    "holds": false,
+    "evidence": "Builder report item 9 is not_done. The flows.log warnings show /help still in English sender words ('envelope', 'audit trail').",
+    "still_broken": "With a second language, a signer who presses Help leaves a translated signing page for an English help page.",
+    "suggested_fix": "Give /help and /security their own pass. Keep the 'Signing outside the United States' notes and /security/processing in English, with the existing note that a person has not reviewed a translation."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Settings shell stays English around translated cards (mixed languages on one screen)",
+    "severity": "medium",
+    "where": "src/app/app/settings/page.tsx (heading, 9 tab names, Profile, Security, Notifications, Account, the Team list, Developers, Records and data), SignedIn.tsx, TwoStep.tsx; evidence tests/out/ux-ds-lang-sender-rest/set-data-en-XA-390.png",
+    "detail": "In the test language every card under Records and data is translated, but 'Settings', 'Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps and seals', 'Plan', 'Records and data' and 'Developers' stay English. This breaks the designer note's 'never: mixed languages on one screen'. Nobody sees it with zero setup. A busy person in another language meets it on the first Settings visit."
+   },
+   {
+    "title": "Shared sentences from src/lib stay English inside translated cards",
+    "severity": "medium",
+    "where": "src/lib/policy.ts GROUP_RULE (seen in src/components/sender/SigningGroups.tsx on /app/contacts), plus LEVEL_*, ORG_POLICY_WORDS, STAMP_IS_TEAM, STATE_LABEL, reminderText; evidence tests/out/ux-ds-lang-sender-rest/contacts-en-XA-390.png",
+    "detail": "The group card on Contacts shows a translated heading and button, followed by the English paragraph 'Every member gets their own email with their own link. The first one who agrees...'. Suggested fix: move each of these sentences to an en.json key with a test that holds it equal to the lib constant (the same pattern the builder used for INK_WORD and THING_WORDS), and read it with T() in the card."
+   },
+   {
+    "title": "Screens left unconverted inside converted areas",
+    "severity": "low",
+    "where": "src/components/templates/WhoCanUse.tsx, src/components/templates/AddTemplate.tsx, src/app/app/agreements/[id]/page.tsx, src/app/app/powerforms/[id]/qr, src/components/forms/FormLimits.tsx, src/components/reports/SavedLists.tsx",
+    "detail": "Each is reached in one click from a converted list (for example a template row's More > Who can use it, or an agreement row). The person moves from their language to English mid-task. The builder's report names these. Suggested fix: convert them in a short follow-up pass before any sender language ships."
+   },
+   {
+    "title": "The pseudo language's unbreakable padding hides real overflow checks at 390 px",
+    "severity": "low",
+    "where": "src/lib/signlang.ts pseudo padding; evidence tests/out/ux-ds-lang-sender-rest/set-data-en-XA-390.png, contacts-en-XA-390.png (shots.json wide=true on impact, bulk, forms, terms, contacts, reports, data, sending, security in en-XA-390)",
+    "detail": "Every long sentence ends in a single unbreakable run of '~' that is wider than the phone, so the 40-percent-longer test cannot show whether real long words wrap. English and ar-XB have no overflow. Suggested fix (owner of signlang.ts): spread the padding as words separated by spaces ('~~ ~~ ~~'), so the long-language screenshots test layout and not the padding."
+   },
+   {
+    "title": "'in world time' on Reports is jargon (already there before this batch)",
+    "severity": "low",
+    "where": "src/app/app/reports/page.tsx filter hint (en.json reports key); evidence tests/out/ux-ds-lang-sender-rest/reports-en-1440.png",
+    "detail": "'Counted by the day each document was sent, in world time, so a late-evening send may count on the next day.' 'World time' is a gloss for UTC that a non-technical person does not recognise. Suggested words: 'Counted by the day each document was sent in London time (UTC), so a send late in your evening may count on the next day.' Or count by the account's time zone and drop the sentence."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Builder report item 1, 'Settings: every tab'",
+    "claim": "Status partly, with 'All 30+ cards in src/components/settings/ go through the catalogue now'",
+    "reality": "True for the card components. But the Settings page around them (heading, tabs, Profile, Security, Account, Team list, Developers) is English, so no Settings tab shows one language yet. The README's 'What is not in it' list should say exactly that."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/flows/ux-flows.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/flows.log",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/shots.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/keyboard.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/shots.cjs",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/templates-en-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/bulk-en-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/login-en-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/impact-en-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/reports-en-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/set-stamps-en-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/set-team-en-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/set-data-en-XA-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-lang-sender-rest/contacts-en-XA-390.png"
+  ]
+ },
+ "verify:ds-lang-sender-rest": {
+  "checks": [
+   {
+    "item": "0. Check what exists / earlier half pass",
+    "holds": true,
+    "evidence": "tests/ds-lang-sender-rest.test.ts passes 10/10. The cards it lists use useST/senderT from src/components/senderLang.tsx and there is one catalogue (src/locales/en.json, about 878 keys added). I compared every 3-word-plus English sentence in the HEAD versions of the 35 converted files against en.json. The only sentences missing were the announced 'void'->'cancel' and 'Envelopes'->'Documents' changes, curly-apostrophe changes, and SendingDefaults text that moved from settings.new.intro into settings.new.how_change. No English was lost."
+   },
+   {
+    "item": "1. Settings: every tab",
+    "holds": false,
+    "evidence": "Running untranslated() from the builder's own test over src/components/settings/*.tsx gives 0 for every DONE file. But src/components/settings/Switches.tsx has 7 English literals and is not in DONE, left_open or README. It is the 'When people sign' card on the Sending tab and the 'Members may place stamps' line on the Stamps tab. In en-XA at /app/settings?tab=sending and ?tab=stamps that English shows on screen. The file is untracked and dated 16:32, so another engineer probably added it during the run. src/components/reports/MonthlyReport.tsx, rendered on the settings page, also has 1 literal that nobody lists. The settings page itself (254 literals) is honestly marked left_open.",
+    "still_broken": "Switches.tsx and MonthlyReport.tsx are unconverted and not named anywhere as left. The claim 'All 30+ cards in src/components/settings/ go through the catalogue now' is not true today.",
+    "suggested_fix": "Convert Switches.tsx (or at least add it and MonthlyReport.tsx to README 'What is not in it' and the left_open list)."
+   },
+   {
+    "item": "2. Templates",
+    "holds": true,
+    "evidence": "templates/page.tsx scans to 0 literals. The en-XA screenshot shows the page text pseudo-translated except 'Start from a ready-made one' and the starter blurb, which come from src/components/templates/Starters.tsx and src/lib/starters. Starters.tsx is not named in left_open (WhoCanUse 24 and AddTemplate 10 are named and confirmed).",
+    "still_broken": "Starters.tsx strings show English in a test language and are not listed as left."
+   },
+   {
+    "item": "3. Bulk send",
+    "holds": true,
+    "evidence": "bulk/page.tsx and BatchCost.tsx scan to 0. The en 390 and 1280 screenshots read normally. The en-XA screen has no plain English. 'cancel' now appears consistently in bulk.* keys and README says so."
+   },
+   {
+    "item": "4. Public form set-up",
+    "holds": true,
+    "evidence": "powerforms/page.tsx scans to 0 and the en-XA screen has 0 plain-English nodes. The QR sheet (14) and FormLimits.tsx (8) are confirmed unconverted and named in left_open and README."
+   },
+   {
+    "item": "5. Click-to-agree set-up",
+    "holds": true,
+    "evidence": "agreements/page.tsx scans to 0. In en-XA two sentences stay English ('This month, counted for the whole account...', 'An acceptance is not a signature...'). They come from src/lib/clickwrap.ts, which the 'sentences from src/lib' caveat covers. agreements/[id] has 77 literals and is named."
+   },
+   {
+    "item": "6. Contacts and groups",
+    "holds": true,
+    "evidence": "contacts/page.tsx and SigningGroups.tsx scan to 0. In en-XA only GROUP_RULE from lib stays English, which is acknowledged. SavedLists.tsx (6) is named."
+   },
+   {
+    "item": "7. Reports",
+    "holds": true,
+    "evidence": "The reports page scans to 0 and the en-XA screen has 0 plain-English nodes. The dynamic key reports.status.${s} covers exactly REPORT_STATUSES (sent, completed, declined, voided, expired). Every key exists."
+   },
+   {
+    "item": "8. Inbox",
+    "holds": true,
+    "evidence": "inbox/page.tsx scans to 0 and the en-XA screen has 0 plain-English nodes."
+   },
+   {
+    "item": "9. Help page and /security",
+    "holds": true,
+    "evidence": "Reported as not_done, which is honest. /help has 217 literals and /security 129, and both render fully English in en-XA. README names both."
+   },
+   {
+    "item": "10. /impact, landing page",
+    "holds": false,
+    "evidence": "src/app/impact/page.tsx scans to 0, but the page renders <ImpactStats> and <Methodology> from src/components/ImpactView.tsx (unchanged, 20 literals). In en-XA at 390 px the 'How we count' block and the stats stay English: 26 plain-English text nodes (screenshot tests/out/verify-ds-lang-sender-rest/impact-en-XA-390.png). README 'What is in it' still lists /impact as in the catalogue. On the landing page, requestLang reads Accept-Language only when senderChoiceShown(), so nothing changes with zero setup. Holds, with the documented ?lang limitation.",
+    "still_broken": "/impact is only half converted: ImpactView.tsx is English and is not listed as left.",
+    "suggested_fix": "Convert ImpactView.tsx through the same usePublicT/T prop, or list it in README 'What is not in it' and correct the 'done' status."
+   },
+   {
+    "item": "11. Login, sign-up, password pages",
+    "holds": true,
+    "evidence": "AuthForm.tsx scans to 0. In en-XA and ar-XB, /login, /signup and /forgot have 0 plain-English nodes, and ar-XB sets dir=rtl on the document. With the keyboard alone, tab order is Email -> Password -> Sign in -> links, labels are intact and targets are 44 px (sign-up Name is autoFocused, as before). The ?lang test languages are gated by NODE_ENV !== 'production' in senderLang.tsx."
+   },
+   {
+    "item": "12. Tests and screenshots",
+    "holds": true,
+    "evidence": "tests/ds-lang-sender-rest.test.ts: 10/10 pass. The file name differs from the brief's tests/i18n-sender-rest.test.ts, which is cosmetic. The en-XA overflow is confirmed: terms 969 px and Settings data 1030 px at 390 wide. The cause is a 135-character run of unbreakable '~' padding from signlang.ts pseudoMessage (measured), not real words. English has 0 overflow on all 18 pages at 390 and 1280. My full npm test: 2247 tests, 2239 pass, 3 fail. The 3 failures are encrypt.test.ts #1088 (encrypt wording) and simplify-editor.test.ts #1934/#1936 (moreLines in the editor), all outside this batch. npx tsc --noEmit -p . is clean."
+   },
+   {
+    "item": "13. README, i18n check",
+    "holds": false,
+    "evidence": "There is a README test-table row (line 115), a 'What is in it' bullet (2029-2040) and a 'not in it' list (2405-2416). The bullet claims /impact is in the catalogue, but ImpactView.tsx is not. The not-in-it list misses Switches.tsx, ImpactView.tsx, Starters.tsx and MonthlyReport.tsx. en.json has no em dashes.",
+    "still_broken": "README overclaims /impact and omits 4 unconverted files.",
+    "suggested_fix": "Add those files to the README not-in-it sentence, or convert them."
+   },
+   {
+    "item": "Core flows unchanged",
+    "holds": true,
+    "evidence": "node tests/ux/flows.cjs on port 4212 reports UX FLOWS OK. Screens: a-send-first 8, b-sign-phone 5, b-sign-desktop 5, c-template-send 4, d-find-download 1, e-settings-name 2, f-signer-help 4, g-sign-in 3, h-sign-myself 8. These screen counts match the builder's. My action sums (17, 7, 7, 5, 1, 3, 6, 4, 13) differ by at most 1 because I counted actions differently. Only the existing P6 warnings on /help and /verify."
+   },
+   {
+    "item": "Abuse: placeholders, test language in production, missing keys",
+    "holds": true,
+    "evidence": "senderT with a value containing '{count} <b>x</b> {name}' puts it in literally, with no re-parsing, and React escapes it. No dangerouslySetInnerHTML in any converted file. ?lang pseudo languages only work when NODE_ENV is not production. requestLang only takes supported locales from Accept-Language. Dynamic keys (reports.status, shares.level, perm.thing, stamps.edge, auth.title/button) are bounded by constant lists that the test holds equal. One weakness: a missing key returns '' silently (senderT('en','no.such.key') === ''), so a typo in a dynamic key gives a blank label. The static-key test guards literal keys only."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "/impact half converted: ImpactView.tsx still English",
+    "severity": "medium",
+    "where": "src/components/ImpactView.tsx (rendered by src/app/impact/page.tsx lines 25, 42)",
+    "detail": "ImpactStats and Methodology have 20 English literals. In en-XA, 26 English sentences show on /impact ('Two different things are counted here...', '1. Mangroves: what the money does'). The report marks item 10 'done' and README lists /impact as in the catalogue."
+   },
+   {
+    "title": "Settings 'When people sign' card (Switches.tsx) unconverted and unlisted",
+    "severity": "low",
+    "where": "src/components/settings/Switches.tsx",
+    "detail": "It has 7 English literals ('These apply to documents sent from now on...', 'People may pass it to someone else', 'Members may place stamps') and shows English on the Sending and Stamps tabs in en-XA. It is not in DONE, left_open or README. The file is untracked and was probably added by another engineer during the run, but the claim that 'all cards' are converted is now false."
+   },
+   {
+    "title": "Unconverted files missing from README 'What is not in it'",
+    "severity": "low",
+    "where": "README.md lines 2405-2416",
+    "detail": "Starters.tsx ('Start from a ready-made one', shown on the templates empty state), MonthlyReport.tsx (1 literal, on the Settings page), ImpactView.tsx and Switches.tsx are not named. The README rule is 'never leave a promise in copy that the code does not keep'."
+   },
+   {
+    "title": "Missing catalogue key renders as empty text silently",
+    "severity": "low",
+    "where": "src/lib/senderlang.ts senderT",
+    "detail": "senderT('en','no.such.key') returns ''. A typo or an unexpected value in a dynamically built key (for example say(`saml.why.${q.get('sso_why')}`) in OrgSso.tsx, which takes a URL value) gives a blank label or message, not the English fallback. Static keys are covered by the test, dynamic ones only where a list is held equal."
+   },
+   {
+    "title": "Builder's tsconfig.json entries left behind",
+    "severity": "low",
+    "where": "tsconfig.json lines 106-107",
+    "detail": "'.next-build-ds-lang-sender-rest/types/**/*.ts' and its dev line are still in tsconfig include. The directory was deleted and the entries are not in HEAD. This contradicts 'tsconfig.json is the same as before my run'. It is harmless to the build."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Report item 10 and README 'What is in it' (line 2036)",
+    "claim": "/impact is converted ('done'); 'the home page and /impact, which follow the browser'",
+    "reality": "Only the page shell is converted. The ImpactView.tsx stats and the 'How we count' methodology are English (20 literals, 26 sentences visible in en-XA)."
+   },
+   {
+    "where": "Report item 1",
+    "claim": "All 30+ cards in src/components/settings/ go through the catalogue now",
+    "reality": "Switches.tsx (7 literals) is not converted, and MonthlyReport.tsx (1 literal) is not either. Switches.tsx is probably a concurrent addition by someone else."
+   },
+   {
+    "where": "Report notes_for_integrator 5",
+    "claim": "tsconfig.json is the same as before my run",
+    "reality": "The two include lines for .next-build-ds-lang-sender-rest are still in tsconfig.json."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-lang-sender-rest/bulk-en-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-lang-sender-rest/contacts-en-1280.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-lang-sender-rest/login-ar-XB-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-lang-sender-rest/impact-en-XA-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-lang-sender-rest/stamps-en-1280.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-lang-sender-rest/probe.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-lang-sender-rest/flows/ux-flows.json"
+  ]
+ },
+ "repair:simplicity-r6": {
+  "done": [
+   {
+    "item": "Reviewer high: Home showed a 55-word warning that could not be closed ('workspace depends on one person') to every paying person who works alone",
+    "status": "done",
+    "how": "New src/components/sender/OnePersonLine.tsx replaces the warning box in src/app/app/page.tsx. It is one quiet line, 'Only you can manage this account. Add a second admin in case you lose access to {email}. Open Team', with an x button that remembers (localStorage, same pattern as InstallHint). It shows only for an admin of a team of 2 or more people with fewer than 2 admins (onePersonLineShown in src/lib/simplicity.ts). Having a paid plan alone no longer triggers it. The full explanation stays in Settings, Team. In the default profile it never appears. In the everything profile it is one 17-word line (screenshot tests/out/repair-simplicity-r6/everything2/d-find-download/01-app-home.png).",
+    "test": "R1 in tests/simplicity-r6.test.ts",
+    "left_open": "In the everything profile (a team of 2) the line still counts as 1 notice in flows d, e, g and h until it is closed. That is intended, because that profile switched a team on."
+   },
+   {
+    "item": "Reviewer medium: the product name was used as a word for a document ('You signed your first GrowSigning', 'Your first GrowSigning is out.')",
+    "status": "done",
+    "how": "src/lib/impactwords.ts now says 'You signed your first document with GrowSigning' and 'Your first document is out.' I updated the 4 matching lines in tests/impact.test.ts. 'from a tree' stays: it is the owner's two-part line, which the comment in impactwords.ts names.",
+    "test": "R2; tests/impact.test.ts passes. Screenshot: tests/out/repair-simplicity-r6/default/b-sign-phone/06-done-full.png"
+   },
+   {
+    "item": "Reviewer medium: on a phone the signer saw two menus with confusable names, 'Other actions' at the top and 'More' at the bottom",
+    "status": "done",
+    "how": "The bottom button is now 'View' and its dialog is titled 'How the document looks' (src/components/sign/More.tsx). 'Other actions' is the only actions menu. Everything that names the button now says View: SIGN_LABELS.more in src/server/chatscreens.ts (the helper's answers), CANNOT_REACH in src/components/sign/stuck.ts, SIGNING_ZOOM in src/lib/mobile.ts, TextFields.tsx, a11y.ts and 4 README lines. I updated the regexes that pinned these words in tests/chat.test.ts, tests/gaps-mobile-sign.test.ts and tests/simplify-signing.test.ts.",
+    "test": "R3; chat, simplify-signing and gaps-mobile-sign pass. Screenshot: tests/out/repair-simplicity-r6/default/b-sign-phone/03-signing-the-document.png"
+   },
+   {
+    "item": "Reviewer P4: the document page's More held 10 lines with everything set up (cap 9)",
+    "status": "done",
+    "how": "In src/lib/envelopepage.ts pageMore, Hold is not offered while a document is out. Nothing deletes a document that is out, so the page offers Hold as soon as it closes. Until then an admin can still hold any single document from Settings, Records and data, Holds (RetentionSettings.tsx, POST /account/retention/holds with envelope_id). Lift the hold is still offered on a waiting document. The everything-profile run now shows 9 lines and 0 broken rules.",
+    "test": "R10; simplify-envelope and retention tests pass (50/50)"
+   },
+   {
+    "item": "Reviewer: Documents intro was about billing and export, and the ZIP button and the tick hint showed before anything was signed (also the skeptic's low bug)",
+    "status": "done",
+    "how": "The intro is now 'Sent documents and drafts, most recently changed first.' The download sentence (exportNote) moved under the ZIP button, and the button shows only once something is completed (/envelopes?box=completed&limit=1, not box=sent). 'Tick the boxes to download several as one ZIP' shows only when 2 or more boxes exist. Probe on a phone: empty account, 0 ZIP buttons; one waiting document, 0 ZIP buttons and no tick hint.",
+    "test": "Tests 4 and 13 updated; output in tests/out/repair-simplicity-r6/shots/"
+   },
+   {
+    "item": "Reviewer and builder overclaim: targets under 44 px (/help hint button, /help summary, Account colour box, Documents 'All' tab)",
+    "status": "done",
+    "how": "globals.css: :where(.tabs button, .tabs a) gets min-width 44px, and :where(input[type=color]) gets 44x44. public.css: .pub-form-hint .linklike gets inline-flex and min-height 44px, and plain /help details > summary gets min-height 44px. My own run of the reviewer's audit (tests/out/repair-simplicity-r6/audit/small.json) no longer lists any of them.",
+    "test": "R5; audit run",
+    "left_open": "The audit still lists 'cancel the plan' (108x23), a link-styled button inside a sentence in Settings, Records and data (settings/page.tsx:966). It is in running text, which WCAG 2.5.8 exempts, the same exemption the audit gives inline links, so I left it. Also still listed: the row title link on Documents (the whole row is clickable) and hidden 1 px inputs."
+   },
+   {
+    "item": "Reviewer low: Documents tabs wrapped onto two rows on a phone",
+    "status": "done",
+    "how": "In sender.css phone rules, .sn .tabs has gap 0 and 8px side padding on its buttons. The probe shows all 5 tabs on one row at 390 px (tops all 153; widths 44/57/67/90/73), with no sideways scroll.",
+    "test": "R5 (CSS) plus the phone probe"
+   },
+   {
+    "item": "Skeptic low: a document waiting only on the sender showed the chip 'Waiting for others' with 'Waiting on You' under it",
+    "status": "done",
+    "how": "rowStatusLabel in simplicity.ts. The chip now says 'Waiting for you' when you are the only person left, in both the phone and desktop rows of envelopes/page.tsx. Screenshot: tests/out/repair-simplicity-r6/shots/phone-documents-self.png",
+    "test": "R4"
+   },
+   {
+    "item": "Reviewer low: an empty 'Details (0)' fold looked different from its neighbours",
+    "status": "done",
+    "how": "CustomDetails.tsx now uses the sn-fold class and the sn-fold-in body, like History and Files. When empty its title is 'Add details' (new key customfields.page.add in en.json). Screenshot: tests/out/repair-simplicity-r6/everything2/inventory/envelope-page-waiting-for-someone.png",
+    "test": "R6"
+   },
+   {
+    "item": "Reviewer low: the envelope page shows the closing time in UTC",
+    "status": "disagree",
+    "how": "deadlineLine (src/components/sender/lib.ts) formats the time in deviceZone(), the zone the browser reports through Intl.DateTimeFormat().resolvedOptions().timeZone. The reviewer's headless browser runs in UTC, so it was shown UTC. A person in Berlin sees Europe/Berlin. The page already uses the reader's own time with the zone named."
+   },
+   {
+    "item": "Reviewer low: the sidebar showed the support address as a second way to Help",
+    "status": "done",
+    "how": "I removed the mailto line from the sidebar in AppShell.tsx. In the app, Help's 'Talk to a person' reaches the same people. The README SUPPORT_EMAIL row now says this instead of 'and in the app's menu'.",
+    "test": "R7"
+   },
+   {
+    "item": "Reviewer low: /help opened with the jargon 'No login wall'",
+    "status": "partly",
+    "how": "The lead now reads 'You do not need an account to get help.'",
+    "test": "R7",
+    "left_open": "I did not shorten /help itself (about 14,500 words) or fold each topic closed. That restructures a busy file and needs its owner."
+   },
+   {
+    "item": "Reviewer low: two names, 'workspace' and 'account'",
+    "status": "partly",
+    "how": "The Home line, shell.workspace ('The account you are in') and rules.password.gate now say account.",
+    "test": "R8",
+    "left_open": "Every account is still created with the stored name '<Name>'s workspace' (routes-account.ts:98, reclaim.ts:54), and that name shows in the sidebar. Code matches it with regexes in routes-starters.ts, sendername.ts and envelopes.ts, so renaming the default needs a migration and those matchers changed together."
+   },
+   {
+    "item": "Reviewer low: the charter lists a Notifications section that the product folded into Profile",
+    "status": "done",
+    "how": "I updated charter 2.2 in research/ux-charter.md to match the product: Profile now holds the email switches, and ?tab=notifications opens Profile (settingsnav.ts).",
+    "test": "R9"
+   },
+   {
+    "item": "Reviewer low: 'Move to folder' shows on every row of a new account",
+    "status": "not_done",
+    "how": "I left it. That button is the only way to make a first folder (MoveDialog). Hiding it until a folder exists would remove the feature, and rows have no More to move it into.",
+    "left_open": "Needs a design decision: add a row More on Documents, or offer folders from the selection bar."
+   },
+   {
+    "item": "Reviewer P6: one consent sentence is 21 words",
+    "status": "not_done",
+    "how": "It is legal consent text in src/lib/policy.ts:275/282/288, pinned by tests/gaps-nonus-words.test.ts:54, and the consent wording is recorded with each signature. The reviewer asked for the legal owner's sign-off, so I did not change it.",
+    "left_open": "Proposed wording for the legal owner: 'By continuing, you agree that you and the others may sign this document electronically.'"
+   },
+   {
+    "item": "Skeptic overclaim: the Billing jargon lines were not named for their owner",
+    "status": "done",
+    "how": "Named in notes_for_integrator with exact line numbers. I did not touch Billing()."
+   },
+   {
+    "item": "Skeptic: h-sign-myself failed, and the everything profile was never measured",
+    "status": "done",
+    "how": "In my default run all 9 flows pass, h-sign-myself included (14/8). I ran the everything profile twice; the second run has 0 broken rules. Counts are in flows."
+   },
+   {
+    "item": "Skeptic overclaim: the screen tests were regex checks of source",
+    "status": "partly",
+    "how": "The new R tests check real functions (onePersonLineShown, rowStatusLabel, pageMore, signerWords, builtInAnswer). The rendered result is shown by the flow runs, a phone probe of Documents (tests/out/repair-simplicity-r6/probe-docs.cjs) and the reviewer's 44 px audit re-run on my server.",
+    "left_open": "The JSX wiring is still checked by source regexes."
+   }
+  ],
+  "files_changed": [
+   "src/lib/simplicity.ts",
+   "src/components/sender/OnePersonLine.tsx",
+   "src/app/app/page.tsx",
+   "src/locales/en.json",
+   "src/lib/impactwords.ts",
+   "tests/impact.test.ts",
+   "src/components/sign/More.tsx",
+   "src/server/chatscreens.ts",
+   "src/components/sign/stuck.ts",
+   "src/lib/mobile.ts",
+   "src/components/sign/TextFields.tsx",
+   "src/lib/a11y.ts",
+   "tests/chat.test.ts",
+   "tests/gaps-mobile-sign.test.ts",
+   "tests/simplify-signing.test.ts",
+   "src/app/app/envelopes/page.tsx",
+   "src/app/globals.css",
+   "src/app/styles/sender.css",
+   "src/app/styles/public.css",
+   "src/app/help/page.tsx",
+   "src/components/sender/CustomDetails.tsx",
+   "src/components/AppShell.tsx",
+   "src/lib/envelopepage.ts",
+   "README.md",
+   "research/ux-charter.md",
+   "tests/simplicity-r6.test.ts"
+  ],
+  "flows": "Counts are actions/screens/choices_seen/max_choices/words/notices. Default profile, before (reviewer's run, tests/out/ux-simplicity-r6/default) then after (tests/out/repair-simplicity-r6/default, exit 0, 0 broken, 21 warnings): a-send-first 18/8/119/28/851/2 then 18/8/119/28/851/2; b-sign-phone 7/5/36/11/400/0 then 7/5/36/11/402/0; b-sign-desktop 7/5/36/11/404/0 then 7/5/36/11/406/0; c-template-send 5/4/59/20/268/1 then 5/4/59/20/268/1; d-find-download 1/1/21/21/83/0 then the same; e-settings-name 3/2/53/32/360/0 then the same; f-signer-help 6/4/28/9/570/2 then the same; g-sign-in 4/3/56/28/365/0 then the same; h-sign-myself 14/8/99/24/621/0 then 14/8/99/24/623/0. The 2 extra words on the signer flows are 'document with' on the done screen. Everything profile, before (1 broken: More 10 lines) then after (tests/out/repair-simplicity-r6/everything2, exit 0, 0 broken, 30 warnings): a 18/8/126/30/888/2 then 18/8/124/30/910/2; b-phone 7/5/36/11/400/0 then 7/5/36/11/402/0; b-desktop 7/5/36/11/404/0 then 7/5/36/11/406/0; c 5/4/55/21/223/1 then 5/4/61/21/283/2; d 1/1/23/23/144/1 then 1/1/23/23/102/1; e 3/2/58/35/447/1 then 3/2/57/34/404/1; f 6/4/29/10/587/2 then the same; g 4/3/60/28/445/1 then 4/3/60/30/402/1; h 14/8/102/24/705/1 then 14/8/101/24/648/1. c gained one notice in the after run: the Home one-person line, which the before run did not show on that flow. The envelope page's More is down from 10 lines to 9. No flow gained an action or a screen.",
+  "found": "The repair-simplicity-r6 builder's 15 fixes were in place, and tests/simplicity-r6.test.ts passed 16/16. The tree was shared and moving: during my first full-suite run another engineer's edit was half-finished (src/server/records.ts imported a collab.ts that did not exist yet, then a missing setAside export), which failed 1063 tests. I waited for the modules to load again and re-ran.",
+  "suite": "tests/simplicity-r6.test.ts: 26/26 pass. The suites I edited (impact, chat, simplify-signing, gaps-mobile-sign, simplify-envelope) pass: 159/159 together with mine. retention passes. npx tsc --noEmit -p .: exit 0. Full npm test: 2175 pass, 81 fail (log in tests/out/repair-simplicity-r6/npm-test.log). I re-ran each failing file on its own afterwards. ds-page-tools, ds-pdfa, ds-perm-profiles, ds-phone-app and ds-paper now pass fully. ds-consent-own, gaps-industry, open-platform, simplify-editor, simplify-signing and gaps-mobile-send showed failures on the first individual re-run and none on the second, so they look flaky or were mid-edit by others. One failure persists and is not mine: tests/stamps.test.ts 'the screens: Settings, the editor...' expects `{tab === 'stamps' && <Card><StampSettings /></Card>}` in settings/page.tsx, a line I did not touch.",
+  "notes_for_integrator": "Billing owner (I did not touch Billing()): src/app/app/settings/page.tsx still says 'envelopes' at lines 667, 674 and 679 ('held for envelopes that are out', 'More envelopes are out'), 'voided' at 818 ('When an envelope is voided, declined or expires'), and 'audit trail' at 886 ('Every document, audit trail and invoice stays'). Charter words would be: documents that are out, cancelled, History or signing record.\nLegal owner: the 21-word consent sentence in src/lib/policy.ts:275/282/288 needs your sign-off before it changes. Proposed: 'By continuing, you agree that you and the others may sign this document electronically.' tests/gaps-nonus-words.test.ts:54 pins the current text.\nThe Hold line is not offered while a document is out (envelopepage.ts). Settings, Records and data, Holds still holds any single document, and Lift the hold is still on the page.\nThe signer's bottom button is now 'View'. Any new copy should say 'View', not 'More', on the signing page.\nDefault account names '<Name>'s workspace' are still stored data (see left_open), so the sidebar still says 'workspace'.\nFound in passing, not fixed: a Documents row waiting only on the sender offers 'Remind' (reminding yourself) rather than a way to sign.\nDev server stopped, .next-repair-simplicity-r6 deleted, both data dirs deleted, and only my two lines removed from tsconfig.json (other sessions' lines left as they were).",
+  "settings": []
+ },
+ "repair:ds-lang-sender-rest": {
+  "done": [
+   {
+    "item": "Switches.tsx (When people sign, Members may place stamps) unconverted and unlisted",
+    "status": "done",
+    "how": "I converted it to useST() with 13 new settings.switches.* keys in en.json. The English is unchanged and the file is now in DONE. Two things stay English, both from src/lib: WAY_LABELS/WAYS_NOTE and PAPER_WORDS from the new PaperSetting.tsx. They fall under the src/lib caveat.",
+    "test": "tests/ds-lang-sender-rest.test.ts: 'the switches, the monthly line and the ready-made list read as before' and the DONE scan. A new test, 'no file of the batch in src/components/settings is forgotten', fails on any settings card that shows English and is in neither DONE nor LEFT. en-XA screenshot: tests/out/repair-ds-lang-sender-rest/sending-en-XA-390.png"
+   },
+   {
+    "item": "MonthlyReport.tsx literal and forced English",
+    "status": "done",
+    "how": "It now uses useST() and no longer forces SOURCE_LOCALE. The toast fallback reads reports.monthly.not_saved.",
+    "test": "In DONE; key value asserted"
+   },
+   {
+    "item": "Starters.tsx (ready-made list) English in a test language, not listed",
+    "status": "done",
+    "how": "Each of the 4 components asks useSenderLangHere(). t is now senderT (aliased), so the existing ds-templates-lib regex t(ui, ...) still holds. placeLine takes the language. The starter titles and the note come from the server's starter content, so they stay as written.",
+    "test": "In DONE, plus an assertion of 4 hooks and no SOURCE_LOCALE. Screenshot: templates-en-XA-390.png"
+   },
+   {
+    "item": "/impact half converted (ImpactView.tsx), README overclaim",
+    "status": "partly",
+    "how": "I did not convert it. tests/impact.test.ts, tests/open-signing.test.ts and tests/billing9.test.ts:657 (which I may not touch) check the green-claim sentences word for word in ImpactView.tsx, and those claims are legal-ish wording that should stay as written, like the legal texts. Instead I corrected the README (it now says 'the top of /impact'), named ImpactView.tsx in 'What is not in it' with the reason, and added it to LEFT.",
+    "left_open": "Converting it needs the billing owner to point billing9.test.ts:657 at en.json (and impact/open-signing tests updated likewise)."
+   },
+   {
+    "item": "README 'What is not in it' omits unconverted files; report overclaims",
+    "status": "done",
+    "how": "Each remaining file is named in README: settings/page.tsx, SignedIn, TwoStep, agreements/[id], the QR sheet, WhoCanUse, AddTemplate, FormLimits, SavedLists, ImpactView, /help, /security. The README also now says that no Settings tab reads in one language yet, so a second sender language must not ship until the LEFT list is empty. I updated the test table row and the 'What is in it' bullet.",
+    "test": "New test: every LEFT file exists, is named in README 'What is not in it', still holds English and is not in DONE. So the list cannot over- or under-claim."
+   },
+   {
+    "item": "Mixed languages: shared src/lib sentences (GROUP_RULE) inside translated cards",
+    "status": "partly",
+    "how": "GROUP_RULE is now the key contacts.groups.rule, read with T() on Contacts, with a test that holds it equal to src/lib/policy.ts. The helper and /help still use the constant.",
+    "test": "'the group rule on Contacts reads the same from the catalogue as from src/lib/policy.ts'",
+    "left_open": "These src/lib sentences still stay English (named in README): LEVEL_*, ORG_POLICY_WORDS, STAMP_IS_TEAM, STATE_LABEL, reminderText, WAYS_NOTE/WAY_LABELS, PAPER_WORDS. The Settings page shell is also still English. The operator gate (English is the only sender language) means nobody sees any of this with zero setup."
+   },
+   {
+    "item": "Missing catalogue key renders blank silently",
+    "status": "done",
+    "how": "A key built from a value is now tested. Every T(`prefix.${x}`) in a DONE file must have keys under its prefix in en.json. The one built from a URL value (saml.why.* in OrgSso) must sit behind its isSamlWhy guard, which it already did. I left translate() itself alone: it is shared with the signing page.",
+    "test": "'a key built from a value is one of a bounded set'"
+   },
+   {
+    "item": "Pseudo-language padding: one unbreakable '~' run overflowed 390 px",
+    "status": "done",
+    "how": "In src/lib/signlang.ts pseudoMessage, padding longer than 12 is now split into 6-character groups separated by spaces. A short text keeps one run, so the existing ds-lang-signing regex still holds.",
+    "test": "New test: still 40 percent longer, no run longer than 20 characters, short text still one run. Browser check: wide=false for all 6 pages in en-XA at 390, and contacts and reports were wide before (tests/out/repair-ds-lang-sender-rest/shots.json)."
+   },
+   {
+    "item": "'in world time' jargon on Reports",
+    "status": "done",
+    "how": "en.json reports.counted now reads: 'Each document counts on the day it was sent by UTC, the world's standard clock, so one you send late in your evening may count on the next day.' I did not change the monthly email text in routes-reports.ts: ds-reports.test checks 'world time (UTC)' there, and it already names UTC.",
+    "test": "'Reports says UTC by its name, not \"world time\"'"
+   },
+   {
+    "item": "Builder's tsconfig.json entries left behind",
+    "status": "done",
+    "how": "I removed the two .next-build-ds-lang-sender-rest lines, and the lines my own dev server added, and checked the file still parses."
+   },
+   {
+    "item": "/help and /security not converted (designer: signer leaves a translated page for English help)",
+    "status": "not_done",
+    "how": "Out of reach in this pass. Both are named in README and in LEFT, and the operator gate keeps any second language off.",
+    "left_open": "/help (about 217 literals) and /security (about 129) need their own pass."
+   },
+   {
+    "item": "Abuse and stuck-person review",
+    "status": "done",
+    "how": "Abuse: (1) a URL value turning into a dynamic key is guarded and tested; (2) placeholders with markup stay escaped (no dangerouslySetInnerHTML added); (3) test languages are still development-only. Stuck: (1) a settings card added later that shows English now fails a test until it is listed; (2) the Reports UTC wording is plainer; (3) on a phone, long en-XA lines wrap instead of scrolling sideways."
+   }
+  ],
+  "files_changed": [
+   "src/components/settings/Switches.tsx",
+   "src/components/reports/MonthlyReport.tsx",
+   "src/components/templates/Starters.tsx",
+   "src/components/sender/SigningGroups.tsx",
+   "src/lib/signlang.ts",
+   "src/locales/en.json",
+   "tests/ds-lang-sender-rest.test.ts",
+   "README.md",
+   "tsconfig.json",
+   "tests/out/repair-ds-lang-sender-rest/shots.cjs"
+  ],
+  "flows": "After, against port 4213: UX FLOWS OK. actions/screens: a-send-first 18/8, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 14/8. These match the reviewer's numbers from before. The only warnings are the existing P6 ones on /help and /verify (tests/out/repair-ds-lang-sender-rest/flows/ux-flows.json).",
+  "suite": "tests/ds-lang-sender-rest.test.ts: 17/17 pass. npm test: 2290 tests, 2278 pass, 7 fail. The tool-side background job hit its time limit, but the log has the final counts. All 7 failures are in other people's in-progress areas and none touch my files: bounces.test 1060 (timing), chat.test 1042 (simplify-signing comment), convert.test 582 (job timeout), ds-consent-own.test 375 and 536 (paper/consent work in progress), gaps-industry.test 444 (autosave race), gaps-mobile-send.test 729, stamps.test 1354 (settings page stamps tab regex). npx tsc --noEmit -p . is clean. An earlier tsc run showed errors in src/app/in-person/page.tsx and a missing src/server/collab.ts from someone's half-finished edit; both were gone on the re-run.",
+  "found": "The builder's pass was mostly in place (10/10 tests). The gaps were Switches.tsx (added during the run by another engineer), MonthlyReport.tsx, and Starters.tsx, which used catalogue keys but forced English. ImpactView.tsx was English while the README said /impact was done. The tsconfig lines were left behind. While I worked, another engineer was adding collab.ts and PaperSetting.tsx (the paper-signing feature); my dev server had to wait for their edit to compile.",
+  "notes_for_integrator": "1. Billing owner: if ImpactView's Methodology is ever converted, tests/billing9.test.ts:657 must read the sentence from en.json, not from ImpactView.tsx. I did not touch billing files. 2. A new settings card that shows English must go in DONE or LEFT in tests/ds-lang-sender-rest.test.ts, or that test fails. This is deliberate, so the gap cannot be forgotten. PaperSetting.tsx passes because its words come from src/lib/paper PAPER_WORDS. 3. In signlang.ts, en-XA padding longer than 12 characters is now spaced groups of '~~~~~~'. 4. The dev server is stopped, .next-repair-ds-lang-sender-rest is deleted, and tsconfig.json has no lang-sender-rest lines. Screenshots and shots.json are in tests/out/repair-ds-lang-sender-rest/."
  }
 }

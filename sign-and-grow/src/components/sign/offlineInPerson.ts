@@ -18,7 +18,7 @@ export type Kept = { v: 1; prep_id: string; created_at: string; expires_at: stri
 /** What the server gave when it was got ready (POST /envelopes/:id/offline). */
 export type Pack = { prep_id: string; created_at: string; expires_at: string; token: string; host: string; view: any; files: { id: string; name: string; pages: number; sha256: string; pdf: string }[] };
 /** What the person did on the device. `device_at` is the device's own clock, which nobody checks. */
-export type Result = { values: Record<string, string>; signature_png: string | null; initials_png: string | null; consent: Record<string, any>; device_at: string };
+export type Result = { values: Record<string, string>; signature_png: string | null; initials_png: string | null; consent: Record<string, any>; device_at: string; signature_how?: string; initials_how?: string };
 
 export const DB_NAME = 'growsigning-in-person';
 const KEY = 'copy';
@@ -74,14 +74,15 @@ export async function peek(box: Box, at = Date.now()): Promise<{ state: 'none' }
 export const tooOld = (k: { expires_at: string; created_at: string }, at = Date.now()) => at > Date.parse(k.expires_at) || at - Date.parse(k.created_at) > OFFLINE_DAYS * DAY;
 
 /**
- * Keeps a copy on the device under a PIN. One envelope per device: a copy already here is replaced, unless it holds a
- * result that has not been sent, which is never thrown away by this.
+ * Keeps a copy on the device under a PIN. One person at a time per device: a copy already here (for another envelope,
+ * or another person of the same one) is replaced, unless it holds a result that has not been sent, which is never
+ * thrown away by this (the host sends it, or removes it on /in-person).
  */
 export async function keep(box: Box, pin: string, pack: Pack, rounds = PIN_ROUNDS): Promise<CryptoKey> {
   const problem = pinProblem(pin);
   if (problem) throw new Error(problem);
   const had: Kept | null = await box.get(KEY).catch(() => null);
-  if (had?.result && !tooOld(had)) throw new Error('This device still holds a signature that has not been sent. Send it first: open it with signal and type its PIN.');
+  if (had?.result && !tooOld(had)) throw new Error('This device still holds a signature that has not been sent. Open GrowSigning\'s page for signing in person on this device with signal and type its PIN: it is sent then, or you can remove it there.');
   const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
   const key = await keyFrom(pin, salt, rounds);
   const kept: Kept = { v: 1, prep_id: pack.prep_id, created_at: pack.created_at, expires_at: pack.expires_at, salt: b64(salt), rounds, check: await seal(key, 'growsigning'), pack: await seal(key, pack), tries: 0 };
@@ -143,7 +144,7 @@ export async function sendResult(box: Box, pack: Pack, result: Result, post: (ur
   const name = pack.view?.recipient?.name || 'this person';
   let res: { status: number; data: any };
   try {
-    res = await post(`/api/sign/${encodeURIComponent(pack.token)}/offline-finish`, { prep_id: pack.prep_id, device_at: result.device_at, values: result.values, signature_png: result.signature_png, initials_png: result.initials_png, consent: result.consent });
+    res = await post(`/api/sign/${encodeURIComponent(pack.token)}/offline-finish`, { prep_id: pack.prep_id, device_at: result.device_at, values: result.values, signature_png: result.signature_png, initials_png: result.initials_png, signature_how: result.signature_how, initials_how: result.initials_how, consent: result.consent });
   } catch {
     return { state: 'waiting', text: OFFLINE_WORDS.saved };
   }
@@ -180,8 +181,18 @@ export function idbBox(): Box {
       db.close();
     }
   };
+  // Only looking never makes the database: a device that never kept anything has none, so public/offline.html does not
+  // offer a copy that is not there.
+  const exists = async () => {
+    try {
+      if (typeof indexedDB.databases !== 'function') return true;
+      return (await indexedDB.databases()).some((d) => d.name === DB_NAME);
+    } catch {
+      return true;
+    }
+  };
   return {
-    get: (k) => run('readonly', (s) => s.get(k)),
+    get: async (k) => ((await exists()) ? run('readonly', (s) => s.get(k)) : undefined),
     put: async (k, v) => void (await run('readwrite', (s) => s.put(v, k))),
     clear: () => new Promise<void>((ok) => {
       const q = indexedDB.deleteDatabase(DB_NAME);

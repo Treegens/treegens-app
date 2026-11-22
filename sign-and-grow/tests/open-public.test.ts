@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
 import { boot, signUp, Client, PNG, tokenFor, upload } from './helpers.ts';
+import { englishIf } from './words.ts';
 
 const server = await boot();
 const { decodePng } = await import('../src/server/png.ts');
@@ -16,7 +17,8 @@ const { planFoot, pictureBoxes, textBoxes, growFoot, STRIP_PT, EDGE } = await im
 const { PAGE_STAMP_W } = await import('../src/server/brandpdf.ts');
 
 const root = path.resolve(import.meta.dirname, '..');
-const read = (p: string) => fs.readFileSync(path.join(root, p), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, fs.readFileSync(path.join(root, p), 'utf8'));
 let ipN = 0;
 const newIp = () => `203.0.113.${++ipN}`;
 const havePoppler = spawnSync('which', ['pdftotext']).status === 0 && spawnSync('which', ['pdftoppm']).status === 0;
@@ -479,7 +481,9 @@ test('19. Send to many, its batches, Documents, Reports, Contacts and Home say d
   for (const old of ['It was voided', 'Open the envelope', 'These envelopes', 'sent envelopes in this list']) assert.ok(!list.includes(old), old);
   const reports = strip(read('src/app/app/reports/page.tsx'));
   assert.ok(!reports.includes('Envelopes sent') && !reports.includes('Envelopes per month'));
-  assert.match(reports, /s === 'voided' \? 'cancelled'/);
+  // The status names are in the catalogue since lang-sender-rest (reports.status.*).
+  assert.match(reports, /T\(`reports\.status\.\$\{s\}`\)/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'src/locales/en.json'), 'utf8'))['reports.status.voided'], 'cancelled');
   assert.ok(!strip(read('src/app/app/contacts/page.tsx')).includes('Envelopes already sent'));
   assert.ok(!strip(read('src/app/app/page.tsx')).includes('Open the envelope'));
 });

@@ -17,6 +17,7 @@ import { MorePanel } from './More';
 import { dayText } from '@/lib/dates';
 import { removedDay } from '@/lib/retention';
 import { askedPaper } from '@/lib/disclosure';
+import { PAPER_WORDS } from '@/lib/paper';
 import { pendingWhen } from '@/lib/timing';
 
 export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent', witness: 'Witnessed' };
@@ -288,7 +289,10 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
         const line = e.status === 'draft' ? null
           // "Only when..." was not met (src/server/routing.ts). Someone asked before a correction was told, or the sender is.
           : r.status === 'skipped' ? <>{String(r.skipped_why || 'The rule for them was not met.').replace(/^.*?, because /, 'Because ')} {skippedFact(r)}</>
-          : r.status === 'completed' && r.role !== 'cc' ? <>{DONE[r.role]} on {dayTime(r.completed_at)}.</>
+          : r.status === 'completed' && r.role !== 'cc' ? <>{r.paper_state === 'accepted' ? PAPER_WORDS.accepted : DONE[r.role]} on {dayTime(r.completed_at)}.</>
+          // Signing on paper (src/lib/paper.ts): a scan waits for the sender, or the sender asked for it again.
+          : r.paper_state === 'waiting' && r.status !== 'declined' ? <>{PAPER_WORDS.waitingSender}.</>
+          : r.paper_state === 'asked_again' && r.status !== 'declined' ? <>{PAPER_WORDS.askedAgain}.</>
           : askedPaper(r) ? <>Asked for this document on paper on {dayTime(r.paper_at)}.</>
           : r.status === 'declined' ? <>Declined on {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</>
           : r.status === 'viewed' ? openedFact
@@ -349,6 +353,12 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               <p className="sn-hint warn">
                 <b>Filled in everything but has not pressed Finish.</b> Their answers are saved, and nothing is signed until they press Finish.
                 {' '}{r.role === 'inperson' ? 'Open it with Host signing now and let them finish.' : r.muted ? 'They turned reminder emails off, so send them the link yourself and say that one button is left.' : 'A reminder tells them that one button is left.'}
+              </p>
+            )}
+            {/* Pressed Finish on a "pay before finishing" document: what is left is their card payment (collect.ts). */}
+            {turn && p?.paying && (
+              <p className="sn-hint" data-feature="ds-pay-collect">
+                <b>Waiting for payment.</b> They pressed Finish, and their part completes once Stripe confirms their payment of {p.paying}. Nothing is signed until then.
               </p>
             )}
             {!stale && undelivered && mail!.status === 'failed' && (

@@ -3,6 +3,7 @@
 // bulk sends and public forms, dates and numbers by language, and the check translators run (scripts/i18n-check.mjs).
 // Only English is switched on. Where a test needs a second language it uses a table and catalogues of its own: the
 // functions take them as arguments, so nothing here pretends a language ships.
+import { englishIf } from './words.ts';
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -16,7 +17,8 @@ import {
 } from '../src/lib/i18n.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
-const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (f: string) => englishIf(f, fs.readFileSync(path.join(root, f), 'utf8'));
 const en = JSON.parse(read('src/locales/en.json'));
 // A table where French and Brazilian Portuguese are switched on, for the tests that need more than English.
 const MORE: Language[] = [

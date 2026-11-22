@@ -6,6 +6,7 @@ import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { mailLocale, theirWords } from './maillang.ts';
 import { requestMail, translatable } from './requestmail.ts';
 import { renderEnvelopePdf, withNotice, senderZone } from './pdf.ts';
+import { snapSwitches } from './switches.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { noteFramed } from './embed.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
@@ -34,6 +35,8 @@ import { bouncedBefore, bouncedRefusal, bouncedLine } from './bounces.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
 import { attachGroups, groupNames, saveGroups, copyGroup, assertGroups, groupReach, groupReachNew, snapshotGroups, settleGroups, groupPeople, notifyMembers, groupLine, groupWords, groupChange, groupsCorrected, memberLinks, assertGroupCorrection, memberMailStop } from './groups.ts';
 import { isOpenGroup, whoIs } from '../lib/groups.ts';
+// Signing on paper: what the sender chose for each person, and copies of it (paper.ts).
+import { savePaper, copyPaper } from './paper.ts';
 // Someone who signs for a person while they are away (src/server/delegation.ts).
 import { attachDelegates, delegateLines, alsoDelegate, delegateCorrected } from './delegation.ts';
 // A person whose link the sender passes on themselves, with no email address (src/server/bysender.ts).
@@ -71,7 +74,8 @@ import { convertedOf } from '../lib/convert.ts';
 import { CONFIRM_BEFORE_SEND } from '../lib/confirm.ts';
 // The account's own custom fields on envelopes and templates, and name and value pairs per document (customfields.ts).
 import { customView, copyCustom, assertCustomFields, customWords } from './customfields.ts';
-import { payFirst, copyCollect } from './collect.ts';
+import { payFirst, copyCollect, waitsForPayment } from './collect.ts';
+import { moneyText } from '../lib/collect.ts';
 // "Sign now": the sender is the only person on it, so their own invitation is not emailed (signnow.ts).
 import { holdInvite, inviteHeld, dropHold, SIGN_NOW_AUDIT, signNowNote } from './signnow.ts';
 import { dayText, stampText } from '../lib/dates.ts';
@@ -88,6 +92,7 @@ import { PAUSED_NO_REMINDER } from '../lib/timing.ts';
 import { supplementalOf, saveSupplement, noFieldsOn, copySupplement, assertSupplements, assertSomethingToSign, ruleChangeWords } from './supplements.ts';
 // People who change the envelope on their turn: what stops a send, and the places they fill in (agents.ts).
 import { stepProblem, nameOpenPlaces, changedBy } from './agents.ts';
+import { saveShared, copyShared, sharedNow } from './collab.ts';
 import { counterFinished } from './counter.ts';
 import { isOpenPlace, isStepRole, STEP_MAIL, changerWords } from '../lib/recipienttypes.ts';
 import { seal, sealField } from './colcrypt.ts';
@@ -359,6 +364,8 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
   saveLocales(asked, oldRecs, accountId);
   // How long each person waits after the step before them finishes ("wait_hours"): waits.ts.
   saveWaits(asked, oldRecs);
+  // Whether each person may, or must, sign on paper ("allow_paper", "require_paper"): paper.ts.
+  savePaper(e, asked, oldRecs);
   const placed = new Map<string, number>();
   // Each field with the id it was saved under, for its rule and formula once every field is in (logic.ts).
   const logic: { fid: string; f: any; rid: string | null; which: string }[] = [];
@@ -429,6 +436,8 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
   saveLogic(e, logic);
   // "link", "date_from" and "look", and what buttons and worked-out dates must be (fieldkinds.ts).
   saveKinds(e, logic, accountId);
+  // "shared": a field anyone on the document can fill in (collab.ts).
+  saveShared(e, logic);
   // "only_when" of each person, once the fields it may read are in (routing.ts).
   saveRules(e, asked, logic, oldRecs, correcting);
   // "own_docs" and each person's "also_sees": who sees which files (visibility.ts).
@@ -627,7 +636,7 @@ export function clearAnswers(recipientId: string) {
   run("UPDATE fields SET value=prefill WHERE recipient_id=? AND readonly=0 AND type!='note'", recipientId);
   // A stamp they put on goes with its name and where it came from (stamps.ts).
   run("UPDATE fields SET stamp_id=NULL, stamp_meta=NULL WHERE recipient_id=? AND type='stamp'", recipientId);
-  run('UPDATE recipients SET signature_png=NULL, initials_png=NULL, ip=NULL, user_agent=NULL, seen_version=NULL, signed_before=NULL WHERE id=?', recipientId);
+  run('UPDATE recipients SET signature_png=NULL, initials_png=NULL, sig_how=NULL, ini_how=NULL, ip=NULL, user_agent=NULL, seen_version=NULL, signed_before=NULL WHERE id=?', recipientId);
   // A witness the first person named and who was not asked yet is theirs too: the next person names their own.
   forgetNamedWitness(recipientId);
 }
@@ -788,7 +797,7 @@ const sameSigner = (o: any, n: any): boolean => !!n && sameEmail(n.email, o.emai
 
 // A signature that no longer stands because the sender changed what was signed. It is never thrown away: the audit
 // trail says when it was given, from where and what was entered, and the signature itself is kept (earlier_signatures).
-function setAside(e: any, o: any, actor: Actor, after?: any) {
+export function setAside(e: any, o: any, actor: Actor, after?: any) {
   // `after` is the same recipient once the correction is saved: gone, handed to someone at another address, or asked again.
   const removed = !after, passed = !!after && !sameSigner(o, after);
   const answers = e.fields.filter((f: any) => f.recipient_id === o.id && !f.readonly && f.value != null && f.value !== '')
@@ -1051,6 +1060,8 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
       copyLocale(r, rmap.get(r.id)!, fill);
       // And the wait before them (waits.ts).
       copyWait(r, rmap.get(r.id)!);
+      // And whether they may or must sign on paper (paper.ts).
+      copyPaper(r, rmap.get(r.id)!);
     }
     // A witness stays the witness of the same person in the copy, and one the signer names is named afresh (witness.ts).
     copyWitnesses(src, rmap);
@@ -1070,6 +1081,7 @@ export function copyEnvelope(src: any, o: { accountId: string; senderId: string;
     copyStamps(src, fmap);
     // Same answer, dates from dates and text style go with every copy (fieldkinds.ts).
     copyKinds(src, fmap);
+    copyShared(src, fmap); // fields anyone on the document can fill in (collab.ts)
     // So does a payment asked for while signing, from the copy's own amount field (collect.ts).
     copyCollect(src, eid, fmap);
     // Custom fields go with every copy: a template's values are what is made from it starts with (customfields.ts).
@@ -1392,6 +1404,8 @@ export async function sendEnvelope(envelopeId: string, actor: Actor, o: { anyway
     }
     // The members of every group are written down as they are now, each with a link of their own (groups.ts).
     snapshotGroups(e);
+    // The sender's switches as they are now, so a later change in Settings never changes it (switches.ts).
+    snapSwitches(e);
     noteReached(e, reach);
     if (visitor) noteReached(e, [visitor.email], `form:${e.powerform_id}`);
     audit(e.id, actor, 'Envelope sent', `${e.recipients.length} recipient${e.recipients.length === 1 ? '' : 's'}, ${pages} page${pages === 1 ? '' : 's'}`);
@@ -1511,7 +1525,7 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
   const brand = brandOf(e.account_id);
   // Someone whose language is not English gets our words in theirs (lang-mail, requestmail.ts); English is below.
   const L = mailLocale(r);
-  const own = translatable(L, r, e.last_change) ? requestMail(L, { kind, role: r.role, name: r.name, sender, subject: e.subject, message: e.message, note: r.note, accessCode: !!r.access_code, shared, done, complete: e.status === 'completed', deadline: deadline ? e.expires_at : '', tz: zoneForEmail(e, r), zoneKnown: !!validZone(r.tz), before, changer: kind === 'again' ? changer : kind === 'updated' ? e.changed_by_editor || null : null, ready: kind === 'reminder' && fieldProgress(e, r).ready, trees: kind === 'new' && showsTrees(e.account_id) ? treesInInvite(r) : 0, url: signUrl(r) }) : null;
+  const own = translatable(L, r, e.last_change) ? requestMail(L, { kind, role: r.role, name: r.name, sender, subject: e.subject, message: e.message, note: r.note, accessCode: !!r.access_code, shared, done, complete: e.status === 'completed', deadline: deadline ? e.expires_at : '', tz: zoneForEmail(e, r), zoneKnown: !!validZone(r.tz), before, changer: kind === 'again' ? changer : kind === 'updated' ? e.changed_by_editor || null : null, ready: kind === 'reminder' && fieldProgress(e, r).ready && !waitsForPayment(r), trees: kind === 'new' && showsTrees(e.account_id) ? treesInInvite(r) : 0, url: signUrl(r) }) : null;
   const mailed = await sendMail({
     to,
     subject: `${NOTICE_PREFIX[kind]}${e.subject}`,
@@ -1536,7 +1550,9 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
       ...(done ? [e.status === 'completed' ? `You ${finishedHow(r)} this document, and so has everyone else. The link opens the completed document, and you can download it there.`
         : `You have already ${finishedHow(r)} this document, so there is nothing more for you to do. The link opens it as it stands while the others finish.`] : []),
       // "Filled everything in and never pressed Finish": the reminder says that one button is all that is left.
-      ...(kind === 'reminder' && fieldProgress(e, r).ready ? [r.role === 'inperson'
+      // Finish pressed and waiting for a card payment (collect.ts): the reminder says what is left is the payment.
+      ...(kind === 'reminder' && waitsForPayment(r) ? [`Your signature is ready. Pay ${moneyText(waitsForPayment(r).amount, waitsForPayment(r).currency)} to finish: open the document and press Pay. Until Stripe confirms the payment, it is not signed.`] : []),
+      ...(kind === 'reminder' && fieldProgress(e, r).ready && !waitsForPayment(r) ? [r.role === 'inperson'
         ? `${r.name} filled in everything, but Finish was not pressed, so nothing is signed yet. Open the document, let ${r.name} check it, and press Finish.`
         : `You filled in everything, and what you filled in is saved. One step is left: open the document and press Finish. Until you do, it is not signed and ${sender.name} has not received it.`] : []),
       // The second sentence is the hand-over lock (handover.ts), said before the host opens the link from this email.
@@ -1896,7 +1912,8 @@ export async function remindEnvelope(e: any, actor: Actor, recipientId?: string)
   // A reminder is an email in the sender's name like any other: none while paused, and none for a fake notice.
   assertMayEmail(e);
   // A place still waiting for the person who chooses who comes next has nobody to remind (agents.ts).
-  const waiting = e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && (!recipientId || r.id === recipientId) && !(r.place_open && !String(r.email || '').trim()));
+  // Nor has someone whose scan signed on paper waits for the sender to look at it: they did their part (paper.ts).
+  const waiting = e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && (!recipientId || r.id === recipientId) && !(r.place_open && !String(r.email || '').trim()) && r.paper_state !== 'waiting');
   // Someone whose link the sender passes on has no address: a nudge by hand is refused in words, and the timer's
   // reminder for them goes to the sender (bysender.ts).
   assertNudgeable(e, recipientId, actor);
@@ -2124,7 +2141,8 @@ const VALIDATORS: Record<string, RegExp> = { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 // before anything is checked: the same result then decides what is required, which marks need a picture, and what
 // the PDF prints (completeRecipient, logic.ts). Returns that set.
 export function applyValues(e: any, r: any, values: Record<string, any>, strict: boolean, atFinish?: (hidden: Set<string>) => void): Set<string> {
-  const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !AUTO_TYPES.includes(f.type));
+  // A field anyone on the document can fill in changes only through takeShared, on the record (collab.ts).
+  const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !f.readonly && !AUTO_TYPES.includes(f.type) && !f.shared);
   // One answer per group of radio buttons: two at once is refused, and one takes the others off (logic.ts).
   values = oneChoice(mine, values);
   // Names taken from theirs, drawings, buttons, worked-out dates and fields that share an answer (fieldkinds.ts).
@@ -2209,11 +2227,20 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // person): the page then loads what is true now, and that screen asks for the agreement.
   const shown = shownVersion(r, body);
   if (shown != null && shown !== e.content_version) throw changedSince(e);
-  if (!r.consent_at) throw bad('Please agree to use electronic records and signatures first.');
-  assertSupplements(e, r);
+  // Someone whose scan signed on paper the sender has just accepted (paper.ts acceptScan sets paper_scan_id, and nothing
+  // else does) finishes here without an electronic signature: no agreement to electronic records, no files to have
+  // opened on screen, nothing typed or drawn. What they wrote is on the scan.
+  const onPaper = !!r.paper_scan_id;
+  if (!r.consent_at && !onPaper) throw bad('Please agree to use electronic records and signatures first.');
+  if (!onPaper) assertSupplements(e, r);
   // What other people filled in that this person's formulas count must be what their screen was given: someone who
   // finished meanwhile changes the result, and then nothing is signed until the person has seen it (logic.ts).
-  assertInputs(e, r, body);
+  if (!onPaper) assertInputs(e, r, body);
+  // Fields anyone on the document can fill in: nobody finishes on a value someone changed since, and a change sent
+  // with Finish is on the record like any other (collab.ts).
+  // Nothing is waited for here unless someone is asked to sign again, so nothing gets in before the claim below.
+  const sharedLater = onPaper ? null : sharedNow(e, r, body, actor, true).later;
+  if (sharedLater) await sharedLater();
   // "Pay before finishing": nothing is signed until Stripe confirmed this person's payment (402 pay_first, collect.ts).
   payFirst(e, r, body, actor);
   let verb = 'Viewed';
@@ -2264,7 +2291,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
       // None was free after all (another visitor took the last one a moment ago): nothing of this Finish stays.
       if (formTook && available(e.account_id) < 0) throw FORM_FULL;
     }
-    if (!ACTS(r.role)) return;
+    if (!ACTS(r.role) || onPaper) return;
     // Which fields are shown is worked out once, here, from the answers as stored (settleLogic in logic.ts), and the
     // same result decides what is required, which signature and initials need a picture, and what the PDF prints.
     // So nobody finishes as signed with a mark on the page and no picture behind it, whatever the browser claimed.
@@ -2282,7 +2309,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // Each stamp they put on: which, where, when and its fingerprint (stamps.ts). A stamp uses no signature.
   if (ACTS(r.role)) stampsFinished(e, r, actor);
   // Someone signing for the second time, after the sender changed the document, is recorded as exactly that.
-  audit(e.id, actor, r.signed_before ? `${verb} again` : verb, whoIs(r)); // for a group: the person who acted, and the group
+  audit(e.id, actor, onPaper ? `${verb} on paper` : r.signed_before ? `${verb} again` : verb, whoIs(r)); // for a group: the person who acted, and the group
   // "Signed inside a frame on <website>", when the page was on a website the link was handed out for (embed.ts).
   noteFramed(e, r, body?.frame_origin, actor, verb);
   // A witness with the signer's address or device is marked, before the certificate can be made (witness.ts).

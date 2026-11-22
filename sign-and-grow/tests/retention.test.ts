@@ -5,6 +5,7 @@
 // audit trail that says which lines were redacted instead of calling the record altered, /verify and the signing
 // link after a purge, the export and the evidence pack, the disposition record that is never changed, and today's
 // delete and restore as they were.
+import { englishIf } from './words.ts';
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -790,7 +791,8 @@ test('with no schedule nothing is offered on the page; with one, Keep it and Hol
   assert.equal(on.filter((l) => /delete/i.test(l.label)).length, 1, 'one Delete');
   assert.ok(on.length <= 9);
   // The screens: what must be there, and what must not.
-  const read = (f: string) => fs.readFileSync(path.join(import.meta.dirname, '..', f), 'utf8');
+  // A screen moved into the catalogue is read with its English put back (lang-sender-rest, tests/words.ts).
+  const read = (f: string) => englishIf(f, fs.readFileSync(path.join(import.meta.dirname, '..', f), 'utf8'));
   const settings = read('src/components/settings/RetentionSettings.tsx'), page = read('src/components/sender/Retention.tsx'), envelope = read('src/app/app/envelopes/[id]/page.tsx');
   for (const w of ['Keep and delete', 'Delete completed documents after', 'Delete cancelled, declined and expired ones after', 'At the end', '>Holds<', '>Deletion record<', 'Download the deletion record', 'How this works', 'Off: nothing is deleted automatically.']) assert.ok(settings.includes(w), w);
   // No word of the first vocabulary between tags or in a quoted sentence of the two components.

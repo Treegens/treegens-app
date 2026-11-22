@@ -27,6 +27,8 @@ import { signerLanguage, consentLine } from './locales.ts';
 import { refuse, notePageLanguage } from './signlang.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { shownSender } from './sentfor.ts';
+import { signingSwitches, assertMayPassOn, keepFirstAsCopy, noteHow, keptCopyLink, KEPT_COPY_LINK } from './switches.ts';
+import { senderOf } from './envelopes.ts';
 // A recipient that is a group: whose link this is, who has taken the document on, and what a member's link may do.
 import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup, memberReported, memberWrongCode } from './groups.ts';
 // What happens around the certificate: later visits and the first look at the completed copy (evidence.ts).
@@ -58,6 +60,8 @@ import { delegateLinkOf, delegateLook, delegateFacts, delegateAway, delegateTake
 // A first or last name taken from theirs, and a date worked out from another, said in words (fieldkinds.ts).
 import { signerField } from './fieldkinds.ts';
 import { seal } from './colcrypt.ts';
+import { takeShared, sharesWith, sharedProps, noteSharedShown } from './collab.ts';
+import { paperSignFacts, paperGate } from './paper.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -92,6 +96,9 @@ export function look(c: Ctx, needUnlocked = true) {
   if (!r) {
     // 410 tells the page this link was replaced, so it can offer to send the current one instead of a dead end.
     if (get('SELECT 1 x FROM retired_tokens WHERE token=?', c.params.token)) {
+      // Someone who passed it on and stays on as a copy is told that, not offered a link that is no longer theirs.
+      // The sender is not alerted: this is the person they chose to keep on.
+      if (keptCopyLink(c.params.token)) throw new HttpError(410, KEPT_COPY_LINK, { code: 'kept_copy' });
       // The sender hears once that this replaced link was opened: it usually means someone is using the wrong email.
       void noteReplacedLink(c.params.token, { name: 'Someone with a replaced link', ip: c.ip, ua: c.ua }).catch(() => {});
       throw new HttpError(410, 'This link was replaced by a newer one.', { code: 'replaced' });
@@ -196,6 +203,10 @@ export function signView(c: Ctx, found: any, quiet = false): any {
   // To a signer with a witness: who and how far. To a witness: whose signature, and the statement they would tick.
   Object.assign(base.recipient, witnessFacts(e, r));
   Object.assign(base.recipient, paperFacts(r));
+  // Printing it, signing by hand and sending back a photo, when the sender's account offers it to this person (paper.ts).
+  Object.assign(base.recipient, { paper_sign: paperSignFacts(e, r, c.params.token) });
+  // What the sender's switches allow here: passing it on, writing a comment, the ways to make a signature (switches.ts).
+  Object.assign(base, { switches: signingSwitches(e) });
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
   // A member whose colleague has the document, or who was taken out of the group, is told so and shown no more.
   if (r.member && (r.group_state === 'taken' || r.group_state === 'removed')) return { ...base, locked: false };
@@ -207,6 +218,8 @@ export function signView(c: Ctx, found: any, quiet = false): any {
   // The server keeps which content version this screen was given. The screen sends the number back with every save
   // and with Finish, and one that comes from an older version is refused: see completeRecipient.
   if (!quiet && e.status === 'sent' && r.seen_version !== e.content_version) run('UPDATE recipients SET seen_version=? WHERE id=?', e.content_version, r.id);
+  // And what it was given for the fields anyone on the document can fill in (collab.ts).
+  if (!quiet) noteSharedShown(e, r);
   const byId = new Map<string, any>(e.recipients.map((x: any) => [x.id, x]));
   const signedBefore = String(r.signed_before || '').split('\n').filter(Boolean).pop() || null;
   const words = printedWords(e);
@@ -233,13 +246,14 @@ export function signView(c: Ctx, found: any, quiet = false): any {
     // Files given to read, not signed, are listed apart ("Also for you", supplements.ts), only when there are any.
     documents: toSign(e.documents).map((d: any) => ({ id: d.id, name: d.name, pages: d.pages, sha256: d.sha256 })),
     ...(e.documents.some(isSupplement) ? { supplements: supplementsFor(e, r) } : {}),
-    fields: e.fields.filter((f: any) => f.recipient_id === r.id).map(({ envelope_id: _e, ...f }: any, _i: number, mine: any[]) => signerField(f, r, mine)),
+    // With the fields anyone on the document can fill in, who changed each last (collab.ts).
+    fields: e.fields.filter((f: any) => f.recipient_id === r.id || sharesWith(f, r)).map(({ envelope_id: _e, ...f }: any, _i: number, mine: any[]) => sharedProps(e, r, signerField(f, r, mine))),
     // What is on the pages besides this person's own fields, shown read-only so they see the document as it stands.
     // Everything the sender wrote is there from the first look, whoever it is assigned to: a note or a read-only
     // value, and the name or address that a full name or email field prints, also for someone who only gets a copy
     // ('sender'), and a value its owner may still change ('start'). What another person filled in ('signer')
     // appears once that person has finished.
-    others: e.fields.filter((f: any) => f.recipient_id !== r.id && !hideOthers.has(f.id) && onShownDoc(e, f.document_id)).map((f: any) => {
+    others: e.fields.filter((f: any) => f.recipient_id !== r.id && !sharesWith(f, r) && !hideOthers.has(f.id) && onShownDoc(e, f.document_id)).map((f: any) => {
       const o = f.recipient_id ? byId.get(f.recipient_id) : null;
       const done = !f.recipient_id || o?.status === 'completed';
       return {
@@ -378,18 +392,24 @@ route('POST', '/sign/:token/print-check', async (c) => {
 route('POST', '/sign/:token/save', async (c) => {
   // Looked up after the body is in, so a save that crosses Finish can never change what was just signed.
   const b = await checkedBody(c);
-  const { e, r } = look(c);
+  const { e, r, actor } = look(c);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw notOpen(e, r);
   // A save from a screen that still shows the document as it was before a correction is not applied. The page
   // loads the new version, keeps the answers that still have a field, and asks the person to look again.
   const shown = shownVersion(r, b);
   if (shown != null && shown !== e.content_version) throw changedSince(e);
   applyValues(e, r, b.values || {}, false);
+  noteHow(e, r, b);
   // Someone typing is someone who is there: an unfinished start from a public form is not cleared under them.
   run('UPDATE recipients SET touched_at=? WHERE id=?', now(), r.id);
   // The chosen signature travels with "finish later", so picking up on another device does not mean signing again.
-  if (b.signature_png !== undefined || b.initials_png !== undefined)
-    run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', seal('recipients.signature_png', okImage(b.signature_png) ? b.signature_png : r.signature_png), seal('recipients.initials_png', okImage(b.initials_png) ? b.initials_png : r.initials_png), r.id);
+  // Only the picture that was sent is written: the other one stays exactly as stored (it may be one this server
+  // cannot open while a key is missing, and writing back what was read would lose it).
+  for (const k of ['signature_png', 'initials_png'] as const)
+    if (okImage(b[k])) run(`UPDATE recipients SET ${k}=? WHERE id=?`, seal(`recipients.${k}`, b[k]), r.id);
+  // Fields anyone on the document can fill in: each change on the record, decided before anything is waited for (collab.ts).
+  const shared = await takeShared(e, r, b, actor);
+  if (shared.changed) return { ok: true, shared };
 }, 'public');
 
 route('POST', '/sign/:token/upload', async (c) => {
@@ -413,6 +433,10 @@ route('POST', '/sign/:token/complete', async (c) => {
   // A witness the signer names is named first, and a witness's statement is ticked first (witness.ts).
   beforeFinish(c, e, r);
   counterBeforeFinish(e, r);
+  // How the signature and initials were made, refused when the account does not offer that way (switches.ts).
+  noteHow(e, r, body, true);
+  // Someone asked to sign on paper only, or whose scan waits for the sender, does not also sign on screen (paper.ts).
+  paperGate(e, r);
   await completeRecipient(e, r, body, actor);
   // The person a delegate signed for is told (delegation.ts).
   await delegateFinished(e, r.id, 'completed');
@@ -435,7 +459,10 @@ route('POST', '/sign/:token/decline', async (c) => {
 route('POST', '/sign/:token/reassign', async (c) => {
   const body = await checkedBody(c);
   const { e, r, actor } = look(c);
+  assertMayPassOn(e, senderOf(e)?.name || 'the sender');
   await reassignRecipient(e, r, body, actor);
+  // The first person stays on as someone who gets a copy, when the sender chose that (switches.ts).
+  keepFirstAsCopy(e, r, { email: str(body?.email, 254).trim() }, actor);
 }, 'public');
 
 route('POST', '/sign/:token/name', async (c) => {

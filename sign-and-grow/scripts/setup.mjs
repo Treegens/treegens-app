@@ -34,5 +34,5 @@ try {
 } catch {}
 const data = path.join(path.resolve(process.env.DATA_DIR || './data'), 'sign.db');
 console.log(`A new encryption key is in ${file} (FILE_ENCRYPTION_KEY). Stored files and the signatures, typed answers, comments, stored emails, decline reasons and help messages in the database are encrypted with it from the next start.`);
-console.log('Keep a copy of it somewhere safe and apart from the server and its backups. Without it nobody can read what was encrypted with it, and that includes us. A backup of the data folder alone cannot be read, which is the point.');
+console.log('Keep a copy of it somewhere safe and apart from the server and its backups. Without it nobody can read what was encrypted with it, not even the people who wrote this software. A backup of the data folder alone cannot be read, which is the point.');
 if (fs.existsSync(data)) console.log('This server already holds data. What was stored before stays as it was until you run: node scripts/encrypt-files.mjs and node scripts/encrypt-columns.mjs (the server also encrypts the database values by itself, a batch at a time).');

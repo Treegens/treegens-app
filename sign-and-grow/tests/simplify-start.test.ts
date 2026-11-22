@@ -9,6 +9,7 @@ import { NAV_START, NAV_MAIN, NAV_MORE, NAV_END, NAV_ENTRIES, TAB_BAR, IN_TAB_BA
 import { nameFromFile, listName } from '../src/lib/docname.ts';
 import { TOTALS_FROM, totalWorthShowing } from '../src/lib/impact.ts';
 import { CONFIRM_CODE_MAX_WRONG, CONFIRM_CODE_HOURS, CONFIRM_ADDRESS_DAYS, CONFIRM_BEFORE_SEND, CODE_REFUSED, cleanCode, showCode } from '../src/lib/confirm.ts';
+import { englishIf } from './words.ts';
 
 const { db } = await boot();
 
@@ -201,7 +202,8 @@ test('1. the code route is named in the API description as left out on purpose, 
   assert.match(gate, /verify-code/);
 });
 
-const read = (p: string) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 
 // ---- 2. One start button; Home shows what was completed, with Download ----------------------------------------------
 

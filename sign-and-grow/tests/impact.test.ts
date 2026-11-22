@@ -8,12 +8,14 @@ import { boot, Client, signUp, mailTo, simple, signAll, upload, tokenFor, type S
 import { stripe, unix } from './stripe-fake.ts';
 import { finishLine, mailLine, signerWords, senderWords, reviewPlus, recordLines, SOFT_LINE, TREES_PER_SIGNATURE } from '../src/lib/impactwords.ts';
 import { TOTALS_FROM, totalWorthShowing } from '../src/lib/impact.ts';
+import { englishIf } from './words.ts';
 
 let db: Server['db'];
 let billing: Server['billing'];
 let impact: typeof import('../src/server/impact.ts');
 
-const read = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 const textOf = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
 const aboveButton = (html: string) => textOf(html.slice(html.indexOf('<h1'), html.indexOf('<p style="margin:24px 0 8px">')));
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
@@ -100,7 +102,7 @@ test('the words: 10 mangroves only for a paid signature, the soft line for a fre
   assert.doesNotMatch(Object.values(afterFree).join(' '), /more/);
 
   const free = signerWords({ trees: 0, first: true, total: 0, sheets: 6 });
-  assert.equal(free.title, 'You signed your first GrowSigning');
+  assert.equal(free.title, 'You signed your first document with GrowSigning');
   assert.equal(free.line, 'You saved 6 pages of paper from a tree.');
   assert.equal(free.under, 'You saved 6 pages of paper from a tree.');
   assert.equal(free.count, '');
@@ -112,8 +114,8 @@ test('the words: 10 mangroves only for a paid signature, the soft line for a fre
   assert.equal(senderWords({ paid: 1, signers: 3, planted: 0, sheets: 15 }).promise, 'Each paid signature on it plants 10 mangroves with Treegens.');
   const trial = senderWords({ paid: 0, signers: 2, planted: 0, sheets: 15 });
   assert.equal(trial.promise, '', 'no signature on it is paid for: nothing is said about planting');
-  assert.equal(trial.title, 'Your first GrowSigning is out.');
-  assert.equal(trial.announce, 'Your first GrowSigning is out.');
+  assert.equal(trial.title, 'Your first document is out.');
+  assert.equal(trial.announce, 'Your first document is out.');
   assert.equal(trial.saving, 'Paper saved: 15 pages.', 'short: the envelope page is read on every send');
   assert.equal(trial.saved, 'This saved 15 pages of paper from a tree.');
   assert.equal(senderWords({ paid: 0, signers: 1, planted: 0, sheets: 1 }).saving, 'Paper saved: 1 page.');
@@ -328,7 +330,7 @@ test('the first envelope an account ever sends: the picture once, for the person
   const e1 = await send(p, 'f1@signers.example');
   const a = (await p.c.get(`/envelopes/${e1}/impact`)).data.sent;
   assert.deepEqual(a, { paid: 0, signers: 1, planted: 0, sheets: 1, celebrate: true });
-  assert.equal(senderWords(a).announce, 'Your first GrowSigning is out.', 'the trial plants nothing, so nothing is promised');
+  assert.equal(senderWords(a).announce, 'Your first document is out.', 'the trial plants nothing, so nothing is promised');
   assert.equal((await p.c.post(`/envelopes/${e1}/impact/seen`)).status, 200);
   assert.equal((await p.c.get(`/envelopes/${e1}/impact`)).data.sent.celebrate, false, 'shown once');
   const e2 = await send(p, 'f2@signers.example');

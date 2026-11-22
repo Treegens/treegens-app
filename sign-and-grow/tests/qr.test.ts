@@ -17,13 +17,15 @@ import { boot, Client, signUp, simple, draft, tokenFor, PNG, type Server } from 
 import { qrEncode, qrSvg, qrCapacity, qrSize, qrAlignment, qrPenalty, QrTooLong, QR_MAX_BYTES, QR_QUIET, type Qr } from '../src/lib/qr.ts';
 import * as words from '../src/lib/qrlink.ts';
 import { qrForLink, qrReach, QR_LINK_MAX, QR_SHOW_SECONDS, personScanLine, personCodeWarning, afterScanLine, hiddenLine, formCodeWarning, qrFileName, FORM_SCAN_LINE, FORM_LINK_LINE, FORM_PAUSED_LINE, OWN_PHONE_LINE, SCAN_TROUBLE } from '../src/lib/qrlink.ts';
+import { englishIf } from './words.ts';
 
 let db: Server['db'];
 before(async () => {
   ({ db } = await boot());
 });
 
-const read = (p: string) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 const rowsOf = (q: Qr) => q.modules.map((r) => r.map((on) => (on ? '#' : '.')).join(''));
 const hash = (q: Qr) => crypto.createHash('sha256').update(q.modules.map((r) => r.map((on) => (on ? '1' : '0')).join('')).join('\n')).digest('hex').slice(0, 16);
 const FILL = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_';

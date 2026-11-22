@@ -12,6 +12,7 @@ import { fail } from '@/components/sender/feedback';
 import { neverOpened, waitingOn } from '@/components/sender/lib';
 import { scheduledHome } from '@/components/sender/Timing';
 import { InstallHint } from '@/components/InstallHint';
+import { OnePersonLine } from '@/components/sender/OnePersonLine';
 // Every word in the sender's language (lang-sender, src/components/senderLang.tsx).
 import { useST, senderRich } from '@/components/senderLang';
 import { howLongIn, joinIn } from '@/lib/senderlang';
@@ -72,13 +73,8 @@ export default function Home() {
         </div>
       </div>
 
-      {/* A workspace that is paid for, or that more than one person works in, should never hang on one mailbox. */}
-      {me.role !== 'member' && me.admins < 2 && (me.members > 1 || me.account.plan !== 'seedling') && (
-        <div className="notice warn row between wrap" role="note">
-          <span><b>{T('home.one_person.title')}</b> {T('home.one_person.body', { email: me.user.email })}</span>
-          <Link href="/app/settings?tab=team" className="btn sm">{T('home.one_person.button')}</Link>
-        </div>
-      )}
+      {/* A team of two or more should never hang on one admin: one line that can be closed; the full words are in Settings, Team. */}
+      <OnePersonLine me={me} />
 
       {(todo.length > 0 || others.length > 0) && (
         <div className={`grid${todo.length > 0 && others.length > 0 ? ' g2' : ''} sn-waits`}>

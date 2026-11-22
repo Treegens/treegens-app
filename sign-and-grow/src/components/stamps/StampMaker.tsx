@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
-import { prepare, impression, lookFor, tiltFor, INKS, INK_WORD, INK_RGB, TILT_MAX, FINE_WARN_SHARE, FINE_WARN_TEXTURE, type Look, type Prepared, type InkFound, type Ink, type Rgba } from '@/lib/stampink';
+import { prepare, impression, lookFor, tiltFor, INKS, INK_RGB, TILT_MAX, FINE_WARN_SHARE, FINE_WARN_TEXTURE, type Look, type Prepared, type InkFound, type Ink, type Rgba } from '@/lib/stampink';
 import { stampFileProblem, tooManyPixels, turnStyle, STAMP_WORK_SIDE, STAMP_UPLOAD_MAX_PIXELS } from '@/lib/stamps';
+import { useStampT } from './words';
 
 // Turns a picture of a stamp into an impression that looks like ink, in this browser, on a canvas: the steps are in
 // src/lib/stampink.ts. Shows the picture as it came and the impression on a page of text side by side ("before" and
@@ -50,12 +51,13 @@ function toPng(img: Rgba): string {
 
 /** A short piece of a printed page, to see the stamp on. Words under the stamp show through it, as on paper. */
 export function OnPaper({ children, label, className }: { children?: React.ReactNode; label: string; className?: string }) {
+  const T = useStampT();
   return (
     <div className={`st-paper${className ? ` ${className}` : ''}`} role="img" aria-label={label}>
-      <p>The goods listed in the schedule were delivered in full and in good condition. Payment is due within thirty days of the date below.</p>
-      <p>Signed for and on behalf of the company:</p>
-      <div className="st-sigline"><span className="st-sig">J. Mwangi</span></div>
-      <p className="st-small">Name and title</p>
+      <p>{T('stamps.paper.p1')}</p>
+      <p>{T('stamps.paper.p2')}</p>
+      <div className="st-sigline"><span className="st-sig">{T('stamps.paper.sample_name')}</span></div>
+      <p className="st-small">{T('stamps.paper.name_title')}</p>
       {children}
     </div>
   );
@@ -72,6 +74,7 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
   mm?: number;
 }) {
   const id = useId();
+  const T = useStampT();
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [look, setLook] = useState<Look | null>(null);
   const [problem, setProblem] = useState('');
@@ -110,11 +113,12 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
         setPrepared(p);
         setLook(lookFor(newSeed(), p.found.ink, p));
       })
-      .catch((e: any) => live && (setProblem(e?.said ? e.message : file.type === 'image/webp' ? `"${file.name}" is a WebP picture, and this browser cannot read WebP. Choose a PNG or JPEG instead.` : `We could not read "${file.name}" as a picture. Choose another picture of the stamp, or take a photo of it.`), setBusy(false)));
+      .catch((e: any) => live && (setProblem(e?.said ? e.message : file.type === 'image/webp' ? T('stamps.webp', { file: file.name }) : T('stamps.unreadable', { file: file.name })), setBusy(false)));
     return () => {
       live = false;
       URL.revokeObjectURL(url);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file]);
 
   // Making the impression: again after every change of a control, a moment after the last one.
@@ -143,107 +147,107 @@ export function StampMaker({ file, from, onMade, sizeLabel, mm }: {
   }, [prepared, look, from, mm]);
 
   if (problem) return <div className="notice err" role="alert">{problem}</div>;
-  if (!prepared || !look) return <p className="muted" role="status">Reading the picture</p>;
+  if (!prepared || !look) return <p className="muted" role="status">{T('stamps.reading')}</p>;
   const set = (p: Partial<Look>) => setLook((l) => (l ? { ...l, ...p } : l));
   // What was found in the part of the picture that is used (after cutting off its edges).
   const f = result?.found || prepared.found;
   const crop = look.crop || { left: 0, top: 0, right: 0, bottom: 0 };
   // The colour "Only the ... marks" keeps: the ink chosen when the picture has marks in it, or else the main colour.
   const kept = f.colours?.some((c) => c.ink === look.ink && c.hue != null && c.share >= 0.06) ? look.ink : f.ink;
-  const keptWord = INK_WORD[kept].toLowerCase();
+  const keptWord = T.inkLower(kept);
   const design = !prepared.photo;
 
   return (
     <div className="st-maker">
       <div className="st-compare">
         <figure>
-          <figcaption>Before: your picture</figcaption>
-          <OnPaper label="Your picture as it came, pasted on a page of text">
+          <figcaption>{T('stamps.before')}</figcaption>
+          <OnPaper label={T('stamps.before_label')}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img className="st-on st-before" src={before} alt="" />
           </OnPaper>
         </figure>
         <figure>
-          <figcaption>After: printed like ink</figcaption>
-          <OnPaper label={result?.png ? `The stamp in ${INK_WORD[look.ink].toLowerCase()} ink on a page of text. The words under it show through.` : 'No stamp yet'}>
+          <figcaption>{T('stamps.after')}</figcaption>
+          <OnPaper label={result?.png ? T('stamps.after_label', { ink: T.inkLower(look.ink) }) : T('stamps.no_stamp_yet')}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             {result?.png && <img className="st-on st-ink" src={result.png} alt="" style={turnStyle(look.tilt)} />}
           </OnPaper>
         </figure>
       </div>
-      <p className="muted small" role="status" aria-live="polite">{busy ? 'Making the stamp' : result?.empty ? '' : `Ready. ${sizeLabel || ''}`}</p>
-      {f.empty && <div className="notice warn" role="alert">We could not find a stamp in this picture: it looks like blank paper. Choose a picture where the stamp is darker than the paper around it.</div>}
+      <p className="muted small" role="status" aria-live="polite">{busy ? T('stamps.making') : result?.empty ? '' : T('stamps.ready', { size: sizeLabel || '' }).trim()}</p>
+      {f.empty && <div className="notice warn" role="alert">{T('stamps.blank')}</div>}
       {/* Small type and hairline rings at this size: the rubber texture breaks them into specks (fineShare in stampink.ts). */}
       {!busy && result && !result.empty && evened && look.texture <= FINE_WARN_TEXTURE && (
-        <p className="notice small st-fine">This stamp has very thin lines at this size, so we printed it with even ink to keep them whole. You can change this under &ldquo;Adjust the look&rdquo;.</p>
+        <p className="notice small st-fine">{T('stamps.evened')}</p>
       )}
       {!busy && result && !result.empty && result.fine >= FINE_WARN_SHARE && look.texture > FINE_WARN_TEXTURE && (
-        <p className="notice small st-fine">Some lines and letters are very thin at this size, and the rubber texture can break them up when printed. To keep them clean, open &ldquo;Adjust the look&rdquo; and move &ldquo;Rubber texture&rdquo; towards &ldquo;Even ink&rdquo;.</p>
+        <p className="notice small st-fine">{T('stamps.fine')}</p>
       )}
-      {!f.empty && result?.empty && <div className="notice warn" role="alert">Nothing is left at these settings. Under &ldquo;Adjust the look&rdquo;, move &ldquo;What counts as paper&rdquo; towards &ldquo;Keep faint marks&rdquo;, or cut less off the edges.</div>}
+      {!f.empty && result?.empty && <div className="notice warn" role="alert">{T('stamps.nothing_left')}</div>}
       {f.several && (
         <p className="notice small">
-          {design ? 'This picture has marks in more than one colour, like a logo.' : 'This photo has marks in other colours too, such as printed text or lines around the stamp.'} A real stamp prints in one ink, so {look.onlyInk && f.hue != null ? <>only the {keptWord} marks are kept, in the ink you choose. To keep every mark, untick &ldquo;Only the {keptWord} marks&rdquo; under &ldquo;Adjust the look&rdquo;.</> : <>every mark is printed in the ink you choose{design && look.gaps ? ', with a thin gap of paper where two colours meet so the shapes stay apart' : ''}.</>}
-          {design && <> A logo made for screens often looks less like a real stamp than a design made for one ink. If you have the stamp itself, a photo of it pressed on paper works best.</>}
+          {design ? T('stamps.several_design') : T('stamps.several_photo')} {look.onlyInk && f.hue != null ? T('stamps.only_kept', { ink: keptWord }) : design && look.gaps ? T('stamps.every_mark_gaps') : T('stamps.every_mark')}
+          {design && <> {T('stamps.logo_note')}</>}
         </p>
       )}
 
       <fieldset className="st-inks">
-        <legend>Ink{prepared.found.empty ? '' : <span className="hint"> (we found {INK_WORD[prepared.found.ink].toLowerCase()} and chose it for you)</span>}</legend>
+        <legend>{T('stamps.ink_legend')}{prepared.found.empty ? '' : <span className="hint"> {T('stamps.ink_found', { ink: T.inkLower(prepared.found.ink) })}</span>}</legend>
         {INKS.map((k: Ink) => (
           <label key={k} className={`st-swatch${look.ink === k ? ' on' : ''}`}>
             <input type="radio" name={`${id}-ink`} value={k} checked={look.ink === k} onChange={() => set({ ink: k })} />
             <span className="st-dot" style={{ background: `rgb(${INK_RGB[k].join(',')})` }} aria-hidden="true" />
-            {INK_WORD[k]}
+            {T.ink(k)}
           </label>
         ))}
       </fieldset>
 
       <details className="st-adjust" data-fold open={adjust} onToggle={(e) => setAdjust((e.target as HTMLDetailsElement).open)}>
-      <summary>Adjust the look</summary>
+      <summary>{T('stamps.adjust')}</summary>
       <div className="st-controls">
         <label className="f st-range">
-          <span id={`${id}-paper-l`}>What counts as paper</span>
+          <span id={`${id}-paper-l`}>{T('stamps.paper_label')}</span>
           <input type="range" min={0} max={100} value={Math.round(look.paper * 100)} onChange={(e) => set({ paper: Number(e.target.value) / 100 })} aria-labelledby={`${id}-paper-l`} aria-describedby={`${id}-paper`} />
-          <span id={`${id}-paper`} className="st-ends muted small"><span>Keep faint marks</span><span>Take more away</span></span>
+          <span id={`${id}-paper`} className="st-ends muted small"><span>{T('stamps.paper_keep')}</span><span>{T('stamps.paper_more')}</span></span>
         </label>
         <label className="f st-range">
-          <span id={`${id}-tex-l`}>Rubber texture</span>
+          <span id={`${id}-tex-l`}>{T('stamps.texture_label')}</span>
           <input type="range" min={0} max={100} value={Math.round(look.texture * 100)} onChange={(e) => set({ texture: Number(e.target.value) / 100 })} aria-labelledby={`${id}-tex-l`} aria-describedby={`${id}-tex`} />
-          <span id={`${id}-tex`} className="st-ends muted small"><span>Even ink</span><span>A well-worn stamp</span></span>
+          <span id={`${id}-tex`} className="st-ends muted small"><span>{T('stamps.texture_even')}</span><span>{T('stamps.texture_worn')}</span></span>
         </label>
         <div className="f st-range">
-          <label htmlFor={`${id}-tilt`}>Tilt: {look.tilt === 0 ? 'straight' : `${Math.abs(look.tilt).toFixed(1)} degrees ${look.tilt > 0 ? 'clockwise' : 'anticlockwise'}`}</label>
+          <label htmlFor={`${id}-tilt`}>{look.tilt === 0 ? T('stamps.tilt_straight') : T(look.tilt > 0 ? 'stamps.tilt_clockwise' : 'stamps.tilt_anticlockwise', { degrees: Math.abs(look.tilt).toFixed(1) })}</label>
           <input id={`${id}-tilt`} type="range" min={-TILT_MAX * 10} max={TILT_MAX * 10} value={Math.round(look.tilt * 10)} onChange={(e) => set({ tilt: Number(e.target.value) / 10 })} />
           <div className="row st-row">
-            <button type="button" className="btn sm" onClick={() => set({ tilt: 0 })} disabled={look.tilt === 0}>Straight</button>
-            <button type="button" className="btn sm" onClick={() => { const seed = newSeed(); set({ seed, tilt: tiltFor(seed) }); }}>A different look</button>
+            <button type="button" className="btn sm" onClick={() => set({ tilt: 0 })} disabled={look.tilt === 0}>{T('stamps.straight')}</button>
+            <button type="button" className="btn sm" onClick={() => { const seed = newSeed(); set({ seed, tilt: tiltFor(seed) }); }}>{T('stamps.different_look')}</button>
           </div>
         </div>
         {f.hue != null && (
           <label className="check st-check">
             <input type="checkbox" checked={look.onlyInk} onChange={(e) => set({ onlyInk: e.target.checked })} />
-            <span>Only the {keptWord} marks <span className="hint">(leaves out printed black text and lines in other colours around the stamp)</span></span>
+            <span>{T('stamps.only_ink', { ink: keptWord })} <span className="hint">{T('stamps.only_ink_hint')}</span></span>
           </label>
         )}
         {design && f.several && !look.onlyInk && (
           <label className="check st-check">
             <input type="checkbox" checked={!!look.gaps} onChange={(e) => set({ gaps: e.target.checked })} />
-            <span>Keep the shapes apart <span className="hint">(a thin gap of paper where two colours meet, so a shape inside another does not vanish in one ink)</span></span>
+            <span>{T('stamps.gaps')} <span className="hint">{T('stamps.gaps_hint')}</span></span>
           </label>
         )}
         {result?.oval && (
           <label className="check st-check">
             <input type="checkbox" checked={!!look.round} onChange={(e) => set({ round: e.target.checked })} />
-            <span>Make it round <span className="hint">(the stamp looks like an oval, as a round seal does in a photo taken at a slant)</span></span>
+            <span>{T('stamps.round')} <span className="hint">{T('stamps.round_hint')}</span></span>
           </label>
         )}
         <fieldset className="st-edges">
-          <legend>Cut off the edges of the picture</legend>
-          <p className="muted small">For a photo with something else in it, such as other writing or the edge of a table.</p>
+          <legend>{T('stamps.edges')}</legend>
+          <p className="muted small">{T('stamps.edges_hint')}</p>
           {(['left', 'right', 'top', 'bottom'] as const).map((side) => (
             <label key={side} className="f st-range">
-              <span>{side[0].toUpperCase() + side.slice(1)}: {Math.round(crop[side] * 100)} percent</span>
+              <span>{T(`stamps.edge.${side}`, { percent: String(Math.round(crop[side] * 100)) })}</span>
               <input type="range" min={0} max={45} value={Math.round(crop[side] * 100)} onChange={(e) => set({ crop: { ...crop, [side]: Number(e.target.value) / 100 } })} />
             </label>
           ))}

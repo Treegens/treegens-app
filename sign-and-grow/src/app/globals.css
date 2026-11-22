@@ -263,6 +263,8 @@ body.ed-pulling, body.ed-pulling * { cursor: grabbing !important; user-select: n
    src/lib/simplicity.ts). :where() keeps the weight at zero, so a box that sits on a document page, a chip or any rule
    that sets its own size still wins. Checkboxes and radios keep their size: their label is the target. */
 :where(.btn, .steps button, .side button, .tabs button, summary.btn) { min-height: 44px; }
+:where(.tabs button, .tabs a) { min-width: 44px; }
+:where(input[type='color']) { min-height: 44px; min-width: 44px; }
 :where(.pub-toc a) { display: inline-flex; align-items: center; min-height: 44px; }
 :where(input:not([type='checkbox'], [type='radio'], [type='color'], [type='range'], [type='file'], [type='hidden']), select) { min-height: 44px; }
 :where(.btn.sm, .steps button) { min-width: 44px; }

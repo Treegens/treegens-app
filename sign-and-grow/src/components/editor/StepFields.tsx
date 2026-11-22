@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMe } from '../AppShell';
 import { newId, toast } from '../ui';
 import { PdfDoc } from '../PdfDoc';
 import { findFields, overlap, scanPdf, type Found, type PageScan } from '@/lib/autoplace';
@@ -20,6 +21,7 @@ import { stampBox, STAMP_DEFAULT_MM, turnStyle } from '@/lib/stamps';
 import { ConvertNotes } from './ConvertNotes';
 // First or last name, dates from dates, same answer, text style and the team's saved fields (src/lib/fieldkinds.ts).
 import { NameChoice, DateFrom, FieldLookMore, SavedPalette, kindTitle, onlyDateSource, ButtonWordsNote } from './FieldLook';
+import { AnyoneOption, SharedChoice, assignedValue, assignPatch } from './SharedChoice';
 import { paletteKinds, personLabel } from '@/lib/editorux';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
@@ -68,7 +70,10 @@ export function StepFields({ ed }: { ed: Ed }) {
   // A field's More options is closed every time another field is selected.
   useEffect(() => setFieldMore(false), [sel]);
   // The kinds of field already on this document stay in the short list (src/lib/editorux.ts paletteKinds).
+  // A member whose admins turned stamps off gets no Stamp field to add (src/server/switches.ts); one already there stays.
+  const me = useMe();
   const kinds = paletteKinds(TYPES.map((t) => t[0]), { open: allTypes, tool, used: list.map((f) => f.type) });
+  if (me?.no_stamps && !list.some((f) => f.type === 'stamp') && kinds.includes('stamp')) kinds.splice(kinds.indexOf('stamp'), 1);
   const selLocked = !!selected && isLockedField(selected);
   const patchField = (fid: string, p: any, key = Object.keys(p).join()) => setFields((l) => l.map((f) => (f.id === fid ? { ...f, ...p } : f)), { tag: `prop:${fid}:${key}` });
   // Fields that depended on the deleted one are put right in the same step, and the sender is told (withoutField).
@@ -589,14 +594,17 @@ export function StepFields({ ed }: { ed: Ed }) {
                   <StampChoice field={selected} open={open} envelopeId={env.id} page={docs.find((d) => d.id === selected.document_id)?.page_sizes?.[selected.page] || { w: 612, h: 792 }} patch={(p) => patchField(selected.id, p)} />
                 ) : !SENDER_MARK(selected.type) && (
                   <label className="f"><span>Assigned to</span>
-                    <select value={selected.recipient_id || ''} onChange={(e) => patchField(selected.id, { recipient_id: e.target.value })}>
+                    <select value={assignedValue(selected, open)} onChange={(e) => patchField(selected.id, assignPatch(e.target.value, selected, open))}>
                       {/* An Approve or Decline button can also be for someone who approves (src/lib/fieldkinds.ts). */}
                       {(selected.type === 'approve' || selected.type === 'decline' ? [...open, ...rcps.filter((r) => r.role === 'approver' && !ed.isIdle(r))] : open).map((r) => <option key={r.id} value={r.id}>{label(r)}</option>)}
+                      {/* "Anyone on the document", for text, choice, dropdown and tick-box fields (SharedChoice.tsx). */}
+                      <AnyoneOption field={selected} people={open} />
                     </select>
                   </label>
                 )}
+                <SharedChoice field={selected} people={open} patch={(p) => patchField(selected.id, p)} />
                 {/* A calculated field is never typed into: not required, no prefilled value (FieldLogic.tsx). */}
-                {!SENDER_MARK(selected.type) && !senderStamp(selected) && !['date_signed', 'full_name', 'email', 'approve', 'decline'].includes(selected.type) && selected.formula == null && !selected.date_from && (
+                {!SENDER_MARK(selected.type) && !senderStamp(selected) && !['date_signed', 'full_name', 'email', 'approve', 'decline'].includes(selected.type) && selected.formula == null && !selected.date_from && !selected.shared && (
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
                 )}
                 {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}

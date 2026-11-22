@@ -325,7 +325,7 @@ route('POST', '/public/support', async (c) => {
   // The help chat the writer chose to send along ("Talk to a person" in the chat), for the people who answer only:
   // never in an email, never to the document's sender (src/server/chat.ts attachedChat).
   const chat = attachedChat(b.chat);
-  if (chat) run('UPDATE support_requests SET chat=? WHERE id=?', JSON.stringify(chat), t.id);
+  if (chat) run('UPDATE support_requests SET chat=? WHERE id=?', seal('support_requests.chat', JSON.stringify(chat)), t.id);
   await announce(t, chat ? [`The writer attached their chat with the helper (${chat.length} lines). Read it with the request in the queue.`] : []);
   await acknowledge(t);
   // A problem with signing that names a document the writer is a recipient of also goes to its sender, who can

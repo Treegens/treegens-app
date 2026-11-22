@@ -129,7 +129,9 @@ export function pageMore(o: {
   if (!o.removed && sent) add('cancel', 'Cancel the request', true);
   if (!o.isTemplate && !o.purged && o.schedule && o.mayKeep) add('keep', 'Keep it');
   if (!o.isTemplate && !o.purged && o.mayHold && o.heldHere) add('lift_hold', 'Lift the hold');
-  else if (!o.isTemplate && !o.purged && o.mayHold && o.schedule) add('hold', 'Hold');
+  // Not while it is out (repair-simplicity-r6, charter P4: at most 9 lines): nothing deletes a document that is out,
+  // so Hold is offered here once it closes; until then an admin holds it from Settings, Records and data, Holds.
+  else if (!o.isTemplate && !o.purged && o.mayHold && o.schedule && !sent) add('hold', 'Hold');
   // Delete is not offered for a document its sender already removed, and Delete is where removing the files for
   // good starts. So an admin gets that line here, without putting the document back into everyone's lists first.
   // Only with a deletion schedule on: without one, an admin starts this from Settings (charter P3).

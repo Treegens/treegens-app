@@ -99,7 +99,7 @@ export function GroupMembers({ e, r, deliveries, onChanged }: { e: any; r: any; 
           <button type="button" className="btn sm" onClick={() => setReleasing(true)} aria-label={`Give ${r.group_name} back to the whole group`}>Give back to the group</button>
         </div>
       )}
-      {out && r.status !== 'completed' && <p className="muted small" style={{ margin: '6px 0 0' }}>To change who is in {r.group_name} on this document, choose Edit, in More at the top of the page. Changing the group under Contacts does not change envelopes already sent.</p>}
+      {out && r.status !== 'completed' && <p className="muted small" style={{ margin: '6px 0 0' }}>To change who is in {r.group_name} on this document, choose Edit, in More at the top of the page. Changing the group under Contacts does not change documents already sent.</p>}
       {releasing && (
         <ConfirmDialog title={`Give back to ${r.group_name}`} confirmLabel="Give it back" keepLabel={`Leave it with ${r.name}`} danger={false} onClose={() => setReleasing(false)}
           onConfirm={async () => {

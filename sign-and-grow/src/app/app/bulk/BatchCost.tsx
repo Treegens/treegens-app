@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { api, useLoad, oops, fmtDate } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { PRICING, mangrovesFor } from '@/lib/impact';
-import { plural } from '@/components/sender/lib';
+import { useST } from '@/components/senderLang';
+import { senderT } from '@/lib/senderlang';
 import type { BulkRow } from '@/components/sender/csv';
 import type { BouncedAddress } from '@/lib/mailnews';
 
@@ -47,17 +48,18 @@ export function useBatchCheck(templateId: string, rows: BulkRow[], again = 0): {
 const usd = (n: number) => `$${n}`;
 
 /** One sentence for the confirm dialog, so the count is said once more at the moment of sending. */
-export function batchLine(c: BatchCheck | null): string {
+export function batchLine(c: BatchCheck | null, lang = 'en'): string {
   if (!c?.counted) return '';
-  if (c.need === 0) return 'This batch uses none of your signatures.';
-  return `This batch holds ${plural(c.need, 'signature')} of the ${c.have} you have ready, one for each person who signs. A signature is only used when that person actually signs.`;
+  if (c.need === 0) return senderT(lang, 'bulk.cost.none_used');
+  return senderT(lang, 'bulk.cost.line', { count: c.need, have: c.have });
 }
 
 export function BatchCost({ check, failed, onPaying }: { check: BatchCheck | null; failed: boolean; onPaying?: () => void }) {
   const me = useMe();
+  const T = useST();
   const [b] = useLoad(() => api('/billing'));
-  if (failed) return <p className="muted small" role="status" id="sn-batch-cost">We could not count what this list holds just now. The count is checked again when you send, and nothing goes out unless all of it can.</p>;
-  if (!check) return <p className="muted small" role="status" id="sn-batch-cost">Counting what this list holds…</p>;
+  if (failed) return <p className="muted small" role="status" id="sn-batch-cost">{T('bulk.cost.failed')}</p>;
+  if (!check) return <p className="muted small" role="status" id="sn-batch-cost">{T('bulk.cost.counting')}</p>;
   const c = check;
   const admin = me.role !== 'member';
   const pay = (path: string, body?: any) => {
@@ -66,20 +68,20 @@ export function BatchCost({ check, failed, onPaying }: { check: BatchCheck | nul
   };
   const refused = c.refusal && (
     <div className="notice err" role="alert">
-      <b>This batch would not go out as it stands.</b> {c.refusal.message}
+      <b>{T('bulk.cost.refused')}</b> {c.refusal.message}
     </div>
   );
   if (!c.counted) return refused ? <div id="sn-batch-cost">{refused}</div> : null; // payments are not connected, so nothing is counted
-  const perRow = c.signers_per_row > 1 ? ` (${c.signers_per_row} people sign each of the ${plural(c.rows, 'row')})` : '';
+  const perRow = c.signers_per_row > 1 ? T('bulk.cost.per_row', { people: c.signers_per_row, count: c.rows }) : '';
   if (c.need === 0)
-    return <div id="sn-batch-cost">{refused}<div className="notice">This batch uses none of your signatures. Approving, viewing and copies are always free, and so is your own signature on your own document.</div></div>;
+    return <div id="sn-batch-cost">{refused}<div className="notice">{T('bulk.cost.free')}</div></div>;
   if (c.short === 0)
     return (
       <div id="sn-batch-cost">
         {refused}
         <div className="notice">
-          <b>This batch holds {plural(c.need, 'signature')}</b> of the {c.have} you have ready, one for each person who signs{perRow}. That leaves you {c.have - c.need}.
-          {' '}A signature is only used when that person actually signs. If you void the batch, or someone declines or runs out of time, theirs comes straight back.
+          <b>{T('bulk.cost.holds', { count: c.need })}</b> {T('bulk.cost.holds_rest', { have: c.have, perRow, left: c.have - c.need })}
+          {' '}{T('bulk.cost.holds_back')}
         </div>
       </div>
     );
@@ -92,20 +94,20 @@ export function BatchCost({ check, failed, onPaying }: { check: BatchCheck | nul
     <div id="sn-batch-cost">
       {refused}
       <div className="notice warn" role="status">
-        <b>This batch holds {plural(c.need, 'signature')} and you have {c.have} ready, so {c.short} {c.short === 1 ? 'is' : 'are'} missing.</b>
-        {' '}One is held for each person who signs{perRow}. A batch only goes out when all of it can, so nothing would be sent yet. Nothing is charged unless you choose it. You can:
+        <b>{T('bulk.cost.short', { count: c.need, have: c.have, short: c.short })}</b>
+        {' '}{T('bulk.cost.short_rest', { perRow })}
         <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
           {c.plan === 'grove'
-            ? <li><b>Top up {plural(c.short, 'signature')} for {usd(cost.top_up_usd)}.</b> One payment, nothing recurring, and it plants {mangrovesFor(cost.top_up_usd)} mangrove trees.{tooBig ? ` One top-up holds up to ${PRICING.topUpMax}, so this takes more than one payment on the Plan page.` : ''}{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>
-            : <li><b>Start the monthly plan for {usd(cost.plan_usd)} a month,</b> which brings {plural(cost.plan_signatures, 'signature')} with every payment and can be cancelled in one click.{cost.top_up > 0 ? <> Then <b>top up the other {cost.top_up} for {usd(cost.top_up_usd)}</b>. That is <b>{usd(cost.usd)} in all</b> before this batch can go out.</> : ' That covers this batch.'}{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>}
-          {fits > 0 && <li><b>Send a shorter list now.</b> The first {plural(fits, 'row')} could go out with what you have.</li>}
-          {next && c.plan === 'grove' && <li><b>Wait.</b> The next {plural(PRICING.monthlySignatures, 'signature')} arrive on {fmtDate(next)}.</li>}
+            ? <li><b>{T('bulk.cost.top_up', { count: c.short, price: usd(cost.top_up_usd) })}</b> {T('bulk.cost.top_up_rest', { trees: mangrovesFor(cost.top_up_usd) })}{tooBig ? ` ${T('bulk.cost.too_big', { max: PRICING.topUpMax })}` : ''}{!admin && ` ${T('bulk.cost.admin_can')}`}</li>
+            : <li><b>{T('bulk.cost.plan', { price: usd(cost.plan_usd) })}</b> {T('bulk.cost.plan_rest', { count: cost.plan_signatures })}{cost.top_up > 0 ? <> {T('bulk.cost.then')} <b>{T('bulk.cost.then_top_up', { count: cost.top_up, price: usd(cost.top_up_usd) })}</b>. {T('bulk.cost.that_is')} <b>{T('bulk.cost.in_all', { price: usd(cost.usd) })}</b> {T('bulk.cost.before_batch')}</> : ` ${T('bulk.cost.covers')}`}{!admin && ` ${T('bulk.cost.admin_can')}`}</li>}
+          {fits > 0 && <li><b>{T('bulk.cost.shorter')}</b> {T('bulk.cost.shorter_rest', { count: fits })}</li>}
+          {next && c.plan === 'grove' && <li><b>{T('bulk.cost.wait')}</b> {T('bulk.cost.wait_rest', { count: PRICING.monthlySignatures, day: fmtDate(next) })}</li>}
         </ul>
-        <p className="small" style={{ margin: '8px 0 0' }}>What nobody signs is not lost: it comes back to your balance when you void the batch or it runs out of time (unless its own date has passed by then, when it expires instead), and signatures you have not used and that have not expired are refunded on request within the refund window. Paying opens the payment page in this tab. Your list is kept in this browser tab, so it is still here when you come back to Bulk send.</p>
+        <p className="small" style={{ margin: '8px 0 0' }}>{T('bulk.cost.not_lost')}</p>
         <div className="row wrap" style={{ marginTop: 10 }}>
-          {admin && b?.enabled && c.plan === 'grove' && !tooBig && <button type="button" className="btn sm primary" onClick={() => pay('/billing/topup', { quantity: c.short })}>Pay {usd(cost.top_up_usd)} and add {plural(c.short, 'signature')}</button>}
-          {admin && b?.enabled && c.plan !== 'grove' && <button type="button" className="btn sm primary" onClick={() => pay('/billing/checkout')}>Start the plan for {usd(cost.plan_usd)} a month</button>}
-          <Link href="/app/settings?tab=billing" className="btn sm" onClick={() => onPaying?.()}>Open the Plan page</Link>
+          {admin && b?.enabled && c.plan === 'grove' && !tooBig && <button type="button" className="btn sm primary" onClick={() => pay('/billing/topup', { quantity: c.short })}>{T('bulk.cost.pay', { price: usd(cost.top_up_usd), count: c.short })}</button>}
+          {admin && b?.enabled && c.plan !== 'grove' && <button type="button" className="btn sm primary" onClick={() => pay('/billing/checkout')}>{T('bulk.cost.start_plan', { price: usd(cost.plan_usd) })}</button>}
+          <Link href="/app/settings?tab=billing" className="btn sm" onClick={() => onPaying?.()}>{T('bulk.cost.open_plan')}</Link>
         </div>
       </div>
     </div>

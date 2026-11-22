@@ -305,7 +305,7 @@ export function recordMail(m: Mail): number | bigint {
   );
   // The copy for the account's archive addresses, made now while the whole email is known (archivemail.ts).
   const draft = archiveDraft(m);
-  if (draft) run('UPDATE emails SET archive_draft=? WHERE id=?', draft, r.lastInsertRowid);
+  if (draft) run('UPDATE emails SET archive_draft=? WHERE id=?', seal('emails.archive_draft', draft), r.lastInsertRowid);
   return r.lastInsertRowid;
 }
 export async function deliverQueued(id: number | bigint): Promise<MailStatus | null> {

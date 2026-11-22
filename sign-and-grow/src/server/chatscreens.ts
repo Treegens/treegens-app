@@ -29,15 +29,15 @@ export const SIGN_ACTIONS: Record<(typeof ACTION_ORDER)[number], { label: string
   later: { label: 'Finish later', when: 'always, also on the first screen before agreeing' },
   time: { label: 'Ask the sender for more time', when: 'only when the document has a deadline; the page shows the sender\'s name in it' },
   handback: { label: 'Hand back to the group', when: 'only for someone who took on a document that was sent to a group' },
-  reassign: { label: 'Pass to someone else', when: 'for a signer or an approver, unless the document went to a group' },
-  ask: { label: 'Questions and comments', when: 'always' },
+  reassign: { label: 'Pass to someone else', when: 'for a signer or an approver, unless the document went to a group or the sender turned passing on off for this document' },
+  ask: { label: 'Questions and comments', when: 'always, unless the sender turned questions and comments off for this document; then the person asks by replying to the email they got' },
   paper: null,
   decline: { label: 'Decline to sign', when: 'for everyone who signs or approves; always the last entry' },
 };
 /** The entry only a witness has (WITNESS_ACTIONS in the same file of the page). */
 export const WITNESS_LABELS = { absent: 'I was not there' } as const;
 /** Labels on the signing page that are not entries of Other actions. */
-export const SIGN_LABELS = { menu: 'Other actions', next: 'Next', finish: 'Finish', report: 'Report this request', more: 'More', textView: 'Easy reading', download: 'Download the document', stopReminders: 'Stop reminder emails', fixName: 'Fix my name', check: 'Check before you finish' } as const;
+export const SIGN_LABELS = { menu: 'Other actions', next: 'Next', finish: 'Finish', report: 'Report this request', more: 'View', textView: 'Easy reading', download: 'Download the document', stopReminders: 'Stop reminder emails', fixName: 'Fix my name', check: 'Check before you finish' } as const;
 /** Labels in the app, for people who send. `where` is the source file each one is read from in the tests. */
 export const APP_LABELS = {
   start: { label: 'Send a document', where: 'src/lib/nav.ts' },
@@ -114,7 +114,7 @@ export const SIGNER_FAQ: Faq[] = [
   { id: 'decline', acts: ['decline', 'ask'], words: ['decline', 'do not want to sign', "don't want to sign", 'not want to sign', 'refuse to sign', 'not going to sign', 'say no', 'will not sign', "won't sign", 'disagree'],
     answer: (s) => `You do not have to sign. ${other(s)}, then ${S.decline!.label}, and add a short reason. That closes the document for everyone, and the sender is told why. Only a question? Choose ${S.ask!.label} instead.` },
   { id: 'pass', acts: ['reassign', 'ask'], words: ['someone else', 'wrong person', 'not for me', 'not meant for me', 'pass it', 'pass this', 'forward', 'reassign', 'another person', 'instead of me', 'right person', 'my boss', 'my manager', 'my colleague', 'delegate'],
-    answer: (s) => `${other(s)}, then ${S.reassign!.label}, and give their name and email address. They get their own link, yours stops working, and the sender is told. If it is not in your list, choose ${S.ask!.label} and ask the sender to change the person.` },
+    answer: (s) => `${other(s)}, then ${S.reassign!.label}, and give their name and email address. They get their own link, yours stops working, and the sender is told. Not in your list? The sender may have turned it off: reply to their email and ask them to change the person.` },
   { id: 'ask-sender', acts: ['ask', 'later'], words: ['question for the sender', 'ask the sender', 'contact the sender', 'tell the sender', 'write to the sender', 'comment', 'do not understand', "don't understand", 'not understand', 'unclear', 'wrong in the document', 'mistake in the document', 'error in the document', 'change the document', 'wrong amount', 'wrong date', 'contract is wrong', 'document is wrong', 'agreement is wrong', 'what does this mean'],
     answer: (s) => `${other(s)}, then ${S.ask!.label}. What you write goes to the sender, and their answer appears in the same place. ${S.later!.label} keeps your place while you wait. The helper cannot see your document and cannot say what it means.` },
   { id: 'paper', acts: ['ask'], words: ['on paper', 'paper copy', ' print', 'by hand', 'handwritten', 'wet ink', 'with a pen'],

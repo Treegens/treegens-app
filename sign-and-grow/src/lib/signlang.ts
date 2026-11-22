@@ -48,8 +48,12 @@ export function pseudoMessage(text: string, tag: PseudoLocale): string {
   }
   if (tag === 'ar-XB') return body;
   const plain = text.replace(/\{[^{}]*\}/g, '').length;
-  return `[${body}${plain ? ` ${'~'.repeat(Math.max(1, Math.round(plain * 0.4)))}` : ''}]`;
+  return `[${body}${plain ? ` ${padding(Math.max(1, Math.round(plain * 0.4)))}` : ''}]`;
 }
+
+// The extra length as words of six that a line may break between, so a long sentence wraps on a phone the way real
+// words would, rather than running off the screen as one unbreakable run. A short text keeps one run.
+const padding = (n: number): string => (n <= 12 ? '~'.repeat(n) : ('~~~~~~ '.repeat(Math.floor(n / 6)) + '~'.repeat(n % 6)).trim());
 
 const pseudoCats = new Map<PseudoLocale, Catalogue>();
 /** The catalogue of a test language, made from en.json the first time it is asked for. */

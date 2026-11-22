@@ -66,6 +66,8 @@ export function personSummary(r: any): string {
   const said: string[] = [];
   if (r.role === 'inperson') said.push('Signs in person, with you');
   else if (r.role && r.role !== 'signer') said.push(ROLE_WORDS[r.role] || '');
+  // Set only where "People may sign on paper" is on (src/lib/paper.ts).
+  if (r.require_paper && r.role !== 'inperson') said.push('Signs on paper only');
   if (r.link_by_sender) said.push('You send the link yourself');
   else if (r.text_link) said.push('Link also by text');
   else if (r.whatsapp) said.push('Link also by WhatsApp');
@@ -203,6 +205,8 @@ export function reviewSummary(o: {
   reminderDays: number; expireDays?: number | null; closesOn?: string; dateFormat?: string | null;
   defaults: { expireDays?: number | null; dateFormat?: string | null };
   dateExample?: string; signNow?: boolean; payLink?: boolean;
+  /** A payment asked for by card, in words (collectSummary in src/lib/collect.ts). */
+  collect?: string | null;
 }): string {
   const days = (n: number) => `${n} ${n === 1 ? 'day' : 'days'}`;
   const said: string[] = [];
@@ -211,6 +215,7 @@ export function reviewSummary(o: {
   else if (o.expireDays != null && o.defaults.expireDays != null && Number(o.expireDays) !== Number(o.defaults.expireDays)) said.push(`closes after ${days(Number(o.expireDays))}`);
   if (o.dateFormat && o.dateFormat !== o.defaults.dateFormat && o.dateExample) said.push(`dates written like ${o.dateExample}`);
   if (o.payLink) said.push('payment link shown after signing');
+  if (o.collect) said.push(o.collect);
   const line = said.join(' · ');
   return line ? line[0].toUpperCase() + line.slice(1) : '';
 }

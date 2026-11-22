@@ -6,6 +6,7 @@
 //   3. Tree commitments per contract, filled in by the operator; /impact lists signed ones only.
 //   4. /pricing/government built from the table.
 //   5. The total-cost calculator's arithmetic for 1M, 10M and 100M signatures with fixed inputs.
+import { readEnglish } from './words.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -122,7 +123,7 @@ test('1. Settings, Plan is one line naming the agreement; parts not set are left
 test('1. the Settings page shows the agreement line in place of the plan, and the plan everywhere else', () => {
   const page = fs.readFileSync('src/app/app/settings/page.tsx', 'utf8');
   assert.match(page, /tab === 'billing' && <AgreementPlan plan=\{<Billing \/>\} \/>/);
-  const comp = fs.readFileSync('src/components/settings/AgreementPlan.tsx', 'utf8');
+  const comp = readEnglish('src/components/settings/AgreementPlan.tsx');
   // The line comes with /me, so the plan draws at once wherever the mode is not deployment, with no extra loading.
   assert.match(comp, /if \(!me\?\.agreement\) return <>\{plan\}<\/>/);
   assert.ok(!/Loading/.test(comp));
@@ -263,7 +264,7 @@ test('3. /impact lists signed contracts only, each with its yearly planting stat
 });
 
 test('3. the impact page shows the commitments section only when there is a signed one, and words it as the rules say', () => {
-  const page = fs.readFileSync('src/app/impact/page.tsx', 'utf8');
+  const page = readEnglish('src/app/impact/page.tsx');
   assert.match(page, /<Commitments \/>/);
   const comp = fs.readFileSync('src/components/Commitments.tsx', 'utf8');
   assert.match(comp, /if \(!list\?\.length\) return null/);
@@ -419,7 +420,7 @@ test('repair: in deployment mode no page offers money tools, consumer prices, to
   const pub = read('src/components/Public.tsx');
   assert.match(pub, /\{!gov && <p>\{MONEY_SHORT\}<\/p>\}/);
   assert.match(pub, /\{!gov && <Link href="\/help#cancel">Stop a subscription<\/Link>\}/);
-  assert.match(read('src/app/impact/page.tsx'), /gov \? \(\s*<div className="card">\s*<h2[^>]*>Trees here are set per contract/);
+  assert.match(readEnglish('src/app/impact/page.tsx'), /gov \? \(\s*<div className="card">\s*<h2[^>]*>Trees here are set per contract/);
   // The help page answers "Does anyone pay here?" in place of cancelling, refunds, signatures and codes.
   const help = read('src/app/help/page.tsx');
   assert.match(help, /\{gov \? <QA id="paying" q="Does anyone pay here\?">/);

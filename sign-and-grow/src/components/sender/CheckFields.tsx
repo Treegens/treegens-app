@@ -64,7 +64,7 @@ export function CheckFields({ value, role, textsOn, open = false, keepCode = fal
         {verify === 'none' ? says('link') : says(verify)}
         {verify !== 'none' && ' Nothing is sent until they open the link and ask for the code.'}
       </p>
-      {showTexts && open && usesTexts && <p className="muted small ed-check-says">The mobile number comes with the person each time this template is used: a &ldquo;phone&rdquo; column in a bulk send, or &ldquo;phone&rdquo; next to the name and email in the API. A public form cannot use text messages, because its visitors type their own details.</p>}
+      {showTexts && open && usesTexts && <p className="muted small ed-check-says">The mobile number comes with the person each time this template is used: a &ldquo;phone&rdquo; column in Send to many, or &ldquo;phone&rdquo; next to the name and email in the API. A public form cannot use text messages, because its visitors type their own details.</p>}
       {badNumber && <p className="notice warn small ed-check-says" role="status">{PHONE_HOW}</p>}
       {usesTexts && !textsOn && <p className="notice warn small ed-check-says" role="status">This server cannot send text messages, because its operator has not switched them on. Choose a one-time code by email or no extra check, and switch &ldquo;also text the signing link&rdquo; off.</p>}
     </div>

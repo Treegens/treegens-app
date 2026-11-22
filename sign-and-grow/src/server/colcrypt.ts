@@ -46,11 +46,23 @@ export const SEALED_COLUMNS: { table: string; column: string; where?: string }[]
   // other tables are joined on, not anything a person wrote.
   { table: 'fields', column: 'value', where: "type NOT IN ('attachment','stamp')" },
   { table: 'fields', column: 'prefill', where: "type NOT IN ('attachment','stamp')" },
+  // The same answer again as a plain number (a number field, a calculated field): as private as the text it repeats.
+  { table: 'fields', column: 'typed_num' },
+  { table: 'fields', column: 'calc_num' },
+  // A field anyone on the document can fill in: what it said before and after each change, the initials given for it,
+  // and what each person's screen was last given (collab.ts).
+  { table: 'shared_changes', column: 'before' },
+  { table: 'shared_changes', column: 'after' },
+  { table: 'shared_changes', column: 'initials_png' },
+  { table: 'recipients', column: 'shared_shown' },
   { table: 'comments', column: 'body' },
   { table: 'emails', column: 'html' },
   { table: 'emails', column: 'payload' },
+  { table: 'emails', column: 'archive_draft' },
   { table: 'support_requests', column: 'message' },
+  { table: 'support_requests', column: 'chat' },
   { table: 'support_messages', column: 'body' },
+  { table: 'form_drafts', column: 'answers' },
 ];
 const CLEAR_FIELD_TYPES = new Set(['attachment', 'stamp']);
 
@@ -159,7 +171,8 @@ export function openValue<T>(v: T): T | string {
     if (!(e instanceof SealedValueProblem)) throw e;
     told(e);
     // A key this server was not given (a new key set in place of the old one): like stored files, everything else is
-    // still served, and this value reads as empty, never as something else. It stays on the disk untouched, the log
+    // still served, and this value reads as empty, never as something else. It stays on the disk untouched (code that
+    // writes a row back writes only the columns a request changed: tests/ds-db-encrypt.test.ts checks it), the log
     // and /app/operator name the missing key, and storing files is stopped meanwhile (filestore.ts), so no signed
     // PDF is made from a record with a part missing. A value damaged on the disk is refused outright.
     if (e.why === 'no-key') return '';

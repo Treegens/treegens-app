@@ -28,6 +28,7 @@ import { usableRule } from '@/lib/routing';
 import { atWordsHere, sendAtProblem } from '@/lib/timing';
 import { isOpenPlace, stepRoleProblem } from '@/lib/recipienttypes';
 import { roleKey } from '@/lib/tplcombine';
+import { flushCollect } from './editor/CollectChoice';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -153,6 +154,8 @@ export function Editor({ id, embedded }: { id: string; embedded?: { onDone: (eve
       only_when: usableRule(r, list, flds, !!env.ordered),
       // The wait after the step before them, in hours (editor/WaitChoice.tsx). The server ignores it without an order.
       wait_hours: Number(r.wait_hours) || 0,
+      // May or must sign on paper (editor/PaperPick.tsx), sent only once it was set, so a screen without the switch changes nothing.
+      ...(r.allow_paper !== undefined || r.require_paper !== undefined ? { allow_paper: r.allow_paper !== 0 && r.allow_paper !== false, require_paper: !!r.require_paper } : {}),
       // The check before the document opens, and the signing link by text message (see sender/CheckFields.tsx).
       verify: r.verify || 'none', phone: r.phone || '', text_link: !!r.text_link,
       // The link also by WhatsApp, and the sender's tick that they agreed, for the number it was ticked for (editor/WaLink.tsx).
@@ -547,6 +550,9 @@ export function Editor({ id, embedded }: { id: string; embedded?: { onDone: (eve
         // The strip under the top bar says what went wrong and keeps trying. Here, say what it means.
         return setError(isTpl ? 'Try again in a moment.' : 'Your latest changes could not be saved, so nothing was sent. Try again in a moment.');
       }
+      // A payment typed under "Ask for a payment" that could not be saved stops Send, in words (CollectChoice.tsx).
+      const payNot = await flushCollect(id);
+      if (payNot) return setError(payNot);
       if (isTpl) {
         toast('Template saved');
         return leave('/app/templates');

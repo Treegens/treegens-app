@@ -23,7 +23,7 @@ export const WORKS: string[] = [
   'Signing a document with the keyboard alone: Tab, Enter and Space reach every step, from the consent tick to Finish, on a phone-sized screen and on a large one.',
   'Next moves the focus to the next field that needs you, and opens the signature or stamp box when that is what the field needs.',
   'Each field tells a screen reader its name, whether it is required or optional, and the page it is on.',
-  'The document can be read as text instead of as pictures of the pages: "Read the document in Easy reading instead" is the first thing the keyboard reaches on the document, and the view can also be changed under More. Easy reading shows the words in one column, with headings, lists and tables, and every field as an ordinary form where it sits in the text.',
+  'The document can be read as text instead of as pictures of the pages: "Read the document in Easy reading instead" is the first thing the keyboard reaches on the document, and the view can also be changed under View. Easy reading shows the words in one column, with headings, lists and tables, and every field as an ordinary form where it sits in the text.',
   'A signature can be typed instead of drawn, and a stamp can be chosen as a file instead of taking a photo.',
   'The pages work at 320 pixels wide, which is a large screen at 400 percent zoom, without scrolling sideways.',
   'The buttons of the signing page are at least 44 pixels tall. On a phone every field on the document takes a tap 44 pixels across, and on a large screen a small tick box or round button on the document still takes one 24 pixels across. The tick to agree before signing can be pressed anywhere on its sentence.',

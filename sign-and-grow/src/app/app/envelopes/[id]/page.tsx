@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { listName } from '@/lib/docname';
 import { useParams, useRouter } from 'next/navigation';
 import { api, useLoad, Status, fmtDate, toast } from '@/components/ui';
 import { Mark } from '@/components/Brand';
@@ -35,6 +36,7 @@ import { ChangeTimeDialog, scheduledWords, pausedWords, sendNow, pauseIt, resume
 import { SharedNote, MoveDialog, moveAllowed } from '@/components/sender/Colleagues';
 import { shareAllows, MOVE_LABEL, commentsReadOnly } from '@/lib/shares';
 import { seesLine, SEES_REST } from '@/lib/owndocs';
+import { PaperReview, PaperWaitingLine, scanWaiting } from '@/components/sender/PaperReview';
 
 export default function EnvelopeDetail() {
   const { id } = useParams<{ id: string }>();
@@ -174,6 +176,10 @@ export default function EnvelopeDetail() {
   // main button and Copy stays in More.
   const noMain = paperAsk && main?.kind === 'copy_fix';
   const mainPerson = main?.personId ? e.recipients.find((r: any) => r.id === main.personId) : null;
+  // Someone sent back a scan signed on paper, and it waits for a look (sender/PaperReview.tsx).
+  const paperScan = scanWaiting(e);
+  // Someone printed it to sign on paper: the page does not say that paper was saved.
+  const onPaper = e.recipients.some((r: any) => r.paper_state === 'waiting' || r.paper_state === 'accepted');
   const whyNot = paused ? 'Sending is paused on this account, so this has to wait.' : undefined;
   // Opened through a colleague's share: only what the share lets this person do is offered (src/lib/shares.ts).
   const shareOk = (k: string) => !data.shared || shareAllows(data.shared.level, k);
@@ -218,7 +224,8 @@ export default function EnvelopeDetail() {
   // Move to a colleague, before Cancel the request (charter 2.5), on a team only.
   const moveAt = more.findIndex((l) => l.key === 'cancel' || l.key === 'delete');
   if (moveAllowed(me, e, data)) more.splice(moveAt < 0 ? more.length : moveAt, 0, { key: 'move', label: MOVE_LABEL, onPick: () => setDialog('move') });
-  const title = e.subject || (isTpl ? 'Untitled template' : 'Untitled');
+  // The same name the document has on Home and in Documents (listName): "Planting partnership", not "Please sign: ...".
+  const title = listName(e.subject) || (isTpl ? 'Untitled template' : 'Untitled');
   const nFiles = e.documents.length;
 
   return (
@@ -273,6 +280,7 @@ export default function EnvelopeDetail() {
             <div>
               <p className="sn-now-line">{waitingSentence(people, { paused: !!e.paused_at, wait: waitNow(e) })}{e.sent_at ? ` Sent ${howLong(e.sent_at)} ago.` : ''}</p>
               {e.paused_at && <p className="sn-now-sub warn" data-feature="ds-timing">{pausedWords(e)}</p>}
+              {paperScan && <PaperWaitingLine r={paperScan} />}
               {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} {bounced.some((r: any) => lastEmailTo(deliveries, r.email, r.id)?.next_try_at) ? 'has not gone out yet, and we keep trying' : 'did not go out'}. Open their More below to change the address or share the link yourself.</p>}
               <MailStopLines people={stopped} />
               {almost.length > 0 && <p className="sn-now-sub warn" id="sn-almost"><b>{joinNames(almost.map((r: any) => r.name))}</b> {almost.length === 1 ? 'has' : 'have'} filled in everything but {almost.length === 1 ? 'has' : 'have'} not pressed Finish, so {almost.length === 1 ? 'their part is' : 'their parts are'} not signed yet. A reminder tells them that one button is left.</p>}
@@ -282,9 +290,10 @@ export default function EnvelopeDetail() {
               {paused && <p className="sn-now-sub warn">Sending is paused on this account, so reminders are off, nobody is emailed about a change you make, and people further down the signing order are asked only once the pause is lifted. You can still give more time, change the document and cancel the request.</p>}
               {!paused && e.held_at && <p className="sn-now-sub warn">We are holding back emails about this document. We emailed you why, and its history below says it too.</p>}
               {/* The paper this one saves, and what its signatures plant when that is true (impact/SenderTrees.tsx). */}
-              <SenderTrees envelopeId={e.id} status={e.status} line />
+              {!onPaper && <SenderTrees envelopeId={e.id} status={e.status} line />}
             </div>
-            {!removed && mainEl && <div className="sn-now-actions">{mainEl}</div>}
+            {/* A scan signed on paper waits: its review is the main button (sender/PaperReview.tsx). */}
+            {!removed && (paperScan && shareOk('remind') ? <div className="sn-now-actions"><PaperReview e={e} r={paperScan} onDone={reload} /></div> : mainEl && <div className="sn-now-actions">{mainEl}</div>)}
           </div>
         </section>
       )}
@@ -337,7 +346,7 @@ export default function EnvelopeDetail() {
       {e.status === 'completed' && (
         <div className="card sn-done">
           <Mark size={26} label="" />
-          <div className="grow"><b>Everyone finished{e.completed_at ? ` on ${longDate(e.completed_at)}` : ''}. Completed without paper.</b><SenderTrees envelopeId={e.id} status={e.status} /></div>
+          <div className="grow"><b>Everyone finished{e.completed_at ? ` on ${longDate(e.completed_at)}` : ''}.{onPaper ? '' : ' Completed without paper.'}</b>{!onPaper && <SenderTrees envelopeId={e.id} status={e.status} />}</div>
           {/* The signed PDF with its signing record pages: the one file most people want. */}
           {!removed && mainEl && <div className="sn-now-actions">{mainEl}</div>}
         </div>

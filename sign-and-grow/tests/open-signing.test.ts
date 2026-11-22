@@ -397,7 +397,8 @@ test('a long subject, a long name or a message: the least useful words go first,
   assert.match(top, /fold=\{level >= 2\}/);
   assert.match(top, /const plainFor = !group && !me\.link_by_sender;/, 'a group\'s For line and the handed-over note always stay');
   assert.match(read('src/components/sign/Witness.tsx'), /\{headingFor\(env\.subject, true\)\}/);
-  assert.match(read('src/components/sign/parts.tsx'), /headingFor\(data\.envelope\.subject, NOT_SIGNING\.includes\(data\?\.recipient\?\.role\)\)/);
+  // The bar over the document names it for everyone, never with "Please sign: " (build-simplicity-r6, barTitle).
+  assert.match(read('src/components/sign/parts.tsx'), /const title = data\?\.envelope\?\.subject \? barTitle\(data\.envelope\.subject\) : 'GrowSigning';/);
 });
 
 test('the group note is tied to Continue for a screen reader, and the witness screen leaves out the default account name', async () => {

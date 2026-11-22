@@ -68,7 +68,7 @@ export type SignerFacts = {
 export function signerWords(f: SignerFacts): { title: string; under: string; line: string; count: string; announce: string } {
   const paid = f.trees >= 1;
   const saved = f.sheets >= 1 ? `${pages(f.sheets)} of paper from a tree` : '';
-  const title = paid ? `Your signature plants ${mangroves(f.trees)}` : 'You signed your first GrowSigning';
+  const title = paid ? `Your signature plants ${mangroves(f.trees)}` : 'You signed your first document with GrowSigning';
   const under = !saved ? '' : paid ? `You also saved ${saved}.` : `You saved ${saved}.`;
   // "More" is said only when there were some before: the total is above what this signature funds.
   const more = paid && f.total > f.trees;
@@ -105,7 +105,7 @@ export function senderWords(f: SenderFacts): { title: string; promise: string; s
   const saving = f.sheets >= 1 ? `Paper saved: ${pages(f.sheets)}.` : '';
   // Once everyone finished.
   const saved = f.sheets >= 1 ? `This saved ${pages(f.sheets)} of paper from a tree.` : '';
-  const title = 'Your first GrowSigning is out.';
+  const title = 'Your first document is out.';
   return { title, promise, saving, saved, announce: `${title}${promise ? ` ${promise}` : ''}` };
 }
 

@@ -231,7 +231,7 @@ if (isMain) {
   const args = process.argv.slice(2);
   if (args.includes('--new-key')) {
     console.log(crypto.randomBytes(32).toString('base64'));
-    console.error('A new key. Keep a copy somewhere safe and apart from the server and its backups: without it nobody can read what was encrypted with it, and that includes us. Put it in FILE_ENCRYPTION_KEY. If a key was set before, move that one to FILE_ENCRYPTION_KEYS_OLD.');
+    console.error('A new key. Keep a copy somewhere safe and apart from the server and its backups: without it nobody can read what was encrypted with it, not even the people who wrote this software. Put it in FILE_ENCRYPTION_KEY. If a key was set before, move that one to FILE_ENCRYPTION_KEYS_OLD.');
     process.exit(0);
   }
   if (args.some((a) => a !== '--check')) {

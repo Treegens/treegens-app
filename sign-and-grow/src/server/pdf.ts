@@ -36,6 +36,7 @@ import { BlendMode } from 'pdf-lib';
 import { stampPng, stampCertLines, senderStampCertLines, stampCertNote } from './stamps.ts';
 import { drawSenderDetails } from './customfields.ts';
 import { collectCertLines } from './collect.ts';
+import { sharedCertLines } from './collab.ts';
 import { sealLineFor } from './seal.ts';
 import { pdfaLineFor } from './pdfa.ts';
 // Hidden values, currency signs and boxes of fixed size (fieldchecks.ts, src/lib/fieldrules.ts).
@@ -54,6 +55,9 @@ import { notePages, drawFootClear, fieldBox } from './footplace.ts';
 import { toSign, addSupplements, supplementCert } from './supplements.ts';
 import { hiddenDocLines, TRAIL_NAMES_NOTE } from '../lib/owndocs.ts';
 import { drawKind, drawStyled, kindCertLines } from './fieldkinds.ts';
+import { howCertLines, unfinishedMark } from './switches.ts';
+// Signed on paper: the scan after a divider page, the places that point to it, the certificate lines (paper.ts).
+import { paperSigned, addPaperScans, paperCertLines, paperStatus } from './paper.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -62,7 +66,7 @@ const MUTED = rgb(0.42, 0.47, 0.44);
 const RULE = rgb(0.86, 0.87, 0.84);
 
 const g = globalThis as any;
-function fontBytes(name: string): Buffer {
+export function fontBytes(name: string): Buffer {
   g.__tsfonts ??= {};
   return (g.__tsfonts[name] ??= fs.readFileSync(path.join(/* turbopackIgnore: true */ process.cwd(), 'assets', 'fonts', name)));
 }
@@ -141,7 +145,7 @@ function dataUrlBytes(url: string | null | undefined): { bytes: Buffer; png: boo
 }
 
 // Maps coordinates given in the displayed page (origin top-left, y down) to PDF user space, honouring /Rotate.
-function mapper(page: PDFPage) {
+export function mapper(page: PDFPage) {
   const b = page.getCropBox();
   const rot = ((page.getRotation().angle % 360) + 360) % 360;
   const W = rot % 180 ? b.height : b.width;
@@ -425,6 +429,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   drawSenderDetails(s, e, iso, MUTED);
   // A payment taken while signing, only once Stripe confirmed it (collect.ts): never "paid" without that.
   for (const [k, v] of collectCertLines(e)) s.kv(k, known(v));
+  // Fields anyone on the document could fill in: each change, who made it and what it was before (collab.ts).
+  for (const [k, v] of sharedCertLines(e)) s.kv(k, known(v));
 
   s.h2('Documents');
   for (const d of toSign(e.documents)) {
@@ -443,7 +449,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     // For a group: the member who acted and the group ("Maya Lopez, for HR team"), see certName in src/lib/groups.ts.
     s.text(certName(r, iso), { size: 10, bold: true, maxW: 330 });
     s.kv('Role', ROLE_LABEL[r.role] || r.role);
-    s.kv('Status', r.status === 'skipped' ? notAskedStatus(r) : stepStatus(r) || (r.status === 'completed' ? (r.role === 'cc' ? 'Copied' : r.role === 'viewer' ? 'Viewed' : r.role === 'approver' ? 'Approved' : r.role === 'witness' ? 'Witnessed' : 'Signed') : r.status));
+    s.kv('Status', r.status === 'skipped' ? notAskedStatus(r) : paperStatus(r) || stepStatus(r) || (r.status === 'completed' ? (r.role === 'cc' ? 'Copied' : r.role === 'viewer' ? 'Viewed' : r.role === 'approver' ? 'Approved' : r.role === 'witness' ? 'Witnessed' : 'Signed') : r.status));
     // What someone who changes the document could do, and who named this person (src/lib/recipienttypes.ts).
     for (const [k, v] of stepCertLines(e, r, ts)) s.kv(k, known(v));
     // Whose signature a witness witnessed, their statement as ticked, when, and what a challenge would look at.
@@ -452,6 +458,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     for (const [k, v] of delegateCertLines(e, r)) s.kv(k, known(v));
     // Signed in person on the host's device without a connection: the device's clock, unchecked, and when we got it (offlinesign.ts).
     for (const [k, v] of offlineCertLines(e, r, ts)) s.kv(k, known(v));
+    // Signed on paper: when the scan came, from where, who accepted it, and that nobody checked the handwriting (paper.ts).
+    for (const [k, v] of paperCertLines(e, r, ts)) s.kv(k, known(v));
     s.kv('Sent', ts(r.sent_at));
     // Someone who was not asked never had the document: no times, checks or address to show for them.
     if (r.role !== 'cc' && r.status !== 'skipped') {
@@ -485,6 +493,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
         if (r.completed_at) s.kv('Completed, their time', localStamp(r.completed_at, zone));
       }
       if (r.reassigned_from) s.kv('Reassigned from', known(r.reassigned_from));
+      // How the signature and initials were made, as their signing page reported it (src/lib/switches.ts).
+      for (const [k, v] of howCertLines(r)) s.kv(k, v);
       // Each stamp this person put on: which, where, when, and the fingerprint of its picture (stamps.ts).
       for (const [k, v] of stampCertLines(e, r)) s.kv(k, known(v));
       // The drawings they made, as drawings and never as a signature (fieldkinds.ts).
@@ -547,7 +557,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   // 'Trees on the signing record' (Settings, Account): on unless the account's admins switched it off, as a
   // government tenant will have. Estimates are called estimates, and trees are claimed only for signatures that
   // were paid for (src/server/impact.ts, src/lib/impactwords.ts).
-  if (!recordShowsTrees(e.account_id)) return;
+  // Not when someone printed it to sign on paper: "were not used" would not be true (paper.ts).
+  if (!recordShowsTrees(e.account_id) || paperSigned(e).size) return;
   const i = impactOf(e.sheets || 0);
   const lines = recordLines({ ...i, trees: treesOnEnvelope(e.id), plans: takesPayments(), site: baseUrl() });
   const high = 36 + lines.length * 13;
@@ -723,14 +734,19 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   const seen = printedFields(e.fields.map(asSeen), ctx.recipients, opts.certificate ? 'completed' : e.status, opts.viewer);
   const hide = hiddenOf(seen);
   // Nor do the fields of someone who was not asked (routing.ts): not even their name, as if they had taken part.
-  const fields = seen.filter((f: any) => !hide.has(f.id) && ctx.recipients.get(f.recipient_id)?.status !== 'skipped');
+  // Someone who signed on paper prints nothing of their own at their places: those point to their scan (paper.ts).
+  const onPaper = paperSigned(e);
+  const fields = seen.filter((f: any) => !hide.has(f.id) && ctx.recipients.get(f.recipient_id)?.status !== 'skipped' && !onPaper.has(f.recipient_id));
   // The mark of a copy that must not pass for a signed document: closed, or still out (stamp.ts).
-  const mark = opts.notice ? stampFor(e.status) : opts.unfinished && e.status === 'sent' && !opts.certificate ? stampFor('sent') : null;
+  // The big words of a copy still out are the account's own when an admin chose them (switches.ts); the small line is not.
+  const mark = opts.notice ? stampFor(e.status) : opts.unfinished && e.status === 'sent' && !opts.certificate ? unfinishedMark(e) : null;
 
+  const docPages = new Map<string, PDFPage[]>();
   const footLine = `GrowSigning Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`;
   for (const d of toSign(e.documents)) {
     const pages = await flatPages(doc, d.sha256);
     pages.forEach((p) => doc.addPage(p));
+    docPages.set(d.id, pages);
     for (const f of fields.filter((f: any) => f.document_id === d.id)) {
       const page = pages[f.page];
       if (page) await drawField(ctx, page, f);
@@ -757,6 +773,8 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
       if (opts.certificate && (err?.data?.code === 'file_damaged' || err?.data?.code === 'file_locked')) throw err;
     }
   }
+  // The scan of each person who signed on paper, after a divider page, and their places pointing to it (paper.ts).
+  if (onPaper.size) await addPaperScans(e, doc, { font, bold, footLine, mark, places: seen.filter((f: any) => !hide.has(f.id) && onPaper.has(f.recipient_id)), docPages, flat: (sha) => flatPages(doc, sha) });
   await addSupplements(e, { flat: (sha) => flatPages(doc, sha), add: (p) => doc.addPage(p), sheet: () => new Sheet(doc, font, bold, footLine), foot: (p) => (drawFootClear(p, mapper(p), [], { line: footLine, font, color: MUTED }), mark && drawStamp(p, bold, mark)) });
   if (opts.certificate) await drawCertificate(ctx, e, audit, opts.sender);
   doc.setTitle(e.subject || 'Signed document');

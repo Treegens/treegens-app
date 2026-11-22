@@ -155,9 +155,9 @@ More options.
 
 | Section | Who | Cards |
 |---|---|---|
-| Profile | everyone | Name, job title, company, email, language of your screens (only when one ships) [ds-lang-sender], your signature and initials |
+| Profile | everyone | Name, job title, company, email, language of your screens (only when one ships) [ds-lang-sender], your signature and initials, and the email switches (Notifications was folded into Profile, src/lib/settingsnav.ts) |
 | Security | everyone | First card "Your sign-in": password, two-step login, ways to sign in, where you are signed in and how. Then admin cards: Sign-in rules [ds-sec-policy, gov-G23]; Single sign-on and Your email domains [ds-sso-oidc, ds-sso-saml-scim, gov-G08]; identity providers you add for signers [ds-id-login]; Members from your directory; Security record [ds-sec-log, gov-G12]; Your own encryption key, owner only [ds-cmk, gov-G22] |
-| Notifications | everyone | The email switches; monthly report for admins [ds-reports] |
+| (Notifications) | everyone | Now part of Profile: the email switches; monthly report for admins [ds-reports]. A link to ?tab=notifications opens Profile |
 | Away and sharing | accounts with 2 or more members | Share my documents with a colleague [ds-colleagues]; someone signs for me while I am away, when an admin allowed it [ds-delegate] |
 | Account | admins | The one account name, logo, colour; "Hide the GrowSigning name on emails and pages" and Sending domain [gov-G17]; language for the people you send to (only with 2 languages) [ds-lang-core]; Trees on screens and emails, Trees on the signing record [gov-G01, impact]; AI card: helper on or off, let the AI read document text (with one line on what it is used for), Key dates [gov-G20, ds-ai-assist, ds-ai-repo] |
 | Sending | admins | Three open cards. "New documents": reminders, deadline, date format. "When people sign": pass it on, questions and comments, ways to make a signature, paper [ds-paper], each person sees only their files, mark pages until everyone has signed [ds-switches, ds-visibility]. "Details and saved fields" [ds-custom-fields, ds-fields-kinds]. More options: access code rules, the in-person ID question [ds-id-small], your consent text [ds-consent-own], strict signing [ds-part11], signature level rules [gov-G10] |

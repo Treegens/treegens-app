@@ -37,8 +37,11 @@ route('POST', '/collect/connect', (c) => {
 }, 'admin');
 
 // Stripe sends the browser back here. It is answered with a move back to Settings, which says what happened.
+// Public, so a person whose session ended while they were on Stripe's page is sent to sign in and back to Settings,
+// never shown a bare error. Nothing is connected without the signed-in admin who started it (finishConnect).
 route('GET', '/collect/callback', async (c) => {
   const back = (how: string) => new Response(null, { status: 303, headers: { location: `/app/settings?tab=sending&collect=${how}` } });
+  if (!c.user) return new Response(null, { status: 303, headers: { location: `/login?next=${encodeURIComponent('/app/settings?tab=sending&collect=failed')}` } });
   if (!collectOn()) return back('off');
   if (!c.admin) return back('failed');
   if (c.q.get('error')) return back('declined');
@@ -48,7 +51,7 @@ route('GET', '/collect/callback', async (c) => {
   } catch {
     return back('failed');
   }
-});
+}, 'public');
 
 route('DELETE', '/collect/connection', async (c) => {
   if (!collectOn()) throw offHere();
@@ -63,7 +66,7 @@ const peopleOf = (e: any) => {
   const rows = all('SELECT * FROM collect_payments WHERE envelope_id=? ORDER BY created_at', e.id);
   return e.recipients.filter((r: any) => r.role === 'signer' || r.role === 'inperson').map((r: any) => {
     const row = rows.find((x: any) => x.recipient_id === r.id && x.email === String(r.email || '').toLowerCase());
-    const w = row ? rowWords(row) : null;
+    const w = row ? rowWords(row) : notAsked(e, r) === 'team' ? { state: 'not_asked', line: 'Not asked to pay: they are on your own team.' } : null;
     return { id: r.id, name: r.name, state: w?.state || null, line: w?.line || null, amount: row && row.status !== 'not_asked' ? moneyText(row.amount, row.currency) : null };
   });
 };
@@ -95,16 +98,24 @@ route('PUT', '/envelopes/:id/collect', async (c: Ctx) => {
     if (!connectionOf(e.account_id)) throw bad('Connect your Stripe account first, in Settings, Sending. Nothing was saved.', 409);
     const why = collectRefusal(e.account_id);
     if (why) throw bad(`${why} Nothing was saved.`, 403);
-    if (e.pay_url) throw bad('This document already links to your own payment page. Take that link off first, or keep it and do not ask here. Nothing was saved.', 409);
+    // replace_link: the sender chose "By card" over their own payment page. The link goes only once the payment
+    // itself was accepted (below), so a refused payment never leaves the document with neither.
+    if (e.pay_url && b?.replace_link !== true) throw bad('This document already links to your own payment page. Take that link off first, or keep it and do not ask here. Nothing was saved.', 409);
   } else if (!e.collect_currency) return { setting: null };
   const was = settingOf(e);
   const now_ = saveSetting(e, off ? null : b);
+  let linkRemoved = false;
+  if (now_ && e.pay_url && b?.replace_link === true) {
+    run('UPDATE envelopes SET pay_url=NULL, pay_kind=NULL, pay_told_at=NULL WHERE id=?', e.id);
+    if (e.kind === 'envelope') audit(e.id, c.actor, 'Payment link removed', 'The link to the sender\'s own payment page was taken off, because the payment is now asked for by card here.');
+    linkRemoved = true;
+  }
   if (e.kind === 'envelope') {
     const what = (s: any) => `${s.amount_text || `the amount in "${s.field_label || 'a field'}"`} for "${s.for}", ${s.when === 'before' ? 'before finishing' : 'after finishing'}`;
     if (!now_) audit(e.id, c.actor, 'Payment request removed', `${was ? `${what(was)}. ` : ''}Nobody who signs from now on is asked to pay here.`);
-    else audit(e.id, c.actor, was ? 'Payment request changed' : 'Payment request added', `Each person who signs is asked to pay ${what(now_)}, by card on Stripe's page, into ${connectionOf(e.account_id)?.name}'s Stripe account.`);
+    else audit(e.id, c.actor, was ? 'Payment request changed' : 'Payment request added', `Each person who signs, other than people on the sending account's own team, is asked to pay ${what(now_)}, by card on Stripe's page, into ${connectionOf(e.account_id)?.name}'s Stripe account.`);
   }
-  return { setting: now_ };
+  return { setting: now_, ...(linkRemoved ? { pay_link_removed: true } : {}) };
 });
 
 // ---- The person who signs and pays ----------------------------------------------------------------------------------------
@@ -126,7 +137,7 @@ route('GET', '/sign/:token/collect', (c) => {
     // Before finishing: a Finish already waits for this payment, or the one line ahead of it.
     if (s.when === 'before' && row && row.finish_body && (row.status === 'ready' || row.status === 'started' || row.status === 'expired'))
       return { collect: { ...base, state: row.status === 'started' ? 'started' : 'ready', amount: moneyText(row.amount, row.currency) } };
-    return { collect: { ...base, state: 'ahead', amount: s.amount_text, line: payAhead({ amount: s.amount_text, field: s.field_label, merchant: base.merchant, for: base.for, when: s.when }) } };
+    return { collect: { ...base, state: 'ahead', amount: s.amount_text, field: s.field_label, line: payAhead({ amount: s.amount_text, field: s.field_label, merchant: base.merchant, for: base.for, when: s.when }) } };
   }
   if (s.when !== 'after') return { collect: null };
   const a = amountFor(e, r);
@@ -154,7 +165,10 @@ route('POST', '/sign/:token/collect/start', async (c) => {
     if (r.status !== 'completed') throw bad('There is nothing to pay yet. Press Finish first.', 409);
   }
   if (row.when_to === 'after' && r.status !== 'completed') throw bad('There is nothing to pay yet. Press Finish first.', 409);
-  return checkoutFor(e, r, row, actor);
+  const out = await checkoutFor(e, r, row, actor);
+  // An earlier Stripe page turned out to be paid: it counts, and a Finish that waited for it completes now.
+  if ('paid' in out) await finishAfterPayment(rowOf(r));
+  return out;
 }, 'public');
 
 // ---- Stripe's messages ----------------------------------------------------------------------------------------------------
@@ -178,10 +192,12 @@ export async function finishAfterPayment(row: any) {
     await delegateFinished(e, r.id, 'completed').catch(() => {});
   } catch (x: any) {
     const closed = e.status !== 'sent';
+    // Paid on an older Stripe page, for an amount the document no longer says (the field was changed after it opened).
+    const other = x?.data?.code === 'paid_other_amount';
     audit(e.id, { name: 'System' }, 'Paid, not finished yet', `${r.name}'s payment is confirmed, and their part could not be completed with it: ${str(x?.message || 'the document changed', 300)} ${closed ? 'The document is closed.' : 'They are asked to open the document again and finish.'}`);
     if (r.email) void sendMail({ to: r.email, subject: `Your payment is confirmed: ${e.subject}`, heading: 'Your payment is confirmed',
-      lines: [closed ? `Stripe confirmed your payment for "${e.subject}", but the document was closed before your signature could be added. Ask the sender about a refund.` : `Stripe confirmed your payment for "${e.subject}". The document changed meanwhile, so your signature was not added yet.`,
-        closed ? 'There is nothing more to do on the document.' : 'Open the link in the email you got for this document, look at it again and press Finish. You will not be asked to pay again.'] }).catch(() => {});
+      lines: [closed ? `Stripe confirmed your payment for "${e.subject}", but the document was closed before your signature could be added. Ask the sender about a refund.` : other ? `Stripe confirmed your payment of ${moneyText(row.amount, row.currency)} for "${e.subject}". The amount on the document now says something else, so your signature was not added yet.` : `Stripe confirmed your payment for "${e.subject}". The document changed meanwhile, so your signature was not added yet.`,
+        closed ? 'There is nothing more to do on the document.' : other ? `Open the link in the email you got for this document, set the amount back to ${moneyText(row.amount, row.currency)} and press Finish. You will not be asked to pay again.` : 'Open the link in the email you got for this document, look at it again and press Finish. You will not be asked to pay again.'] }).catch(() => {});
     if (closed) await notifySender(e, 'always', `Paid, but not signed: ${e.subject}`, `${r.name} paid, and the document was closed first`, [`Stripe confirmed ${r.name}'s payment of ${moneyText(row.amount, row.currency)}, and the document was ${e.status} before their part was complete. If you do not want to keep the money, refund it in your Stripe dashboard.`]).catch(() => {});
   }
 }
@@ -199,5 +215,11 @@ route('POST', '/collect/webhook', async (c) => {
   }
   const out = await onStripeEvent(ev);
   if (out.done === 'paid') await finishAfterPayment(out.row);
+  // Paid on two Stripe pages: the sender hears it, so the second payment is refunded and never kept by mistake.
+  if (out.done === 'paid_twice') {
+    const e = loadEnvelope(out.row.envelope_id);
+    const r = e?.recipients.find((x: any) => x.id === out.row.recipient_id);
+    if (e) await notifySender(e, 'always', `Paid twice: ${e.subject}`, `${r?.name || 'A signer'} paid twice`, [`Stripe confirmed a second payment of ${moneyText(out.row.twice.amount, out.row.twice.currency)} from ${r?.name || 'a signer'}, on an earlier payment page. Their first payment already counts. Refund the second one in your Stripe dashboard.`]).catch(() => {});
+  }
   return { received: true, done: out.done, at: now() };
 }, 'public');

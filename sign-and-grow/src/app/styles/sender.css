@@ -18,7 +18,7 @@
 @media (min-width: 901px) { .sn-only-sm { display: none !important; } }
 
 /* ---- Page head ---- */
-.sn-back { display: inline-flex; align-items: center; min-height: 28px; }
+.sn-back { display: inline-flex; align-items: center; min-height: 44px; } /* 44 px at every width (build-simplicity-r6) */
 .sn-title { margin-top: 2px; overflow-wrap: anywhere; }
 .sn-id { overflow-wrap: anywhere; }
 /* The title keeps room to be read: beside many buttons the buttons go to the next line, the title is not squeezed letter by letter. */
@@ -198,7 +198,10 @@ table.sn-batch tr.cont td { border-bottom: 0; padding-bottom: 2px; }
   .sn .btn.sm { padding: 8px 13px; font-size: 14px; }
   .sn .tabs { flex-wrap: wrap; overflow: visible; }
   .sn .tabs button { min-height: 44px; }
-  .sn-back { min-height: 40px; }
+  /* repair-simplicity-r6: the five tabs of Documents fit one row at 390 px, so "Stopped" does not sit alone below. */
+  .sn .tabs { gap: 0; }
+  .sn .tabs button { padding-left: 8px; padding-right: 8px; }
+  .sn-back { min-height: 44px; }
   .sn-mails summary { min-height: 40px; display: flex; align-items: center; gap: 6px; }
   .sn-mails summary::before { content: '▸'; }
   .sn-mails[open] summary::before { content: '▾'; }

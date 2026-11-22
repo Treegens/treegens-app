@@ -61,7 +61,9 @@ import '@/server/routes-shares';
 import '@/server/routes-fieldlib';
 import '@/server/routes-phoneapp';
 import '@/server/routes-offline';
+import '@/server/routes-paper';
 import '@/server/routes-webforms';
+import '@/server/routes-switches';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

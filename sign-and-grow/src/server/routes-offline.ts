@@ -10,6 +10,7 @@ import { mine } from './routes-envelopes.ts';
 import { find, look, signView } from './routes-sign.ts';
 import { can } from './perm.ts';
 import { prepare, finishOffline, waitingOn, cancel, lockForHandOver } from './offlinesign.ts';
+import { noteHow } from './switches.ts';
 
 /** The envelope, for its sender or an admin who sees the whole account. A colleague it is shared with gets no links. */
 function hostOf(c: any) {
@@ -43,5 +44,8 @@ route('POST', '/sign/:token/offline-finish', async (c) => {
   find(c);
   const b = await c.body().catch(() => ({}));
   // Looked at again after the body is in, as every Finish does (routes-sign.ts).
-  return finishOffline(c, look(c), b);
+  const found = look(c);
+  // How the signature and initials were made on the device, for the certificate (switches.ts).
+  noteHow(found.e, found.r, b);
+  return finishOffline(c, found, b);
 }, 'public');

@@ -1,6 +1,7 @@
 // Ready-made templates (src/lib/starters/, src/server/starters.ts, routes-starters.ts): every starter is written
 // as the brief says, renders on one or two pages with its fields inside the page and on the right roles, can be
 // made into a template and sent, carries its note, and is checked before sending like any other document.
+import { readEnglish } from './words.ts';
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument } from 'pdf-lib';
@@ -248,13 +249,15 @@ test('6. repair: brand words and our own name are refused in plain words, the pr
 test('7. repair: the list does not lengthen the way to Use a template, has one filled button, and says its note once', async () => {
   const fs = await import('node:fs');
   const page = fs.readFileSync(new URL('../src/app/app/templates/page.tsx', import.meta.url), 'utf8');
+  // The same page with its English put back: it asks the catalogue for its words since lang-sender-rest (tests/words.ts).
+  const pageEn = readEnglish('src/app/app/templates/page.tsx');
   const comp = fs.readFileSync(new URL('../src/components/templates/Starters.tsx', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../src/app/styles/starters.css', import.meta.url), 'utf8');
   const en = JSON.parse(fs.readFileSync(new URL('../src/locales/en.json', import.meta.url), 'utf8'));
   // With templates, the header has only New template: the link shows under "Nothing matches" and in the empty list.
   const head = page.slice(page.indexOf('className="rmt-headbtns"'), page.indexOf('sn-newtpl'));
   assert.ok(!head.includes('StartersLink'), 'no ready-made link in the header');
-  assert.match(page.slice(page.indexOf('<h3>Nothing matches</h3>'), page.indexOf('<h3>Nothing matches</h3>') + 900), /StartersLink/);
+  assert.match(pageEn.slice(pageEn.indexOf('<h3>Nothing matches</h3>'), pageEn.indexOf('<h3>Nothing matches</h3>') + 900), /StartersLink/);
   // While the list is open on an empty account, no second "No templates yet" card with its own filled button.
   assert.match(page, /rows\.length === 0 && ready \?[\s\S]{0,300}starters\.or_own/);
   // Row buttons are secondary: the only filled one is Make the template.

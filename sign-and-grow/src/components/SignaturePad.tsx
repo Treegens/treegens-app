@@ -5,6 +5,7 @@ import { adoptLine } from '@/lib/policy';
 import { handwritingWrites } from '@/lib/scripts';
 import { drawnProblem, inkShare, pictureProblem, onePen, twoFingers, PEN_WIDTH } from '@/lib/ink';
 import { DRAWING_IS } from '@/lib/fieldkinds';
+import { waysLimited, type SignWay } from '@/lib/switches';
 
 const STYLES = ['Sig Dancing', 'Sig Caveat', 'Sig Vibes', 'Sig Sacramento'];
 // The handwriting fonts have Latin letters only. A name with none of them is typed in the device's own plain font:
@@ -115,7 +116,12 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Point[]) {
 // typed, when the signature was typed: the signing page compares it with the name on the document.
 // kind "drawing": the same box to draw in, for a Drawing field (src/lib/fieldkinds.ts). Only Draw, no style, and none
 // of the words about signing: a drawing is a picture, never a signature.
-export function AdoptSignature({ kind: asked, name, saved, onDone, onClose, doneLabel }: { kind: 'signature' | 'initials' | 'drawing'; name: string; saved?: SavedMark | null; onDone: (png: string, typedText?: string) => void; onClose: () => void; doneLabel?: string }) {
+// `ways`: the ways the account offers (Settings, Sending, src/lib/switches.ts), all three when left out. With fewer,
+// a saved signature is not offered: nobody can say how it was made. `onDone` also gets how it was made ("type:<style>",
+// "draw", "upload" or "saved"), which the certificate prints.
+export function AdoptSignature({ kind: asked, name, saved: savedIn, onDone, onClose, doneLabel, ways }: { kind: 'signature' | 'initials' | 'drawing'; name: string; saved?: SavedMark | null; onDone: (png: string, typedText?: string, how?: string) => void; onClose: () => void; doneLabel?: string; ways?: readonly SignWay[] }) {
+  const saved = ways && waysLimited(ways) ? null : savedIn;
+  const make = ways ? MAKE.filter(([t]) => (ways as readonly string[]).includes(t)) : MAKE;
   const drawing = asked === 'drawing';
   const kind = asked === 'drawing' ? 'signature' : asked;
   // A drawing's button is its own (doneLabel from sign/KindFields.tsx: "Put it on the page").
@@ -123,8 +129,8 @@ export function AdoptSignature({ kind: asked, name, saved, onDone, onClose, done
   const initials = name.split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 4).toUpperCase();
   // Typed as the two marks adoptLine knows: "drawing" is only ever put into sentences, and a drawing has no adoptLine.
   const word = (drawing ? 'drawing' : kind === 'signature' ? 'signature' : 'initials') as 'signature' | 'initials';
-  const TABS: [Tab, string][] = drawing ? [['draw', 'Draw']] : saved ? [['saved', 'Saved'], ...MAKE] : MAKE;
-  const [tab, setTab] = useState<Tab>(drawing ? 'draw' : saved ? 'saved' : 'type');
+  const TABS: [Tab, string][] = drawing ? [['draw', 'Draw']] : saved ? [['saved', 'Saved'], ...make] : make;
+  const [tab, setTab] = useState<Tab>(drawing ? 'draw' : saved ? 'saved' : make[0]?.[0] || 'type');
   const [text, setText] = useState(kind === 'signature' ? name : initials);
   const [font, setFont] = useState(STYLES[0]);
   const [error, setError] = useState('');
@@ -261,7 +267,7 @@ export function AdoptSignature({ kind: asked, name, saved, onDone, onClose, done
       image = photo;
     }
     if (!image) return setError(`Choose Type, Draw or Upload to make your ${word}.`);
-    onDone(image, tab === 'type' ? text.trim() : undefined);
+    onDone(image, tab === 'type' ? text.trim() : undefined, tab === 'type' ? `type:${handwritingWrites(text) ? font : 'plain'}` : tab);
   }
 
   function upload(file?: File) {
@@ -297,12 +303,13 @@ export function AdoptSignature({ kind: asked, name, saved, onDone, onClose, done
 
   return (
     <Dialog title={kind === 'signature' ? 'Your signature' : 'Your initials'} {...(drawing ? { title: 'Your drawing' } : {})} onClose={onClose} wide variant="field">
-      <div className="tabs sg-sigtabs" role="tablist" aria-label={`How to make your ${word}`} onKeyDown={tabKey}>
+      {/* One way only (Settings, Sending): no row of tabs with a single tab in it, the box itself. */}
+      {(drawing || TABS.length > 1) && <div className="tabs sg-sigtabs" role="tablist" aria-label={`How to make your ${word}`} onKeyDown={tabKey}>
         {TABS.map(([t, label]) => (
           <button key={t} type="button" role="tab" id={`${ids}-${t}`} aria-selected={tab === t} aria-controls={`${ids}-panel`} tabIndex={tab === t ? 0 : -1} className={tab === t ? 'on' : ''} onClick={() => (setTab(t), setError(''))}>{label}</button>
         ))}
-      </div>
-      <div role="tabpanel" id={`${ids}-panel`} aria-labelledby={`${ids}-${tab}`}>
+      </div>}
+      <div {...(drawing || TABS.length > 1 ? { role: 'tabpanel', 'aria-labelledby': `${ids}-${tab}` } : {})} id={`${ids}-panel`}>
         {tab === 'saved' && saved && (
           <div>
             <div className="sg-sigpreview"><img src={saved.image} alt={`Your saved ${word}`} /></div>

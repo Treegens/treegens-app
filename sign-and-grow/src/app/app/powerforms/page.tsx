@@ -3,44 +3,48 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 import { MoreMenu } from '@/components/sender/More';
+import { FormLimits, formLimitLine } from '@/components/forms/FormLimits';
 import { POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '@/lib/policy';
+import { useST, senderRich } from '@/components/senderLang';
 
 export default function PowerForms() {
+  const T = useST();
   const [tpls] = useLoad(() => api('/envelopes?kind=template'));
   const [data, reload] = useLoad(() => api('/powerforms'));
   const [tid, setTid] = useState('');
   const [name, setName] = useState('');
   const [shared, setShared] = useState(false);
+  const [limits, setLimits] = useState<any>(null);
   const link = (slug: string) => `${window.location.origin}/f/${slug}`;
 
   return (
     <div className="stack">
-      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Forms</h1><div className="muted">A public link anyone can open to fill in and sign a template. Put it on your website or in an email, or print its QR code for a poster or a front desk.</div></div></div>
+      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">{T('forms.title')}</h1><div className="muted">{T('forms.lede')}</div></div></div>
       <div className="card">
-        <h2 style={{ marginBottom: 12 }}>Make a form</h2>
+        <h2 style={{ marginBottom: 12 }}>{T('forms.make')}</h2>
         <div className="row wrap" style={{ alignItems: 'flex-end' }}>
-          <label className="f grow" style={{ margin: 0, minWidth: 200 }}><span>Template</span>
+          <label className="f grow" style={{ margin: 0, minWidth: 200 }}><span>{T('forms.template')}</span>
             <select value={tid} onChange={(e) => setTid(e.target.value)}>
-              <option value="">Choose a template…</option>
+              <option value="">{T('forms.choose')}</option>
               {/* A form sends in the name of the template's owner, so only that person and admins may publish it. */}
-              {(tpls?.envelopes || []).filter((t: any) => t.may_change !== false).map((t: any) => <option key={t.id} value={t.id}>{t.subject || 'Untitled template'}</option>)}
+              {(tpls?.envelopes || []).filter((t: any) => t.may_change !== false).map((t: any) => <option key={t.id} value={t.id}>{t.subject || T('forms.untitled')}</option>)}
             </select>
           </label>
-          <label className="f grow" style={{ margin: 0, minWidth: 200 }}><span>Name shown to signers</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Volunteer waiver" /></label>
-          <button className="btn primary" disabled={!tid} onClick={() => api('/powerforms', { body: { template_id: tid, name, shared_device: shared } }).then(() => (toast('Form made'), setName(''), setTid(''), setShared(false), reload())).catch(oops)}>Create</button>
+          <label className="f grow" style={{ margin: 0, minWidth: 200 }}><span>{T('forms.shown_name')}</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder={T('forms.shown_placeholder')} /></label>
+          <button className="btn primary" disabled={!tid} onClick={() => api('/powerforms', { body: { template_id: tid, name, shared_device: shared } }).then(() => (toast(T('forms.made')), setName(''), setTid(''), setShared(false), reload())).catch(oops)}>{T('forms.create')}</button>
         </div>
-        {(tpls?.envelopes || []).some((t: any) => t.may_change === false) && <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>Only templates you may change are listed here. A form sends in the name of the person its template belongs to, so a colleague&apos;s template can be published by that colleague, by an admin, or by someone they let change it. To make a form from one yourself, copy the template on the Templates page first.</p>}
-        <label className="check" style={{ marginTop: 12, minHeight: 44 }}><input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} style={{ width: 20, height: 20 }} /> <span>People fill this in on a shared device or in one office (a tablet at the front desk, a classroom, an event)</span></label>
-        <p className="muted small" style={{ marginTop: 6, marginBottom: 0 }}>Anyone with this link can fill it in and sign. Each person who signs uses one of your signatures.</p>
+        {(tpls?.envelopes || []).some((t: any) => t.may_change === false) && <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>{T('forms.only_yours')}</p>}
+        <label className="check" style={{ marginTop: 12, minHeight: 44 }}><input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} style={{ width: 20, height: 20 }} /> <span>{T('forms.shared')}</span></label>
+        <p className="muted small" style={{ marginTop: 6, marginBottom: 0 }}>{T('forms.anyone')}</p>
         <details data-fold="">
-          <summary className="set-fold">How this works</summary>
-          <p className="muted small">The template needs exactly one open signer role. That is the person who fills in the form. When every field they fill in has a label, the fields are asked as questions, one at a time, and then they see the whole document with their answers in it and sign it. Nothing is made or sent until they press the button to go on to sign, and no signature is used until they sign. From one internet connection, an ordinary form allows {POWERFORM_OPEN_STARTS} unfinished starts at a time, ordinary forms together take {POWERFORM_STARTS_PER_HOUR} starts an hour, and an abandoned start is cleared after a day. A shared-device form allows {POWERFORM_SHARED_OPEN_STARTS} unfinished starts at a time and {POWERFORM_SHARED_STARTS_PER_HOUR} starts an hour from one connection, clears an abandoned one after an hour, and offers &quot;start a new form for the next person&quot; when someone has finished. Whoever comes back to a start that was cleared is offered a fresh form, and you are not emailed about it. While the daily limit for new accounts applies to you (see <a href="/help#cannot-send" target="_blank" rel="noreferrer">Why can I not send?</a>), each form takes that many new people a day, counted for the form alone: strangers who fill it in never use up what you can send yourself. If someone reports a document they got through a form, a person looks at it, but it does not count towards pausing your account.</p>
+          <summary className="set-fold">{T('forms.how')}</summary>
+          <p className="muted small">{senderRich(T.lang, 'forms.how_body', { link: <a href="/help#cannot-send" target="_blank" rel="noreferrer">{T('forms.why_cannot')}</a> }, { open: POWERFORM_OPEN_STARTS, hour: POWERFORM_STARTS_PER_HOUR, shared_open: POWERFORM_SHARED_OPEN_STARTS, shared_hour: POWERFORM_SHARED_STARTS_PER_HOUR })}</p>
         </details>
       </div>
       <div className="card pad0">
-        {data && data.powerforms.length === 0 ? <div className="empty"><h3>No forms yet</h3>Make one above to collect signatures without sending anything.</div> : (
+        {data && data.powerforms.length === 0 ? <div className="empty"><h3>{T('forms.none')}</h3>{T('forms.none_body')}</div> : (
           <div className="tablewrap"><table className="t">
-            <thead><tr><th>Name</th><th>Signed</th><th><span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>What you can do</span></th></tr></thead>
+            <thead><tr><th>{T('forms.col_name')}</th><th>{T('forms.col_signed')}</th><th><span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>{T('forms.col_actions')}</span></th></tr></thead>
             {/* Signed is who finished. Started and not finished yet is shown under it, because those count against what the form can still take. */}
             <tbody>
               {(data?.powerforms || []).map((p: any) => {
@@ -48,29 +52,31 @@ export default function PowerForms() {
                 // else is told whose it is instead of being shown lines that would be refused.
                 const mine = p.may_change !== false;
                 const lines = [
-                  { key: 'open', label: 'Open the form', href: `/f/${p.slug}`, newTab: true },
+                  { key: 'open', label: T('forms.open'), href: `/f/${p.slug}`, newTab: true },
                   ...(mine ? [
-                    { key: 'shared', label: `Used on a shared device: ${p.shared_device ? 'Yes' : 'No'}`, onPick: () => api(`/powerforms/${p.id}`, { method: 'PATCH', body: { shared_device: !p.shared_device } }).then(() => (toast(p.shared_device ? 'Now treated as an ordinary form' : 'Now marked as used on a shared device'), reload())).catch(oops) },
-                    { key: 'pause', label: p.active ? 'Pause' : 'Resume', onPick: () => api(`/powerforms/${p.id}`, { method: 'PATCH', body: { active: !p.active } }).then(reload).catch(oops) },
-                    { key: 'delete', label: 'Delete', danger: true, onPick: () => window.confirm('Delete this form? The link will stop working.') && api(`/powerforms/${p.id}`, { method: 'DELETE' }).then(reload).catch(oops) },
+                    { key: 'shared', label: p.shared_device ? T('forms.shared_yes') : T('forms.shared_no'), onPick: () => api(`/powerforms/${p.id}`, { method: 'PATCH', body: { shared_device: !p.shared_device } }).then(() => (toast(p.shared_device ? T('forms.now_ordinary') : T('forms.now_shared')), reload())).catch(oops) },
+                    { key: 'limits', label: T('forms.limits'), onPick: () => setLimits(p) },
+                    { key: 'pause', label: p.active ? T('forms.pause') : T('forms.resume'), onPick: () => api(`/powerforms/${p.id}`, { method: 'PATCH', body: { active: !p.active } }).then(reload).catch(oops) },
+                    { key: 'delete', label: T('forms.delete'), danger: true, onPick: () => window.confirm(T('forms.delete_confirm')) && api(`/powerforms/${p.id}`, { method: 'DELETE' }).then(reload).catch(oops) },
                   ] : []),
                 ];
                 return (
                 <tr key={p.id} data-item="form">
                   {/* Whose it is, when it was made and what a visitor goes through stand under the name, where a phone shows them without scrolling the table sideways. */}
                   {/* Under the template's name: whether the envelope each visitor starts reminds them (reminderText in src/lib/policy.ts). */}
-                  <td><b>{p.name}</b><div className="muted small">{p.template || 'Template deleted'}{p.shared_device ? ' · shared device' : ''}{p.active ? '' : ' · paused'} · made {fmtDate(p.created_at)}</div>
-                    {p.questions > 0 && <div className="muted small">{p.questions} question{p.questions === 1 ? '' : 's'}, one at a time, then the document to sign.</div>}
-                    {p.unlabelled > 0 && <div className="muted small">{p.unlabelled === 1 ? '1 field has' : `${p.unlabelled} fields have`} no label, so people fill this in on the document. Add labels in the template to ask them as questions.</div>}
-                    {p.reminders && <div className="muted small">{p.reminders} That comes from the template.</div>}
-                    {!mine && <div className="muted small">Only {p.owner || 'the owner of its template'} or an admin can pause or delete it.</div>}
+                  <td><b>{p.name}</b><div className="muted small">{p.template || T('forms.template_deleted')}{p.shared_device ? T('forms.tag_shared') : ''}{p.active ? '' : T('forms.tag_paused')}{T('forms.made_on', { day: fmtDate(p.created_at) })}</div>
+                    {p.questions > 0 && <div className="muted small">{T('forms.questions', { count: p.questions })}</div>}
+                    {p.unlabelled > 0 && <div className="muted small">{T('forms.unlabelled', { count: p.unlabelled })}</div>}
+                    {p.reminders && <div className="muted small">{p.reminders} {T('forms.from_template')}</div>}
+                    {formLimitLine(p) && <div className="muted small">{formLimitLine(p)}</div>}
+                    {!mine && <div className="muted small">{T('forms.only_owner', { name: p.owner || T('forms.the_owner') })}</div>}
                   </td>
-                  <td className="num">{p.signed}{p.open > 0 && <div className="muted small">{p.open} filling it in now</div>}</td>
+                  <td className="num">{p.signed}{p.open > 0 && <div className="muted small">{T('forms.filling_now', { count: p.open })}</div>}</td>
                   {/* The link the server gives is the public address (APP_URL), the one a printed code has to carry. */}
                   <td><div className="row wrap" style={{ gap: 4, justifyContent: 'flex-end' }}>
-                    <button className="btn sm" style={{ minHeight: 44 }} aria-label={`Copy link to ${p.name}`} onClick={() => navigator.clipboard.writeText(p.url || link(p.slug)).then(() => toast('Link copied'))}>Copy link</button>
-                    <Link className="btn sm qr-tap" style={{ minHeight: 44 }} href={`/app/powerforms/${p.id}/qr`} aria-label={`QR code for ${p.name}, on a sheet to print`}>QR code</Link>
-                    <MoreMenu kind="item" small label={`More for ${p.name}`} lines={lines} />
+                    <button className="btn sm" style={{ minHeight: 44 }} aria-label={T('forms.copy_label', { name: p.name })} onClick={() => navigator.clipboard.writeText(p.url || link(p.slug)).then(() => toast(T('forms.copied')))}>{T('forms.copy')}</button>
+                    <Link className="btn sm qr-tap" style={{ minHeight: 44 }} href={`/app/powerforms/${p.id}/qr`} aria-label={T('forms.qr_label', { name: p.name })}>{T('forms.qr')}</Link>
+                    <MoreMenu kind="item" small label={T('forms.more_for', { name: p.name })} lines={lines} />
                   </div></td>
                 </tr>
                 );
@@ -79,6 +85,7 @@ export default function PowerForms() {
           </table></div>
         )}
       </div>
+      {limits && <FormLimits form={limits} onClose={() => setLimits(null)} onSaved={() => (setLimits(null), reload())} />}
     </div>
   );
 }

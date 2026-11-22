@@ -128,7 +128,9 @@ export const askedPaper = (r: { status?: string; paper_at?: string | null } | nu
  * "E-record consent" on the certificate for one person: when they agreed, and for someone who asked for paper
  * instead, that they took it back (or never gave it) and when. `ts` writes a moment the way the certificate does.
  */
-export function consentCertValue(r: { status?: string; paper_at?: string | null; consent_at?: string | null; completed_at?: string | null }, ts: (at: string | null | undefined) => string): string {
+export function consentCertValue(r: { status?: string; paper_at?: string | null; consent_at?: string | null; completed_at?: string | null; paper_scan_id?: string | null }, ts: (at: string | null | undefined) => string): string {
+  // Signed on paper without agreeing to electronic records: they were never asked to (src/server/paper.ts).
+  if (r.paper_scan_id && r.status === 'completed' && !r.consent_at) return 'Not asked: signed on paper';
   if (!askedPaper(r)) return ts(r.consent_at);
   if (r.consent_at) return `${ts(r.consent_at)}, withdrawn ${ts(r.paper_at)}: asked for paper instead`;
   return `Not given. Asked for paper instead ${ts(r.paper_at)}`;

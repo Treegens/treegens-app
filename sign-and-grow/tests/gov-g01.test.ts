@@ -16,6 +16,7 @@ import { stripe, unix } from './stripe-fake.ts';
 import { CLAIMS, CLAIM_GROUPS, claimText, claimStatus, claimSentence, claimProblems, claimsSummary, noneHeld, claimById, type Claim } from '../src/lib/claims.ts';
 import { scan, scanText, withoutComments, uncovered, ALL_PATTERNS, type Hit } from './claims-scan.ts';
 import { deploymentProfile, deploymentProfileWarning, governmentChatWarning, isGovernment } from '../src/lib/deployment.ts';
+import { englishIf } from './words.ts';
 
 let db: Server['db'];
 let billing: Server['billing'];
@@ -23,7 +24,8 @@ let policy: typeof import('../src/server/tenantpolicy.ts');
 let prov: typeof import('../src/lib/chatprovider.ts');
 
 const root = new URL('../', import.meta.url).pathname;
-const read = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 const textOf = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
 
 const ENV = ['DEPLOYMENT_PROFILE', 'SUPPORT_CHAT_API_KEY', 'SUPPORT_CHAT_BASE_URL', 'SUPPORT_CHAT_MODEL', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY', 'SUPPORT_CHAT_DAILY_LIMIT', 'SUPPORT_CHAT_PROVIDER_NAME'];

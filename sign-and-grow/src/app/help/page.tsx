@@ -61,7 +61,7 @@ export default function Help() {
       <main id="main" className="wrap pub-page">
         <header className="pub-top">
           <h1 className="pub-h1">Help</h1>
-          <p className="pub-lead">No login wall. {chatModelOn() ? 'An AI helper' : 'Our helper, with answers from this page,'} answers at once{support.promised ? ', and a person is one click away from every answer' : ''}. Most things can be fixed right on this page.{support.promised ? ' For everything else, write to us at the bottom and a person replies.' : ''}</p>
+          <p className="pub-lead">You do not need an account to get help. {chatModelOn() ? 'An AI helper' : 'Our helper, with answers from this page,'} answers at once{support.promised ? ', and a person is one click away from every answer' : ''}. Most things can be fixed right on this page.{support.promised ? ' For everything else, write to us at the bottom and a person replies.' : ''}</p>
           <p><HelpChatButton className="btn primary hc-open">Ask a question</HelpChatButton></p>
         </header>
 
@@ -300,10 +300,12 @@ export default function Help() {
           </QA>
 
           <QA id="payment-link" q="Can someone pay a deposit when they sign?">
-            <p>GrowSigning does not take payments. What it can do is show a link to your own payment page, such as one from your card provider, right after a person presses Finish. {PAY_FOR_SENDER}</p>
+            <p>GrowSigning never takes the money itself. It can show a link to your own payment page, such as one from your card provider, right after a person presses Finish. {PAY_FOR_SENDER}</p>
             <p>{payNotYet(PAID_TRUST_DAYS)} Once it is offered, it is on the last step of the editor, under More options, and a template&apos;s link goes with every document made from it.</p>
             <p>Addresses that hide where they lead are refused: a link shortener such as bit.ly, a forwarding page, and any name that leads into a private network, which is checked again each time the link would be shown. The audit trail and the certificate name the address by a fingerprint (the start of its SHA-256), so it never travels in an email, a certificate or an export. The document's page shows the address, who was shown which address and who pressed it. If the person who set a link leaves your team, the link is taken off, because it leads to their own page.</p>
-            <p>If you signed something and were shown a Pay button: your signature is complete whether you pay or not. The page names the person asking and the full address the button opens. GrowSigning does not check where that site sends you next, so look at the page before you pay. GrowSigning cannot confirm or refund a payment, so ask the sender about it, and if you did not expect to pay anything, do not pay and report the request from the signing page.</p>
+            {/* Payments while signing (src/components/sign/PayNow.tsx), where the people who run the server set up Stripe Connect. */}
+            <p>On some servers an account can also ask for a payment by card while signing, straight into its own Stripe account. A document that asks you for one says so in one line before you sign. You pay on Stripe&apos;s own page, and GrowSigning never sees your card details. When the payment comes before finishing, nothing is signed until Stripe confirms it; you can still go back to the document, change an answer, or decline from Other actions. When it comes after finishing, your signature is complete whether you pay or not, and you can choose Not now. Questions about the payment or a refund go to the account that asked for it.</p>
+            <p>If you signed something and were shown a Pay button for a link: your signature is complete whether you pay or not. The page names the person asking and the full address the button opens. GrowSigning does not check where that site sends you next, so look at the page before you pay. GrowSigning cannot confirm or refund a payment, so ask the sender about it, and if you did not expect to pay anything, do not pay and report the request from the signing page.</p>
           </QA>
 
           <QA id="signing-groups" q="Can I send to a team, where anyone in it can sign?">

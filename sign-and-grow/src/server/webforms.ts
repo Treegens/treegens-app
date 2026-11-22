@@ -14,6 +14,7 @@ import { workOut } from '../lib/logic.ts';
 import { questionsOf, firstProblem, answersToKeep, withAnswers, DRAFTS_PER_CONNECTION, DRAFT_MAX_CHARS, type Question } from '../lib/webforms.ts';
 import { powerformIdleHours, powerformSharedIdleMinutes } from '../lib/policy.ts';
 import type { Ctx } from './router.ts';
+import { seal } from './colcrypt.ts';
 
 /** The questions of a form's template for its open role. */
 export const formQuestions = (tpl: any, open: any): Question[] => questionsOf(tpl.fields, tpl.documents, open.id);
@@ -91,7 +92,7 @@ export function saveDraft(c: Ctx, p: any, tpl: any, open: any, body: any) {
   const t = now();
   run(`INSERT INTO form_drafts (powerform_id, browser, ip, name, email, answers, updated_at) VALUES (?,?,?,?,?,?,?)
     ON CONFLICT(powerform_id, browser) DO UPDATE SET ip=excluded.ip, name=excluded.name, email=excluded.email, answers=excluded.answers, updated_at=excluded.updated_at`,
-  p.id, b, c.ip, str(body?.name, 120), str(body?.email, 254), text, t);
+  p.id, b, c.ip, str(body?.name, 120), str(body?.email, 254), seal('form_drafts.answers', text), t);
   if (c.ip !== 'unknown') {
     const extra = all('SELECT powerform_id, browser FROM form_drafts WHERE ip=? ORDER BY updated_at DESC LIMIT -1 OFFSET ?', c.ip, DRAFTS_PER_CONNECTION);
     for (const x of extra) run('DELETE FROM form_drafts WHERE powerform_id=? AND browser=?', x.powerform_id, x.browser);

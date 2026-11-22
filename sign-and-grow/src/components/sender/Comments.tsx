@@ -86,6 +86,20 @@ export function EnvelopeComments({ envelope, readOnly }: { envelope: any; readOn
     }
   }
 
+  // Turned off when it was sent (Settings, Sending): the sender can allow them again on this one document.
+  async function allowAgain() {
+    setBusy(true);
+    try {
+      await api(`/envelopes/${e.id}/switches`, { method: 'PUT', body: { comments: true } });
+      await load();
+      toast('Questions and comments are allowed on this document again.');
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const threads: any[] = data?.threads || [];
   const waiting: any[] = data?.waiting || [];
   return (
@@ -102,7 +116,14 @@ export function EnvelopeComments({ envelope, readOnly }: { envelope: any; readOn
       {data && (waiting.length > 0
         ? <p className="notice warn" role="status" style={{ marginTop: 10 }}>Waiting for your answer: <b>{joinNames([...new Set(waiting.map((w) => w.name as string))])}</b>.</p>
         : threads.length > 0 ? <p className="muted" style={{ marginTop: 10 }}>Nobody is waiting for an answer.</p>
+        : data.comments_off ? null
         : <p className="muted" style={{ marginTop: 10 }}>Nobody has written anything yet. The people on this document can ask you something from their signing page, and you are emailed when they do.</p>)}
+      {data?.comments_off && data.may_write && (
+        <p className="muted" style={{ marginTop: 10 }}>
+          Questions and comments are off for this document, so the people on it cannot write here. They can reply to your email.{threads.length ? ' You can still answer what was asked before.' : ''}{' '}
+          {!readOnly && <button type="button" className="btn sm" style={{ minHeight: 44 }} disabled={busy} onClick={allowAgain}>Allow them on this document</button>}
+        </p>
+      )}
 
       {threads.map((t, i) => (
         <article key={t.id} className={`cm-thread${t.settled_at ? ' settled' : t.waiting ? ' waiting' : ''}`} aria-label={`Conversation ${i + 1}`} style={{ marginTop: 12 }}>
@@ -146,7 +167,7 @@ export function EnvelopeComments({ envelope, readOnly }: { envelope: any; readOn
       {error && <div className="notice err" role="alert" style={{ marginTop: 10 }}>{error}</div>}
       {data && !data.may_write && <p className="muted small" style={{ marginTop: 10 }}>This document is no longer out, so these can be read and no longer added to. They are kept with it, and its export and its full record for disputes carry them.</p>}
       {readOnly && data?.may_write && <p className="muted small" style={{ marginTop: 10 }}>{readOnly}</p>}
-      {data?.may_write && !readOnly && !replyTo && (
+      {data?.may_write && !data.comments_off && !readOnly && !replyTo && (
         <form className="cm-new" style={{ marginTop: 14 }} onSubmit={async (ev) => {
           ev.preventDefault();
           if (!text.trim()) return setError('Type your comment first. Nothing was sent.');

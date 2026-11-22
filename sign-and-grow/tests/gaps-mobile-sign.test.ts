@@ -417,7 +417,7 @@ test('two fields of the same person that cover each other are named; anything a 
   // Next coming back to the same empty field points to Easy reading, from the second time.
   const again = sameFieldAgain();
   assert.deepEqual([again('a'), again('a'), again('a'), again('b'), again('a')], [false, true, true, false, false]);
-  assert.match(CANNOT_REACH, /Choose More, then Easy reading/);
+  assert.match(CANNOT_REACH, /Choose View, then Easy reading/);
   // (simplify-signing: not for a field Next opens by itself, a signature or a stamp still to be made.)
   assert.match(signPage(), /nextAgain\(nextField\.id\) && view === 'doc' && !opensOnNext\(nextField\) && toast\(CANNOT_REACH\)/);
 });

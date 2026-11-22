@@ -97,6 +97,10 @@ const NEEDS: Record<Need, string[]> = {
     'POST /envelopes/:id/move', 'POST /envelopes/:id/send-for',
     // Asking for a payment by card on a document or template (routes-collect.ts).
     'GET /envelopes/:id/collect', 'PUT /envelopes/:id/collect',
+    // One envelope's own switches (routes-switches.ts).
+    'GET /envelopes/:id/switches', 'PUT /envelopes/:id/switches',
+    // Scans signed on paper: looking at one, accepting it, asking again (routes-paper.ts).
+    'GET /envelopes/:id/paper', 'GET /envelopes/:id/recipients/:rid/paper/scan', 'POST /envelopes/:id/recipients/:rid/paper/accept', 'POST /envelopes/:id/recipients/:rid/paper/reject',
   ],
   drafting: [
     'GET /ai/assist', 'POST /ai/draft', 'POST /ai/fields', 'POST /files', 'POST /files/:id/undo-cleanup', 'POST /print-check', 'GET /write', 'POST /write/change',
@@ -142,7 +146,7 @@ const NEEDS: Record<Need, string[]> = {
     'PATCH /account', 'PUT /account/ai-read', 'POST /account/archive-addresses', 'DELETE /account/archive-addresses/:id',
     'GET /account/disclosure', 'PUT /account/disclosure', 'GET /account/disclosure/versions', 'DELETE /account/embed-origins',
     'GET /account/embed-origins', 'POST /account/embed-origins', 'PUT /account/impact-record', 'GET /account/pdfa', 'PUT /account/pdfa', 'GET /account/template-match', 'PUT /account/template-match',
-    'GET /account/policy', 'PUT /account/policy', 'PUT /account/retention', 'GET /account/retention/log', 'GET /account/rules',
+    'GET /account/policy', 'PUT /account/policy', 'GET /account/switches', 'PUT /account/switches', 'PUT /account/retention', 'GET /account/retention/log', 'GET /account/rules',
     'PATCH /account/rules', 'GET /account/security', 'PATCH /account/security', 'GET /account/security-events',
     'GET /account/security-events/csv', 'GET /account/security-events/view', 'DELETE /account/sso', 'GET /account/sso', 'PUT /account/sso',
     'POST /account/sso/domains', 'DELETE /account/sso/domains/:id', 'PATCH /account/sso/domains/:id', 'POST /account/sso/domains/:id/check',
@@ -152,6 +156,7 @@ const NEEDS: Record<Need, string[]> = {
     'POST /saved-fields', 'DELETE /saved-fields/:id', 'PUT /saved-fields/look',
     'PUT /account/key-dates', 'POST /account/key-dates/older',
     'GET /account/delegation', 'PUT /account/delegation',
+    'GET /account/paper', 'PUT /account/paper',
     'GET /counter/settings', 'PUT /counter/settings', 'PUT /counter/staff/:user', 'PUT /counter/templates/:id',
   ],
   settings_and_see_all: [

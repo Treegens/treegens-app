@@ -28,6 +28,7 @@ import { forgetEnvelopes, removeUnusedBlobs } from './routes-trust.ts';
 import { CLOSED, senderNotice } from './evidence.ts';
 import { sendWarnings } from './warnings.ts';
 import { emailRefusal, fieldProgress, formPageRefusal, yesNo } from './envelopes.ts';
+import { markPaying } from './collect.ts';
 import { PRICING } from '../lib/impact.ts';
 import { showsTrees } from './tenantpolicy.ts';
 import { printProblems, unprintable } from './pdftext.ts';
@@ -72,6 +73,7 @@ import { dayText } from '../lib/dates.ts';
 import { assertNoStepRoles } from './agents.ts';
 // One envelope from several templates (tplcombine.ts).
 import { readTemplateIds, combineTemplates, combinedLine } from './tplcombine.ts';
+import { assertStampsAllowed, saveFormLimits, formLimitClosed } from './switches.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -283,6 +285,8 @@ route('POST', '/envelopes', async (c) => {
   if (b.kind != null && b.kind !== '' && b.kind !== 'template' && b.kind !== 'envelope')
     throw bad(`"kind" is "${str(b.kind, 40)}", which does not exist. Use "envelope" or "template", or leave it out for an envelope. Nothing was created.`);
   const kind = b.kind === 'template' ? 'template' : 'envelope';
+  // A member may not add a stamp field when the admins turned that off (switches.ts).
+  assertStampsAllowed(c, b);
   // "send": "false", in quotes, must never email anybody. A yes or no is true or false, or it is refused (yesNo).
   const send = yesNo(b.send, false, '"send"');
   // A retried or timed-out call with the same Idempotency-Key gets the envelope the first call made instead of
@@ -390,6 +394,8 @@ route('GET', '/envelopes/:id', (c) => {
   // `ready` marks someone who filled in everything required and has not pressed Finish (fieldProgress in envelopes.ts,
   // the same count the reminder to that person goes by).
   for (const r of env.recipients) r.progress = fieldProgress(e, r);
+  // Pressed Finish and waits for a card payment to be confirmed (collect.ts): said as that, not as "Finish is left".
+  markPaying(env.recipients);
   // A template: who can use and change it, and what this person may do with it. An envelope started from a template
   // whose wording is locked for this person: what is locked and who can unlock it, so the editor shows it as locked.
   if (e.kind === 'template') env.access = accessOf(c, e);
@@ -429,6 +435,7 @@ route('PUT', '/envelopes/:id', async (c) => {
   const b = await c.body();
   const e = mine(c, c.params.id);
   assertMayChange(c, e);
+  assertStampsAllowed(c, b, e);
   // Started from a template whose wording is locked for this person: the locked parts stay as they are (tplroles.ts).
   assertWordingKept(c, e, b);
   // "custom_fields" and "documents[].fields", checked before anything is saved and written after (customfields.ts).
@@ -975,7 +982,7 @@ function formToChange(c: Ctx, doing: string) {
 route('GET', '/powerforms', (c) => ({
   // "uses" counts every start. "signed" is what people finished, and "open" is who is filling one in right now.
   // may_change says whether this person may pause, change or delete the form, and owner whose template it is on.
-  powerforms: all(`SELECT p.id, p.slug, p.name, p.active, p.uses, p.shared_device, p.created_at, t.subject template, p.template_id template_ref, u.name owner,
+  powerforms: all(`SELECT p.id, p.slug, p.name, p.active, p.uses, p.shared_device, p.created_at, p.max_signed, p.closes_at, p.closes_day, t.subject template, p.template_id template_ref, u.name owner,
       (SELECT COUNT(*) FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=p.id AND r.status='completed') signed,
       (SELECT COUNT(*) FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.powerform_id=p.id AND e.status='sent' AND r.status IN ('pending','sent','viewed')) open
     FROM powerforms p LEFT JOIN envelopes t ON t.id=p.template_id LEFT JOIN users u ON u.id=t.sender_id WHERE p.account_id=? ORDER BY p.created_at DESC`, c.account.id)
@@ -1012,7 +1019,9 @@ route('POST', '/powerforms', async (c) => {
 route('PATCH', '/powerforms/:id', async (c) => {
   // Only what the call names is changed, so pausing a form does not also change how it treats a shared device.
   const b = await c.body();
-  formToChange(c, 'pause or change this PowerForm');
+  const form = formToChange(c, 'pause or change this PowerForm');
+  // "max_signed" and "closes_at": how many may sign it, and until when (switches.ts).
+  saveFormLimits(form, b);
   if (b.active !== undefined) run('UPDATE powerforms SET active=? WHERE id=? AND account_id=?', b.active ? 1 : 0, c.params.id, c.account.id);
   if (b.shared_device !== undefined) run('UPDATE powerforms SET shared_device=? WHERE id=? AND account_id=?', b.shared_device ? 1 : 0, c.params.id, c.account.id);
 });
@@ -1034,7 +1043,9 @@ route('GET', '/public/powerforms/:slug', async (c) => {
   const noCustom = posing ? null : formCustomProblem(tpl);
   if (noCustom) await tellFormOwner(p, tpl.sender_id, noCustom);
   // Said before anyone types their name and address into a form that cannot take them.
-  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || !!noCustom || formClosed(p, tpl), shared_device: !!p.shared_device, trees: showsTrees(p.account_id),
+  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || !!noCustom || formClosed(p, tpl) || !!formLimitClosed(p),
+    // Closed because it reached the number of signatures it was set up for, or its closing date: said, with whom to ask.
+    closed_why: posing || noCustom ? null : formLimitClosed(p), shared_device: !!p.shared_device, trees: showsTrees(p.account_id),
     // The questions the visitor answers before the document (webforms.ts), with what the form page needs to check them.
     ...(posing || noCustom ? { questions: [] } : formView(tpl, open)) };
 }, 'public');
@@ -1086,6 +1097,8 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   if (!name || !isEmail(email)) throw bad('Enter your name and a valid email address.');
   const { tpl, open } = powerformTemplate(p.template_id);
   if (formClosed(p, tpl)) throw bad(FORM_CLOSED, 503);
+  const full = formLimitClosed(p);
+  if (full) throw bad(full, 403, { code: 'form_closed' });
   // Answers from the form's questions are checked before anything is made (webforms.ts).
   const answers = checkAnswers(p, tpl, open, b.answers);
   // Opening the form twice must not create two envelopes. But an email address proves nothing, because anyone can

@@ -16,6 +16,7 @@ import { HttpError, id, now, isEmail, baseUrl } from './util.ts';
 import { get, run, dataDir } from './db.ts';
 import { fileKeys, openFile, sealFile, sha256hex, scanStore, writeWhole, StoredFileProblem, type FileKeys, type StoreScan } from './filecrypt.ts';
 import { NEW_FILE_KEY_COMMAND } from '../lib/storedfiles.ts';
+import { seal } from './colcrypt.ts';
 
 const g = globalThis as any;
 const sig = () => `${process.env.FILE_ENCRYPTION_KEY || ''}\n${process.env.FILE_ENCRYPTION_KEYS_OLD || ''}`;
@@ -80,7 +81,7 @@ function fileAlert(subject: string, lines: string[]) {
     const to = [...new Set([process.env.SUPPORT_EMAIL || '', ...(process.env.OPERATOR_EMAILS || '').split(',')].map((s) => s.trim().toLowerCase()).filter(isEmail))];
     const message = `${subject}\n\n${lines.join('\n')}`.slice(0, 5000);
     if (get("SELECT 1 x FROM support_requests WHERE name=? AND status!='closed' AND col_find(message)=?", 'GrowSigning (automatic alert)', message)) return;
-    run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'other',?,'open',?)", id('sup'), to[0] || 'files-alert@localhost', 'GrowSigning (automatic alert)', message, now());
+    run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'other',?,'open',?)", id('sup'), to[0] || 'files-alert@localhost', 'GrowSigning (automatic alert)', seal('support_requests.message', message), now());
     if (to.length)
       import('./mail.ts').then(async ({ sendMail }) => {
         for (const t of to) await sendMail({ to: t, subject, heading: subject, lines, cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } });

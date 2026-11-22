@@ -8,13 +8,16 @@ import { safeNext, signInErrorText, signInNotice, removedText } from '@/lib/sign
 // Why a sign-in rule of the team signed this browser out: only its two known reasons are ever said.
 import { signedOutNotice } from '@/lib/signinrules';
 import { useSso, SsoChoice } from './SsoSignIn';
+import { usePublicT } from './publicLang';
 
 type Mode = 'login' | 'signup' | 'forgot' | 'reset';
 type Provider = { id: string; name: string };
-const list = (names: string[]) => names.join(' or ');
-const TITLE: Record<Mode, string> = { login: 'Welcome back', signup: 'Create your free account', forgot: 'Reset your password', reset: 'Choose a new password' };
+// "Google or Microsoft": the names of the providers, in the page's language.
+const listIn = (T: ReturnType<typeof usePublicT>, names: string[]) => names.reduce((a, b) => (a ? T('auth.or_list', { a, b }) : b), '');
 
 export function AuthForm({ mode }: { mode: Mode }) {
+  const T = usePublicT();
+  const list = (names: string[]) => listIn(T, names);
   const [f, setF] = useState({ name: '', email: '', password: '', code: '' });
   const [q, setQ] = useState<URLSearchParams | null>(null);
   const [error, setError] = useState('');
@@ -81,7 +84,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         // Someone who already has an account accepts a team invitation by signing in: the server does both in one
         // step. What happened on the way in is said on the first screen of the app, never swallowed.
         // A remembered device is the second step: signing in on it stops a reset of two-step login by email.
-        const notice = [signInNotice(r), r.reset_stopped ? 'The reset of your two-step login that was under way has stopped, because you signed in on a device that is remembered for your login.' : ''].filter(Boolean).join(' ');
+        const notice = [signInNotice(r), r.reset_stopped ? T('auth.reset_stopped') : ''].filter(Boolean).join(' ');
         try {
           if (r.restored) sessionStorage.setItem('sg_restored', '1');
           if (notice) sessionStorage.setItem('sg_notice', notice);
@@ -96,17 +99,17 @@ export function AuthForm({ mode }: { mode: Mode }) {
         await api('/auth/forgot', { body: { email: f.email } });
         // The invitation is not lost by resetting a password, but the reset email does not carry it: the person is
         // told to come back through the invitation email, which is what puts them on the team.
-        setDone(`If that address has an account, a link to choose a new password is on its way. It works for one hour.${q?.get('invite') ? ' Once you have chosen the new password, open the invitation email again and sign in from its button. That is what puts you on the team.' : ''}`);
+        setDone(`${T('auth.forgot_sent')}${q?.get('invite') ? ` ${T('auth.forgot_invite')}` : ''}`);
       } else {
         const r = await api('/auth/reset', { body: { token: q?.get('token'), password: f.password } });
         // Choosing a password for a login whose address had never been confirmed cuts off a provider that did not
         // stand behind the address. That is said here, so the next sign-in holds no surprise.
-        setDone(`Password changed.${r.disconnected?.length ? ` ${r.disconnected.join(' and ')} was disconnected from this login, because this address had not been confirmed before. Once you are signed in you can connect it again under Settings.` : ''}${removedText({ ...r.removed, disconnected: undefined }) ? ` Nobody had confirmed this address before, so anyone could have started this login. ${removedText({ ...r.removed, disconnected: undefined })} We emailed you the same list.` : ''} You can sign in now.${r.two_step ? ' After the password you are asked for the code from your authenticator app, as before: a new password does not change the second step.' : ''}`);
+        setDone(`${T('auth.changed')}${r.disconnected?.length ? ` ${T('auth.disconnected', { names: r.disconnected.join(T('auth.and')) })}` : ''}${removedText({ ...r.removed, disconnected: undefined }) ? ` ${T('auth.removed', { what: removedText({ ...r.removed, disconnected: undefined }) })}` : ''} ${T('auth.sign_in_now')}${r.two_step ? ` ${T('auth.two_step_after')}` : ''}`);
       }
     } catch (err: any) {
       // Someone whose login was made with Google or Microsoft has no password to get right. The server does not say
       // whether that is the case for this address, so the hint goes to everyone whose password did not match.
-      setError(err.message + (mode === 'login' && err.status === 401 && providers.length ? ` If you made your login with ${list(providers.map((p) => p.name))}, use that button below instead. To choose a password for it, use "Forgot password".` : ''));
+      setError(err.message + (mode === 'login' && err.status === 401 && providers.length ? ` ${T('auth.provider_hint', { providers: list(providers.map((p) => p.name)) })}` : ''));
     } finally {
       setBusy(false);
     }
@@ -116,40 +119,40 @@ export function AuthForm({ mode }: { mode: Mode }) {
     <div className="authbox">
       <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
       <form className="card" onSubmit={submit}>
-        <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>{TITLE[mode]}</h1>
-        {mode === 'signup' && <p className="muted small">{q?.get('invite') ? 'You were invited to join a team.' : 'Free to start. No card needed. Every subscription plants trees.'}</p>}
-        {mode === 'login' && q?.get('invite') && <p className="muted small">You were invited to join a team. Sign in and you are on it. Anything you already have on GrowSigning stays as it is.</p>}
-        {mode === 'forgot' && q?.get('invite') && <p className="muted small">Your invitation stays valid while you do this. After you have chosen a new password, open the invitation email again and sign in from its button.</p>}
-        {mode === 'login' && q?.get('closing') && <div className="notice" style={{ marginTop: 10 }}>Your account is closed and will be deleted in 30 days. Any subscription has been stopped. Changed your mind? Sign in and it comes straight back.</div>}
+        <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>{T(`auth.title.${mode}`)}</h1>
+        {mode === 'signup' && <p className="muted small">{q?.get('invite') ? T('auth.invited_team') : T('auth.free_start')}</p>}
+        {mode === 'login' && q?.get('invite') && <p className="muted small">{T('auth.invited_login')}</p>}
+        {mode === 'forgot' && q?.get('invite') && <p className="muted small">{T('auth.invited_forgot')}</p>}
+        {mode === 'login' && q?.get('closing') && <div className="notice" style={{ marginTop: 10 }}>{T('auth.closing')}</div>}
         {cameBack && <div className="notice err" style={{ marginTop: 10 }} role="alert">{cameBack}</div>}
         {sso.errorText && !cameBack && <div className="notice err" style={{ marginTop: 10 }} role="alert">{sso.errorText}</div>}
         {out && <div className="notice" style={{ marginTop: 10 }} role="status">{out}</div>}
-        {done ? <div className="notice" style={{ margin: '12px 0' }}>{done} <Link href="/login">Sign in</Link></div> : (
+        {done ? <div className="notice" style={{ margin: '12px 0' }}>{done} <Link href="/login">{T('auth.sign_in')}</Link></div> : (
           <div style={{ marginTop: 14 }}>
-            {mode === 'signup' && <label className="f"><span>Your name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>}
-            {mode !== 'reset' && <label className="f"><span>Email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} onBlur={(e) => (mode === 'login' || mode === 'signup') && sso.look(e.target.value)} required autoComplete="email" readOnly={mode === 'signup' && !!q?.get('invite')} /></label>}
+            {mode === 'signup' && <label className="f"><span>{T('auth.your_name')}</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>}
+            {mode !== 'reset' && <label className="f"><span>{T('auth.email')}</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} onBlur={(e) => (mode === 'login' || mode === 'signup') && sso.look(e.target.value)} required autoComplete="email" readOnly={mode === 'signup' && !!q?.get('invite')} /></label>}
             {(mode === 'login' || mode === 'signup') && sso.found && <SsoChoice sso={sso} mode={mode} q={q} />}
-            {mode !== 'forgot' && !sso.active && <label className="f"><span>{mode === 'reset' ? 'New password' : 'Password'} {mode !== 'login' && <span className="hint">(at least 8 characters)</span>}</span><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={mode === 'login' ? 1 : 8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>}
-            {mode === 'signup' && !q?.get('invite') && !sso.active && <label className="f"><span>Plan code <span className="hint">(optional, only if we gave you one)</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
+            {mode !== 'forgot' && !sso.active && <label className="f"><span>{mode === 'reset' ? T('auth.new_password') : T('auth.password')} {mode !== 'login' && <span className="hint">{T('auth.password_hint')}</span>}</span><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={mode === 'login' ? 1 : 8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>}
+            {mode === 'signup' && !q?.get('invite') && !sso.active && <label className="f"><span>{T('auth.plan_code')} <span className="hint">{T('auth.plan_code_hint')}</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
             {error && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{error}</div>}
-            {!sso.active && <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Save password'}</button>}
+            {!sso.active && <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{T(`auth.button.${mode}`)}</button>}
             {(mode === 'login' || mode === 'signup') && providers.length > 0 && signedInAs && !q?.get('invite') && (
-              <div className="auth-alt" role="group" aria-label="You are signed in already">
-                <p className="auth-or" aria-hidden="true"><span>or</span></p>
-                <p className="notice" style={{ margin: '8px 0 0' }}>You are signed in as {signedInAs} in this browser. To sign in with {list(providers.map((p) => p.name))} as well, connect it under Settings, Security: continuing with it here would make you a separate login. To use another login, sign out first.</p>
-                <a className="btn" href="/app/settings?tab=security">Open Settings, Security</a>
-                <button type="button" className="btn" onClick={signOut}>Sign out</button>
+              <div className="auth-alt" role="group" aria-label={T('auth.signed_in_group')}>
+                <p className="auth-or" aria-hidden="true"><span>{T('auth.or')}</span></p>
+                <p className="notice" style={{ margin: '8px 0 0' }}>{T('auth.signed_in_as', { email: signedInAs, providers: list(providers.map((p) => p.name)) })}</p>
+                <a className="btn" href="/app/settings?tab=security">{T('auth.open_security')}</a>
+                <button type="button" className="btn" onClick={signOut}>{T('auth.sign_out')}</button>
               </div>
             )}
             {(mode === 'login' || mode === 'signup') && providers.length > 0 && (!signedInAs || !!q?.get('invite')) && sso.found?.password !== 'owner_only' && (
-              <div className="auth-alt" role="group" aria-label={mode === 'login' ? 'Other ways to sign in' : 'Other ways to create your account'}>
-                <p className="auth-or" aria-hidden="true"><span>or</span></p>
+              <div className="auth-alt" role="group" aria-label={mode === 'login' ? T('auth.other_ways_login') : T('auth.other_ways_signup')}>
+                <p className="auth-or" aria-hidden="true"><span>{T('auth.or')}</span></p>
                 {/* The providers' names in plain text. Real links, so they work by keyboard and without scripts. */}
-                {providers.map((p) => <a key={p.id} className="btn" href={startAt(p.id)}>Continue with {p.name}</a>)}
+                {providers.map((p) => <a key={p.id} className="btn" href={startAt(p.id)}>{T('auth.continue_with', { name: p.name })}</a>)}
                 <p className="muted small" style={{ margin: '10px 0 0' }}>
                   {mode === 'signup'
-                    ? `You sign in at ${list(providers.map((p) => p.name))} and need no password here. We take your name, your email address and the id they know you by, and nothing else.${q?.get('invite') ? ' Choose the account with the address you were invited at.' : ''}`
-                    : `No GrowSigning login yet? Continuing with ${list(providers.map((p) => p.name))} makes one for you.`}
+                    ? `${T('auth.provider_signup', { providers: list(providers.map((p) => p.name)) })}${q?.get('invite') ? ` ${T('auth.provider_signup_invite')}` : ''}`
+                    : T('auth.provider_login', { providers: list(providers.map((p) => p.name)) })}
                 </p>
               </div>
             )}
@@ -157,9 +160,9 @@ export function AuthForm({ mode }: { mode: Mode }) {
         )}
       </form>
       <p className="muted small center" style={{ marginTop: 14 }}>
-        {mode === 'login' ? <>New here? <Link href={`/signup${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Create an account</Link> · <Link href={`/forgot${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Forgot password?</Link></> : <>Already have an account? <Link href={`/login${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>Sign in</Link></>}
+        {mode === 'login' ? <>{T('auth.new_here')} <Link href={`/signup${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>{T('auth.create')}</Link> · <Link href={`/forgot${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>{T('auth.forgot')}</Link></> : <>{T('auth.have_account')} <Link href={`/login${q?.get('invite') ? `?invite=${q.get('invite')}&email=${encodeURIComponent(f.email)}` : ''}`}>{T('auth.sign_in')}</Link></>}
         {/* Whichever form this is, a person is one click away, also for someone who cannot get in at all. */}
-        {' · '}<Link href={mode === 'signup' ? '/help' : '/help?topic=cannot-log-in#contact'}>{mode === 'signup' ? 'Help' : 'Cannot get in? Get help'}</Link>
+        {' · '}<Link href={mode === 'signup' ? '/help' : '/help?topic=cannot-log-in#contact'}>{mode === 'signup' ? T('auth.help') : T('auth.cannot_get_in')}</Link>
       </p>
     </div>
   );

@@ -17,6 +17,7 @@ import { all, get, run } from './db.ts';
 import { bad, now, rateLimit, rateWait, baseUrl } from './util.ts';
 // Refusals the signing page shows carry a code, so it can say them in the signer's language (signlang.ts).
 import { refuse } from './signlang.ts';
+import { envelopeSwitches, assertSignerMayComment, assertSenderMayStart } from './switches.ts';
 import { sendMail, type Mail } from './mail.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { audit, loadEnvelope, senderOf, signUrl, pausedText } from './envelopes.ts';
@@ -116,7 +117,9 @@ function signerView(e: any, r: any, c: Ctx) {
     threads,
     // Questions of this person that the sender's side has not answered yet: said, never blocking, before Finish.
     waiting: threads.filter((t) => t.waiting && t.comments[t.comments.length - 1]?.mine).length,
-    may_write: e.status === 'sent' && !away,
+    // The sender may have turned questions and comments off (switches.ts): what was written stays readable.
+    may_write: e.status === 'sent' && !away && envelopeSwitches(e).comments,
+    comments_off: !envelopeSwitches(e).comments,
     away: away ? awayText(e, r) : null,
     // A visitor of a public form typed their own name: what they write goes to the form's owner only.
     for_everyone: !visitorOf(e, r),
@@ -137,6 +140,7 @@ async function writeAsSigner(c: Ctx, body: any) {
   // Read the body, then look the link up again: see checkedBody in routes-sign.ts.
   const { e, r, actor } = look(c);
   signerSide(e, r, true);
+  assertSignerMayComment(e, senderName(e));
   const text = textOf(body.text);
   const v = viewerOf(r, c);
   if (v.party === AWAY) throw refuse('handed_on', 403, { name: r.name, sender: senderName(e) }, 'handed_on_unsent');
@@ -239,6 +243,8 @@ function senderView(e: any) {
     // Who has not been answered: each thread whose last word is from someone on the envelope, with their name.
     waiting: threads.filter((t) => t.waiting).map((t) => ({ thread_id: t.id, name: t.comments[t.comments.length - 1].name })),
     may_write: e.status === 'sent',
+    // Off for this envelope (switches.ts): earlier conversations can still be answered, a new one is not started.
+    comments_off: !envelopeSwitches(e).comments,
     people: e.status === 'sent' ? reachable(e).map((r: any) => ({ id: r.id, name: r.name, role: r.role, ...mailable(reachOf(e, r)) })) : [],
     // Answers wait while sending is paused: the card says so instead of only "waiting".
     paused: !!get('SELECT suspended_at FROM accounts WHERE id=?', e.account_id)?.suspended_at,
@@ -253,6 +259,8 @@ route('GET', '/envelopes/:id/comments', (c) => senderView(senderSide(c, false)))
 route('POST', '/envelopes/:id/comments', async (c) => {
   const body = await c.body();
   const e = senderSide(c, true);
+  // Off for this envelope: an earlier conversation can still be answered, a new one is not started (switches.ts).
+  assertSenderMayStart(e, body.thread_id);
   const text = textOf(body.text);
   const author = `u:${c.user.id}`;
   // Where it goes is settled first, and nothing is counted or stored before everything about it is known to be right.

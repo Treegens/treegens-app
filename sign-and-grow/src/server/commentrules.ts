@@ -91,7 +91,7 @@ const SAME_MS = 15_000;
 export function sameAgain(e: any, o: { author: string; text: string; threadId?: string | null; to?: Audience & { pin?: any } }): any | null {
   const rows = all(`SELECT c.id, c.thread_id, t.private, t.recipient_id, t.party, t.document_id, t.page, t.x, t.y,
       (SELECT id FROM comments f WHERE f.thread_id=c.thread_id ORDER BY f.at, f.rowid LIMIT 1) first
-    FROM comments c JOIN comment_threads t ON t.id=c.thread_id WHERE c.envelope_id=? AND c.author=? AND c.body=? AND c.at > ? ORDER BY c.at DESC, c.rowid DESC`, e.id, o.author, o.text, since(SAME_MS));
+    FROM comments c JOIN comment_threads t ON t.id=c.thread_id WHERE c.envelope_id=? AND c.author=? AND col_find(c.body)=? AND c.at > ? ORDER BY c.at DESC, c.rowid DESC`, e.id, o.author, o.text, since(SAME_MS));
   const same = (a: any, b: any) => (a ?? null) === (b ?? null);
   return rows.find((x) => (o.threadId ? x.thread_id === o.threadId
     // A new conversation: the earlier one started its own, with the same readers and the same place on the page.

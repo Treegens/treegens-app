@@ -114,7 +114,7 @@ export function saveLogic(e: any, entries: Entry[]) {
   // writeContent wrote every field again. A calculated value that was kept (someone who has finished keeps what they
   // signed) keeps the number it stands for, so it is never read again from its shown text (canonOf in logic.ts).
   for (const old of e.fields || [])
-    if (old?.calc_num != null && out.get(old.id)?.formula) run('UPDATE fields SET calc_num=? WHERE id=? AND col_find(value) IS ?', old.calc_num, old.id, old.value ?? null);
+    if (old?.calc_num != null && old.calc_num !== '' && out.get(old.id)?.formula) run('UPDATE fields SET calc_num=? WHERE id=? AND col_find(value) IS ?', seal('fields.calc_num', String(old.calc_num)), old.id, old.value ?? null);
   // A calculated field is never typed into, so it is never required, never read only, and holds no wording of the
   // sender's: its value is whatever it works out to.
   run('UPDATE fields SET required=0, readonly=0, prefill=NULL WHERE envelope_id=? AND formula IS NOT NULL', e.id);
@@ -158,7 +158,7 @@ export function settleLogic(envelopeId: string, acting?: string | null, fields?:
       f.value = next;
       if (calc) f.calc_num = num;
       // Never over an answer of someone who has finished, unless it is the person finishing in this very moment.
-      run(`UPDATE fields SET value=?, calc_num=? WHERE id=?${R === acting ? '' : " AND (SELECT status FROM recipients WHERE id=?)!='completed'"}`, sealField(f.type, next), num, f.id, ...(R === acting ? [] : [R]));
+      run(`UPDATE fields SET value=?, calc_num=? WHERE id=?${R === acting ? '' : " AND (SELECT status FROM recipients WHERE id=?)!='completed'"}`, sealField(f.type, next), num == null ? null : seal('fields.calc_num', String(num)), f.id, ...(R === acting ? [] : [R]));
     }
   }
   return hiddenMine;

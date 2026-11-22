@@ -1036,6 +1036,13 @@ CREATE TABLE IF NOT EXISTS collect_payments (
 CREATE INDEX IF NOT EXISTS collect_payments_envelope ON collect_payments(envelope_id);
 CREATE INDEX IF NOT EXISTS collect_payments_intent ON collect_payments(payment_intent);
 CREATE TABLE IF NOT EXISTS collect_events (id TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- collect_sessions: every Stripe page made for a payment row, with the amount it asked. A payment on an older page
+-- (the amount changed meanwhile) is still found and recorded, never dropped. closed_at: Stripe said it is closed.
+CREATE TABLE IF NOT EXISTS collect_sessions (
+  session_id TEXT PRIMARY KEY, payment_id TEXT NOT NULL REFERENCES collect_payments(id) ON DELETE CASCADE, stripe_account TEXT NOT NULL,
+  amount INTEGER NOT NULL, currency TEXT NOT NULL, at TEXT NOT NULL, closed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS collect_sessions_payment ON collect_sessions(payment_id);
 -- Signing in person without a connection (src/server/offlinesign.ts): one copy got ready on a host's device for one
 -- person, the content version it was made from, when it ends, and, once it came back, the device's clock and when we got it.
 CREATE TABLE IF NOT EXISTS offline_preps (
@@ -1045,6 +1052,23 @@ CREATE TABLE IF NOT EXISTS offline_preps (
 );
 CREATE INDEX IF NOT EXISTS offline_preps_rec ON offline_preps(recipient_id, state);
 CREATE INDEX IF NOT EXISTS offline_preps_session ON offline_preps(session_id, state);
+-- Signed on paper (src/server/paper.ts): each scan one person sent back through their own link, the content version
+-- and the security code of the print it was made from, where it came from, and what the sender decided about it.
+-- state: waiting, accepted or asked_again (with the sender's reason).
+CREATE TABLE IF NOT EXISTS paper_scans (
+  id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, recipient_id TEXT NOT NULL,
+  file_id TEXT NOT NULL, pages INTEGER NOT NULL, sha256 TEXT NOT NULL, content_version INTEGER NOT NULL, code TEXT NOT NULL,
+  at TEXT NOT NULL, ip TEXT, ua TEXT, state TEXT NOT NULL DEFAULT 'waiting', decided_at TEXT, decided_by TEXT, reason TEXT
+);
+CREATE INDEX IF NOT EXISTS paper_scans_rec ON paper_scans(recipient_id, at);
+-- A field anyone on the document can fill in (src/server/collab.ts): every change, who made it, what it said before and
+-- after, and the initials they gave for it when the sender asked for initials on a change. before, after and
+-- initials_png are sealed like answers (colcrypt.ts).
+CREATE TABLE IF NOT EXISTS shared_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, field_id TEXT NOT NULL,
+  recipient_id TEXT NOT NULL, name TEXT NOT NULL, before TEXT, after TEXT, initials_png TEXT, sign_again TEXT, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shared_changes_env ON shared_changes(envelope_id, field_id, id);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1797,6 +1821,45 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['envelopes', 'collect_currency', 'TEXT'],
   ['envelopes', 'collect_for', 'TEXT'],
   ['envelopes', 'collect_when', 'TEXT'],
+  // Switches for senders and admins (src/server/switches.ts). NULL on an envelope: as the account said when it was sent.
+  ['accounts', 'sw_pass_on', 'INTEGER NOT NULL DEFAULT 1'],
+  ['accounts', 'sw_pass_copy', 'INTEGER NOT NULL DEFAULT 0'],
+  ['accounts', 'sw_comments', 'INTEGER NOT NULL DEFAULT 1'],
+  ['accounts', 'sw_sign_ways', 'TEXT'],
+  ['accounts', 'sw_stamps', 'INTEGER NOT NULL DEFAULT 1'],
+  ['accounts', 'sw_mark_words', 'TEXT'],
+  ['envelopes', 'sw_pass_on', 'INTEGER'],
+  ['envelopes', 'sw_pass_copy', 'INTEGER'],
+  ['envelopes', 'sw_comments', 'INTEGER'],
+  // Written at send: the ways to make a signature ("type,draw,upload") and the mark words. NULL: sent before these
+  // were kept, read from the account.
+  ['envelopes', 'sw_sign_ways', 'TEXT'],
+  ['envelopes', 'sw_mark_words', 'TEXT'],
+  ['recipients', 'sig_how', 'TEXT'],
+  ['recipients', 'ini_how', 'TEXT'],
+  ['powerforms', 'max_signed', 'INTEGER'],
+  ['powerforms', 'closes_at', 'TEXT'],
+  // The person kept as a copy after passing it on: their old link, so it can say why it stopped (switches.ts).
+  ['recipients', 'kept_from', 'TEXT'],
+  // The last day a form takes signatures, as the admin chose it (closes_at is the moment it closes).
+  ['powerforms', 'closes_day', 'TEXT'],
+  // Signed on paper (src/server/paper.ts). accounts.paper_sign: the admins' switch "People may sign on paper" (off).
+  // recipients.allow_paper: NULL is the default (allowed while the switch is on), 0 is "on screen only".
+  // require_paper: "On paper only". paper_state: where their latest scan stands (waiting, asked_again, accepted).
+  // paper_scan_id: the scan accepted as what they signed, set by the acceptance alone.
+  ['accounts', 'paper_sign', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'allow_paper', 'INTEGER'],
+  ['recipients', 'require_paper', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'paper_state', 'TEXT'],
+  ['recipients', 'paper_scan_id', 'TEXT'],
+  // A field anyone on the document can fill in, instead of one person (src/server/collab.ts). shared_initials: whoever
+  // changes it adds their initials. shared_after: the sender allows a change after someone finished, and then everyone
+  // who finished is asked to sign again. recipients.shared_shown: what this person's screen was last given for those
+  // fields, so a screen that is out of date never undoes someone else's change.
+  ['fields', 'shared', 'INTEGER NOT NULL DEFAULT 0'],
+  ['fields', 'shared_initials', 'INTEGER NOT NULL DEFAULT 0'],
+  ['fields', 'shared_after', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'shared_shown', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

@@ -15,6 +15,7 @@ import { sealSet } from '../lib/seal.ts';
 import { get, run } from './db.ts';
 import { id, now, isEmail, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
+import { seal } from './colcrypt.ts';
 import { dayText } from '../lib/dates.ts';
 
 export type SealKey = { signer: SealSigner; cert: CertInfo; chain: CertInfo[]; hash: string };
@@ -169,7 +170,7 @@ export function tellOperators(why: string) {
     const text = `${subject}\n\n${lines.join('\n')}`.slice(0, 5000);
     if (get("SELECT 1 x FROM support_requests WHERE status='open' AND col_find(message)=?", text)) return;
     const to = [...new Set([process.env.SUPPORT_EMAIL || '', ...(process.env.OPERATOR_EMAILS || '').split(',')].map((s) => s.trim().toLowerCase()).filter(isEmail))];
-    run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'other',?,'open',?)", id('sup'), to[0] || 'files-alert@localhost', 'GrowSigning (automatic alert)', text, now());
+    run("INSERT INTO support_requests (id, email, name, topic, message, status, at) VALUES (?,?,?,'other',?,'open',?)", id('sup'), to[0] || 'files-alert@localhost', 'GrowSigning (automatic alert)', seal('support_requests.message', text), now());
     for (const t of to) sendMail({ to: t, subject, heading: subject, lines, cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } }).catch((x: any) => console.error('[seal] could not email the operators', x?.message));
   } catch (x: any) {
     console.error('[seal] could not file the alert', x?.message);

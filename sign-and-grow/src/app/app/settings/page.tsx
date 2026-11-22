@@ -45,6 +45,8 @@ import { Organisation } from '@/components/settings/Organisation';
 import { sectionsFor, landingFor, closingCount, nextTab, KEYS_AND_TWO_STEP, MEMBER_READS, awayInTeam, AWAY_ANCHOR } from '@/lib/settingsnav';
 import { Card, MoreOptions, useSaved } from '@/components/settings/Frame';
 import { SendingDefaults } from '@/components/settings/SendingDefaults';
+// "Members may place stamps" (owners and admins, src/lib/switches.ts). The rest is in the card "When people sign".
+import { MembersStamps } from '@/components/settings/Switches';
 // How alike an upload must be to a template before the editor suggests it (src/server/tplmatch.ts).
 // "When people sign": whether new documents start with "Each person sees only their files" on (admins).
 import { OwnDocsDefault } from '@/components/settings/OwnDocsDefault';
@@ -394,7 +396,7 @@ function Team() {
 
       {leaving && (
         <Modal title={`Leave ${me.account.name}`} onClose={() => setLeaving(false)}>
-          <p>You lose access to this team straight away. Nothing you sent is lost: your envelopes, drafts, templates and bulk sends pass to the person you choose, and anything still out for signature carries on. Each envelope&apos;s audit trail says who handed it to whom.</p>
+          <p>You lose access to this team straight away. Nothing you sent is lost: your documents, drafts, templates and Send to many batches pass to the person you choose, and anything still out for signature carries on. Each document&apos;s History says who handed it to whom.</p>
           {/* Where they land is said by name: the oldest of their other workspaces, as the server picks it (me.accounts is oldest first). */}
           <p className="muted small">You keep your login and stay signed in, {(me.accounts || []).find((a: any) => a.id !== me.account.id) ? `in ${(me.accounts || []).find((a: any) => a.id !== me.account.id).name}, the workspace you joined first among your others` : 'in a new workspace of your own'}. The team&apos;s owner and admins are told by email that you left. They can invite you back at any time.</p>
           {myKeys.length > 0 && (
@@ -420,7 +422,7 @@ function Team() {
 
       {remove && (
         <Modal title={`Remove ${remove.name}`} onClose={() => setRemove(null)}>
-          <p>They lose access to this account straight away. Nothing they sent is lost: their envelopes, drafts, templates and bulk sends pass to the person you choose, and anything still out for signature carries on. Each envelope&apos;s audit trail says who handed it to whom.</p>
+          <p>They lose access to this account straight away. Nothing they sent is lost: their documents, drafts, templates and Send to many batches pass to the person you choose, and anything still out for signature carries on. Each document&apos;s History says who handed it to whom.</p>
           <p className="muted small">{remove.name} keeps their own login and is told by email. The next time they sign in they are in another team they belong to, or in a workspace of their own if there is none, and you can invite them back at any time.</p>
           {theirKeys.length > 0 && (
             <div className="notice warn" style={{ marginBottom: 12 }}>
@@ -470,7 +472,7 @@ function Developers() {
   return (
     <div className="stack">
       <div className="card" data-item="card">
-        <div className="row between wrap"><h2>API keys</h2><a href="/developers" target="_blank">API reference ↗</a></div>
+        <div className="row between wrap"><h2>API keys</h2><a href="/developers" target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', minHeight: 44 }}>Open the API reference<span className="sn-vh"> (opens in a new tab)</span></a></div>
         <p className="muted small">Included on every plan, with the same limits as the app. A key works straight away: there is no review step and no separate test environment.{admin ? ' As an admin you see every key in this account and who made it. The key itself is shown once, to the person who creates it, and never again.' : ''}</p>
         <p className="muted small">{KEYS_AND_TWO_STEP}</p>
         {fresh && <div className="notice" style={{ marginBottom: 12 }}>Copy your key now. It is not shown again:<div className="mono" style={{ marginTop: 4 }}>{fresh}</div></div>}
@@ -1076,11 +1078,10 @@ export default function Settings() {
       {tab === 'away' && me.delegation && <Delegate />}
       {tab === 'account' && <Card><Account /></Card>}
       {tab === 'account' && <LanguageSettings />}
-      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><OwnDocsDefault /><CustomFieldSettings /><MoreOptions><Disclosure /><SavedFieldsCard /></MoreOptions></div>}
+      {/* Take payments (admins, where the operator set up Stripe Connect, TakePayments.tsx) sits above More options, not under it. */}
+      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><OwnDocsDefault /><CustomFieldSettings /><TakePayments /><MoreOptions><Disclosure /><SavedFieldsCard /></MoreOptions></div>}
       {/* Admins, where the operator set up WhatsApp or calls with a code: one read-only Connections card. */}
       {tab === 'sending' && <ChannelsStatus />}
-      {/* Admins, where the operator set up Stripe Connect: the account's own Stripe account (TakePayments.tsx). */}
-      {tab === 'sending' && <TakePayments />}
       {tab === 'team' && <Team />}
       {/* A member's Away and sharing: under Team, so they keep at most 4 sections (src/lib/settingsnav.ts). */}
       {tab === 'team' && awayInTeam(me.role, away) && <section id={AWAY_ANCHOR} aria-labelledby={`${AWAY_ANCHOR}-h`} className="stack" style={{ marginTop: 16 }}><h2 id={`${AWAY_ANCHOR}-h`} style={{ margin: 0 }}>Away and sharing</h2><Shares />{me.delegation && <Delegate />}</section>}
@@ -1095,7 +1096,7 @@ export default function Settings() {
       {tab === 'data' && mayDo(me, 'see_all') && <ExportImport />}
       {tab === 'data' && <MoreOptions><ArchiveFormat /><YourData only="close" /></MoreOptions>}
       {tab === 'developers' && <Developers />}
-      {tab === 'stamps' && <Card><StampSettings /></Card>}
+      {tab === 'stamps' && <Card><StampSettings after={<MembersStamps />} /></Card>}
       {tab === 'organisation' && me.org_admin && <Organisation />}
       </div>
     </div>

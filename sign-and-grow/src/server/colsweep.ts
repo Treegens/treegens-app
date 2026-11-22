@@ -136,7 +136,7 @@ export function sealColumns(o: { limit?: number; blobs?: string } = {}): SweepRe
     try {
       d.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     } catch {}
-    console.error(`[database] ${res.sealed} value(s) in the database encrypted with the current key, ${res.moved} moved from an old key to it.`);
+    console.error(`[database] ${values(res.sealed)} in the database encrypted with the current key, ${res.moved} moved from an old key to it.`);
   }
   return res;
 }
@@ -145,14 +145,15 @@ const g = globalThis as any;
 /** What the server says about the database when it starts, and on /app/operator. Null when there is nothing to say. */
 export function databaseWarning(scan?: ColumnScan): string | null {
   const raw = (process.env.FILE_ENCRYPTION_KEY || '').trim();
-  if (!raw) return 'FILE_ENCRYPTION_KEY is not set, so stored files and the values in the database that could be encrypted (signatures, typed answers, comments, stored emails, decline reasons, help messages) are kept as they are. Anyone with a copy of the disk or a backup can read them. Run "npm run setup" to write a new key into .env, or set one yourself (openssl rand -base64 32), and restart. Keep a copy of the key apart from the server and its backups.';
-  if (!decodeFileKey(raw)) return null; // filestore.ts already says this one, loudly
+  if (!raw) return 'Stored files and the signatures, typed answers, comments and emails in the database are kept readable on the disk. Run "npm run setup" (it writes FILE_ENCRYPTION_KEY into .env), restart, and keep a copy of the key apart from the backups.';
+  if (!decodeFileKey(raw)) return 'The value of FILE_ENCRYPTION_KEY is not a key (a key is 32 bytes written in base64, like "npm run setup" makes), so storing files is stopped and nothing new is encrypted. Put back the key this server had and restart.';
   const s = scan ?? scanColumns();
   const lines: string[] = [];
-  if (s.unknown) lines.push(`${s.unknown} value(s) in the database were encrypted with a key this server does not have (key id ${s.unknownKeys.join(', key id ')}). They cannot be shown and were not changed. Add that key to FILE_ENCRYPTION_KEYS_OLD and restart.`);
-  if (s.damaged) lines.push(`${s.damaged} encrypted value(s) in the database fail their check and cannot be read with any key. Put the database back from a backup.`);
+  if (s.unknown) lines.push(`${values(s.unknown)} in the database ${s.unknown === 1 ? 'was' : 'were'} encrypted with a key this server does not have (key id ${s.unknownKeys.join(', key id ')}). ${s.unknown === 1 ? 'It cannot be shown and was' : 'They cannot be shown and were'} not changed. Add that key to FILE_ENCRYPTION_KEYS_OLD and restart.`);
+  if (s.damaged) lines.push(`${values(s.damaged, 'encrypted ')} in the database ${s.damaged === 1 ? 'fails its' : 'fail their'} check and cannot be read with any key. Put the database back from a backup.`);
   return lines.length ? lines.join(' ') : null;
 }
+const values = (n: number, kind = '') => `${n} ${kind}${n === 1 ? 'value' : 'values'}`;
 
 /** Once when the server starts: the warning in the log, then a first batch of the sweep. */
 export function columnsAtStart(): void {

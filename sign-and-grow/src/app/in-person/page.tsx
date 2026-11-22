@@ -13,7 +13,8 @@ import { consentWording } from '@/lib/policy';
 import { deviceZone, formatDate } from '@/lib/dates';
 import { OFFLINE_WORDS, PIN_TRIES, OFFLINE_DAYS } from '@/lib/offlinesign';
 import { idbBox, peek, unlock, saveResult, sendResult, wipe, HANDED_KEY, PinError, type Pack, type Result } from '@/components/sign/offlineInPerson';
-import { fieldName, pos } from '@/components/sign/fields';
+import { fieldName, pos, finishProblem, problemWith } from '@/components/sign/fields';
+import { keepPageForLater, pageKept } from '@/components/sign/offlinePage';
 import '../styles/inperson.css';
 
 type Stage = 'loading' | 'none' | 'pin' | 'host' | 'consent' | 'sign' | 'saved' | 'sent' | 'refused' | 'not_signing';
@@ -38,7 +39,18 @@ const handed = (v: string | null) => {
 async function warmViewer() {
   try {
     const m = await (new Function('u', 'return import(u)') as (u: string) => Promise<any>)('/pdfjs/pdf.min.mjs');
-    m.GlobalWorkerOptions.workerPort ??= new Worker('/pdfjs/pdf.worker.min.mjs', { type: 'module' });
+    // The worker is started from the file as fetched (through the kept copy when there is no signal): a worker's own
+    // address is not always answered by the service worker, and with no signal it then fails to start.
+    if (!m.GlobalWorkerOptions.workerPort) {
+      let src = '/pdfjs/pdf.worker.min.mjs';
+      try {
+        const res = await fetch(src);
+        if (res.ok) src = URL.createObjectURL(new Blob([await res.text()], { type: 'text/javascript' }));
+      } catch {
+        /* the address itself, below */
+      }
+      m.GlobalWorkerOptions.workerPort ??= new Worker(src, { type: 'module' });
+    }
   } catch {
     /* the viewer says itself that the document cannot be shown, and the person's part still works */
   }
@@ -58,16 +70,29 @@ export default function InPersonPage() {
   const [agree, setAgree] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [sig, setSig] = useState<string | null>(null);
+  // How the signature and initials were made here, for the certificate (src/lib/switches.ts howText).
+  const hows = useRef<{ signature_how?: string; initials_how?: string }>({});
   const [ini, setIni] = useState<string | null>(null);
   const [adopt, setAdopt] = useState<'signature' | 'initials' | null>(null);
   const [urls, setUrls] = useState<string[]>([]);
   const [pinBack, setPinBack] = useState(false);
   const [hostBack, setHostBack] = useState(false);
+  const [declined, setDeclined] = useState(false);
+  const [refusedKept, setRefusedKept] = useState(false);
+  const [sure, setSure] = useState(false);
+  const [notKept, setNotKept] = useState(false);
 
   useEffect(() => {
     document.title = 'Sign in person · GrowSigning';
     // In the installed app the page also has to open later with no signal: it asks to be kept (public/sw.js).
-    if (process.env.NODE_ENV === 'production') navigator.serviceWorker?.register('/sw.js', { scope: '/in-person' }).catch(() => {});
+    // Visiting it is not enough to keep it (src/components/sign/offlinePage.ts): it is kept on purpose, and checked.
+    if (process.env.NODE_ENV === 'production') {
+      void pageKept().then(async (kept) => {
+        if (kept) return;
+        if (online() && (await keepPageForLater())) return;
+        setNotKept(true);
+      });
+    }
     // The PDF viewer and its worker are loaded now, while the page may still have signal, and kept for every page
     // drawn later: with no signal they come from the device's copy (public/sw.js) or from here.
     void warmViewer();
@@ -99,8 +124,18 @@ export default function InPersonPage() {
     setNote(s.text);
     // Sent: the account stays locked for whoever holds the device until the host types their password (AppShell).
     if (s.state === 'sent') setStage('sent');
-    else if (s.state === 'refused') setStage('refused');
+    else if (s.state === 'refused') (setRefusedKept(!!s.kept), setStage('refused'));
   }, []);
+
+  // While the person holds the device, Back stays on this page: the pages behind it need signal, and are the host's.
+  const holding = stage === 'consent' || stage === 'sign' || stage === 'not_signing' || (stage === 'saved' && !hostBack);
+  useEffect(() => {
+    if (!holding) return;
+    history.pushState({ ip: 1 }, '', location.href);
+    const stay = () => history.pushState({ ip: 1 }, '', location.href);
+    window.addEventListener('popstate', stay);
+    return () => window.removeEventListener('popstate', stay);
+  }, [holding]);
 
   // Sent by itself when the device says it is back online, and every 15 seconds while it says it is.
   useEffect(() => {
@@ -128,6 +163,7 @@ export default function InPersonPage() {
         void trySend(o.pack, o.result);
       } else setStage('host');
       setPinBack(false);
+      setDeclined(false);
     } catch (e: any) {
       setError(e?.message || 'That did not work. Try again.');
       if (e instanceof PinError && e.code !== 'wrong_pin') setStage('none');
@@ -147,13 +183,17 @@ export default function InPersonPage() {
 
   async function finish() {
     if (!pack || !key) return;
-    const missing = fields.find((f) => f.required && !values[f.id] && !(f.type === 'signature' && sig) && !(f.type === 'initials' && (ini || sig)) && !(f.type === 'radio' && fields.some((x) => x.type === 'radio' && (x.group_name || x.id) === (f.group_name || f.id) && values[x.id])));
-    if (missing) return setError(`${fieldName(missing)} is still empty. Fill it in, then choose Finish.`);
+    const missing = fields.find((f) => f.required && !values[f.id] && !(f.type === 'signature' && sig) && !(f.type === 'initials' && ini) && !(f.type === 'radio' && fields.some((x) => x.type === 'radio' && (x.group_name || x.id) === (f.group_name || f.id) && values[x.id])));
+    if (missing) return (setError(`${fieldName(missing)} is still empty. Fill it in, then choose Finish.`), goTo(missing));
     if (fields.some((f) => f.type === 'signature') && !sig) return setError('Add your signature first, then choose Finish.');
+    // The same checks GrowSigning makes when it receives it (src/lib/fieldrules.ts), so a mistake is put right now,
+    // while the person is still here, not found after they have gone.
+    const wrong = finishProblem(fields, values, pack.view?.envelope?.date_format);
+    if (wrong) return (setError(`${fieldName(wrong.field)}: ${wrong.text}`), goTo(wrong.field));
     setBusy(true);
     const all: Record<string, string> = { ...values };
     for (const f of fields) if (f.type === 'signature' || f.type === 'initials') all[f.id] = '1';
-    const r: Result = { values: all, signature_png: sig, initials_png: ini || sig, consent: { wording: wording.version, language: wording.language, page_language: 'en', tz: deviceZone(), own: pack.view?.own_terms?.id }, device_at: new Date().toISOString() };
+    const r: Result = { values: all, signature_png: sig, initials_png: ini, ...hows.current, consent: { wording: wording.version, language: wording.language, page_language: 'en', tz: deviceZone(), own: pack.view?.own_terms?.id }, device_at: new Date().toISOString() };
     try {
       await saveResult(box.current, key, r);
     } catch (e: any) {
@@ -171,8 +211,34 @@ export default function InPersonPage() {
   async function remove() {
     await wipe(box.current);
     handed(null);
+    // The copy on the server ends too when there is signal, so nothing can come back for it.
+    if (pack && online()) await fetch(`/api/envelopes/${encodeURIComponent(pack.view?.envelope?.id || '')}/offline/${encodeURIComponent(pack.prep_id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {});
     setPack(null);
+    setResult(null);
+    setSure(false);
     setStage('none');
+  }
+
+  /** Back to the form with what the person did, after the server would not take it as it was. */
+  function changePart() {
+    if (!result) return;
+    setValues(Object.fromEntries(Object.entries(result.values).filter(([id]) => !fields.some((f) => f.id === id && (f.type === 'signature' || f.type === 'initials')))));
+    setSig(result.signature_png);
+    setIni(result.initials_png);
+    setAgree(true);
+    setHostBack(false);
+    setError('');
+    setStage('sign');
+    window.scrollTo(0, 0);
+  }
+
+  /** Moves to the control of a field in "Your part", from its spot on the page or from a message about it. */
+  function goTo(f: any) {
+    window.setTimeout(() => {
+      const el = document.getElementById(`ip-f-${f.id}`);
+      el?.scrollIntoView({ block: 'center' });
+      el?.focus({ preventScroll: true });
+    }, 0);
   }
 
   const top = (
@@ -185,7 +251,7 @@ export default function InPersonPage() {
     <main className="ip">{top}
       <div className="card">
         <h1>Nothing is ready on this device</h1>
-        {error ? <p className="notice err" role="alert">{error}</p> : <p className="muted">A document got ready to sign in person without signal is kept here for {OFFLINE_DAYS} days at most, and wiped once it is sent.</p>}
+        {error ? <p className="notice err" role="alert">{error}</p> : <p className="muted">A document kept here to sign in person without signal stays for {OFFLINE_DAYS} days at most, and is wiped once it is sent.</p>}
         <p><a className="btn" href="/app">Open GrowSigning</a></p>
       </div>
     </main>
@@ -195,9 +261,11 @@ export default function InPersonPage() {
     <main className="ip">{top}
       <form className="card" onSubmit={open}>
         <h1>{pinBack ? 'Hand the device back' : 'Type your PIN'}</h1>
-        <p className="muted">{pinBack ? `Only ${host} goes on from here.` : `This device holds a document got ready to sign in person.${ends ? ` It is kept until ${formatDate(ends, 'D MMM YYYY')}.` : ''}`}</p>
+        {notKept && <p className="notice warn small">{OFFLINE_WORDS.notKept}</p>}
+        {declined && <p className="notice small">{name} chose not to sign. Nothing was sent. The document still waits for them.</p>}
+        <p className="muted">{pinBack ? `Only ${host} goes on from here.` : `This device holds a document for someone to sign in person.${ends ? ` It is kept until ${formatDate(ends, 'D MMM YYYY')}.` : ''}`}</p>
         <label className="f"><span>PIN</span>
-          <input type="password" inputMode="numeric" autoComplete="off" autoFocus value={pin} onChange={(e) => (setPin(e.target.value), setError(''))} aria-describedby={error ? 'ip-err' : undefined} />
+          <input type="password" autoComplete="off" autoFocus value={pin} onChange={(e) => (setPin(e.target.value), setError(''))} aria-describedby={error ? 'ip-err' : undefined} />
         </label>
         {error && <p id="ip-err" className="notice err" role="alert">{error}</p>}
         <button className="btn primary ip-wide" disabled={busy || !pin}>{busy ? 'Checking…' : 'Open'}</button>
@@ -211,7 +279,9 @@ export default function InPersonPage() {
       <div className="card">
         <h1>Ready for {name}</h1>
         <p><b>{subject}</b></p>
+        {notKept && <p className="notice warn small">{OFFLINE_WORDS.notKept}</p>}
         <p className="muted">Kept on this device until {formatDate(pack.expires_at, 'D MMM YYYY')}. {name} can sign here without signal. It is sent when the device has signal again, and nothing is signed until then.</p>
+        <p className="muted small">If you hand the device over with no signal, your account locks the first time GrowSigning opens on it with signal. Until then, only this page is open on it.</p>
         <button className="btn primary ip-wide" onClick={handOver}>Hand over to {name}</button>
         <p className="small"><button type="button" className="btn sm" onClick={remove}>Remove it from this device</button></p>
       </div>
@@ -222,8 +292,9 @@ export default function InPersonPage() {
     <main className="ip">{top}
       <div className="card">
         <h1>{subject}</h1>
-        <p>{sender} asks you to sign this, {name}. You sign on {host}&apos;s device.</p>
+        <p>{sender} asks you to sign this, {name}.</p>
         <div id="ip-legal">
+          <p className="small">{OFFLINE_WORDS.consentNote(host)}</p>
           <p className="muted small">{wording.legal}</p>
           <p className="muted small">{wording.practical}</p>
         </div>
@@ -239,25 +310,25 @@ export default function InPersonPage() {
   if (stage === 'sign' && pack) return (
     <main className="ip ip-signing">{top}
       <h1 className="ip-subject">{subject}</h1>
-      <p className="muted small">Read the document, then fill in your part below it.</p>
+      <p className="muted small ip-hint">Read the document, then fill in your part below it. <button type="button" className="btn sm" onClick={() => document.getElementById('ip-part-h')?.scrollIntoView({ block: 'start' })}>Go to your part</button></p>
       {pack.files.map((f, i) => (
         <section key={f.id} aria-label={f.name} className="ip-doc">
           {pack.files.length > 1 && <h2 className="small">{f.name}</h2>}
           {urls[i] && <PdfDoc url={urls[i]} maxWidth={760} overlay={(page) => fields.filter((x) => x.document_id === f.id && x.page === page).map((x) => (
-            // Where each of the person's fields sits on the page, with its name; they fill it in under the document.
-            <span key={x.id} className="ip-spot" style={pos(x)} aria-hidden="true"><span>{fieldName(x)}</span></span>
+            // Where each of the person's fields sits on the page, with its name. A tap goes to its control under the document.
+            <button key={x.id} type="button" className="ip-spot" style={pos(x)} aria-label={`Fill in ${fieldName(x)}`} onClick={() => goTo(x)}><span>{fieldName(x)}</span></button>
           ))} />}
         </section>
       ))}
       <section className="card ip-part" aria-labelledby="ip-part-h">
         <h2 id="ip-part-h">Your part</h2>
-        {fields.map((f) => <Field key={f.id} f={f} fields={fields} values={values} setValues={setValues} sig={sig} ini={ini} onAdopt={setAdopt} />)}
+        {fields.map((f) => <Field key={f.id} f={f} fields={fields} values={values} setValues={setValues} sig={sig} ini={ini} onAdopt={setAdopt} dateFormat={pack.view?.envelope?.date_format} />)}
         {error && <p className="notice err" role="alert">{error}</p>}
         <button className="btn primary ip-wide" disabled={busy} onClick={finish}>Finish</button>
         <p className="muted small">Finish keeps your answers on this device. They are sent to {sender} when the device has signal again.</p>
         <Ways urls={urls} files={pack.files} host={host} onNo={() => setStage('not_signing')} />
       </section>
-      {adopt && <AdoptSignature kind={adopt} name={name} onClose={() => setAdopt(null)} onDone={(png) => (adopt === 'signature' ? setSig(png) : setIni(png), setAdopt(null), setError(''))} />}
+      {adopt && <AdoptSignature kind={adopt} name={name} ways={pack.view?.switches?.ways} onClose={() => setAdopt(null)} onDone={(png, _typed, how) => (adopt === 'signature' ? setSig(png) : setIni(png), how && (hows.current = { ...hows.current, [adopt === 'signature' ? 'signature_how' : 'initials_how']: how }), setAdopt(null), setError(''))} />}
     </main>
   );
 
@@ -265,8 +336,8 @@ export default function InPersonPage() {
     <main className="ip">{top}
       <div className="card" role="status">
         <h1>Nothing was signed</h1>
-        <p>Nothing you typed was kept. If you want it on paper instead, ask {host}. Please hand the device back to {host}.</p>
-        <button className="btn ip-wide" onClick={() => (setPinBack(true), setKey(null), setPack(null), setValues({}), setSig(null), setIni(null), setAgree(false), setStage('pin'))}>I am {host}</button>
+        <p>Nothing was signed, and nothing is sent. Nothing you typed was kept. If you want it on paper instead, ask {host}. Please hand the device back to {host}.</p>
+        <button className="btn ip-wide" onClick={() => (setPinBack(true), setDeclined(true), setKey(null), setPack(null), setValues({}), setSig(null), setIni(null), setAgree(false), setStage('pin'))}>I am {host}</button>
       </div>
     </main>
   );
@@ -278,6 +349,10 @@ export default function InPersonPage() {
         <p>{note || OFFLINE_WORDS.saved}</p>
         <p className="muted">{name} finished on this device. Keep this page open, or open it again later and type your PIN. Send it within {OFFLINE_DAYS} days of getting it ready, before the copy is wiped.</p>
         <button className="btn primary ip-wide" disabled={busy} onClick={() => pack && result && (setBusy(true), trySend(pack, result).finally(() => setBusy(false)))}>Send now</button>
+        {sure ? (
+          <p className="notice warn small" role="alert">This removes what {name} did from this device, and nothing is signed.{' '}
+            <button type="button" className="btn sm" onClick={remove}>Remove it</button> <button type="button" className="btn sm" onClick={() => setSure(false)}>Keep it</button></p>
+        ) : <p className="small"><button type="button" className="btn sm" onClick={() => setSure(true)}>Remove it from this device</button></p>}
       </div>
     </main>
   );
@@ -285,8 +360,8 @@ export default function InPersonPage() {
   if (stage === 'saved') return (
     <main className="ip">{top}
       <div className="card" role="status">
-        <h1>Saved on this phone</h1>
-        <p>{note || OFFLINE_WORDS.saved}</p>
+        <h1>{OFFLINE_WORDS.savedTitle}</h1>
+        <p>{note && note !== OFFLINE_WORDS.saved ? note : OFFLINE_WORDS.waiting}</p>
         <p className="notice">Thank you, {name}. Please hand the device back to {host}.</p>
         <button className="btn ip-wide" onClick={() => (setPinBack(true), setKey(null), setPack(null), setStage('pin'))}>I am {host}</button>
       </div>
@@ -298,7 +373,7 @@ export default function InPersonPage() {
       <div className="card" role="status">
         <h1>Sent</h1>
         <p>{note}</p>
-        <p><a className="btn primary ip-wide" href={pack?.view?.envelope?.id ? `/app/envelopes/${pack.view.envelope.id}` : '/app'}>Back to the envelope</a></p>
+        <p><a className="btn primary ip-wide" href={pack?.view?.envelope?.id ? `/app/envelopes/${pack.view.envelope.id}` : '/app'}>Back to the document</a></p>
       </div>
     </main>
   );
@@ -308,51 +383,62 @@ export default function InPersonPage() {
       <div className="card" role="alert">
         <h1>Not signed</h1>
         <p>{note}</p>
-        <p><a className="btn primary ip-wide" href={pack?.view?.envelope?.id ? `/app/envelopes/${pack.view.envelope.id}` : '/app'}>Open the envelope</a></p>
+        {refusedKept && pack && key && result ? (
+          <>
+            <p>{OFFLINE_WORDS.keptAfterRefusal(name)}</p>
+            <button className="btn primary ip-wide" onClick={changePart}>Change {name}&apos;s part</button>
+            <p className="small"><button type="button" className="btn sm" onClick={remove}>Remove it from this device</button></p>
+          </>
+        ) : <p><a className="btn primary ip-wide" href={pack?.view?.envelope?.id ? `/app/envelopes/${pack.view.envelope.id}` : '/app'}>Open the document</a></p>}
       </div>
     </main>
   );
 }
 
-/** The other ways, as the consent wording promises: a copy of the document now, and not signing (paper is asked of the host, who is there). */
+/** The other ways, as the consent wording promises: a copy of the document now, Decline (nothing is signed or sent), and paper (asked of the host, who is there). */
 function Ways({ urls, files, host, onNo }: { urls: string[]; files: Pack['files']; host: string; onNo: () => void }) {
   return (
     <p className="ip-ways small">
       {files.map((f, i) => urls[i] && <a key={f.id} className="btn sm" href={urls[i]} download={`${f.name}.pdf`}>Download {files.length > 1 ? f.name : 'a copy'}</a>)}
-      <button type="button" className="btn sm" onClick={onNo}>I do not want to sign</button>
+      <button type="button" className="btn sm" onClick={onNo}>Decline</button>
       <span className="muted">For paper instead, ask {host}.</span>
     </p>
   );
 }
 
 /** One field of the person's part, as a plain control with its name, so it works with a keyboard and a screen reader. */
-function Field({ f, fields, values, setValues, sig, ini, onAdopt }: { f: any; fields: any[]; values: Record<string, string>; setValues: (fn: (v: Record<string, string>) => Record<string, string>) => void; sig: string | null; ini: string | null; onAdopt: (k: 'signature' | 'initials') => void }) {
+function Field({ f, fields, values, setValues, sig, ini, onAdopt, dateFormat }: { f: any; fields: any[]; values: Record<string, string>; setValues: (fn: (v: Record<string, string>) => Record<string, string>) => void; sig: string | null; ini: string | null; onAdopt: (k: 'signature' | 'initials') => void; dateFormat?: string | null }) {
   const set = (v: string) => setValues((o) => ({ ...o, [f.id]: v }));
   const label = `${fieldName(f)}${f.required ? '' : ' (optional)'}`;
+  const fid = `ip-f-${f.id}`;
   if (f.type === 'signature' || f.type === 'initials') {
-    const img = f.type === 'signature' ? sig : ini || sig;
+    // Initials are the person's own, made for initials, as on the signing page: never their signature put in their place.
+    const img = f.type === 'signature' ? sig : ini;
     return (
       <div className="ip-field">
         <span className="ip-label">{label}</span>
         {img && <img className="ip-mark" src={img} alt={`Your ${f.type === 'signature' ? 'signature' : 'initials'}`} />}
-        <button type="button" className="btn" onClick={() => onAdopt(f.type)}>{img ? 'Change' : f.type === 'signature' ? 'Sign' : 'Add initials'}</button>
+        <button type="button" id={fid} className="btn" onClick={() => onAdopt(f.type)}>{img ? 'Change' : f.type === 'signature' ? 'Sign' : 'Add initials'}</button>
       </div>
     );
   }
-  if (f.type === 'checkbox') return <label className="check ip-field"><input type="checkbox" checked={values[f.id] === '1'} onChange={(e) => set(e.target.checked ? '1' : '')} /> <span>{label}</span></label>;
+  if (f.type === 'checkbox') return <label className="check ip-field"><input id={fid} type="checkbox" checked={values[f.id] === '1'} onChange={(e) => set(e.target.checked ? '1' : '')} /> <span>{label}</span></label>;
   if (f.type === 'radio') {
     const group = f.group_name || f.id;
     const pick = () => setValues((o) => ({ ...o, ...Object.fromEntries(fields.filter((x) => x.type === 'radio' && (x.group_name || x.id) === group).map((x) => [x.id, x.id === f.id ? '1' : ''])) }));
-    return <label className="check ip-field"><input type="radio" name={`ip-${group}`} checked={values[f.id] === '1'} onChange={pick} /> <span>{f.label || `Option of ${f.group_name || 'a choice'}`}</span></label>;
+    return <label className="check ip-field"><input id={fid} type="radio" name={`ip-${group}`} checked={values[f.id] === '1'} onChange={pick} /> <span>{f.label || `Option of ${f.group_name || 'a choice'}`}</span></label>;
   }
   if (f.type === 'dropdown') return (
     <label className="f ip-field"><span>{label}</span>
-      <select value={values[f.id] || ''} onChange={(e) => set(e.target.value)}><option value="">Choose</option>{(f.options || []).map((o: string) => <option key={o}>{o}</option>)}</select>
+      <select id={fid} value={values[f.id] || ''} onChange={(e) => set(e.target.value)}><option value="">Choose</option>{(f.options || []).map((o: string) => <option key={o}>{o}</option>)}</select>
     </label>
   );
+  // The same check GrowSigning makes when it receives it, said under the field as soon as something is typed.
+  const problem = problemWith(f, values[f.id] || '', dateFormat);
   return (
     <label className="f ip-field"><span>{label}</span>
-      <input type={f.type === 'date' ? 'date' : 'text'} inputMode={f.type === 'number' ? 'decimal' : undefined} value={values[f.id] || ''} onChange={(e) => set(e.target.value)} />
+      <input id={fid} type={f.type === 'date' ? 'date' : 'text'} inputMode={f.type === 'number' ? 'decimal' : undefined} value={values[f.id] || ''} onChange={(e) => set(e.target.value)} aria-invalid={problem ? true : undefined} aria-describedby={problem ? `${fid}-p` : undefined} />
+      {problem && <span id={`${fid}-p`} className="ip-problem small">{problem}</span>}
     </label>
   );
 }

@@ -48,13 +48,20 @@ export function checkFor(raw: any): { text: string } | { error: string } {
 }
 
 export type CollectWhen = 'before' | 'after';
+/** The choice, short enough to read whole in a select on a phone. WHEN_HINT says what it means, under it. */
 export const WHEN_WORDS: Record<CollectWhen, string> = {
-  before: 'Before they finish: their part is complete once the payment is confirmed',
-  after: 'After they finish: signing does not wait for the payment',
+  before: 'Before they finish',
+  after: 'After they finish',
+};
+export const WHEN_HINT: Record<CollectWhen, string> = {
+  before: 'Their part is complete once Stripe confirms the payment.',
+  after: 'Signing does not wait for the payment.',
 };
 
 /** What the sender reads where they set it. */
-export const COLLECT_FOR_SENDER = 'Each person who signs pays by card on Stripe\'s own page, into your Stripe account. GrowSigning never sees card details and takes no fee. Nobody on your own team is asked to pay. A payment shows as paid only once Stripe confirms it.';
+export const COLLECT_FOR_SENDER = 'People pay by card on Stripe\'s page, into your Stripe account. It shows as paid once Stripe confirms it.';
+/** Behind "How this works", for whoever wants the details. */
+export const COLLECT_HOW = 'Everyone who signs is asked, except people on your own team. GrowSigning never sees card details and takes no fee. It saves by itself; nobody is emailed about a change here.';
 
 /** The one line on the document screen, so nobody is surprised by a payment after they sign. */
 export function payAhead(o: { amount: string | null; field: string | null; merchant: string; for: string; when: CollectWhen }): string {
@@ -75,3 +82,9 @@ export const disputeLine = (status: string, at: string): string => status === 'l
 /** What a signer reads on the Pay screen. */
 export const PAY_SAFE = 'You pay on Stripe\'s own page. GrowSigning never sees your card details.';
 export const payWho = (merchant: string, account: string): string => `The money goes to ${merchant}${account && account !== merchant ? `, the Stripe account of ${account}` : ''}. Questions about it go to them.`;
+
+/** What step 3 says next to its closed More options: "asks each signer to pay 40.00 EUR before finishing". */
+export function collectSummary(s: { amount_text: string | null; field_label: string | null; when: CollectWhen } | null | undefined): string | null {
+  if (!s) return null;
+  return `asks each signer to pay ${s.amount_text || `the amount in "${s.field_label || 'a field'}"`} ${s.when === 'before' ? 'before finishing' : 'after finishing'}`;
+}

@@ -4,7 +4,8 @@ import { ZoomControl } from '@/components/sign/Zoom';
 import { Icon } from '@/components/sign/parts';
 import { useT } from '@/components/sign/lang';
 
-// The toolbar's More on the signing page (research/ux-charter.md, 2.6): how the document is shown, the size of its
+// The toolbar's View on the signing page (it was called More, and a signer looking for Decline opened it: the one
+// menu of actions is Other actions, so this one is named for what it holds) (research/ux-charter.md, 2.6): how the document is shown, the size of its
 // pages, and its download. They used to stand in a row above the document and took the top of a phone screen.
 // Never more than six lines (tests/ux/flows.cjs counts them): two views, three sizes, one download. The dialog's
 // own Close is the way back, so there is no seventh. Questions and
@@ -12,7 +13,7 @@ import { useT } from '@/components/sign/lang';
 
 /** The button. `data-more="screen"` marks it as this screen's one More, closed until it is pressed. */
 export function MoreButton({ open, onOpen, className = 'btn sm sg-morebtn' }: { open: boolean; onOpen: () => void; className?: string }) {
-  return <button type="button" className={className} data-more="screen" aria-haspopup="dialog" aria-expanded={open} onClick={onOpen}>More</button>;
+  return <button type="button" className={className} data-more="screen" aria-haspopup="dialog" aria-expanded={open} onClick={onOpen}>View</button>;
 }
 
 export function MoreDialog({ view, onView, zoom, onZoom, downloadUrl, onClose }: {
@@ -25,7 +26,7 @@ export function MoreDialog({ view, onView, zoom, onZoom, downloadUrl, onClose }:
 }) {
   const T = useT();
   return (
-    <Dialog title="More" onClose={onClose}>
+    <Dialog title="How the document looks" onClose={onClose}>
       <div className="sg-moredlg">
         <div role="group" aria-labelledby="sg-more-view">
           <h3 id="sg-more-view">{T('sign.read.title')}</h3>

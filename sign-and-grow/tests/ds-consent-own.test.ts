@@ -6,13 +6,14 @@
 // by post" takes the person's consent back: their part closes like a decline with a reason the software writes, the
 // sender is emailed, and the audit trail, the certificate and the evidence pack say so. With no text saved nothing
 // changes anywhere.
+import { readEnglish } from './words.ts';
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { boot, Client, signUp, simple, tokenFor, signAll, mailTo, PNG, type Server } from './helpers.ts';
 import {
-  OWN_TEXT_KEYS, ESIGN_NOTE, DEFAULT_NEEDS, WITHDREW_REASON, NEVER_AGREED_REASON, ownSections, ownTextPlain, tidyOwnText, ownTextProblem, possessive, consentCertValue,
+  OWN_TEXT_KEYS, ESIGN_NOTE, HOW_OFTEN, DEFAULT_NEEDS, WITHDREW_REASON, NEVER_AGREED_REASON, ownSections, ownTextPlain, tidyOwnText, ownTextProblem, possessive, consentCertValue,
 } from '../src/lib/disclosure.ts';
 import { SUPPORTED_LOCALES, CATALOGUES, t } from '../src/lib/i18n.ts';
 
@@ -561,11 +562,14 @@ test('screens: "Sign on paper instead" only with the account\'s text and only fo
   // Settings: behind Sending's one More options, for admins.
   const settings = fs.readFileSync('src/app/app/settings/page.tsx', 'utf8');
   assert.match(settings, /tab === 'sending' && <div className="stack">.*<MoreOptions><Disclosure \/>(?:<[A-Za-z]+ \/>)*<\/MoreOptions><\/div>\}/);
-  const card = fs.readFileSync('src/components/settings/Disclosure.tsx', 'utf8');
+  const card = readEnglish('src/components/settings/Disclosure.tsx');
   assert.match(card, /if \(!admin\) return null;/);
-  assert.match(card, /\{ESIGN_NOTE\}/);
+  // The note is in the catalogue since lang-sender-rest (disclosure.esign_note), word for word ESIGN_NOTE.
+  assert.ok(card.includes(ESIGN_NOTE));
   assert.match(card, /Your consent text/);
-  const shown = card.replace(/^\s*\/\/.*$/gm, '').replace(/^import .*$/gm, '').replace(/'\/account\/disclosure[^']*'/g, '').replace(/export function Disclosure\(/, '');
+  const shown = card.replace(/^\s*\/\/.*$/gm, '').replace(/^import .*$/gm, '').replace(/'\/account\/disclosure[^']*'/g, '').replace(/export function Disclosure\(/, '')
+    // Catalogue keys (disclosure.label.*, disclosure.often.*) are names in the code, not words on the screen (lang-sender-rest).
+    .replace(/T\(`disclosure\.[a-z_.]*\$\{\w+\}`\)/g, '');
   assert.doesNotMatch(shown, /disclosure|ERSD/i, 'the word is the API\'s only (designer\'s note)');
 });
 
@@ -620,10 +624,12 @@ test('repair: "Sign on paper instead" marks paper_at, the sender sees it, and th
 });
 
 test('repair: Settings has "Ask people to agree", shown only with a text; the save message promises only what happens', () => {
-  const card = fs.readFileSync('src/components/settings/Disclosure.tsx', 'utf8');
+  const card = readEnglish('src/components/settings/Disclosure.tsx');
   assert.match(card, /\{shown && !editing && \(\s*<label className="f own-often"><span>Ask people to agree \{oftenSaid\}<\/span>/);
   assert.match(card, /onChange=\{\(e\) => often\(e\.target\.value\)\}/);
-  assert.match(card, /HOW_OFTEN\.map\(\(\[v, l\]\) => <option key=\{v\} value=\{v\}>\{l\}<\/option>\)/);
+  // The choices' words are in the catalogue since lang-sender-rest (disclosure.often.<value>), the same as HOW_OFTEN's.
+  assert.match(card, /HOW_OFTEN\.map\(\(\[v\]\) => <option key=\{v\} value=\{v\}>\{T\(`disclosure\.often\.\$\{v\}`\)\}<\/option>\)/);
+  { const en = JSON.parse(fs.readFileSync('src/locales/en.json', 'utf8')); for (const [v, l] of HOW_OFTEN) assert.equal(en[`disclosure.often.${v}`], l); }
   assert.match(card, /People who agree from now on see it\./);
   assert.doesNotMatch(card, /People who open a document from now on see it/);
 });

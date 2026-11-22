@@ -15,6 +15,7 @@ import { WaitChoice } from './WaitChoice';
 // "Only when...", only once there is an earlier answer to test (RecipientRule.tsx).
 import { RecipientRule } from './RecipientRule';
 import { type Ed } from './shared';
+import { PaperPick, paperLine } from './PaperPick';
 
 // One person's More in step 1 (research/ux-charter.md, 2.3). Everything about a person that is not their name and
 // address lives here, one line for each choice with what it is set to now ("How they get it: Email"). A line opens
@@ -37,6 +38,8 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
   const kept = wording?.people?.[r.id];
   const patch = (p: any) => ed.patchRcp(r.id, p);
   const lines = moreLines(r, { isTpl, languages: shippedLocales().length, texts: !!me.text_messages, whatsapp: !!me.whatsapp });
+  // With "People may sign on paper" on, "How they sign" says the paper choice (PaperPick.tsx).
+  if (me.paper_signing) for (const l of lines) if (l.key === 'sign' && r.role !== 'inperson') l.value = paperLine(r);
   const name = personInSentence(r);
   // Opened from the keyboard or by a tap, the first line takes the focus: the next Tab stop is inside this More,
   // not the Remove button that stands after More on the row.
@@ -65,6 +68,8 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
     if (key === 'deliver') return <><SendMyself r={r} isTpl={isTpl} onChange={patch} /><TextLink r={r} textsOn={!!me.text_messages} open={isTpl && !r.email} onChange={patch} /><WaLink r={r} isTpl={isTpl} waOn={!!me.whatsapp} onChange={patch} /></>;
     // One list: none, an access code, a one-time code, or both (CheckPick.tsx).
     if (key === 'check') return <CheckPick r={r} name={name} kept={kept} textsOn={!!me.text_messages} callsOn={!!me.phone_calls} open={isTpl && !r.email} onChange={patch} />;
+    // With "People may sign on paper" on, the same list has the paper choices (PaperPick.tsx).
+    if (key === 'sign' && me.paper_signing) return <PaperPick r={r} name={name} disabled={!!wording} onChange={patch} />;
     if (key === 'sign')
       return (
         <>

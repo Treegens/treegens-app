@@ -258,7 +258,7 @@ export function removeUnusedBlobs(shas: string[]) {
   // Stamp pictures are kept in the database, not as files: the ones nothing points at any more go too (stamps.ts).
   pruneStampImages();
   for (const sha of new Set(shas.filter(Boolean))) {
-    if (get('SELECT 1 x FROM files WHERE sha256=? OR original_sha256=?', sha, sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)
+    if (get('SELECT 1 x FROM files WHERE sha256=? OR original_sha256=?', sha, sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE col_find(payload) LIKE ?', `%${sha}%`)
       // Someone's own completed copy on an envelope that stays (visibility.ts).
       || get('SELECT 1 x FROM final_copies WHERE sha256=?', sha)
       // A document brought in from an export or from DocuSign (importer.ts) keeps its file.

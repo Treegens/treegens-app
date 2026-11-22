@@ -1,10 +1,12 @@
 'use client';
 import { api, useLoad, Status, fmtDate } from '@/components/ui';
-import { howLong } from '@/components/sender/lib';
+import { useST } from '@/components/senderLang';
+import { howLongIn } from '@/lib/senderlang';
 
-const verb = (role: string) => (role === 'approver' ? 'Review' : role === 'viewer' ? 'View' : 'Sign');
+const verb = (role: string) => (role === 'approver' ? 'inbox.review' : role === 'viewer' ? 'inbox.view' : 'inbox.sign');
 
 export default function Inbox() {
+  const T = useST();
   const [data, reload, error] = useLoad<any>(() => api('/inbox'));
   const needsMe = (i: any) => i.status === 'sent' && (i.my_status === 'sent' || i.my_status === 'viewed') && i.role !== 'cc';
   // What still needs you comes first, the longest wait at the top.
@@ -15,21 +17,21 @@ export default function Inbox() {
     <div className="sn">
       <div className="pagehead">
         <div>
-          <h1 className="serif">To sign</h1>
-          <div className="muted">Documents other people sent to you.{waiting > 0 ? ` ${waiting} ${waiting === 1 ? 'is' : 'are'} waiting for you.` : ''}</div>
+          <h1 className="serif">{T('inbox.title')}</h1>
+          <div className="muted">{T('inbox.lede')}{waiting > 0 ? ` ${T('inbox.waiting', { count: waiting })}` : ''}</div>
         </div>
       </div>
-      {data?.needs_verification && <div className="notice warn" style={{ marginBottom: 14 }}>Confirm your email address first: type the 6-digit code from our email in the box at the top of this page. Until then we cannot show documents sent to it.</div>}
+      {data?.needs_verification && <div className="notice warn" style={{ marginBottom: 14 }}>{T('inbox.confirm_first')}</div>}
       <div className="card pad0">
         {error ? (
-          <div className="empty" role="alert"><h3>We could not load your documents</h3>Check your connection, then try again.<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>Try again</button></div></div>
+          <div className="empty" role="alert"><h3>{T('inbox.load_failed')}</h3>{T('inbox.load_failed_body')}<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>{T('inbox.try_again')}</button></div></div>
         ) : !data ? (
-          <div className="empty" role="status">Loading…</div>
+          <div className="empty" role="status">{T('inbox.loading')}</div>
         ) : items.length === 0 ? (
-          <div className="empty"><h3>Nothing to sign</h3>When someone sends you a document through GrowSigning, it appears here as well as in your email.</div>
+          <div className="empty"><h3>{T('inbox.none')}</h3>{T('inbox.none_body')}</div>
         ) : (
           <div className="tablewrap"><table className="t sn-list">
-            <thead><tr><th>Subject</th><th className="hide-sm">From</th><th className="hide-sm">Status</th><th className="hide-sm">Received</th><th><span className="sn-vh">Open</span></th></tr></thead>
+            <thead><tr><th>{T('inbox.col_subject')}</th><th className="hide-sm">{T('inbox.col_from')}</th><th className="hide-sm">{T('inbox.col_status')}</th><th className="hide-sm">{T('inbox.col_received')}</th><th><span className="sn-vh">{T('inbox.col_open')}</span></th></tr></thead>
             <tbody>
               {items.map((i) => {
                 const open = needsMe(i);
@@ -38,14 +40,14 @@ export default function Inbox() {
                     <td className="sn-main">
                       <b>{i.subject}</b>
                       <div className="sn-only-sm sn-rowmeta">
-                        <Status s={i.status} label={open ? 'Needs you' : undefined} />
-                        <span className="muted small">from {i.sender} · {fmtDate(i.sent_at)}</span>
+                        <Status s={i.status} label={open ? T('inbox.needs_you') : undefined} />
+                        <span className="muted small">{T('inbox.from', { name: i.sender, day: fmtDate(i.sent_at) })}</span>
                       </div>
                     </td>
                     <td className="hide-sm">{i.sender}</td>
-                    <td className="hide-sm"><Status s={i.status} label={open ? 'Needs you' : undefined} /></td>
-                    <td className="hide-sm muted small">{fmtDate(i.sent_at)}{open && i.sent_at ? <div>{howLong(i.sent_at)} ago</div> : null}</td>
-                    <td className="sn-fit"><a className={`btn sm${open ? ' primary' : ''}`} href={`/sign/${i.token}`} aria-label={`${open ? verb(i.role) : 'Open'} ${i.subject}`}>{open ? verb(i.role) : 'Open'}</a></td>
+                    <td className="hide-sm"><Status s={i.status} label={open ? T('inbox.needs_you') : undefined} /></td>
+                    <td className="hide-sm muted small">{fmtDate(i.sent_at)}{open && i.sent_at ? <div>{T('inbox.ago', { time: howLongIn(T.lang, i.sent_at) })}</div> : null}</td>
+                    <td className="sn-fit"><a className={`btn sm${open ? ' primary' : ''}`} href={`/sign/${i.token}`} aria-label={T('inbox.action_label', { action: T(open ? verb(i.role) : 'inbox.open'), subject: i.subject })}>{T(open ? verb(i.role) : 'inbox.open')}</a></td>
                   </tr>
                 );
               })}

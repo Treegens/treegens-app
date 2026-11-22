@@ -7,11 +7,13 @@ import { explain, looksLikeEmail } from '@/components/sender/lib';
 import { SigningGroups } from '@/components/sender/SigningGroups';
 import { SavedListsSection } from '@/components/reports/SavedLists';
 import '../../styles/reports.css';
+import { useST } from '@/components/senderLang';
 
 type Contact = { id: string; name: string; email: string; company: string | null };
 const EMPTY = { name: '', email: '', company: '' };
 
 export default function Contacts() {
+  const T = useST();
   const [data, reload, error] = useLoad<{ contacts: Contact[] }>(() => api('/contacts'));
   const [add, setAdd] = useState(EMPTY);
   const [q, setQ] = useState('');
@@ -39,7 +41,7 @@ export default function Contacts() {
     const known = all.some((c) => c.email.toLowerCase() === add.email.trim().toLowerCase());
     try {
       await api('/contacts', { body: add });
-      toast(known ? 'That email was already in your contacts, so we updated its name and company.' : 'Contact saved.');
+      toast(known ? T('contacts.updated_known') : T('contacts.saved'));
       setAdd(EMPTY);
       reload();
     } catch (err) {
@@ -50,18 +52,18 @@ export default function Contacts() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!edit) return;
-    if (!edit.name.trim()) return setEditError('Add a name.');
-    if (!looksLikeEmail(edit.email.trim())) return setEditError('That email address is not complete. It should look like name@example.org.');
+    if (!edit.name.trim()) return setEditError(T('contacts.need_name'));
+    if (!looksLikeEmail(edit.email.trim())) return setEditError(T('contacts.bad_email'));
     setSaving(true);
     setEditError('');
     try {
       await api(`/contacts/${edit.id}`, { method: 'PATCH', body: { name: edit.name.trim(), email: edit.email.trim(), company: edit.company.trim() } });
-      toast('Contact updated.');
+      toast(T('contacts.updated'));
       backTo.current = edit.id;
       setEdit(null);
       reload();
     } catch (err) {
-      setEditError(explain(err, 'Nothing was changed.'));
+      setEditError(explain(err, T('contacts.nothing_changed')));
     } finally {
       setSaving(false);
     }
@@ -75,48 +77,48 @@ export default function Contacts() {
   return (
     <div className="sn stack">
       <div className="pagehead" style={{ marginBottom: 0 }}>
-        <div><h1 className="serif">Contacts</h1><div className="muted">People you send to are saved here automatically and suggested as you type. Fix a name or address here any time.</div></div>
+        <div><h1 className="serif">{T('contacts.title')}</h1><div className="muted">{T('contacts.lede')}</div></div>
       </div>
 
-      <form className="card sn-addcontact" onSubmit={create} aria-label="Add a contact">
-        <label className="f"><span>Name</span><input value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} required autoComplete="off" /></label>
-        <label className="f"><span>Email</span><input type="email" value={add.email} onChange={(e) => setAdd({ ...add, email: e.target.value })} required autoComplete="off" /></label>
-        <label className="f"><span>Company <span className="hint">(optional)</span></span><input value={add.company} onChange={(e) => setAdd({ ...add, company: e.target.value })} autoComplete="off" /></label>
-        <button className="btn primary">Add contact</button>
+      <form className="card sn-addcontact" onSubmit={create} aria-label={T('contacts.add_label')}>
+        <label className="f"><span>{T('contacts.name')}</span><input value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} required autoComplete="off" /></label>
+        <label className="f"><span>{T('contacts.email')}</span><input type="email" value={add.email} onChange={(e) => setAdd({ ...add, email: e.target.value })} required autoComplete="off" /></label>
+        <label className="f"><span>{T('contacts.company')} <span className="hint">{T('contacts.optional')}</span></span><input value={add.company} onChange={(e) => setAdd({ ...add, company: e.target.value })} autoComplete="off" /></label>
+        <button className="btn primary">{T('contacts.add')}</button>
       </form>
 
       <section className="card pad0" aria-labelledby="sn-contacts-h">
         <div className="sn-cardhead sn-contacts-head">
-          <h2 id="sn-contacts-h">Your contacts <span className="muted sn-count" aria-live="polite">{data ? (q.trim() ? `${shown.length} of ${all.length}` : all.length) : ''}</span></h2>
+          <h2 id="sn-contacts-h">{T('contacts.yours')} <span className="muted sn-count" aria-live="polite">{data ? (q.trim() ? T('contacts.of', { shown: shown.length, all: all.length }) : all.length) : ''}</span></h2>
           {all.length > 0 && (
             <div className="sn-search">
-              <input type="search" placeholder="Search by name, email or company" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" />
-              {q && <button className="btn sm ghost" onClick={() => setQ('')}>Clear</button>}
+              <input type="search" placeholder={T('contacts.search_placeholder')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={T('contacts.search_label')} />
+              {q && <button className="btn sm ghost" onClick={() => setQ('')}>{T('contacts.clear')}</button>}
             </div>
           )}
         </div>
         {error ? (
-          <div className="empty" role="alert"><h3>We could not load your contacts</h3>Check your connection, then try again.<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>Try again</button></div></div>
+          <div className="empty" role="alert"><h3>{T('contacts.load_failed')}</h3>{T('contacts.load_failed_body')}<div style={{ marginTop: 14 }}><button className="btn" onClick={reload}>{T('contacts.try_again')}</button></div></div>
         ) : !data ? (
-          <div className="empty" role="status">Loading…</div>
+          <div className="empty" role="status">{T('contacts.loading')}</div>
         ) : all.length === 0 ? (
-          <div className="empty"><h3>No contacts yet</h3>They appear here after your first send, or you can add one above.</div>
+          <div className="empty"><h3>{T('contacts.none')}</h3>{T('contacts.none_body')}</div>
         ) : shown.length === 0 ? (
-          <div className="empty"><h3>Nobody matches &ldquo;{q.trim()}&rdquo;</h3>Try part of their name, email or company.<div style={{ marginTop: 14 }}><button className="btn" onClick={() => setQ('')}>Show everyone</button></div></div>
+          <div className="empty"><h3>{T('contacts.nobody', { q: q.trim() })}</h3>{T('contacts.nobody_body')}<div style={{ marginTop: 14 }}><button className="btn" onClick={() => setQ('')}>{T('contacts.show_all')}</button></div></div>
         ) : (
           <ul className="sn-contacts" role="list">
             {shown.map((c) => edit?.id === c.id ? (
               <li key={c.id} className="editing">
-                <form onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), cancel())} aria-label={`Edit ${c.name}`}>
-                  <label className="f"><span>Name</span><input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} autoFocus autoComplete="off" /></label>
-                  <label className="f"><span>Email</span><input type="email" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} autoComplete="off" /></label>
-                  <label className="f"><span>Company <span className="hint">(optional)</span></span><input value={edit.company} onChange={(e) => setEdit({ ...edit, company: e.target.value })} autoComplete="off" /></label>
+                <form onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), cancel())} aria-label={T('contacts.edit_label', { name: c.name })}>
+                  <label className="f"><span>{T('contacts.name')}</span><input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} autoFocus autoComplete="off" /></label>
+                  <label className="f"><span>{T('contacts.email')}</span><input type="email" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} autoComplete="off" /></label>
+                  <label className="f"><span>{T('contacts.company')} <span className="hint">{T('contacts.optional')}</span></span><input value={edit.company} onChange={(e) => setEdit({ ...edit, company: e.target.value })} autoComplete="off" /></label>
                   <div className="sn-contact-actions">
-                    <button type="submit" className="btn sm primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
-                    <button type="button" className="btn sm" onClick={cancel}>Cancel</button>
+                    <button type="submit" className="btn sm primary" disabled={saving}>{saving ? T('contacts.saving') : T('contacts.save')}</button>
+                    <button type="button" className="btn sm" onClick={cancel}>{T('contacts.cancel')}</button>
                   </div>
                   {editError && <div className="notice err sn-wide" role="alert">{editError}</div>}
-                  <p className="muted small sn-wide">This changes the saved contact for next time. Documents already sent keep the details they were sent with.</p>
+                  <p className="muted small sn-wide">{T('contacts.edit_note')}</p>
                 </form>
               </li>
             ) : (
@@ -127,8 +129,8 @@ export default function Contacts() {
                   {c.company && <span className="muted small sn-contact-co">{c.company}</span>}
                 </div>
                 <div className="sn-contact-actions">
-                  <button id={`sn-edit-${c.id}`} className="btn sm" onClick={() => (setEdit({ id: c.id, name: c.name, email: c.email, company: c.company || '' }), setEditError(''))} aria-label={`Edit ${c.name}`}>Edit</button>
-                  <button className="btn sm ghost danger" onClick={() => setRemoving(c)} aria-label={`Remove ${c.name}`}>Remove</button>
+                  <button id={`sn-edit-${c.id}`} className="btn sm" onClick={() => (setEdit({ id: c.id, name: c.name, email: c.email, company: c.company || '' }), setEditError(''))} aria-label={T('contacts.edit_label', { name: c.name })}>{T('contacts.edit')}</button>
+                  <button className="btn sm ghost danger" onClick={() => setRemoving(c)} aria-label={T('contacts.remove_label', { name: c.name })}>{T('contacts.remove')}</button>
                 </div>
               </li>
             ))}
@@ -142,14 +144,14 @@ export default function Contacts() {
       <SavedListsSection />
 
       {removing && (
-        <ConfirmDialog title={`Remove ${removing.name}`} confirmLabel="Remove contact" keepLabel="Keep" onClose={() => setRemoving(null)}
+        <ConfirmDialog title={T('contacts.remove_title', { name: removing.name })} confirmLabel={T('contacts.remove_confirm')} keepLabel={T('contacts.keep')} onClose={() => setRemoving(null)}
           onConfirm={async () => {
             await api(`/contacts/${removing.id}`, { method: 'DELETE' });
-            toast(`${removing.name} removed from your contacts.`);
+            toast(T('contacts.removed', { name: removing.name }));
             setRemoving(null);
             reload();
           }}>
-          <p>{removing.name} ({removing.email}) will no longer be suggested when you add people to a document. Documents you already sent them are not affected.</p>
+          <p>{T('contacts.remove_body', { name: removing.name, email: removing.email })}</p>
         </ConfirmDialog>
       )}
     </div>

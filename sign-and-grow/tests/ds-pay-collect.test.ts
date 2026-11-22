@@ -30,7 +30,7 @@ afterEach(() => {
 let sessionNo = 0;
 type Sess = { id: string; account: string; amount_total: number; currency: string; payment_status: string; status: string; url: string; metadata: any; payment_intent: string | null };
 function fakeStripe(o: { acct?: string; name?: string } = {}) {
-  const st = { sessions: {} as Record<string, Sess>, calls: [] as { url: string; account: string | null; params: URLSearchParams; key: string | null }[], deauthorized: [] as string[], n: 0 };
+  const st = { sessions: {} as Record<string, Sess>, calls: [] as { url: string; account: string | null; params: URLSearchParams; key: string | null }[], deauthorized: [] as string[], n: 0, expired: [] as string[], gone: [] as string[] };
   globalThis.fetch = (async (input: any, init: any = {}) => {
     const url = String(input);
     const h = init.headers || {};
@@ -43,10 +43,15 @@ function fakeStripe(o: { acct?: string; name?: string } = {}) {
     if (url.startsWith('https://connect.stripe.com/oauth/token')) return params.get('code') === 'good' ? json({ stripe_user_id: o.acct || 'acct_green', livemode: false }) : json({ error: 'invalid_grant', error_description: 'bad code' }, 400);
     if (url.startsWith('https://connect.stripe.com/oauth/deauthorize')) return (st.deauthorized.push(params.get('stripe_user_id')!), json({ stripe_user_id: params.get('stripe_user_id') }));
     if (/\/v1\/accounts\//.test(url)) return json({ id: o.acct || 'acct_green', business_profile: { name: o.name || 'Green Trust' } });
-    const m = url.match(/\/v1\/checkout\/sessions\/([^/?]+)/);
+    const m = url.match(/\/v1\/checkout\/sessions\/([^/?]+)(\/expire)?/);
     if (m) {
       const x = st.sessions[m[1]];
-      if (!x || x.account !== account) return json({ error: { message: 'No such checkout.session' } }, 404);
+      if (!x || x.account !== account || st.gone.includes(account!)) return json({ error: { message: 'No such checkout.session' } }, 404);
+      if (m[2]) {
+        st.expired.push(x.id);
+        if (x.status !== 'open') return json({ error: { message: 'Only Checkout Sessions with a status of open can be expired.' } }, 400);
+        x.status = 'expired';
+      }
       return json(x);
     }
     if (url.startsWith('https://api.stripe.com/v1/checkout/sessions') && init.method === 'POST') {
@@ -459,4 +464,220 @@ test('3f. a payment Stripe has but has not confirmed by message is never called 
   assert.match(other.data.error, /^You paid 5\.00 EUR, and Donation now says something else\. Change it back to 5\.00 EUR, then finish again\.$/);
   const same = await p.post(`/sign/${tok}/complete`, { values: await valuesFor(p, tok, { [amt]: '5.00' }), signature_png: PNG, version: v });
   assert.equal(same.status, 200, JSON.stringify(same.data));
+});
+
+// ---- Repairs after the skeptic and the simplicity review ------------------------------------------------------------------
+
+const amountDoc = async (c: Client, email: string) => {
+  const e = await doc(c, email, {}, [{ id: 'amt', document_id: 'd', recipient_id: 'r', type: 'number', label: 'Donation', page: 0, x: 0.5, y: 0.5, w: 0.2, h: 0.03 }]);
+  const fid = (await c.get(`/envelopes/${e.id}/collect`)).data.fields[0].id;
+  assert.equal((await c.put(`/envelopes/${e.id}/collect`, { field_id: fid, currency: 'eur', for: 'Donation', when: 'before' })).status, 200);
+  assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+  const tok = tokenFor(e.id, email);
+  const p = new Client();
+  await p.post(`/sign/${tok}/consent`);
+  const amt = (await p.get(`/sign/${tok}`)).data.fields.find((f: any) => f.type === 'number').id;
+  const fin = async (v: string) => p.post(`/sign/${tok}/complete`, { values: await valuesFor(p, tok, { [amt]: v }), signature_png: PNG });
+  return { e, tok, p, fin };
+};
+const status = (tok: string) => s.db.get('SELECT status FROM recipients WHERE token=?', tok).status;
+
+test('R1 (high). a changed amount closes the earlier Stripe page first; never two open at once', async () => {
+  const fake = fakeStripe();
+  const { c } = await charity('Ria Hall', 'ria@hall.example');
+  const { tok, p, fin } = await amountDoc(c, 'r1@example.com');
+  assert.equal((await fin('100.00')).data.code, 'pay_first');
+  await p.post(`/sign/${tok}/collect/start`);
+  const [cs1] = Object.keys(fake.sessions).slice(-1);
+  assert.equal((await fin('50.00')).data.code, 'pay_first');
+  const again = await p.post(`/sign/${tok}/collect/start`);
+  assert.equal(again.status, 200, JSON.stringify(again.data));
+  const cs2 = Object.keys(fake.sessions).pop()!;
+  assert.notEqual(cs2, cs1);
+  assert.ok(fake.expired.includes(cs1), 'the 100.00 page was closed at Stripe before the 50.00 one was made');
+  assert.equal(fake.sessions[cs1].status, 'expired');
+  assert.equal(fake.sessions[cs2].amount_total, 5000);
+  // Stripe unreachable while closing the old page: no new page is made, and nothing was charged.
+  assert.equal((await fin('60.00')).data.code, 'pay_first');
+  const real = globalThis.fetch;
+  const before = Object.keys(fake.sessions).length;
+  globalThis.fetch = (async (u: any, i: any) => (String(u).includes('/expire') ? Promise.reject(new Error('down')) : real(u, i))) as any;
+  const down = await p.post(`/sign/${tok}/collect/start`);
+  globalThis.fetch = real;
+  assert.equal(down.status, 503);
+  assert.match(down.data.error, /Nothing was charged/);
+  assert.equal(Object.keys(fake.sessions).length, before, 'no second page while the first may still be open');
+});
+
+test('R1b (high). a payment on the earlier page is recorded, never dropped, and the person is told what is left', async () => {
+  const fake = fakeStripe();
+  const { c } = await charity('Rob Hall', 'rob@hall.example');
+  const { e, tok, p, fin } = await amountDoc(c, 'r1b@example.com');
+  await fin('100.00');
+  await p.post(`/sign/${tok}/collect/start`);
+  const cs1 = Object.keys(fake.sessions).pop()!;
+  // They change the amount and press Finish (the row now asks 50.00), and meanwhile pay the 100.00 page.
+  assert.equal((await fin('50.00')).data.code, 'pay_first');
+  fake.pay(cs1);
+  const hooked = await hook(paidEvent(fake.sessions[cs1]));
+  assert.equal(hooked.data.done, 'paid', 'the payment on the older page counts');
+  const row = s.db.get("SELECT * FROM collect_payments WHERE envelope_id=?", e.id);
+  assert.equal(row.status, 'paid');
+  assert.equal(row.amount, 10000, 'what was actually paid');
+  // Their part does not complete with 50.00 when 100.00 was paid: they are told, in words, and asked to finish again.
+  assert.notEqual(status(tok), 'completed');
+  assert.ok(s.db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Paid, not finished yet'", e.id));
+  const mail = mailTo('r1b@example.com').map((m: any) => m.html).join('\n');
+  assert.match(mail, /payment of 100\.00 EUR/);
+  assert.match(mail, /set the amount back to 100\.00 EUR and press Finish/);
+  // Finishing with 100.00 goes through without paying again.
+  const v = (await p.get(`/sign/${tok}`)).data.version;
+  const amt = (await p.get(`/sign/${tok}`)).data.fields.find((f: any) => f.type === 'number').id;
+  const ok = await p.post(`/sign/${tok}/complete`, { values: await valuesFor(p, tok, { [amt]: '100.00' }), signature_png: PNG, version: v });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal(status(tok), 'completed');
+});
+
+test('R1c. pressing Pay after the earlier page was paid: it counts, no new page, and the person is told what is left', async () => {
+  const fake = fakeStripe();
+  const { c } = await charity('Rui Hall', 'rui@hall.example');
+  const { tok, p, fin } = await amountDoc(c, 'r1c@example.com');
+  await fin('30.00');
+  await p.post(`/sign/${tok}/collect/start`);
+  const cs1 = Object.keys(fake.sessions).pop()!;
+  fake.pay(cs1);
+  // Same amount again: the open page is reused, and Stripe says it is paid (no message yet): waiting, never a second page.
+  await fin('30.00');
+  assert.deepEqual((await p.post(`/sign/${tok}/collect/start`)).data, { waiting: true });
+  // A changed amount: the older page is found paid while closing it, so it counts and the 30.00 Finish waits on the field.
+  await fin('20.00');
+  const n = Object.keys(fake.sessions).length;
+  const r = await p.post(`/sign/${tok}/collect/start`);
+  assert.deepEqual(r.data, { paid: true });
+  assert.equal(Object.keys(fake.sessions).length, n, 'no new page');
+  // The message from Stripe arriving later changes nothing more.
+  assert.equal((await hook(paidEvent(fake.sessions[cs1]))).data.done, 'ignored');
+  assert.notEqual(status(tok), 'completed', 'paid 30.00 while the field says 20.00: never signed with the other amount');
+  assert.ok(mailTo('r1c@example.com').some((m: any) => /set the amount back to 30\.00 EUR/.test(m.html)));
+});
+
+test('R1d. paid on two pages: the second is never silently kept; the history and the sender say to refund it', async () => {
+  const fake = fakeStripe();
+  const { c } = await charity('Rae Hall', 'rae@hall.example');
+  const { e, tok, p, fin } = await amountDoc(c, 'r1d@example.com');
+  await fin('10.00');
+  await p.post(`/sign/${tok}/collect/start`);
+  const cs1 = Object.keys(fake.sessions).pop()!;
+  await fin('12.00');
+  await p.post(`/sign/${tok}/collect/start`);
+  const cs2 = Object.keys(fake.sessions).pop()!;
+  // A race at Stripe: both end up paid.
+  fake.pay(cs2);
+  fake.pay(cs1);
+  assert.equal((await hook(paidEvent(fake.sessions[cs2]))).data.done, 'paid');
+  assert.equal(status(tok), 'completed');
+  const twice = await hook(paidEvent(fake.sessions[cs1]));
+  assert.equal(twice.data.done, 'paid_twice');
+  const line = s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Paid twice'", e.id).detail;
+  assert.match(line, /also paid 10\.00 EUR on an earlier Stripe page.*Refund the second one in your Stripe dashboard\./);
+  assert.ok(mailTo('rae@hall.example').some((m: any) => /Paid twice/.test(m.subject)));
+  // Sent again by Stripe: said once.
+  assert.equal((await hook(paidEvent(fake.sessions[cs1]))).data.done, 'ignored');
+});
+
+test('R2. after the account took access away in Stripe, a page already open and paid is still recorded from the signed message', async () => {
+  const fake = fakeStripe();
+  const { c } = await charity('Dee Hall', 'dee@hall.example');
+  const e = await doc(c, 'r2@example.com');
+  await c.put(`/envelopes/${e.id}/collect`, { amount: '15', currency: 'eur', for: 'Fee', when: 'before' });
+  await c.post(`/envelopes/${e.id}/send`);
+  const tok = tokenFor(e.id, 'r2@example.com');
+  const { p } = await finish(tok);
+  await p.post(`/sign/${tok}/collect/start`);
+  const sid = Object.keys(fake.sessions).pop()!;
+  fake.pay(sid);
+  assert.equal((await hook({ type: 'account.application.deauthorized', account: 'acct_green', data: { object: {} } })).data.done, 'disconnected');
+  fake.gone.push('acct_green');
+  assert.equal((await hook(paidEvent(fake.sessions[sid]))).data.done, 'paid');
+  assert.equal(s.db.get('SELECT status FROM collect_payments WHERE session_id=?', sid).status, 'paid');
+});
+
+test('R3. the Stripe connect answer reaching a signed-out browser goes to sign in, then back to Settings', async () => {
+  fakeStripe();
+  const { handle } = await import('../src/server/router.ts');
+  const r = await handle(new Request('http://test.local/api/collect/callback?state=x&code=good'));
+  assert.equal(r.status, 303);
+  assert.equal(r.headers.get('location'), `/login?next=${encodeURIComponent('/app/settings?tab=sending&collect=failed')}`);
+});
+
+test('R4. choosing "By card" over the own payment page: the link goes only once the payment itself is accepted', async () => {
+  fakeStripe();
+  const { c } = await charity('Lin Hall', 'lin@hall.example');
+  const e = await doc(c, 'r4@example.com');
+  // The link as the pay-link route stores it (its own checks are tested in gaps-industry.test.ts).
+  s.db.run("UPDATE envelopes SET pay_url='https://pay.example.org/hall', pay_kind='deposit' WHERE id=?", e.id);
+  const refused = await c.put(`/envelopes/${e.id}/collect`, { amount: '-5', currency: 'eur', for: 'Fee', replace_link: true });
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /Nothing was saved\.$/);
+  assert.ok(s.db.get('SELECT pay_url FROM envelopes WHERE id=?', e.id).pay_url, 'a refused payment leaves the link where it was');
+  assert.equal((await c.put(`/envelopes/${e.id}/collect`, { amount: '5', currency: 'eur', for: 'Fee' })).status, 409, 'without replace_link the link is never taken off');
+  const ok = await c.put(`/envelopes/${e.id}/collect`, { amount: '5', currency: 'eur', for: 'Fee', replace_link: true });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.pay_link_removed, true);
+  assert.equal(s.db.get('SELECT pay_url FROM envelopes WHERE id=?', e.id).pay_url, null);
+  assert.ok(s.db.get("SELECT 1 x FROM audit WHERE envelope_id=? AND action='Payment link removed'", e.id));
+});
+
+test('R5. the sender\'s page and the reminder say "waiting for payment" for someone who pressed Finish, never "press Finish"', async () => {
+  fakeStripe();
+  const { c } = await charity('Mae Hall', 'mae@hall-r5.example');
+  const e = await doc(c, 'r5@example.com');
+  await c.put(`/envelopes/${e.id}/collect`, { amount: '40', currency: 'eur', for: 'Deposit for the hall', when: 'before' });
+  await c.post(`/envelopes/${e.id}/send`);
+  const tok = tokenFor(e.id, 'r5@example.com');
+  const { p } = await finish(tok);
+  // Their answers saved by autosave too, the way a real page does: still "waiting for payment", not "ready".
+  const fid = s.db.get("SELECT id FROM fields WHERE envelope_id=? AND type='signature'", e.id).id;
+  s.db.run('UPDATE fields SET value=? WHERE id=?', 'sig', fid);
+  void p;
+  const r = (await c.get(`/envelopes/${e.id}`)).data.envelope.recipients[0];
+  assert.equal(r.progress.ready, false);
+  assert.equal(r.progress.paying, '40.00 EUR');
+  assert.match(read('src/components/sender/Recipients.tsx'), /Waiting for payment\./);
+  const rem = await c.post(`/envelopes/${e.id}/remind`, {});
+  assert.equal(rem.status, 200, JSON.stringify(rem.data));
+  const last = mailTo('r5@example.com').pop();
+  assert.match(last.html, /Your signature is ready\. Pay 40\.00 EUR to finish/);
+  assert.doesNotMatch(last.html, /press Finish\. Until you do/);
+});
+
+test('R6. people on the sender\'s own team read "not asked: on your own team", and the words say so', async () => {
+  fakeStripe();
+  const { c } = await charity('Tia Hall', 'tia@hall.example');
+  const e = await doc(c, 'tia@hall.example');
+  await c.put(`/envelopes/${e.id}/collect`, { amount: '9', currency: 'eur', for: 'Fee' });
+  const people = (await c.get(`/envelopes/${e.id}/collect`)).data.people;
+  assert.equal(people[0].line, 'Not asked to pay: they are on your own team.');
+  assert.match(read('src/components/sender/CollectNote.tsx'), /other than people on your own team/);
+  assert.match(s.db.get("SELECT detail FROM audit WHERE envelope_id=? AND action='Payment request added'", e.id).detail, /other than people on the sending account's own team/);
+});
+
+test('R7. screens: short "when" choices with a hint, autosave with a Send guard, Pay after before Done, no forced bounce, summary', async () => {
+  const lib = await import('../src/lib/collect.ts');
+  assert.ok(lib.WHEN_WORDS.after.length <= 20 && lib.WHEN_WORDS.before.length <= 20, 'fits a phone select');
+  assert.equal(lib.collectSummary({ amount_text: '40.00 EUR', field_label: null, when: 'before' }), 'asks each signer to pay 40.00 EUR before finishing');
+  const { reviewSummary } = await import('../src/lib/editorux.ts');
+  assert.match(reviewSummary({ reminderDays: 3, defaults: {}, collect: lib.collectSummary({ amount_text: '40.00 EUR', field_label: null, when: 'before' }) }), /Reminder every 3 days · asks each signer to pay 40\.00 EUR before finishing/);
+  const choice = read('src/components/editor/CollectChoice.tsx');
+  assert.doesNotMatch(choice, /Save the payment|Choose &ldquo;By card&rdquo; and take it off/, 'no save button to forget, no detour to take it off');
+  assert.match(choice, /Payment taken off\. Nobody was emailed\./);
+  assert.match(read('src/components/Editor.tsx'), /flushCollect\(id\)/);
+  const pay = read('src/components/sign/PayNow.tsx');
+  assert.match(pay, /shown\.has\(base\)/, 'the Pay screen opens by itself once per page load, so Back stays back');
+  assert.match(pay, /sign\.pay\.not_now/);
+  const page = read('src/app/sign/[token]/page.tsx');
+  assert.match(page, /<PayAfter base=\{base\} token=\{token\} on=\{acts\}>/);
+  assert.match(page, /payWait && acts\) return <Shell data=\{data\} bar=\{other\}[^\n]*onHelp=\{headHelp\}/, 'Other actions (with Decline) and Help on the Pay screen');
+  const en = JSON.parse(read('src/locales/en.json'));
+  for (const k of ['sign.pay.title', 'sign.pay.not_now', 'sign.pay.still', 'sign.pay.waits']) assert.ok(en[k], k);
 });

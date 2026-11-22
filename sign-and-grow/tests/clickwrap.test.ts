@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { PDFDocument } from 'pdf-lib';
 import { boot, Client, signUp, mailTo, upload, type Server } from './helpers.ts';
+import { englishIf } from './words.ts';
 
 let db: Server['db'];
 before(async () => {
@@ -26,7 +27,8 @@ const withKey = (key: string) => {
   c.call = (method: string, url: string, body?: any, headers: Record<string, string> = {}) => call(method, url, body, { authorization: `Bearer ${key}`, ...headers });
   return c;
 };
-const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (f: string) => englishIf(f, fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8'));
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ');
 const sign = (secret: string, o: any) => {
   const who = Buffer.from(JSON.stringify(o)).toString('base64url');

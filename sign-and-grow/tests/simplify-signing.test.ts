@@ -45,7 +45,7 @@ test('Next opens the field when a tap would only have opened a dialog: a signatu
   assert.match(page, /return f\.type === 'stamp' \? setStampFor\(f\.id\) : clickSig\(f\);/);
   assert.match(page, /goTo\(nextField, true\)\)\}>Next<\/button>/);
   // Someone who cannot reach a field is told where Easy reading is now (the text view, renamed by reading-view).
-  assert.equal(CANNOT_REACH, 'Cannot reach this field? Choose More, then Easy reading, where every field is listed as a form you can fill in.');
+  assert.equal(CANNOT_REACH, 'Cannot reach this field? Choose View, then Easy reading, where every field is listed as a form you can fill in.');
 });
 
 test('the "Sign here" pointer never stands on a printed label, or right beside one on the same line', () => {

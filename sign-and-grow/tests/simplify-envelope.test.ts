@@ -3,6 +3,7 @@
 // rest moves into one More, each person has one status line and a More of their own, comments, history, files and
 // details are folded, and the page shows no internet address or fingerprint. The counts of the flows are measured
 // in a browser by tests/ux/flows.cjs; this file pins the rules behind them, and that nothing became impossible.
+import { englishIf } from './words.ts';
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,7 +19,8 @@ before(async () => {
   ({ db } = await boot());
 });
 
-const read = (f: string) => fs.readFileSync(f, 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (f: string) => englishIf(f, fs.readFileSync(f, 'utf8'));
 let n = 0;
 const ip = () => `10.81.${Math.floor(++n / 250)}.${n % 250}`;
 const PAGE = 'src/app/app/envelopes/[id]/page.tsx';
@@ -570,7 +572,9 @@ test('a person with nothing left to do has no empty More: the facts are on their
 
 test('Templates: when nobody is left to fill in, the Use dialog names who it goes to', async () => {
   const tpl = read(TEMPLATES);
-  assert.match(tpl, /use\.open\.length === 0 && <p>This goes to <b>\{joinNames\(use\.recipients\.filter\(\(r: any\) => r\.email\)/);
+  // The sentence is in the catalogue since lang-sender-rest (templates.goes_to), with the names in bold where it says.
+  assert.match(tpl, /use\.open\.length === 0 && <p>\{senderRich\(T\.lang, 'templates\.goes_to', \{ who: <b>\{joinNames\(use\.recipients\.filter\(\(r: any\) => r\.email\)/);
+  assert.match(fs.readFileSync('src/locales/en.json', 'utf8'), /"templates\.goes_to": "This goes to \{who\}\. Send it as it is, or review it first\."/);
   assert.doesNotMatch(tpl, /Everyone who signs is already set in this template/);
   // Save as template keeps the people of the document (as before): this is the case the dialog now names.
   const c = await signUp('Tia Template', 'tia-template@example.com', ip());

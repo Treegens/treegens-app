@@ -16,6 +16,7 @@ import { numberOnScreen } from '../src/lib/numbers.ts';
 import { SUPPORTED_LOCALES, t } from '../src/lib/i18n.ts';
 import { dayText } from '../src/lib/dates.ts';
 import { fmtCode } from '../src/server/util.ts';
+import { englishIf } from './words.ts';
 
 let db: Server['db'];
 let cron: Server['cron'];
@@ -28,7 +29,8 @@ after(() => {
 });
 
 const root = path.resolve(import.meta.dirname, '..');
-const read = (p: string) => fs.readFileSync(path.join(root, p), 'utf8');
+// Screens ask the catalogue for their words (lang-sender-rest): read them with the English put back (tests/words.ts).
+const read = (p: string) => ((s) => englishIf(p, s))(fs.readFileSync(path.join(root, p), 'utf8'));
 let n = 0;
 const ip = () => `10.${120 + Math.floor(++n / 250)}.${n % 250}.7`;
 const person = (name: string, email: string) => signUp(name, email, ip());
@@ -47,7 +49,7 @@ test('chat: Help on the signing page is one button in the top bar, with no secon
   assert.match(read('src/app/styles/simplesign.css'), /\.sg-bar \.btn\.sm\.sg-other \{ min-height: 44px; \}/);
   const page = read('src/app/sign/[token]/page.tsx');
   assert.match(page, /const headHelp = me\.role === 'witness' \? undefined : go\('help'\);/);
-  assert.equal(page.match(/onHelp=\{headHelp\}/g)?.length, 3, 'the consent screen, the document, and the screen of someone who changes it or chooses who comes next');
+  assert.equal(page.match(/onHelp=\{headHelp\}/g)?.length, 5, 'the consent screen, the document, the screen of someone who changes it or chooses who comes next, the Pay screen (sign/PayNow.tsx), and the screen of someone who signs on paper (sign/Paper.tsx)');
   // Other actions has no Help button of its own any more, and its list never had one for a signer.
   const dialogs = read('src/components/sign/dialogs.tsx');
   const menu = dialogs.slice(dialogs.indexOf('export function MenuDialog'), dialogs.indexOf('export function', dialogs.indexOf('export function MenuDialog') + 10));

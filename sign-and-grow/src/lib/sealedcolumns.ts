@@ -5,19 +5,20 @@
 
 /** Encrypted in the database, with a key of its own for each column, when FILE_ENCRYPTION_KEY is set. */
 export const SEALED_WORDS = [
-  'signatures and initials as pictures, also the ones a login keeps for reuse and the ones kept when a document was changed after signing',
-  'what people typed or chose in fields, and what the sender filled in for them',
+  'signatures and initials, also the ones saved for reuse and earlier ones kept after a change',
+  'what people typed or chose in fields, also as plain numbers, and what the sender filled in',
+  'answers typed into a public form before it is signed',
   'comments',
-  'the stored copies of the emails that were sent, with their plain text',
-  'the reasons people gave when they declined',
-  'the messages and replies of help requests',
+  'copies of the emails that were sent',
+  'decline reasons',
+  'help messages, their replies and the chats attached to them',
 ];
 
-/** Kept readable in the database whatever the setting, and why. */
+/** Kept readable in the database whatever the setting. Search, sending mail and joining records need them. */
 export const CLEAR_WORDS = [
-  'the names, email addresses and phone numbers of everyone on a document and of everyone with a login, because finding a document, sending mail and joining records need them',
-  'the subjects and messages of envelopes, the names of their documents and folders, and the address and subject of each stored email, because search needs them',
-  'ids and fingerprints of files, and which file an attachment or a stamp field holds, because records are joined on them',
-  'every audit trail, with the IP addresses and browsers it records and what it repeats, such as a decline reason, because each line is chained to the one before and checked',
-  'the copies kept of text and WhatsApp messages, terms written on click-to-agree pages and who accepted them, custom fields, contacts, signing groups, and the plans and payments of accounts',
+  'names, email addresses and phone numbers',
+  'subjects and messages of envelopes, names of documents and folders, and who each email went to with its subject',
+  'ids and fingerprints of files',
+  'audit trails, with the IP addresses and browsers they record and what they repeat, such as a decline reason',
+  'copies of text and WhatsApp messages, click-to-agree terms and who accepted them, custom fields, contacts, signing groups, plans and payments',
 ];

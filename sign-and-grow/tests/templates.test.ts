@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, Client, upload, signUp, type Server } from './helpers.ts';
 import { accessSentence, lockedBanner, LOCK_MEANS } from '../src/lib/tplroles.ts';
+import { englishIf } from './words.ts';
 
 let db: Server['db'];
 before(async () => {
@@ -502,7 +503,8 @@ test('templates in a database from before this have the usual rule: everyone use
 
 // ---- 8. Screens and what the pages promise ------------------------------------------------------------------------
 
-const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (f: string) => englishIf(f, fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8'));
 
 test('the screens show the rule and the lock before anyone types, and the pages promise only what the code keeps', async () => {
   const list = read('src/app/app/templates/page.tsx');

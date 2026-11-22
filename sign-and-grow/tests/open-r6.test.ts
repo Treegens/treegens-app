@@ -3,9 +3,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, signUp, simple, draft, upload, tokenFor, mailTo, signAll, Client, PNG } from './helpers.ts';
+import { englishIf } from './words.ts';
 
 const srv = await boot();
-const read = (p: string) => fs.readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, fs.readFileSync(new URL('../' + p, import.meta.url), 'utf8'));
 
 test('1. every button, box and fold in every Settings section is at least 44 px tall, not only in .set-card', () => {
   const css = read('src/app/styles/settings.css');

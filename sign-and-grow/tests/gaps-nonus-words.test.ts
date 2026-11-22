@@ -23,6 +23,7 @@ import { bySenderProblem, reachKey, reporterKey } from '../src/server/bysender.t
 import { labelOf, BY_SENDER_LINE, BY_SENDER_TICK, BY_SENDER_HOW, noEmailCopyText, noEmailWaitText, signerAt } from '../src/lib/bysender.ts';
 import { checkLine } from '../src/lib/checks.ts';
 import { whoIs, certName } from '../src/lib/groups.ts';
+import { englishIf } from './words.ts';
 
 let db: Server['db'];
 let env: Server['env'];
@@ -32,7 +33,8 @@ before(async () => {
   ada = await signUp('Ada Sender', 'ada.sender@example.com', '198.51.100.201');
 });
 
-const read = (p: string) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+// Screens moved into the catalogue are read with their English put back (lang-sender-rest, tests/words.ts).
+const read = (p: string) => englishIf(p, fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 const src = (p: string) => read(`src/${p}`);
 const full = async (c: Client, id: string) => (await c.get(`/envelopes/${id}`)).data;
 // What no page, email or record of ours may say about a signature made here.
@@ -540,7 +542,7 @@ test('the security page and the processing summary print those facts and invent 
   // What the software does not do comes from the setting (src/lib/storedfiles.ts): with it off, that it does not
   // encrypt the files it stores now and never the database (files encrypted while it was on stay so).
   assert.match(page, /<b>What the software does not do:<\/b> \{processingNotDone\(\)\}/);
-  assert.match(read('src/lib/storedfiles.ts'), /'on this server it does not encrypt the files it stores now, and it never encrypts the database, so how the disk is protected depends on the host\.'/);
+  assert.match(read('src/lib/storedfiles.ts'), /'on this server it does not encrypt the files it stores now or any of the database, so how the disk is protected depends on the host\.'/);
   assert.match(page, /An envelope that somebody signed<\/b> cannot be erased by itself/);
   assert.equal(MAIL_COPY_DAYS, 90);
   assert.equal(CLOSE_GRACE_DAYS, 30);

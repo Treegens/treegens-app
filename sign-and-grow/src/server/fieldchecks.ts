@@ -5,6 +5,7 @@ import { get, run } from './db.ts';
 import { bad, str } from './util.ts';
 import vm from 'node:vm';
 import { usePatternTester, groupRuleProblem, patternProblem, tidyChecks, storedChecks, checksOf, valueProblem, groupProblem, limitOf, amountOf, fieldChecks, shownToOthers, hiddenInCopy, HIDDEN_IN_COPY } from '../lib/fieldrules.ts';
+import { seal } from './colcrypt.ts';
 
 // A pattern check on the server runs with a time limit, so even a pattern that slipped past the reader cannot keep
 // the server busy for everyone. One that runs out of time counts as a match: the signer is not held to a rule that
@@ -150,7 +151,7 @@ export function keepNumbers(mine: any[]) {
   for (const f of mine) {
     if (f.type !== 'number' || f.formula) continue;
     const n = f.value ? amountOf(f.value) : null;
-    run('UPDATE fields SET typed_num=? WHERE id=?', n == null ? null : String(n), f.id);
+    run('UPDATE fields SET typed_num=? WHERE id=?', n == null ? null : seal('fields.typed_num', String(n)), f.id);
   }
 }
 

@@ -13,6 +13,7 @@ import * as ink from '../src/lib/stampink.ts';
 import { encodePng, decodePng, readPng, crc32 } from '../src/server/png.ts';
 import { deflateSync, inflateSync } from 'node:zlib';
 import { STAMP_IS, stampFileProblem, stampBox, stampFieldBox, sameBox, stampTurn, STAMP_DEFAULT_MM, STAMPS_PER_ACCOUNT, STAMP_UPLOADS_PER_LINK_HOUR, STAMP_OPACITY } from '../src/lib/stamps.ts';
+import { englishIf } from './words.ts';
 
 let s: Server;
 let db: Server['db'];
@@ -26,7 +27,8 @@ const ip = () => `10.91.${Math.floor(++n / 250)}.${n % 250}`;
 const from = () => Object.assign(new Client(), { ip: ip() });
 const person = (name: string, email: string) => signUp(name, email, ip());
 const ok = (r: { status: number; data: any }, what = '') => (assert.equal(r.status, 200, `${what} ${JSON.stringify(r.data)}`), r.data);
-const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+// Screens ask the catalogue for their words (lang-sender-rest): read them with the English put back (tests/words.ts).
+const read = (f: string) => ((s) => englishIf(f, s))(fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8'));
 const trail = (envelopeId: string) => db.all('SELECT actor, action, detail FROM audit WHERE envelope_id=? ORDER BY seq', envelopeId);
 
 // ---- Pictures made here --------------------------------------------------------------------------------------

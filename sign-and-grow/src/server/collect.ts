@@ -303,8 +303,34 @@ export function payFirst(e: any, r: any, body: any, actor: Actor): void {
 
 // ---- Stripe Checkout ----------------------------------------------------------------------------------------------------
 
+/**
+ * Closes at Stripe every earlier page of this payment that may still be open, except `keep`, so a person never has
+ * two pages they can pay on. A page that was paid meanwhile is recorded as paid instead (confirmPaid), and the answer
+ * says so. When Stripe cannot be reached this throws, and no new page is made while an old one may still be open.
+ */
+export async function closeOlder(row: any, keep: string | null = null): Promise<'paid' | null> {
+  const open = all('SELECT * FROM collect_sessions WHERE payment_id=? AND closed_at IS NULL', row.id).filter((x: any) => x.session_id !== keep);
+  for (const x of open) {
+    let s: any;
+    try {
+      s = await stripeCall('POST', `https://api.stripe.com/v1/checkout/sessions/${x.session_id}/expire`, {}, { account: x.stripe_account });
+    } catch (err: any) {
+      if (!err?.data?.stripe) throw err;
+      // Refused: it is already closed, or it was paid. Asked again to know which.
+      s = await stripeCall('GET', `https://api.stripe.com/v1/checkout/sessions/${x.session_id}`, {}, { account: x.stripe_account });
+    }
+    if (s?.payment_status === 'paid' || s?.status === 'complete') {
+      run('UPDATE collect_sessions SET closed_at=? WHERE session_id=?', now(), x.session_id);
+      if (s?.payment_status === 'paid' && (await confirmPaid(x.session_id, x.stripe_account))) return 'paid';
+      continue;
+    }
+    run('UPDATE collect_sessions SET closed_at=? WHERE session_id=?', now(), x.session_id);
+  }
+  return null;
+}
+
 /** The Stripe page for this person's payment: the one already open, or a new one. Never two open at once. */
-export async function checkoutFor(e: any, r: any, row: any, actor: Actor): Promise<{ url: string } | { waiting: true }> {
+export async function checkoutFor(e: any, r: any, row: any, actor: Actor): Promise<{ url: string } | { waiting: true } | { paid: true }> {
   if (row.session_id && row.status === 'started') {
     const s = await stripeCall('GET', `https://api.stripe.com/v1/checkout/sessions/${row.session_id}`, {}, { account: row.stripe_account });
     // Paid on Stripe's page: never a second page. It counts as paid once Stripe's own message arrives (onStripeEvent).
@@ -312,6 +338,8 @@ export async function checkoutFor(e: any, r: any, row: any, actor: Actor): Promi
     if (s?.status === 'open' && s.url) return { url: s.url };
     // Expired or abandoned: a fresh one below, under a new idempotency key.
   }
+  // An earlier page (the amount changed since) is closed first. If it was paid, that payment counts, and no new page is made.
+  if ((await closeOlder(row)) === 'paid') return { paid: true };
   const p: Record<string, string> = {
     mode: 'payment', 'line_items[0][quantity]': '1', 'line_items[0][price_data][currency]': row.currency,
     'line_items[0][price_data][unit_amount]': String(row.amount), 'line_items[0][price_data][product_data][name]': str(row.for_text || 'Payment', 80),
@@ -321,25 +349,52 @@ export async function checkoutFor(e: any, r: any, row: any, actor: Actor): Promi
   if (r.email) p.customer_email = r.email;
   const s = await stripeCall('POST', 'https://api.stripe.com/v1/checkout/sessions', p, { account: row.stripe_account, idem: `gs-${row.id}-${row.session_id || 'first'}-${row.amount}` });
   if (!s?.id || !s?.url) throw bad('Stripe did not give a payment page. Nothing was charged. Try again in a minute.', 502);
+  run('INSERT OR IGNORE INTO collect_sessions (session_id, payment_id, stripe_account, amount, currency, at) VALUES (?,?,?,?,?,?)', s.id, row.id, row.stripe_account, row.amount, row.currency, now());
   run("UPDATE collect_payments SET session_id=?, session_url=?, status='started', updated_at=? WHERE id=? AND status!='paid'", s.id, s.url, now(), row.id);
   audit(e.id, actor, 'Payment started', `${r.name} opened Stripe's page to pay ${moneyText(row.amount, row.currency)} to ${row.merchant}. Not confirmed yet.`);
   return { url: s.url };
 }
 
 /**
- * Marks a payment paid, once: only for the session and the connected account named, and only when Stripe, asked
- * with that session id on that account, says it is paid, for the amount and the currency this row asked. Returns the
- * row when it became paid now, or null.
+ * Marks a payment paid, once: only for a session made here for that connected account, and only when Stripe, asked
+ * with that session id on that account, says it is paid, for the amount and the currency that page asked. A page made
+ * before the amount changed still counts: the row then holds what was actually paid. Returns the row when it became
+ * paid now, or null. A second page paid for the same person is never silently dropped: it is written down as paid
+ * twice, for the sender to refund (`twice` on the answer).
+ *
+ * `sent`: the session as Stripe's signed message carried it. Used only when the connected account took this server's
+ * access away (disconnected here, or in Stripe), so Stripe no longer answers when asked: the signed message is then
+ * all there is, and a person who paid on a page that was already open is still recorded as paid.
  */
-export async function confirmPaid(sessionId: string, stripeAccount: string): Promise<any | null> {
-  const row = get('SELECT * FROM collect_payments WHERE session_id=?', sessionId);
-  if (!row || row.stripe_account !== stripeAccount || row.status === 'paid') return null;
-  const s = await stripeCall('GET', `https://api.stripe.com/v1/checkout/sessions/${sessionId}`, {}, { account: stripeAccount });
-  if (s?.payment_status !== 'paid' || Number(s.amount_total) !== row.amount || String(s.currency).toLowerCase() !== row.currency || (s.metadata?.growsigning_payment && s.metadata.growsigning_payment !== row.id)) return null;
+export async function confirmPaid(sessionId: string, stripeAccount: string, sent?: any): Promise<any | null> {
+  const sess = get('SELECT * FROM collect_sessions WHERE session_id=?', sessionId);
+  const row = sess ? get('SELECT * FROM collect_payments WHERE id=?', sess.payment_id) : get('SELECT * FROM collect_payments WHERE session_id=?', sessionId);
+  if (!row || (sess?.stripe_account || row.stripe_account) !== stripeAccount) return null;
+  if (row.status === 'paid' && row.session_id === sessionId) return null;
+  const want = sess ? { amount: sess.amount, currency: sess.currency } : { amount: row.amount, currency: row.currency };
+  let s: any;
+  try {
+    s = await stripeCall('GET', `https://api.stripe.com/v1/checkout/sessions/${sessionId}`, {}, { account: stripeAccount });
+  } catch (x: any) {
+    const gone = !get('SELECT 1 x FROM collect_accounts WHERE stripe_account=?', stripeAccount);
+    if (!(x?.data?.stripe && gone && sent?.id === sessionId)) throw x;
+    s = sent;
+  }
+  if (s?.payment_status !== 'paid' || Number(s.amount_total) !== want.amount || String(s.currency).toLowerCase() !== want.currency || (s.metadata?.growsigning_payment && s.metadata.growsigning_payment !== row.id)) return null;
   const t = now();
-  if (!run("UPDATE collect_payments SET status='paid', paid_at=?, payment_intent=?, updated_at=? WHERE id=? AND status!='paid'", t, str(s.payment_intent?.id || s.payment_intent || '', 100) || null, t, row.id).changes) return null;
+  const pi = str(s.payment_intent?.id || s.payment_intent || '', 100) || null;
   const r = get('SELECT name FROM recipients WHERE id=?', row.recipient_id);
-  audit(row.envelope_id, { name: 'Stripe' }, 'Payment confirmed', `${r?.name || 'The signer'}: ${certLine(moneyText(row.amount, row.currency), row.merchant, momentText(t))}`);
+  if (sess) run('UPDATE collect_sessions SET closed_at=COALESCE(closed_at, ?) WHERE session_id=?', t, sessionId);
+  if (row.status === 'paid') {
+    // Paid on two pages. Both are Stripe's to refund; the second is said, never dropped.
+    if (!run('INSERT OR IGNORE INTO collect_events (id, at) VALUES (?,?)', `twice:${sessionId}`, t).changes) return null;
+    audit(row.envelope_id, { name: 'Stripe' }, 'Paid twice', `${r?.name || 'The signer'} also paid ${moneyText(want.amount, want.currency)} on an earlier Stripe page, as Stripe confirmed at ${momentText(t)}. Their payment of ${moneyText(row.amount, row.currency)} already counts. Refund the second one in your Stripe dashboard.`);
+    return { ...row, twice: { amount: want.amount, currency: want.currency } };
+  }
+  if (!run("UPDATE collect_payments SET status='paid', paid_at=?, payment_intent=?, amount=?, currency=?, session_id=?, session_url=NULL, updated_at=? WHERE id=? AND status!='paid'", t, pi, want.amount, want.currency, sessionId, t, row.id).changes) return null;
+  audit(row.envelope_id, { name: 'Stripe' }, 'Payment confirmed', `${r?.name || 'The signer'}: ${certLine(moneyText(want.amount, want.currency), row.merchant, momentText(t))}`);
+  // Any other page of this person's still open is closed, so they cannot pay twice. Failing that, a second payment is said (above).
+  await closeOlder({ id: row.id }, sessionId).catch(() => {});
   return get('SELECT * FROM collect_payments WHERE id=?', row.id);
 }
 
@@ -368,8 +423,8 @@ export async function onStripeEvent(ev: any): Promise<{ done: string; row?: any 
       case 'checkout.session.completed':
       case 'checkout.session.async_payment_succeeded': {
         if (o.payment_status !== 'paid') return { done: 'waiting' };
-        const row = await confirmPaid(String(o.id || ''), acct);
-        return row ? { done: 'paid', row } : { done: 'ignored' };
+        const row = await confirmPaid(String(o.id || ''), acct, o);
+        return row ? { done: row.twice ? 'paid_twice' : 'paid', row } : { done: 'ignored' };
       }
       case 'checkout.session.async_payment_failed':
       case 'checkout.session.expired': {
@@ -432,4 +487,23 @@ export function rowWords(row: any): { state: string; line: string; lines: string
 export function collectCertLines(e: any): [string, string][] {
   const rows = all("SELECT p.*, r.name rname FROM collect_payments p JOIN recipients r ON r.id=p.recipient_id WHERE p.envelope_id=? AND p.status='paid' ORDER BY p.paid_at", e.id);
   return rows.map((row: any) => ['Payment', `${row.rname}: ${rowWords(row).lines.join(' ')}`]);
+}
+
+/**
+ * A person who pressed Finish on a "pay before finishing" document and whose part waits for Stripe to confirm the
+ * payment: their row, or null. The sender's page and the reminder say "waiting for payment" for them, not that
+ * Finish is left to press.
+ */
+export function waitsForPayment(r: any): any | null {
+  if (r?.status === 'completed') return null;
+  const row = rowOf(r);
+  return row && row.when_to === 'before' && row.finish_body && ['ready', 'started', 'expired'].includes(row.status) ? row : null;
+}
+
+/** For the sender's page: each such person's progress says `paying` (with the amount) in place of `ready`. */
+export function markPaying(recipients: any[]) {
+  for (const r of recipients) {
+    const row = r.progress && waitsForPayment(r);
+    if (row) r.progress = { ...r.progress, ready: false, paying: moneyText(row.amount, row.currency) };
+  }
 }

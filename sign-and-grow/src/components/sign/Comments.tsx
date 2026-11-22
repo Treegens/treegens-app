@@ -155,7 +155,8 @@ export function CommentsDialog({ base, sender, documents, onClose }: { base: str
 
       {error && <div className="notice err sg-problem" role="alert">{error}</div>}
 
-      {data && !data.may_write && !data.away && <p className="notice">Everyone has finished, so these can be read and no longer added to. They are kept with the document.</p>}
+      {data && data.comments_off && !data.away && <p className="notice">{sender.name} turned off questions and comments for this document. What was written before is here to read. To ask {sender.name} something, reply to the email you got about this document.</p>}
+      {data && !data.may_write && !data.away && !data.comments_off && <p className="notice">Everyone has finished, so these can be read and no longer added to. They are kept with the document.</p>}
       {data && data.may_write && data.left <= 0 && <p className="notice warn">You have written as many comments on this document as one person can. To say more, email {sender.name}{sender.email ? ` at ${sender.email}` : ''}.</p>}
       {canWrite && !replyTo && (
         <form className="cm-new" onSubmit={async (ev) => {

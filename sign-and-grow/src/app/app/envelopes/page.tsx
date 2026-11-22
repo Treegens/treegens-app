@@ -1,5 +1,5 @@
 'use client';
-import { documentsIntro, countLine } from '@/lib/simplicity';
+import { documentsIntro, exportNote, countLine, exportShown, SEARCH_HINT, rowStatusLabel } from '@/lib/simplicity';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -91,6 +91,8 @@ export default function Envelopes() {
   }, [typed]);
 
   const change = (patch: Partial<View>) => (setView((v) => ({ ...(v || START), ...patch })), setPicked(new Set()));
+  // Whether anything was ever completed: the ZIP button waits for that (exportShown).
+  const [sentOne] = useLoad<any>(() => api('/envelopes?box=completed&limit=1'));
   const [data, reload, error] = useLoad<any>(
     () => (view ? api(`/envelopes?box=${view.box}&q=${encodeURIComponent(view.q)}&folder=${encodeURIComponent(view.folder)}&sender=${encodeURIComponent(view.sender)}&field=${encodeURIComponent(view.field)}&value=${encodeURIComponent(view.value)}&limit=${PAGE}`) : Promise.resolve(null)),
     [view?.box, view?.q, view?.folder, view?.sender, view?.field, view?.value],
@@ -137,7 +139,7 @@ export default function Envelopes() {
     try {
       // Look before downloading, so an empty account gets a sentence instead of a broken file.
       const any = await api('/envelopes?box=sent&limit=1');
-      if (!any.envelopes.length) return toast('There is nothing to export yet. Envelopes are included once they have been sent.');
+      if (!any.envelopes.length) return toast('There is nothing to download yet. Documents are included once they have been sent.');
       toast('Your export is being put together. The download starts in a moment.');
       window.location.href = exportUrl();
     } catch (err) {
@@ -171,11 +173,13 @@ export default function Envelopes() {
       <div className="pagehead">
         <div>
           <h1 className="serif">Documents</h1>
-          <div className="muted small" id="sn-export-note">{documentsIntro(!!isAdmin)}</div>
+          <div className="muted small">{documentsIntro()}</div>
         </div>
-        <div className="row wrap">
-          <button className="btn" onClick={exportAll} disabled={busy === 'export'} aria-describedby="sn-export-note">{busy === 'export' ? 'Preparing…' : 'Download signed PDFs (ZIP)'}</button>
-        </div>
+        {/* Only once something is completed: before that there is no signed PDF (exportShown in simplicity.ts). Its note goes with it. */}
+        {exportShown(sentOne) && <div className="stack" style={{ gap: 4, maxWidth: 340 }}>
+          <div className="row wrap"><button className="btn" onClick={exportAll} disabled={busy === 'export'} aria-describedby="sn-export-note">{busy === 'export' ? 'Preparing…' : 'Download signed PDFs (ZIP)'}</button></div>
+          <div className="muted small" id="sn-export-note">{exportNote(!!isAdmin)}</div>
+        </div>}
       </div>
 
       <div className="tabs" role="group" aria-label="Show">
@@ -186,7 +190,7 @@ export default function Envelopes() {
 
       <div className="sn-filters">
         <div className="sn-search">
-          <input type="search" placeholder="Search subject, people, document text or ID" value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Search documents" />
+          <input type="search" placeholder={SEARCH_HINT} value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Search documents" />
           {typed && <button className="btn sm ghost" onClick={() => (setTyped(''), change({ q: '' }))}>Clear</button>}
         </div>
         {data && data.folders.length > 0 && (
@@ -239,7 +243,7 @@ export default function Envelopes() {
                     <label className="sn-check"><input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(pickable))} aria-label={allPicked ? 'Clear selection' : `Select all ${pickable.length} sent documents in this list`} /></label>
                   )}
                 </th>
-                <th>Subject</th><th className="hide-sm">Status</th><th className="hide-sm">Waiting on</th><th className="hide-sm">Folder</th>{view?.col && <th className="hide-sm">{view.col}</th>}<th className="hide-sm">Updated</th><th className="hide-sm"><span className="sn-vh">Actions</span></th>
+                <th>Document</th><th className="hide-sm">Status</th><th className="hide-sm">Waiting on</th><th className="hide-sm">Folder</th>{view?.col && <th className="hide-sm">{view.col}</th>}<th className="hide-sm">Updated</th><th className="hide-sm"><span className="sn-vh">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -265,12 +269,12 @@ export default function Envelopes() {
                       {inRemoved && <div className="muted small">Sent by {e.sender}. Removed from their lists on {fmtDate(e.removed_at)}.</div>}
                       {e.shared_level && <div className="muted small" data-feature="ds-colleagues">{sharedRowLabel(e.sender)}, shared with you</div>}
                       <div className="sn-only-sm sn-rowmeta">
-                        <Status s={e.status} />
+                        <Status s={e.status} label={rowStatusLabel(e.status, w)} />
                         {e.status === 'sent' && <span className="small">{timed ? waitingText : <>Waiting on {waitingText}</>}</span>}
                         <span className="muted small">{fmtDate(e.updated_at)}</span>
                         {view?.col && customValue(e, view.col) && <span className="small cf-col">{view.col}: {customValue(e, view.col)}</span>}
                       </div>
-                      {e.bulk_id && <Link href={`/app/bulk?batch=${e.bulk_id}`} className="small sn-batchlink" onClick={(ev) => ev.stopPropagation()}>Part of a bulk send</Link>}
+                      {e.bulk_id && <Link href={`/app/bulk?batch=${e.bulk_id}`} className="small sn-batchlink" onClick={(ev) => ev.stopPropagation()}>Sent with Send to many</Link>}
                       <div className="sn-only-sm sn-inlineactions" onClick={(ev) => ev.stopPropagation()}>
                         {e.status === 'sent' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
                         {e.status === 'completed' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
@@ -278,7 +282,7 @@ export default function Envelopes() {
                           : !e.shared_level && <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move to folder</button>}
                       </div>
                     </td>
-                    <td className="hide-sm"><Status s={e.status} /></td>
+                    <td className="hide-sm"><Status s={e.status} label={rowStatusLabel(e.status, w)} /></td>
                     <td className="hide-sm small sn-waiting">{waitingText}</td>
                     <td className="hide-sm muted small">{e.folder || ''}</td>
                     {view?.col && <td className="hide-sm small cf-col">{customValue(e, view.col)}</td>}

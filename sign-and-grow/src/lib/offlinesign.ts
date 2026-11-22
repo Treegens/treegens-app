@@ -23,17 +23,35 @@ export const OFFLINE_WORDS = {
   /** The menu line on the envelope page. */
   action: 'Get ready to sign without signal',
   /** What is kept on the device, and for how long, said before the PIN is chosen. */
-  kept: (name: string) => `This device keeps the document, ${name}'s part and, once they finish, their signature, locked with a PIN you choose. It is wiped once it is sent, when you remove it, or after ${OFFLINE_DAYS} days.`,
-  /** The line after Finish on the device. Nothing is signed before the server has it. */
-  saved: 'Saved on this phone. It is sent when the phone has signal again. Nothing is signed until then.',
+  kept: (name: string) => `This device keeps the document and ${name}'s part, locked with a PIN you choose, for up to ${OFFLINE_DAYS} days. It is wiped once it is sent, or when you remove it. Nothing is signed until the device has signal again.`,
+  /** A device keeps one person's part at a time: said when it already holds one. */
+  replaces: 'This device already holds a document for someone to sign in person. A device keeps one person at a time, so getting this one ready replaces it.',
+  /** The heading after Finish on the device. Nothing is signed before the server has it. */
+  savedTitle: 'Saved on this device',
+  /** The line under it, and while it waits. */
+  waiting: 'It is sent when the device has signal again. Nothing is signed until then.',
+  /** Both together, for a line on its own. */
+  saved: 'Saved on this device. It is sent when the device has signal again. Nothing is signed until then.',
   /** The line once the server has it. */
-  sent: (name: string) => `Sent. ${name} has signed, and the copy on this phone is wiped.`,
+  sent: (name: string) => `Sent. ${name} has signed, and the copy on this device is wiped.`,
+  /**
+   * Said above the consent words on the device: what is recorded, and when, when nobody can reach GrowSigning while
+   * the person signs. The consent words themselves stay as they are recorded (their version), and this says how they apply.
+   */
+  consentNote: (host: string) => `You sign on ${host}'s device without a connection. Its own clock is recorded, and it is not checked. When the device has signal again, GrowSigning records when it receives your signature, and the IP address of the network the device uses then. Decline stops here: nothing is signed and nothing is sent.`,
+  /** The page could not be kept to open without signal (a browser that does not keep it, private browsing). */
+  notKept: 'This device could not keep this page to open without signal. Keep this page open until you meet the person: closing it or reloading it with no signal does not bring it back.',
   /** What the record and the certificate say. `ts` writes a moment; the default is "22 November 2026 at 14:03 UTC". */
   record: (deviceAt: string | null, received: string, ts: (s: string) => string = at) =>
     `Signed in person on the host's device without a connection. ${deviceAt ? `The device's clock said ${ts(deviceAt)}; this was not checked.` : 'The device did not say what its clock said.'} The server received it at ${ts(received)}.`,
-  unknown: (name: string) => `This copy for ${name} is not known to GrowSigning, so nothing was signed. Open the envelope with a connection and let ${name} sign there.`,
-  ended: (name: string, why: string) => `This copy for ${name} had ended, so nothing was signed.${why ? ` ${why}` : ''} Open the envelope with a connection and let ${name} sign there.`,
-  tooOld: (name: string) => `This copy for ${name} was more than ${OFFLINE_DAYS} days old, so nothing was signed. Open the envelope with a connection and let ${name} sign again.`,
-  closed: (name: string) => `The envelope is no longer open for ${name}, so nothing was signed. Open the envelope with a connection to see why.`,
-  changed: (name: string) => `Nothing was signed for ${name}, because the document was changed after this phone got it ready. Open the envelope with a connection and let ${name} sign it again.`,
+  unknown: (name: string) => `This copy for ${name} is not known to GrowSigning, so nothing was signed. Open the document with a connection and let ${name} sign there.`,
+  ended: (name: string, why: string) => `This copy for ${name} had ended, so nothing was signed.${why ? ` ${why}` : ''} Open the document with a connection and let ${name} sign there.`,
+  tooOld: (name: string) => `This copy for ${name} was more than ${OFFLINE_DAYS} days old, so nothing was signed. Open the document with a connection and let ${name} sign again.`,
+  closed: (name: string) => `The document is no longer open for ${name}, so nothing was signed. Open the document with a connection to see why.`,
+  changed: (name: string) => `Nothing was signed for ${name}, because the document was changed after it was kept on this device. Open the document with a connection and let ${name} sign it again.`,
+  /**
+   * The server refused it for another reason (an answer it does not take, say). The copy stays on the device, so the
+   * person can look again while they are there, or the host removes it.
+   */
+  keptAfterRefusal: (name: string) => `The copy is still on this device. If ${name} is with you, let them change their part and finish again. If not, remove it, and let ${name} sign with a connection.`,
 };

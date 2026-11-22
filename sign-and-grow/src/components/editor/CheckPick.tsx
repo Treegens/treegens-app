@@ -26,7 +26,7 @@ export function PhoneBox({ r, onChange }: { r: any; onChange: (p: any) => void }
   );
 }
 
-const TPL_PHONE = 'The mobile number comes with the person each time this template is used: a "phone" column in a bulk send, or "phone" next to the name and email in the API. A public form cannot use text messages, because its visitors type their own details.';
+const TPL_PHONE = 'The mobile number comes with the person each time this template is used: a "phone" column in Send to many, or "phone" next to the name and email in the API. A public form cannot use text messages, because its visitors type their own details.';
 
 /** "Check who signs": none, an access code, a one-time code, or both. `open`: a template role filled in each time. */
 export function CheckPick({ r, name, kept, textsOn, open, onChange, callsOn }: { r: any; name: string; kept?: KeptForPerson; textsOn: boolean; open: boolean; onChange: (p: any) => void; callsOn?: boolean }) {

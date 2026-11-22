@@ -19,6 +19,7 @@ import { MenuDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDia
 import { HelpChat } from '@/components/HelpChat';
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
+import { SharedNotes, sharedSaid, ownAnswers, needsInitials, INITIALS_FIRST } from '@/components/sign/SharedNotes';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
 import { useLiveLogic } from '@/components/sign/logic';
 import { keepTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
@@ -33,7 +34,7 @@ import { isConnectionError, isAlreadyFinished, finishLanded, finishNotSent, fini
 import { CANNOT_REACH, sameFieldAgain } from '@/components/sign/stuck';
 import { SIGNING_ONLINE } from '@/lib/mobile';
 import { PayLink } from '@/components/sign/PayLink';
-import { PayNow, PayAhead } from '@/components/sign/PayNow';
+import { PayNow, PayAhead, PayAfter } from '@/components/sign/PayNow';
 import { NoEmailDone, NoEmailWait } from '@/components/sign/NoEmail';
 import { moreTimeWords, laterWords } from '@/lib/bysender';
 // "Questions and comments": the one way to ask the sender something, and the note before Finish (Comments.tsx).
@@ -54,7 +55,7 @@ import { StampDialog, sameStampOf } from '@/components/stamps/StampDialog';
 import { stampTurn, turnStyle } from '@/lib/stamps';
 import { layers } from '@/lib/stacked';
 // The page made simpler: Other actions in one order, Finish that signs unless something needs a look, Next that opens.
-import { otherActions, lookAgain, nextOpens, nameDiffers, laterAtConsent, laterLabel, reviewTitle, GUIDE_NEXT, GUIDE_FINISH, FLAG_MARGIN, type ActionKey } from '@/components/sign/actions';
+import { otherActions, bySwitches, lookAgain, nextOpens, nameDiffers, laterAtConsent, laterLabel, reviewTitle, GUIDE_NEXT, GUIDE_FINISH, FLAG_MARGIN, type ActionKey } from '@/components/sign/actions';
 import { ConsentTop } from '@/components/sign/ConsentTop';
 import { SummaryLink } from '@/components/sign/Summary';
 import { Supplements, focusAlso, NO_ALSO, type AlsoLeft } from '@/components/sign/Supplements';
@@ -67,7 +68,8 @@ import { NameDialog } from '@/components/sign/NameDialog';
 import { yourMoment } from '@/lib/dates';
 // The account's own consent text under ours, and "Sign on paper instead" (sign/OwnTerms.tsx, sign/Withdraw.tsx).
 import { OwnTermsBlock } from '@/components/sign/OwnTerms';
-import { PaperDialog } from '@/components/sign/Withdraw';
+// Printing it, signing by hand and sending back a photo, when the sender's account offers it (sign/Paper.tsx).
+import { PaperChoice, PaperScreen, paperFirst, withPrint } from '@/components/sign/Paper';
 import { t } from '@/lib/i18n';
 // Inside a frame on the sender's own website: what happened is told to that website alone (sign/frame.ts).
 import { frameBody, tellFrame } from '@/components/sign/frame';
@@ -101,6 +103,8 @@ export default function SignPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [sig, setSig] = useState<string | null>(null);
   const [ini, setIni] = useState<string | null>(null);
+  // How the signature and initials were made here, for the certificate (src/lib/switches.ts howText).
+  const hows = useRef<{ signature_how?: string; initials_how?: string }>({});
   const [adopt, setAdopt] = useState<{ kind: 'signature' | 'initials'; field?: string; saved?: SavedMark | null } | null>(null);
   // Which of the two marks was made or confirmed in this tab. One that only comes from storage (saved with this
   // document on another device, or kept on the signer's account) is shown in the adopt dialog and confirmed there
@@ -224,7 +228,7 @@ export default function SignPage() {
         // Answers not saved yet are kept, but only for fields that still exist: the sender may have taken one away.
         // After a reload, answers this tab had not got through to the server yet come back from its own storage.
         const tabKept = mine && !unsaved ? readAnswers(token, d.recipient?.name, Object.keys(server)) : null;
-        setValues((prev) => (unsaved ? { ...server, ...Object.fromEntries(Object.entries(prev).filter(([id]) => id in server)) } : tabKept ? { ...server, ...tabKept } : server));
+        setValues((prev) => (unsaved ? { ...server, ...ownAnswers(d.fields, Object.fromEntries(Object.entries(prev).filter(([id]) => id in server))) } : tabKept ? { ...server, ...ownAnswers(d.fields, tabKept) } : server));
         lastSaved.current = start.baseline;
       }
     } catch (e: any) {
@@ -365,7 +369,8 @@ export default function SignPage() {
   const byId = (id: string | null | undefined) => fields.find((f) => f.id === id);
 
   // Typing in a field fills the fields that share its answer too (spreadLinked in src/lib/fieldkinds.ts).
-  const set = useCallback((id: string, v: string) => setValues((s) => spreadLinked(ownFields, s, id, v)), [ownFields]);
+  // A field anyone can fill in that asks for initials on a change asks for them first (sign/SharedNotes.tsx).
+  const set = useCallback((id: string, v: string) => (needsInitials(ownFields, id, ini) ? (toast(INITIALS_FIRST), changeMark('initials')) : setValues((s) => spreadLinked(ownFields, s, id, v))), [ownFields, ini]); // eslint-disable-line react-hooks/exhaustive-deps
   const drawing = useDrawing(set);
   const pickRadio = useCallback((f: any) => setValues((s) => {
     const n = { ...s };
@@ -382,7 +387,8 @@ export default function SignPage() {
     // are sent when they changed, not with every keystroke. From a closing page they only go along when the whole
     // request stays small: a request the browser finishes on its own has a size limit, and one that is too big
     // would lose the answers with it.
-    let body = saveBody(valuesRef.current, version.current, kept.current, savedMarks.current);
+    // sign_again: a field anyone can fill in says under it who is asked to sign again when it changes (SharedNotes.tsx).
+    let body: any = { ...saveBody(valuesRef.current, version.current, kept.current, savedMarks.current), ...hows.current, sign_again: true };
     if (leaving && JSON.stringify(body).length > 60_000) body = saveBody(valuesRef.current, version.current, savedMarks.current, savedMarks.current);
     const marks = { sig: body.signature_png, ini: body.initials_png };
     if (json === lastSaved.current && !marks.sig && !marks.ini) return true;
@@ -403,7 +409,10 @@ export default function SignPage() {
     setSave('saving');
     try {
       const res = await fetch(`/api${base}/save`, request);
-      if (!res.ok) throw Object.assign(new Error(), { status: res.status, code: (await res.json().catch(() => ({}))).code });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw Object.assign(new Error(j.error || ''), { status: res.status, code: j.code, why: j.why });
+      }
       lastSaved.current = json;
       savedMarks.current = { sig: marks.sig || savedMarks.current.sig, ini: marks.ini || savedMarks.current.ini };
       rejected.current = 0;
@@ -418,7 +427,8 @@ export default function SignPage() {
         // The last step before sending (the check at Finish) is closed too: it must never be taken on top of a
         // document that changed underneath it. The person sees the notice and the new pages first.
         setOpen((o) => (o === 'review' ? '' : o));
-        setChangedOpen(true);
+        // Someone else changed a field anyone can fill in: the server's own words say who and what (collab.ts).
+        setChangedOpen(e?.why === 'shared' && e.message ? e.message : true);
         setSave('idle');
         load();
         window.scrollTo({ top: 0 });
@@ -642,7 +652,7 @@ export default function SignPage() {
     // What the page does once the server has this person's part, however that became known.
     const landed = (r?: any) => (canSave.current = false, writeKept(token, null, null), writeTypedName(token, null), dropAnswers(token), setFinishPending(false), setOpen(''), tellFrame('signing_complete'), r && setFinished(r));
     try {
-      landed(await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, inputs: data?.inputs ?? null, tz: deviceZone(), ...frameBody() } }));
+      landed(await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, ...hows.current, version: version.current, inputs: data?.inputs ?? null, tz: deviceZone(), sign_again: true, ...frameBody() } }));
     } catch (e: any) {
       const msg = e?.message || 'Something went wrong on our side.';
       // Said in "Check before you finish", opened for it when Finish went straight through: the message stays next to
@@ -665,6 +675,11 @@ export default function SignPage() {
         if (view === 'text') toast(msg, true);
         afterClose.current = f;
         setOpen('');
+      } else if (e?.code === 'sign_way_off') {
+        // The ways to make a signature are fewer than this page was loaded with: it offers only those from now on.
+        if (Array.isArray(e?.data?.ways)) setData((d: any) => (d ? { ...d, switches: { ...(d.switches || {}), ways: e.data.ways } } : d));
+        hows.current = {};
+        say(msg);
       } else if (e?.code === 'form_waits') {
         // A public form with no signature free: the server's own sentence says what happens next. Not sent again.
         setFinishPending(false);
@@ -682,7 +697,7 @@ export default function SignPage() {
         // for another look before finishing. Someone else who finished meanwhile is said in the server's own words
         // ("why": "inputs"): it was not the sender, and the total worked out for this person changed with it.
         setOpen('');
-        setChangedOpen(e?.data?.why === 'inputs' ? msg : true);
+        setChangedOpen(e?.data?.why === 'inputs' || e?.data?.why === 'shared' ? msg : true);
         await load();
         window.scrollTo({ top: 0 });
       } else if (e?.code === 'supplements_missing') {
@@ -742,6 +757,7 @@ export default function SignPage() {
     if (isPreviewToken(token)) return <PreviewProblem message={problem.message} />;
     if (problem.code === 'purged') return <PurgedLink day={problem.day} />;
     if (problem.code === 'counter_id_first') return <CounterWait message={problem.message} onRetry={load} />;
+    if (problem.code === 'kept_copy') return <Shell><StateCard tone="ok" title="You passed this on"><p>{problem.message}</p></StateCard></Shell>;
     if (problem.status === 410) return <ReplacedLink token={token} />;
     if (problem.status === 404) return <UnknownLink />;
     return <LoadProblem message={problem.message} onRetry={load} />;
@@ -784,7 +800,8 @@ export default function SignPage() {
       {open === 'ask' && <CommentsDialog base={base} sender={sender} documents={data.documents || []} onClose={() => setOpen('')} />}
       {drawing.dialog}
       {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : isStepRole(me.role) ? 'Decline' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); tellFrame('declined'); load(); }} />}
-      {open === 'paper' && <PaperDialog base={base} sender={sender} lang={data.language?.locale || 'en'} note={groupDeclineText(data)} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
+      {/* With signing on paper offered, the print and send steps too (sign/Paper.tsx); otherwise by post only (Withdraw.tsx). */}
+      {open === 'paper' && <PaperChoice base={base} ps={me.paper_sign} byPost={!!data.own_terms} sender={sender} lang={data.language?.locale || 'en'} note={groupDeclineText(data)} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} onSent={() => { setOpen(''); load(); }} />}
       {open === 'name' && <NameDialog name={me.name} approving={me.role === 'approver'} onRename={rename} onClose={() => setOpen('')} />}
       {open === 'reassign' && <ReassignDialog base={base} sender={sender} fixName={<FixName name={me.name} onRename={rename} />} onClose={() => setOpen('')} onDone={(name) => { canSave.current = false; writeKept(token, null, null); setOpen(''); setHandedTo(name); }} />}
       {open === 'handback' && <HandBackDialog base={base} data={data} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); toast(`Handed back to ${me.group?.name}. Nothing you filled in was kept.`); load(); }} />}
@@ -933,6 +950,8 @@ export default function SignPage() {
     return (
       <Shell data={data} footer={report}>
         {notice}
+        {/* "Pay after finishing": the Pay screen first, with Not now going on to Done (sign/PayNow.tsx). */}
+        <PayAfter base={base} token={token} on={acts}>
         <div className="stack">
           {/* In person, the device is not the signer's: the first thing the done screen says is to hand it back. */}
           {/* On the screen facing the person at a service counter there is no account to hand back: CounterDone below. */}
@@ -954,14 +973,15 @@ export default function SignPage() {
           {/* On the screen facing the person at a service counter: hand it back, then Next person (counter.ts). */}
           {env.counter?.screen && <CounterDone />}
           {/* Trees and paper: the picture the first time someone signs, one small card after that (impact/SignerTrees.tsx). */}
-          {!env.counter?.screen && <SignerDone base={base} impact={finished?.impact || env.impact} />}
+          {/* Not for someone who printed it to sign on paper: they did use paper (sign/Paper.tsx). */}
+          {!env.counter?.screen && me.paper_sign?.state !== 'accepted' && <SignerDone base={base} impact={finished?.impact || env.impact} />}
           {/* The sender's own payment page, when they set one and may: only after Finish (src/components/sign/PayLink.tsx). */}
           {/* A signer with a witness: what became of them, and another one after "I was not there" (sign/Witness.tsx). */}
           <WitnessAfter me={me} base={base} onNamed={load} />
           {acts && <PayLink base={base} />}
-          {acts && <PayNow base={base} token={token} />}
           {env.next_person && <NextPerson slug={env.next_person} email={myEmail} />}
         </div>
+        </PayAfter>
         {dialogs}
       </Shell>
     );
@@ -1044,7 +1064,7 @@ export default function SignPage() {
   };
   // Someone asked only to read has nothing to finish: for them the same entry is "Read it later".
   ACTION.later.label = laterLabel(me.role);
-  const menu: MenuItem[] = otherActions(me, { stage, deadline: !!env.expires_at, paper: !!data.own_terms }).map((k) => ACTION[k]);
+  const menu: MenuItem[] = bySwitches(withPrint(otherActions(me, { stage, deadline: !!env.expires_at, paper: !!data.own_terms }), me.paper_sign, () => otherActions(me, { stage, deadline: !!env.expires_at, paper: true })), data.switches).map((k) => ACTION[k]);
   helpActs.current = [...menu.filter((m) => m.key !== 'help'), { key: 'menu', label: 'Other actions', onClick: go('menu') }];
   const other = <button type="button" className="btn sm sg-other" aria-haspopup="dialog" onClick={go('menu')}>Other actions</button>;
   const menuDialog = open === 'menu' && <MenuDialog items={menu} onClose={() => setOpen('')} when={env.expires_at ? `Open until ${yourMoment(env.expires_at, deviceZone())}.` : undefined} back="Back" />;
@@ -1064,6 +1084,17 @@ export default function SignPage() {
 
   // Someone who changes the envelope on their turn and does not sign: their own screen (sign/NameNext.tsx), with
   // the same Other actions as every signer screen (charter 2.6).
+  // Signed on paper and waiting for the sender to check, or asked to sign on paper only (sign/Paper.tsx).
+  const paperScreen = paperFirst(me.paper_sign, stage);
+  if (paperScreen)
+    return (
+      <Shell data={data} bar={other} footer={report} plainBar onHelp={headHelp}>
+        {notice}
+        <PaperScreen kind={paperScreen} base={base} ps={me.paper_sign} sender={sender} email={me.link_by_sender ? null : me.email} lang={data.language?.locale || 'en'} onSent={load} />
+        {dialogs}
+      </Shell>
+    );
+
   if (stepFirst(data, stage))
     return (
       <Shell data={data} bar={other} footer={report} helpInNewTab plainBar onHelp={headHelp}>
@@ -1219,7 +1250,7 @@ export default function SignPage() {
     if (f.type === 'checkbox')
       return (
         <label key={f.id} {...common}>
-          <input type="checkbox" className="sg-vh" checked={!!value} aria-label={`${name}${need}${boxRuleHint(f, fields) ? `. ${boxRuleHint(f, fields)}` : ''}`} aria-required={!!f.required} onChange={(e) => set(f.id, e.target.checked ? '1' : '')} />
+          <input type="checkbox" className="sg-vh" checked={!!value} aria-label={`${name}${need}${sharedSaid(f)}${boxRuleHint(f, fields) ? `. ${boxRuleHint(f, fields)}` : ''}`} aria-required={!!f.required} onChange={(e) => set(f.id, e.target.checked ? '1' : '')} />
           {value && <Icon name="check" />}
         </label>
       );
@@ -1241,14 +1272,14 @@ export default function SignPage() {
       );
     if (usesSheet(f))
       return (
-        <button key={f.id} type="button" {...common} onClick={() => goTo(f)} aria-label={`${name}${need}. ${value ? `Your answer: ${shown}` : 'Empty'}. Opens a box to type in`}>
+        <button key={f.id} type="button" {...common} onClick={() => goTo(f)} aria-label={`${name}${need}${sharedSaid(f)}. ${value ? `Your answer: ${shown}` : 'Empty'}. Opens a box to type in`}>
           <span className={`sg-val${value ? '' : ' ph'}`} dir="auto">{shown || name + (f.required ? ' *' : '')}</span>
         </button>
       );
     if (f.type === 'dropdown')
       return (
         <div key={f.id} {...common}>
-          <select aria-label={name} aria-required={!!f.required} value={value} onChange={(e) => set(f.id, e.target.value)}>
+          <select aria-label={name + sharedSaid(f)} aria-required={!!f.required} value={value} onChange={(e) => set(f.id, e.target.value)}>
             <option value="">{name}</option>
             {(f.options || []).map((o: string) => <option key={o}>{o}</option>)}
           </select>
@@ -1266,7 +1297,7 @@ export default function SignPage() {
     // A character limit is said under the box while the person is in it (sign.css .sg-doc-count), so typing that stops is never a mystery.
     const count = lengthHint(f, value);
     const again = askAgain && askAgain.id === f.id && askAgain.value === value ? askAgain.text : '';
-    const shared = { dir: 'auto' as const, 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong || !!again, 'aria-describedby': [count && `f-${f.id}-count`, again && `f-${f.id}-again`].filter(Boolean).join(' ') || undefined, placeholder: name + (f.required ? ' *' : ''), value, maxLength: inputLimit(f), title: wrong ? problemWith(f, value, env.date_format) : f.type === 'number' ? amountHint(f) || NUMBER_HINT : undefined };
+    const shared = { dir: 'auto' as const, 'aria-label': name + sharedSaid(f), 'aria-required': !!f.required, 'aria-invalid': wrong || !!again, 'aria-describedby': [count && `f-${f.id}-count`, again && `f-${f.id}-again`].filter(Boolean).join(' ') || undefined, placeholder: name + (f.required ? ' *' : ''), value, maxLength: inputLimit(f), title: wrong ? problemWith(f, value, env.date_format) : f.type === 'number' ? amountHint(f) || NUMBER_HINT : undefined };
     return (
       <div key={f.id} {...common}>
         {isMulti(f)
@@ -1320,6 +1351,7 @@ export default function SignPage() {
         </div>
       ))}
       {pageFields(docId, page)}
+      <SharedNotes fields={fields.filter((f: any) => f.document_id === docId && f.page === page)} />
       {nextField && nextField.document_id === docId && nextField.page === page && !sheet && (
         <span className={`sg-flag ${flagSide}`} aria-hidden="true" style={flagAt(nextField)}>
           {boxRuleHint(nextField, fields, true) || FLAG[nextField.type] || 'Fill in here'}
@@ -1345,8 +1377,9 @@ export default function SignPage() {
   const sheetField = byId(sheet);
   const sheetTarget = sheetField && nextAfter(sheetField.id);
 
-  // Pay, for a document that asks for a payment before finishing: after the last signature, before Done.
-  if (payWait && acts) return <Shell data={data} footer={report}>{notice}<PayNow base={base} token={token} onBack={() => setPayWait(false)} onDone={load} />{dialogs}</Shell>;
+  // Pay, for a document that asks for a payment before finishing: after the last signature, before Done. The usual
+  // header stays (Other actions, with Decline, and Help), so not paying is never a dead end.
+  if (payWait && acts) return <Shell data={data} bar={other} footer={report} helpInNewTab onHelp={headHelp}>{notice}<PayNow base={base} token={token} onBack={() => setPayWait(false)} onDone={load} />{menuDialog}{dialogs}</Shell>;
 
   return (
     <Shell data={data} bar={bar} bottom={bottom} footer={report} titleIsHeading live={live} helpInNewTab onHelp={headHelp}>
@@ -1439,8 +1472,9 @@ export default function SignPage() {
           onRename={rename} />
       )}
       {adopt && (
-        <AdoptSignature kind={adopt.kind} name={me.name} saved={adopt.saved} onClose={() => setAdopt(null)}
-          onDone={(png, typed) => {
+        <AdoptSignature kind={adopt.kind} name={me.name} saved={adopt.saved} ways={data.switches?.ways} onClose={() => setAdopt(null)}
+          onDone={(png, typed, how) => {
+            if (how) hows.current = { ...hows.current, [adopt.kind === 'signature' ? 'signature_how' : 'initials_how']: how };
             // A typed signature under another name than the one on the document: looked at once more at Finish.
             if (adopt.kind === 'signature') (setSig(png), setTypedName(typed ?? null), writeTypedName(token, typed));
             else setIni(png);

@@ -1,5 +1,6 @@
 // "Each person sees only their files" (research/docusign-gaps.json, batch "visibility"): src/lib/owndocs.ts (the rule
 // and the words) and src/server/visibility.ts (the signing link, the copy made for one person, its completed copy).
+import { readEnglish } from './words.ts';
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { boot, Client, signUp, upload, tokenFor, PNG } from './helpers.ts';
@@ -570,7 +571,7 @@ test('P5: a file to read that nobody ticked goes to everyone, so its rule is nev
 
 test('screens: the Settings card is open in Sending, with ids of its own; the editor never springs a cleared tick back', async () => {
   const fs = await import('node:fs');
-  const card = fs.readFileSync('src/components/settings/OwnDocsDefault.tsx', 'utf8');
+  const card = readEnglish('src/components/settings/OwnDocsDefault.tsx');
   assert.ok(!/"set-own-h"|"set-own-hint"/.test(card), 'not the ids of the consent text card');
   assert.match(card, /data-item="card"/);
   const page = fs.readFileSync('src/app/app/settings/page.tsx', 'utf8');

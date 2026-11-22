@@ -88,14 +88,39 @@ export function Toasts() {
 }
 
 export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const k = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') return onClose();
+      // Tab stays inside the dialog, so a keyboard never reaches the page behind it.
+      if (e.key !== 'Tab' || !box.current) return;
+      // With a dialog over a dialog, the top one holds the keyboard.
+      const open = document.querySelectorAll('.modal');
+      if (open[open.length - 1] !== box.current) return;
+      const all = [...box.current.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter((x) => x.offsetParent !== null || x === document.activeElement);
+      if (!all.length) return;
+      const first = all[0];
+      const last = all[all.length - 1];
+      const inside = box.current.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) (e.preventDefault(), last.focus());
+      else if (!e.shiftKey && (document.activeElement === last || !inside)) (e.preventDefault(), first.focus());
+    };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
   }, [onClose]);
+  // Focus moves into the dialog when it opens (to a field marked autoFocus, else the first control) and back to
+  // what opened it when it closes.
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    const el = box.current;
+    if (el && !el.contains(document.activeElement)) (el.querySelector<HTMLElement>('input:not([disabled]):not([type="hidden"]),select,textarea,button:not([disabled]),a[href]') || el).focus();
+    return () => {
+      if (before && document.contains(before)) before.focus();
+    };
+  }, []);
   return (
     <div className="modal-bg" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div ref={box} tabIndex={-1} className={`modal${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
         {children}
       </div>

@@ -4,9 +4,12 @@
 //   Card         marks one card of a section, so the page can be checked for "at most 4 cards with zero setup".
 //   MoreOptions  the one place per section for what is rarely needed. Closed every time the section opens.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useST } from '@/components/senderLang';
 
 /** `[said, saved]`: put `said` next to the control, call `saved()` when the server has answered. */
-export function useSaved(words = 'Saved'): [ReactNode, () => void] {
+export function useSaved(given?: string): [ReactNode, () => void] {
+  const T = useST();
+  const words = given ?? T('settings.saved');
   const [on, setOn] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
@@ -24,9 +27,10 @@ export function Card({ children }: { children: ReactNode }) {
 }
 
 export function MoreOptions({ children }: { children: ReactNode }) {
+  const T = useST();
   return (
     <details className="set-more" data-more="screen">
-      <summary>More options</summary>
+      <summary>{T('settings.more_options')}</summary>
       <div className="stack set-more-body">{children}</div>
     </details>
   );

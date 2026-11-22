@@ -96,9 +96,12 @@
 .pub-form-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 .pub-form-row label.f { flex: 1 1 220px; margin-bottom: 0; }
 .pub-form-row label.f.pub-last4 { flex: 0 1 170px; }
-.pub-form-row .btn { min-height: 40px; }
+.pub-form-row .btn { min-height: 44px; } /* 44 px at every width (build-simplicity-r6) */
 .pub-form .notice { margin-top: 12px; }
 .pub-form-hint { margin: 10px 0 0; }
+/* repair-simplicity-r6: 44 px for the link-style button inside the hint, and for every fold's heading on /help. */
+.pub-form-hint .linklike { display: inline-flex; align-items: center; min-height: 44px; text-align: left; }
+.pub details:not(.pub-fold) > summary:not([class]) { min-height: 44px; padding: 10px 0; box-sizing: border-box; cursor: pointer; }
 .pub-result > :last-child { margin-bottom: 0; }
 .pub-result p { margin-bottom: 8px; }
 .pub-link { border: 0; background: none; padding: 0; font: inherit; color: var(--green); text-decoration: underline; cursor: pointer; }
@@ -141,9 +144,13 @@
 .pub-points.not li::before { background: #eeeae0; box-shadow: inset 0 0 0 4px #9aa39c; }
 .pub-points b { display: block; }
 .pub-points span { color: #3d4a42; }
+/* A short list inside one point (the database point, src/app/security/dblists.tsx). */
+.pub-points .pub-sublist { list-style: disc; margin: 4px 0 0; padding-left: 20px; display: grid; gap: 2px; }
+.pub-points .pub-sublist li { padding-left: 0; }
+.pub-points .pub-sublist li::before { content: none; }
 .pub-trust.not { background: #fbfaf6; }
 .pub-toc { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-.pub-toc a { display: inline-flex; align-items: center; min-height: 36px; padding: 0 13px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 13.5px; font-weight: 600; color: var(--green-deep); text-decoration: none; }
+.pub-toc a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 13px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 13.5px; font-weight: 600; color: var(--green-deep); text-decoration: none; }
 .pub-toc a:hover { border-color: var(--green); }
 
 /* ---- Landing page ----------------------------------------------------------------------------- */
@@ -161,7 +168,7 @@
 .pub-promise .said span { display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #7d241d; background: var(--red-soft); border-radius: 999px; padding: 2px 8px; flex: none; }
 .pub-promise h3 { font-size: 17px; margin-bottom: 6px; color: var(--green-deep); }
 .pub-promise p { color: #3d4a42; font-size: 14.5px; margin-bottom: 12px; }
-.pub-promise a { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; min-height: 32px; font-weight: 600; font-size: 14px; text-decoration: none; }
+.pub-promise a { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; font-size: 14px; text-decoration: none; }
 .pub-promise a::after { content: '→'; margin-left: 6px; transition: transform 0.12s; }
 .pub-promise a:hover { text-decoration: underline; }
 .pub-promise a:hover::after { transform: translateX(3px); }

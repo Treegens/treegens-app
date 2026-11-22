@@ -4,11 +4,10 @@
 // shown only to owners and admins of a team of two or more that has sent something (or who has it on already).
 import { useState } from 'react';
 import { api, useLoad, toast } from '@/components/ui';
-import { SOURCE_LOCALE, t } from '@/lib/i18n';
-
-const ui = SOURCE_LOCALE;
+import { useST } from '@/components/senderLang';
 
 export function MonthlyReport() {
+  const T = useST();
   const [r, reload] = useLoad<any>(() => api('/reports/monthly'), []);
   const [busy, setBusy] = useState(false);
   // The box shows the choice at once; it goes back if the server did not take it.
@@ -23,7 +22,7 @@ export function MonthlyReport() {
       reload();
     } catch (e: any) {
       setMine(on);
-      toast(e?.message || 'That did not save. Try again.', true);
+      toast(e?.message || T('reports.monthly.not_saved'), true);
     } finally {
       setBusy(false);
     }
@@ -31,7 +30,7 @@ export function MonthlyReport() {
   return (
     <label className="setting-row" id="monthly-report">
         <input type="checkbox" checked={on} aria-busy={busy} onChange={flip} />
-        <span><b>{t(ui, 'reports.monthly.title')}</b><span className="muted small" style={{ display: 'block' }}>{t(ui, 'reports.monthly.label')}</span></span>
+        <span><b>{T('reports.monthly.title')}</b><span className="muted small" style={{ display: 'block' }}>{T('reports.monthly.label')}</span></span>
     </label>
   );
 }

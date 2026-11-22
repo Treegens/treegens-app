@@ -151,7 +151,7 @@ test('2-4. signing on the device, saved with its clock, sent once there is signa
   assert.equal(JSON.stringify(b.m.get('copy')).includes('Plot 14'), false);
   assert.equal((await dev.peek(b)).state, 'saved');
   const offline = await dev.sendResult(b, pack, res, async () => { throw new TypeError('Failed to fetch'); });
-  assert.deepEqual(offline, { state: 'waiting', text: 'Saved on this phone. It is sent when the phone has signal again. Nothing is signed until then.' });
+  assert.deepEqual(offline, { state: 'waiting', text: 'Saved on this device. It is sent when the device has signal again. Nothing is signed until then.' });
   // A page from something in between (a Wi-Fi sign-in page) is no answer either.
   assert.equal((await dev.sendResult(b, pack, res, async () => ({ status: 200 - 0 + 302, data: '<html>' }))).state, 'waiting');
   assert.equal(S.db.get('SELECT status FROM recipients WHERE id=?', r.id).status, 'sent');
@@ -197,7 +197,7 @@ test('3. a document changed after it was got ready is refused: nothing signed, a
   S.db.run('UPDATE envelopes SET content_version=content_version+1 WHERE id=?', e.id);
   const sent = await dev.sendResult(b, pack, result(pack), poster());
   assert.equal(sent.state, 'refused');
-  assert.equal(sent.text, 'Nothing was signed for Pat Present, because the document was changed after this phone got it ready. Open the envelope with a connection and let Pat Present sign it again.');
+  assert.equal(sent.text, 'Nothing was signed for Pat Present, because the document was changed after it was kept on this device. Open the document with a connection and let Pat Present sign it again.');
   assert.equal(b.m.size, 0, 'a refused copy can never be accepted later, so it is not kept');
   assert.equal(S.db.get('SELECT status FROM recipients WHERE id=?', r.id).status, 'sent');
   assert.equal(S.db.get('SELECT state FROM offline_preps WHERE id=?', pack.prep_id).state, 'ended');
@@ -211,13 +211,13 @@ test('3. refused too: an unknown copy, a cancelled one, one replaced by another 
   const send = (p: any, extra: any = {}) => post(`/api/sign/${p.token}/offline-finish`, { prep_id: p.prep_id, device_at: '2026-11-20T09:15:00Z', values: valuesFor(p), signature_png: PNG, consent: {}, ...extra });
   const unknown = await send(pack, { prep_id: 'ofl_made_up' });
   assert.equal(unknown.status, 404);
-  assert.match(unknown.data.error, /not known to GrowSigning, so nothing was signed\. Open the envelope/);
+  assert.match(unknown.data.error, /not known to GrowSigning, so nothing was signed\. Open the document/);
   // Cancelled from the envelope page (a lost phone).
   assert.equal((await host.call('DELETE', `/envelopes/${e.id}/offline/${pack.prep_id}`)).status, 200);
   const cancelled = await send(pack);
   assert.equal(cancelled.status, 409);
   assert.equal(cancelled.data.code, 'offline_ended');
-  assert.match(cancelled.data.error, /cancelled it\. Open the envelope with a connection/);
+  assert.match(cancelled.data.error, /cancelled it\. Open the document with a connection/);
   // One envelope per device: getting a second one ready on the same browser ends the first.
   const p1 = (await ready(host, e, r.id)).data;
   const two = await hosted('ref2');
@@ -249,7 +249,7 @@ test('5. at most 7 days: the device wipes its copy, and the server refuses one t
   const res = await poster()(`/api/sign/${pack.token}/offline-finish`, { prep_id: pack.prep_id, device_at: '2026-11-20T09:15:00Z', values: valuesFor(pack), signature_png: PNG, consent: {} });
   assert.equal(res.status, 409);
   assert.equal(res.data.code, 'offline_too_old');
-  assert.match(res.data.error, /more than 7 days old, so nothing was signed\. Open the envelope with a connection/);
+  assert.match(res.data.error, /more than 7 days old, so nothing was signed\. Open the document with a connection/);
 });
 
 test('5. one envelope per device: a copy with a result not sent yet is never replaced', async () => {
@@ -297,9 +297,228 @@ test('the screens: the action only in the More of someone who signs in person, t
   assert.match(read('src/components/AppShell.tsx'), /lockIfHanded\(\)\.then/);
   const page = read('src/app/in-person/page.tsx');
   assert.match(page, /OFFLINE_WORDS\.saved/);
-  assert.match(page, /I do not want to sign/);
+  assert.match(page, />Decline<\/button>/);
   const sw = read('public/sw.js');
   assert.match(sw, /const IN_PERSON = '\/in-person';/);
   assert.match(sw, /pdfjs/);
   assert.match(read('public/offline.html'), /id="in-person" hidden/);
+});
+
+// ---- Repairs after review (tests/out/verify-ds-offline-inperson, tests/out/ux-ds-offline-inperson) -------------------
+
+test('repair: a part that pays before finishing is not got ready, because the payment needs a connection', async () => {
+  const { host, e, r } = await hosted('pay1');
+  S.db.run("UPDATE envelopes SET collect_currency='usd', collect_when='before' WHERE id=?", e.id);
+  const res = await ready(host, e, r.id);
+  assert.equal(res.status, 409, JSON.stringify(res.data));
+  assert.equal(res.data.code, 'needs_signal');
+  assert.match(res.data.error, /pays before finishing, and the payment needs a connection\. Host it with a connection instead\./);
+  // Paying after finishing never waits, so that part can be got ready.
+  S.db.run("UPDATE envelopes SET collect_when='after' WHERE id=?", e.id);
+  assert.equal((await ready(host, e, r.id)).status, 200);
+});
+
+test('repair: a field check is made on the device at Finish, the same as GrowSigning makes when it receives it', async () => {
+  const fields = await import('../src/components/sign/fields.ts');
+  const { host, e, r } = await hosted('check1', {
+    recipients: [{ id: 'r', role: 'inperson', name: 'Pat Present', email: 'check1-pat@example.com' }],
+    fields: [
+      { id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 },
+      { id: 'm', document_id: 'd', recipient_id: 'r', type: 'text', label: 'Email', required: true, validation: 'email', page: 0, x: 0.1, y: 0.3, w: 0.3, h: 0.03 },
+    ],
+  });
+  const pack = (await ready(host, e, r.id)).data;
+  const mine = pack.view.fields.filter((f: any) => f.type === 'text');
+  const id = mine[0].id;
+  // The device's own check, with what the person typed: caught while they are still there.
+  const wrong = fields.finishProblem(mine, { [id]: 'not an email' }, pack.view.envelope?.date_format);
+  assert.ok(wrong, 'a wrong format is caught on the device');
+  assert.match(wrong!.text, /email address/);
+  assert.equal(fields.finishProblem(mine, { [id]: 'amina@example.org' }, pack.view.envelope?.date_format), null);
+  // And the server agrees: what the device lets through is taken.
+  const ok = await poster()(`/api/sign/${pack.token}/offline-finish`, { prep_id: pack.prep_id, device_at: '2026-11-20T09:15:00.000Z', values: { [id]: 'amina@example.org', ...Object.fromEntries(pack.view.fields.filter((f: any) => f.type === 'signature').map((f: any) => [f.id, '1'])) }, signature_png: PNG, consent: {} });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  const page = read('src/app/in-person/page.tsx');
+  assert.match(page, /const wrong = finishProblem\(fields, values, pack\.view\?\.envelope\?\.date_format\);/);
+});
+
+test('repair: a refusal for another reason keeps the copy, says what to do, and the host can change the part or remove it', async () => {
+  const { host, e, r } = await hosted('kept1');
+  const pack = (await ready(host, e, r.id)).data;
+  const b = box();
+  const key = await dev.keep(b, PIN, pack, ROUNDS);
+  const res = result(pack);
+  await dev.saveResult(b, key, res);
+  const said = await dev.sendResult(b, pack, res, async () => ({ status: 400, data: { error: '"x" is not valid for Email of Pat.' } }));
+  assert.equal(said.state, 'refused');
+  assert.equal(said.kept, true);
+  assert.equal((await dev.peek(b)).state, 'saved');
+  // The page shows the next step and both ways out for a kept copy.
+  const page = read('src/app/in-person/page.tsx');
+  assert.match(page, /OFFLINE_WORDS\.keptAfterRefusal\(name\)/);
+  assert.match(page, /onClick=\{changePart\}>Change \{name\}&apos;s part<\/button>/);
+  assert.match(words.OFFLINE_WORDS.keptAfterRefusal('Pat'), /^The copy is still on this device\. .*remove it, and let Pat sign with a connection\.$/);
+  // The waiting screen can remove it too (asked twice), so a host is never stuck until the 7 days run out.
+  assert.match(page, /This removes what \{name\} did from this device, and nothing is signed\./);
+  // Removing ends the copy on the server when there is signal: a result sent for it later signs nothing.
+  assert.equal((await host.call('DELETE', `/envelopes/${e.id}/offline/${pack.prep_id}`)).status, 200);
+  const late = await poster()(`/api/sign/${pack.token}/offline-finish`, { prep_id: pack.prep_id, device_at: res.device_at, values: res.values, signature_png: PNG, consent: {} });
+  assert.equal(late.status, 409);
+  assert.equal(late.data.code, 'offline_ended');
+});
+
+test('repair: initials are the person\'s own, never their signature in their place', () => {
+  const page = read('src/app/in-person/page.tsx');
+  assert.doesNotMatch(page, /ini \|\| sig/);
+  assert.match(page, /initials_png: ini,/);
+  assert.match(page, /!\(f\.type === 'initials' && ini\)/);
+  assert.match(page, /const img = f\.type === 'signature' \? sig : ini;/);
+});
+
+test('repair: the words on the device: device not phone, document not envelope, the offline consent note, Decline', () => {
+  const all = JSON.stringify(Object.values(words.OFFLINE_WORDS).map((w: any) => (typeof w === 'function' ? w('Pat', 'Why.') : w)));
+  assert.doesNotMatch(all, /phone|envelope|got ready to sign|offline mode|sync|valid|hold up/i);
+  assert.equal(words.OFFLINE_WORDS.savedTitle, 'Saved on this device');
+  const note = words.OFFLINE_WORDS.consentNote('Wanjiru Field');
+  assert.match(note, /^You sign on Wanjiru Field's device without a connection\. Its own clock is recorded, and it is not checked\./);
+  assert.match(note, /records when it receives your signature, and the IP address of the network the device uses then\./);
+  assert.match(note, /Decline stops here: nothing is signed and nothing is sent\.$/);
+  const page = read('src/app/in-person/page.tsx');
+  assert.match(page, /\{OFFLINE_WORDS\.consentNote\(host\)\}/);
+  assert.doesNotMatch(page, /I do not want to sign|got ready to sign|Saved on this phone|the envelope</);
+  assert.match(page, /chose not to sign\. Nothing was sent\. The document still waits for them\./);
+  // The PIN takes letters too, so the keyboard is not a number pad.
+  for (const f of ['src/app/in-person/page.tsx', 'src/components/sender/OfflineReady.tsx']) assert.doesNotMatch(read(f), /inputMode="numeric"/, f);
+  // A device keeps one person at a time, and the dialog says so.
+  assert.match(words.OFFLINE_WORDS.replaces, /A device keeps one person at a time/);
+  assert.match(read('src/components/sender/OfflineReady.tsx'), /\{OFFLINE_WORDS\.replaces\}/);
+});
+
+test('repair: two people of one envelope cannot both be kept on one device: the second replaces the first, as said', async () => {
+  const { host, e } = await hosted('two1', {
+    recipients: [{ id: 'r', role: 'inperson', name: 'Pat Present', email: 'two1-pat@example.com' }, { id: 'q', role: 'inperson', name: 'Quinn Present', email: 'two1-q@example.com' }],
+    fields: [
+      { id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 },
+      { id: 'g', document_id: 'd', recipient_id: 'q', type: 'signature', page: 0, x: 0.5, y: 0.5, w: 0.3, h: 0.06 },
+    ],
+  });
+  const [p, q] = e.recipients.filter((x: any) => x.role === 'inperson');
+  const first = (await ready(host, e, p.id)).data;
+  const second = await ready(host, e, q.id);
+  assert.equal(second.status, 200, JSON.stringify(second.data));
+  assert.equal(S.db.get('SELECT state FROM offline_preps WHERE id=?', first.prep_id).state, 'ended');
+  assert.match(read('README.md'), /One person at a time per device/);
+});
+
+test('repair: spots on the page are buttons that go to their control; Back stays on the page while the person holds it', () => {
+  const page = read('src/app/in-person/page.tsx');
+  assert.match(page, /<button key=\{x\.id\} type="button" className="ip-spot" style=\{pos\(x\)\} aria-label=\{`Fill in \$\{fieldName\(x\)\}`\} onClick=\{\(\) => goTo\(x\)\}>/);
+  assert.match(page, /id=\{fid\}/);
+  assert.match(page, />Go to your part<\/button>/);
+  assert.match(page, /window\.addEventListener\('popstate', stay\)/);
+  assert.match(read('src/components/sender/OfflineReady.tsx'), /window\.location\.replace\('\/in-person'\)/);
+  assert.match(read('src/app/styles/inperson.css'), /\.ip-spot::after \{[^}]*width: max\(100%, 44px\); height: max\(100%, 44px\)/);
+});
+
+test('repair: a dialog takes the focus when it opens and Tab stays inside it', () => {
+  const ui = read('src/components/ui.tsx');
+  assert.match(ui, /Tab stays inside the dialog/);
+  assert.match(ui, /el\.querySelector<HTMLElement>\('input:not\(\[disabled\]\)/);
+  assert.match(read('src/components/sender/OfflineReady.tsx'), /type="password" autoFocus/);
+});
+
+// ---- The page kept to open with no signal (public/sw.js keepInPerson, src/components/sign/offlinePage.ts) ----------
+
+const vm = await import('node:vm');
+type Res = { ok: boolean; status: number; type: string; headers: Headers; body: string; clone(): Res; text(): Promise<string> };
+const answer = (body: string, headers: Record<string, string> = {}, status = 200, type = 'basic'): Res => ({ ok: status === 200, status, type, headers: new Headers(headers), body, clone() { return answer(body, headers, status, type); }, async text() { return body; } });
+function sw(net: (url: string) => Res) {
+  const store = new Map<string, Map<string, any>>();
+  const handlers: Record<string, any> = {};
+  const asked: string[] = [];
+  const key = (r: any) => new URL(typeof r === 'string' ? r : r.url, 'https://growsigning.com').href;
+  const open = async (k: string) => {
+    if (!store.has(k)) store.set(k, new Map());
+    const m = store.get(k)!;
+    return { match: async (r: any) => m.get(key(r)), put: async (r: any, res: any) => void m.set(key(r), res), addAll: async () => {}, keys: async () => [...m.keys()], delete: async (x: string) => m.delete(x) };
+  };
+  const ctx: any = {
+    self: { addEventListener: (t: string, h: any) => (handlers[t] = h), location: { origin: 'https://growsigning.com' }, skipWaiting: async () => {}, clients: { claim: async () => {} } },
+    caches: { open, keys: async () => [...store.keys()], delete: async (k: string) => store.delete(k) },
+    fetch: async (r: any) => (asked.push(key(r)), net(key(r))),
+    URL, Headers, Promise, console,
+  };
+  vm.runInNewContext(read('public/sw.js'), ctx);
+  const keepNow = () => new Promise<any>((ok) => handlers.message({ data: { type: 'keep-in-person' }, ports: [{ postMessage: ok }], waitUntil: () => {} }));
+  const kept = () => [...(store.get('growsigning-in-person')?.keys() || [])].map((u) => new URL(u).pathname);
+  return { handlers, keepNow, kept, asked, store };
+}
+const HTML = '<html><head><link rel="stylesheet" href="/_next/static/css/app-1a.css"><script src="/_next/static/chunks/main-9f.js" async></script></head><body><script>self.__next_f.push([1,"\\"/_next/static/chunks/app/in-person/page-77.js\\""])</script><script src="https://elsewhere.example/_next/static/x.js"></script></body></html>';
+
+test('repair: getting it ready keeps the in-person page and every file it loads, even when pages are marked not to be stored', async () => {
+  const w = sw((url) => {
+    const p = new URL(url).pathname;
+    if (p === '/in-person') return answer(HTML, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache, no-store, max-age=0, must-revalidate' });
+    if (p.endsWith('.css')) return answer('@font-face{src:url(/_next/static/media/lora.woff2)}', { 'content-type': 'text/css' });
+    return answer('x', { 'content-type': 'text/javascript' });
+  });
+  const a = await w.keepNow();
+  assert.equal(a.ok, true, JSON.stringify(a));
+  assert.deepEqual(w.kept().sort(), ['/_next/static/chunks/app/in-person/page-77.js', '/_next/static/chunks/main-9f.js', '/_next/static/css/app-1a.css', '/_next/static/media/lora.woff2', '/in-person', '/pdfjs/pdf.min.mjs', '/pdfjs/pdf.worker.min.mjs']);
+  // Nothing from another site is fetched or kept.
+  assert.ok(!w.asked.some((u) => !u.startsWith('https://growsigning.com/')), w.asked.join(' '));
+});
+
+test('repair: with no connection the kept page and its files open; a page that is not ours is never kept', async () => {
+  let up = true;
+  const w = sw((url) => {
+    if (!up) throw new TypeError('offline');
+    return new URL(url).pathname === '/in-person' ? answer(HTML, { 'content-type': 'text/html' }) : answer('js', { 'content-type': 'text/javascript' });
+  });
+  assert.equal((await w.keepNow()).ok, true);
+  up = false;
+  const ev = (url: string, mode = 'no-cors') => new Promise<any>((ok) => w.handlers.fetch({ request: { url, method: 'GET', mode }, respondWith: (p: Promise<any>) => p.then(ok, (e: any) => ok(e)) }));
+  assert.equal((await ev('https://growsigning.com/in-person', 'navigate')).body, HTML);
+  assert.equal((await ev('https://growsigning.com/_next/static/chunks/main-9f.js')).body, 'js');
+  // An update of the app (a new VERSION) drops its old caches, never what was kept for signing in person.
+  w.store.set('growsigning-shell-0-old', new Map());
+  await new Promise<void>((ok) => w.handlers.activate({ waitUntil: (p: Promise<any>) => p.then(() => ok()) }));
+  assert.ok(!w.store.has('growsigning-shell-0-old'));
+  assert.equal((await ev('https://growsigning.com/in-person', 'navigate')).body, HTML);
+  // Online, the page comes from the network and is not kept by being visited: only keepInPerson keeps it, whole.
+  up = true;
+  const before = w.kept().length;
+  await ev('https://growsigning.com/in-person', 'navigate');
+  assert.equal(w.kept().length, before);
+  // A redirect or a sign-in page from a Wi-Fi in between is not kept as the page.
+  const bad = sw((url) => (new URL(url).pathname === '/in-person' ? answer('<html>login</html>', { 'content-type': 'text/html' }, 200, 'opaqueredirect') : answer('x')));
+  assert.equal((await bad.keepNow()).ok, false);
+  assert.deepEqual(bad.kept(), []);
+  const json = sw(() => answer('{}', { 'content-type': 'application/json' }));
+  assert.equal((await json.keepNow()).ok, false);
+});
+
+test('repair: the device says ready only once the page is found kept', async () => {
+  const { keepPageForLater, pageKept } = await import('../src/components/sign/offlinePage.ts');
+  const worker = (reply: any) => ({ state: 'activated', postMessage: (_m: any, ports: MessagePort[]) => ports[0].postMessage(reply) });
+  const nav = (w: any) => ({ serviceWorker: { register: async (_u: string, o: any) => (assert.equal(o.scope, '/in-person'), { active: w, installing: null, waiting: null }) } });
+  const has = (yes: boolean) => ({ match: async (u: string) => (yes && u === '/in-person' ? {} : undefined) });
+  assert.equal(await keepPageForLater(nav(worker({ ok: true })) as any, has(true), 2000), true);
+  assert.equal(await keepPageForLater(nav(worker({ ok: true })) as any, has(false), 2000), false, 'a worker that says yes is not enough: the page must be found');
+  assert.equal(await keepPageForLater(nav(worker({ ok: false })) as any, has(true), 2000), false);
+  assert.equal(await keepPageForLater({} as any, has(true), 2000), false, 'no service worker: not kept');
+  const gone = { state: 'installing', listeners: [] as any[], addEventListener(_t: string, f: any) { this.listeners.push(f); } };
+  const p = keepPageForLater({ serviceWorker: { register: async () => ({ active: null, installing: gone, waiting: null }) } } as any, has(true), 2000);
+  gone.state = 'redundant';
+  gone.listeners.forEach((f) => f());
+  assert.equal(await p, false);
+  assert.equal(await pageKept(has(true)), true);
+  assert.equal(await pageKept(undefined), false);
+});
+
+test('repair: the no-connection page offers the kept document only when a copy is there, and looking never makes the database', () => {
+  const html = read('public/offline.html');
+  assert.match(html, /objectStore\('kept'\)\.get\('copy'\)/);
+  assert.match(html, /if \(g\.result\) document\.getElementById\('in-person'\)\.hidden = false;/);
+  assert.match(read('src/components/sign/offlineInPerson.ts'), /get: async \(k\) => \(\(await exists\(\)\) \? run\('readonly', \(s\) => s\.get\(k\)\) : undefined\)/);
 });

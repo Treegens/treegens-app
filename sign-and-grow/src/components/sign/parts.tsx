@@ -4,13 +4,11 @@ import { Logo, Mark, SentWith } from '@/components/Brand';
 import { savedLine } from '@/components/sign/actions';
 import { jumpRatherThanGlide } from '@/components/pdfMemory';
 import { orgOf } from '@/lib/sendername';
-import { headingFor } from '@/lib/consentfit';
+import { barTitle } from '@/lib/simplicity';
 import { signT } from '@/lib/signlang';
 import { useSignLang, useDocumentLang, SignLangProvider, LanguageMenu, langAttrs } from '@/components/sign/lang';
 import { PreviewBand, PreviewChip } from '@/components/sign/PreviewBand';
 
-/** The roles whose screens never say "Please sign": they approve, read or witness. */
-const NOT_SIGNING = ['approver', 'viewer', 'witness'];
 
 const ICONS: Record<string, string> = {
   download: 'M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14',
@@ -84,8 +82,9 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
   onHelp?: () => void;
 }) {
   const brand = data?.brand;
-  // Someone asked to approve, read or witness is not asked to sign: no "Please sign: " over their screen (headingFor).
-  const title = data?.envelope?.subject ? headingFor(data.envelope.subject, NOT_SIGNING.includes(data?.recipient?.role)) : 'GrowSigning';
+  // The bar names the document (charter 2.6 header): the app's own "Please sign: " is left out for everyone, so a phone
+  // shows "Planting partnership" and not "Please sign: Pla..." (simplicity.ts, barTitle). The consent heading keeps it.
+  const title = data?.envelope?.subject ? barTitle(data.envelope.subject) : 'GrowSigning';
   const named = !!data?.envelope?.subject && !plainBar;
   const style = brand?.brand_color ? ({ ['--brand' as any]: brand.brand_color, ['--sg-bar-ink' as any]: inkOn(brand.brand_color) }) : undefined;
   // The language of everything under the Shell, on its root as lang and dir (src/components/sign/lang.tsx).

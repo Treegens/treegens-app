@@ -1,5 +1,6 @@
 import { route, json, type Ctx } from './router.ts';
 import { counterMe } from './counter.ts';
+import { paperOn } from './paper.ts';
 import { whatsappProvider, voiceProvider, waDailyPerAccount } from '../lib/channels.ts';
 import { adminOrgs, refuseOrgAdminRole, orgMe } from './orgs.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
@@ -47,6 +48,7 @@ import { isDeploymentBilling, agreementLine, agreementOf } from '../lib/billingm
 import { askedSenderLocale, noteSeenLocale } from './senderlocale.ts';
 import { directoryManaged, invitesAllowed } from './scim.ts';
 import { seal } from './colcrypt.ts';
+import { membersMayStamp } from './switches.ts';
 
 // The role an invitation or a change gives (perm.ts): "admin", a role the team made (its id), and anything else
 // "member", as it always was. Refused when it can do more than the person giving it.
@@ -412,6 +414,8 @@ route('GET', '/me', (c) => {
     ...(keyDatesOn(a.id) ? { key_dates: true } : {}),
     // Delegates are allowed in this account (delegation.ts): Settings then lists Away and sharing. Absent otherwise.
     ...(delegationOn(a.id) ? { delegation: true } : {}),
+    // Admins turned stamps off for members (switches.ts): a member's editor then offers no Stamp field. Absent otherwise.
+    ...(c.role === 'member' && !membersMayStamp(a.id) ? { no_stamps: true } : {}),
     // People who can look after the account: the owner, the admins, and a role an admin made only when it keeps both
     // the team and the settings (perm.ts). An "Office manager" without the settings does not count.
     admins: all("SELECT user_id FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id)
@@ -428,6 +432,8 @@ route('GET', '/me', (c) => {
     outbox: devOutbox(),
     // Whether the operator of this server has switched text messages on. When not, nothing offers them.
     text_messages: !!smsProvider(),
+    // Whether the account's admins switched on "People may sign on paper" (paper.ts). When not, nothing offers it.
+    paper_signing: paperOn(a.id),
     // Whether this server sends the signing link by WhatsApp, and can call a number to read a code (src/lib/channels.ts).
     whatsapp: !!whatsappProvider(),
     phone_calls: !!voiceProvider(),
@@ -465,9 +471,12 @@ route('PATCH', '/me', async (c) => {
   // before anything is written, so a refusal changes nothing.
   const locale = askedSenderLocale(b.locale);
   if (locale !== undefined) run('UPDATE users SET locale=? WHERE id=?', locale, c.user.id);
-  run('UPDATE users SET name=?, title=?, company=?, signature_png=?, initials_png=?, notify=? WHERE id=?',
-    str(b.name ?? c.user.name, 120).trim() || c.user.name, str(b.title ?? c.user.title, 120) || null, str(b.company ?? c.user.company, 120) || null,
-    seal('users.signature_png', b.signature_png === undefined ? c.user.signature_png : b.signature_png || null), seal('users.initials_png', b.initials_png === undefined ? c.user.initials_png : b.initials_png || null), notify, c.user.id);
+  run('UPDATE users SET name=?, title=?, company=?, notify=? WHERE id=?',
+    str(b.name ?? c.user.name, 120).trim() || c.user.name, str(b.title ?? c.user.title, 120) || null, str(b.company ?? c.user.company, 120) || null, notify, c.user.id);
+  // The saved signature and initials are written only when this request sends them. Written back as read, a value
+  // this server cannot open (a key missing after a restart) would be lost for good (colcrypt.ts openValue).
+  for (const k of ['signature_png', 'initials_png'] as const)
+    if (b[k] !== undefined) run(`UPDATE users SET ${k}=? WHERE id=?`, seal(`users.${k}`, b[k] || null), c.user.id);
   return { user: publicUser(get('SELECT * FROM users WHERE id=?', c.user.id), c) };
 });
 

@@ -8,7 +8,7 @@ export function EncryptionLine() {
   const [d] = useLoad<{ on: boolean; warning: string | null } | null>(() => api('/operator/encryption').catch(() => null));
   if (!d?.warning) return null;
   return (
-    <p className="notice small" role="status" data-feature="ds-db-encrypt">
+    <p className="notice warn small" role="status" data-feature="ds-db-encrypt">
       {d.on ? 'Encryption needs a look: ' : 'Encryption off: '}
       {d.warning}
     </p>
