@@ -43,7 +43,8 @@ import { HttpError, matchPattern } from '../../server/lib/http';
 import { mainOf } from '../../server/lib/googleAccounts';
 import * as repo from '../../server/lib/repo';
 import { TEMPLATE_VARIABLES } from '../../server/lib/templates';
-import { VOICE_OPTIONS } from '../../server/lib/voice';
+import { modelRequest, resetVoiceModelMemo, VOICE_OPTIONS } from '../../server/lib/voice';
+import { anthropicRequestProblem } from '../../server/lib/mocks';
 import { routes as adminRoutes } from '../../server/routes/admin';
 import type { AdminBooking, AdminBootstrap, AdminHost, AdminOverview, Booking, CallRecord, EventType, Host, HostGoogle, IntegrationsStatus, Job, SharedHoursCheck, SiteSettings } from '../../shared/types';
 import { apiRequest, cookiePair, makeTestCtx, TEST_BASE_URL, TEST_NOW, type TestCtx, type TestCtxOptions } from '../helpers/ctx';
@@ -595,6 +596,24 @@ describe('PUT /admin/site', () => {
     expect(site.assistant.callWindowStartHour).toBe(9);
     await s.ctx.settle();
     expect(s.ctx.logs.some((l) => l.level === 'error' && l.msg.includes('re-planning reminder calls'))).toBe(true);
+  });
+
+  it('stores the callback number in E.164, and refuses one without a country code or the Twilio number itself', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { twilio: { accountSid: `AC${'a'.repeat(32)}`, authToken: 'twilio-auth-token-secret-value-1', fromNumber: '+15005550006' } });
+    const { site } = await ok<{ site: SiteSettings }>(call(s, 'PUT', '/admin/site', { assistant: { callbackNumber: ' +1 (212) 555-0100 ' } }));
+    expect(site.assistant.callbackNumber).toBe('+12125550100');
+    for (const [value, message] of [
+      ['212 555 0100', 'Write the callback number with its country code, for example +14155550123.'],
+      ['+1 555', 'Write the callback number with its country code, for example +14155550123.'],
+      ['+1 500 555 0006', 'That is your Twilio number, which places the calls. Use a different number that people can call back on.'],
+    ]) {
+      expect(await fieldsOf(call(s, 'PUT', '/admin/site', { assistant: { callbackNumber: value } }))).toEqual({ 'assistant.callbackNumber': message });
+    }
+    expect((await repo.getSite(s.ctx)).assistant.callbackNumber).toBe('+12125550100');
+    // Emptied, it is gone (and reminder calls stop until a number is back).
+    const cleared = await ok<{ site: SiteSettings }>(call(s, 'PUT', '/admin/site', { assistant: { callbackNumber: '' } }));
+    expect(cleared.site.assistant.callbackNumber).toBe('');
   });
 });
 
@@ -1657,7 +1676,7 @@ describe('integrations', () => {
       baseUrl: TEST_BASE_URL,
       google: { configured: false, redirectUri: `${TEST_BASE_URL}/api/google/callback`, ownerConnected: false },
       twilio: { configured: false, calls: false },
-      anthropic: { configured: false, model: 'claude-opus-5-5' },
+      anthropic: { configured: false, model: 'claude-haiku-5-5' },
       email: { setting: 'auto', resolved: 'none', resendConfigured: false, gmailAvailable: false, fromEmail: '' },
       environment: {
         google: { clientId: false, clientSecret: false },
@@ -1870,6 +1889,16 @@ describe('integrations', () => {
       expect(text.get('From')).toBe('+15005550006');
       expect(text.get('Body')).toContain('texts are working');
 
+      // Without a callback number the test call says what is missing, and nothing rings.
+      const missing = await test(s, { channel: 'call', to: '+14155552671' });
+      expect(missing).toEqual({
+        ok: false,
+        detail:
+          'Reminder calls need a callback number first: every call ends by saying a number people can call back on, and it cannot be your Twilio number. Add it in Settings, under AI assistant.',
+      });
+      expect(calls).toHaveLength(1);
+      await ok(call(s, 'PUT', '/admin/site', { assistant: { callbackNumber: '+1 212 555 0100' } }));
+
       const rang = await test(s, { channel: 'call', to: '+14155552671' });
       expect(rang.ok).toBe(true);
       expect(rang.detail).toMatch(/^Calling \+14155552671 now\. Ava will say it is a test call/);
@@ -1916,7 +1945,18 @@ describe('integrations', () => {
 
     function claudeReply(extra: Record<string, unknown> = {}): Response {
       return Response.json(
-        { id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ready' }], stop_reason: 'end_turn', stop_sequence: null, stop_details: null, usage: { input_tokens: 20, output_tokens: 3 }, ...extra },
+        {
+          id: 'msg_test',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-haiku-5-5',
+          content: [{ type: 'text', text: '{"say":"ready","action":"continue"}' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          stop_details: null,
+          usage: { input_tokens: 20, output_tokens: 3 },
+          ...extra,
+        },
         { headers: { 'request-id': 'req_test' } },
       );
     }
@@ -1924,51 +1964,85 @@ describe('integrations', () => {
       return Response.json({ type: 'error', error: { type, message: 'details from the provider' } }, { status, headers: { 'request-id': 'req_test' } });
     }
 
-    it('sends one tiny message to Claude with the saved key and model', async () => {
+    /** Answers the way the Claude API does, turning down what it turns down (server/lib/mocks.ts anthropicRequestProblem). */
+    function strictClaude(c: NetCall, reply: () => Response = () => claudeReply()): Response {
+      const betas = (c.headers.get('anthropic-beta') ?? '').split(',').map((b) => b.trim()).filter(Boolean);
+      const problem = anthropicRequestProblem(JSON.parse(c.body), betas);
+      return problem ? Response.json({ type: 'error', error: { type: 'invalid_request_error', message: problem } }, { status: 400 }) : reply();
+    }
+
+    it('sends Claude one turn shaped exactly like a reminder call turn, with the saved key and model', async () => {
       const s = await signIn();
       await repo.saveSecrets(s.ctx, { anthropic: { apiKey: 'sk-ant-api03-very-secret-key-value' } });
-      const calls = useFetch(s.ctx, () => claudeReply());
+      const calls = useFetch(s.ctx, (c) => strictClaude(c));
       const result = await test(s, { channel: 'anthropic' });
-      expect(result).toEqual({ ok: true, detail: 'The key works. claude-opus-5-5 answered.' });
+      expect(result).toEqual({ ok: true, detail: 'The key works. claude-haiku-5-5 answered.' });
       expect(calls).toHaveLength(1);
       expect(calls[0].url.startsWith('https://api.anthropic.com/v1/messages')).toBe(true);
       expect(`${calls[0].headers.get('x-api-key') ?? ''} ${calls[0].headers.get('authorization') ?? ''}`).toContain('sk-ant-api03-very-secret-key-value');
-      expect(calls[0].headers.get('anthropic-beta')).toContain('server-side-fallback-2026-07-01');
+      // The call's own request (voice.ts modelRequest): Haiku with thinking off, no fallback, the structured reply.
+      expect(calls[0].headers.has('anthropic-beta')).toBe(false);
       const sent = JSON.parse(calls[0].body);
-      expect(sent.model).toBe('claude-opus-5-5');
-      expect(sent.output_config).toEqual({ effort: 'low' });
+      const callShape = modelRequest('claude-haiku-5-5', 'system', 'turn');
+      expect(sent.model).toBe('claude-haiku-5-5');
+      expect(sent.thinking).toEqual({ type: 'disabled' });
+      expect(sent.output_config).toEqual(callShape.output_config);
+      expect(sent.max_tokens).toBe(callShape.max_tokens);
+      expect(sent).not.toHaveProperty('fallbacks');
       expect(sent.messages).toHaveLength(1);
-      expect(sent.max_tokens).toBeLessThanOrEqual(1024);
       expect(result.detail).not.toContain('sk-ant');
 
-      // Another model, chosen under Integrations.
+      // Another model, chosen under Integrations: its own thinking setting, and the refusal fallback.
       await ok(call(s, 'PUT', '/admin/site', { assistant: { model: 'claude-sonnet-5-5' } }));
-      const second = useFetch(s.ctx, () => claudeReply({ model: 'claude-sonnet-5-5' }));
+      const second = useFetch(s.ctx, (c) => strictClaude(c, () => claudeReply({ model: 'claude-sonnet-5-5' })));
       expect((await test(s, { channel: 'anthropic' })).detail).toBe('The key works. claude-sonnet-5-5 answered.');
-      expect(JSON.parse(second[0].body).model).toBe('claude-sonnet-5-5');
+      expect(JSON.parse(second[0].body)).toMatchObject({ model: 'claude-sonnet-5-5', thinking: { type: 'between_tools' }, fallbacks: 'default' });
+      expect(second[0].headers.get('anthropic-beta')).toBe('server-side-fallback-2026-07-01');
+    });
+
+    it('fails when a call could not use the answer, and says when it would be too slow for a call', async () => {
+      const s = await signIn();
+      await repo.saveSecrets(s.ctx, { anthropic: { apiKey: 'sk-ant-api03-very-secret-key-value' } });
+      useFetch(s.ctx, () => claudeReply({ content: [{ type: 'text', text: 'ready' }] }));
+      expect(await test(s, { channel: 'anthropic' })).toEqual({
+        ok: false,
+        detail: 'claude-haiku-5-5 answered, but not in the form reminder calls need, so calls would use the simple script. Choose another model.',
+      });
+      useFetch(s.ctx, () => {
+        s.ctx.clock.advance(6200);
+        return claudeReply();
+      });
+      expect(await test(s, { channel: 'anthropic' })).toEqual({
+        ok: true,
+        detail: 'The key works, but claude-haiku-5-5 took 6.2 seconds. On a call a reply slower than 4.8 seconds gives way to the simple script.',
+      });
     });
 
     it('still passes when the account does not have the refusal fallback option', async () => {
       const s = await signIn();
       await repo.saveSecrets(s.ctx, { anthropic: { apiKey: 'sk-ant-api03-very-secret-key-value' } });
+      await ok(call(s, 'PUT', '/admin/site', { assistant: { model: 'claude-opus-5-5' } }));
+      resetVoiceModelMemo();
       const calls = useFetch(s.ctx, (c) => (c.headers.has('anthropic-beta') ? claudeError(400, 'invalid_request_error') : claudeReply()));
       expect((await test(s, { channel: 'anthropic' })).ok).toBe(true);
       expect(calls).toHaveLength(2);
       expect(JSON.parse(calls[0].body).fallbacks).toBe('default');
       expect(JSON.parse(calls[1].body).fallbacks).toBeUndefined();
       expect(calls[1].headers.has('anthropic-beta')).toBe(false);
-      // A request the API turns down either way is reported, not retried for ever.
+      // A request the API turns down either way is reported, not retried for ever. The option is already
+      // known to be missing for this model, as it would be on a call, so it is not tried again.
       const rejected = useFetch(s.ctx, () => claudeError(400, 'invalid_request_error'));
       const result = await test(s, { channel: 'anthropic' });
       expect(result.ok).toBe(false);
       expect(result.detail).toMatch(/turned the test down for claude-opus-5-5/);
-      expect(rejected).toHaveLength(2);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].headers.has('anthropic-beta')).toBe(false);
     });
 
     it.each([
       [401, 'authentication_error', /did not accept this key/],
-      [403, 'permission_error', /not allowed to use claude-opus-5-5/],
-      [404, 'not_found_error', /does not know the model "claude-opus-5-5"/],
+      [403, 'permission_error', /not allowed to use claude-haiku-5-5/],
+      [404, 'not_found_error', /does not know the model "claude-haiku-5-5"/],
       [429, 'rate_limit_error', /limiting this key/],
       [529, 'overloaded_error', /having trouble right now/],
     ])('explains a %i from Anthropic in plain words', async (status, type, message) => {
@@ -2144,7 +2218,7 @@ describe('GET /admin/overview', () => {
       twilio: { accountSid: `AC${'a'.repeat(32)}`, authToken: 'twilio-auth-token-secret-value-1', fromNumber: '+15005550006' },
       anthropic: { apiKey: 'sk-ant-api03-very-secret-key-value' },
     });
-    await ok(call(s, 'PUT', '/admin/site', { theme: { colors: { primary: '#123456' } } }));
+    await ok(call(s, 'PUT', '/admin/site', { theme: { colors: { primary: '#123456' } }, assistant: { callbackNumber: '+12125550100' } }));
     const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
     expect(done(o)).toEqual({ google: true, availability: true, event: true, email: true, sms: true, assistant: true, design: true });
     expect(keys(o)).toEqual([]);
@@ -2154,6 +2228,20 @@ describe('GET /admin/overview', () => {
     for (const et of await repo.listEventTypes(s.ctx)) await ok(call(s, 'PUT', `/admin/event-types/${et.id}`, { active: false }));
     const later = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
     expect(done(later)).toMatchObject({ availability: false, event: false });
+  });
+
+  it('says plainly when reminder calls are not placed for want of a callback number', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { twilio: { accountSid: `AC${'a'.repeat(32)}`, authToken: 'twilio-auth-token-secret-value-1', fromNumber: '+15005550006' } });
+    const callback = async () => (await ok<AdminOverview>(call(s, 'GET', '/admin/overview'))).warnings.find((w) => w.key === 'callback_missing');
+    const missing = await callback();
+    expect(missing).toMatchObject({ href: '/admin/settings#callback' });
+    expect(missing?.message).toMatch(/(has|have) reminder calls, but no callback number is set\. Every call has to end with a number people can call back on, so those calls are not placed\. Add one in Settings, under AI assistant\. Texts and emails still go out\.$/);
+    // The Twilio number cannot be saved as one, but a Twilio number changed later can make it the same.
+    await repo.updateSite(s.ctx, (site) => ({ ...site, assistant: { ...site.assistant, callbackNumber: '+15005550006' } }));
+    expect((await callback())?.message).toContain('the callback number is your Twilio number, which places the calls');
+    await ok(call(s, 'PUT', '/admin/site', { assistant: { callbackNumber: '+1 212 555 0100' } }));
+    expect(await callback()).toBeUndefined();
   });
 
   it('counts what is coming up and what happened in the last 30 days', async () => {

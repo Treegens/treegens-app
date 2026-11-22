@@ -1,5 +1,6 @@
 /**
- * The one-time setup of the short links on the live data (docs: README, "Short links").
+ * The one-time changes to the live data: the setup of the short links (docs: README, "Short links"), and
+ * at the end of the file the move of the voice assistant off the old default model.
  *
  *   jimicohen.com/meet  opens a meeting with the owner alone: the starter "Meeting" (renamed "Meeting with
  *                       Jimi" while it still has its starter title), or another solo meeting of theirs. The
@@ -20,11 +21,11 @@
  * hosts or hours; it renames only the untouched starter title.
  */
 import { ECO_CHAMPIONS_BRAND_ID, isBrandId } from '../../shared/brands';
-import { newEventType } from '../../shared/defaults';
+import { DEFAULT_ASSISTANT, newEventType } from '../../shared/defaults';
 import type { EventType, Host, ShortName, SiteSettings } from '../../shared/types';
 import { freeSlug } from './admin/event-types';
 import type { Ctx, KV } from './ctx';
-import { KEYS, listHosts, getSite, updateEventTypes, updateSite } from './repo';
+import { KEYS, getSecrets, listHosts, getSite, updateEventTypes, updateSite } from './repo';
 import { firstName } from './templates';
 
 export const MOVE_MARKER = `${KEYS.migrationPrefix}short-links-v1`;
@@ -228,4 +229,41 @@ export async function runShortLinkMove(ctx: Ctx, opts?: { readMarker?: boolean }
   DONE.add(ctx.kv);
   ctx.log('info', 'short links: one-time setup done', plan.report);
   return plan.report;
+}
+
+// ───────────────────────── the voice assistant's model ─────────────────────────
+
+export const MODEL_MOVE_MARKER = `${KEYS.migrationPrefix}assistant-model-v1`;
+/** The default model before Claude Haiku 5.5 with thinking off took over (server/lib/voice.ts DEFAULT_MODEL). */
+export const OLD_DEFAULT_MODEL = 'claude-opus-5-5';
+
+const MODEL_DONE = new WeakSet<KV>();
+
+/**
+ * Moves the voice assistant off the old default model, once. A site that says "claude-opus-5-5" while no
+ * Anthropic key was ever saved (none in the dashboard, and no real one in the environment: getSecrets applies
+ * the environment rule in runtime.ts) only says so because that was the default, so it gets the new default.
+ * With a key saved the owner may have chosen it, and it stays. Run and guarded like the short link setup above:
+ * the deploy's scheduled function and POST /dev/one-time-moves, a compare-and-swap, the marker written last.
+ */
+export async function runAssistantModelMove(ctx: Ctx, opts?: { readMarker?: boolean }): Promise<'moved' | 'kept' | 'already_done'> {
+  if (!opts?.readMarker && MODEL_DONE.has(ctx.kv)) return 'already_done';
+  if (await ctx.kv.getJSON(MODEL_MOVE_MARKER)) {
+    MODEL_DONE.add(ctx.kv);
+    return 'already_done';
+  }
+  const keySaved = !!(await getSecrets(ctx)).anthropic?.apiKey?.trim();
+  let moved = false;
+  // Read first, so a site that has nothing to change is not written to.
+  if (!keySaved && (await getSite(ctx)).assistant?.model === OLD_DEFAULT_MODEL) {
+    await updateSite(ctx, (fresh) => {
+      moved = fresh.assistant?.model === OLD_DEFAULT_MODEL;
+      return moved ? { ...fresh, assistant: { ...fresh.assistant, model: DEFAULT_ASSISTANT.model } } : fresh;
+    });
+  }
+  const result = moved ? 'moved' : 'kept';
+  await ctx.kv.setJSON(MODEL_MOVE_MARKER, { at: ctx.now().toISOString(), result, keySaved }, { onlyIfNew: true });
+  MODEL_DONE.add(ctx.kv);
+  ctx.log('info', 'assistant model: one-time move done', { result, keySaved });
+  return result;
 }

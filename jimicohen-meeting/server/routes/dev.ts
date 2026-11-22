@@ -10,7 +10,7 @@
  *   POST   /dev/clock      { now: ISO } freezes time, { now: null } returns to real time,
  *                          { advanceMs: n } moves on from the current (fake or real) time
  *   POST   /dev/run-jobs   what the cron function does            → result of runScheduled
- *   POST   /dev/one-time-moves  the one-time setup of the short links (server/lib/seed.ts) → { shortLinks }
+ *   POST   /dev/one-time-moves  the one-time changes to stored data (server/lib/seed.ts) → { shortLinks, assistantModel }
  *
  * Controls for the provider mocks (server/lib/mocks.ts) and direct views for end-to-end tests:
  *
@@ -41,7 +41,7 @@ import { manageToken } from '../lib/booking';
 import type { Ctx, KV } from '../lib/ctx';
 import { HttpError, json, readJson, route, type Route } from '../lib/http';
 import { KEYS, getBookingIndex, getBookings, listJobs } from '../lib/repo';
-import { runShortLinkMove } from '../lib/seed';
+import { runAssistantModelMove, runShortLinkMove } from '../lib/seed';
 
 export const DEV_CLOCK_KEY = 'dev/clock';
 export const DEV_OUTBOX_KEY = 'dev/outbox';
@@ -366,7 +366,7 @@ export const routes: Route[] = [
   // run-jobs above never runs them, so the suites that do not ask for them never see them.
   route('POST', '/dev/one-time-moves', async ({ ctx }) => {
     assertDev(ctx);
-    return json({ shortLinks: await runShortLinkMove(ctx, { readMarker: true }) });
+    return json({ shortLinks: await runShortLinkMove(ctx, { readMarker: true }), assistantModel: await runAssistantModelMove(ctx, { readMarker: true }) });
   }),
 
   // ───────────── mock Google ─────────────

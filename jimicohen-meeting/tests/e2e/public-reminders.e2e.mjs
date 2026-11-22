@@ -7,7 +7,7 @@
  * needs a second yes, voicemail, a call that would ring at night (it rings earlier instead), and a "C" sent by text.
  */
 import { defineSuite } from './lib.mjs';
-import { HOUR, MINUTE, OWNER_GOOGLE, PHONE, jobLines, plus, prepare } from './public-helpers.mjs';
+import { HOUR, MINUTE, OWNER_GOOGLE, PHONE, REACH, jobLines, plus, prepare } from './public-helpers.mjs';
 
 const NEW_YORK = 'America/New_York';
 const ADA = { name: 'Ada Lovelace', email: 'ada@example.com' };
@@ -112,7 +112,7 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
     await s.step('Twilio connects: the greeting says who is calling, that it is an AI, and the time in her zone', async () => {
       const start = await s.voice(call, 'start');
       s.expect(start.status, 'start webhook').toBe(200);
-      s.expect(start.said, 'greeting').toBe('Hi Ada, this is Ava, an AI assistant calling for Jimi. A quick reminder about your Intro call today at 11:00 AM your time. Are you still able to make it?');
+      s.expect(start.said, 'greeting').toBe('Hi Ada, this is Ava, an AI assistant calling for Jimi Cohen. A quick reminder about your Intro call today at 11:00 AM your time. Are you still able to make it?');
       s.expect(start.listens, 'waits for an answer').toBe(true);
       s.expect(start.xml, 'gathers speech and keys, and posts the answer to our turn webhook').toContain(`<Gather input="speech dtmf" action="${s.url('/api/twilio/voice/turn')}?c=${call.callId}" method="POST"`);
       // A request that does not carry Twilio's signature is turned away.
@@ -120,15 +120,15 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       s.expect(forged.status, 'forged webhook').toBe(403);
     });
 
-    await s.step('she says yes: attendance is confirmed and the assistant says goodbye', async () => {
+    await s.step('she says yes: attendance is confirmed, and the assistant gives the callback number, says goodbye and hangs up', async () => {
       const turn = await s.voice(call, 'turn', { SpeechResult: 'Yes, I will be there.', Confidence: '0.93' });
       s.expect(turn.status, 'turn webhook').toBe(200);
-      s.expect(turn.said, 'answer').toMatch(/noted|see you|great|wonderful|thank/i);
+      s.expect(turn.said, 'answer').toBe(`Wonderful, I have noted that you will be there. ${REACH} Goodbye.`);
+      s.expect(turn.hangsUp, 'hangs up: nobody is kept on the line for "anything else?"').toBe(true);
       const [model] = await s.outbox({ kind: 'llm' });
-      s.expect(model, 'model call').toMatchObject({ service: 'anthropic', status: 200, model: 'claude-opus-5-5', caller: 'Yes, I will be there.', reply: { action: 'confirm_attendance' } });
+      // The default model: Claude Haiku 5.5 with thinking off, and no refusal fallback (it has none).
+      s.expect(model, 'model call').toMatchObject({ service: 'anthropic', status: 200, model: 'claude-haiku-5-5', thinking: { type: 'disabled' }, betas: [], caller: 'Yes, I will be there.', reply: { action: 'confirm_attendance' } });
       s.expect((await stored(s)).attendance, 'attendance').toMatchObject({ confirmedAt: T.call, confirmedVia: 'call' });
-      // Whether the assistant hung up itself or she did: Twilio reports the end of the call.
-      if (!turn.hangsUp) await s.voice(call, 'turn', { SpeechResult: 'No, that is all. Goodbye.' });
       const status = await s.voice(call, 'status', { CallStatus: 'completed', CallDuration: '24' });
       s.expect(status.status, 'status webhook').toBeLessThan(300);
       await s.settle();
@@ -285,7 +285,7 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
 
     await s.step('"Yes": now it is cancelled, by the assistant on her behalf', async () => {
       const turn = await s.voice(call, 'turn', { SpeechResult: 'Yes.' });
-      s.expect(turn.said, 'answer').toBe('All right, your meeting is cancelled. Thank you, and take care. Goodbye.');
+      s.expect(turn.said, 'answer').toBe(`All right, your meeting is cancelled. Thank you, and take care. ${REACH} Goodbye.`);
       s.expect(turn.hangsUp, 'hangs up').toBe(true);
       await s.voice(call, 'status', { CallStatus: 'completed', CallDuration: '40' });
       await s.settle();
@@ -367,7 +367,8 @@ export default defineSuite('public-reminders', { mockCreds: true }, async (t) =>
       const updates = await s.outbox({ kind: 'call_update' });
       s.expect(updates, 'updates of the live call').toHaveLength(1);
       s.expect(updates[0], 'update').toMatchObject({ service: 'twilio', sid: call.sid, status: 200 });
-      s.expect(updates[0].text, 'voicemail message').toMatch(/^Hi Ada, this is Ava, an AI assistant calling for Jimi/);
+      s.expect(updates[0].text, 'voicemail message').toMatch(/^Hi Ada, this is Ava, an AI assistant calling for Jimi Cohen\./);
+      s.expect(updates[0].text, 'voicemail message').toMatch(new RegExp(`${REACH.replace(/[.,]/g, '\\$&')} Goodbye\\.$`));
       s.expect(updates[0].text, 'voicemail message').toContain('Intro call');
       s.expect(updates[0].text, 'voicemail message').toContain('11:00 AM');
       s.expect(updates[0].twiml, 'hangs up after the message').toContain('<Hangup/>');

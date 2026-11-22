@@ -166,6 +166,7 @@ const SKIP_REASONS: Record<string, string> = {
   invalid_recipient: 'the address is not valid',
   email_not_configured: 'email sending is not set up yet',
   outside_call_window: 'it was outside calling hours',
+  no_callback_number: 'no callback number is set for reminder calls (Settings, AI assistant)',
   no_call_time: 'there is no time inside calling hours before the meeting',
   daily_limit: 'the daily limit of texts or calls was reached',
   host_notifications_off: 'the host has these notifications switched off',

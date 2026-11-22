@@ -39,12 +39,14 @@ import {
   whenPhrase,
   withinCallWindow,
   callTranscript,
+  closingLine,
   type Move,
   type StoredCall,
 } from '../../server/lib/voice';
 import { hostMap, toAdminBooking, withCallTranscripts } from '../../server/lib/admin/view';
 import type { Env } from '../../server/lib/ctx';
 import { makeTestCtx, type TestCtx } from '../helpers/ctx';
+import { anthropicRequestProblem } from '../../server/lib/mocks';
 
 const confirm = vi.mocked(confirmAttendance);
 const cancel = vi.mocked(cancelBooking);
@@ -60,6 +62,9 @@ const INTERNAL_API = 'https://jimicohen-meeting.netlify.app/meeting/api';
 /** 1:30 PM in New York on the day of the meeting, which starts at 3:30 PM there. */
 const NOW = '2026-11-17T18:30:00.000Z';
 const WINDOW: AssistantSettings = { ...DEFAULT_ASSISTANT, callWindowStartHour: 8, callWindowEndHour: 21 };
+/** The number every call gives for calling back, and how it is read to someone with a US number. */
+const CALLBACK = '+12125550100';
+const REACH = 'To reach Jimi, call 2 1 2, 5 5 5, 0 1 0 0.';
 
 function makeBooking(id: string, patch: Partial<Booking> = {}): Booking {
   return {
@@ -135,6 +140,10 @@ function network() {
     if (url.startsWith('https://api.anthropic.com/')) {
       const call: ClaudeCall = { url, headers: new Headers(init.headers), body: JSON.parse(String(init.body)), signal: init.signal ?? null };
       claude.push(call);
+      // What the real API turns down (a thinking setting the model does not take, say) is turned down here too.
+      const betas = (call.headers.get('anthropic-beta') ?? '').split(',').map((b) => b.trim()).filter(Boolean);
+      const problem = anthropicRequestProblem(call.body, betas);
+      if (problem) return Response.json({ type: 'error', error: { type: 'invalid_request_error', message: problem } }, { status: 400 });
       return claudeRespond(call);
     }
     throw new Error(`Unexpected network call in a test: ${url}`);
@@ -155,7 +164,7 @@ function network() {
 type Net = ReturnType<typeof network>;
 
 async function setup(
-  opts: { anthropic?: boolean; booking?: Partial<Booking>; now?: string; twilio?: Record<string, string>; env?: Partial<Env> } = {},
+  opts: { anthropic?: boolean; booking?: Partial<Booking>; now?: string; twilio?: Record<string, string>; env?: Partial<Env>; callback?: string } = {},
 ): Promise<{ ctx: TestCtx; net: Net; booking: Booking }> {
   const net = network();
   const ctx = makeTestCtx({ now: opts.now ?? NOW, fetch: net.impl, env: opts.env });
@@ -163,6 +172,8 @@ async function setup(
     twilio: { accountSid: SID, authToken: TOKEN, fromNumber: '+15005550006', ...opts.twilio },
     ...(opts.anthropic ? { anthropic: { apiKey: 'sk-ant-test-key' } } : {}),
   });
+  const site = await getSite(ctx);
+  await saveSite(ctx, { ...site, assistant: { ...site.assistant, callbackNumber: opts.callback ?? CALLBACK } });
   const booking = await saveBooking(ctx, makeBooking('bk_1', opts.booking));
   return { ctx, net, booking };
 }
@@ -312,6 +323,27 @@ describe('speakable', () => {
   });
 });
 
+describe('closingLine (every call ends with the callback number, then goodbye)', () => {
+  it.each([
+    ['Wonderful, see you then. Is there anything else?', 'Wonderful, see you then.'],
+    ['Thank you, and goodbye.', 'Thank you.'],
+    ['All right, your meeting is cancelled. Goodbye, Sam.', 'All right, your meeting is cancelled.'],
+    ['Take care. Bye!', 'Take care.'],
+    ['Anything else? Goodbye.', ''],
+    ['You are confirmed', 'You are confirmed.'],
+    ['Have a great day', 'Have a great day.'],
+  ])('"%s"', (line, body) => {
+    expect(closingLine(line, REACH)).toBe(`${body ? `${body} ` : ''}${REACH} Goodbye.`);
+  });
+
+  it('adds the number once, whatever it is given', () => {
+    const once = closingLine('Okay, you are confirmed. Goodbye.', REACH);
+    expect(closingLine(once, REACH)).toBe(once);
+    expect(closingLine(`Okay. ${REACH} Is there anything else? Goodbye.`, REACH)).toBe(once.replace('Okay, you are confirmed.', 'Okay.'));
+    expect(closingLine('', REACH)).toBe(`${REACH} Goodbye.`);
+  });
+});
+
 describe('whenPhrase', () => {
   const start = Date.parse('2026-11-17T20:30:00Z');
 
@@ -339,18 +371,21 @@ describe('the spoken script', () => {
   async function script(patch: Partial<Booking> = {}, purpose: 'reminder' | 'test' = 'reminder') {
     const ctx = makeTestCtx({ now: NOW });
     const [site, hosts] = [await getSite(ctx), await listHosts(ctx)];
-    return buildCallScript({ booking: makeBooking('bk_1', patch), site, hosts, purpose });
+    return buildCallScript({ booking: makeBooking('bk_1', patch), site, hosts, purpose, callbackNumber: CALLBACK });
   }
 
-  it('opens by saying who is calling, that it is an AI assistant, and why', async () => {
+  it('opens by saying who is calling, that it is an AI assistant, who is responsible in full, and why', async () => {
     const p = callPhrases(await script(), Date.parse(NOW));
     expect(p.greeting).toBe(
-      'Hi Sam, this is Ava, an AI assistant calling for Jimi. A quick reminder about your Intro call today at 3:30 PM your time. Are you still able to make it?',
+      'Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen. A quick reminder about your Intro call today at 3:30 PM your time. Are you still able to make it?',
     );
     const firstSentence = p.greeting.split('. ')[0];
     expect(firstSentence).toContain('this is Ava');
     expect(firstSentence).toContain('an AI assistant');
-    expect(firstSentence).toContain('calling for Jimi');
+    expect(firstSentence).toContain('calling for Jimi Cohen');
+    // Every line that introduces the assistant names the host in full.
+    for (const line of [p.greetingConfirmed, p.reintroduce, p.changed, p.voicemail]) expect(line).toContain('an AI assistant calling for Jimi Cohen.');
+    expect(p.identity).toContain('I am Ava, an AI assistant calling for Jimi Cohen.');
   });
 
   it('keeps every line short, free of long dashes, and discloses the AI wherever it introduces itself', async () => {
@@ -365,12 +400,12 @@ describe('the spoken script', () => {
     }
   });
 
-  it('keeps the voicemail under 20 seconds and says how to reschedule', async () => {
+  it('keeps the voicemail short, says how to reschedule and how to call back', async () => {
     const usual = callPhrases(await script(), Date.parse('2026-11-14T15:00:00Z'));
     expect(usual.voicemail).toBe(
-      'Hi Sam, this is Ava, an AI assistant calling for Jimi. A reminder: your Intro call is on Tuesday, November 17th at 3:30 PM your time. To change it, use the link I am texting you now. Goodbye.',
+      'Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen. A reminder: your Intro call is on Tuesday, November 17th at 3:30 PM your time. To change it, use the link I am texting you now. To reach Jimi, call 2 1 2, 5 5 5, 0 1 0 0. Goodbye.',
     );
-    expect(estimateSpeechSeconds(usual.voicemail)).toBeLessThan(17);
+    expect(estimateSpeechSeconds(usual.voicemail)).toBeLessThan(23);
 
     const byEmail = callPhrases(await script({ consent: { sms: false, call: true, at: NOW, text: 'ok' } }), Date.parse(NOW));
     expect(byEmail.voicemail).toContain('use the link I am emailing you now');
@@ -378,7 +413,7 @@ describe('the spoken script', () => {
     expect(onTest.voicemail).toContain('use the link in your confirmation email');
   });
 
-  it('keeps the voicemail under 20 seconds even with the longest names it can be given', async () => {
+  it('keeps the voicemail under 25 seconds even with the longest names it can be given', async () => {
     const ctx = makeTestCtx({ now: NOW });
     const site = await getSite(ctx);
     const owner = (await listHosts(ctx))[0];
@@ -396,14 +431,18 @@ describe('the spoken script', () => {
       site: { ...site, assistant: { ...site.assistant, name: 'Miss Penelope Featherington the Third' } },
       hosts,
       purpose: 'reminder',
+      // The longest way a number is read: abroad, with the country code.
+      callbackNumber: '+442079460958',
     });
     const line = callPhrases(worst, Date.parse('2026-09-20T15:00:00Z')).voicemail;
     expect(line).toBe(
-      'Hi Maximiliano-Alexander, this is Miss, an AI assistant calling for Bartholomew-Christopher. A reminder: your meeting is on Wednesday, September 30th at 11:30 AM your time. To change it, use the link I am texting you now. Goodbye.',
+      'Hi Maximiliano-Alexander, this is Miss, an AI assistant calling for Bartholomew-Christopher Featherstonehaugh. A reminder: your meeting is on Wednesday, September 30th at 11:30 AM your time. To change it, use the link I am texting you now. To reach Bartholomew-Christopher, call plus 4 4, 2 0, 7 9 4 6, 0 9 5 8. Goodbye.',
     );
-    expect(estimateSpeechSeconds(line)).toBeLessThan(20);
+    expect(estimateSpeechSeconds(line)).toBeLessThan(25);
     // The live greeting keeps the full names.
-    expect(callPhrases(worst, Date.parse('2026-09-20T15:00:00Z')).greeting).toContain('this is Miss Penelope Featherington the Third, an AI assistant calling for Bartholomew-Christopher and Maximilienne-Josephine.');
+    expect(callPhrases(worst, Date.parse('2026-09-20T15:00:00Z')).greeting).toContain(
+      'this is Miss Penelope Featherington the Third, an AI assistant calling for Bartholomew-Christopher Featherstonehaugh and Maximilienne-Josephine Vandersloot.',
+    );
   });
 
   it('says "meeting" instead of a title too long to say comfortably', async () => {
@@ -425,10 +464,11 @@ describe('the spoken script', () => {
     expect(three.hostFirstNames).toBe('Jimi, Alex and Kim');
     expect(three.hostNames).toBe('Jimi Cohen, Alex Rivera and Kim Lee');
     const lines = callPhrases(three, Date.parse(NOW));
-    expect(lines.greeting).toContain('an AI assistant calling for Jimi, Alex and Kim.');
+    // Who is responsible, in full, in the first sentence; first names afterwards.
+    expect(lines.greeting).toContain('an AI assistant calling for Jimi Cohen, Alex Rivera and Kim Lee.');
     expect(lines.repeat).toContain('with Jimi, Alex and Kim,');
     expect(lines.cancelled).toContain('I will let Jimi, Alex and Kim know.');
-    expect(lines.voicemail).toContain('calling for Jimi, Alex and Kim.');
+    expect(lines.voicemail).toContain('calling for Jimi Cohen, Alex Rivera and Kim Lee.');
     // A round robin booking carries only the host it went to.
     const robin = buildCallScript({ booking: makeBooking('b', { kind: 'round_robin', hostIds: ['host_kim'] }), site, hosts: [owner, alex, kim], purpose: 'reminder' });
     expect(robin.hostFirstNames).toBe('Kim');
@@ -438,8 +478,9 @@ describe('the spoken script', () => {
       { ...alex, name: 'Maximilienne Vandersloot' },
       { ...kim, name: 'Christopher Abernathy' },
     ];
-    const crowd = buildCallScript({ booking: makeBooking('b', { hostIds: ['host_owner', 'host_alex', 'host_kim'] }), site, hosts: long, purpose: 'reminder' });
-    expect(callPhrases(crowd, Date.parse(NOW)).voicemail).toContain('an AI assistant calling for Bartholomew. A reminder');
+    const crowd = buildCallScript({ booking: makeBooking('b', { hostIds: ['host_owner', 'host_alex', 'host_kim'] }), site, hosts: long, purpose: 'reminder', callbackNumber: CALLBACK });
+    expect(callPhrases(crowd, Date.parse(NOW)).voicemail).toContain('an AI assistant calling for Bartholomew Featherstonehaugh. A reminder');
+    expect(callPhrases(crowd, Date.parse(NOW)).voicemail).toContain('To reach Bartholomew, call 2 1 2, 5 5 5, 0 1 0 0. Goodbye.');
   });
 
   it('chooses how the link travels from the consent given', async () => {
@@ -456,7 +497,7 @@ describe('the spoken script', () => {
     const s = buildCallScript({ booking: makeBooking('b'), site: odd, hosts, purpose: 'reminder' });
     expect(s.voice).toBe(DEFAULT_ASSISTANT.voice);
     expect(s.language).toBe('en-US');
-    expect(s.model).toBe('claude-opus-5-5');
+    expect(s.model).toBe('claude-haiku-5-5');
     expect(s.assistantName).toBe('Ava');
   });
 });
@@ -579,6 +620,13 @@ describe('enforceMove (the server has the last word)', () => {
     expect(enforceMove(model('end_call', 'Bye.'), { pendingCancel: false, speech: 'bye', digit: '' }, p).hangup).toBe(true);
     const talk = model('continue', 'It is at 3:30 PM.');
     expect(enforceMove(talk, { pendingCancel: false, speech: 'when', digit: '' }, p)).toEqual(talk);
+  });
+
+  it('ends the call after a decision, whatever the move says, for the model and the script alike', () => {
+    for (const action of ['confirm_attendance', 'send_manage_link'] as const) {
+      expect(enforceMove(model(action, 'Done. Anything else?'), { pendingCancel: false, speech: 'yes', digit: '' }, p).hangup, action).toBe(true);
+      expect(enforceMove({ ...model(action, 'Done.'), brain: 'script' }, { pendingCancel: false, speech: '', digit: '1' }, p).hangup, action).toBe(true);
+    }
   });
 
   it('gives the scripted flow the same guard', () => {
@@ -763,13 +811,48 @@ describe('startReminderCall', () => {
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
 
+  it.each([
+    ['no callback number', ''],
+    ['the Twilio number as the callback number', '+1 500 555 0006'],
+  ])('places no call, reminder or test, with %s', async (_name, callback) => {
+    const { ctx, net, booking } = await setup({ callback });
+    expect(await startReminderCall(ctx, { booking, purpose: 'reminder' })).toEqual({ ok: false, provider: 'none', skipped: 'no_callback_number' });
+    expect(await startReminderCall(ctx, { booking, purpose: 'test', to: '+14155552671' })).toEqual({ ok: false, provider: 'none', skipped: 'no_callback_number' });
+    expect(net.twilio).toHaveLength(0);
+    // Nothing was counted against today's limits either: once a number is set, the call goes out.
+    const site = await getSite(ctx);
+    await saveSite(ctx, { ...site, assistant: { ...site.assistant, callbackNumber: CALLBACK } });
+    expect(await startReminderCall(ctx, { booking, purpose: 'reminder' })).toMatchObject({ ok: true });
+  });
+
+  it('reads the callback number with the country code to someone abroad', async () => {
+    const { start, ctx, callId } = await answered({
+      now: '2026-11-17T11:00:00.000Z',
+      booking: { start: '2026-11-18T06:30:00.000Z', end: '2026-11-18T07:00:00.000Z', invitee: { name: 'Wanjiru Kamau', email: 'w@example.com', phone: '+254712345678', timezone: 'Africa/Nairobi' } },
+    });
+    expect(listens(start.xml)).toBe(true);
+    const { xml } = await hook(ctx, 'turn', callId, { Digits: '1' });
+    expect(said(xml)).toContain('To reach Jimi, call plus 1, 2 1 2, 5 5 5, 0 1 0 0. Goodbye.');
+  });
+
+  it('gives the same callback number on a brand call, for the brand', async () => {
+    const env = await setup({ booking: { brandId: 'brand_eco_champions' } });
+    const site = await getSite(env.ctx);
+    await saveSite(env.ctx, { ...site, brands: [{ id: 'brand_eco_champions', theme: site.theme, emailFromName: 'Eco Champions', updatedAt: NOW }] });
+    const { callId } = await ring(env.ctx, env.net, env.booking);
+    const start = await hook(env.ctx, 'start', callId);
+    expect(said(start.xml)).toMatch(/^Hi Sam, this is Ava, an AI assistant calling for Eco Champions\./);
+    const { xml } = await hook(env.ctx, 'turn', callId, { Digits: '1' });
+    expect(said(xml)).toContain('To reach Eco Champions, call 2 1 2, 5 5 5, 0 1 0 0. Goodbye.');
+  });
+
   it('places a test call to any number, at any hour, without consent, and changes nothing', async () => {
     const { ctx, net, booking } = await setup({ now: '2026-11-17T08:00:00.000Z', booking: { consent: { sms: false, call: false, at: NOW, text: '' } } });
     const { callId, params } = await ring(ctx, net, booking, 'test', '+254 712 345 678');
     expect(params.get('To')).toBe('+254712345678');
     const start = await hook(ctx, 'start', callId);
     expect(said(start.xml)).toContain('This is a test call, so nothing will be changed.');
-    expect(said(start.xml).split('. ')[0]).toBe('Hi Sam, this is Ava, an AI assistant calling for Jimi');
+    expect(said(start.xml).split('. ')[0]).toBe('Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen');
 
     expect(hangsUp((await hook(ctx, 'turn', callId, { Digits: '1' })).xml)).toBe(true);
     await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '20' });
@@ -787,6 +870,8 @@ describe('startReminderCall', () => {
       env: { mockProviders: true, publicBaseUrl: 'http://localhost:8788/meeting', overrides: { twilioAccountSid: SID, twilioAuthToken: TOKEN, twilioFromNumber: '+15005550006' } },
     });
     const booking = await saveBooking(ctx, makeBooking('bk_1'));
+    const site = await getSite(ctx);
+    await saveSite(ctx, { ...site, assistant: { ...site.assistant, callbackNumber: CALLBACK } });
     const result = await startReminderCall(ctx, { booking, purpose: 'reminder' });
     expect(result).toMatchObject({ ok: true, provider: 'mock' });
     const callId = new URL(net.twilio[0].params.get('Url')!).searchParams.get('c')!;
@@ -852,7 +937,7 @@ describe('start', () => {
     // A beat of silence first, so a "Hello?" at pickup does not talk over the greeting.
     expect(start.xml).toContain('<Response><Pause length="1"/><Gather ');
     expect(said(start.xml)).toBe(
-      'Hi Sam, this is Ava, an AI assistant calling for Jimi. A quick reminder about your Intro call today at 3:30 PM your time. Are you still able to make it?',
+      'Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen. A quick reminder about your Intro call today at 3:30 PM your time. Are you still able to make it?',
     );
     const call = await record(ctx, callId);
     expect(call.status).toBe('in_progress');
@@ -916,7 +1001,7 @@ describe('start', () => {
     const { xml } = await hook(ctx, 'start', callId);
     expect(listens(xml)).toBe(false);
     expect(hangsUp(xml)).toBe(true);
-    expect(said(xml)).toBe('Hi Sam, this is Ava, an AI assistant calling for Jimi. It looks like this meeting was just changed, so there is nothing you need to do. Goodbye.');
+    expect(said(xml)).toBe(`Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen. It looks like this meeting was just changed, so there is nothing you need to do. ${REACH} Goodbye.`);
   });
 });
 
@@ -929,7 +1014,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     const { xml } = await hook(ctx, 'turn', callId, form);
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(confirm).toHaveBeenCalledWith(ctx, 'bk_1', 'call');
-    expect(said(xml)).toBe('Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you, and goodbye.');
+    expect(said(xml)).toBe(`Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you. ${REACH} Goodbye.`);
     expect(hangsUp(xml)).toBe(true);
     expect(listens(xml)).toBe(false);
     const call = await record(ctx, callId);
@@ -943,7 +1028,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     const { xml } = await hook(ctx, 'turn', callId, { Digits: '2' });
     expect(enqueue).toHaveBeenCalledTimes(1);
     expect(enqueue.mock.calls[0][1]).toEqual({ type: 'message', bookingId: 'bk_1', dueAt: NOW, channel: 'sms', audience: 'invitee', kind: 'manage_link' });
-    expect(said(xml)).toBe('No problem. I am texting you a link now so you can pick a new time. Your meeting stays as it is until you choose one. Goodbye.');
+    expect(said(xml)).toBe(`No problem. I am texting you a link now so you can pick a new time. Your meeting stays as it is until you choose one. ${REACH} Goodbye.`);
     expect(hangsUp(xml)).toBe(true);
     await ctx.settle();
     expect(runJobs).toHaveBeenCalledWith(ctx, { onlyBookingId: 'bk_1', budgetMs: 8000 });
@@ -972,7 +1057,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(cancel.mock.calls[0][1]).toBe('bk_1');
     expect(cancel.mock.calls[0][2]).toEqual({ by: 'assistant' });
-    expect(said(second.xml)).toBe('Okay, your Intro call is cancelled, and I will let Jimi know. Goodbye.');
+    expect(said(second.xml)).toBe(`Okay, your Intro call is cancelled, and I will let Jimi know. ${REACH} Goodbye.`);
     expect(hangsUp(second.xml)).toBe(true);
     const call = await record(ctx, callId);
     expect(call).toMatchObject({ outcome: 'cancelled', pendingCancel: false, ended: true });
@@ -995,7 +1080,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     await hook(ctx, 'turn', callId, { SpeechResult: 'Cancel it please' });
     const { xml } = await hook(ctx, 'turn', callId, form);
     expect(cancel).not.toHaveBeenCalled();
-    expect(said(xml)).toBe('No problem. Your meeting stays as planned, today at 3:30 PM. Goodbye.');
+    expect(said(xml)).toBe(`No problem. Your meeting stays as planned, today at 3:30 PM. ${REACH} Goodbye.`);
     expect(hangsUp(xml)).toBe(true);
     expect((await record(ctx, callId)).pendingCancel).toBe(false);
   });
@@ -1029,10 +1114,10 @@ describe('the scripted conversation (no Anthropic key)', () => {
   it('says it is an AI when asked, and introduces itself again to a bare hello', async () => {
     const { ctx, callId } = await answered();
     const who = await hook(ctx, 'turn', callId, { SpeechResult: 'Wait, is this a real person?' });
-    expect(said(who.xml)).toContain('I am Ava, an AI assistant calling for Jimi.');
+    expect(said(who.xml)).toContain('I am Ava, an AI assistant calling for Jimi Cohen.');
     expect(listens(who.xml)).toBe(true);
     const hello = await hook(ctx, 'turn', callId, { SpeechResult: 'Hello?' });
-    expect(said(hello.xml)).toContain('Hi Sam, this is Ava, an AI assistant calling for Jimi.');
+    expect(said(hello.xml)).toContain('Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen.');
     expect(listens(hello.xml)).toBe(true);
   });
 
@@ -1045,7 +1130,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     const second = await hook(ctx, 'turn', callId, { SpeechResult: '   ' });
     expect(hangsUp(second.xml)).toBe(true);
     expect(listens(second.xml)).toBe(false);
-    expect(said(second.xml)).toBe('I am not hearing anything, so I will let you go. Your meeting is still on, today at 3:30 PM. Goodbye.');
+    expect(said(second.xml)).toBe(`I am not hearing anything, so I will let you go. Your meeting is still on, today at 3:30 PM. ${REACH} Goodbye.`);
     const call = await record(ctx, callId);
     expect(call.ended).toBe(true);
     expect(call.turns.filter((t) => t.role === 'caller')).toHaveLength(0);
@@ -1072,7 +1157,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     const last = await hook(ctx, 'turn', callId, { SpeechResult: 'purple monkey again' });
     expect(listens(last.xml)).toBe(false);
     expect(hangsUp(last.xml)).toBe(true);
-    expect(said(last.xml)).toBe('I should let you go now. If you want to change anything, use the link in your confirmation email. Goodbye.');
+    expect(said(last.xml)).toBe(`I should let you go now. If you want to change anything, use the link in your confirmation email. ${REACH} Goodbye.`);
     expect((await record(ctx, callId)).turns.filter((t) => t.role === 'caller')).toHaveLength(MAX_CALLER_TURNS);
   });
 
@@ -1082,7 +1167,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     const last = await hook(ctx, 'turn', callId, { SpeechResult: 'cancel my meeting' });
     expect(cancel).not.toHaveBeenCalled();
     expect(hangsUp(last.xml)).toBe(true);
-    expect(said(last.xml)).toBe('I have not cancelled anything. I am texting you a link now so you can cancel or reschedule yourself. Goodbye.');
+    expect(said(last.xml)).toBe(`I have not cancelled anything. I am texting you a link now so you can cancel or reschedule yourself. ${REACH} Goodbye.`);
     expect(jobsOfKind('manage_link')).toHaveLength(1);
     expect((await record(ctx, callId)).pendingCancel).toBe(false);
   });
@@ -1090,7 +1175,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
   it('honours "stop calling me": calls are switched off for this booking', async () => {
     const { ctx, callId } = await answered();
     const { xml } = await hook(ctx, 'turn', callId, { SpeechResult: 'Please stop calling me.' });
-    expect(said(xml)).toBe('Understood. You will not get any more calls about this meeting. Goodbye.');
+    expect(said(xml)).toBe(`Understood. You will not get any more calls about this meeting. ${REACH} Goodbye.`);
     expect(hangsUp(xml)).toBe(true);
     const booking = await getBooking(ctx, 'bk_1');
     expect(booking?.consent.call).toBe(false);
@@ -1131,7 +1216,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     confirm.mockRejectedValueOnce(new Error('storage is down'));
     const { ctx, callId } = await answered();
     const { xml } = await hook(ctx, 'turn', callId, { Digits: '1' });
-    expect(said(xml)).toBe('Thank you. I could not save that just now, but your meeting is still on, today at 3:30 PM. Goodbye.');
+    expect(said(xml)).toBe(`Thank you. I could not save that just now, but your meeting is still on, today at 3:30 PM. ${REACH} Goodbye.`);
     expect((await record(ctx, callId)).outcome).toBeUndefined();
   });
 
@@ -1140,7 +1225,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     const { ctx, callId } = await answered();
     await hook(ctx, 'turn', callId, { Digits: '3' });
     const { xml } = await hook(ctx, 'turn', callId, { Digits: '1' });
-    expect(said(xml)).toBe('I am sorry, I could not cancel it just now. Please use the cancel link in your confirmation email. Goodbye.');
+    expect(said(xml)).toBe(`I am sorry, I could not cancel it just now. Please use the cancel link in your confirmation email. ${REACH} Goodbye.`);
     expect((await record(ctx, callId)).outcome).not.toBe('cancelled');
     await hook(ctx, 'status', callId, { CallStatus: 'completed', CallDuration: '31' });
     expect(jobsOfKind('manage_link')).toHaveLength(1);
@@ -1163,6 +1248,7 @@ describe('the scripted conversation (no Anthropic key)', () => {
     expect(status).toBe(200);
     expect(hangsUp(xml)).toBe(true);
     expect(said(xml)).toContain('something went wrong on my end');
+    expect(said(xml)).toMatch(new RegExp(`${REACH.replace(/[.,]/g, '\\$&')} Goodbye\\.$`));
   });
 });
 
@@ -1177,9 +1263,10 @@ describe('answering machines', () => {
     expect(twiml).toMatch(/^<Response><Pause length="1"\/><Say voice="Polly\.Joanna-Neural">[^<]+<\/Say><Hangup\/><\/Response>$/);
     const message = said(twiml);
     expect(message).toBe(
-      'Hi Sam, this is Ava, an AI assistant calling for Jimi. A reminder: your Intro call is today at 3:30 PM your time. To change it, use the link I am texting you now. Goodbye.',
+      `Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen. A reminder: your Intro call is today at 3:30 PM your time. To change it, use the link I am texting you now. ${REACH} Goodbye.`,
     );
-    expect(estimateSpeechSeconds(message)).toBeLessThan(20);
+    // With the greeting before it, a call to voicemail stays inside one billed minute.
+    expect(estimateSpeechSeconds(message)).toBeLessThan(25);
     expect(jobsOfKind('manage_link')).toEqual([{ type: 'message', bookingId: 'bk_1', dueAt: NOW, channel: 'sms', audience: 'invitee', kind: 'manage_link' }]);
     expect(await record(ctx, callId)).toMatchObject({ status: 'voicemail', outcome: 'voicemail', voicemailLeft: true, linkSent: true, answeredBy: 'machine_end_beep' });
 
@@ -1227,12 +1314,53 @@ describe('answering machines', () => {
     const res = await hook(unsure.ctx, 'turn', unsure.callId, { SpeechResult: speech });
     expect(confirm).not.toHaveBeenCalled();
     expect(listens(res.xml)).toBe(true);
-    expect(said(res.xml)).toContain('Hi Sam, this is Ava, an AI assistant calling for Jimi.');
+    expect(said(res.xml)).toContain('Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen.');
 
     const person = await answered();
     await hook(person.ctx, 'amd', person.callId, { AnsweredBy: 'human' });
     await hook(person.ctx, 'turn', person.callId, { SpeechResult: 'yes of course I will be there thanks so much for calling to remind me about it today' });
     expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the voicemail once when the turn hears the greeting first and Twilio reports the beep afterwards', async () => {
+    const { ctx, net, callId } = await answered();
+    const heard = await hook(ctx, 'turn', callId, { SpeechResult: 'You have reached Sam. Please leave a message after the tone.' });
+    expect(said(heard.xml)).toContain('A reminder: your Intro call is today at 3:30 PM your time.');
+    const beep = await hook(ctx, 'amd', callId, { AnsweredBy: 'machine_end_beep' });
+    expect(beep.status).toBe(204);
+    // No second message: Twilio was never asked to switch the call to it again.
+    expect(net.twilio).toHaveLength(1);
+    expect(jobsOfKind('manage_link')).toHaveLength(1);
+    const call = await record(ctx, callId);
+    expect(call).toMatchObject({ status: 'voicemail', voicemailLeft: true, linkSent: true });
+    expect(call.turns.filter((t) => t.role === 'assistant' && t.text.startsWith('Hi Sam, this is Ava') && t.text.includes('A reminder:'))).toHaveLength(1);
+  });
+
+  it('says the voicemail once when Twilio reports the beep first and a turn arrives afterwards', async () => {
+    const { ctx, net, callId } = await answered();
+    await hook(ctx, 'amd', callId, { AnsweredBy: 'machine_end_beep' });
+    expect(net.twilio).toHaveLength(2);
+    expect(said(net.twilio[1].params.get('Twiml') ?? '')).toContain('A reminder: your Intro call');
+    // A turn that was on its way (the greeting, heard as speech) says nothing more and keeps the line for the switch.
+    for (const form of [{ SpeechResult: 'Please leave a message after the tone.' }, {}] as Record<string, string>[]) {
+      const late = await hook(ctx, 'turn', callId, form);
+      expect(said(late.xml)).toBe('');
+      expect(late.xml).toContain('<Pause length="10"/><Hangup/>');
+    }
+    expect(net.twilio).toHaveLength(2);
+    expect(jobsOfKind('manage_link')).toHaveLength(1);
+    const call = await record(ctx, callId);
+    expect(call.turns.filter((t) => t.role === 'assistant' && t.text.includes('A reminder:'))).toHaveLength(1);
+  });
+
+  it('leaves the message from a later turn when switching the call to it failed', async () => {
+    const { ctx, net, callId } = await answered();
+    net.onTwilio(() => Response.json({ code: 21220, message: 'Call is not in-progress. Cannot redirect.' }, { status: 400 }));
+    await hook(ctx, 'amd', callId, { AnsweredBy: 'machine_end_beep' });
+    const late = await hook(ctx, 'turn', callId, {});
+    expect(said(late.xml)).toContain('A reminder: your Intro call');
+    expect(jobsOfKind('manage_link')).toHaveLength(1);
+    expect((await record(ctx, callId)).voicemailLeft).toBe(true);
   });
 
   it('hangs up on a fax machine', async () => {
@@ -1268,7 +1396,7 @@ describe('status', () => {
     expect(enqueue).not.toHaveBeenCalled();
     expect(await record(ctx, callId)).toMatchObject({ status: 'completed', outcome: 'confirmed', ended: true, durationSec: 27 });
     expect(callTranscript(await record(ctx, callId))).toBe(
-      "Ava: Hi Sam, this is Ava, an AI assistant calling for Jimi. A quick reminder about your Intro call today at 3:30 PM your time. Are you still able to make it? | Sam: Yes, I'll be there | Ava: Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you, and goodbye.",
+      `Ava: Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen. A quick reminder about your Intro call today at 3:30 PM your time. Are you still able to make it? | Sam: Yes, I'll be there | Ava: Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you. ${REACH} Goodbye.`,
     );
   });
 
@@ -1281,7 +1409,7 @@ describe('status', () => {
     const entry = (await view()).timeline.find((e) => e.type === 'call_completed')!;
     expect(entry.callId).toBe(callId);
     expect(entry.detail).toBe('They confirmed they are coming. Call length: 27 seconds.');
-    expect(entry.transcript).toContain('Ava: Hi Sam, this is Ava, an AI assistant calling for Jimi.');
+    expect(entry.transcript).toContain('Ava: Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen.');
     expect(entry.transcript).toContain("| Sam: Yes, I'll be there | Ava: Wonderful, I have you down as confirmed");
     expect(entry.transcript!.length).toBeLessThanOrEqual(1000);
     // The view adds it; the stored booking still does not carry it.
@@ -1430,7 +1558,7 @@ describe('status', () => {
 // ───────────────────────── Claude ─────────────────────────
 
 describe('the conversation with Claude', () => {
-  it('asks Claude with the documented request shape and acts on the structured reply', async () => {
+  it('asks Claude Haiku 5.5 with thinking off and no fallback by default, and acts on the structured reply', async () => {
     const { ctx, net, callId } = await answered({ anthropic: true });
     net.onClaude(() => claudeMessage({ say: 'Perfect, I will let Jimi know you are coming. Is there anything else?', action: 'confirm_attendance' }));
     const { xml } = await hook(ctx, 'turn', callId, { SpeechResult: 'Yep, see you then!', Confidence: '0.91' });
@@ -1438,11 +1566,14 @@ describe('the conversation with Claude', () => {
     expect(net.claude).toHaveLength(1);
     const { url, headers, body } = net.claude[0];
     expect(url).toBe('https://api.anthropic.com/v1/messages');
-    expect(headers.get('anthropic-beta')).toContain('server-side-fallback-2026-07-01');
+    // "There is no server-side fallback for Claude Haiku 5.5 - don't add the fallbacks parameter to its requests."
+    expect(headers.has('anthropic-beta')).toBe(false);
+    expect(body).not.toHaveProperty('fallbacks');
     expect(`${headers.get('x-api-key') ?? ''} ${headers.get('authorization') ?? ''}`).toContain('sk-ant-test-key');
-    expect(body.model).toBe('claude-opus-5-5');
+    expect(body.model).toBe('claude-haiku-5-5');
+    expect(body.model).toBe(DEFAULT_ASSISTANT.model);
+    expect(body.thinking).toEqual({ type: 'disabled' });
     expect(body.max_tokens).toBe(2000);
-    expect(body.fallbacks).toBe('default');
     expect(body.output_config.effort).toBe('low');
     expect(body.output_config.format).toEqual({
       type: 'json_schema',
@@ -1456,7 +1587,7 @@ describe('the conversation with Claude', () => {
         additionalProperties: false,
       },
     });
-    for (const removed of ['temperature', 'top_p', 'top_k', 'thinking', 'stream', 'tools', 'betas']) expect(body, removed).not.toHaveProperty(removed);
+    for (const removed of ['temperature', 'top_p', 'top_k', 'stream', 'tools', 'betas']) expect(body, removed).not.toHaveProperty(removed);
     expect(net.claude[0].signal).toBeInstanceOf(AbortSignal);
 
     expect(typeof body.system).toBe('string');
@@ -1465,15 +1596,43 @@ describe('the conversation with Claude', () => {
     expect(body.system).toContain('America/New_York');
     expect(body.messages).toHaveLength(1);
     expect(body.messages[0].role).toBe('user');
-    expect(body.messages[0].content).toContain('<assistant>Hi Sam, this is Ava, an AI assistant calling for Jimi.');
+    expect(body.messages[0].content).toContain('<assistant>Hi Sam, this is Ava, an AI assistant calling for Jimi Cohen.');
     expect(body.messages[0].content).toContain('<caller>Yep, see you then!</caller>');
     expect(body.messages[0].content).toContain('cancellation_waiting_for_confirmation: no');
     expect(body.messages[0].content).toContain(`replies_left_after_this_one: ${MAX_CALLER_TURNS - 1}`);
 
     expect(confirm).toHaveBeenCalledWith(ctx, 'bk_1', 'call');
-    expect(said(xml)).toBe('Perfect, I will let Jimi know you are coming. Is there anything else?');
-    expect(listens(xml)).toBe(true);
-    expect((await record(ctx, callId)).outcome).toBe('confirmed');
+    // A decision ends the call: the question is dropped, the callback number and the goodbye are ours.
+    expect(said(xml)).toBe(`Perfect, I will let Jimi know you are coming. ${REACH} Goodbye.`);
+    expect(listens(xml)).toBe(false);
+    expect(hangsUp(xml)).toBe(true);
+    expect(await record(ctx, callId)).toMatchObject({ outcome: 'confirmed', ended: true });
+  });
+
+  it.each([
+    // [model, thinking field sent, refusal fallback asked for]
+    ['claude-haiku-5-5', { type: 'disabled' }, false],
+    ['claude-sonnet-5-5', { type: 'between_tools' }, true],
+    ['claude-opus-5-5', undefined, true],
+    ['claude-some-other-model', undefined, true],
+  ] as const)('sends %s the thinking setting and fallback its reference gives', async (model, thinking, fallback) => {
+    const env = await setup({ anthropic: true });
+    const site = await getSite(env.ctx);
+    await saveSite(env.ctx, { ...site, assistant: { ...site.assistant, model } });
+    const { callId } = await ring(env.ctx, env.net, env.booking);
+    await hook(env.ctx, 'start', callId);
+    const { xml } = await hook(env.ctx, 'turn', callId, { SpeechResult: 'what is this about' });
+    expect(env.net.claude).toHaveLength(1);
+    const [{ body, headers }] = env.net.claude;
+    expect(body.model).toBe(model);
+    if (thinking) expect(body.thinking).toEqual(thinking);
+    else expect(body).not.toHaveProperty('thinking');
+    expect(body.output_config.effort).toBe('low');
+    expect(headers.get('anthropic-beta') ?? '').toBe(fallback ? 'server-side-fallback-2026-07-01' : '');
+    expect(body.fallbacks).toBe(fallback ? 'default' : undefined);
+    // The stand-in turns down what the API turns down, so this is the model's answer, not the script's.
+    expect(said(xml)).toBe('Okay.');
+    expect(env.ctx.logs.filter((l) => l.level !== 'info')).toEqual([]);
   });
 
   it('uses the model the owner chose', async () => {
@@ -1486,24 +1645,71 @@ describe('the conversation with Claude', () => {
     expect(env.net.claude[0].body.model).toBe('claude-haiku-5-5');
   });
 
-  it('answers a closing "no thanks" at once, without asking Claude again', async () => {
+  it('ends the call after the confirmation, so nothing said afterwards reaches Claude or changes anything', async () => {
     const { ctx, net, callId } = await answered({ anthropic: true });
     net.onClaude(() => claudeMessage({ say: 'Great, you are confirmed. Anything else?', action: 'confirm_attendance' }));
-    await hook(ctx, 'turn', callId, { SpeechResult: 'yes I can make it' });
-    const bye = await hook(ctx, 'turn', callId, { SpeechResult: 'No thanks, that is all.' });
+    const done = await hook(ctx, 'turn', callId, { SpeechResult: 'yes I can make it' });
+    expect(said(done.xml)).toBe(`Great, you are confirmed. ${REACH} Goodbye.`);
+    expect(hangsUp(done.xml)).toBe(true);
+    for (const late of [{ SpeechResult: 'No thanks, that is all.' }, {}, { Digits: '3' }] as Record<string, string>[]) {
+      const res = await hook(ctx, 'turn', callId, late);
+      expect(res.xml).toBe('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+    }
     expect(net.claude).toHaveLength(1);
-    expect(said(bye.xml)).toBe('Thanks Sam. Have a great day. Goodbye.');
-    expect(hangsUp(bye.xml)).toBe(true);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    // [what Claude did, its reply, what the caller hears]
+    ['confirm_attendance', 'Wonderful, see you then. Is there anything else I can help with?', 'Wonderful, see you then.'],
+    ['confirm_attendance', 'Anything else?', 'Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you.'],
+    ['send_manage_link', 'Of course. I am texting you a link to pick a new time. Anything else?', 'Of course. I am texting you a link to pick a new time.'],
+    ['send_manage_link', 'Sure thing! Is there anything else you need?', 'Sure thing!'],
+    ['end_call', 'Take care, Sam. Goodbye.', 'Take care, Sam.'],
+    ['end_call', 'Thank you, and goodbye.', 'Thank you.'],
+  ] as const)('after "%s" from Claude ends with one closing line, the callback number and goodbye: "%s"', async (action, reply, heard) => {
+    const { ctx, net, callId } = await answered({ anthropic: true });
+    net.onClaude(() => claudeMessage({ say: reply, action }));
+    const { xml } = await hook(ctx, 'turn', callId, { SpeechResult: action === 'end_call' ? 'well, never mind then' : action === 'send_manage_link' ? 'can we do another day' : 'yes I will be there' });
+    expect(said(xml)).toBe(`${heard} ${REACH} Goodbye.`);
+    expect(listens(xml)).toBe(false);
+    expect(hangsUp(xml)).toBe(true);
+    expect((await record(ctx, callId)).ended).toBe(true);
+    expect((await record(ctx, callId)).turns.at(-1)?.text).toBe(`${heard} ${REACH} Goodbye.`);
+  });
+
+  it('lets the closing line answer what was asked in the same breath', async () => {
+    const { ctx, net, callId } = await answered({ anthropic: true });
+    net.onClaude(() =>
+      claudeMessage({ say: 'You are all set, and the Google Meet link is in your confirmation email. Is there anything else?', action: 'confirm_attendance' }),
+    );
+    const { xml } = await hook(ctx, 'turn', callId, { SpeechResult: 'yes I will be there, where do I find the meeting link?' });
+    expect(said(xml)).toBe(`You are all set, and the Google Meet link is in your confirmation email. ${REACH} Goodbye.`);
+    expect(hangsUp(xml)).toBe(true);
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
-  it('says goodbye instead of asking again when the caller goes quiet after a result', async () => {
+  it('ends a confirmed cancellation from Claude the same way', async () => {
     const { ctx, net, callId } = await answered({ anthropic: true });
-    net.onClaude(() => claudeMessage({ say: 'Great, you are confirmed. Anything else?', action: 'confirm_attendance' }));
-    await hook(ctx, 'turn', callId, { SpeechResult: 'yes I can make it' });
-    const quiet = await hook(ctx, 'turn', callId, {});
-    expect(said(quiet.xml)).toBe('Thanks Sam. Have a great day. Goodbye.');
-    expect(hangsUp(quiet.xml)).toBe(true);
+    net.onClaude(() => claudeMessage({ say: 'Shall I cancel it for you?', action: 'request_cancel' }));
+    await hook(ctx, 'turn', callId, { SpeechResult: 'I need to cancel' });
+    net.onClaude(() => claudeMessage({ say: 'All right, it is cancelled. Is there anything else I can do?', action: 'confirm_cancel' }));
+    const { xml } = await hook(ctx, 'turn', callId, { SpeechResult: 'yes' });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(said(xml)).toBe(`All right, it is cancelled. ${REACH} Goodbye.`);
+    expect(hangsUp(xml)).toBe(true);
+  });
+
+  it('tells the model a decision ends the call, and never to say the number or goodbye itself', async () => {
+    const { ctx, net, callId } = await answered({ anthropic: true });
+    await hook(ctx, 'turn', callId, { SpeechResult: 'what is this about' });
+    const system: string = net.claude[0].body.system;
+    expect(system).toContain('The call ends right after a reply with "confirm_attendance", "send_manage_link", "confirm_cancel" or "end_call"');
+    expect(system).toContain('with no question in it');
+    expect(system).toContain('Do not say goodbye and do not read out a phone number');
+    expect(system).toContain('- The number for reaching Jimi: 2 1 2, 5 5 5, 0 1 0 0.');
+    expect(system).not.toMatch(/whether there is anything else/i);
   });
 
   it('never sends key presses to Claude', async () => {
@@ -1518,17 +1724,15 @@ describe('the conversation with Claude', () => {
     net.onClaude(() => claudeMessage({ say: 'Of course. I am texting you a link to pick a new time. Anything else?', action: 'send_manage_link' }));
     const a = await hook(ctx, 'turn', callId, { SpeechResult: 'Something came up, could we do Thursday?' });
     expect(jobsOfKind('manage_link')).toHaveLength(1);
-    expect(listens(a.xml)).toBe(true);
+    expect(listens(a.xml)).toBe(false);
+    expect(hangsUp(a.xml)).toBe(true);
+    expect(await record(ctx, callId)).toMatchObject({ outcome: 'reschedule_requested', linkSent: true, ended: true });
 
-    net.onClaude(() => claudeMessage({ say: 'I am texting it again now. Take care, goodbye.', action: 'send_manage_link' }));
-    await hook(ctx, 'turn', callId, { SpeechResult: 'can you send that link once more' });
-    expect(jobsOfKind('manage_link')).toHaveLength(1); // one link per call
-
-    net.onClaude(() => claudeMessage({ say: 'Take care, Sam. Goodbye.', action: 'end_call' }));
-    const c = await hook(ctx, 'turn', callId, { SpeechResult: 'well I was wondering, never mind' });
-    expect(hangsUp(c.xml)).toBe(true);
-    expect(listens(c.xml)).toBe(false);
-    expect((await record(ctx, callId)).ended).toBe(true);
+    // Anything Twilio still sends for this call only hangs up: one link per call.
+    const late = await hook(ctx, 'turn', callId, { SpeechResult: 'can you send that link once more' });
+    expect(late.xml).toBe('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+    expect(jobsOfKind('manage_link')).toHaveLength(1);
+    expect(net.claude).toHaveLength(1);
   });
 
   it('enforces the two step cancel no matter what Claude returns', async () => {
@@ -1560,7 +1764,7 @@ describe('the conversation with Claude', () => {
     const fourth = await hook(ctx, 'turn', callId, { SpeechResult: 'Yes, please cancel it' });
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(cancel).toHaveBeenCalledWith(ctx, 'bk_1', { by: 'assistant' }, { calendarBudgetMs: 7000 });
-    expect(said(fourth.xml)).toBe('All right, your meeting is cancelled. Goodbye, Sam.');
+    expect(said(fourth.xml)).toBe(`All right, your meeting is cancelled. ${REACH} Goodbye.`);
     expect(hangsUp(fourth.xml)).toBe(true);
     expect(net.claude[3].body.messages[0].content).toContain('cancellation_waiting_for_confirmation: yes');
   });
@@ -1676,13 +1880,13 @@ describe('the conversation with Claude', () => {
     const { status, xml } = await hook(ctx, 'turn', callId, { SpeechResult: "Yes, I'll be there" });
     expect(net.claude).toHaveLength(1); // no retries: the caller is waiting
     expect(status).toBe(200);
-    expect(said(xml)).toBe('Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you, and goodbye.');
+    expect(said(xml)).toBe(`Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you. ${REACH} Goodbye.`);
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(ctx.logs.some((l) => l.msg.startsWith('voice:') && l.msg.includes('scripted reply'))).toBe(true);
     expect(JSON.stringify(ctx.logs)).not.toContain('sk-ant-test-key');
   });
 
-  it('falls back to the scripted reply when Claude is too slow, even if the fetch never settles', async () => {
+  it('falls back to the scripted reply when Claude is too slow, even if the fetch never settles, within 5 seconds', async () => {
     const { ctx, net, callId } = await answered({ anthropic: true });
     net.onClaude(() => new Promise<Response>(() => undefined));
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -1696,7 +1900,9 @@ describe('the conversation with Claude', () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1500);
+      // The most a caller waits for the model: about 5 seconds, then the scripted reply answers.
+      await vi.advanceTimersByTimeAsync(5000 - (MODEL_TIMEOUT_MS - 1000));
+      expect(settled).toBe(true);
       const { xml } = await pending;
       expect(said(xml)).toContain('I am texting you a link now so you can pick a new time.');
       expect(jobsOfKind('manage_link')).toHaveLength(1);
@@ -1706,8 +1912,17 @@ describe('the conversation with Claude', () => {
     }
   });
 
-  it('carries on without the refusal fallback when the account does not have that beta, and remembers it', async () => {
-    const { ctx, net, callId } = await answered({ anthropic: true });
+  async function answeredWith(model: string) {
+    const env = await setup({ anthropic: true });
+    const site = await getSite(env.ctx);
+    await saveSite(env.ctx, { ...site, assistant: { ...site.assistant, model } });
+    const { callId } = await ring(env.ctx, env.net, env.booking);
+    await hook(env.ctx, 'start', callId);
+    return { ...env, callId };
+  }
+
+  it('carries on without the refusal fallback when the account does not have that beta, and remembers it for that model', async () => {
+    const { ctx, net, callId } = await answeredWith('claude-opus-5-5');
     net.onClaude((call) =>
       call.headers.has('anthropic-beta')
         ? Response.json({ type: 'error', error: { type: 'invalid_request_error', message: 'Unexpected value(s) `server-side-fallback-2026-07-01` for the `anthropic-beta` header.' } }, { status: 400 })
@@ -1722,19 +1937,53 @@ describe('the conversation with Claude', () => {
     expect(net.claude[1].body.output_config).toEqual(net.claude[0].body.output_config);
     expect(net.claude[1].body.model).toBe('claude-opus-5-5');
 
+    expect(ctx.logs.find((l) => l.msg.includes('refusal fallback option was not accepted'))?.data).toEqual({
+      model: 'claude-opus-5-5',
+      reason: 'Unexpected value(s) `server-side-fallback-2026-07-01` for the `anthropic-beta` header.',
+    });
+
     // The next turn does not repeat the attempt that is known to fail.
     await hook(ctx, 'turn', callId, { SpeechResult: 'sorry what day' });
     expect(net.claude).toHaveLength(3);
     expect(net.claude[2].headers.has('anthropic-beta')).toBe(false);
+
+    // Learned for that model only: another model still asks for the fallback.
+    const sonnet = await answeredWith('claude-sonnet-5-5');
+    sonnet.net.onClaude(() => claudeMessage({ say: 'It is today at 3:30 PM.', action: 'continue' }));
+    await hook(sonnet.ctx, 'turn', sonnet.callId, { SpeechResult: 'when is it again' });
+    expect(sonnet.net.claude).toHaveLength(1);
+    expect(sonnet.net.claude[0].headers.get('anthropic-beta')).toBe('server-side-fallback-2026-07-01');
   });
 
-  it('uses the scripted reply when the request is rejected with or without the beta', async () => {
+  it('does not take a 400 about something else for a missing beta, and logs why every call is on the script', async () => {
+    const { ctx, net, callId } = await answeredWith('claude-opus-5-5');
+    const why = '"thinking.type.disabled" is not supported for this model. Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.';
+    net.onClaude(() => Response.json({ type: 'error', error: { type: 'invalid_request_error', message: why } }, { status: 400 }));
+    const res = await hook(ctx, 'turn', callId, { SpeechResult: 'when is it again' });
+    expect(net.claude).toHaveLength(2);
+    expect(said(res.xml)).toContain('This is a reminder about your Intro call');
+    expect(ctx.logs.some((l) => l.msg.includes('refusal fallback option was not accepted'))).toBe(false);
+    const errors = ctx.logs.filter((l) => l.level === 'error');
+    expect(errors.map((l) => l.msg)).toEqual([
+      'voice: Anthropic turned the request down with and without the refusal fallback, so the request itself needs fixing',
+      'voice: the model call failed, using the scripted reply',
+    ]);
+    expect(errors[0].data).toEqual({ model: 'claude-opus-5-5', reason: why });
+    expect(errors[1].data).toMatchObject({ reason: 'bad_request', status: 400, detail: why });
+
+    // Nothing was wrongly learned: the next turn still asks for the fallback first.
+    await hook(ctx, 'turn', callId, { SpeechResult: 'sorry what day' });
+    expect(net.claude).toHaveLength(4);
+    expect(net.claude[2].headers.get('anthropic-beta')).toBe('server-side-fallback-2026-07-01');
+  });
+
+  it('logs the reason when a model without the fallback has its request turned down', async () => {
     const { ctx, net, callId } = await answered({ anthropic: true });
     net.onClaude(() => Response.json({ type: 'error', error: { type: 'invalid_request_error', message: 'output_config: Extra inputs are not permitted' } }, { status: 400 }));
     const res = await hook(ctx, 'turn', callId, { SpeechResult: "Yes, I'll be there" });
-    expect(net.claude).toHaveLength(2);
-    expect(said(res.xml)).toBe('Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you, and goodbye.');
-    expect(ctx.logs.some((l) => l.level === 'error' && l.msg.includes('model call failed'))).toBe(true);
+    expect(net.claude).toHaveLength(1);
+    expect(said(res.xml)).toBe(`Wonderful, I have you down as confirmed for today at 3:30 PM. Thank you. ${REACH} Goodbye.`);
+    expect(ctx.logs.find((l) => l.level === 'error' && l.msg.includes('model call failed'))?.data).toMatchObject({ detail: 'output_config: Extra inputs are not permitted' });
   });
 
   it('wraps up on the last allowed turn whatever Claude wanted', async () => {
@@ -1744,7 +1993,7 @@ describe('the conversation with Claude', () => {
     const last = await hook(ctx, 'turn', callId, { SpeechResult: 'still thinking about it' });
     expect(net.claude.at(-1)!.body.messages[0].content).toContain('replies_left_after_this_one: 0');
     expect(hangsUp(last.xml)).toBe(true);
-    expect(said(last.xml)).toBe('I should let you go now. If you want to change anything, use the link in your confirmation email. Goodbye.');
+    expect(said(last.xml)).toBe(`I should let you go now. If you want to change anything, use the link in your confirmation email. ${REACH} Goodbye.`);
   });
 });
 

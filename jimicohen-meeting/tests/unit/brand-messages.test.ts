@@ -352,7 +352,8 @@ describe('the reminder call', () => {
     expect(plain.brandName).toBeUndefined();
     const { brandName: _gone, ...older } = await script(true);
     expect(callPhrases(older, NOW)).toEqual(callPhrases(plain, NOW));
-    expect(callPhrases(plain, NOW).greeting).toBe('Hi Ann, this is Ava, an AI assistant calling for Jimi and Ian. A quick reminder about your Eco Champions conversation tomorrow at 3:00 PM your time. Are you still able to make it?');
+    // The first sentence names who is responsible for the call in full (47 CFR 64.1200(b)(1)).
+    expect(callPhrases(plain, NOW).greeting).toBe('Hi Ann, this is Ava, an AI assistant calling for Jimi Cohen and Ian Poirier. A quick reminder about your Eco Champions conversation tomorrow at 3:00 PM your time. Are you still able to make it?');
   });
 });
 

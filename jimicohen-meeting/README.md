@@ -133,9 +133,23 @@ All of this is done in the dashboard under **Integrations**, which has step-by-s
   it (see "Older deploys after this release" below). Take a copy of the `hosts` blob before deploying this change,
   for example with `netlify blobs:get meeting hosts`.
 - **Email**: a Resend API key with a verified sender, or "send from my Gmail".
-- **Texts and reminder calls**: a Twilio Account SID, Auth Token and phone number. For replies by text, set the
-  number's incoming message webhook to `https://jimicohen.com/meeting/api/twilio/sms` (POST).
-- **Voice assistant**: an Anthropic API key. Without one the reminder call still works with a simpler scripted menu.
+- **Texts and reminder calls**: a paid Twilio account (a trial account only calls and texts numbers you verified, and
+  plays a trial message first). Fill in the Trust Hub business profile, then buy one number that does both voice and
+  SMS. Toll-free has the lower fixed cost: its verification for texting US numbers is free and takes about 3 to 5
+  business days. A local number is $1.15 a month plus A2P 10DLC registration. Paste the Account SID, Auth Token and
+  number under Integrations. For replies by text, set the number's incoming message webhook to
+  `https://jimicohen.com/meeting/api/twilio/sms` (POST). In Twilio's Voice Geo Permissions, switch on only the
+  countries you mean to call: a minute to Kenya costs about $0.39, to Ethiopia about $0.49.
+- **Callback number** (Settings, AI assistant): every reminder call names who it is for in its first sentence and
+  ends with "To reach Jimi, call ...", the voicemail too, as the US rules for artificial voice calls require
+  (47 CFR 64.1200(b)). It cannot be the Twilio number. Without one no reminder call is placed, and Home and
+  Integrations say so; texts and emails carry on. Eco Champions calls give the same number.
+- **Voice assistant**: an Anthropic API key. The default model is Claude Haiku 5.5 with thinking off: the quickest
+  replies and the lowest cost. Claude Sonnet 5.5 words things more naturally and is a little slower and pricier;
+  Claude Opus 5.5 is the slowest on a phone line. A reply slower than about 5 seconds gives way to the scripted one.
+  Without a key the call uses a simpler scripted menu. The scheduled function moves a site still on
+  `claude-opus-5-5` with no key ever saved to the new default, once (marker `migrations/assistant-model-v1`). The
+  "most natural (premium)" generative voice costs about four times as much per spoken character.
 
 ## Short links and the Eco Champions brand
 
@@ -158,7 +172,8 @@ All of this is done in the dashboard under **Integrations**, which has step-by-s
   unlisted "Eco Champions conversation" with Jimi and every co-host, 30 or 60 minutes. It only fills in what is
   missing, never edits the profile, the welcome text, the theme or a choice made since, and leaves a marker
   (`migrations/short-links-v1`) so it never runs again. Nothing a visitor or the dashboard does can start it. Locally,
-  `POST /meeting/api/dev/one-time-moves` runs it (the dev server only; production answers 404). Home says "Your short
+  `POST /meeting/api/dev/one-time-moves` runs it, with the assistant model move (the dev server only; production
+  answers 404). Home says "Your short
   links are being set up" until it has run; if that stays longer than a few minutes, read the scheduled function's log
   for "the short link setup".
 - **Link previews.** The title, description and picture of each link are part of its static page, so they change

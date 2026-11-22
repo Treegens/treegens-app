@@ -79,10 +79,24 @@ export const DEFAULT_ASSISTANT: AssistantSettings = {
   voice: 'Polly.Joanna-Neural',
   language: 'en-US',
   persona: 'Warm, brief and professional. Sounds like a capable executive assistant.',
-  model: 'claude-opus-5-5',
+  // The quickest replies on a phone line, with thinking turned off (server/lib/voice.ts modelRequest).
+  model: 'claude-haiku-5-5',
   callWindowStartHour: 8,
   callWindowEndHour: 21,
+  callbackNumber: '',
 };
+
+/**
+ * Why reminder calls have no number to give for calling back, or null when they have one. The number may not
+ * be the one that places the call (47 CFR 64.1200(b)(2)), so the Twilio number does not count. Digits are
+ * compared, so "+1 500 555 0006" and "+15005550006" are the same number.
+ */
+export function callbackProblem(assistant: { callbackNumber?: string } | null | undefined, twilioNumber: string | null | undefined): 'missing' | 'twilio_number' | null {
+  const digits = (value: unknown): string => (typeof value === 'string' ? value.replace(/\D/g, '') : '');
+  const callback = digits(assistant?.callbackNumber);
+  if (!callback) return 'missing';
+  return callback === digits(twilioNumber) ? 'twilio_number' : null;
+}
 
 export const DEFAULT_CONSENT_TEXT =
   "By adding your number you agree to receive reminder texts and an automated reminder call from {{host_first_name}}'s AI assistant about this meeting. Message and data rates may apply.";

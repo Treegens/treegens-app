@@ -4,8 +4,10 @@
  * every problem is reported under the dotted path of its field ("profile.name",
  * "theme.colors.primary", "assistant.callWindowStartHour").
  */
+import { callbackProblem } from '../../../shared/defaults';
 import type { SiteSettings } from '../../../shared/types';
 import type { Ctx } from '../ctx';
+import { getTwilioAccount, normalizePhone } from '../twilio';
 import { FieldErrors, isEmail, isHttpsUrl, isPlainObject, requireObject } from '../validate';
 import { type AssetRef, given, isWebUrl, readAssetId, readBool, readEnum, readInt, readObject, readText, verifyAssets } from './fields';
 import { mergeTheme, parseThemePatch, themeAssetIds } from './theme';
@@ -65,6 +67,15 @@ export async function applySitePatch(ctx: Ctx, current: SiteSettings, body: unkn
   const refs: AssetRef[] = [];
   const next = patchSite(current, body, refs, errors);
   await verifyAssets(ctx, refs, errors);
+  // The number people call back on cannot be the one the calls come from (47 CFR 64.1200(b)(2)). Checked
+  // when it is saved; a Twilio number changed later is caught where calls are placed (voice.ts).
+  const patch = isPlainObject(body) && isPlainObject(body.assistant) ? body.assistant : null;
+  if (patch && typeof patch.callbackNumber === 'string' && next.assistant.callbackNumber) {
+    const twilio = await getTwilioAccount(ctx);
+    if (callbackProblem(next.assistant, twilio?.fromNumber) === 'twilio_number') {
+      errors.add('assistant.callbackNumber', 'That is your Twilio number, which places the calls. Use a different number that people can call back on.');
+    }
+  }
   errors.throwIfAny();
   return next;
 }
@@ -127,6 +138,14 @@ function patchSite(current: SiteSettings, body: unknown, refs: AssetRef[], error
       }
       const start = readInt(a, 'callWindowStartHour', 'assistant.callWindowStartHour', 0, 23, errors, 'Choose an hour from 0 to 23.');
       if (start !== undefined) next.assistant.callWindowStartHour = start;
+      if (given(a, 'callbackNumber')) {
+        // Stored in E.164. Typed with spaces, dashes or brackets is fine; without the country code it is not.
+        const raw = typeof a.callbackNumber === 'string' ? a.callbackNumber.trim() : null;
+        const number = raw ? normalizePhone(raw) : null;
+        if (raw === '') next.assistant.callbackNumber = '';
+        else if (number) next.assistant.callbackNumber = number;
+        else errors.add('assistant.callbackNumber', 'Write the callback number with its country code, for example +14155550123.');
+      }
       const end = readInt(a, 'callWindowEndHour', 'assistant.callWindowEndHour', 1, 24, errors, 'Choose an hour from 1 to 24.');
       if (end !== undefined) next.assistant.callWindowEndHour = end;
       if ((start !== undefined || end !== undefined) && next.assistant.callWindowStartHour >= next.assistant.callWindowEndHour) {

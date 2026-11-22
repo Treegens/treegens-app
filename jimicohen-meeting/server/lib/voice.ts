@@ -18,11 +18,14 @@
  *     time inside the calling window
  *   - every webhook must carry a valid Twilio signature for our public URL
  *   - everything spoken is XML escaped, and caller speech reaches the model as quoted data
- *   - the first sentence of every call says it is an AI assistant and who it is calling for
+ *   - the first sentence of every call says it is an AI assistant and who is responsible for the call (the
+ *     hosts' full names, or the brand's name), and every call ends with a number to call back on that is not
+ *     the number placing the call (US rules for artificial voice calls, 47 CFR 64.1200(b)). Without such a
+ *     number no reminder call is placed.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { DateTime } from 'luxon';
-import { DEFAULT_ASSISTANT } from '../../shared/defaults';
+import { callbackProblem, DEFAULT_ASSISTANT } from '../../shared/defaults';
 import { isSiteView, viewFor } from '../../shared/brands';
 import type { AssistantSettings, Booking, CallRecord, Host, IanaZone, SendResult, SiteSettings } from '../../shared/types';
 import { cancelBooking, confirmAttendance } from './booking';
@@ -41,6 +44,7 @@ import {
   isRestrictedNumber,
   noConsentReason,
   normalizePhone,
+  spokenPhoneNumber,
   TwilioError,
   twilioRequestAs,
   twimlResponse,
@@ -73,20 +77,28 @@ export const VOICE_OPTIONS: { id: string; label: string }[] = [
 
 export const MAX_CALLER_TURNS = 8;
 const MAX_EMPTY_INPUTS = 2;
-/** How long Claude gets for one reply. Twilio itself gives a webhook 15 seconds. */
-export const MODEL_TIMEOUT_MS = 9000;
-const MODEL_DEADLINE_SLACK_MS = 250;
+/**
+ * How long Claude gets for one reply: the caller is waiting in silence. With the hard deadline's slack the
+ * model has at most 4.75 seconds, and the storage reads before it and the writes after it bring the longest
+ * wait after the caller stops speaking to about 5 seconds. A slower reply gives way to the scripted one.
+ * (Twilio itself gives a webhook 15 seconds. The dashboard's key test waits longer, admin/integrations.ts.)
+ */
+export const MODEL_TIMEOUT_MS = 4500;
+export const MODEL_DEADLINE_SLACK_MS = 250;
 /**
  * A turn that cancels the meeting aims to have its answer ready this long after the webhook arrived,
  * leaving room for the storage writes that follow inside Twilio's 15 seconds. What the model left over
  * is what Google gets for the delete; a slower delete finishes in the background (booking.ts calendarStep).
+ * With the model held to MODEL_TIMEOUT_MS, Google still gets about 6 seconds after the slowest model reply;
+ * the floor below is for a turn whose storage reads were slow as well.
  */
 const TURN_BUDGET_MS = 11_000;
 /** The most and the least a phone cancellation waits for Google (the most is booking.ts CALENDAR_BUDGET_MS). */
 const CANCEL_CALENDAR_MAX_MS = 7000;
 const CANCEL_CALENDAR_MIN_MS = 1000;
 const MODEL_MAX_TOKENS = 2000;
-const DEFAULT_MODEL = 'claude-opus-5-5';
+/** Claude Haiku 5.5 with thinking off: the quickest replies on a phone line, at the lowest cost (modelRequest). */
+export const DEFAULT_MODEL = 'claude-haiku-5-5';
 const REFUSAL_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 const ANTHROPIC_API = 'https://api.anthropic.com';
 const RING_TIMEOUT_SEC = 25;
@@ -136,6 +148,11 @@ export interface CallScript {
    * behalf of the hosts. Absent on every call record from before brands, which speak exactly as before.
    */
   brandName?: string;
+  /**
+   * The number to call back on, as it is read out ("4 1 5, 5 5 5, 2 6 7 1"; with "plus" and the country
+   * code for someone abroad). Every call places one; absent only on call records from before it existed.
+   */
+  callbackSpoken?: string;
 }
 
 /** The stored record: the shared CallRecord plus what this module needs between webhooks. */
@@ -329,7 +346,17 @@ function modelSetting(model: unknown): string {
   return typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,99}$/.test(model.trim()) ? model.trim() : DEFAULT_MODEL;
 }
 
-export function buildCallScript(p: { booking: Booking; site: SiteSettings; hosts: Host[]; purpose: 'reminder' | 'test' }): CallScript {
+/**
+ * The number a reminder call gives for calling back (E.164), or null when there is none it may give: no
+ * number is set, or it is the Twilio number that places the call (47 CFR 64.1200(b)(2)). Without one no
+ * reminder call is placed. A brand's calls give the site's number: brands have no number of their own.
+ */
+export function usableCallbackNumber(site: Pick<SiteSettings, 'assistant'>, fromNumber: string): string | null {
+  if (callbackProblem(site.assistant, fromNumber)) return null;
+  return normalizePhone(site.assistant?.callbackNumber ?? '');
+}
+
+export function buildCallScript(p: { booking: Booking; site: SiteSettings; hosts: Host[]; purpose: 'reminder' | 'test'; callbackNumber?: string | null }): CallScript {
   const { booking, site } = p;
   const assistant: AssistantSettings = { ...DEFAULT_ASSISTANT, ...(site.assistant ?? {}) };
   const assigned = booking.hostIds.map((id) => p.hosts.find((h) => h.id === id)).filter((h): h is Host => !!h);
@@ -345,6 +372,8 @@ export function buildCallScript(p: { booking: Booking; site: SiteSettings; hosts
   const eventTitle = speakable(booking.eventTitle, 80) || 'meeting';
   const inviteeName = cleanName(booking.invitee.name, 60);
   const hasPhone = !!booking.invitee.phone?.trim();
+  // Read the way someone with this phone number dials it: the country code only for a number abroad.
+  const callbackSpoken = p.callbackNumber ? spokenPhoneNumber(p.callbackNumber, booking.invitee.phone ?? '') : '';
   return {
     inviteeName,
     inviteeFirstName: firstNameOf(inviteeName),
@@ -363,12 +392,15 @@ export function buildCallScript(p: { booking: Booking; site: SiteSettings; hosts
     model: modelSetting(assistant.model),
     linkChannel: p.purpose === 'test' ? 'none' : booking.consent?.sms === true && hasPhone ? 'sms' : 'email',
     ...(brandName ? { brandName } : {}),
+    ...(callbackSpoken ? { callbackSpoken } : {}),
   };
 }
 
 /** Every fixed line the assistant can say on one call. Short sentences, written for the ear. */
 export interface CallPhrases {
   when: string;
+  /** "To reach Jimi, call 4 1 5, 5 5 5, 2 6 7 1.": said before the goodbye of every call ('' on an old call record) */
+  reach: string;
   greeting: string;
   greetingConfirmed: string;
   reintroduce: string;
@@ -398,20 +430,66 @@ export interface CallPhrases {
   cancelFailed: string;
 }
 
+/** Who is responsible for the call, said in its first sentence: the brand, or every host by full name. */
+function responsible(s: CallScript): string {
+  return s.brandName || s.hostNames;
+}
+
+/** Who the callback number reaches, the way the rest of the call names them: the brand, or the hosts' first names. */
+function reachLine(s: Pick<CallScript, 'brandName' | 'hostFirstNames' | 'callbackSpoken'>, who: string = s.brandName || s.hostFirstNames): string {
+  return s.callbackSpoken ? `To reach ${who}, call ${s.callbackSpoken}.` : '';
+}
+
+// A goodbye at the very end, with what usually comes with it: "Goodbye.", "Goodbye, Sam.", "Thank you, and goodbye."
+// The end of the sentence before it stays, so a question just before a goodbye is still seen as one.
+const GOODBYE_TAIL = /(?:^|(?<=[.!?])\s+|\s*[,;:]\s*|\s+)(?:(?:and|so)\s+)?(?:good\s?-?bye|bye(?:\s+bye)?)(?:,?\s+[\p{L}][\p{L}'-]*){0,2}[\s.!]*$/iu;
+
+function withoutTrailingQuestions(text: string): string {
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  while (sentences.length > 0 && /\?["')\s]*$/.test(sentences[sentences.length - 1])) sentences.pop();
+  return sentences.join(' ');
+}
+
 /**
- * The message left on an answering machine. It has to stay under 20 seconds whatever the names
- * are, so it uses the shortest form of each: one word for the assistant, the hosts' first names while they
- * are short (else the first one alone), and "meeting" for a long title. It says how to reschedule: with the
- * link that is sent alongside.
+ * What a line that ends the call says before the callback number: no question (nobody can answer it) and no
+ * goodbye (that comes after the number). Also takes out a callback sentence already in it, so applying
+ * `closingLine` twice changes nothing.
+ */
+function closingBody(line: string, reach: string): string {
+  let body = (reach ? line.split(reach).join(' ') : line).replace(/\s+/g, ' ').trim();
+  for (let before = ''; before !== body; ) {
+    before = body;
+    body = withoutTrailingQuestions(body.replace(GOODBYE_TAIL, '').trim()).trim();
+  }
+  return body && !/[.!?]$/.test(body) ? `${body}.` : body;
+}
+
+/**
+ * Every call ends the same way, whoever wrote the line before it: that line, then the number to call back on,
+ * then goodbye (47 CFR 64.1200(b)(2)). The server adds the number; the model is never relied on for it.
+ */
+export function closingLine(line: string, reach: string): string {
+  const body = closingBody(line, reach);
+  return [body, reach, 'Goodbye.'].filter(Boolean).join(' ');
+}
+
+/**
+ * The message left on an answering machine. It has to stay under 25 seconds whatever the names are, so that
+ * with the greeting before it a call to voicemail stays inside one billed minute. So it uses the shortest form
+ * of each: one word for the assistant, the hosts' full names while they are short (else the first host's),
+ * their first names for the callback, and "meeting" for a long title. It says how to reschedule (with the
+ * link that is sent alongside) and how to call back.
  */
 function voicemailLine(s: CallScript, when: string): string {
   const hi = s.inviteeFirstName ? `Hi ${s.inviteeFirstName}` : 'Hi there';
   const assistant = s.assistantName.length <= 16 ? s.assistantName : firstNameOf(s.assistantName) || s.assistantName;
-  // Too long to say in time: the first host's first name alone ("Jimi", never "Jimi,").
-  const host = s.brandName ? s.brandName : s.hostFirstNames.length <= 24 ? s.hostFirstNames : s.hostFirstNames.split(/[\s,]+/)[0] || 'your host';
+  // Too long to say in time: the first host alone ("Jimi Cohen", never "Jimi Cohen,").
+  const lead = (names: string, max: number): string => (names.length <= max ? names : names.split(/,\s*|\s+and\s+/)[0] || 'your host');
+  const host = s.brandName ? s.brandName : lead(s.hostNames, 40);
+  const short = s.brandName ? s.brandName : s.hostFirstNames.length <= 24 ? s.hostFirstNames : s.hostFirstNames.split(/[\s,]+/)[0] || 'your host';
   const event = s.eventShort.length <= 32 ? s.eventShort : 'meeting';
   const link = s.linkChannel === 'sms' ? 'the link I am texting you now' : s.linkChannel === 'email' ? 'the link I am emailing you now' : 'the link in your confirmation email';
-  return `${hi}, this is ${assistant}, an AI assistant calling for ${host}. A reminder: your ${event} is ${when} your time. To change it, use ${link}. Goodbye.`;
+  return closingLine(`${hi}, this is ${assistant}, an AI assistant calling for ${host}. A reminder: your ${event} is ${when} your time. To change it, use ${link}.`, reachLine(s, short));
 }
 
 const PROBLEM_LINE = 'I am sorry, something went wrong on my end. If you need to change your meeting, please use the link in your confirmation email. Goodbye.';
@@ -420,49 +498,62 @@ export function callPhrases(s: CallScript, nowMs: number, purpose: 'reminder' | 
   const when = whenPhrase(s.startMs, nowMs, s.timezone);
   const name = s.inviteeFirstName;
   const hi = name ? `Hi ${name}` : 'Hi there';
-  // Under a brand the assistant calls for the brand and names the hosts with the meeting.
-  const caller = s.brandName || s.hostFirstNames;
+  // The first sentence names who is responsible for the call in full. Under a brand that is the brand, and the
+  // hosts are named with the meeting; afterwards the hosts go by first name.
+  const caller = responsible(s);
   const intro = `this is ${s.assistantName}, an AI assistant calling for ${caller}`;
   const event = s.eventShort;
   const about = s.brandName ? `${event} with ${s.hostFirstNames}` : event;
   const sending = s.linkChannel === 'sms' ? 'texting' : 'emailing';
   const sendsLink = s.linkChannel !== 'none';
   const testNote = purpose === 'test' ? 'This is a test call, so nothing will be changed. ' : '';
+  const reach = reachLine(s);
+  const end = (line: string): string => closingLine(line, reach);
   return {
     when,
+    reach,
     greeting: `${hi}, ${intro}. ${testNote}A quick reminder about your ${about} ${when} your time. Are you still able to make it?`,
     greetingConfirmed: `${hi}, ${intro}. ${testNote}A quick reminder about your ${about} ${when} your time. I have you down as coming. Is that still right?`,
     reintroduce: `${hi}, ${intro}. I am calling with a quick reminder about your ${about} ${when} your time. Are you still able to make it?`,
     identity: `I am ${s.assistantName}, an AI assistant calling for ${caller}. I am calling about your ${about}${s.brandName ? ',' : ''} ${when} your time. Will you be able to make it?`,
     // "your Meeting with Jimi", never "your Meeting with Jimi with Jimi".
     repeat: `Of course. This is a reminder about your ${eventNamesEveryone(event, s.hostFirstNames) ? event : `${event} with ${s.hostFirstNames}`}, ${when} your time. Will you be able to make it?`,
-    confirmed: `Wonderful, I have you down as confirmed for ${when}. Thank you, and goodbye.`,
-    linkSent: sendsLink
-      ? `No problem. I am ${sending} you a link now so you can pick a new time. Your meeting stays as it is until you choose one. Goodbye.`
-      : 'No problem. On a real call I would send you a link now to pick a new time. Goodbye.',
+    confirmed: end(`Wonderful, I have you down as confirmed for ${when}. Thank you.`),
+    linkSent: end(
+      sendsLink
+        ? `No problem. I am ${sending} you a link now so you can pick a new time. Your meeting stays as it is until you choose one.`
+        : 'No problem. On a real call I would send you a link now to pick a new time.',
+    ),
     askRescheduleOrCancel: 'Sorry to hear that. Would you like to reschedule, or cancel the meeting? You can say reschedule or cancel.',
     confirmCancelQuestion: `Just to confirm, would you like me to cancel your ${event} ${when}? Please say yes or no.`,
     cancelRetryQuestion: `Sorry, I did not catch that. Should I cancel your ${event}? Please say yes or no.`,
-    cancelled: `Okay, your ${event} is cancelled, and I will let ${s.hostFirstNames} know. Goodbye.`,
-    cancelKept: `No problem. Your meeting stays as planned, ${when}. Goodbye.`,
+    cancelled: end(`Okay, your ${event} is cancelled, and I will let ${s.hostFirstNames} know.`),
+    cancelKept: end(`No problem. Your meeting stays as planned, ${when}.`),
     cancelKeptContinue: 'No problem, I have left your meeting as it is. Is there anything else you need?',
     unclear: 'Sorry, I did not catch that. Say yes if you are coming, reschedule to get a link to change the time, or cancel. You can also press 1, 2 or 3.',
     stillThere: `Are you still there? Say yes or press 1 if you can make your ${event}. Press 2 to reschedule, or 3 to cancel.`,
     stillThereCancel: `Are you still there? Should I cancel your ${event}? Please say yes or no.`,
-    silenceClose: `I am not hearing anything, so I will let you go. Your meeting is still on, ${when}. Goodbye.`,
-    goodbye: `Thanks${name ? ` ${name}` : ''}. Have a great day. Goodbye.`,
-    wrongPerson: 'I am sorry about that. I will make a note of it. Goodbye.',
-    optedOut: 'Understood. You will not get any more calls about this meeting. Goodbye.',
-    turnLimit: 'I should let you go now. If you want to change anything, use the link in your confirmation email. Goodbye.',
-    turnLimitCancel: sendsLink
-      ? `I have not cancelled anything. I am ${sending} you a link now so you can cancel or reschedule yourself. Goodbye.`
-      : 'I have not cancelled anything. You can cancel or reschedule from the link in your confirmation email. Goodbye.',
-    changed: `${hi}, ${intro}. It looks like this meeting was just changed, so there is nothing you need to do. Goodbye.`,
+    silenceClose: end(`I am not hearing anything, so I will let you go. Your meeting is still on, ${when}.`),
+    goodbye: end(`Thanks${name ? ` ${name}` : ''}. Have a great day.`),
+    wrongPerson: end('I am sorry about that. I will make a note of it.'),
+    optedOut: end('Understood. You will not get any more calls about this meeting.'),
+    turnLimit: end('I should let you go now. If you want to change anything, use the link in your confirmation email.'),
+    turnLimitCancel: end(
+      sendsLink
+        ? `I have not cancelled anything. I am ${sending} you a link now so you can cancel or reschedule yourself.`
+        : 'I have not cancelled anything. You can cancel or reschedule from the link in your confirmation email.',
+    ),
+    changed: end(`${hi}, ${intro}. It looks like this meeting was just changed, so there is nothing you need to do.`),
     voicemail: voicemailLine(s, when),
-    confirmFailed: `Thank you. I could not save that just now, but your meeting is still on, ${when}. Goodbye.`,
-    linkFailed: 'I am sorry, I could not send the link just now. You can use the link in your confirmation email to change your meeting. Goodbye.',
-    cancelFailed: 'I am sorry, I could not cancel it just now. Please use the cancel link in your confirmation email. Goodbye.',
+    confirmFailed: end(`Thank you. I could not save that just now, but your meeting is still on, ${when}.`),
+    linkFailed: end('I am sorry, I could not send the link just now. You can use the link in your confirmation email to change your meeting.'),
+    cancelFailed: end('I am sorry, I could not cancel it just now. Please use the cancel link in your confirmation email.'),
   };
+}
+
+/** The line a call ends on when something broke on our side, with the number to call back on when the call has one. */
+function problemLine(s: CallScript | null | undefined): string {
+  return s ? closingLine(PROBLEM_LINE, reachLine(s)) : PROBLEM_LINE;
 }
 
 // ───────────────────────── TwiML ─────────────────────────
@@ -500,6 +591,20 @@ function listenTwiml(ctx: Ctx, call: StoredCall, say: string, leadPauseSec = 0):
 function hangupTwiml(say: string, s: Pick<CallScript, 'voice' | 'language'>): Response {
   return twimlResponse(`${say ? sayVerb(say, s) : ''}<Hangup/>`);
 }
+
+/**
+ * The voicemail is said once per call, by whichever path gets there first: the turn that heard a greeting, or
+ * Twilio's machine detection, which switches the live call to the message. The one that takes this claim speaks.
+ */
+function voicemailClaim(callId: string): string {
+  return `call-voicemail-said-${callId}`;
+}
+
+/**
+ * The answer of a turn that lost the voicemail to the machine detection: say nothing and keep the line open
+ * while that switch takes over (it replaces this document). Long enough for Twilio's own timeout on the switch.
+ */
+const HOLD_FOR_VOICEMAIL = '<Pause length="10"/><Hangup/>';
 
 /** A voicemail greeting may still be playing: wait `pauseSec`, speak, hang up. */
 function voicemailVerbs(say: string, s: Pick<CallScript, 'voice' | 'language'>, pauseSec: number): string {
@@ -666,6 +771,9 @@ export function scriptedMove(intent: CallerIntent, state: { pendingCancel: boole
  *     and anything in between is asked once more. A meeting is never cancelled on the model's
  *     reading of the caller alone.
  *   - "request_cancel" always ends in a question.
+ *   - a decision ends the call, as it does in the scripted flow: after "confirm_attendance" and
+ *     "send_manage_link" (and a confirmed cancellation) comes one closing line, then the hang-up, whatever
+ *     the reply asked. Nobody is kept on the line for "anything else?".
  */
 export function enforceMove(move: Move, state: { pendingCancel: boolean; speech: string; digit: string }, p: CallPhrases): Move {
   if (move.action === 'confirm_cancel') {
@@ -679,7 +787,7 @@ export function enforceMove(move: Move, state: { pendingCancel: boolean; speech:
     const asks = /\?\s*$/.test(move.say) || /\b(yes or no|press 1)\b/i.test(move.say);
     return { ...move, hangup: false, say: asks ? move.say : `${move.say} ${p.confirmCancelQuestion}` };
   }
-  if (move.action === 'end_call') return { ...move, hangup: true };
+  if (move.action === 'end_call' || move.action === 'confirm_attendance' || move.action === 'send_manage_link') return { ...move, hangup: true };
   return move;
 }
 
@@ -710,6 +818,7 @@ export function buildSystemPrompt(s: CallScript, nowMs: number, purpose: 'remind
       : s.linkChannel === 'email'
         ? 'by email to the address they booked with'
         : 'by email';
+  const reachWho = s.brandName || s.hostFirstNames;
   const lines = [
     `You are ${s.assistantName}, an AI voice assistant. You are on a live phone call that you placed for ${s.brandName ? `${s.brandName}, on behalf of ${s.hostNames}` : s.hostNames}, to remind ${s.inviteeName || 'their guest'} about an upcoming meeting.`,
     s.persona ? `Your manner: ${s.persona}` : '',
@@ -724,6 +833,7 @@ export function buildSystemPrompt(s: CallScript, nowMs: number, purpose: 'remind
     `- Length: ${s.durationMin} minutes`,
     `- Where: ${s.location}`,
     `- The caller's local time right now: ${formatInZone(nowMs, zone, 'spoken', 'en-US')}`,
+    s.callbackSpoken ? `- The number for reaching ${reachWho}: ${s.callbackSpoken}. If they ask how to reach ${reachWho}, give it, said exactly like that.` : '',
     '',
     'How the call works:',
     'Your reply is turned into speech and played to the caller, and then they answer. You receive the call so far as a transcript. The caller\'s words come from speech recognition, so they can be misheard or cut short. If you are not sure what they meant, ask one short question instead of guessing.',
@@ -731,15 +841,15 @@ export function buildSystemPrompt(s: CallScript, nowMs: number, purpose: 'remind
     '',
     'What you can do, through the "action" field of your reply:',
     '- "continue": only talk. Use it to answer a question, to clarify, or when nothing else fits.',
-    `- "confirm_attendance": the caller clearly says they will be there. This records it for ${s.hostFirstNames}.`,
-    `- "send_manage_link": the caller wants a different time, is unsure, or asks for the link. This sends a link ${linkRoute} where they can pick a new time or cancel. You cannot choose a new time yourself, and the meeting stays as booked until they use the link. Tell them how the link will reach them.`,
+    `- "confirm_attendance": the caller clearly says they will be there. This records it for ${s.hostFirstNames} and ends the call.`,
+    `- "send_manage_link": the caller wants a different time, is unsure, or asks for the link. This sends a link ${linkRoute} where they can pick a new time or cancel, and ends the call. You cannot choose a new time yourself, and the meeting stays as booked until they use the link. Tell them how the link will reach them.`,
     '- "request_cancel": the caller says they want to cancel. Nothing is cancelled yet. Your reply must ask them to confirm with a yes or no question.',
-    '- "confirm_cancel": only when your previous reply asked them to confirm the cancellation and they have now clearly said yes. This cancels the meeting and ends the call, so say that it is cancelled and say goodbye. If they say no or hesitate, use "continue" and leave the meeting as it is.',
-    '- "end_call": the conversation is finished, they ask you to stop, or you reached the wrong person. Say a short goodbye. The call ends after your reply.',
-    'After "confirm_attendance" or "send_manage_link" the caller can still speak, so end by asking briefly whether there is anything else.',
+    '- "confirm_cancel": only when your previous reply asked them to confirm the cancellation and they have now clearly said yes. This cancels the meeting and ends the call, so say that it is cancelled. If they say no or hesitate, use "continue" and leave the meeting as it is.',
+    '- "end_call": the conversation is finished, they ask you to stop, or you reached the wrong person. The call ends after your reply.',
+    'The call ends right after a reply with "confirm_attendance", "send_manage_link", "confirm_cancel" or "end_call", so that reply is one short closing sentence that says what was done, with no question in it. If the caller asked something else in the same breath, such as where to find the meeting link, answer it briefly in that sentence. Do not say goodbye and do not read out a phone number: the call adds the callback number and the goodbye itself.',
     'The call state tells you whether a cancellation is waiting for confirmation. A cancellation is only carried out when it is, and only on a plain yes from the caller. If the caller drifts to something else and later comes back to cancelling, use "request_cancel" again.',
     'The call state also tells you whether the link was already sent on this call. It is sent once, so if they ask again, tell them it is already on its way.',
-    'When the call state says no replies are left, the call ends after what you say now: wrap up and say goodbye.',
+    'When the call state says no replies are left, the call ends after what you say now: wrap up in one short sentence.',
     `If the latest words sound like a voicemail greeting or an automated phone menu rather than a person answering you, do not act on them. Use "continue" and simply ask whether you are speaking with ${s.inviteeFirstName || 'the right person'}.`,
     '',
     'How to speak:',
@@ -805,30 +915,85 @@ function modelFailure(err: unknown): { reason: string; level: 'warn' | 'error'; 
   return { reason: 'unexpected', level: 'warn' };
 }
 
-interface ModelReply {
+export interface ModelReply {
   stopReason: string | null;
   refusalCategory: string | null;
   text: string;
 }
 
-interface ModelRequest {
+export interface ModelRequest {
   model: string;
   max_tokens: number;
+  thinking?: { type: 'disabled' } | { type: 'between_tools' };
   output_config: { effort: 'low'; format: { type: 'json_schema'; schema: Record<string, unknown> } };
   system: string;
   messages: { role: 'user'; content: string }[];
 }
 
 /**
- * Set once the API has turned down the refusal fallback option (a beta that an account or model
- * may not have) while the same request without it went through. Later requests from this
- * instance then skip the attempt that is known to fail. Lives only in memory.
+ * What a request to this model says about thinking, and whether it asks for the server-side refusal fallback.
+ * From the Claude API reference (shared/models.md, shared/model-migration.md):
+ *   claude-haiku-5-5   thinking {type: "disabled"} is accepted at effort high or below. "There is no server-side
+ *                      fallback for Claude Haiku 5.5 - don't add the fallbacks parameter to its requests".
+ *   claude-sonnet-5-5  {type: "disabled"} returns a 400; {type: "between_tools"} turns thinking off at effort high
+ *                      or below. Its fallback retries some declines on Claude Sonnet 5, where a between_tools
+ *                      request runs with thinking disabled.
+ *   claude-opus-5-5    thinking cannot be disabled: the field is left out (adaptive), effort is the control.
+ *   anything else      no thinking field: its rules are not known here. The fallback is asked for, and
+ *                      dropped for that model if the API turns it down (askModel).
+ * Every request runs at effort "low", which all three accept with these settings.
  */
-let refusalFallbackUnavailable = false;
+export function modelOptions(model: string): { thinking?: ModelRequest['thinking']; refusalFallback: boolean } {
+  if (model === 'claude-haiku-5-5') return { thinking: { type: 'disabled' }, refusalFallback: false };
+  if (model === 'claude-sonnet-5-5') return { thinking: { type: 'between_tools' }, refusalFallback: true };
+  return { refusalFallback: true };
+}
+
+/** The request a call sends, and the dashboard's key test too, so that test passes only when a call would work. */
+export function modelRequest(model: string, system: string, content: string): ModelRequest {
+  const { thinking } = modelOptions(model);
+  return {
+    model,
+    max_tokens: MODEL_MAX_TOKENS,
+    ...(thinking ? { thinking } : {}),
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: MOVE_SCHEMA } },
+    system,
+    messages: [{ role: 'user', content }],
+  };
+}
+
+/** The Anthropic client the assistant uses: our fetch, no retries (the caller is waiting), no request logging. */
+export function anthropicClient(ctx: Ctx, apiKey: string, timeoutMs: number): Anthropic {
+  return new Anthropic({
+    apiKey,
+    // Stated outright so nothing in the process environment can point requests elsewhere.
+    baseURL: ANTHROPIC_API,
+    fetch: ctx.fetch,
+    maxRetries: 0,
+    timeout: timeoutMs,
+    // The SDK's debug logging would print request bodies, which hold what the caller said.
+    logLevel: 'off',
+  });
+}
+
+/**
+ * The models for which the API has turned down the refusal fallback option (a beta that an account or model
+ * may not have) while the same request without it went through. Later requests for them skip the attempt that
+ * is known to fail. Lives only in memory.
+ */
+const refusalFallbackRefused = new Set<string>();
 
 /** For tests: forget what was learned about the refusal fallback option. */
 export function resetVoiceModelMemo(): void {
-  refusalFallbackUnavailable = false;
+  refusalFallbackRefused.clear();
+}
+
+/** What the API said about a request it turned down, on one line. Its messages name fields, not what was said on the call. */
+function apiReason(err: unknown): string | undefined {
+  if (!(err instanceof Anthropic.APIError)) return undefined;
+  const body = err.error as { error?: { message?: unknown } } | undefined;
+  const message = typeof body?.error?.message === 'string' ? body.error.message : err.message;
+  return message.replace(/\s+/g, ' ').trim().slice(0, 300) || undefined;
 }
 
 async function askOnce(client: Anthropic, request: ModelRequest, withRefusalFallback: boolean, signal: AbortSignal): Promise<ModelReply> {
@@ -855,6 +1020,41 @@ async function askOnce(client: Anthropic, request: ModelRequest, withRefusalFall
 }
 
 /**
+ * Sends the request, with the refusal fallback where the model has one. A 400 comes back at once and may
+ * be about the fallback option or about anything else in the request (a thinking setting the model does not
+ * take, say), so the same request goes once more without the option. Only when that one goes through was the
+ * option the cause, and only then is it dropped, for this model alone. When both are turned down the error
+ * is thrown with the API's reason in the log, so a request that can never work is never mistaken for a
+ * missing beta and never leaves every call on the scripted replies without saying why.
+ */
+export async function askModel(ctx: Ctx, client: Anthropic, request: ModelRequest, signal: AbortSignal): Promise<ModelReply> {
+  if (!modelOptions(request.model).refusalFallback || refusalFallbackRefused.has(request.model)) return askOnce(client, request, false, signal);
+  try {
+    return await askOnce(client, request, true, signal);
+  } catch (err) {
+    if (!(err instanceof Anthropic.BadRequestError)) throw err;
+    let reply: ModelReply;
+    try {
+      reply = await askOnce(client, request, false, signal);
+    } catch (again) {
+      if (again instanceof Anthropic.BadRequestError) {
+        ctx.log('error', 'voice: Anthropic turned the request down with and without the refusal fallback, so the request itself needs fixing', {
+          model: request.model,
+          reason: apiReason(again),
+        });
+      }
+      throw again;
+    }
+    refusalFallbackRefused.add(request.model);
+    ctx.log('warn', 'voice: the refusal fallback option was not accepted for this model, continuing without it', { model: request.model, reason: apiReason(err) });
+    return reply;
+  }
+}
+
+/** The actions after which the call ends: a decision was made, or the conversation is over. */
+const ENDS_CALL: ReadonlySet<AssistantAction> = new Set(['confirm_attendance', 'send_manage_link', 'confirm_cancel', 'end_call']);
+
+/**
  * Asks Claude for the next move. Returns null (and the scripted flow answers) on any error,
  * timeout, refusal, cut-off or unusable reply, so the caller is never left in silence.
  */
@@ -862,38 +1062,9 @@ async function modelMove(ctx: Ctx, apiKey: string, call: StoredCall, callerText:
   const s = call.script;
   const controller = new AbortController();
   try {
-    const client = new Anthropic({
-      apiKey,
-      // Stated outright so nothing in the process environment can point requests elsewhere.
-      baseURL: ANTHROPIC_API,
-      fetch: ctx.fetch,
-      maxRetries: 0,
-      timeout: MODEL_TIMEOUT_MS,
-      // The SDK's debug logging would print request bodies, which hold what the caller said.
-      logLevel: 'off',
-    });
-    const request: ModelRequest = {
-      model: modelSetting(s.model),
-      max_tokens: MODEL_MAX_TOKENS,
-      output_config: { effort: 'low', format: { type: 'json_schema', schema: MOVE_SCHEMA } },
-      system: buildSystemPrompt(s, ctx.now().getTime(), call.purpose),
-      messages: [{ role: 'user', content: buildTurnMessage(call, callerText, repliesLeft) }],
-    };
-    const ask = async (): Promise<ModelReply> => {
-      if (refusalFallbackUnavailable) return askOnce(client, request, false, controller.signal);
-      try {
-        return await askOnce(client, request, true, controller.signal);
-      } catch (err) {
-        // A 400 comes back at once. The usual cause is that the refusal fallback beta is not
-        // enabled for this account or model, so the same question is asked once more without it.
-        if (!(err instanceof Anthropic.BadRequestError)) throw err;
-        const reply = await askOnce(client, request, false, controller.signal);
-        refusalFallbackUnavailable = true;
-        ctx.log('warn', 'voice: the refusal fallback option was not accepted for this account or model, continuing without it');
-        return reply;
-      }
-    };
-    const reply = await withDeadline(ask(), MODEL_TIMEOUT_MS + MODEL_DEADLINE_SLACK_MS, () => controller.abort());
+    const client = anthropicClient(ctx, apiKey, MODEL_TIMEOUT_MS);
+    const request = modelRequest(modelSetting(s.model), buildSystemPrompt(s, ctx.now().getTime(), call.purpose), buildTurnMessage(call, callerText, repliesLeft));
+    const reply = await withDeadline(askModel(ctx, client, request, controller.signal), MODEL_TIMEOUT_MS + MODEL_DEADLINE_SLACK_MS, () => controller.abort());
     if (reply.stopReason === 'refusal') {
       ctx.log('warn', 'voice: the model declined to answer, using the scripted reply', { category: reply.refusalCategory });
       return null;
@@ -907,10 +1078,10 @@ async function modelMove(ctx: Ctx, apiKey: string, call: StoredCall, callerText:
       ctx.log('warn', 'voice: the model reply was not usable, using the scripted reply');
       return null;
     }
-    return { ...parsed, hangup: parsed.action === 'end_call', brain: 'model' };
+    return { ...parsed, hangup: ENDS_CALL.has(parsed.action), brain: 'model' };
   } catch (err) {
     const failure = modelFailure(err);
-    ctx.log(failure.level, 'voice: the model call failed, using the scripted reply', { reason: failure.reason, status: failure.status });
+    ctx.log(failure.level, 'voice: the model call failed, using the scripted reply', { reason: failure.reason, status: failure.status, detail: apiReason(err) });
     return null;
   }
 }
@@ -1039,6 +1210,10 @@ async function placeCall(ctx: Ctx, account: TwilioAccount, p: { booking: Booking
   if (isRestrictedNumber(to)) return skip('unsupported_number');
 
   const [site, hosts] = await Promise.all([getSite(ctx), listHosts(ctx)]);
+  // Every call has to give a number to call back on that is not the one calling (47 CFR 64.1200(b)(2)).
+  // Without it no call goes out, a test call included: it is set up like anything else that is missing.
+  const callbackNumber = usableCallbackNumber(site, account.fromNumber);
+  if (!callbackNumber) return skip('no_callback_number');
   if (purpose === 'reminder') {
     if (!withinCallWindow(now, booking.invitee.timezone, { ...DEFAULT_ASSISTANT, ...(site.assistant ?? {}) })) return skip('outside_call_window');
     if (await isNumberBlocked(ctx, to, 'call')) return skip('opted_out');
@@ -1064,7 +1239,7 @@ async function placeCall(ctx: Ctx, account: TwilioAccount, p: { booking: Booking
       updatedAt: nowIso,
       purpose,
       // A reminder speaks for the brand the meeting was booked under; a test call is always the owner's own.
-      script: buildCallScript({ booking, site: purpose === 'reminder' ? viewFor(site, booking) : site, hosts, purpose }),
+      script: buildCallScript({ booking, site: purpose === 'reminder' ? viewFor(site, booking) : site, hosts, purpose, callbackNumber }),
       emptyCount: 0,
       linkSent: false,
       ended: false,
@@ -1123,7 +1298,7 @@ async function placeCall(ctx: Ctx, account: TwilioAccount, p: { booking: Booking
 
 /**
  * Places the reminder call. `skipped` means there is no point trying again (no consent, outside
- * calling hours, not configured, a number that cannot be called). `to` is only used for a test call.
+ * calling hours, not configured, no callback number, a number that cannot be called). `to` is only used for a test call.
  * Never throws.
  */
 export async function startReminderCall(ctx: Ctx, p: { booking: Booking; purpose: 'reminder' | 'test'; to?: string }): Promise<SendResult> {
@@ -1297,6 +1472,17 @@ async function carryOut(ctx: Ctx, call: StoredCall, booking: Booking | null, mov
   }
 }
 
+/**
+ * What a call ends on: the reply's own last line without a question and without a goodbye, then the number to
+ * call back on and the goodbye, added here whoever wrote the reply. A reply with nothing left once its questions
+ * are gone ("Anything else?") gets our own closing line for what was done.
+ */
+function closingFor(move: Move, p: CallPhrases): string {
+  const own: Partial<Record<AssistantAction, string>> = { confirm_attendance: p.confirmed, send_manage_link: p.linkSent, confirm_cancel: p.cancelled };
+  const line = closingLine(speakable(move.say), p.reach);
+  return line === closingLine('', p.reach) ? (own[move.action] ?? p.goodbye) : line;
+}
+
 function cleanCallerSpeech(value: string | null): string {
   return clip(
     String(value ?? '')
@@ -1313,8 +1499,14 @@ async function stepTurn(ctx: Ctx, call: StoredCall, form: URLSearchParams, arriv
   const at = now.toISOString();
   const p = callPhrases(s, now.getTime(), call.purpose);
 
-  // A machine was detected while this request was on its way: make sure the message still gets left.
-  if (call.status === 'voicemail') return twimlResponse(voicemailVerbs(p.voicemail, s, 1));
+  // A machine was detected while this request was on its way. The message is said once: here, unless the
+  // detection is already switching the call to it.
+  if (call.status === 'voicemail') {
+    if (!(await claim(ctx, voicemailClaim(call.id)))) return twimlResponse(HOLD_FOR_VOICEMAIL);
+    await mutateCall(ctx, call.id, (c) => ({ ...c, voicemailLeft: true }));
+    await sendVoicemailLink(ctx, call);
+    return twimlResponse(voicemailVerbs(p.voicemail, s, 1));
+  }
   if (isOver(call)) return hangupTwiml('', s);
 
   const digit = /^[0-9*#]/.test(form.get('Digits') ?? '') ? (form.get('Digits') ?? '').charAt(0) : '';
@@ -1338,16 +1530,19 @@ async function stepTurn(ctx: Ctx, call: StoredCall, form: URLSearchParams, arriv
 
   // ── an answering machine picked up ──
   if (!digit && !humanEngaged(call) && soundsLikeVoicemail(speech)) {
+    // Said once per call: when Twilio's detection got there first, it is switching the call to the message.
+    const mine = await claim(ctx, voicemailClaim(call.id));
     await mutateCall(ctx, call.id, (c) => ({
       ...c,
       status: 'voicemail',
       outcome: 'voicemail',
       pendingCancel: false,
-      voicemailLeft: true,
-      turns: [...c.turns, turn('caller', callerText, at), turn('assistant', p.voicemail, at)],
+      voicemailLeft: c.voicemailLeft || mine,
+      turns: [...c.turns, turn('caller', callerText, at), ...(mine ? [turn('assistant', p.voicemail, at)] : [])],
     }));
+    if (!mine) return twimlResponse(HOLD_FOR_VOICEMAIL);
     await sendVoicemailLink(ctx, call);
-    // The greeting is probably still playing. If Twilio's detection reports the beep, the message is restarted then.
+    // The greeting is probably still playing: wait a little first. A beep Twilio reports later does not restart it.
     return twimlResponse(voicemailVerbs(p.voicemail, s, 4));
   }
 
@@ -1388,7 +1583,7 @@ async function stepTurn(ctx: Ctx, call: StoredCall, form: URLSearchParams, arriv
 
   const done = await carryOut(ctx, call, booking, move, p, arrivedMs);
   move = done.move;
-  const say = speakable(move.say) || p.unclear;
+  const say = move.hangup ? closingFor(move, p) : speakable(move.say) || p.unclear;
 
   await mutateCall(ctx, call.id, (c) => ({
     ...c,
@@ -1447,6 +1642,8 @@ async function stepAmd(ctx: Ctx, call: StoredCall, form: URLSearchParams): Promi
         },
   );
   if (!marked || marked.status !== 'voicemail') return ack();
+  // Said once per call: a turn that heard the greeting may already be saying it (or a repeat of this verdict).
+  if (!(await claim(ctx, voicemailClaim(call.id)))) return ack();
 
   try {
     // Replaces whatever the call is doing with the message, now that the greeting and its beep are over.
@@ -1455,6 +1652,8 @@ async function stepAmd(ctx: Ctx, call: StoredCall, form: URLSearchParams): Promi
     });
   } catch (err) {
     ctx.log('warn', 'voice: could not switch the call to the voicemail message', { callId: call.id, error: shortError(err) });
+    // Nothing was said: a turn still on its way may leave the message instead.
+    await releaseClaim(ctx, voicemailClaim(call.id)).catch(() => undefined);
     return ack();
   }
   await mutateCall(ctx, call.id, (c) => ({ ...c, voicemailLeft: true }));
@@ -1630,6 +1829,6 @@ export async function handleVoiceWebhook(ctx: Ctx, req: Request, step: 'start' |
     ctx.log('error', `voice: the ${step} webhook failed`, { callId, error: shortError(err) });
     if (!speaks) return new Response(null, { status: 500, headers: { 'Cache-Control': 'no-store' } });
     if (call) await mutateCall(ctx, call.id, (c) => ({ ...c, ended: true })).catch(() => null);
-    return hangupTwiml(PROBLEM_LINE, call?.script ?? DEFAULT_SPEECH);
+    return hangupTwiml(problemLine(call?.script), call?.script ?? DEFAULT_SPEECH);
   }
 }

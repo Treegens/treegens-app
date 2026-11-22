@@ -68,6 +68,9 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       s.expect(await card('Google Calendar').getByRole('button', { name: 'Connect Google Calendar' }).isDisabled(), 'connect before keys are saved').toBe(true);
       await open('Email');
       await open('Texts and reminder calls');
+      // What a real setup needs: a paid account, and the registration that fits the kind of number.
+      await card('Texts and reminder calls').getByText('A trial account only calls and texts numbers you have verified yourself, and plays a trial message first, so real reminders need a paid account.', { exact: false }).waitFor();
+      await card('Texts and reminder calls').getByText('A toll-free number needs toll-free verification: it takes about 3 to 5 business days, and Twilio lists no fee for it. A local number needs A2P 10DLC registration instead.', { exact: false }).waitFor();
       s.expect(await card('Texts and reminder calls').getByRole('button', { name: 'Send test text' }).isDisabled(), 'test text before Twilio is saved').toBe(true);
       s.expect(await card('Texts and reminder calls').getByRole('button', { name: 'Call me' }).isDisabled(), 'test call before Twilio is saved').toBe(true);
       await open('Voice assistant');
@@ -229,7 +232,8 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       await twilio.getByLabel('Auth token').fill('invalid-twilio-token-0042');
       await twilio.getByRole('button', { name: 'Save Twilio details' }).click();
       await expectToast(page, 'Twilio saved');
-      await s.eventually(async () => s.expect(await badge('Texts and reminder calls'), 'Twilio badge').toBe('Connected'));
+      // Calls also need a number to call back on, which is not set yet.
+      await s.eventually(async () => s.expect(await badge('Texts and reminder calls'), 'Twilio badge').toBe('Calls need a callback number'));
       // The number was typed with spaces and brackets, and is kept in the international form.
       s.expect((await status()).twilio, 'Twilio status').toEqual({ configured: true, calls: true, accountSidMasked: 'AC01…cdef', fromNumber: TWILIO_NUMBER });
       s.expect(await twilio.getByLabel('Your Twilio number').inputValue(), 'number shown after saving').toBe(TWILIO_NUMBER);
@@ -251,6 +255,36 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       await result('Texts and reminder calls').getByText(`Test text sent to ${MOBILE}.`).waitFor();
       const [text] = await s.outbox({ kind: 'sms' });
       s.expect(text, 'the test text').toMatchObject({ service: 'twilio', ok: true, to: MOBILE, from: TWILIO_NUMBER, body: /texts are working/ });
+
+      // No callback number yet: the card says what is missing, the test call says so too, and nothing rings.
+      await twilio.getByText('Every reminder call ends by saying a number people can call back on, and it cannot be your Twilio number. Until you add one, no reminder calls are placed.', { exact: false }).waitFor();
+      await twilio.getByRole('button', { name: 'Call me' }).click();
+      await result('Texts and reminder calls').getByText('Reminder calls need a callback number first: every call ends by saying a number people can call back on, and it cannot be your Twilio number. Add it in Settings, under AI assistant.').waitFor();
+      s.expect(await s.outbox({ kind: 'call' }), 'calls placed without a callback number').toEqual([]);
+      s.expect((await s.apiOk('GET', '/admin/overview')).warnings.find((w) => w.key === 'callback_missing'), 'Home').toMatchObject({ href: '/admin/settings#callback' });
+      await s.screenshot(page, 'twilio card asking for a callback number');
+      for (const [width, height] of [[1280, 900], [390, 844]]) {
+        await page.setViewportSize({ width, height });
+        await twilio.scrollIntoViewIfNeeded();
+        await s.screenshot(page, `twilio card asking for a callback number at ${width}`);
+        s.expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `no sideways scrolling at ${width}`).toBe(true);
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+
+      // The link in the card goes straight to the field in Settings.
+      await twilio.getByRole('link', { name: 'Add it in Settings, under AI assistant' }).click();
+      const callback = page.getByLabel('Callback number');
+      await s.eventually(async () => s.expect(await callback.evaluate((el) => el === document.activeElement), 'the field has the focus').toBe(true));
+      await callback.fill('+1 212 555 0100');
+      await page.getByRole('button', { name: 'Save settings' }).click();
+      await expectToast(page, 'Settings saved');
+      await clearToasts(page);
+      s.expect((await s.kv('site')).assistant.callbackNumber, 'stored callback number').toBe('+12125550100');
+      await page.goBack();
+      await page.getByRole('heading', { name: 'Integrations', level: 1 }).waitFor();
+      await open('Texts and reminder calls');
+      await s.eventually(async () => s.expect(await badge('Texts and reminder calls'), 'Twilio badge').toBe('Connected'));
+      await twilio.getByLabel('Your mobile number').fill(MOBILE);
 
       await twilio.getByRole('button', { name: 'Call me' }).click();
       await result('Texts and reminder calls').getByText(`Calling ${MOBILE} now. Ava will say it is a test call, and nothing will be changed.`).waitFor();
@@ -276,7 +310,24 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       s.expect((await status()).anthropic.configured, 'configured after a refused save').toBe(false);
 
       await key.fill(ANTHROPIC_KEY);
-      await assistant.getByRole('combobox', { name: 'Model' }).selectOption({ label: 'Claude Sonnet 5.5 (quicker replies, lower cost)' });
+      // Quickest first, and that is the one recommended.
+      const models = await assistant.getByRole('combobox', { name: 'Model' }).locator('option').allTextContents();
+      s.expect(models, 'the models offered').toEqual([
+        'Claude Haiku 5.5 (recommended: quickest replies, lowest cost)',
+        'Claude Sonnet 5.5 (more natural wording, a little slower and pricier)',
+        'Claude Opus 5.5 (slowest on a phone line)',
+        'Another model',
+      ]);
+      s.expect(await assistant.getByRole('combobox', { name: 'Model' }).inputValue(), 'chosen out of the box').toBe('claude-haiku-5-5');
+      await assistant.getByText('The recommended model answers quickest, so callers wait the least after they speak.', { exact: false }).waitFor();
+      for (const [width, height] of [[1280, 900], [390, 844]]) {
+        await page.setViewportSize({ width, height });
+        await assistant.getByRole('combobox', { name: 'Model' }).scrollIntoViewIfNeeded();
+        await s.screenshot(page, `voice assistant model choice at ${width}`, { fullPage: false });
+        s.expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `no sideways scrolling at ${width}`).toBe(true);
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await assistant.getByRole('combobox', { name: 'Model' }).selectOption({ label: 'Claude Sonnet 5.5 (more natural wording, a little slower and pricier)' });
       await assistant.getByRole('button', { name: 'Save assistant settings' }).click();
       await expectToast(page, 'Assistant settings saved');
       await s.eventually(async () => s.expect(await badge('Voice assistant'), 'assistant badge').toBe('Connected'));
@@ -289,7 +340,16 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       await assistant.getByRole('button', { name: 'Send test' }).click();
       await result('Voice assistant').getByText(/^The key works\. claude-sonnet-5-5 answered/).waitFor();
       const [asked] = await s.outbox({ kind: 'llm' });
-      s.expect(asked, 'the test message to the model').toMatchObject({ service: 'anthropic', ok: true, model: 'claude-sonnet-5-5' });
+      // Asked the way a call asks: Sonnet turns thinking off with between_tools, with the refusal fallback.
+      s.expect(asked, 'the test message to the model').toMatchObject({
+        service: 'anthropic',
+        ok: true,
+        model: 'claude-sonnet-5-5',
+        thinking: { type: 'between_tools' },
+        fallbacks: 'default',
+        betas: ['server-side-fallback-2026-07-01'],
+        structured: true,
+      });
 
       // A key Anthropic turns down gives a clear sentence, not a code.
       await s.failService('anthropic', { status: 401 });

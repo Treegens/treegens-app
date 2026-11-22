@@ -27,8 +27,8 @@ import {
 } from '../../server/lib/google';
 import { fetchIcsBusy } from '../../server/lib/icsfeed';
 import { runDueJobs } from '../../server/lib/jobs';
-import { configureMocks, createMockFetch, decodeRawEmail, getMockKV, mockFetch } from '../../server/lib/mocks';
-import { getBooking, getCall, getHost, getSite, listJobs as listQueuedJobs, saveHost, saveSite, updateHost } from '../../server/lib/repo';
+import { anthropicRequestProblem, configureMocks, createMockFetch, decodeRawEmail, getMockKV, mockFetch } from '../../server/lib/mocks';
+import { getBooking, getCall, getHost, getSite, listJobs as listQueuedJobs, saveHost, saveSite, updateHost, updateSite } from '../../server/lib/repo';
 import { sendSms } from '../../server/lib/sms';
 import { memoryKV } from '../../server/lib/store';
 import { startReminderCall } from '../../server/lib/voice';
@@ -143,8 +143,10 @@ async function voiceHook(ctx: TestCtx, step: 'start' | 'turn' | 'status' | 'amd'
 }
 
 /** A booking with a phone number and consent, and the reminder call for it placed through mock Twilio. */
-async function bookedAndRinging(ctx: TestCtx) {
-  const { booking } = await createBooking(ctx, bookingRequest({ phone: '+14155552671', consent: { sms: true, call: true } }));
+async function bookedAndRinging(ctx: TestCtx, start?: string) {
+  // Reminder calls need a number to call back on (voice.ts usableCallbackNumber).
+  await updateSite(ctx, (s) => ({ ...s, assistant: { ...s.assistant, callbackNumber: '+12125550100' } }));
+  const { booking } = await createBooking(ctx, bookingRequest({ phone: '+14155552671', consent: { sms: true, call: true }, ...(start ? { start } : {}) }));
   await ctx.settle();
   const result = await startReminderCall(ctx, { booking, purpose: 'reminder' });
   expect(result).toMatchObject({ ok: true, provider: 'mock' });
@@ -565,32 +567,37 @@ describe('mock Twilio', () => {
     expect(start.said).toContain('an AI assistant');
 
     const turn = await voiceHook(ctx, 'turn', callId, sid, { SpeechResult: 'Yes, I will be there.' });
-    expect(turn.said).toContain('I have noted that you will be there');
+    expect(turn.said).toBe('Wonderful, I have noted that you will be there. To reach Jimi, call 2 1 2, 5 5 5, 0 1 0 0. Goodbye.');
+    expect(turn.hangsUp).toBe(true);
     expect((await getBooking(ctx, booking.id))?.attendance).toMatchObject({ confirmedVia: 'call' });
     const [llm] = await outbox(ctx, 'llm');
-    expect(llm).toMatchObject({ service: 'anthropic', status: 200, model: 'claude-opus-5-5', structured: true, caller: 'Yes, I will be there.', reply: { action: 'confirm_attendance' } });
-    expect(llm.betas).toContain('server-side-fallback-2026-07-01');
+    // The default: Claude Haiku 5.5, thinking off, and no refusal fallback (it has none).
+    expect(llm).toMatchObject({ service: 'anthropic', status: 200, model: 'claude-haiku-5-5', thinking: { type: 'disabled' }, fallbacks: null, betas: [], structured: true, caller: 'Yes, I will be there.', reply: { action: 'confirm_attendance' } });
     expect((await getCall(ctx, callId))?.outcome).toBe('confirmed');
   });
 
-  it('calls: "reschedule" sends the link, "cancel" asks first and only a following "yes" cancels', async () => {
+  it('calls: "reschedule" sends the link and ends the call, "cancel" asks first and only a following "yes" cancels', async () => {
     const ctx = await world();
     const first = await bookedAndRinging(ctx);
     await voiceHook(ctx, 'start', first.callId, first.sid);
     const moved = await voiceHook(ctx, 'turn', first.callId, first.sid, { SpeechResult: 'Can we reschedule?' });
-    expect(moved.said).toContain('link');
+    expect(moved.said).toBe('No problem. I am sending you a link where you can pick a new time. To reach Jimi, call 2 1 2, 5 5 5, 0 1 0 0. Goodbye.');
+    expect(moved.hangsUp).toBe(true);
     await ctx.settle();
     expect((await outbox(ctx, 'sms')).some((sms) => String(sms.body).includes(`/booking/${first.booking.id}`))).toBe(true);
     expect((await getCall(ctx, first.callId))?.outcome).toBe('reschedule_requested');
 
-    const asked = await voiceHook(ctx, 'turn', first.callId, first.sid, { SpeechResult: 'Actually, please cancel it.' });
+    const second = await bookedAndRinging(ctx, '2026-11-18T15:00:00.000Z');
+    await voiceHook(ctx, 'start', second.callId, second.sid);
+    const asked = await voiceHook(ctx, 'turn', second.callId, second.sid, { SpeechResult: 'Actually, please cancel it.' });
     expect(asked.listens).toBe(true);
-    expect((await getCall(ctx, first.callId))?.pendingCancel).toBe(true);
-    expect((await getBooking(ctx, first.booking.id))?.status).toBe('confirmed');
+    expect((await getCall(ctx, second.callId))?.pendingCancel).toBe(true);
+    expect((await getBooking(ctx, second.booking.id))?.status).toBe('confirmed');
 
-    const done = await voiceHook(ctx, 'turn', first.callId, first.sid, { SpeechResult: 'Yes.' });
+    const done = await voiceHook(ctx, 'turn', second.callId, second.sid, { SpeechResult: 'Yes.' });
     expect(done.hangsUp).toBe(true);
-    expect(await getBooking(ctx, first.booking.id)).toMatchObject({ status: 'cancelled', cancellation: { by: 'assistant' } });
+    expect(done.said).toBe('All right, your meeting is cancelled. Thank you, and take care. To reach Jimi, call 2 1 2, 5 5 5, 0 1 0 0. Goodbye.');
+    expect(await getBooking(ctx, second.booking.id)).toMatchObject({ status: 'cancelled', cancellation: { by: 'assistant' } });
     expect((await outbox(ctx, 'llm')).map((e) => e.reply.action)).toEqual(['send_manage_link', 'request_cancel', 'confirm_cancel']);
   });
 
@@ -610,15 +617,61 @@ describe('mock Twilio', () => {
     expect(await ctx.kv.getJSON(DEV_LLM_SCRIPT_KEY)).toEqual([]);
   });
 
-  it('the Anthropic connection test of the dashboard gets a real Messages answer', async () => {
+  it('the Anthropic connection test of the dashboard gets a real Messages answer, asked the way a call asks', async () => {
     const ctx = await world();
     expect(await runIntegrationTest(ctx, { channel: 'anthropic' })).toMatchObject({ ok: true });
-    expect((await outbox(ctx, 'llm'))[0]).toMatchObject({ status: 200, text: 'ready', structured: false });
+    expect((await outbox(ctx, 'llm'))[0]).toMatchObject({ status: 200, model: 'claude-haiku-5-5', thinking: { type: 'disabled' }, betas: [], structured: true, reply: { action: 'continue' } });
 
     const bad = await world({ overrides: { ...ALL_CREDS, anthropicApiKey: 'invalid-key' } });
     const refused = await runIntegrationTest(bad, { channel: 'anthropic' });
     expect(refused.ok).toBe(false);
     expect(refused.detail).toContain('did not accept this key');
+  });
+});
+
+describe('mock Anthropic: the request rules of the Claude API reference', () => {
+  const FALLBACK = ['server-side-fallback-2026-07-01'];
+  const body = (model: string, extra: Record<string, unknown> = {}) => ({ model, max_tokens: 2000, output_config: { effort: 'low' }, messages: [{ role: 'user', content: 'hi' }], ...extra });
+
+  it.each([
+    // Claude Opus 5.5: thinking cannot be disabled.
+    ['claude-opus-5-5', { thinking: { type: 'disabled' } }, [], '"thinking.type.disabled" is not supported for this model.'],
+    ['claude-opus-5-5', { thinking: { type: 'between_tools' } }, [], '"thinking.type.between_tools" is not supported for this model.'],
+    ['claude-opus-5-5', { thinking: { type: 'enabled', budget_tokens: 2000 } }, [], '"thinking.type.enabled" is not supported for this model.'],
+    // Claude Sonnet 5.5: "disabled" is a 400, "between_tools" at effort high or below with nothing else in it.
+    ['claude-sonnet-5-5', { thinking: { type: 'disabled' } }, [], 'To turn thinking off on this model, send "thinking": {"type": "between_tools"}'],
+    ['claude-sonnet-5-5', { thinking: { type: 'between_tools' }, output_config: { effort: 'xhigh' } }, [], "output_config.effort 'xhigh' is not supported when thinking is disabled"],
+    ['claude-sonnet-5-5', { thinking: { type: 'between_tools', display: 'summarized' } }, [], 'no other field'],
+    // Claude Haiku 5.5: "disabled" up to effort high only; no between_tools; no list of fallbacks.
+    ['claude-haiku-5-5', { thinking: { type: 'disabled' }, output_config: { effort: 'max' } }, [], "output_config.effort 'max' is not supported when thinking is disabled"],
+    ['claude-haiku-5-5', { thinking: { type: 'between_tools' } }, [], '"thinking.type.between_tools" is not supported for this model.'],
+    ['claude-haiku-5-5', { fallbacks: [{ model: 'claude-sonnet-5-5' }] }, FALLBACK, 'claude-haiku-5-5 has no server-side fallback'],
+    // The fallback parameter needs its beta.
+    ['claude-opus-5-5', { fallbacks: 'default' }, [], 'needs the server-side-fallback beta'],
+  ] as const)('turns down %s with %j', (model, extra, betas, message) => {
+    expect(anthropicRequestProblem(body(model, extra), [...betas])).toContain(message);
+  });
+
+  it.each([
+    ['claude-haiku-5-5', { thinking: { type: 'disabled' } }, []],
+    ['claude-haiku-5-5', { thinking: { type: 'disabled' }, output_config: { effort: 'high' } }, []],
+    ['claude-sonnet-5-5', { thinking: { type: 'between_tools' }, fallbacks: 'default' }, FALLBACK],
+    ['claude-opus-5-5', { fallbacks: 'default' }, FALLBACK],
+    ['claude-opus-5-5', { thinking: { type: 'adaptive' } }, []],
+    ['claude-some-other-model', {}, []],
+  ] as const)('accepts %s with %j', (model, extra, betas) => {
+    expect(anthropicRequestProblem(body(model, extra), [...betas])).toBeNull();
+  });
+
+  it('answers a request it turns down with the 400 the API gives', async () => {
+    const ctx = await world();
+    const res = await ctx.fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': 'sk-ant-mock', 'content-type': 'application/json' },
+      body: JSON.stringify(body('claude-sonnet-5-5', { thinking: { type: 'disabled' } })),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ type: 'error', error: { type: 'invalid_request_error' } });
   });
 });
 

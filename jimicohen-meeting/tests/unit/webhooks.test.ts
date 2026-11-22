@@ -3,7 +3,7 @@ import type { Booking, CreateBookingRequest } from '../../shared/types';
 import { handle } from '../../server/api';
 import { createBooking } from '../../server/lib/booking';
 import type { Env } from '../../server/lib/ctx';
-import { getBooking, getSite, listJobs, updateHost } from '../../server/lib/repo';
+import { getBooking, getSite, listJobs, updateHost, updateSite } from '../../server/lib/repo';
 import { computeTwilioSignature } from '../../server/lib/twilio';
 import { startReminderCall } from '../../server/lib/voice';
 import { routes } from '../../server/routes/webhooks';
@@ -268,6 +268,8 @@ describe('POST /twilio/sms/status', () => {
 describe('POST /twilio/voice/:step', () => {
   async function ringing(): Promise<{ ctx: TestCtx; booking: Booking; callId: string }> {
     const { ctx, twilio } = await setup();
+    // Every reminder call gives a number to call back on (voice.ts usableCallbackNumber).
+    await updateSite(ctx, (site) => ({ ...site, assistant: { ...site.assistant, callbackNumber: '+12125550100' } }));
     const booking = await book(ctx);
     const placed = await startReminderCall(ctx, { booking, purpose: 'reminder' });
     expect(placed).toMatchObject({ ok: true });
@@ -288,11 +290,11 @@ describe('POST /twilio/voice/:step', () => {
     const greeting = await start.text();
     expect(greeting).toContain('<Gather ');
     expect(greeting).toContain(`action="${PUBLIC_API}/twilio/voice/turn?c=${callId}`);
-    expect(spoken(greeting)).toMatch(/^Hi Ada, this is Ava, an AI assistant calling for Jimi/);
+    expect(spoken(greeting)).toMatch(/^Hi Ada, this is Ava, an AI assistant calling for Jimi Cohen\./);
 
     const turn = await handle(twilioPost(`/twilio/voice/turn?c=${callId}`, { ...base, Digits: '1' }), ctx);
     expect(turn.status).toBe(200);
-    expect(spoken(await turn.text())).toMatch(/\S/);
+    expect(spoken(await turn.text())).toMatch(/To reach Jimi, call 2 1 2, 5 5 5, 0 1 0 0\. Goodbye\.$/);
     const confirmed = (await getBooking(ctx, booking.id))!;
     expect(confirmed.attendance).toEqual({ confirmedAt: NOW, confirmedVia: 'call' });
 

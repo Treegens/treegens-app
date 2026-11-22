@@ -11,6 +11,9 @@ export const FROM_EMAIL = 'meetings@jimicohen.test';
 /** A US number the phone library accepts, as people type it and as the server stores it. */
 export const PHONE_TYPED = '4155552671';
 export const PHONE = '+14155552671';
+/** The number every reminder call gives for calling back (Settings, AI assistant), and how it is read to a US number. */
+export const CALLBACK = '+12125550100';
+export const REACH = 'To reach Jimi, call 2 1 2, 5 5 5, 0 1 0 0.';
 export const PHONE_VIEWPORT = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 
 export const MINUTE = 60_000;
@@ -89,6 +92,8 @@ export async function prepare(s, { clock = MONDAY, zone = 'Europe/London', googl
   await s.setClock(clock);
   await s.setupAdmin({ timezone: zone });
   if (fromEmail) await s.apiOk('PUT', '/admin/site', { body: { email: { fromEmail } } });
+  // Without a callback number no reminder call is placed (server/lib/voice.ts usableCallbackNumber).
+  await s.apiOk('PUT', '/admin/site', { body: { assistant: { callbackNumber: CALLBACK } } });
   const page = await s.newPage({ signedIn: true, timezoneId: zone, locale: 'en-GB' });
   if (connect) {
     const { result } = await s.connectGoogle(page, google, zone, { start: { hostId: 'host_owner' } });

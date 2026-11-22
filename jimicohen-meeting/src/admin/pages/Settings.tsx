@@ -7,19 +7,20 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { KeyRound, Plus, Quote, Trash2 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
-import { DEFAULT_CONSENT_TEXT } from '../../../shared/defaults';
+import { callbackProblem, DEFAULT_CONSENT_TEXT } from '../../../shared/defaults';
 import type { AssistantSettings, HostUpdate, SiteSettings } from '../../../shared/types';
 import { ApiFailure, changePassword, errorMessage, saveSite, updateHost } from '../../lib/api';
 import { Button, Field, IconButton, Input, Select, Switch, Textarea, useToast } from '../../ui';
 import { FieldGroup, Notice, Page, PageHeader, SaveBar, Section } from '../components/Page';
 import { useUnsavedGuard } from '../components/UnsavedGuard';
 import { ImageField } from '../components/x/bits';
+import { loadPhoneLib, phoneLibIfLoaded } from '../../public/lib/phone';
 import { BRAND_CHOICES, shortLinkRows } from '../brands';
 import { firstName, sameJson } from '../format';
 import { useAdmin } from '../state';
 import '../../styles/adminx.css';
 
-type AssistantDraft = Omit<AssistantSettings, 'model'>;
+type AssistantDraft = Omit<AssistantSettings, 'model' | 'callbackNumber'> & { callbackNumber: string };
 
 interface Draft {
   profile: SiteSettings['profile'];
@@ -63,7 +64,7 @@ function toDraft(site: SiteSettings, owner: { email: string; phone?: string; tex
     phone: owner.phone ?? '',
     textMe: owner.textMe,
     profile: { ...site.profile, avatarAssetId: site.profile.avatarAssetId ?? null, links: site.profile.links.map((l) => ({ ...l })) },
-    assistant,
+    assistant: { ...assistant, callbackNumber: assistant.callbackNumber ?? '' },
     booking: { reminderOptInDefault: site.booking.reminderOptInDefault, consentText: site.booking.consentText, privacyUrl: site.booking.privacyUrl ?? '' },
     email: { fromName: site.email.fromName, replyTo: site.email.replyTo },
   };
@@ -91,8 +92,8 @@ function hourLabel(hour: number): string {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(d);
 }
 
-/** First problem that blocks saving, in words. */
-function problemOf(d: Draft): string | null {
+/** First problem that blocks saving, in words. `twilioNumber` is the number calls come from. */
+function problemOf(d: Draft, twilioNumber: string | undefined): string | null {
   if (!d.profile.name.trim()) return 'Your name cannot be empty.';
   for (const l of d.profile.links) {
     const label = l.label.trim();
@@ -104,6 +105,9 @@ function problemOf(d: Draft): string | null {
   if (!d.assistant.name.trim()) return 'Your assistant needs a name.';
   if (!d.assistant.voice.trim()) return 'Choose a voice for your assistant.';
   if (d.assistant.callWindowStartHour >= d.assistant.callWindowEndHour) return 'Calls must start before they end.';
+  const callback = cleanPhone(d.assistant.callbackNumber.trim());
+  if (callback && !E164.test(callback)) return 'Write the callback number with its country code, for example +14155550123.';
+  if (callback && callbackProblem({ callbackNumber: callback }, twilioNumber) === 'twilio_number') return 'The callback number is your Twilio number, which places the calls. Use a different number people can call back on.';
   if (!d.booking.consentText.trim()) return 'The consent wording cannot be empty.';
   if (d.booking.privacyUrl.trim() && !/^https:\/\//i.test(d.booking.privacyUrl.trim())) return 'The privacy link must start with https://';
   if (d.email.replyTo.trim() && !EMAIL.test(d.email.replyTo.trim())) return 'The reply-to address is not a full email address.';
@@ -187,12 +191,13 @@ export default function SettingsPage() {
   const base = useMemo(() => toDraft(data.site, { email: ownerHost.email, phone: ownerHost.phone, textMe }), [data.site, ownerHost.email, ownerHost.phone, textMe]);
   const location = useLocation();
   const noticesRef = useRef<HTMLDivElement>(null);
+  const callbackRef = useRef<HTMLDivElement>(null);
 
-  // Links like /admin/settings#notices (from a warning on Home) bring the notice settings into view.
+  // Links like /admin/settings#notices or #callback (from a warning on Home) bring those settings into view.
   useEffect(() => {
-    if (location.hash !== '#notices') return;
+    if (location.hash !== '#notices' && location.hash !== '#callback') return;
     const frame = window.requestAnimationFrame(() => {
-      const box = noticesRef.current;
+      const box = location.hash === '#callback' ? callbackRef.current : noticesRef.current;
       if (!box) return;
       box.scrollIntoView({ block: 'center', behavior: 'smooth' });
       const empty = Array.from(box.querySelectorAll<HTMLInputElement>('input[type="email"], input[type="tel"]')).find((input) => input.value === '');
@@ -220,7 +225,8 @@ export default function SettingsPage() {
   useUnsavedGuard(dirty);
   // An address that is in use cannot be emptied again: notices need somewhere to go.
   const noticesProblem = base.noticesTo && !draft.noticesTo.trim() ? 'Enter the address your booking notices should go to.' : null;
-  const problem = dirty ? (problemOf(draft) ?? noticesProblem ?? serverProblem) : null;
+  const twilioNumber = data.integrations.twilio.fromNumber;
+  const problem = dirty ? (problemOf(draft, twilioNumber) ?? noticesProblem ?? serverProblem) : null;
 
   const set = <K extends Exclude<keyof Draft, 'noticesTo' | 'phone' | 'textMe'>>(key: K, patch: Partial<Draft[K]>) => {
     setDraft((d) => ({ ...d, [key]: { ...d[key], ...patch } }));
@@ -237,6 +243,29 @@ export default function SettingsPage() {
   const [customVoice, setCustomVoice] = useState(() => voices.length > 0 && !voices.some((v) => v.id === base.assistant.voice));
   const showCustomVoice = voices.length === 0 || customVoice || !voiceKnown;
   const languageKnown = LANGUAGES.some((l) => l.value === draft.assistant.language);
+  // Polly's generative voice is billed at a higher rate than the neural ones.
+  const voiceHint = showCustomVoice
+    ? 'The exact name of a Twilio voice, for example Polly.Joanna-Neural.'
+    : /-Generative$/i.test(draft.assistant.voice)
+      ? 'The most natural voice. It costs about four times as much per spoken character as the standard voices.'
+      : 'How your assistant sounds on the phone.';
+
+  // The callback number, shown the way people write it ("+1 415 555 2671") once the phone library has loaded.
+  const [phoneLib, setPhoneLib] = useState(() => phoneLibIfLoaded());
+  useEffect(() => {
+    if (phoneLib) return;
+    let live = true;
+    loadPhoneLib()
+      .then((lib) => live && setPhoneLib(() => lib))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [phoneLib]);
+  const callbackTyped = cleanPhone(draft.assistant.callbackNumber.trim());
+  const callbackOff = callbackTyped !== '' && !E164.test(callbackTyped);
+  const callbackIsTwilio = callbackTyped !== '' && callbackProblem({ callbackNumber: callbackTyped }, twilioNumber) === 'twilio_number';
+  const callbackShown = callbackTyped && !callbackOff ? (phoneLib?.parsePhoneNumberFromString(callbackTyped)?.formatInternational() ?? callbackTyped) : '';
 
   const avatarId = draft.profile.avatarAssetId ?? null;
   const avatarUrl = avatarId ? (avatarUrls[avatarId] ?? (avatarId === (data.site.profile.avatarAssetId ?? null) ? ownerHost.avatarUrl : null)) : null;
@@ -265,7 +294,13 @@ export default function SettingsPage() {
       }
       const site = await saveSite({
         profile: { ...draft.profile, name: draft.profile.name.trim(), headline: draft.profile.headline.trim(), welcome: draft.profile.welcome.trim(), links: cleanLinks },
-        assistant: { ...draft.assistant, name: draft.assistant.name.trim(), voice: draft.assistant.voice.trim(), persona: draft.assistant.persona.trim() },
+        assistant: {
+          ...draft.assistant,
+          name: draft.assistant.name.trim(),
+          voice: draft.assistant.voice.trim(),
+          persona: draft.assistant.persona.trim(),
+          callbackNumber: cleanPhone(draft.assistant.callbackNumber.trim()),
+        },
         booking: { ...draft.booking, consentText: draft.booking.consentText.trim(), privacyUrl: draft.booking.privacyUrl.trim() },
         email: { fromName: draft.email.fromName.trim(), replyTo: draft.email.replyTo.trim() },
       });
@@ -285,6 +320,8 @@ export default function SettingsPage() {
   };
 
   const owner = firstName(draft.profile.name || 'you');
+  // The first sentence of a call names who it is for in full.
+  const ownerFull = draft.profile.name.trim() || 'you';
   const assistantName = draft.assistant.name.trim() || 'Your assistant';
 
   return (
@@ -376,7 +413,7 @@ export default function SettingsPage() {
             />
           </Field>
         </div>
-        <Field label="Voice" hint={showCustomVoice ? 'The exact name of a Twilio voice, for example Polly.Joanna-Neural.' : 'How your assistant sounds on the phone.'}>
+        <Field label="Voice" hint={voiceHint}>
           <div className="st-voice">
             {voices.length ? (
               <Select
@@ -397,6 +434,36 @@ export default function SettingsPage() {
             ) : null}
           </div>
         </Field>
+        <div id="callback" ref={callbackRef}>
+          <Field
+            label="Callback number"
+            hint={
+              callbackShown
+                ? `Every call and voicemail ends with "To reach ${owner}, call ${callbackShown}." It cannot be your Twilio number.`
+                : 'Every call and voicemail ends by saying a number people can call back on. Without one, no reminder calls are placed. It cannot be your Twilio number.'
+            }
+            error={callbackOff ? 'Write it with the country code, for example +14155550123.' : callbackIsTwilio ? 'This is your Twilio number, which places the calls. Use a different one.' : undefined}
+            action={
+              !callbackTyped && ownerHost.phone ? (
+                <button type="button" className="adm-textbtn" onClick={() => set('assistant', { callbackNumber: ownerHost.phone ?? '' })}>
+                  Use my mobile number
+                </button>
+              ) : undefined
+            }
+            className="adm-w-lg"
+          >
+            <Input
+              type="tel"
+              inputMode="tel"
+              autoComplete="off"
+              value={draft.assistant.callbackNumber}
+              maxLength={32}
+              placeholder="+14155550123"
+              invalid={callbackOff || callbackIsTwilio}
+              onChange={(e) => set('assistant', { callbackNumber: e.target.value })}
+            />
+          </Field>
+        </div>
         <Field label="Personality" hint="A sentence or two about tone. The assistant always says it is an AI and stays on the subject of the meeting.">
           <Textarea value={draft.assistant.persona} rows={3} maxLength={500} autoGrow onChange={(e) => set('assistant', { persona: e.target.value })} />
         </Field>
@@ -423,7 +490,7 @@ export default function SettingsPage() {
         <figure className="st-script">
           <Quote size={16} aria-hidden="true" className="st-script__icon" />
           <blockquote>
-            Hi Sam, this is {assistantName}, an AI assistant calling for {owner}. A quick reminder about your meeting tomorrow at 10:00 AM your time. Are you still able to make it?
+            Hi Sam, this is {assistantName}, an AI assistant calling for {ownerFull}. A quick reminder about your meeting tomorrow at 10:00 AM your time. Are you still able to make it?
           </blockquote>
           <figcaption>How every reminder call begins.</figcaption>
         </figure>

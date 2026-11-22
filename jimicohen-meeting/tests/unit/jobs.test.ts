@@ -931,6 +931,16 @@ describe('runDueJobs: things that must not be sent', () => {
     expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual(['it was outside calling hours']);
   });
 
+  it('ends a reminder call quietly, with the reason, when no callback number is set', async () => {
+    const world = await makeWorld({ rules: [DEFAULT_RULES[1]] });
+    await book(world, {}, null);
+    callSpy.mockResolvedValue({ ok: false, provider: 'none', skipped: 'no_callback_number' });
+    world.ctx.clock.set(at(START, -2 * HOUR));
+    expect(await runDueJobs(world.ctx)).toEqual({ processed: 1, failed: 0, remaining: 0 });
+    expect(await queue(world.ctx)).toEqual([]);
+    expect(await timelineDetail(world.ctx, 'reminder_call_skipped')).toEqual(['no callback number is set for reminder calls (Settings, AI assistant)']);
+  });
+
   it('skips a reminder whose rule was switched off after it was queued', async () => {
     const world = await makeWorld({ rules: [DEFAULT_RULES[2]] });
     await book(world, {}, null);

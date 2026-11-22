@@ -17,6 +17,8 @@ async function prepare(s) {
   await s.reset();
   await s.setClock(MONDAY);
   await s.setupAdmin({ timezone: 'Europe/London' });
+  // Without a callback number no reminder call is placed (server/lib/voice.ts usableCallbackNumber).
+  await s.apiOk('PUT', '/admin/site', { body: { assistant: { callbackNumber: '+12125550100' } } });
   const page = await s.newPage({ signedIn: true, timezoneId: 'Europe/London', locale: 'en-GB' });
   const { result } = await s.connectGoogle(page, OWNER_GOOGLE, 'Europe/London', { start: { hostId: 'host_owner' } });
   s.expect(result.status, `google connect (${result.reason ?? 'no reason'})`).toBe('connected');
@@ -123,8 +125,8 @@ export default defineSuite('harness', { mockCreds: true }, async (t) => {
       const turn = await s.voice(call, 'turn', { SpeechResult: 'Yes, I will be there.' });
       s.expect(turn.status, 'turn webhook').toBe(200);
       s.expect(await s.outbox({ kind: 'llm' }), 'model calls').toMatchObject([{ status: 200, caller: 'Yes, I will be there.', reply: { action: 'confirm_attendance' } }]);
+      s.expect(turn.hangsUp, 'the confirmation ends the call').toBe(true);
 
-      await s.voice(call, 'turn', { SpeechResult: 'No thanks, goodbye.' });
       await s.voice(call, 'status', { CallStatus: 'completed', CallDuration: '21' });
       const [stored] = await s.bookings();
       s.expect(stored.attendance, 'attendance').toMatchObject({ confirmedVia: 'call' });

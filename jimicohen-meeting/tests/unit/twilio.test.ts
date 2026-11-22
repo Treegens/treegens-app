@@ -9,6 +9,7 @@ import {
   isRestrictedNumber,
   normalizePhone,
   publicRequestUrls,
+  spokenPhoneNumber,
   twilioConfigured,
   TwilioError,
   twilioFeatures,
@@ -336,6 +337,20 @@ describe('normalizePhone', () => {
     expect(normalizePhone('+1 415 555 2671'.repeat(5))).toBeNull();
     expect(normalizePhone(undefined as unknown as string)).toBeNull();
     expect(normalizePhone(14155552671 as unknown as string)).toBeNull();
+  });
+});
+
+describe('spokenPhoneNumber', () => {
+  it('reads a number digit by digit in its groups, with the country code only for a listener abroad', () => {
+    expect(spokenPhoneNumber('+12125550100', '+14155552671')).toBe('2 1 2, 5 5 5, 0 1 0 0');
+    expect(spokenPhoneNumber('+12125550100', '+254712345678')).toBe('plus 1, 2 1 2, 5 5 5, 0 1 0 0');
+    expect(spokenPhoneNumber('+442079460958', '+447700900123')).toBe('0 2 0, 7 9 4 6, 0 9 5 8');
+    expect(spokenPhoneNumber('+254712345678', '+254712345679')).toBe('0 7 1 2, 3 4 5 6 7 8');
+    expect(spokenPhoneNumber('+12125550100')).toBe('plus 1, 2 1 2, 5 5 5, 0 1 0 0');
+  });
+
+  it('says nothing for a number that is not valid', () => {
+    for (const bad of ['', '12345', '+1 555', 'not a number']) expect(spokenPhoneNumber(bad, '+14155552671')).toBe('');
   });
 });
 

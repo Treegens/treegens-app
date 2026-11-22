@@ -24,15 +24,18 @@ import { firstName } from '../format';
 import { announceGoogleReturn, findScreenAccount } from '../googleReturn';
 import { formatDateLong } from '../../lib/tz';
 import { endedOnItsDay, testingEndedAdvice } from '../../../shared/calendar';
+import { callbackProblem } from '../../../shared/defaults';
 import { useAdmin } from '../state';
 import '../../styles/adminx.css';
 
 type CardId = 'google' | 'email' | 'twilio' | 'assistant';
 const CARD_IDS: CardId[] = ['google', 'email', 'twilio', 'assistant'];
 
+// Quickest first: on a phone line every second of silence after the caller speaks is heard.
 const MODELS: { id: string; label: string }[] = [
-  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (recommended)' },
-  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (quicker replies, lower cost)' },
+  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 (recommended: quickest replies, lowest cost)' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (more natural wording, a little slower and pricier)' },
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (slowest on a phone line)' },
 ];
 
 const E164 = /^\+[1-9]\d{6,14}$/;
@@ -848,9 +851,13 @@ function TwilioCard({ open, onToggle }: CardProps) {
 
   const hasKeys = !!t.accountSidMasked;
   const calls = canCall(t);
+  // Every call has to end with a number to call back on that is not the Twilio number (Settings, AI assistant).
+  const callback = calls ? callbackProblem(data.site.assistant, t.fromNumber) : null;
   const status: IntegrationStatus = t.configured
     ? calls
-      ? { tone: 'success', label: 'Connected' }
+      ? callback
+        ? { tone: 'warning', label: 'Calls need a callback number' }
+        : { tone: 'success', label: 'Connected' }
       : { tone: 'warning', label: 'Texts only' }
     : hasKeys
       ? { tone: 'warning', label: 'Needs a phone number' }
@@ -913,6 +920,17 @@ function TwilioCard({ open, onToggle }: CardProps) {
       onToggle={onToggle}
     >
       {!t.configured ? <p className="ix-lead">Until this is connected, reminders go out by email only. Twilio charges a small amount per text and per minute of calling.</p> : null}
+      {callback ? (
+        <Notice tone="warning" title="Add a callback number to place calls">
+          {callback === 'twilio_number'
+            ? 'The callback number is your Twilio number, which places the calls. Every call has to end with a different number people can call back on, so no reminder calls are placed until you change it. '
+            : 'Every reminder call ends by saying a number people can call back on, and it cannot be your Twilio number. Until you add one, no reminder calls are placed. Texts and emails still go out. '}
+          <Link className="adm-textlink" to="/admin/settings#callback">
+            Add it in Settings, under AI assistant
+          </Link>
+          .
+        </Notice>
+      ) : null}
       {t.configured && !calls ? (
         <Notice tone="warning" title="Add a phone number to place calls">
           Texts go out through your Messaging Service, but reminder calls need a Twilio phone number of their own. Until you add one under "Your Twilio number" below, reminder calls are skipped.
@@ -921,14 +939,16 @@ function TwilioCard({ open, onToggle }: CardProps) {
       <Steps>
         <Step title="Create a Twilio account" done={hasKeys}>
           <p>
-            Sign up at <Ext href="https://www.twilio.com/try-twilio">twilio.com</Ext> and add a payment method. A trial account can only text and call numbers you have verified yourself.
+            Sign up at <Ext href="https://www.twilio.com/try-twilio">twilio.com</Ext> and upgrade to a paid account. A trial account only calls and texts numbers you have verified yourself, and plays a trial message first, so real reminders need a paid account.
           </p>
         </Step>
         <Step title="Get a phone number" done={t.configured && calls}>
           <p>
             Under <Ext href="https://console.twilio.com/us1/develop/phone-numbers/manage/search">Phone Numbers, Buy a number</Ext>, pick one that can do both <strong>SMS</strong> and <strong>Voice</strong>.
           </p>
-          <p>Texting people in the United States also needs a one-time registration (Twilio calls it A2P 10DLC). Twilio walks you through it under Messaging.</p>
+          <p>
+            Texting people in the United States needs a one-time registration, which Twilio walks you through under Messaging. A toll-free number needs toll-free verification: it takes about 3 to 5 business days, and Twilio lists no fee for it. A local number needs A2P 10DLC registration instead.
+          </p>
         </Step>
         <Step title="Paste your Twilio details" done={t.configured}>
           <p>
@@ -1117,7 +1137,7 @@ function AssistantCard({ open, onToggle }: CardProps) {
         </Step>
         <Step title="Choose the model">
           <div className="ix-form">
-            <Field label="Model" hideLabel hint="The recommended model handles phone conversations best. You can change this any time.">
+            <Field label="Model" hideLabel hint="The recommended model answers quickest, so callers wait the least after they speak. You can change this any time.">
               <Select value={model} onChange={(e) => setModel(e.target.value)} options={[...MODELS.map((m) => ({ value: m.id, label: m.label })), { value: 'custom', label: 'Another model' }]} />
             </Field>
             {model === 'custom' ? (
@@ -1211,7 +1231,7 @@ export default function IntegrationsPage() {
 
   const googleDone = integ.google.ownerConnected && ownerHost.google?.status !== 'needs_reconnect' && integ.google.configured;
   const emailDone = integ.email.resolved !== 'none';
-  const twilioDone = integ.twilio.configured && canCall(integ.twilio);
+  const twilioDone = integ.twilio.configured && canCall(integ.twilio) && !callbackProblem(data.site.assistant, integ.twilio.fromNumber);
   const done: Record<CardId, boolean> = { google: googleDone, email: emailDone, twilio: twilioDone, assistant: integ.anthropic.configured };
 
   const [open, setOpen] = useState<Set<CardId>>(() => {

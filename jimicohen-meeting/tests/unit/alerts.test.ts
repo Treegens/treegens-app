@@ -5,7 +5,7 @@ import { alertCalendarTrouble } from '../../server/lib/booking';
 import type { Ctx, KV } from '../../server/lib/ctx';
 import { deliverMessage, enqueueJob, runDueJobs, type StoredJob } from '../../server/lib/jobs';
 import { CALLS_PER_DAY, CALLS_PER_NUMBER_PER_DAY, reserveOutbound, TEXTS_PER_DAY, TEXTS_PER_NUMBER_PER_DAY, type OutboundChannel } from '../../server/lib/outbound';
-import { getBooking, getSite, listJobs, saveBooking } from '../../server/lib/repo';
+import { getBooking, getSite, listJobs, saveBooking, updateSite } from '../../server/lib/repo';
 import { memoryKV } from '../../server/lib/store';
 import { blockNumber, TWILIO_TIMEOUT_MS, unblockNumber } from '../../server/lib/twilio';
 import { startReminderCall } from '../../server/lib/voice';
@@ -211,7 +211,8 @@ describe('daily limits count the texts and calls that really go out', () => {
       return state.reply(path) ?? Response.json({ sid, status: 'queued' }, { status: 201 });
     }) as typeof fetch;
     const ctx = makeTestCtx({ now: NOW, fetch: fetchImpl, env: { overrides: opts.twilio === false ? {} : { ...TWILIO } } });
-    await getSite(ctx);
+    // Reminder calls need a number to call back on (voice.ts usableCallbackNumber).
+    await updateSite(ctx, (s) => ({ ...s, assistant: { ...s.assistant, callbackNumber: '+12125550100' } }));
     await saveBooking(ctx, invitation('bkg_sam1'));
     return { ctx, requests, state };
   }

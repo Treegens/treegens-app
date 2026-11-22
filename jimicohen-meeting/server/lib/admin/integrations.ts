@@ -26,16 +26,15 @@ import { sendSms } from '../sms';
 import { firstName } from '../templates';
 import { getTwilioAccount, normalizePhone, twilioFeatures } from '../twilio';
 import { FieldErrors, isEmail, isPlainObject, requireObject } from '../validate';
-import { MODEL_TIMEOUT_MS, startReminderCall } from '../voice';
+import { anthropicClient, askModel, DEFAULT_MODEL, MODEL_DEADLINE_SLACK_MS, MODEL_TIMEOUT_MS, modelRequest, parseModelMove, startReminderCall } from '../voice';
 import { type Bag, given } from './fields';
 import { MODEL_ID_PATTERN } from './site';
 import { maskMiddle, ownerOf } from './view';
 
 const DAY_MS = 86_400_000;
 const GOOGLE_CLIENT_SUFFIX = '.apps.googleusercontent.com';
-const DEFAULT_MODEL = 'claude-opus-5-5';
-const ANTHROPIC_API = 'https://api.anthropic.com';
-const REFUSAL_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+/** The key test may wait longer than a call does: it reports how long the answer took instead of hiding it. */
+const KEY_TEST_TIMEOUT_MS = 15_000;
 
 /** Which values are set in the deployment's environment and therefore win over anything saved here. */
 export interface EnvironmentFlags {
@@ -224,6 +223,8 @@ const SKIP_REASONS: Record<string, string> = {
   invalid_recipient: 'That email address does not look right.',
   sms_not_configured: 'Twilio is not set up yet. Save your Twilio details first.',
   calls_not_configured: 'Reminder calls need a Twilio phone number. Add one first.',
+  no_callback_number:
+    'Reminder calls need a callback number first: every call ends by saying a number people can call back on, and it cannot be your Twilio number. Add it in Settings, under AI assistant.',
   invalid_phone: 'That phone number does not look right. Use the international format, for example +14155550123.',
   unsupported_number: 'That kind of number cannot be used for tests. Try a normal mobile number.',
   recipient_opted_out: 'That number has opted out of texts. Text START to your Twilio number from it, then try again.',
@@ -390,9 +391,10 @@ function anthropicProblem(err: unknown, model: string): string {
 }
 
 /**
- * One tiny message with the configured key and model, sent the way the voice assistant sends
- * its own (official SDK, our fetch, no retries, low effort, refusal fallback when the account
- * has it). A reply of any kind proves that the key and the model work together.
+ * One short turn with the configured key and model, sent exactly the way a reminder call sends its own
+ * (voice.ts modelRequest and askModel: the same thinking setting, structured reply, effort and refusal
+ * fallback), so the test passes only when a call would get a usable answer too. It may wait longer than a
+ * call, and says so when the answer would have been too slow for one.
  */
 async function testAnthropic(ctx: Ctx, site: SiteSettings): Promise<IntegrationTestResponse> {
   const apiKey = (await getSecrets(ctx)).anthropic?.apiKey?.trim();
@@ -400,43 +402,28 @@ async function testAnthropic(ctx: Ctx, site: SiteSettings): Promise<IntegrationT
   const configured = site.assistant?.model?.trim() ?? '';
   const model = MODEL_ID_PATTERN.test(configured) ? configured : DEFAULT_MODEL;
 
-  const client = new Anthropic({
-    apiKey,
-    // Stated outright so nothing in the process environment can point requests elsewhere.
-    baseURL: ANTHROPIC_API,
-    fetch: ctx.fetch,
-    maxRetries: 0,
-    timeout: MODEL_TIMEOUT_MS,
-    logLevel: 'off',
-  });
-  const request = {
+  const client = anthropicClient(ctx, apiKey, KEY_TEST_TIMEOUT_MS);
+  const request = modelRequest(
     model,
-    max_tokens: 512,
-    output_config: { effort: 'low' as const },
-    messages: [{ role: 'user' as const, content: 'This is a connection test from a scheduling app. Reply with the single word: ready' }],
-  };
+    'You are a voice assistant on a phone call for a scheduling app. This turn is a connection test.',
+    'This is a connection test. Reply with say set to "ready" and action set to "continue".',
+  );
 
   const started = ctx.now().getTime();
-  let stopReason: string | null;
+  let reply: Awaited<ReturnType<typeof askModel>>;
   try {
-    try {
-      const response = await client.beta.messages.create({ ...request, betas: [REFUSAL_FALLBACK_BETA], fallbacks: 'default' });
-      stopReason = response.stop_reason;
-    } catch (err) {
-      // A 400 comes back at once. The usual cause is that the refusal fallback option is not
-      // available to this account or model, so the same message is sent once more without it.
-      if (!(err instanceof Anthropic.BadRequestError)) throw err;
-      const response = await client.messages.create(request);
-      stopReason = response.stop_reason;
-    }
+    reply = await askModel(ctx, client, request, new AbortController().signal);
   } catch (err) {
     ctx.log('warn', 'integrations: the Anthropic test failed', { reason: err instanceof Error ? err.name : 'unknown', status: err instanceof Anthropic.APIError ? err.status : undefined });
     return { ok: false, detail: anthropicProblem(err, model) };
   }
 
-  const seconds = (ctx.now().getTime() - started) / 1000;
-  const timing = seconds > 0 ? ` in ${seconds.toFixed(1)} seconds` : '';
-  if (stopReason === 'refusal') return { ok: true, detail: `The key works and ${model} answered${timing}, although it declined the test message itself.` };
+  const ms = ctx.now().getTime() - started;
+  const timing = ms > 0 ? ` in ${(ms / 1000).toFixed(1)} seconds` : '';
+  if (reply.stopReason === 'refusal') return { ok: true, detail: `The key works and ${model} answered${timing}, although it declined the test message itself.` };
+  if (!parseModelMove(reply.text)) return { ok: false, detail: `${model} answered, but not in the form reminder calls need, so calls would use the simple script. Choose another model.` };
+  const callMs = MODEL_TIMEOUT_MS + MODEL_DEADLINE_SLACK_MS;
+  if (ms > callMs) return { ok: true, detail: `The key works, but ${model} took ${(ms / 1000).toFixed(1)} seconds. On a call a reply slower than ${(callMs / 1000).toFixed(1)} seconds gives way to the simple script.` };
   return { ok: true, detail: `The key works. ${model} answered${timing}.` };
 }
 

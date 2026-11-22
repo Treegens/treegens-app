@@ -192,6 +192,8 @@ export default defineSuite('public-short-links', { mockCreds: true }, async (t) 
       await s.runJobs();
       const [call] = await s.calls();
       s.expect(call?.record?.script?.brandName, 'brand on the call record').toBe('Eco Champions');
+      // A brand has no number of its own: its calls give the site's callback number.
+      s.expect(call?.record?.script?.callbackSpoken, 'callback number on the call record').toBe('2 1 2, 5 5 5, 0 1 0 0');
       const answer = await s.voice(call, 'start');
       s.expect(answer.said, 'greeting').toMatch(/an AI assistant calling for Eco Champions\. A quick reminder about your Eco Champions conversation with Jimi and Ian/);
     });

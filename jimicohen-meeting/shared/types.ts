@@ -447,6 +447,12 @@ export interface AssistantSettings {
   model: string; // Claude model id
   callWindowStartHour: number; // invitee-local, inclusive
   callWindowEndHour: number; // invitee-local, exclusive
+  /**
+   * E.164. Said at the end of every reminder call and voicemail so people can call back (US rules for
+   * artificial voice calls, 47 CFR 64.1200(b)(2)). Never the Twilio number the calls come from. Without one,
+   * no reminder call is placed. Absent on sites saved before it existed.
+   */
+  callbackNumber?: string;
 }
 
 export interface SiteSettings {

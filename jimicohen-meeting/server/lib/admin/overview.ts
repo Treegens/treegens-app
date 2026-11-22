@@ -6,7 +6,7 @@
  * the mount path itself.
  */
 import { endedOnItsDay, testingEndedAdvice } from '../../../shared/calendar';
-import { DEFAULT_THEME } from '../../../shared/defaults';
+import { callbackProblem, DEFAULT_THEME } from '../../../shared/defaults';
 import type { AdminOverview, EventType, Host, IntegrationsStatus, SharedHoursCheck, SiteSettings } from '../../../shared/types';
 import type { Ctx } from '../ctx';
 import { accountsOf, mainOf } from '../googleAccounts';
@@ -35,6 +35,8 @@ const LINK = {
   team: '/admin/team',
   /** the "Send my booking notices to" field on the Settings page */
   notices: '/admin/settings#notices',
+  /** the assistant's callback number on the Settings page */
+  callback: '/admin/settings#callback',
 };
 
 // ───────────────────────── joint meetings: do the hours ever line up? ─────────────────────────
@@ -469,6 +471,21 @@ export function buildWarnings(
         key: 'twilio_missing',
         message: `${quoted(needsNumber.map((e) => e.title))} ${needsNumber.length === 1 ? 'has' : 'have'} reminder calls, but reminder calls need a Twilio phone number and none is saved, so those calls are skipped. Texts still go out.`,
         href: LINK.twilio,
+      });
+    }
+  } else {
+    // Every call ends with a number to call back on that is not the one calling (47 CFR 64.1200(b)(2)).
+    const callback = callbackProblem(site.assistant, integrations.twilio.fromNumber);
+    const needsCallback = callback ? active.filter((e) => bookable(e) && e.reminders.some((r) => r.enabled && r.channel === 'call')) : [];
+    if (needsCallback.length > 0) {
+      const why =
+        callback === 'twilio_number'
+          ? 'the callback number is your Twilio number, which places the calls. Every call has to end with a different number people can call back on'
+          : 'no callback number is set. Every call has to end with a number people can call back on';
+      warnings.push({
+        key: 'callback_missing',
+        message: `${quoted(needsCallback.map((e) => e.title))} ${needsCallback.length === 1 ? 'has' : 'have'} reminder calls, but ${why}, so those calls are not placed. Add one in Settings, under AI assistant. Texts and emails still go out.`,
+        href: LINK.callback,
       });
     }
   }

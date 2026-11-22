@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { defaultOwnerHost, defaultSchedule, defaultSite, newEventType, starterEventTypes } from '../../shared/defaults';
+import { DEFAULT_ASSISTANT, defaultOwnerHost, defaultSchedule, defaultSite, newEventType, starterEventTypes } from '../../shared/defaults';
 import type { EventType, Host, SiteSettings } from '../../shared/types';
 import type { KV } from '../../server/lib/ctx';
 import * as repo from '../../server/lib/repo';
-import { MOVE_MARKER, POD_DESCRIPTION, planShortLinks, runShortLinkMove } from '../../server/lib/seed';
+import { MODEL_MOVE_MARKER, MOVE_MARKER, OLD_DEFAULT_MODEL, POD_DESCRIPTION, planShortLinks, runAssistantModelMove, runShortLinkMove } from '../../server/lib/seed';
+import { runScheduled } from '../../server/cron';
+import { envFromProcess } from '../../server/lib/runtime';
 import { memoryKV } from '../../server/lib/store';
 import { makeTestCtx, TEST_NOW } from '../helpers/ctx';
 
@@ -256,5 +258,78 @@ describe('runShortLinkMove', () => {
     }) as KV['setJSON'];
     await expect(runShortLinkMove(makeTestCtx({ kv: ctx.kv }))).rejects.toThrow('store down');
     expect(await ctx.kv.getJSON(MOVE_MARKER)).toBeNull();
+  });
+});
+
+describe('runAssistantModelMove (off the old default model, once)', () => {
+  /** A site as it is stored live: the old default model, saved when that was the default. */
+  async function stored(model = OLD_DEFAULT_MODEL, env?: NonNullable<Parameters<typeof makeTestCtx>[0]>['env']) {
+    const ctx = makeTestCtx({ kv: memoryKV(), env });
+    const site = await repo.getSite(ctx);
+    await repo.saveSite(ctx, { ...site, assistant: { ...site.assistant, model } });
+    return ctx;
+  }
+  const modelOf = async (ctx: ReturnType<typeof makeTestCtx>) => (await repo.getSite(ctx)).assistant.model;
+
+  it('moves a site that says "claude-opus-5-5" and never had a key to Claude Haiku 5.5, once', async () => {
+    const ctx = await stored();
+    const before = await repo.getSite(ctx);
+    expect(await runAssistantModelMove(ctx)).toBe('moved');
+    expect(await modelOf(ctx)).toBe('claude-haiku-5-5');
+    expect(await modelOf(ctx)).toBe(DEFAULT_ASSISTANT.model);
+    // Only the model changed.
+    expect({ ...(await repo.getSite(ctx)), assistant: before.assistant, updatedAt: before.updatedAt }).toEqual(before);
+    expect(await ctx.kv.getJSON(MODEL_MOVE_MARKER)).toMatchObject({ result: 'moved', keySaved: false });
+
+    // Once: an owner who then chooses Opus on purpose keeps it.
+    await repo.updateSite(ctx, (s) => ({ ...s, assistant: { ...s.assistant, model: OLD_DEFAULT_MODEL } }));
+    expect(await runAssistantModelMove(makeTestCtx({ kv: ctx.kv }), { readMarker: true })).toBe('already_done');
+    expect(await modelOf(ctx)).toBe(OLD_DEFAULT_MODEL);
+  });
+
+  it('leaves the choice alone when a key was saved in the dashboard', async () => {
+    const ctx = await stored();
+    await repo.saveSecrets(ctx, { anthropic: { apiKey: 'sk-ant-api03-very-secret-key-value' } });
+    expect(await runAssistantModelMove(ctx)).toBe('kept');
+    expect(await modelOf(ctx)).toBe(OLD_DEFAULT_MODEL);
+    expect(await ctx.kv.getJSON(MODEL_MOVE_MARKER)).toMatchObject({ result: 'kept', keySaved: true });
+  });
+
+  it('counts a key in the environment only when it is a real one (the AI Gateway value is not)', async () => {
+    const names = ['ANTHROPIC_API_KEY', 'NETLIFY_AI_GATEWAY_KEY'] as const;
+    const saved = Object.fromEntries(names.map((n) => [n, process.env[n]]));
+    try {
+      process.env.ANTHROPIC_API_KEY = 'nf-gateway-credential-value';
+      process.env.NETLIFY_AI_GATEWAY_KEY = 'nf-gateway-credential-value';
+      const gateway = await stored(OLD_DEFAULT_MODEL, { overrides: envFromProcess().overrides });
+      expect(await runAssistantModelMove(gateway)).toBe('moved');
+
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-api03-a-real-key-set-on-the-site';
+      const real = await stored(OLD_DEFAULT_MODEL, { overrides: envFromProcess().overrides });
+      expect(await runAssistantModelMove(real)).toBe('kept');
+      expect(await modelOf(real)).toBe(OLD_DEFAULT_MODEL);
+    } finally {
+      for (const n of names) {
+        if (saved[n] === undefined) delete process.env[n];
+        else process.env[n] = saved[n];
+      }
+    }
+  });
+
+  it('never touches another model, and writes nothing to the site then', async () => {
+    const ctx = await stored('claude-sonnet-5-5');
+    const before = await repo.getSite(ctx);
+    expect(await runAssistantModelMove(ctx)).toBe('kept');
+    expect(await repo.getSite(ctx)).toEqual(before);
+  });
+
+  it('runs from the scheduled run of the deploy, and only from there', async () => {
+    const ctx = await stored();
+    await runScheduled(ctx);
+    expect(await modelOf(ctx)).toBe(OLD_DEFAULT_MODEL);
+    const summary = await runScheduled(makeTestCtx({ kv: ctx.kv }), { oneTimeMoves: true, stepWaitMs: 50 });
+    expect(summary.assistantModel).toBe('moved');
+    expect(await modelOf(ctx)).toBe('claude-haiku-5-5');
+    expect((await runScheduled(makeTestCtx({ kv: ctx.kv }), { oneTimeMoves: true, stepWaitMs: 50 })).assistantModel).toBe('already_done');
   });
 });

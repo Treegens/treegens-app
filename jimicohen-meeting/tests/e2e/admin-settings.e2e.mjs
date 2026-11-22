@@ -139,14 +139,47 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       await assistant.getByLabel('Personality').fill('Warm, brief and a little dry.');
       await assistant.getByRole('combobox', { name: 'Earliest call' }).selectOption('10');
       await assistant.getByRole('combobox', { name: 'Latest call' }).selectOption('18');
-      // The example line follows the name at once.
-      await assistant.getByText('Hi Sam, this is Nia, an AI assistant calling for Jimi.').waitFor();
+      // The example line follows the name at once, and names the owner in full.
+      await assistant.getByText('Hi Sam, this is Nia, an AI assistant calling for Jimi A. Cohen.').waitFor();
       // Hours that end before they start cannot be saved.
       await assistant.getByRole('combobox', { name: 'Latest call' }).selectOption('9');
       await saveBar(page).getByText('Calls must start before they end.').waitFor();
       await assistant.getByRole('combobox', { name: 'Latest call' }).selectOption('18');
+      // The premium generative voice says what it costs.
+      await assistant.getByRole('combobox', { name: 'Voice' }).selectOption('Polly.Joanna-Generative');
+      await assistant.getByText('It costs about four times as much per spoken character as the standard voices.').waitFor();
+      await assistant.getByRole('combobox', { name: 'Voice' }).selectOption(voice.id);
       await save();
       s.expect((await site()).assistant, 'stored assistant').toMatchObject({ name: 'Nia', language: 'en-GB', voice: voice.id, persona: 'Warm, brief and a little dry.', callWindowStartHour: 10, callWindowEndHour: 18 });
+    });
+
+    await s.step('assistant: the callback number every call ends with, never the Twilio number', async () => {
+      const assistant = section(page, 'AI assistant');
+      const field = assistant.getByLabel('Callback number');
+      await assistant.getByText('Without one, no reminder calls are placed.').waitFor();
+      // Home says plainly that reminder calls are not placed for want of one.
+      const home = await s.apiOk('GET', '/admin/overview');
+      s.expect(home.warnings.find((w) => w.key === 'callback_missing'), 'the warning on Home').toMatchObject({ href: '/admin/settings#callback' });
+      await field.fill('212 555 0100');
+      await assistant.getByText('Write it with the country code, for example +14155550123.').waitFor();
+      await saveBar(page).getByText('Write the callback number with its country code, for example +14155550123.').waitFor();
+      // The Twilio number places the calls, so it cannot be the number to call back on (DEV_MOCK_CREDS: +15005550006).
+      await field.fill('+1 500 555 0006');
+      await assistant.getByText('This is your Twilio number, which places the calls. Use a different one.').waitFor();
+      await field.fill('+1 (212) 555-0100');
+      // Shown the way people write it, in the sentence every call ends with.
+      await assistant.getByText('Every call and voicemail ends with "To reach Jimi, call +1 212 555 0100." It cannot be your Twilio number.').waitFor();
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await assistant.scrollIntoViewIfNeeded();
+      await s.screenshot(page, 'assistant settings with the callback number at 1280');
+      await page.setViewportSize({ width: 390, height: 844 });
+      await assistant.scrollIntoViewIfNeeded();
+      await s.screenshot(page, 'assistant settings with the callback number at 390');
+      s.expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no sideways scrolling at 390').toBe(true);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await save();
+      s.expect((await site()).assistant.callbackNumber, 'stored in E.164').toBe('+12125550100');
+      s.expect((await s.apiOk('GET', '/admin/overview')).warnings.some((w) => w.key === 'callback_missing'), 'the warning on Home').toBe(false);
     });
 
     await s.step('booking form: reminders off by default, own consent wording, a privacy link', async () => {
@@ -286,12 +319,15 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       s.expect(spoken.status, 'status of the voice webhook').toBe(200);
       s.expect(spoken.xml, 'voice in the TwiML').toContain(`voice="${voice.id}"`);
       s.expect(spoken.xml, 'language in the TwiML').toContain('language="en-GB"');
-      s.expect(spoken.said, 'what is said first').toMatch(/^Hi Lise, this is Nia, an AI assistant calling for Jimi\./);
+      s.expect(spoken.said, 'what is said first').toMatch(/^Hi Lise, this is Nia, an AI assistant calling for Jimi A\. Cohen\./);
       // The personality goes to the model with the next turn.
-      await s.voice(calls[0], 'turn', { SpeechResult: 'Yes, I will be there.' });
+      const answer = await s.voice(calls[0], 'turn', { SpeechResult: 'Yes, I will be there.' });
       const [asked] = await s.outbox({ kind: 'llm' });
       s.expect(asked.system, 'instructions for the model').toContain('Warm, brief and a little dry.');
       s.expect(asked.system, 'instructions for the model').toContain('Nia');
+      // Lise has a German number: the callback number is read with its country code, then goodbye.
+      s.expect(answer.said, 'how the call ends').toMatch(/To reach Jimi, call plus 1, 2 1 2, 5 5 5, 0 1 0 0\. Goodbye\.$/);
+      s.expect(answer.hangsUp, 'the confirmation ends the call').toBe(true);
     });
   });
 
@@ -549,8 +585,11 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       await warning.getByText('the people who book get no calendar invitation', { exact: false }).waitFor();
       s.expect(await warning.getByRole('link', { name: 'Connect Google Calendar' }).getAttribute('href'), 'where the button leads').toBe('/meeting/admin/integrations#google');
       // Nor has the owner said where booking notices go, so nobody tells them about these bookings.
-      s.expect(overview.warnings.map((w) => w.key), 'warnings').toEqual(['google_not_connected', 'owner_no_email']);
+      // And with Twilio on but no callback number set, the reminder calls are not placed: Home says that plainly too.
+      s.expect(overview.warnings.map((w) => w.key), 'warnings').toEqual(['google_not_connected', 'owner_no_email', 'callback_missing']);
       s.expect(overview.warnings.find((w) => w.key === 'owner_no_email').href, 'where that is fixed').toBe('/admin/settings#notices');
+      s.expect(overview.warnings.find((w) => w.key === 'callback_missing').href, 'where the callback number is set').toBe('/admin/settings#callback');
+      await page.getByText('but no callback number is set. Every call has to end with a number people can call back on, so those calls are not placed.', { exact: false }).waitFor();
       await s.screenshot(page, 'home with bookings');
       // A meeting on Home opens its details on the bookings page.
       await coming.getByRole('link', { name: /Alan Turing/ }).click();

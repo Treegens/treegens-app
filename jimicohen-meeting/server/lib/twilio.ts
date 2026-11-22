@@ -302,6 +302,32 @@ export function normalizePhone(input: string, defaultCountry?: string): string |
   }
 }
 
+/**
+ * A number the way it is read out on a call: digit by digit in the usual groups, the groups apart, so a
+ * listener can write it down. "4 1 5, 5 5 5, 2 6 7 1" for someone with a number in the same country,
+ * "plus 1, 4 1 5, 5 5 5, 2 6 7 1" for anyone else. Plain text on purpose: it reads the same in every
+ * voice the dashboard offers (an SSML say-as tag is not something every one of them takes), and it goes
+ * through the same escaping as every other spoken line. '' for a number that is not valid.
+ */
+export function spokenPhoneNumber(e164: string, listener?: string): string {
+  let phone: ReturnType<typeof parsePhoneNumberFromString>;
+  try {
+    phone = parsePhoneNumberFromString(String(e164 ?? '').trim());
+  } catch {
+    return '';
+  }
+  if (!phone || !phone.isValid()) return '';
+  let local = false;
+  try {
+    local = !!listener && parsePhoneNumberFromString(listener)?.countryCallingCode === phone.countryCallingCode;
+  } catch {
+    local = false;
+  }
+  const groups = (local ? phone.formatNational() : phone.formatInternational()).match(/\d+/g) ?? [];
+  const spoken = groups.map((group) => group.split('').join(' ')).join(', ');
+  return local ? spoken : `plus ${spoken}`;
+}
+
 const RESTRICTED_NUMBER_TYPES = new Set(['PREMIUM_RATE', 'SHARED_COST', 'PERSONAL_NUMBER', 'UAN', 'PAGER', 'VOICEMAIL']);
 
 /**

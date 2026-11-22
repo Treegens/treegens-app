@@ -1395,13 +1395,13 @@ function chooseVoiceMove(turn: VoiceTurn): { say: string; action: string } {
   if (words.includes(' cancel')) return { say: 'I can cancel the meeting for you. Just to be sure, do you want me to cancel it? Yes or no?', action: 'request_cancel' };
   if (words.includes(' reschedul') || has('another time', 'different time', 'move it', 'move the meeting', 'change the time', 'the link', 'a link')) {
     if (turn.linkSent) return { say: 'The link is already on its way to you. Is there anything else?', action: 'continue' };
-    return { say: 'No problem. I am sending you a link where you can pick a new time. Is there anything else?', action: 'send_manage_link' };
+    return { say: 'No problem. I am sending you a link where you can pick a new time.', action: 'send_manage_link' };
   }
   if (has('bye', 'goodbye', "that's all", 'that is all', 'nothing else', 'no thanks', 'no thank you')) return { say: 'Thank you. Have a great day. Goodbye.', action: 'end_call' };
   if (has('robot', 'human', 'real person', 'an ai', 'a machine', 'who is this', 'who are you')) {
     return { say: 'I am an AI assistant calling with a reminder about your meeting. Are you still able to make it?', action: 'continue' };
   }
-  if (yes && !no) return { say: 'Wonderful, I have noted that you will be there. Is there anything else?', action: 'confirm_attendance' };
+  if (yes && !no) return { say: 'Wonderful, I have noted that you will be there.', action: 'confirm_attendance' };
   if (no) return { say: 'I understand. Would you like a link to pick another time, or should I cancel the meeting?', action: 'continue' };
   return { say: 'Sorry, I did not catch that. Are you still able to make the meeting?', action: 'continue' };
 }
@@ -1413,6 +1413,49 @@ async function nextScriptedReply(kv: KV): Promise<Record<string, unknown> | null
     const [first, ...rest] = found.value;
     const written = await kv.setJSON(DEV_LLM_SCRIPT_KEY, rest, { onlyIfMatch: found.etag });
     if (written.modified) return isRecord(first) ? first : null;
+  }
+  return null;
+}
+
+const FALLBACK_BETAS = ['server-side-fallback-2026-06-01', 'server-side-fallback-2026-07-01'];
+
+/**
+ * The rules of the real Messages API for what the voice assistant sends about thinking and the refusal
+ * fallback, from the Claude API reference (shared/model-migration.md, the Claude Opus 5.5, Sonnet 5.5 and
+ * Haiku 5.5 sections). A request that breaks one gets the 400 the API gives (its wording where the reference
+ * quotes it), so a wrong field fails a test instead of passing. Null when the request is acceptable.
+ */
+export function anthropicRequestProblem(body: Record<string, unknown>, betas: string[]): string | null {
+  const model = str(body.model);
+  const effort = isRecord(body.output_config) ? str(body.output_config.effort) : '';
+  const aboveHigh = effort === 'xhigh' || effort === 'max';
+  if ('thinking' in body && body.thinking !== undefined) {
+    const thinking = isRecord(body.thinking) ? body.thinking : {};
+    const type = str(thinking.type);
+    if (!['adaptive', 'disabled', 'enabled', 'between_tools'].includes(type)) return 'thinking.type: Input should be one of the documented thinking types.';
+    // Claude Sonnet 5.5 only, at effort high or below, with no other field.
+    if (type === 'between_tools') {
+      if (model !== 'claude-sonnet-5-5') return '"thinking.type.between_tools" is not supported for this model.';
+      if (Object.keys(thinking).some((key) => key !== 'type')) return 'thinking: no other field is allowed with "between_tools".';
+      if (aboveHigh) return `output_config.effort '${effort}' is not supported when thinking is disabled on this model. Use effort 'high' or below, or enable thinking.`;
+    }
+    if (type === 'disabled') {
+      if (model === 'claude-opus-5-5') return '"thinking.type.disabled" is not supported for this model. Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.';
+      if (model === 'claude-sonnet-5-5') {
+        return 'To turn thinking off on this model, send "thinking": {"type": "between_tools"} instead of {"type": "disabled"}. The model does not think before responding. The short updates it writes between tool calls come back as thinking blocks.';
+      }
+      if (aboveHigh) return `output_config.effort '${effort}' is not supported when thinking is disabled on this model. Use effort 'high' or below, or enable thinking.`;
+    }
+    // Manual budgets are gone on all three.
+    if (type === 'enabled' && ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'].includes(model)) {
+      return '"thinking.type.enabled" is not supported for this model. Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.';
+    }
+  }
+  if ('fallbacks' in body && body.fallbacks !== undefined) {
+    if (!betas.some((b) => FALLBACK_BETAS.includes(b))) return 'fallbacks: this parameter needs the server-side-fallback beta.';
+    if (body.fallbacks === 'default' && !betas.includes('server-side-fallback-2026-07-01')) return 'fallbacks: "default" needs server-side-fallback-2026-07-01.';
+    // "There is no server-side fallback for Claude Haiku 5.5": "default" changes nothing there, and a list is a 400.
+    if (model === 'claude-haiku-5-5' && Array.isArray(body.fallbacks)) return 'fallbacks: claude-haiku-5-5 has no server-side fallback.';
   }
   return null;
 }
@@ -1435,13 +1478,15 @@ function planAnthropic(call: Call): Plan {
       if (!isRecord(body) || !Array.isArray(body.messages) || body.messages.length === 0) return anthropicError(400, 'invalid_request_error', 'messages: at least one message is required');
       if (typeof body.model !== 'string' || body.model === '') return anthropicError(400, 'invalid_request_error', 'model: field required');
       if (typeof body.max_tokens !== 'number') return anthropicError(400, 'invalid_request_error', 'max_tokens: field required');
+      const betas = (call.headers.get('anthropic-beta') ?? '').split(',').map((b) => b.trim()).filter(Boolean);
+      const problem = anthropicRequestProblem(body, betas);
+      if (problem) return anthropicError(400, 'invalid_request_error', problem);
 
       const last = body.messages[body.messages.length - 1];
       const content = isRecord(last) ? last.content : '';
       const prompt = typeof content === 'string' ? content : Array.isArray(content) ? content.map((block) => (isRecord(block) ? str(block.text) : '')).join('\n') : '';
       const turn = readVoiceTurn(prompt);
       const structured = isRecord(body.output_config) && isRecord(body.output_config.format) && body.output_config.format.type === 'json_schema';
-      const betas = (call.headers.get('anthropic-beta') ?? '').split(',').map((b) => b.trim()).filter(Boolean);
 
       let text: string;
       let stopReason = 'end_turn';
@@ -1502,6 +1547,8 @@ function planAnthropic(call: Call): Plan {
         entry: {
           model: body.model,
           betas,
+          thinking: isRecord(body.thinking) ? body.thinking : null,
+          fallbacks: body.fallbacks ?? null,
           structured,
           scripted: scripted !== null,
           caller: turn?.caller ?? null,
