@@ -36,6 +36,10 @@ export function shownSender<S extends { name?: string } | null | undefined>(enve
 
 /** The certificate's "Sent by" line: who pressed Send for the person it belongs to, or null. */
 export function certSentBy(e: any): string | null {
+  // The person it was sent for, as they were at Send: a move to another member afterwards does not change who it was for.
+  const at = e?.id ? get(`SELECT b.name by_name, b.email by_email, f.name owner FROM envelopes e JOIN users b ON b.id=e.sent_by_id JOIN users f ON f.id=e.sent_for_id
+    WHERE e.id=? AND e.sent_for_id IS NOT NULL AND e.sent_by_id != e.sent_for_id`, e.id) : null;
+  if (at) return `${at.by_name} <${at.by_email}>, for ${at.owner}`;
   const s = sentFor(e?.id);
   return s ? `${s.by} <${s.byEmail}>, for ${s.owner}` : null;
 }

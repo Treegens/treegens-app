@@ -2,10 +2,12 @@
 // openapi.ts puts `localeProp` on a recipient and spreads `localePaths()` into its paths.
 import { OWN_DOCS_DEFAULT_PROP } from './openapi-visibility.ts';
 import { shippedLocales } from '../lib/i18n.ts';
+import { senderTags } from '../lib/senderlang.ts';
 
 const s = { type: 'string' };
 const err = { description: 'Error', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } };
 
+const SENDER = () => senderTags().map((t) => `"${t}"`).join(', ');
 const AVAILABLE = () => `Available now: ${shippedLocales().map((t) => `"${t}"`).join(', ')}.`;
 
 /** A recipient's "locale". */
@@ -28,6 +30,14 @@ export function localePaths() {
         description: `For admins. This describes "default_locale"; the other settings of this call are the ones under Settings, Account, and a setting left out stays as it is. "default_locale" is the language the editor and this API give each new recipient that names none. ${AVAILABLE()} null or "" lets each person's browser decide, then English. A language that is not available answers 400 and changes nothing. GET /me returns it under "account".`,
         requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { default_locale: { ...s, nullable: true }, own_docs_default: OWN_DOCS_DEFAULT_PROP } } } } },
         responses: { 200: { description: 'OK', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' } } } } } }, default: err },
+      },
+    },
+    '/me': {
+      patch: {
+        summary: 'Change your own profile: here, the language of your own screens and of our emails to you',
+        description: `This describes "locale"; the other fields of this call are the ones under Settings, Profile, and a field left out stays as it is. "locale" is the language of your own screens in the app (so far the menu, Home and the language choice itself; the other screens stay in English until they are translated) and of the emails we send you about your documents (declined, signed, opened, completed, expired, not opened yet, your turn to pass a link on, the reminder to pass it on, and the digest of questions and comments). Available now: ${SENDER()}. A regional code such as "en-US" is saved as its language ("en") when that one is available. null or "" lets your browser decide, among those, then English; the emails then follow the language your browser asked for when you last opened the app. A language that is not available, or one of the test languages, answers 400 with "code": "sender_locale" and changes nothing, the other fields of the call included. It never changes the language of the people you send documents to (their "locale"), and what you write is never translated. GET /me returns it as "user.locale".`,
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { locale: { ...s, nullable: true }, name: s, title: s, company: s } } } } },
+        responses: { 200: { description: 'OK', content: { 'application/json': { schema: { type: 'object', properties: { user: { type: 'object', properties: { locale: { ...s, nullable: true } } } } } } } }, default: err },
       },
     },
     '/sign/{token}/locale': {

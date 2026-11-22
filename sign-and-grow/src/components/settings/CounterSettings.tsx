@@ -2,11 +2,12 @@
 import { useEffect, useState } from 'react';
 import { api, oops } from '@/components/ui';
 import { useSaved } from '@/components/settings/Frame';
-import { CANNOT_CHECK_ID } from '@/lib/counter';
+import { useST } from '@/components/senderLang';
 
 // Settings, Team, for admins: signing at a service counter (src/server/counter.ts). Closed, and nothing of it shows
 // anywhere else until an admin gives someone the counter permission here. Each switch saves as it changes.
 export function CounterSettings() {
+  const T = useST();
   const [d, setD] = useState<any>(null);
   const [contact, setContact] = useState('');
   const [saved, say] = useSaved();
@@ -24,30 +25,30 @@ export function CounterSettings() {
   const tick = (list: 'members' | 'templates', id: string, patch: any) => (x: any) => ({ ...x, [list]: x[list].map((m: any) => (m.id === id ? { ...m, ...patch } : m)) });
   return (
     <details className="set-counter" data-fold="" data-feature="gov-G18" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
-      <summary><b>Service counter</b> <span className="muted small">For staff who help people sign in person at a desk</span></summary>
+      <summary><b>{T('settings.counter.title')}</b> <span className="muted small">{T('settings.counter.lead')}</span></summary>
       {d && (
         <div className="stack" style={{ marginTop: 12 }}>
           {saved}
-          <p className="muted small" style={{ margin: 0 }}>Officials with the counter permission see Counter under More. They record how they know who signs and any help they give, as their own statements. {CANNOT_CHECK_ID}</p>
+          <p className="muted small" style={{ margin: 0 }}>{T('settings.counter.intro')} {T('counter.cannot_check_id')}</p>
           <fieldset className="ct-radio" style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend><b>Who works at the counter</b></legend>
+            <legend><b>{T('settings.counter.who')}</b></legend>
             {d.members.map((m: any) => (
               <label key={m.id} className="check" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={m.counter} onChange={(e) => put(`/counter/staff/${m.id}`, { counter: e.target.checked }, tick('members', m.id, { counter: e.target.checked }))} /> <span>{m.name} <span className="muted small">{m.email}</span></span></label>
             ))}
           </fieldset>
           <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend><b>Documents used at the counter</b></legend>
-            {d.templates.length === 0 ? <p className="muted small" style={{ margin: 0 }}>No template yet. In a template, set a person&apos;s &quot;How they sign&quot; to &quot;In person, with me&quot;, and it appears here.</p> : d.templates.map((t: any) => (
+            <legend><b>{T('settings.counter.docs')}</b></legend>
+            {d.templates.length === 0 ? <p className="muted small" style={{ margin: 0 }}>{T('settings.counter.none')}</p> : d.templates.map((t: any) => (
               <div key={t.id} className="stack" style={{ gap: 0 }}>
                 <label className="check" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={t.counter} onChange={(e) => put(`/counter/templates/${t.id}`, { counter: e.target.checked }, tick('templates', t.id, { counter: e.target.checked }))} /> <span>{t.subject}</span></label>
-                {t.counter && <label className="check" style={{ minHeight: 44, marginLeft: 30 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={t.show_values} onChange={(e) => put(`/counter/templates/${t.id}`, { counter: true, show_values: e.target.checked }, tick('templates', t.id, { show_values: e.target.checked }))} /> <span className="small">Show what the person types on the Counter screen <span className="muted">(the official who started a document is its sender and can always open it)</span></span></label>}
+                {t.counter && <label className="check" style={{ minHeight: 44, marginLeft: 30 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={t.show_values} onChange={(e) => put(`/counter/templates/${t.id}`, { counter: true, show_values: e.target.checked }, tick('templates', t.id, { show_values: e.target.checked }))} /> <span className="small">{T('settings.counter.show_values')} <span className="muted">{T('settings.counter.show_values_hint')}</span></span></label>}
               </div>
             ))}
           </fieldset>
-          <label className="check" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={d.settings.official_may_witness} onChange={(e) => put('/counter/settings', { official_may_witness: e.target.checked }, (x) => ({ ...x, settings: { ...x.settings, official_may_witness: e.target.checked } }))} /> <span>The official may also be the witness of someone who signs with a mark</span></label>
-          {d.pictures_possible && <label className="check" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={d.settings.id_scans} onChange={(e) => put('/counter/settings', { id_pictures: e.target.checked }, (x) => ({ ...x, settings: { ...x.settings, id_scans: e.target.checked } }))} /> <span>Keep a picture of the ID document, encrypted, in the evidence pack</span></label>}
-          <label className="f" style={{ margin: 0 }}><span>Contact on the receipt</span><input value={contact} onChange={(e) => setContact(e.target.value)} maxLength={300} placeholder="Civic Centre, desk 3, phone number" /></label>
-          <div><button type="button" className="btn" onClick={() => put('/counter/settings', { contact })}>Save the contact</button></div>
+          <label className="check" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={d.settings.official_may_witness} onChange={(e) => put('/counter/settings', { official_may_witness: e.target.checked }, (x) => ({ ...x, settings: { ...x.settings, official_may_witness: e.target.checked } }))} /> <span>{T('settings.counter.witness')}</span></label>
+          {d.pictures_possible && <label className="check" style={{ minHeight: 44 }}><input type="checkbox" style={{ width: 20, height: 20 }} checked={d.settings.id_scans} onChange={(e) => put('/counter/settings', { id_pictures: e.target.checked }, (x) => ({ ...x, settings: { ...x.settings, id_scans: e.target.checked } }))} /> <span>{T('settings.counter.id_pictures')}</span></label>}
+          <label className="f" style={{ margin: 0 }}><span>{T('settings.counter.contact')}</span><input value={contact} onChange={(e) => setContact(e.target.value)} maxLength={300} placeholder={T('settings.counter.contact_example')} /></label>
+          <div><button type="button" className="btn" onClick={() => put('/counter/settings', { contact })}>{T('settings.counter.save_contact')}</button></div>
         </div>
       )}
     </details>

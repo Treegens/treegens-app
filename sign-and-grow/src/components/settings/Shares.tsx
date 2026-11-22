@@ -11,7 +11,8 @@ import Link from 'next/link';
 import { api, useLoad, oops } from '@/components/ui';
 import { Card, useSaved } from '@/components/settings/Frame';
 import { ConfirmDialog } from '@/components/sender/dialogs';
-import { CARD_TITLE, CARD_HINT, RECEIVED_TITLE, LEVEL_WORDS, SHARE_LEVELS, shareDates, shareDatesProblem, type ShareLevel } from '@/lib/shares';
+import { SHARE_LEVELS, shareDates, shareDatesProblem, type ShareLevel } from '@/lib/shares';
+import { useST, senderRich } from '@/components/senderLang';
 
 const todayHere = () => {
   const d = new Date();
@@ -19,20 +20,22 @@ const todayHere = () => {
 };
 
 function ShareRow({ s, who, onEnd, busy }: { s: any; who: string; onEnd: () => void; busy: boolean }) {
-  const state = !s.active ? (s.waiting ? 'Starts later' : 'Not in force') : '';
+  const T = useST();
+  const state = !s.active ? T(s.waiting ? 'settings.shares.later' : 'settings.shares.not_in_force') : '';
   return (
     <li className="setting-row" data-item="share" style={{ alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
       <span className="grow">
-        <b>{who}</b>: {LEVEL_WORDS[s.level as ShareLevel]?.name || s.level}, {shareDates(s.starts_on, s.ends_on)}.{state ? ` ${state}.` : ''}
+        {senderRich(T.lang, 'settings.shares.row', { who: <b>{who}</b> }, { level: (SHARE_LEVELS as readonly string[]).includes(s.level) ? T(`shares.level.${s.level}.name`) : s.level, dates: shareDates(s.starts_on, s.ends_on) })}{state ? ` ${state}.` : ''}
       </span>
-      <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={onEnd} aria-label={`End sharing with ${who} now`}>End now</button>
+      <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={onEnd} aria-label={T('settings.shares.end_one', { who })}>{T('settings.shares.end')}</button>
     </li>
   );
 }
 
 export function Shares() {
+  const T = useST();
   const [d, reload] = useLoad<any>(() => api('/me/shares').catch(() => null), []);
-  const [said, saved] = useSaved('Shared');
+  const [said, saved] = useSaved(T('settings.shares.shared'));
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ grantee: '', level: 'see' as ShareLevel, starts_on: '', ends_on: '' });
   const [err, setErr] = useState('');
@@ -50,9 +53,9 @@ export function Shares() {
   };
   const give = async () => {
     setErr('');
-    if (!form.grantee) return setErr('Choose a colleague to share with. Nothing was shared.');
+    if (!form.grantee) return setErr(T('settings.shares.choose'));
     const problem = shareDatesProblem(form.starts_on || today, form.ends_on, today);
-    if (problem) return setErr(`${problem} Nothing was shared.`);
+    if (problem) return setErr(`${problem} ${T('settings.shares.nothing')}`);
     setBusy(true);
     try {
       await api('/me/shares', { body: { ...form, starts_on: form.starts_on || today } });
@@ -60,7 +63,7 @@ export function Shares() {
       saved();
       reload();
     } catch (e: any) {
-      setErr(e?.message || 'That did not work. Nothing was shared. Try again.');
+      setErr(e?.code || e?.message ? T.error(e) : T('settings.shares.failed'));
     }
     setBusy(false);
   };
@@ -68,56 +71,56 @@ export function Shares() {
   return (
     <>
       <Card><div className="card stack" data-feature="ds-colleagues">
-        <h2 style={{ margin: 0 }} id="shr-title">{CARD_TITLE}</h2>
-        <p className="muted small" style={{ margin: 0 }}>{CARD_HINT}</p>
+        <h2 style={{ margin: 0 }} id="shr-title">{T('shares.card_title')}</h2>
+        <p className="muted small" style={{ margin: 0 }}>{T('shares.card_hint')}</p>
         {d.given.length > 0 && (
-          <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }} aria-label="Shared by you">
+          <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }} aria-label={T('settings.shares.by_you')}>
             {d.given.map((s: any) => <ShareRow key={s.id} s={s} who={s.grantee.name} busy={busy} onEnd={() => void end(s.id)} />)}
           </ul>
         )}
         <div className="stack" role="group" aria-labelledby="shr-title">
           <label className="f">
-            <span>Colleague</span>
+            <span>{T('settings.shares.colleague')}</span>
             <select id="shr-colleague" value={form.grantee} style={{ minHeight: 44 }} onChange={(e) => setForm({ ...form, grantee: e.target.value })}>
-              <option value="">Choose a colleague</option>
+              <option value="">{T('settings.shares.choose_colleague')}</option>
               {d.colleagues.map((p: any) => <option key={p.id} value={p.id}>{p.name} ({p.email})</option>)}
             </select>
           </label>
           <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend>What they may do</legend>
+            <legend>{T('settings.shares.may_do')}</legend>
             {SHARE_LEVELS.map((l) => (
               <label key={l} className="setting-row" style={{ minHeight: 44, margin: 0 }}>
                 <input type="radio" name="shr-level" value={l} checked={form.level === l} onChange={() => setForm({ ...form, level: l })} />
-                <span><b>{LEVEL_WORDS[l].name}</b><span className="muted small" style={{ display: 'block' }}>{LEVEL_WORDS[l].covers}</span></span>
+                <span><b>{T(`shares.level.${l}.name`)}</b><span className="muted small" style={{ display: 'block' }}>{T(`shares.level.${l}.covers`)}</span></span>
               </label>
             ))}
           </fieldset>
           <div className="grid g2">
-            <label className="f"><span>First day</span><input type="date" min={today} value={form.starts_on || today} style={{ minHeight: 44 }} onChange={(e) => setForm({ ...form, starts_on: e.target.value })} /></label>
-            <label className="f"><span>Last day (empty: until you end it)</span><input type="date" min={form.starts_on || today} value={form.ends_on} style={{ minHeight: 44 }} onChange={(e) => setForm({ ...form, ends_on: e.target.value })} /></label>
+            <label className="f"><span>{T('settings.delegate.first_day')}</span><input type="date" min={today} value={form.starts_on || today} style={{ minHeight: 44 }} onChange={(e) => setForm({ ...form, starts_on: e.target.value })} /></label>
+            <label className="f"><span>{T('settings.shares.last_day')}</span><input type="date" min={form.starts_on || today} value={form.ends_on} style={{ minHeight: 44 }} onChange={(e) => setForm({ ...form, ends_on: e.target.value })} /></label>
           </div>
           {err && <div className="notice err" role="alert">{err}</div>}
           <div className="row" style={{ gap: 12, alignItems: 'center' }}>
-            <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={() => void give()}>Share with a colleague</button>
+            <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={() => void give()}>{T('settings.shares.give')}</button>
             {said}
           </div>
         </div>
       </div></Card>
       {d.received.length > 0 && (
         <Card><div className="card stack" data-feature="ds-colleagues">
-          <h2 style={{ margin: 0 }}>{RECEIVED_TITLE}</h2>
-          <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }} aria-label={RECEIVED_TITLE}>
+          <h2 style={{ margin: 0 }}>{T('shares.received_title')}</h2>
+          <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }} aria-label={T('shares.received_title')}>
             {d.received.map((s: any) => <ShareRow key={s.id} s={s} who={s.owner.name} busy={busy} onEnd={() => void end(s.id)} />)}
           </ul>
-          {d.received.filter((s: any) => s.active).map((s: any) => <p key={s.id} className="small" style={{ margin: 0 }}><Link href={`/app/envelopes?sender=${encodeURIComponent(s.owner.id)}`} style={{ display: 'inline-block', minHeight: 44, lineHeight: '44px' }}>Open {s.owner.name}&apos;s documents</Link></p>)}
+          {d.received.filter((s: any) => s.active).map((s: any) => <p key={s.id} className="small" style={{ margin: 0 }}><Link href={`/app/envelopes?sender=${encodeURIComponent(s.owner.id)}`} style={{ display: 'inline-block', minHeight: 44, lineHeight: '44px' }}>{T('settings.shares.open', { name: s.owner.name })}</Link></p>)}
         </div></Card>
       )}
       {others.length > 0 && (
         <Card><div className="card stack" data-feature="ds-colleagues">
-          <h2 style={{ margin: 0 }}>Everyone&apos;s shares in this account</h2>
-          <p className="muted small" style={{ margin: 0 }}>You see these because you are an admin. Ending one stops it at once.</p>
-          <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }} aria-label="Everyone's shares">
-            {others.map((s: any) => <ShareRow key={s.id} s={s} who={`${s.owner.name} to ${s.grantee.name}`} busy={busy} onEnd={() => void end(s.id)} />)}
+          <h2 style={{ margin: 0 }}>{T('settings.shares.everyone')}</h2>
+          <p className="muted small" style={{ margin: 0 }}>{T('settings.shares.admin_note')}</p>
+          <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }} aria-label={T('settings.shares.everyone_list')}>
+            {others.map((s: any) => <ShareRow key={s.id} s={s} who={T('settings.shares.from_to', { from: s.owner.name, to: s.grantee.name })} busy={busy} onEnd={() => void end(s.id)} />)}
           </ul>
         </div></Card>
       )}
@@ -126,27 +129,28 @@ export function Shares() {
 }
 
 export function MoveDocuments({ members }: { members: any[] }) {
+  const T = useST();
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
-  const [said, saved] = useSaved('Moved');
+  const [said, saved] = useSaved(T('settings.move.moved'));
   const [err, setErr] = useState('');
   // Asked first, with the numbers: { documents, templates } from GET .../move-documents.
   const [ask, setAsk] = useState<{ documents: number; templates: number } | null>(null);
   if (!members || members.length < 2) return null;
   const id = (m: any) => m.user_id || m.id;
-  const nameOf = (x: string) => members.find((m: any) => id(m) === x)?.name || 'them';
+  const nameOf = (x: string) => members.find((m: any) => id(m) === x)?.name || T('settings.move.them');
   const check = async () => {
     setErr('');
-    if (!from || !to) return setErr('Choose whose documents to move and to whom. Nothing was moved.');
-    if (from === to) return setErr('Those are the same person. Choose someone else to move them to. Nothing was moved.');
+    if (!from || !to) return setErr(T('settings.move.choose'));
+    if (from === to) return setErr(T('settings.move.same'));
     setBusy(true);
     try {
       const n = await api(`/account/members/${from}/move-documents`);
-      if (!n.documents && !n.templates) setErr(`${nameOf(from)} has no documents or templates. Nothing was moved.`);
+      if (!n.documents && !n.templates) setErr(T('settings.move.none', { name: nameOf(from) }));
       else setAsk(n);
     } catch (e: any) {
-      setErr(e?.message || 'That did not work. Nothing was moved. Try again.');
+      setErr(e?.code || e?.message ? T.error(e) : T('settings.move.failed'));
     }
     setBusy(false);
   };
@@ -155,23 +159,22 @@ export function MoveDocuments({ members }: { members: any[] }) {
     setAsk(null);
     saved();
   };
-  const count = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
   return (
     <div className="card stack" data-feature="ds-colleagues">
-      <h3 style={{ margin: 0 }}>Move a member&apos;s documents</h3>
-      <p className="muted small" style={{ margin: 0 }}>Everything one member sent, and their templates, then belong to another member. Each document&apos;s history says who moved it, and its certificate keeps who sent it first.</p>
+      <h3 style={{ margin: 0 }}>{T('settings.move.title')}</h3>
+      <p className="muted small" style={{ margin: 0 }}>{T('settings.move.lead')}</p>
       <div className="grid g2">
-        <label className="f"><span>From</span><select value={from} style={{ minHeight: 44 }} onChange={(e) => setFrom(e.target.value)}><option value="">Choose a member</option>{members.map((m: any) => <option key={id(m)} value={id(m)}>{m.name}</option>)}</select></label>
-        <label className="f"><span>To</span><select value={to} style={{ minHeight: 44 }} onChange={(e) => setTo(e.target.value)}><option value="">Choose a member</option>{members.map((m: any) => <option key={id(m)} value={id(m)}>{m.name}</option>)}</select></label>
+        <label className="f"><span>{T('settings.move.from')}</span><select value={from} style={{ minHeight: 44 }} onChange={(e) => setFrom(e.target.value)}><option value="">{T('settings.move.choose_member')}</option>{members.map((m: any) => <option key={id(m)} value={id(m)}>{m.name}</option>)}</select></label>
+        <label className="f"><span>{T('settings.move.to')}</span><select value={to} style={{ minHeight: 44 }} onChange={(e) => setTo(e.target.value)}><option value="">{T('settings.move.choose_member')}</option>{members.map((m: any) => <option key={id(m)} value={id(m)}>{m.name}</option>)}</select></label>
       </div>
       {err && <div className="notice" role="status">{err}</div>}
       <div className="row" style={{ gap: 12, alignItems: 'center' }}>
-        <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={() => void check()}>Move their documents</button>
+        <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={() => void check()}>{T('settings.move.button')}</button>
         {said}
       </div>
       {ask && (
-        <ConfirmDialog title={`Move ${nameOf(from)}'s documents to ${nameOf(to)}?`} confirmLabel="Move them" keepLabel="Keep them where they are" danger={false} unchanged="Nothing was moved." onClose={() => setAsk(null)} onConfirm={go}>
-          <p>{count(ask.documents, 'document')} and {count(ask.templates, 'template')} then belong to {nameOf(to)}. Each history says you moved them. There is no undo, but you can move them back the same way.</p>
+        <ConfirmDialog title={T('settings.move.ask', { from: nameOf(from), to: nameOf(to) })} confirmLabel={T('settings.move.confirm')} keepLabel={T('settings.move.keep')} danger={false} unchanged={T('settings.move.unchanged')} onClose={() => setAsk(null)} onConfirm={go}>
+          <p>{T('settings.move.what', { documents: T('settings.move.documents', { count: ask.documents }), templates: T('settings.move.templates', { count: ask.templates }), to: nameOf(to) })}</p>
         </ConfirmDialog>
       )}
     </div>

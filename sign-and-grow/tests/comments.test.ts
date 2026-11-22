@@ -132,7 +132,7 @@ test('"Ask the sender a question" is a private comment now: one way to ask, answ
   const mail = mailTo('quin@comments.example').filter((m: any) => m.subject === 'Questions and comments: Lease p3');
   assert.equal(mail.length, 1);
   assert.match(text(mail[0].html), /Ada Tenant, privately: Can I sign on paper instead\?/);
-  assert.match(text(mail[0].html), /Answer on the envelope page\. They see your answer on their signing page, and we email it to them\./);
+  assert.match(text(mail[0].html), /Answer on the document's page\. They see your answer on their signing page, and we email it to them\./);
   // Writing the question again is not a second way in: it lands in the same list.
   assert.equal((await s.get(`/envelopes/${e.id}/comments`)).data.threads.length, 1);
 });

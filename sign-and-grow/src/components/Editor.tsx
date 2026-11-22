@@ -9,7 +9,7 @@ import { sendMyselfTrouble } from './editor/SendMyself';
 import { isGroupRow, groupProblem } from './editor/GroupRecipient';
 import { finished, fingerprint, freshValues, outcomes, rebase, restoreLocked, signsAgain } from './editor/changes';
 import { precheck, uploadFile, fmtSize, MAX_BYTES } from './editor/upload';
-import { isPicture, shrinkPhoto } from './editor/photos';
+import { isPicture, shrinkPhoto, preparePhotos } from './editor/photos';
 import { PhotoAsk } from './editor/PhotoAsk';
 import { StepAdd } from './editor/StepAdd';
 import { StepFields } from './editor/StepFields';
@@ -25,7 +25,7 @@ import { detailsRefused, wantsDetails } from './sender/DetailBoxes';
 import { STEP_NAMES, isBlankPerson, onlyMe, personLabel } from '@/lib/editorux';
 import { moveFields } from '@/lib/pages';
 import { usableRule } from '@/lib/routing';
-import { atWords, sendAtProblem } from '@/lib/timing';
+import { atWordsHere, sendAtProblem } from '@/lib/timing';
 import { isOpenPlace, stepRoleProblem } from '@/lib/recipienttypes';
 import { roleKey } from '@/lib/tplcombine';
 
@@ -276,13 +276,13 @@ export function Editor({ id, embedded }: { id: string; embedded?: { onDone: (eve
       queue.current = queue.current.then(async () => {
         try {
           if (group.some(isPicture)) patch({ state: 'preparing' });
-          const ready: File[] = [];
-          for (const one of group) ready.push(await shrinkPhoto(one));
+          // Photos of a page are cleaned (edges, straightening, contrast) where the page is found (photos.ts, scan.ts).
+          const { ready, extra } = await preparePhotos(group);
           if (sizeOf(ready) > MAX_BYTES) throw new Error(ready.length > 1 ? `Together these pictures are ${fmtSize(sizeOf(ready))}, and one file can be up to 25 MB. Choose fewer pictures at a time and add the rest as a second file.` : precheck(ready[0]));
           patch({ state: 'uploading', size: sizeOf(ready) });
-          const f = await uploadFile(ready.length > 1 ? ready : ready[0], (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }));
+          const f = await uploadFile(ready.length > 1 ? ready : ready[0], (n) => patch(n >= 1 ? { progress: 1, state: 'checking' } : { progress: n }), extra);
           setUploads((u) => u.filter((x) => x.key !== key));
-          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted || null, existing_signatures_note: f.existing_signatures_note }]);
+          setDocs((d) => [...d, { id: newId('doc'), file_id: f.id, name: f.name, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: f.converted || null, existing_signatures_note: f.existing_signatures_note, ...(f.cleaned_pages ? { cleaned_pages: f.cleaned_pages } : {}) }]);
           setEnv((e: any) => (e.subject ? e : { ...e, subject: e.kind === 'template' ? f.name : `Please sign: ${f.name}` }));
           dirty();
         } catch (e: any) {
@@ -307,6 +307,8 @@ export function Editor({ id, embedded }: { id: string; embedded?: { onDone: (eve
   }), dirty());
   // Swap in a corrected file. The document keeps its place and its fields; a field on a page that no longer exists
   // moves to the last page so nothing disappears quietly.
+  // The same pages from another file: "Undo cleanup" of photos (editor/FileRow.tsx). Fields stay where they are.
+  const swapFile = (did: string, f: any) => (setDocs((l) => l.map((x) => (x.id === did ? { ...x, file_id: f.id, pages: f.pages, page_sizes: f.page_sizes, is_scan: f.is_scan, scan_pages: f.scan_pages, size: f.size, converted: null, existing_signatures_note: undefined, cleaned_pages: undefined } : x))), dirty());
   async function replaceDoc(did: string, file: File | null | undefined) {
     if (!file) return;
     const problem = precheck(file, isPicture(file), !!me.converts);
@@ -559,7 +561,7 @@ export function Editor({ id, embedded }: { id: string; embedded?: { onDone: (eve
         if (tooSoon) return setError(`${tooSoon} Nothing was sent.`);
         const r = await api(`/envelopes/${id}/send`, { method: 'POST', body: { send_anyway: anyway === true, ...(signNow ? { sign_now: true } : {}), ...(later ? { send_at: later } : {}) } });
         if (later) {
-          toast(`It goes out soon after ${atWords(r?.send_at || later)}. Nothing has been sent yet.`);
+          toast(`It goes out soon after ${atWordsHere(r?.send_at || later)}. Nothing has been sent yet.`);
           return leave(`/app/envelopes/${id}`);
         }
         if (signNow && r?.sign_url) {
@@ -675,7 +677,7 @@ export function Editor({ id, embedded }: { id: string; embedded?: { onDone: (eve
 
   const ed: Ed = {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, wording, docs, rcps, fields, contacts, uploads, color,
-    patchEnv, isIdle, addMe, addFromTemplate, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, markToRead, removeDoc, replaceDoc, moveDoc, pagesChanged, addWritten, addRcp, patchRcp, removeRcp, removed, undoRemove,
+    patchEnv, isIdle, addMe, addFromTemplate, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, markToRead, removeDoc, replaceDoc, swapFile, moveDoc, pagesChanged, addWritten, addRcp, patchRcp, removeRcp, removed, undoRemove,
     setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
     showField: (fid) => (setJump(fid), void go(2)), jump, clearJump: () => setJump(null),
     flush: () => (correcting ? Promise.resolve() : save()), embedded: !!embedded,

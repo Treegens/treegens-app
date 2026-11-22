@@ -17,6 +17,7 @@ import { planPages, opWords, unchanged, type PagePlan } from '../lib/pages.ts';
 import { chainOf } from './pagechain.ts';
 import { queueOcr } from './ocr.ts';
 import { convertedOf } from '../lib/convert.ts';
+import { copyScanPhotos } from './scanphotos.ts';
 
 export const PAGES_AUDIT = 'Pages changed';
 
@@ -57,6 +58,8 @@ export async function remakeFile(accountId: string, fileId: string, ops: any) {
   run('INSERT INTO files (id, account_id, sha256, name, size, pages, page_sizes, created_at, text, scan_pages, text_sealed, text_key, page_ops, original_sha256, converted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     fid, accountId, sha, src.name, bytes.length, info.pages, JSON.stringify(info.sizes), now(), kept.text, scanPages.length ? JSON.stringify(scanPages) : null, kept.sealed, kept.key,
     JSON.stringify({ from: src.id, ops: planned.ops }), src.original_sha256 || null, src.converted || null);
+  // The photos that its pages were cleaned from go with the pages they belong to (scanphotos.ts).
+  copyScanPhotos(src.id, fid, planned.plan.map((p) => p.from + 1));
   // A new file is read again for its pictures of pages, like any upload (ocr.ts).
   if (accountId) queueOcr(fid, scanPages);
   return {

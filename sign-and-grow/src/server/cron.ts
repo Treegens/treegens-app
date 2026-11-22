@@ -23,6 +23,9 @@ import { forgetOldExports } from './exportfull.ts';
 import { forgetImportedFiles } from './importer.ts';
 import { keyDatesTick, keyReminders } from './airepo.ts';
 import { counterTick } from './counter.ts';
+import { sweepScanPhotos } from './scanphotos.ts';
+import { purgeDrafts } from './webforms.ts';
+import { columnsTick } from './colsweep.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -58,6 +61,7 @@ async function tickOnce() {
     bounces_forgotten: forgetOldBounces(),
     // Visitors of a public form who were told to come back once it can take their signature, emailed when it can.
     forms_ready: await formVisitorsReady(),
+    form_answers_forgotten: purgeDrafts(), // a form's unsigned answers, after a day (webforms.ts)
     // Resets of two-step login by email: announced once a day, and switched off when their day has come (twostep.ts).
     two_step: await twoStepTick(),
     // Emails about comments that waited, because one went to the same person about the same envelope minutes before,
@@ -76,6 +80,8 @@ async function tickOnce() {
     security_heads_noted: exportSecurityHeads(),
     // Full exports past their 7 days, and files of records brought in whose record has gone (exportfull.ts, importer.ts).
     exports_forgotten: forgetOldExports(), imported_files_forgotten: forgetImportedFiles(),
+    // Photos that pages were cleaned from, of files that are gone (scanphotos.ts).
+    scan_photos_removed: sweepScanPhotos(),
     // Closed envelopes at the end of their retention period: the email 14 days before, then the purge (records.ts).
     retention: await retentionTick(),
     // Our stored archive copies about envelopes deleted or purged since, once they have left (archivemail.ts).
@@ -93,5 +99,7 @@ async function tickOnce() {
     sso_domains_checked: await recheckDomains().catch((e) => (console.error('[cron] sso domains', e?.message), 0)),
     // Key dates: completed documents read by the AI a few at a time, and "Remind me" emails before a checked date (airepo.ts).
     key_dates_read: await keyDatesTick().catch((e) => (console.error('[cron] key dates', e?.message), 0)),
-    key_dates_reminded: await keyReminders().catch((e) => (console.error('[cron] key date reminders', e?.message), 0)) };
+    key_dates_reminded: await keyReminders().catch((e) => (console.error('[cron] key date reminders', e?.message), 0)),
+    // With FILE_ENCRYPTION_KEY: database values still in the clear or under an old key, a batch a tick (colsweep.ts).
+    values_encrypted: (() => { try { return columnsTick(); } catch (e: any) { console.error('[cron] encrypted columns', e?.message); return 0; } })() };
 }

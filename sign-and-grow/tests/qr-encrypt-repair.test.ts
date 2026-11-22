@@ -161,12 +161,13 @@ test('/security and the data processing summary list what stays readable in the 
   setKeys(K1);
   const on = encryptedFilesPoint()!;
   assert.match(on.text, /and so is the text read from uploaded PDFs that is kept for search/);
-  assert.match(on.text, /It does not make such a copy safe by itself, because the database on the same disk is not encrypted/);
+  assert.match(on.text, /It does not make such a copy safe by itself, because only part of the database on the same disk is encrypted/);
   assert.match(on.text, /Their earlier readable copies stay in backups made before that, and can stay in the free space of the disk/);
   assert.doesNotMatch(on.text, /That protects a copy of the disk/);
   const dbOn = notEncryptedPoint();
-  for (const h of DATABASE_HOLDS) assert.ok(dbOn.text.includes(h), h);
-  assert.match(dbOn.text, /Only the text read from uploaded PDFs for search is kept encrypted there/);
+  // With the key, part of the database is encrypted too (tests/ds-db-encrypt.test.ts); without it the whole list stays readable.
+  for (const h of DATABASE_HOLDS) assert.ok(databaseText(false).includes(h), h);
+  assert.match(dbOn.text, /and the text read from uploaded PDFs for search\. /);
   assert.match(dbOn.text, /So encrypt the disk itself as well\./);
   assert.match(PROCESSING_ENCRYPTED, /and the text read from uploaded PDFs for search are encrypted/);
   setKeys();
@@ -321,7 +322,9 @@ test('a completion email waiting for another try goes out without an attachment 
     const cases: [string, () => void][] = [
       ['damaged', () => flip(db.get("SELECT final_sha256 s FROM envelopes WHERE subject='Retry damaged'").s, 120)],
       // Locked: the server is given a key that is not the one the signed PDF was written with.
-      ['locked', () => setKeys(K3)],
+      // The emails themselves are made readable first (as if written before the key was set): with the key they are
+      // sealed too (tests/ds-db-encrypt.test.ts), and this case is about the attachment alone.
+      ['locked', () => (db.run("UPDATE emails SET html=col_find(html), payload=col_find(payload) WHERE status='failed'"), setKeys(K3))],
     ];
     for (const [kind, spoil] of cases) {
       both();

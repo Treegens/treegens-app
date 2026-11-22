@@ -23,6 +23,40 @@ export function atWords(iso: string | Date | null | undefined, tz?: string | nul
   return `${c.hh}:${String(c.mm).padStart(2, '0')} on ${c.d} ${MONTHS[c.m]}${year}`;
 }
 
+/**
+ * The same words for a screen: the time in the viewer's own zone and written their own way ("9:00 PM" or "21:00", as
+ * the time box beside it shows it), so the line and the box never disagree. `locale` and `zone` are for tests; a
+ * page leaves them out and gets the browser's.
+ */
+export function atWordsHere(iso: string | Date | null | undefined, locale?: string, zone?: string): string {
+  if (!iso) return '';
+  const t = typeof iso === 'string' ? new Date(iso) : iso;
+  if (Number.isNaN(t.getTime())) return '';
+  let tz = zone;
+  try {
+    tz ||= Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    tz = 'UTC';
+  }
+  const c = clockIn(t, tz);
+  if (!c) return '';
+  let time: string;
+  let monthFirst = false;
+  try {
+    // A 24-hour clock is written the way the time box writes it, "02:30"; a 12-hour one as "9:30 PM".
+    const twelve = !!new Intl.DateTimeFormat(locale, { hour: 'numeric', timeZone: c.zone }).resolvedOptions().hour12;
+    time = new Intl.DateTimeFormat(locale, { hour: twelve ? 'numeric' : '2-digit', minute: '2-digit', timeZone: c.zone }).format(t);
+    // "March 3" where the viewer writes the month first (en-US), "3 March" elsewhere. The month stays in English.
+    const parts = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'long', timeZone: c.zone }).formatToParts(t).map((p) => p.type);
+    monthFirst = parts.indexOf('month') >= 0 && parts.indexOf('month') < parts.indexOf('day');
+  } catch {
+    time = `${c.hh}:${String(c.mm).padStart(2, '0')}`;
+  }
+  const thisYear = c.y === (clockIn(new Date(), c.zone)?.y ?? c.y);
+  if (monthFirst) return `${time} on ${MONTHS[c.m]} ${c.d}${thisYear ? '' : `, ${c.y}`}`;
+  return `${time} on ${c.d} ${MONTHS[c.m]}${thisYear ? '' : ` ${c.y}`}`;
+}
+
 /** "2 days", "1 hour", "1 day and 4 hours". */
 export function waitWords(hours: number): string {
   const h = Math.round(Number(hours) || 0);
@@ -44,8 +78,8 @@ export function spanWords(ms: number): string {
   return waitWords(h);
 }
 
-/** The label of the one Send button once a time is chosen. */
-export const sendAtLabel = (iso: string, tz?: string | null) => `Send at ${atWords(iso, tz)}`;
+/** The label of the one Send button once a time is chosen: on a screen, so in the viewer's zone, like the box above it. */
+export const sendAtLabel = (iso: string, tz?: string | null) => `Send at ${atWordsHere(iso, undefined, tz || undefined)}`;
 
 /** A chosen time that can still be used: in the future, and no further than the limit. */
 export function sendAtProblem(iso: unknown, nowMs = Date.now()): string | null {
@@ -109,12 +143,15 @@ export function waitRunning(e: any): { name: string; at: number; hours: number }
   return { name: list[0].r.name || list[0].r.role_name || 'The next person', at: list[0].w.at, hours: list[0].w.hours };
 }
 
-/** The timer takes a time up within its round (every 15 minutes, or as often as the host calls it), so "soon after". */
-export const goesOutWords = (iso: string | number, tz?: string | null) => `soon after ${atWords(new Date(iso).toISOString(), tz)}`;
+/**
+ * The timer takes a time up within its round (every 15 minutes, or as often as the host calls it), so "soon after".
+ * Only screens use it (the page, the list, Home), so the time is the viewer's own (atWordsHere).
+ */
+export const goesOutWords = (iso: string | number, tz?: string | null) => `soon after ${atWordsHere(new Date(iso).toISOString(), undefined, tz || undefined)}`;
 
 /** What the Documents list says for a draft with a time, a paused envelope, or one held by a wait. Empty otherwise. */
 export function timingRow(e: any): string {
-  if (e?.status === 'draft' && e.send_at) return e.send_error ? `Not sent at ${atWords(e.send_at)}. Open it to see why` : `Sends at ${atWords(e.send_at)}`;
+  if (e?.status === 'draft' && e.send_at) return e.send_error ? `Not sent at ${atWordsHere(e.send_at)}. Open it to see why` : `Sends at ${atWordsHere(e.send_at)}`;
   if (e?.status !== 'sent') return '';
   if (e.paused_at) return 'Paused. Nobody can sign it until it is resumed';
   if ((e.recipients || []).some((r: any) => r.role !== 'cc' && (r.status === 'sent' || r.status === 'viewed'))) return '';

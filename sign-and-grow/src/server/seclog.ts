@@ -467,7 +467,7 @@ async function afterwards(seqs: number[]) {
     } else if (r.kind === 'api_key.created') {
       await alert(r.account_id, 'api_key_created', 'An API key was made',
         [`${whoSaid(r)} made the API key "${d.name || 'API key'}" with the "${d.scope === 'admin' ? 'admin' : 'send'}" scope in ${team} at ${at(r)}${from(r)}.`,
-          'If nobody on your team meant to, revoke it under Settings, API and webhooks: whatever has the key can work in the account until then.']);
+          'If nobody on your team meant to, revoke it under Settings, Developers: whatever has the key can work in the account until then.']);
     } else if (r.kind === 'owner.handed_over') {
       const was = d.from ? userName(d.from)?.name : null;
       const is = d.to ? userName(d.to)?.name : null;

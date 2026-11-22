@@ -6,9 +6,10 @@
 // reads documents by itself on this server ("auto"). While on, one line says what turning it off stops.
 import { useState } from 'react';
 import { api, useLoad, toast } from '@/components/ui';
-import { KEY_DATES, KEY_SWITCH_HINT, KEY_OFF_WARNING, OLDER_BUTTON, autoLine } from '@/lib/keydates';
+import { useST } from '@/components/senderLang';
 
 export function KeyDatesSetting() {
+  const T = useST();
   const [d, reload] = useLoad<any>(() => api('/account/key-dates').catch(() => null), []);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState('');
@@ -18,9 +19,9 @@ export function KeyDatesSetting() {
     setSaved('');
     try {
       await api('/account/key-dates', { method: 'PUT', body: { on } });
-      setSaved('Saved');
+      setSaved(T('settings.saved'));
     } catch (e: any) {
-      toast(`${e?.message || 'That was not saved.'} Try again in a moment.`, true);
+      toast(`${T.error(e)} ${T('settings.try_again')}`, true);
     }
     reload();
     setBusy(false);
@@ -29,9 +30,9 @@ export function KeyDatesSetting() {
     setBusy(true);
     try {
       const r = await api('/account/key-dates/older', { method: 'POST' });
-      setSaved(r.waiting ? `Saved. ${r.waiting} document${r.waiting === 1 ? '' : 's'} will be read over the next hours.` : 'Saved. There are no older completed documents to read.');
+      setSaved(r.waiting ? T('settings.keydates.older_waiting', { count: r.waiting }) : T('settings.keydates.older_none'));
     } catch (e: any) {
-      toast(`${e?.message || 'That was not saved.'} Try again in a moment.`, true);
+      toast(`${T.error(e)} ${T('settings.try_again')}`, true);
     }
     reload();
     setBusy(false);
@@ -41,14 +42,14 @@ export function KeyDatesSetting() {
       <label className="setting-row" style={{ margin: '10px 0 0', minHeight: 44 }}>
         <input type="checkbox" role="switch" checked={!!d.on} disabled={busy} aria-labelledby="key-dates-title" aria-describedby="key-dates-hint" onChange={(e) => flip(e.target.checked)} />
         <span>
-          <b id="key-dates-title">{KEY_DATES}</b> <span role="status" className="small" style={{ marginLeft: 6, color: 'var(--green)' }}>{saved}</span>
+          <b id="key-dates-title">{T('keydates.name')}</b> <span role="status" className="small" style={{ marginLeft: 6, color: 'var(--green)' }}>{saved}</span>
           <span className="muted small" id="key-dates-hint" style={{ display: 'block' }}>
-            {KEY_SWITCH_HINT} {d.on ? autoLine(!!d.auto, !!d.older) : ''}
-            {d.on && <span style={{ display: 'block' }}>{KEY_OFF_WARNING}</span>}
+            {T('keydates.switch_hint')} {d.on ? T(d.auto ? (d.older ? 'keydates.auto_all' : 'keydates.auto_new') : 'keydates.auto_off', { button: T('keydates.find_button') }) : ''}
+            {d.on && <span style={{ display: 'block' }}>{T('keydates.off_warning')}</span>}
           </span>
         </span>
       </label>
-      {d.on && d.auto && !d.older && <button type="button" className="btn sm" style={{ minHeight: 44, marginTop: 6 }} disabled={busy} onClick={() => void older()}>{OLDER_BUTTON}</button>}
+      {d.on && d.auto && !d.older && <button type="button" className="btn sm" style={{ minHeight: 44, marginTop: 6 }} disabled={busy} onClick={() => void older()}>{T('keydates.older_button')}</button>}
     </div>
   );
 }

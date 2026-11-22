@@ -39,6 +39,18 @@ export const movedLine = (from: string, to: string, by: string): string => `Move
 export const sendForLabel = (owner: string): string => `Send for ${owner}`;
 /** The envelope page's More line. */
 export const MOVE_LABEL = 'Move to a colleague';
+/**
+ * Whether "Move to a colleague" is offered for one envelope or template: on a team, to the person it belongs to, or
+ * to someone whose role may change every template (a template) or see every document (an envelope). The same rule
+ * as moveEnvelopes in src/server/shares.ts, so a custom role sees the button exactly when the server would allow it.
+ */
+export function mayMove(me: any, item: { kind?: string; sender_id?: string } | null | undefined): boolean {
+  if (!item || Number(me?.members) < 2) return false;
+  if (item.sender_id && item.sender_id === me?.user?.id) return true;
+  const can: string[] | null = Array.isArray(me?.my_role?.can) ? me.my_role.can : null;
+  if (!can) return me?.role === 'owner' || me?.role === 'admin';
+  return can.includes(item.kind === 'template' ? 'edit_any_template' : 'see_all');
+}
 export const MOVE_HINT = 'They become the person this document belongs to. The record keeps who sent it first and says who moved it.';
 
 /** What a share's dates say: "from 3 March 2027", "from 3 March 2027 to 14 March 2027". */

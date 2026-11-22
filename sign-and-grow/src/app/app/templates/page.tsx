@@ -8,7 +8,7 @@ import { MorePanel } from '@/components/sender/More';
 import { useMe } from '@/components/AppShell';
 // Working for a colleague: a template's More moves it to another member (src/server/shares.ts).
 import { MoveDialog as MoveToColleague } from '@/components/sender/Colleagues';
-import { MOVE_LABEL } from '@/lib/shares';
+import { MOVE_LABEL, mayMove } from '@/lib/shares';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
@@ -38,7 +38,8 @@ export default function Templates() {
   const [handing, setHanding] = useState<any>(null);
   const me = useMe();
   // On a team only, for the person a template belongs to or an admin (the same rule as the server's).
-  const mayHand = (t: any) => Number(me?.members) >= 2 && (t.sender_id === me?.user?.id || me?.role === 'owner' || me?.role === 'admin');
+  // By the same rule as the server: a custom role that may change every template sees it too (mayMove, src/lib/shares.ts).
+  const mayHand = (t: any) => mayMove(me, { kind: 'template', sender_id: t.sender_id });
   const [rules, setRules] = useState<any>(null);
   // Whose More is open: one row at a time, and closed every time the page opens.
   const [more, setMore] = useState('');

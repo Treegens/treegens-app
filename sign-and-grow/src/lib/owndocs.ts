@@ -110,3 +110,8 @@ export function changeFor(said: string | null | undefined, hiddenNames: string[]
 
 /** /verify, when a file is the completed copy made for one person (by file, or compared after a lookup by ID). */
 export const OWN_COPY_VERIFY = 'This is the completed copy made for one person. It holds only the files that were for them, so it has fewer pages than the full signed file. Its certificate lists each other file by its fingerprint only.';
+
+/** The sender's page, folded Files section: one line for each person shown only some files (limited_people). */
+export const seesLine = (p: { name: string; sees: string[] }) => (p.sees.length ? `${p.name} sees only: ${p.sees.join(', ')}` : `${p.name} is shown no file.`);
+/** Said once after those lines, when someone on the document is not limited. */
+export const SEES_REST = 'Everyone else sees every file.';

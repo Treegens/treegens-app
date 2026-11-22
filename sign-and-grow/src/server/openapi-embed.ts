@@ -8,7 +8,7 @@ const err = { description: 'Error', content: { 'application/json': { schema: { $
 const json = (schema: any) => ({ content: { 'application/json': { schema } } });
 const str = { type: 'string' };
 const idParam = { name: 'id', in: 'path', required: true, schema: str };
-const origins = json({ type: 'object', properties: { origins: { type: 'array', items: str }, max: { type: 'integer', example: EMBED_ORIGINS_MAX } } });
+const origins = json({ type: 'object', properties: { origins: { type: 'array', items: str }, max: { type: 'integer', example: EMBED_ORIGINS_MAX }, not_used: { type: 'array', items: str, description: 'Websites on this computer (http://localhost) listed earlier, or on a copy of the database, that do nothing on a server that is not on localhost: they are not counted and never frame a page. Remove them with DELETE.' } } });
 
 /** Field.anchor: a field placed where a piece of text is written. */
 export const anchorProp = () => ({

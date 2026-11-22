@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, toast } from '../ui';
 import { PAY_FOR_SENDER } from '@/lib/paylink';
+import { AskPayment } from './CollectChoice';
 
 type Link = { url: string; host: string; kind: string; label: string } | null;
 type State = { pay_link: Link; may: boolean; why: string | null; host_why?: string | null; gone?: { at: string; note: string } | null; kinds: Record<string, string> };
@@ -11,7 +12,14 @@ type State = { pay_link: Link; may: boolean; why: string | null; host_why?: stri
 // nothing on the pages and emails nobody. An account that may not show one yet is not offered it here at all (the
 // help page says when it is). One that has a link and lost the right to show it sees why, and can take it off.
 // `onChange` tells the step what is saved now, for the line next to its closed More options (ReviewParts.tsx).
-export function PayLinkChoice({ envelopeId, isTpl, onChange }: { envelopeId?: string; isTpl?: boolean; onChange?: (p: { pay_link: Link; host_why: null }) => void }) {
+type Props = { envelopeId?: string; isTpl?: boolean; onChange?: (p: { pay_link: Link; host_why: null }) => void };
+// "Ask for a payment": where the account connected its own Stripe account, one card that chooses between a card
+// payment here and this link (CollectChoice.tsx). Everywhere else it is this link card, as it always was.
+export function PayLinkChoice(props: Props) {
+  return <AskPayment {...props} />;
+}
+
+export function PayLinkCard({ envelopeId, isTpl, onChange }: Props) {
   const [st, setSt] = useState<State | null>(null);
   const [url, setUrl] = useState('');
   const [kind, setKind] = useState('deposit');

@@ -24,3 +24,6 @@ export const OWN_COPY_PROP = { type: 'boolean', description: 'Present and true w
 
 /** GET /public/verify/{id} "own_copies". */
 export const OWN_COPIES_PROP = { type: 'array', items: { type: 'string' }, description: 'Present when people on it were shown only some of the files: the SHA-256 of each completed copy made for one of them, beside "sha256" of the sender\'s copy.' };
+
+/** GET /envelopes/{id} "envelope.limited_people". */
+export const LIMITED_PEOPLE_PROP = { type: 'array', readOnly: true, description: 'With "own_docs" on: each person who is shown only some of the files, with the names of the files they are shown. Empty when everyone sees every file. Not on templates.', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, sees: { type: 'array', items: { type: 'string' } } } } };

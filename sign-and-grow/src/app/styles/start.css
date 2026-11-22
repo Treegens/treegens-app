@@ -53,7 +53,7 @@
 .side .me .side-support { display: flex; align-items: center; min-height: 44px; color: #cfe2d3; font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; }
 .side .nav-more-toggle[aria-disabled='true'] { cursor: default; }
 .side .nav-more-toggle[aria-disabled='true']::after { display: none; }
-/* Home says where the start button is: on the left on a wide screen, in the bar at the bottom on a phone. */
+/* Home says where the start button is: at the top of the menu on a wide screen, in the bar at the bottom on a phone. */
 .sn-where-phone { display: none; }
 @media (max-width: 900px) {
   .sn-where-wide { display: none; }

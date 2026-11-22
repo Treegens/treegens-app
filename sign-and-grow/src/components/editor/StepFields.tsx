@@ -18,6 +18,8 @@ import { WitnessBlockButton } from './WitnessChoice';
 import { StampChoice, useStamps, editorStampSrc, editorStampTurn } from './StampChoice';
 import { stampBox, STAMP_DEFAULT_MM, turnStyle } from '@/lib/stamps';
 import { ConvertNotes } from './ConvertNotes';
+// First or last name, dates from dates, same answer, text style and the team's saved fields (src/lib/fieldkinds.ts).
+import { NameChoice, DateFrom, FieldLookMore, SavedPalette, kindTitle, onlyDateSource, ButtonWordsNote } from './FieldLook';
 import { paletteKinds, personLabel } from '@/lib/editorux';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
@@ -136,19 +138,22 @@ export function StepFields({ ed }: { ed: Ed }) {
     if (r.bottom > top - 12) window.scrollBy({ top: r.bottom - top + 24 });
   }, [sel, sheet]);
 
-  function add(type: string, doc: any, page: number, x: number, y: number, fromKeyboard = false) {
+  function add(type: string, doc: any, page: number, x: number, y: number, fromKeyboard = false, over: any = {}) {
     const t = TYPES.find((v) => v[0] === type)!;
     const size = doc.page_sizes?.[page] || { w: 612, h: 792 };
     // A stamp starts at the real size of a round company seal, 40 mm across, whatever the size of the page.
     const seal = type === 'stamp' ? stampBox(STAMP_DEFAULT_MM, size.w, size.h) : null;
-    const w = seal ? seal.w : t[2];
-    const h = seal ? seal.h : t[3] || (w * size.w) / size.h;
+    // A saved field (FieldLook.tsx) brings its own size.
+    const w = over.w ?? (seal ? seal.w : t?.[2] ?? 0.2);
+    const h = over.h ?? (seal ? seal.h : t?.[3] || (w * size.w) / size.h);
     if (!SENDER_MARK(type) && !active) return toast('Add a signer in step 1 first, then place fields for them.', true);
     if (full()) return;
     const box = { x: clamp(x - w / 2, 0, 1 - w), y: clamp(y - h / 2, 0, 1 - h), w, h };
     // Dropped from the keyboard, a field lands in the middle of the page. Step down until it has a spot of its own.
     if (fromKeyboard) for (let i = 0; i < 12 && fields.current().some((f) => f.document_id === doc.id && f.page === page && overlap(box, f) > 0.4); i++) box.y = clamp(box.y + h + 0.012, 0, 1 - h);
-    const f = makeField(type, doc.id, page, active || null, box);
+    // A date from another date starts counting from the only date its person has, when there is just one.
+    if (type === 'date_from' && !over.date_from) over = { ...over, date_from: { from: onlyDateSource(fields.current(), active), add: 30, unit: 'days' } };
+    const f = makeField(type, doc.id, page, active || null, box, over);
     setFields((l) => [...l, f]);
     setSel(f.id);
     setTool(null);
@@ -163,7 +168,7 @@ export function StepFields({ ed }: { ed: Ed }) {
 
   // Keyboard and screen reader users cannot click a spot on the page, so choosing a field type from the keyboard
   // drops it in the middle of the page that is most in view. Arrow keys move it from there.
-  function addInView(type: string) {
+  function addInView(type: string, over: any = {}) {
     const root = canvas.current;
     if (!root) return;
     const view = root.getBoundingClientRect();
@@ -178,7 +183,7 @@ export function StepFields({ ed }: { ed: Ed }) {
     const doc = b && docs.find((d) => d.id === b.el.closest<HTMLElement>('[data-doc]')?.dataset.doc);
     if (!b || !doc) return toast('The document is still loading. Try again in a moment.', true);
     const y = ((Math.max(b.r.top, top) + Math.min(b.r.bottom, bottom)) / 2 - b.r.top) / b.r.height;
-    add(type, doc, Number(b.el.dataset.page), 0.5, y, true);
+    add(type, doc, Number(b.el.dataset.page), 0.5, y, true, over);
   }
 
   // Drag a kind of field from the list straight onto the page. A plain click still works as before.
@@ -476,6 +481,8 @@ export function StepFields({ ed }: { ed: Ed }) {
                 );
               })}
               {/* The six kinds most documents need are always there. Every other kind is behind this one button. */}
+              {/* The team's saved fields, after the other kinds (FieldLook.tsx). */}
+              <SavedPalette open={allTypes} onAdd={addInView} disabled={!!ed.wording} />
               <button type="button" className="ed-morefields" data-fold aria-expanded={allTypes} onClick={() => setAllTypes(!allTypes)}>{allTypes ? 'Fewer fields' : 'More fields'}</button>
             </div>
           </div>
@@ -518,9 +525,9 @@ export function StepFields({ ed }: { ed: Ed }) {
                         return (
                           <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${f.type === 'stamp' ? ' stamp' : ''}${strikeClass(f)}${locked ? ' locked' : ''}`}
                             style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, ['--fc' as any]: color(f.recipient_id), borderRadius: f.type === 'radio' ? '50%' : undefined }}
-                            tabIndex={0} role="button" aria-label={`${TLABEL[f.type]} field${owner ? ` for ${label(owner)}` : senderStamp(f) ? ', your own stamp' : ''}, page ${page + 1}${locked ? ', locked' : ''}`}
+                            tabIndex={0} role="button" aria-label={`${kindTitle(f, list, true)} field${owner ? ` for ${label(owner)}` : senderStamp(f) ? ', your own stamp' : ''}, page ${page + 1}${locked ? ', locked' : ''}`}
                             onClick={(e) => e.stopPropagation()} onFocus={() => setSel(f.id)} onPointerDown={(e) => drag(e, f, 'move')}>
-                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || TLABEL[f.type]}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
+                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || kindTitle(f, list)}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
                             {sel === f.id && !locked && <span className="grip" onPointerDown={(e) => drag(e, f, 'resize')} />}
                           </div>
                         );
@@ -562,20 +569,20 @@ export function StepFields({ ed }: { ed: Ed }) {
         ) : (
           <div>
             <div className="ed-sheetbar">
-              <span className="truncate"><span className="dot" style={{ background: color(selected.recipient_id) }} /> <b>{TLABEL[selected.type]}</b>{selLocked && <> <Lock /></>}</span>
+              <span className="truncate"><span className="dot" style={{ background: color(selected.recipient_id) }} /> <b>{kindTitle(selected, list, true)}</b>{selLocked && <> <Lock /></>}</span>
               {!selLocked && <button type="button" className="btn sm" onClick={() => setSheet(!sheet)} aria-expanded={sheet}>{sheet ? 'Hide settings' : 'Settings'}</button>}
               {!selLocked && <button type="button" className="btn sm danger" onClick={() => remove(selected.id)}>Delete</button>}
               <button type="button" className="btn sm ghost" onClick={() => (setSel(null), setSheet(false))}>Done</button>
             </div>
             {selLocked ? (
               <div className="ed-sheetbody always">
-                <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{TLABEL[selected.type]}</h3>
+                <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{kindTitle(selected, list, true)}</h3>
                 {ed.wording && !lockedIds.has(selected.recipient_id) ? <WordingField field={selected} lock={ed.wording} onValue={(v) => patchField(selected.id, { value: v })} />
                   : <div className="notice ed-lockline small"><Lock size={16} /><span>{label(rcps.find((r) => r.id === selected.recipient_id))} already finished, so this field stays where it is.</span></div>}
               </div>
             ) : (
               <div className="ed-sheetbody" data-item="field">
-                <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{TLABEL[selected.type]}</h3>
+                <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{kindTitle(selected, list, true)}</h3>
                 {/* A strike-out has nothing to set: it is a line, it belongs to nobody, and its place is the whole of it. */}
                 {selected.type === 'strike' && <p className="muted small" id="ed-strike-help">{STRIKE_HELP}</p>}
                 {selected.type === 'stamp' ? (
@@ -583,22 +590,27 @@ export function StepFields({ ed }: { ed: Ed }) {
                 ) : !SENDER_MARK(selected.type) && (
                   <label className="f"><span>Assigned to</span>
                     <select value={selected.recipient_id || ''} onChange={(e) => patchField(selected.id, { recipient_id: e.target.value })}>
-                      {open.map((r) => <option key={r.id} value={r.id}>{label(r)}</option>)}
+                      {/* An Approve or Decline button can also be for someone who approves (src/lib/fieldkinds.ts). */}
+                      {(selected.type === 'approve' || selected.type === 'decline' ? [...open, ...rcps.filter((r) => r.role === 'approver' && !ed.isIdle(r))] : open).map((r) => <option key={r.id} value={r.id}>{label(r)}</option>)}
                     </select>
                   </label>
                 )}
                 {/* A calculated field is never typed into: not required, no prefilled value (FieldLogic.tsx). */}
-                {!SENDER_MARK(selected.type) && !senderStamp(selected) && !['date_signed', 'full_name', 'email'].includes(selected.type) && selected.formula == null && (
+                {!SENDER_MARK(selected.type) && !senderStamp(selected) && !['date_signed', 'full_name', 'email', 'approve', 'decline'].includes(selected.type) && selected.formula == null && !selected.date_from && (
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
                 )}
                 {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
+                {/* Which name a name field holds, and what a date from another date counts from (FieldLook.tsx). */}
+                <NameChoice field={selected} patch={(p) => patchField(selected.id, p)} />
+                <DateFrom field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />
+                <ButtonWordsNote field={selected} people={rcps} />
                 {/* What a note says is the note itself, so it stays in view. Everything else that is rarely needed is under More options. */}
                 {selected.type === 'note' && <label className="f"><span>Text</span><textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>}
                 {selected.type === 'dropdown' && <label className="f"><span>Options <span className="hint">(one per line)</span></span><textarea value={(selected.options || []).join('\n')} onChange={(e) => patchField(selected.id, { options: e.target.value.split('\n') })} onBlur={(e) => patchField(selected.id, { options: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} /></label>}
                 {selected.type === 'radio' && <label className="f"><span>Group <span className="hint">(one choice per group)</span></span><input value={selected.group_name || ''} onChange={(e) => patchField(selected.id, { group_name: e.target.value })} /></label>}
                 <button type="button" className="btn sm ed-fieldmore" data-more="item" aria-expanded={fieldMore} aria-controls="ed-field-more" onClick={() => setFieldMore(!fieldMore)}>More options</button>
                 {fieldMore && <div id="ed-field-more" className="ed-more">
-                {PREFILL.includes(selected.type) && selected.type !== 'note' && selected.formula == null && (
+                {PREFILL.includes(selected.type) && selected.type !== 'note' && selected.formula == null && !selected.date_from && (
                   <>
                     {/* A date is picked, never typed: the server takes a real day as year-month-day (isDateValue). */}
                     <label className="f"><span>Prefilled value</span>{selected.type === 'date'
@@ -612,6 +624,8 @@ export function StepFields({ ed }: { ed: Ed }) {
                   patch={(p) => patchField(selected.id, p)} patchMany={(ids, p) => setFields((l) => l.map((f) => (ids.includes(f.id) ? { ...f, ...p } : f)), { tag: `prop:group:${ids.join()}` })} />
                 {/* "Only show when..." and "Calculate from...", each said back as a sentence (FieldLogic.tsx). */}
                 <FieldLogic key={selected.id} field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />
+                {/* "Same answer as", "Text style" and, for an admin, "Save for the team" (FieldLook.tsx). */}
+                <FieldLookMore field={selected} fields={list} patch={(p) => patchField(selected.id, p)} patchMany={(ids, p) => setFields((l) => l.map((f) => (ids.includes(f.id) ? { ...f, ...p } : f)), { tag: `prop:link:${ids.join()}` })} />
                 <div className="grid ed-size">
                   <label className="f"><span>Width <span className="hint">(%)</span></span><input type="number" inputMode="decimal" min={1} max={100} step={0.5} value={pct(selected.w)} onChange={(e) => setSize(selected, 'w', e.target.value)} /></label>
                   <label className="f"><span>Height <span className="hint">(%)</span></span><input type="number" inputMode="decimal" min={0.5} max={100} step={0.5} value={pct(selected.h)} onChange={(e) => setSize(selected, 'h', e.target.value)} /></label>

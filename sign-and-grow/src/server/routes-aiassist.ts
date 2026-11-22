@@ -14,7 +14,7 @@ import { record } from './seclog.ts';
 import { mine } from './routes-envelopes.ts';
 import { find, assertViewable } from './routes-sign.ts';
 import { assistInfo, assistOn, setRead, suggestFields, cleanDraftIn, draftMessage, envelopeText, mayRead, summaryOffered, summariesFor, noteSummaryShown } from './aiassist.ts';
-import { SUMMARY_WARNING, SUMMARY_DOWN, SUMMARY_AFTER, NOT_ALLOWED } from '../lib/aiassist.ts';
+import { SUMMARY_WARNING, SUMMARY_DOWN, SUMMARY_AFTER, SUMMARY_AFTER_YOU, NOT_ALLOWED } from '../lib/aiassist.ts';
 
 route('GET', '/ai/assist', (c) => assistInfo(c.account.id));
 
@@ -66,7 +66,7 @@ route('POST', '/sign/:token/summary', async (c) => {
   const first = find(c);
   assertViewable(first.e, first.r);
   // Only before this person finished: a record line after their signature could be read as shown before it.
-  if (first.r.status === 'completed' || first.e.status === 'completed') throw bad(SUMMARY_AFTER, 409, { code: 'finished' });
+  if (first.r.status === 'completed' || first.e.status === 'completed') throw bad(first.e.status === 'completed' ? SUMMARY_AFTER : SUMMARY_AFTER_YOU, 409, { code: 'finished' });
   if (!summaryOffered(first.e)) throw bad('There is no summary for this document. Read the document itself; it is all you need to sign.', 404);
   const documents = await summariesFor(first.e, { ip: c.ip, link: first.r.id });
   // Looked up again after the wait: the sender may have changed the documents meanwhile (routes-sign.ts checkedBody).

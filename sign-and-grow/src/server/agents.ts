@@ -17,6 +17,9 @@ import { isSelf, sameEmail } from './credits.ts';
 import { whoIs } from '../lib/groups.ts';
 import { notAsked } from './routing.ts';
 import { assertEditorKeepsLockedParts } from './tplcombine.ts';
+import { lureIn } from './fakenotice.ts';
+import { keptText } from './searchtext.ts';
+import { ocrState } from './ocr.ts';
 import { isStepRole, isOpenPlace, openPlaceName, namedLine, stepRoleProblem, STEP_ROLE_WORDS, STEP_DONE, STEP_MAX_PEOPLE, STEP_SAVES_PER_HOUR, type StepRole } from '../lib/recipienttypes.ts';
 
 // Characters nobody sees have no place in a name on a certificate (as for a witness and "Fix my name").
@@ -231,6 +234,16 @@ export async function editorChange(e: any, r: any, body: any, actor: Actor) {
       return old ? { ...old, file_id: fid, name: str(d?.name, 200) || old.name } : { file_id: fid, name: str(d?.name, 200) || undefined, supplemental: null };
     });
     docIds = new Set<string>(out.documents.map((d: any) => d.id).filter(Boolean));
+    // A file the editor brought in goes out under the sender's name, so its words are read the way the sender's
+    // own words are (fakenotice.ts), whoever the account is: the editor is not the account.
+    for (const d of out.documents) {
+      if (onIt.has(d.file_id)) continue;
+      // Pages that are pictures (a scan) have no words until the server has read them (ocr.ts adds them to the file's
+      // text). While that is still going on, the file is not taken: checked once its words are there.
+      if (['queued', 'running'].includes(ocrState(d.file_id) || '')) throw bad(`We are still reading the pages of "${str(d.name, 80) || 'the new file'}" that are pictures, so it can be checked like every file brought in from outside. Try again in a minute or two. Nothing was changed.`, 409, { code: 'still_reading' });
+      const lure = lureIn([keptText(get('SELECT id, text, text_sealed FROM files WHERE id=?', d.file_id)).slice(0, 200_000), d.name]);
+      if (lure) throw bad(`"${str(d.name, 80) || 'The new file'}" reads like a payment notice from a well-known brand with a phone number to call, which is how scams look (it names ${lure.brand}, words about money like "${lure.money}" and the number ${lure.phone}). It was not put on the document. Nothing was changed. If the file is genuine, ask ${senderOf(e)?.name || 'the sender'} to add it.`, 422, { code: 'reads_like_scam' });
+    }
     // A file taken off that someone before them has fields on cannot go: replacing it can.
     for (const d of e.documents) {
       if (docIds.has(d.id)) continue;

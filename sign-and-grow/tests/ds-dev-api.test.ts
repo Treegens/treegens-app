@@ -184,7 +184,7 @@ const withBearer = (t: string) => {
 test('an admin lists up to 5 https websites, in plain words', async () => {
   await ready;
   const c = await signUp('Owen Owner', 'owen-embed@example.com', '198.51.100.21');
-  assert.deepEqual((await c.get('/account/embed-origins')).data, { origins: [], max: 5 });
+  assert.deepEqual((await c.get('/account/embed-origins')).data, { origins: [], max: 5, not_used: [] });
   for (const [bad, said] of [['http://portal.example.org', /https:\/\//], ['https://*.example.org', /star/], ['*', /star/], ['not a site', /not a website address/], ['', /Type the address/]] as const) {
     const r = await c.post('/account/embed-origins', { origin: bad });
     assert.equal(r.status, 400, bad);

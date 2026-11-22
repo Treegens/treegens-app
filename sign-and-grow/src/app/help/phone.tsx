@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { OFFLINE_HELP } from '@/lib/offlinesign';
 import { CANNOT_SHOW_WAYS, OLD_IPHONES, SIGNING_BROWSERS, SIGNING_ONLINE, SIGNING_TESTED, SIGNING_WEAK_SIGNAL, SIGNING_ZOOM } from '@/lib/mobile';
 
 // The answer on /help about signing on a phone: which browsers show the document, what to do when one does not, and
@@ -23,6 +24,7 @@ export function SigningOnPhone() {
         {CANNOT_SHOW_WAYS.map((w) => <li key={w}>{w}</li>)}
       </ul>
       <p><b>A weak signal.</b> {SIGNING_ONLINE} {SIGNING_WEAK_SIGNAL}</p>
+      <p><b>No signal where you meet someone in person.</b> {OFFLINE_HELP}</p>
       <p><b>Small print.</b> {SIGNING_ZOOM}</p>
     </QA>
   );

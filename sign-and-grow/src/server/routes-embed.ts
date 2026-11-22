@@ -4,10 +4,11 @@
 import { route } from './router.ts';
 import { bad, rateLimit } from './util.ts';
 import { mine } from './routes-envelopes.ts';
-import { originsOf, addOrigin, removeOrigin, makeSenderView, openSenderView, endSenderView } from './embed.ts';
+import { originsOf, unusedOriginsOf, addOrigin, removeOrigin, makeSenderView, openSenderView, endSenderView } from './embed.ts';
 import { EMBED_ORIGINS_MAX } from '../lib/embed.ts';
 
-const listed = (accountId: string) => ({ origins: originsOf(accountId), max: EMBED_ORIGINS_MAX });
+// not_used: websites on this computer (http://localhost) listed before, which do nothing on a live server.
+const listed = (accountId: string) => ({ origins: originsOf(accountId), max: EMBED_ORIGINS_MAX, not_used: unusedOriginsOf(accountId) });
 
 route('GET', '/account/embed-origins', (c) => listed(c.account.id), 'admin');
 route('POST', '/account/embed-origins', async (c) => {

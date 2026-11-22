@@ -4,13 +4,16 @@ import Link from 'next/link';
 import { NAV_START, NAV_MAIN, NAV_END, IN_TAB_BAR, moreFor, insideMore, moreKey, navOn, type NavItem, type NavOn } from '@/lib/nav';
 // A role an admin made may leave pages out (src/lib/perm.ts): they are then not listed. Built-in roles: no change.
 import { navAllowed } from '@/lib/perm';
+// The words in the sender's language (src/components/senderLang.tsx); each entry's key is in src/lib/nav.ts.
+import { useST } from './senderLang';
 
 // The app's navigation (research/ux-charter.md, section 2.1): the sidebar's entries with the closed More group, and
 // the phone's bottom bar. The list itself is in src/lib/nav.ts.
 
-const Entry = ({ item, path, onGo }: { item: NavItem; path: string; onGo?: () => void }) => (
-  <Link href={item.href} className={`nav${navOn(item.href, path) ? ' on' : ''}${IN_TAB_BAR.includes(item.href) ? ' in-bar' : ''}`} aria-current={navOn(item.href, path) ? 'page' : undefined} data-feature={item.feature} onClick={onGo}>{item.label}</Link>
-);
+const Entry = ({ item, path, onGo }: { item: NavItem; path: string; onGo?: () => void }) => {
+  const T = useST();
+  return <Link href={item.href} className={`nav${navOn(item.href, path) ? ' on' : ''}${IN_TAB_BAR.includes(item.href) ? ' in-bar' : ''}`} aria-current={navOn(item.href, path) ? 'page' : undefined} data-feature={item.feature} onClick={onGo}>{item.key ? T(item.key) : item.label}</Link>;
+};
 
 /** The start button and the pages above Help. `onGo` closes the phone's menu when an entry is pressed. */
 export function SideNav({ path, role, userId, onGo, on, can }: { path: string; role: string; userId: string; onGo?: () => void; on?: NavOn; can?: readonly string[] | null }) {
@@ -27,6 +30,7 @@ export function SideNav({ path, role, userId, onGo, on, can }: { path: string; r
   const inside = insideMore(path, role, on);
   const open = kept || inside;
   const listId = useId();
+  const T = useST();
   function toggle() {
     const next = !open;
     setKept(next);
@@ -37,12 +41,12 @@ export function SideNav({ path, role, userId, onGo, on, can }: { path: string; r
   }
   return (
     <>
-      {navAllowed(NAV_START.href, can) && <Link href={NAV_START.href} className="btn side-start in-bar" onClick={onGo}>{NAV_START.label}</Link>}
+      {navAllowed(NAV_START.href, can) && <Link href={NAV_START.href} className="btn side-start in-bar" onClick={onGo}>{T('nav.start')}</Link>}
       {NAV_MAIN.filter((n) => navAllowed(n.href, can)).map((n) => <Entry key={n.href} item={n} path={path} onGo={onGo} />)}
       <div data-more="nav">
         {/* On a page inside More the group cannot be closed: the page you are on stays in view, and the arrow that
             would close it is not drawn (start.css). */}
-        <button type="button" className="nav nav-more-toggle" aria-expanded={open} aria-controls={listId} onClick={inside ? undefined : toggle} aria-disabled={inside || undefined}>More</button>
+        <button type="button" className="nav nav-more-toggle" aria-expanded={open} aria-controls={listId} onClick={inside ? undefined : toggle} aria-disabled={inside || undefined}>{T('nav.more')}</button>
         <div id={listId} className="nav-more-list" hidden={!open}>
           {moreFor(role, on).filter((n) => navAllowed(n.href, can)).map((n) => <Entry key={n.href} item={n} path={path} onGo={onGo} />)}
         </div>
@@ -70,17 +74,18 @@ const Icon = ({ name }: { name: keyof typeof ICON }) => (
  * The bar stays on top of the open menu and its last button then reads "Close", in the place that opened it.
  */
 export function TabBar({ path, menuOpen, onMenu, can }: { path: string; menuOpen: boolean; onMenu: () => void; can?: readonly string[] | null }) {
+  const T = useST();
   const tab = (href: string, label: string, icon: keyof typeof ICON) => (
     <Link href={href} className={navOn(href, path) ? 'on' : undefined} aria-current={navOn(href, path) ? 'page' : undefined}><Icon name={icon} /><span>{label}</span></Link>
   );
   return (
-    <nav className="tabbar" aria-label="Main">
-      {tab('/app', 'Home', 'home')}
-      {tab('/app/envelopes', 'Documents', 'docs')}
+    <nav className="tabbar" aria-label={T('nav.main')}>
+      {tab('/app', T('nav.home'), 'home')}
+      {tab('/app/envelopes', T('nav.documents'), 'docs')}
       {/* A role the team made without sending has no Send here either, as in the sidebar (src/lib/perm.ts). */}
-      {navAllowed(NAV_START.href, can) && <Link href={NAV_START.href} className="tab-send" aria-label={NAV_START.label}><span className="dot"><Icon name="send" /></span><span>Send</span></Link>}
-      {tab('/app/inbox', 'To sign', 'sign')}
-      <button type="button" id="tab-menu" data-more="nav" aria-expanded={menuOpen} aria-controls="app-menu" onClick={onMenu}><Icon name={menuOpen ? 'close' : 'menu'} /><span>{menuOpen ? 'Close' : 'Menu'}</span></button>
+      {navAllowed(NAV_START.href, can) && <Link href={NAV_START.href} className="tab-send" aria-label={T('nav.start')}><span className="dot"><Icon name="send" /></span><span>{T('nav.send')}</span></Link>}
+      {tab('/app/inbox', T('nav.to_sign'), 'sign')}
+      <button type="button" id="tab-menu" data-more="nav" aria-expanded={menuOpen} aria-controls="app-menu" onClick={onMenu}><Icon name={menuOpen ? 'close' : 'menu'} /><span>{menuOpen ? T('nav.close') : T('nav.menu')}</span></button>
     </nav>
   );
 }

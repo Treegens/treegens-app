@@ -2,39 +2,39 @@
 // closed More group. The sidebar and the phone's bottom bar (src/components/AppNav.tsx) are drawn from here, and
 // tests/simplify-start.test.ts counts it, so the list cannot grow without someone noticing.
 
-export type NavItem = { href: string; label: string; /** Only the owner and admins of the account see it. */ admins?: boolean; /** data-feature of a switched-on feature's entry. */ feature?: string };
+export type NavItem = { href: string; label: string; /** Its words in en.json (src/components/AppNav.tsx says them in the sender's language). label is the English text. */ key?: string; /** Only the owner and admins of the account see it. */ admins?: boolean; /** data-feature of a switched-on feature's entry. */ feature?: string };
 
 /** The one start button of the app. On a phone it is "Send" in the bottom bar. */
-export const NAV_START: NavItem = { href: '/app/envelopes/new', label: 'Send a document' };
+export const NAV_START: NavItem = { href: '/app/envelopes/new', label: 'Send a document', key: 'nav.start' };
 
 /** Above More. */
 export const NAV_MAIN: NavItem[] = [
-  { href: '/app', label: 'Home' },
-  { href: '/app/envelopes', label: 'Documents' },
-  { href: '/app/inbox', label: 'To sign' },
-  { href: '/app/templates', label: 'Templates' },
-  { href: '/app/contacts', label: 'Contacts' },
+  { href: '/app', label: 'Home', key: 'nav.home' },
+  { href: '/app/envelopes', label: 'Documents', key: 'nav.documents' },
+  { href: '/app/inbox', label: 'To sign', key: 'nav.to_sign' },
+  { href: '/app/templates', label: 'Templates', key: 'nav.templates' },
+  { href: '/app/contacts', label: 'Contacts', key: 'nav.contacts' },
 ];
 
 /** Inside More, closed until the person opens it or is on one of these pages. */
 export const NAV_MORE: NavItem[] = [
-  { href: '/app/bulk', label: 'Send to many' },
-  { href: '/app/powerforms', label: 'Forms' },
+  { href: '/app/bulk', label: 'Send to many', key: 'nav.bulk' },
+  { href: '/app/powerforms', label: 'Forms', key: 'nav.forms' },
   // These terms speak for the team's website, so only its owner and admins manage them.
-  { href: '/app/agreements', label: 'Website terms', admins: true },
-  { href: '/app/reports', label: 'Reports' },
-  { href: '/app/impact', label: 'Trees planted' },
+  { href: '/app/agreements', label: 'Website terms', key: 'nav.agreements', admins: true },
+  { href: '/app/reports', label: 'Reports', key: 'nav.reports' },
+  { href: '/app/impact', label: 'Trees planted', key: 'nav.impact' },
 ];
 
 /** In More after Reports, only for an account where Key dates is switched on (/api/me "key_dates", ds-ai-repo). */
-export const NAV_KEY_DATES: NavItem = { href: '/app/key-dates', label: 'Key dates', feature: 'ds-ai-repo' };
+export const NAV_KEY_DATES: NavItem = { href: '/app/key-dates', label: 'Key dates', key: 'nav.key_dates', feature: 'ds-ai-repo' };
 /** Last in More, only for a person an admin gave the counter permission (/api/me "counter", gov-G18). */
-export const NAV_COUNTER: NavItem = { href: '/app/counter', label: 'Counter' };
+export const NAV_COUNTER: NavItem = { href: '/app/counter', label: 'Counter', key: 'nav.counter' };
 /** What the account switched on that adds an entry to More. */
 export type NavOn = { keyDates?: boolean; counter?: boolean };
 
 /** Below More. Help follows it: a button that opens the helper, not a page. */
-export const NAV_END: NavItem[] = [{ href: '/app/settings', label: 'Settings' }];
+export const NAV_END: NavItem[] = [{ href: '/app/settings', label: 'Settings', key: 'nav.settings' }];
 
 /** Entries a person sees in the sidebar before opening anything: the start button, the pages, More and Help. */
 export const NAV_ENTRIES = 1 + NAV_MAIN.length + 1 + NAV_END.length + 1;
@@ -71,13 +71,14 @@ export const IN_TAB_BAR = ['/app', '/app/envelopes', '/app/inbox'];
  * The title of the browser tab for a page of the app, so Home, Documents, To sign and Settings do not all sound
  * alike to a screen reader or look alike in a row of tabs: "Documents · GrowSigning".
  */
-export function pageTitle(path: string): string {
+/** `say` gives an entry's words in the reader's language (AppShell); left out, the English label. */
+export function pageTitle(path: string, say: (n: NavItem) => string = (n) => n.label): string {
   const named = (label: string) => `${label} · GrowSigning`;
-  if (path.startsWith('/app/envelopes/new') || /^\/app\/envelopes\/[^/]+\/edit/.test(path)) return named(NAV_START.label);
+  if (path.startsWith('/app/envelopes/new') || /^\/app\/envelopes\/[^/]+\/edit/.test(path)) return named(say(NAV_START));
   if (path === '/app/operator' || path.startsWith('/app/operator/')) return named('Operator');
   // The longest address first, so a page inside Documents is not taken for Home.
   const hit = [...NAV_MAIN, ...NAV_MORE, NAV_KEY_DATES, NAV_COUNTER, ...NAV_END].filter((n) => navOn(n.href, path)).sort((a, b) => b.href.length - a.href.length)[0];
-  return hit ? named(hit.label) : 'GrowSigning';
+  return hit ? named(say(hit)) : 'GrowSigning';
 }
 
 /** Where this browser remembers, per person, that More was left open. */

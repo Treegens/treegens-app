@@ -3,14 +3,14 @@ import { useEffect, useState } from 'react';
 import { api, useLoad, fmtDate, oops } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { SECURITY_GROUPS, SECURITY_SEARCH_MAX, securityKindWords, securityGroupWords, securityAlertWords, securityLogWords, securityDetail, securityDevice } from '@/lib/seclog';
-import { SOURCE_LOCALE, t } from '@/lib/i18n';
+import { senderT as t } from '@/lib/senderlang';
+import { useSenderLangHere } from '@/components/senderLang';
 
 // Settings, Security: the account's security record (src/server/seclog.ts), for its admins. One card: who signed in
 // and what changed, newest first, with one search box, a folded Filter and Download. What is set up once sits behind
 // the card's More options: the alerts, and how a security system gets the record. Each answer ("Saved", a refusal)
 // stands next to the control that was used. Nothing here watches anything: the first line says so.
 
-const ui = SOURCE_LOCALE;
 type Line = { seq: number; at: string; kind: string; outcome: string; actor_name: string; about_name: string | null; ip: string | null; user_agent: string | null; details: Record<string, any> };
 type Settings = { days: number; alerts: { id: string; on: boolean }[]; emails: boolean; chain: { whole: boolean; broken_at: number | null; why: 'line' | 'missing' | null }; webhooks: { id: string; host: string; created_at: string }[]; webhook_hosts: string[] | null; people: { id: string; name: string }[]; pull_url: string };
 type Said = { at: string; text: string; err?: boolean } | null;
@@ -28,6 +28,7 @@ const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
 const NONE = { kind: '', person: '', from: '', to: '' };
 
 export function SecurityLog() {
+  const ui = useSenderLangHere();
   const me = useMe();
   const admin = me.role !== 'member';
   const [s, reload, failed] = useLoad<Settings | null>(() => (admin ? api('/account/security') : Promise.resolve(null)), [admin]);

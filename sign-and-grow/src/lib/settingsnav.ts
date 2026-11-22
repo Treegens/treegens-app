@@ -25,7 +25,7 @@ const SECTIONS: { key: SectionKey; label: string; admins?: true; orgAdmins?: tru
   { key: 'stamps', label: 'Stamps and seals', admins: true },
   { key: 'billing', label: 'Plan', admins: true },
   { key: 'data', label: 'Records and data', admins: true },
-  { key: 'developers', label: 'API and webhooks' },
+  { key: 'developers', label: 'Developers' },
   // Only for an admin of an organisation above accounts (src/server/orgs.ts), whatever their role in this account.
   { key: 'organisation', label: 'Organisation', orgAdmins: true },
 ];

@@ -553,7 +553,7 @@ test('outside: every place the server calls out is on the list', () => {
   const KNOWN: Record<string, string[]> = {
     'mail.ts': ['mail'], 'routes-billing.ts': ['payments'], 'oidc.ts': ['google', 'microsoft'], 'sms.ts': ['sms'], 'tsa.ts': ['tsa'], 'ltv.ts': ['tsa'],
     'chat.ts': ['chat'], 'convert.ts': ['converter'], 'routes-bounces.ts': ['sns'], 'webhooks.ts': ['webhooks'], 'pwned.ts': ['pwned'], 'ocr.ts': ['ocr'],
-    'whatsapp.ts': ['whatsapp'], 'voice.ts': ['sms'],
+    'whatsapp.ts': ['whatsapp'], 'voice.ts': ['sms'], 'collect.ts': ['collect'],
   };
   const CALLS = /\bfetch\(|createTransport\(|\bhttps?\.request\(|\bnet\.(connect|createConnection)\(|\btls\.connect\(/;
   const dir = path.join(ROOT, 'src/server');

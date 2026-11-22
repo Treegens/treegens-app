@@ -644,19 +644,21 @@ test('the pages say what is encrypted and what is not, from the setting the serv
   assert.equal(on.title, 'Stored files are encrypted by the software.');
   assert.match(on.text, /AES-256-GCM and a key of its own for each file/);
   // The files are unreadable on a copy of the disk; the copy is not safe by itself, because the database is not encrypted.
-  assert.match(on.text, /keeps those files unreadable on a copy of the disk or of a backup taken without the server's settings\. It does not make such a copy safe by itself, because the database on the same disk is not encrypted/);
+  assert.match(on.text, /keeps those files unreadable on a copy of the disk or of a backup taken without the server's settings\. It does not make such a copy safe by itself, because only part of the database on the same disk is encrypted/);
   assert.match(on.text, /It does not protect against someone who gets into the running server either, because the key is in those settings/);
   assert.match(on.text, /Files stored before encryption was switched on are encrypted when the people who run this server run the script/);
   const dbOnly = notEncryptedPoint();
-  assert.equal(dbOnly.title, 'The database is not encrypted by the software.');
-  for (const t of [off.text, dbOnly.text]) {
+  assert.equal(dbOnly.title, 'The database is only partly encrypted by the software.');
+  // With the key, what stays readable is CLEAR_WORDS (tests/ds-db-encrypt.test.ts); without it the whole list below.
+  assert.match(dbOnly.text, /The rest of the database stays readable to whoever has a copy of the disk or of a backup: the names, email addresses and phone numbers/);
+  for (const t of [off.text]) {
     // The whole list of what stays readable is DATABASE_HOLDS (checked item by item in tests/qr-encrypt-repair.test.ts).
     assert.match(t, /The software does not encrypt the database\. Whoever has a copy of the disk or of a backup can read what it holds: the names, email addresses and phone numbers of everyone on a document/);
     assert.match(t, /what people typed into fields, and their signatures and initials as pictures/);
     assert.match(t, /every audit trail, with the IP addresses and browsers it records/);
     assert.match(t, /So encrypt the disk itself as well\./);
   }
-  assert.match(PROCESSING_ENCRYPTED, /The database is not/);
+  assert.match(PROCESSING_ENCRYPTED, /The rest of the database is not/);
   for (const t of [on.title, on.text, off.title, off.text, dbOnly.text, PROCESSING_ENCRYPTED])
     assert.doesNotMatch(t, /\u2014|bank-grade|military|fully secure|unbreakable|compliant|is valid|will hold up/i);
   // The pages print those sentences, and the old one that is no longer true everywhere is gone.
@@ -679,11 +681,11 @@ test('the pages say what is encrypted and what is not, from the setting the serv
 test('the README, the settings example and the API description say how to switch it on, what it protects, and what the errors mean', () => {
   const readme = read('README.md');
   assert.doesNotMatch(readme, /A security certification, or encryption of stored files by the app itself/);
-  assert.match(readme, /- A security certification, and encryption of the database by the app itself\. The app encrypts the stored files\n  when `FILE_ENCRYPTION_KEY` is set/);
+  assert.match(readme, /- A security certification, and encryption of the whole database by the app itself\. With `FILE_ENCRYPTION_KEY` the\n  app encrypts the stored files/);
   assert.match(readme, /\| `FILE_ENCRYPTION_KEY` \| Encrypts every file the app stores from now on .*`openssl rand -base64 32`.* \| off: files are stored as they are \|/);
   assert.match(readme, /\| `FILE_ENCRYPTION_KEYS_OLD` \| Earlier keys, separated by commas/);
   assert.match(readme, /### Encrypting stored files/);
-  assert.match(readme, /\*\*What is not protected\.\*\* The database \(`DATA_DIR\/sign\.db`\) is not encrypted by the app/);
+  assert.match(readme, /\*\*What is not protected\.\*\* The rest of the database \(`DATA_DIR\/sign\.db`\) is not encrypted by the app/);
   assert.match(readme, /not a break-in\n  to the running server or to its settings\. Encrypt the disk as well\./);
   assert.match(readme, /\*\*What the names give away\.\*\* A stored file is still named by the SHA-256 of its readable contents/);
   assert.match(readme, /sees which\n  stored files are the same as each other/);

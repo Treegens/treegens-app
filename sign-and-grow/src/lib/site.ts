@@ -3,6 +3,7 @@
 // APP_URL names the address (the same rule as baseUrl() in src/server/util.ts, which pages may not import).
 
 import { COLORS } from './brandMark.ts';
+import { shareTarget } from './phoneapp.ts';
 
 /** The product's name as it is written in a sentence, a title or an email. The drawn logo writes it "growsigning". */
 export const PRODUCT = 'GrowSigning';
@@ -43,5 +44,7 @@ export function webManifest() {
       { src: '/brand/icon-512.png', sizes: '512x512', type: 'image/png' },
       { src: '/brand/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' as const },
     ],
+    // Sharing a PDF or photos from another app opens a new document with them, on Android (src/lib/phoneapp.ts).
+    share_target: shareTarget(),
   };
 }

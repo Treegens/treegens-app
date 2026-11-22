@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { storeFile, readStored } from './filestore.ts';
+import { openRow, registerSql } from './colcrypt.ts';
 import { PRICING } from '../lib/impact.ts';
 
 // SQLite via Node's built-in driver: no native build step, one file on disk.
@@ -962,6 +963,88 @@ CREATE TABLE IF NOT EXISTS tree_statements (
   sites TEXT NOT NULL, planted_from TEXT NOT NULL, planted_to TEXT NOT NULL, species TEXT NOT NULL, trees INTEGER NOT NULL,
   evidence TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT, UNIQUE (commitment_id, year)
 );
+-- A form's answers that were not signed yet (src/server/webforms.ts), kept for the one browser that typed them
+-- (browser is a random id in that browser's cookie) for a day, or for the minutes of a shared-device form. Nothing
+-- else: no envelope and no signature exist until the person goes on to sign.
+CREATE TABLE IF NOT EXISTS form_drafts (
+  powerform_id TEXT NOT NULL REFERENCES powerforms(id) ON DELETE CASCADE, browser TEXT NOT NULL, ip TEXT,
+  name TEXT, email TEXT, answers TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (powerform_id, browser)
+);
+CREATE INDEX IF NOT EXISTS form_drafts_ip ON form_drafts(ip, updated_at);
+-- SAML 2.0 single sign-on (src/server/saml.ts). org_saml: one line per account whose admin opened the card, with the
+-- random part of our own address for it (sp_id: entity id and metadata at /api/sso/saml/<sp_id>), and, once the
+-- identity provider's metadata was pasted, its entity id, its sign-in address (HTTP-Redirect) and its signing
+-- certificates (JSON list of base64 DER). org_idps holds the name, the switches and "tried" for it, with kind 'saml'.
+-- saml_requests: the AuthnRequests we sent that have not been answered (InResponseTo must name one, once).
+-- saml_seen: every assertion accepted, until it would expire, so none is accepted twice.
+CREATE TABLE IF NOT EXISTS org_saml (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, sp_id TEXT NOT NULL UNIQUE, entity_id TEXT, sso_url TEXT,
+  certs TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS saml_requests (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS saml_seen (key TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
+-- Members from a directory (SCIM 2.0, src/server/scim.ts). org_directory: the account's one bearer token (only its
+-- SHA-256 is kept), whether invitations by hand are stopped (managed), and who takes over what a removed member sent
+-- (heir_id; NULL: the owner). scim_users: each person the directory told us about, by address (user_name); active 0
+-- when the directory switched them off. Whether they are a member is always read from memberships, never kept here.
+CREATE TABLE IF NOT EXISTS org_directory (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, token_hash TEXT UNIQUE, token_prefix TEXT, made_by TEXT, made_at TEXT,
+  last_used_at TEXT, managed INTEGER NOT NULL DEFAULT 0, heir_id TEXT
+);
+CREATE TABLE IF NOT EXISTS scim_users (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, user_name TEXT NOT NULL COLLATE NOCASE,
+  external_id TEXT, given_name TEXT, family_name TEXT, display_name TEXT, active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (account_id, user_name)
+);
+-- Saved fields (src/server/fieldkinds.ts, src/lib/fieldkinds.ts): a field an admin saved under a name for the team's
+-- editor. spec: JSON of its kind, label, checks, size and text style; never a value, a person or a place on a page.
+CREATE TABLE IF NOT EXISTS saved_fields (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL, name_key TEXT NOT NULL,
+  spec TEXT NOT NULL, made_by TEXT, made_at TEXT NOT NULL, UNIQUE (account_id, name_key)
+);
+-- The photo each page was cleaned from, when the sender's browser found the page in a photo, straightened it and
+-- raised its contrast before uploading (src/server/scanphotos.ts). page counts from 1. They go with their file: the
+-- trigger (not a foreign key, so it sees the rows) notes each stored photo in scan_photos_gone, and the timer takes it off the disk once nothing uses it.
+CREATE TABLE IF NOT EXISTS scan_photos (
+  file_id TEXT NOT NULL, page INTEGER NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL,
+  name TEXT, cleaned INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, PRIMARY KEY (file_id, page)
+);
+CREATE TABLE IF NOT EXISTS scan_photos_gone (sha256 TEXT PRIMARY KEY);
+CREATE TRIGGER IF NOT EXISTS scan_photos_with_file AFTER DELETE ON files BEGIN
+  INSERT OR IGNORE INTO scan_photos_gone (sha256) SELECT sha256 FROM scan_photos WHERE file_id=OLD.id;
+  DELETE FROM scan_photos WHERE file_id=OLD.id;
+END;
+-- Payments taken while signing, into the sending account's own Stripe account (src/server/collect.ts). GrowSigning is
+-- never the merchant and never sees card details: Stripe's own page takes them. collect_accounts: the Stripe account
+-- an account connected. collect_states: the one-time value of a connect in progress. collect_payments: one row for each
+-- person and address that is asked to pay; "paid" only after Stripe's message says so and Stripe confirms it again.
+-- finish_body: for "pay before finishing", what the person signed, kept until Stripe confirms and their part completes.
+-- collect_events: the ids of Stripe's messages already handled, so a message sent twice is applied once.
+CREATE TABLE IF NOT EXISTS collect_accounts (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, stripe_account TEXT NOT NULL, name TEXT NOT NULL,
+  livemode INTEGER NOT NULL DEFAULT 0, connected_by TEXT, connected_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS collect_states (state TEXT PRIMARY KEY, account_id TEXT NOT NULL, user_id TEXT NOT NULL, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS collect_payments (
+  id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE,
+  recipient_id TEXT NOT NULL REFERENCES recipients(id) ON DELETE CASCADE, email TEXT NOT NULL DEFAULT '', account_id TEXT NOT NULL,
+  stripe_account TEXT NOT NULL, merchant TEXT NOT NULL, amount INTEGER NOT NULL, currency TEXT NOT NULL, for_text TEXT, when_to TEXT NOT NULL,
+  status TEXT NOT NULL, session_id TEXT UNIQUE, session_url TEXT, payment_intent TEXT, paid_at TEXT, refunded INTEGER NOT NULL DEFAULT 0,
+  refunded_at TEXT, dispute TEXT, dispute_at TEXT, finish_body TEXT, finish_ip TEXT, finish_ua TEXT, note TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (recipient_id, email)
+);
+CREATE INDEX IF NOT EXISTS collect_payments_envelope ON collect_payments(envelope_id);
+CREATE INDEX IF NOT EXISTS collect_payments_intent ON collect_payments(payment_intent);
+CREATE TABLE IF NOT EXISTS collect_events (id TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- Signing in person without a connection (src/server/offlinesign.ts): one copy got ready on a host's device for one
+-- person, the content version it was made from, when it ends, and, once it came back, the device's clock and when we got it.
+CREATE TABLE IF NOT EXISTS offline_preps (
+  id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, recipient_id TEXT NOT NULL,
+  user_id TEXT NOT NULL, session_id TEXT NOT NULL, content_version INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'ready', ended_at TEXT, ended_why TEXT, device_at TEXT, received_at TEXT
+);
+CREATE INDEX IF NOT EXISTS offline_preps_rec ON offline_preps(recipient_id, state);
+CREATE INDEX IF NOT EXISTS offline_preps_session ON offline_preps(session_id, state);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1669,6 +1752,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // made_for_by: the colleague who made a draft and handed it to its owner with "Send for" (shares.ts). Only they may
   // take it back, and it goes back to them when the share ends. Pressing Send on someone else's draft never sets it.
   ['envelopes', 'made_for_by', 'TEXT'],
+  // sent_for_id: the person a colleague pressed Send for, kept at that moment, so the certificate's "Sent by ..., for
+  // ..." still names them after the envelope is moved to someone else (sentfor.ts certSentBy). NULL when not sent for anyone.
+  ['envelopes', 'sent_for_id', 'TEXT'],
   // "Each person sees only their files" (src/server/visibility.ts, rule in src/lib/owndocs.ts). envelopes.own_docs:
   // 1 when on. recipients.own_docs_extra: the files the sender ticked for that person beside those with their fields,
   // as a JSON list of document ids. accounts.own_docs_default: new envelopes and templates start with it on.
@@ -1684,6 +1770,33 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // recipients.views_used: which ways of showing the document this person used while signing, "page", "easy" or
   // "page,easy" (src/lib/readview.ts). The first use of each is in the audit trail; the certificate says which.
   ['recipients', 'views_used', 'TEXT'],
+  // users.seen_locale: the sender language this person's browser asked for when they last opened the app, for the
+  // emails to them while they chose none under Settings, Profile (users.locale; src/server/senderlocale.ts). NULL:
+  // English, and always NULL while English is the only sender language.
+  ['users', 'seen_locale', 'TEXT'],
+  // Which standard an account's own sign-in service speaks (src/server/orgsso.ts): 'oidc' (OpenID Connect) or 'saml'
+  // (SAML 2.0, src/server/saml.ts; issuer is then the identity provider's entity id and there is no client secret).
+  ['org_idps', 'kind', "TEXT NOT NULL DEFAULT 'oidc'"],
+  // More kinds of field (src/server/fieldkinds.ts). fields.link: fields of one person with the same link share one
+  // answer ("Same answer as"). fields.date_from: JSON {from, add, unit}, a date worked out from another date field
+  // of the same person or from their date of signing. fields.look: JSON {font, size, color, bold}, how its text
+  // prints. accounts.field_look: the text style new fields start with (the same JSON); NULL: as usual.
+  ['fields', 'link', 'TEXT'],
+  ['fields', 'date_from', 'TEXT'],
+  ['fields', 'look', 'TEXT'],
+  ['accounts', 'field_look', 'TEXT'],
+  // files.undone_to: after "Undo cleanup" (routes-phoneapp.ts), the answer for the file made from the photos (JSON), so
+  // asking again gives the same file back instead of making another one each time.
+  ['files', 'undone_to', 'TEXT'],
+  // Ask for a payment, taken here by card through the account's own Stripe account (src/server/collect.ts).
+  // collect_amount: a fixed amount in the currency's smallest unit (cents); collect_field: or the id of the number or
+  // calculated field that holds it. collect_currency: three lower-case letters. collect_for: what it is for, in the
+  // sender's words. collect_when: 'before' (the person's part completes only once Stripe confirms) or 'after'.
+  ['envelopes', 'collect_amount', 'INTEGER'],
+  ['envelopes', 'collect_field', 'TEXT'],
+  ['envelopes', 'collect_currency', 'TEXT'],
+  ['envelopes', 'collect_for', 'TEXT'],
+  ['envelopes', 'collect_when', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none
@@ -1802,6 +1915,7 @@ export function db(): any {
     const { DatabaseSync } = (process as any).getBuiltinModule('node:sqlite');
     const d = new DatabaseSync(path.join(dir, 'sign.db'));
     d.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
+    registerSql(d); // col_find and col_replace for values kept encrypted (src/server/colcrypt.ts)
     d.exec(SCHEMA);
     migrate(d);
     g.__tsdb = d;
@@ -1810,10 +1924,11 @@ export function db(): any {
 }
 
 const norm = (p: any[]) => p.map((v) => (v === undefined ? null : typeof v === 'boolean' ? (v ? 1 : 0) : v));
-export const all = (sql: string, ...p: any[]): any[] => db().prepare(sql).all(...norm(p)).map((r: any) => ({ ...r }));
+// Values kept encrypted (src/server/colcrypt.ts) are opened here, so every row read with all() or get() is readable.
+export const all = (sql: string, ...p: any[]): any[] => db().prepare(sql).all(...norm(p)).map((r: any) => openRow({ ...r }));
 export const get = (sql: string, ...p: any[]): any => {
   const r = db().prepare(sql).get(...norm(p));
-  return r ? { ...r } : null;
+  return r ? openRow({ ...r }) : null;
 };
 export const run = (sql: string, ...p: any[]) => db().prepare(sql).run(...norm(p));
 

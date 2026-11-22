@@ -485,7 +485,7 @@ route('POST', '/sign/:token/mail-again', async (c) => {
     const delivery = await sendMail({ to: r.email, envelopeId: e.id, expiresAt: until, subject: 'Your code to get our emails again', heading: 'Your code to get our emails again',
       lines: [`Someone asked, on the signing page of "${str(e.subject, 200)}", for our emails about it to start again. You had ${r.complained_at ? 'marked one of them as spam' : 'reported this document'}, so we had stopped. If that was you, type this code on that page.`,
         `${k} is your code. It works for ${MAIL_AGAIN_MINUTES} minutes. If you did not ask for it, ignore this email. Nothing changes, and we send you nothing more unless you ask on that page.`] });
-    if (delivery === 'sent') run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE envelope_id=? AND expires_at=?)", k, k, e.id, until);
+    if (delivery === 'sent') run("UPDATE emails SET html=col_replace(html, ?, '(removed)'), payload=col_replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE envelope_id=? AND expires_at=?)", k, k, e.id, until);
     audit(e.id, actor, 'Code sent to start emails again', `${r.name} <${r.email}> asked on the signing page for our emails again. A code went to that address. Nothing changes until it is typed there.`);
     return { ok: true, code_sent: true, sent_to: r.email, minutes: MAIL_AGAIN_MINUTES, delivery };
   }

@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 import { Tickets } from './tickets';
 import { LeakCheckLine } from './leakcheck';
+import { EncryptionLine } from './encryption';
 import { TreeCommitments } from './commitments';
 import { useMe } from '@/components/AppShell';
 import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS, priceChangeDay } from '@/lib/policy';
@@ -124,6 +125,7 @@ export default function Operator() {
       <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Review queue</h1><div className="muted">Every item here is a person waiting. Answer a help request right here: the answer is emailed to them and kept with the request.</div></div><button className="btn" onClick={reload}>Refresh</button></div>
 
       <LeakCheckLine />
+      <EncryptionLine />
 
       {/* A server under a government agreement has no plan and its billing routes answer 404: no money tools there. */}
       {!me?.agreement && <BillingTools />}

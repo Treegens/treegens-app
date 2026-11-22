@@ -5,11 +5,12 @@ import { valueProblem, fieldChecks, currencySign, patternProblem, limitOf, group
 
 export const AUTO = ['date_signed', 'full_name', 'email'];
 /** Fields that are typed into. On a phone these open a sheet with a large input. */
-export const TYPED = ['text', 'number', 'date', 'company', 'title'];
+export const TYPED = ['text', 'number', 'date', 'company', 'title', 'first_name', 'last_name'];
 
 export const LABEL: Record<string, string> = {
   signature: 'Signature', initials: 'Initials', text: 'Text', number: 'Number', date: 'Date', company: 'Company', title: 'Job title',
   dropdown: 'Choice', attachment: 'Attachment', checkbox: 'Checkbox', radio: 'Option', date_signed: 'Date signed', full_name: 'Full name', email: 'Email', note: 'Note', stamp: 'Stamp',
+  first_name: 'First name', last_name: 'Last name', drawing: 'Drawing', approve: 'Approve', decline: 'Decline',
 };
 export const fieldName = (f: any): string => f.label || LABEL[f.type] || 'Field';
 export const groupKey = (f: any): string => f.group_name || f.id;
@@ -25,7 +26,8 @@ export function buildItems(ordered: any[], filled: (f: any) => boolean): Item[] 
   const out: Item[] = [];
   const groups = new Map<string, Item>();
   for (const f of ordered) {
-    if (f.readonly || AUTO.includes(f.type)) continue;
+    // A button on the page and a date worked out from another are nothing to fill in (src/lib/fieldkinds.ts).
+    if (f.readonly || AUTO.includes(f.type) || f.type === 'approve' || f.type === 'decline' || f.date_from) continue;
     if (f.type === 'radio') {
       const key = `g:${groupKey(f)}`;
       let it = groups.get(key);

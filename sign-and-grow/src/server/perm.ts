@@ -40,10 +40,14 @@ type Need =
 // tests/ds-perm-profiles.test.ts, so a new route is always given one. Public routes are not listed.
 const NEEDS: Record<Need, string[]> = {
   always: [
+    // Whether the account connected its own Stripe account, and Stripe's way back after connecting (routes-collect.ts).
+    'GET /collect/connection', 'GET /collect/callback',
+    // Locking this browser before the device is handed over to sign in person without signal (routes-offline.ts).
+    'POST /offline/:prep/hand-over',
     'GET /account/archive-addresses', 'GET /account/impact-record', 'POST /account/leave', 'GET /account/members',
     'GET /account/retention', 'POST /account/retention/holds', 'DELETE /account/retention/holds/:id',
     'POST /account/transfer-owner', 'POST /auth/resend-verification', 'POST /auth/switch', 'POST /auth/verify-code',
-    'GET /billing', 'POST /clickwraps/:id/acceptances', 'GET /clickwraps/:id/status', 'GET /custom-fields',
+    'GET /billing', 'POST /clickwraps/:id/acceptances', 'GET /clickwraps/:id/status', 'GET /custom-fields', 'GET /saved-fields',
     'POST /embed/sender/close', 'GET /groups', 'GET /impact', 'GET /inbox', 'POST /invites/accept', 'PATCH /me',
     'GET /me/delete', 'POST /me/delete', 'POST /me/email', 'POST /me/email-works', 'POST /me/email/confirm', 'GET /me/idle',
     'POST /me/idle/stay', 'POST /me/password', 'GET /me/sessions', 'DELETE /me/sessions/:id', 'POST /me/sessions/sign-out-others',
@@ -53,7 +57,7 @@ const NEEDS: Record<Need, string[]> = {
     'POST /me/two-step/reset/stop', 'POST /me/two-step/setup', 'POST /operator/accounts/:id', 'PUT /operator/accounts/:id/org',
     'POST /operator/billing/accounts/:id/clear-dispute', 'GET /operator/billing/disputed', 'GET /operator/billing/lookup',
     'POST /operator/billing/price-notice', 'POST /operator/disputes/:id', 'GET /operator/holds', 'POST /operator/holds/:id/lift',
-    'GET /operator/leak-check', 'GET /operator/tree-commitments', 'POST /operator/tree-commitments', 'POST /operator/tree-commitments/:id/signed',
+    'GET /operator/leak-check', 'GET /operator/encryption', 'GET /operator/tree-commitments', 'POST /operator/tree-commitments', 'POST /operator/tree-commitments/:id/signed',
     'POST /operator/tree-commitments/:id/statements', 'DELETE /operator/tree-commitments/:id/statements/:sid', 'GET /billing-mode', 'GET /operator/orgs', 'POST /operator/orgs', 'PUT /operator/orgs/:id/break-glass', 'GET /operator/queue',
     'POST /operator/reports/:id', 'GET /operator/support', 'GET /operator/support/:id', 'POST /operator/support/:id', 'GET /orgs',
     'GET /orgs/:id', 'POST /orgs/:id/admins', 'DELETE /orgs/:id/admins/:user', 'POST /orgs/:id/agencies',
@@ -80,7 +84,9 @@ const NEEDS: Record<Need, string[]> = {
     'GET /envelopes/:id/download', 'GET /envelopes/:id/evidence', 'POST /envelopes/:id/extend', 'POST /envelopes/:id/hold',
     'DELETE /envelopes/:id/hold', 'GET /envelopes/:id/impact', 'POST /envelopes/:id/impact/seen', 'POST /envelopes/:id/keep',
     'POST /envelopes/:id/pause', 'GET /envelopes/:id/pay-link', 'PUT /envelopes/:id/pay-link', 'POST /envelopes/:id/purge',
-    'DELETE /envelopes/:id/purge', 'POST /envelopes/:id/recipient-view', 'POST /envelopes/:id/recipient-preview', 'POST /envelopes/:id/recipients/:rid/release',
+    'DELETE /envelopes/:id/purge', 'POST /envelopes/:id/recipient-view', 'POST /envelopes/:id/recipient-preview',
+    // Signing in person without signal: getting one person's part ready on this device, and ending it (routes-offline.ts).
+    'POST /envelopes/:id/offline', 'GET /envelopes/:id/offline', 'DELETE /envelopes/:id/offline/:prep', 'POST /envelopes/:id/recipients/:rid/release',
     'POST /envelopes/:id/remind', 'POST /envelopes/:id/restore', 'GET /envelopes/:id/retention', 'POST /envelopes/:id/resume',
     'POST /envelopes/:id/send', 'POST /envelopes/:id/send-later', 'DELETE /envelopes/:id/send-later', 'POST /envelopes/:id/sender-view',
     'GET /envelopes/:id/stamp-image/:sha', 'POST /envelopes/:id/try-again', 'POST /envelopes/:id/void', 'GET /envelopes/:id/warnings',
@@ -89,15 +95,17 @@ const NEEDS: Record<Need, string[]> = {
     'PUT /envelopes/:id/only-named', 'POST /envelopes/:id/away',
     // Moving to a colleague and "Send for" (routes-shares.ts).
     'POST /envelopes/:id/move', 'POST /envelopes/:id/send-for',
+    // Asking for a payment by card on a document or template (routes-collect.ts).
+    'GET /envelopes/:id/collect', 'PUT /envelopes/:id/collect',
   ],
   drafting: [
-    'GET /ai/assist', 'POST /ai/draft', 'POST /ai/fields', 'POST /files', 'POST /print-check', 'GET /write', 'POST /write/change',
+    'GET /ai/assist', 'POST /ai/draft', 'POST /ai/fields', 'POST /files', 'POST /files/:id/undo-cleanup', 'POST /print-check', 'GET /write', 'POST /write/change',
     'POST /write/draft', 'POST /write/render', 'GET /write/source/:file', 'POST /write/tidy',
     // "This looks like your template ... Use it?" (routes-tplmatch.ts).
     'GET /files/:id/template-match', 'POST /files/:id/template-match/use',
   ],
   reading: ['GET /export', 'GET /files/:id/content', 'GET /files/:id/original', 'GET /account/key-dates', 'GET /key-dates', 'GET /key-dates/calendar.ics'],
-  send: ['POST /envelopes/move'],
+  send: ['POST /envelopes/move', 'POST /share-target'],
   use_templates: ['GET /starters', 'GET /starters/:id/preview', 'POST /templates/:id/recipient-preview'],
   make_templates: ['POST /starters/:id/use'],
   edit_any_template: [],
@@ -124,8 +132,13 @@ const NEEDS: Record<Need, string[]> = {
     'POST /account/roles', 'PATCH /account/roles/:id', 'DELETE /account/roles/:id',
     'POST /account/member-groups', 'PATCH /account/member-groups/:id', 'DELETE /account/member-groups/:id',
     'GET /account/members/:id/move-documents', 'POST /account/members/:id/move-documents',
+    // Members from your directory (routes-scim.ts): the directory adds and removes people, so this is Team. Making or
+    // stopping its token also needs the built-in Admin role or the owner (the handler checks it).
+    'PATCH /account/directory', 'POST /account/directory/token', 'DELETE /account/directory/token',
   ],
   settings: [
+    // Connecting and disconnecting the account's own Stripe account (routes-collect.ts).
+    'POST /collect/connect', 'DELETE /collect/connection',
     'PATCH /account', 'PUT /account/ai-read', 'POST /account/archive-addresses', 'DELETE /account/archive-addresses/:id',
     'GET /account/disclosure', 'PUT /account/disclosure', 'GET /account/disclosure/versions', 'DELETE /account/embed-origins',
     'GET /account/embed-origins', 'POST /account/embed-origins', 'PUT /account/impact-record', 'GET /account/pdfa', 'PUT /account/pdfa', 'GET /account/template-match', 'PUT /account/template-match',
@@ -133,8 +146,10 @@ const NEEDS: Record<Need, string[]> = {
     'PATCH /account/rules', 'GET /account/security', 'PATCH /account/security', 'GET /account/security-events',
     'GET /account/security-events/csv', 'GET /account/security-events/view', 'DELETE /account/sso', 'GET /account/sso', 'PUT /account/sso',
     'POST /account/sso/domains', 'DELETE /account/sso/domains/:id', 'PATCH /account/sso/domains/:id', 'POST /account/sso/domains/:id/check',
-    'PATCH /account/sso/rules', 'POST /account/sso/try', 'GET /account/two-step', 'POST /account/two-step', 'PUT /bulk-lists/settings',
+    'PATCH /account/sso/rules', 'POST /account/sso/try', 'PUT /account/sso/saml', 'GET /account/directory', 'GET /account/two-step', 'POST /account/two-step', 'PUT /bulk-lists/settings',
     'POST /custom-fields', 'DELETE /custom-fields/:id', 'PATCH /custom-fields/:id',
+    // Saved fields and the text style new fields start with (routes-fieldlib.ts).
+    'POST /saved-fields', 'DELETE /saved-fields/:id', 'PUT /saved-fields/look',
     'PUT /account/key-dates', 'POST /account/key-dates/older',
     'GET /account/delegation', 'PUT /account/delegation',
     'GET /counter/settings', 'PUT /counter/settings', 'PUT /counter/staff/:user', 'PUT /counter/templates/:id',

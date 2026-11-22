@@ -1,7 +1,9 @@
 import { run } from './db.ts';
 import { bad, str } from './util.ts';
-import { audit, notifySender, type Actor } from './envelopes.ts';
+import { audit, type Actor } from './envelopes.ts';
 import { labelOf, bySenderProblem } from '../lib/bysender.ts';
+// The sender's emails in the sender's language (lang-sender). Used only when an email is sent.
+import { tellSender, st, namesIn } from './senderlocale.ts';
 
 // "I will send the link myself" (recipients.link_by_sender): a person with a name and no email address, whom the
 // sender reaches themselves, often on WhatsApp or by text message. The words are in src/lib/bysender.ts.
@@ -72,9 +74,8 @@ export function copyBySender(from: any, newId: string, fill: any, kind: string) 
  */
 export async function bySenderNotice(e: any, r: any, kind: string): Promise<false> {
   if (kind === 'new' && (e.recipients || []).some((x: any) => x.id !== r.id && x.status === 'completed' && x.role !== 'cc'))
-    await notifySender(e, 'always', `Your turn to pass it on: ${e.subject}`, `It is now ${r.name}'s turn`,
-      [`It is now ${r.name}'s turn to ${verbOf(r)} "${e.subject}". You said you would send them the link yourself, so we did not write to them.`,
-        'Open the envelope to copy their link, or share it on WhatsApp or by text message from there.']);
+    await tellSender(e, 'always', (L) => ({ subject: st(L, 'mail.sender.turn.subject', { subject: e.subject }), heading: st(L, 'mail.sender.turn.heading', { name: r.name }),
+      lines: [st(L, `mail.sender.turn.${verbOf(r) === 'approve' ? 'approve' : verbOf(r) === 'sign' ? 'sign' : 'confirm'}`, { name: r.name, subject: e.subject }), st(L, 'mail.sender.turn.how')] }));
   return false;
 }
 
@@ -91,9 +92,8 @@ export function assertNudgeable(e: any, recipientId: string | undefined, actor: 
 export async function remindThroughSender(e: any, waiting: any[], actor: Actor) {
   const l = waiting.filter((r) => r.link_by_sender && !r.muted);
   if (!l.length || actor.name !== SYSTEM.name) return;
-  await notifySender(e, 'always', `Reminder to pass on: ${e.subject}`, `${names(l)} ${l.length === 1 ? 'has' : 'have'} not finished yet`,
-    [`You said you would send the link to ${names(l)} yourself, so the reminder this envelope is set to send comes to you instead.`,
-      `If ${l.length === 1 ? 'they need' : 'anyone needs'} it again, open the envelope and copy the link, or share it on WhatsApp or by text message from there.`]);
+  await tellSender(e, 'always', (L) => ({ subject: st(L, 'mail.sender.pass_on.subject', { subject: e.subject }), heading: st(L, 'mail.sender.pass_on.heading', { names: namesIn(L, l.map((r) => r.name)), count: l.length }),
+    lines: [st(L, 'mail.sender.pass_on.why', { names: namesIn(L, l.map((r) => r.name)) }), st(L, 'mail.sender.pass_on.how', { count: l.length })] }));
   audit(e.id, SYSTEM, 'Reminder sent to the sender', `${l.map(labelOf).join(', ')}. Their link is shared by the sender, so the reminder went to the sender.`);
 }
 
@@ -104,12 +104,12 @@ export const untoldLines = (waiting: any[]): string[] => {
 };
 
 /** "Not opened yet", said to the sender in the words that fit how each person got their link. */
-export function unopenedLines(list: any[]): string[] {
+export function unopenedLines(list: any[], L = 'en'): string[] {
   const mailed = list.filter((r) => !r.link_by_sender);
   const shared = list.filter((r) => r.link_by_sender);
   return [
-    ...(mailed.length ? ['The email may be sitting in a spam folder or have gone to the wrong address.', 'From the envelope page you can copy their signing link and send it yourself by text or chat, nudge them, or correct the address without voiding anything.'] : []),
-    ...(shared.length ? [`You said you would send the link to ${names(shared)} yourself. If you have, it has not been opened yet. Copy it again from the envelope page, or check that it went to the right chat.`] : []),
+    ...(mailed.length ? [st(L, 'mail.sender.unopened.spam'), st(L, 'mail.sender.unopened.what')] : []),
+    ...(shared.length ? [st(L, 'mail.sender.unopened.shared', { names: namesIn(L, shared.map((r) => r.name)) })] : []),
   ];
 }
 

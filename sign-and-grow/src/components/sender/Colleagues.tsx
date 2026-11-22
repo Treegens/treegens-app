@@ -8,7 +8,7 @@
 import { useState } from 'react';
 import { api, useLoad } from '@/components/ui';
 import { ConfirmDialog } from '@/components/sender/dialogs';
-import { sharedLine, MOVE_LABEL, MOVE_HINT, type ShareLevel } from '@/lib/shares';
+import { sharedLine, MOVE_LABEL, MOVE_HINT, mayMove, type ShareLevel } from '@/lib/shares';
 
 export function SharedNote({ data }: { data: any }) {
   const lines: string[] = [];
@@ -25,7 +25,7 @@ export function SharedNote({ data }: { data: any }) {
 
 /** More lists "Move to a colleague" only on a team, and only for the person it belongs to or an admin. */
 export const moveAllowed = (me: any, e: any, data: any): boolean =>
-  Number(me?.members) >= 2 && !data?.shared && !data?.removed_at && (e?.sender_id === me?.user?.id || me?.role === 'owner' || me?.role === 'admin');
+  !data?.shared && !data?.removed_at && mayMove(me, e);
 
 /**
  * "Move to a colleague": one envelope or template (`envelope`), or several chosen in a list (`ids`, all of them

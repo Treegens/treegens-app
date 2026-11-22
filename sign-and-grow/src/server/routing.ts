@@ -13,6 +13,7 @@ import { nameOf } from './logic.ts';
 import { CONDS, CONDS_FOR, NEEDS_VALUE, RULE_VALUE_MAX, COND_WORDS, readNumber } from '../lib/logic.ts';
 import { onlyWhenOf, onlyWhenKey, isInstead, decide, notAskedWhy, hiddenWhy, condWords, TESTABLE, type AnswerRule, type OnlyWhen } from '../lib/routing.ts';
 import { isHidden } from '../lib/fieldrules.ts';
+import { twoWaysWords } from '../lib/twoways.ts';
 import { sendMail } from './mail.ts';
 import { senderOf } from './envelopes.ts';
 import { groupPeople } from './groups.ts';
@@ -138,6 +139,28 @@ function said(e: any, r: any, w: AnswerRule) {
   if (d.field && isHidden(d.field)) return { met: d.met, why: hiddenWhy(nameOfPerson(r), fieldName, false), asked: hiddenWhy(nameOfPerson(r), fieldName, true) };
   const why = notAskedWhy(nameOfPerson(r), fieldName, d.was, w, d.field?.type || 'text');
   return { met: d.met, why, asked: why.replace(/^(.*?), because /, '$1 is asked, because ') };
+}
+
+/**
+ * Held at Finish (applyValues in envelopes.ts): a number answer that can be read two ways ("1.200" is 1200 in
+ * Germany and 1.2 in England) is refused when the two readings would ask different people. Anywhere else it is read
+ * the way readNumber reads it (src/lib/logic.ts), which is unchanged.
+ */
+export function assertClearRuleAnswers(e: any, mine: any[]) {
+  const nums = new Map(mine.filter((f: any) => f.type === 'number' && !f.formula && f.value).map((f: any) => [f.id, f]));
+  if (!nums.size) return;
+  for (const p of e.recipients || []) {
+    const w = onlyWhenOf(p);
+    if (!w || isInstead(w) || !nums.has(w.field)) continue;
+    const f = nums.get(w.field);
+    const a = readNumber(f.value, '.'), b = readNumber(f.value, ',');
+    if (!a || !b || a.value === b.value) continue;
+    const as = (v: number) => e.fields.map((x: any) => (x.id === f.id ? { ...x, value: String(v), calc_num: null } : x));
+    if (decide(w, as(a.value)).met === decide(w, as(b.value)).met) continue;
+    const [big, small] = a.value > b.value ? [a.value, b.value] : [b.value, a.value];
+    // Said to the signer, so it is about their answer only: who the sender's rule asks next is the sender's business (P7).
+    throw bad(twoWaysWords(str(f.value, 40), nameOf(f), big, small), 400, { code: 'number_two_ways', field_id: f.id });
+  }
 }
 
 /**

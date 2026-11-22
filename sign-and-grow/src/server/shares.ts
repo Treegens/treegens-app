@@ -193,7 +193,7 @@ export function sendForOf(c: Ctx, b: any): string | null {
 /** Who pressed Send, kept on the envelope just before it is sent. NULL when it is the person it belongs to. */
 export function noteSentBy(c: Ctx, envelopeId: string) {
   if (!c.user) return;
-  run('UPDATE envelopes SET sent_by_id=CASE WHEN sender_id=? THEN NULL ELSE ? END WHERE id=?', c.user.id, c.user.id, envelopeId);
+  run('UPDATE envelopes SET sent_by_id=CASE WHEN sender_id=? THEN NULL ELSE ? END, sent_for_id=CASE WHEN sender_id=? THEN NULL ELSE sender_id END WHERE id=?', c.user.id, c.user.id, c.user.id, envelopeId);
 }
 
 // ---- Sharing ----------------------------------------------------------------------------------------------------

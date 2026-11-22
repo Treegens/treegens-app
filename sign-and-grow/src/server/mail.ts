@@ -8,6 +8,7 @@ import { smtpRequireTls, tlsRefusal } from '../lib/mailtls.ts';
 // Our words in the reader's language (lang-mail): the footer below and the lines of the text part.
 import { mt, mailHtml, mailLangAttrs, listIn, storedLocale, mailLine, unquote } from './maillang.ts';
 import { withSentBy } from './sentfor.ts';
+import { seal } from './colcrypt.ts';
 
 export type Mail = {
   to: string;
@@ -236,7 +237,7 @@ async function deliver(id: number | bigint, again = false): Promise<MailStatus> 
       ...(row.message_id ? { messageId: `<${row.message_id}>` } : {}), headers: mailHeaders(row.id),
       attachments,
     });
-    if (missing) run('UPDATE emails SET html=? WHERE id=?', html, id);
+    if (missing) run('UPDATE emails SET html=? WHERE id=?', seal('emails.html', html), id);
     run("UPDATE emails SET status='sent', error=NULL, tries=tries+1, tried_at=?, next_try_at=NULL WHERE id=?", now(), id);
     if (again) await tell(id, 'sent');
     noteArchiveSent(row);
@@ -300,7 +301,7 @@ export function recordMail(m: Mail): number | bigint {
   };
   const r = run(
     'INSERT INTO emails (to_email, subject, html, link, envelope_id, recipient_id, status, at, payload, expires_at, about_user, message_id, locale) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    m.to, m.subject, html, m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), JSON.stringify(payload), m.expiresAt ?? null, m.about ?? null, newMessageId(), storedLocale(m.locale),
+    m.to, m.subject, seal('emails.html', html), m.cta?.url ?? null, m.envelopeId ?? null, m.recipientId ?? null, 'queued', now(), seal('emails.payload', JSON.stringify(payload)), m.expiresAt ?? null, m.about ?? null, newMessageId(), storedLocale(m.locale),
   );
   // The copy for the account's archive addresses, made now while the whole email is known (archivemail.ts).
   const draft = archiveDraft(m);

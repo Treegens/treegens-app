@@ -562,7 +562,7 @@ export const TWO_STEP_RESET_BLOCK_DAYS = 7;
 export const TWO_STEP_LOST_PER_DAY = 3;
 /** How long the second screen waits for the code after the password, or after Google or Microsoft. */
 export const TWO_STEP_SIGNIN_MINUTES = 10;
-export const TWO_STEP_API_KEYS = 'API keys are not affected: a program that uses one is never asked for a code. Treat a key like a password, and revoke it under Settings, API and webhooks if it may have leaked.';
+export const TWO_STEP_API_KEYS = 'API keys are not affected: a program that uses one is never asked for a code. Treat a key like a password, and revoke it under Settings, Developers if it may have leaked.';
 /** What someone who lost their phone and their recovery codes can do, in the words Settings and the sign-in screen share. */
 export const TWO_STEP_LOST: string[] = [
   'On a team: an owner or an admin of the team can switch your second step off under Settings, Team, unless you own a workspace or are an admin of another one (it would open that workspace too). They type their own code first, if they have two-step login. You are emailed at once, and it is written down who did it. Then you sign in with your password and set it up again.',

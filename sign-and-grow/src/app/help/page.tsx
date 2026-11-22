@@ -16,6 +16,7 @@ import { ConsentWords, SignatureKind } from './outside';
 import { WitnessHelp } from './witness';
 import { StampHelp } from './stamps';
 import { WordFilesHelp } from './convert';
+import { HomeScreenHelp, PhotoCleanupHelp } from './homescreen';
 import { SigningOnPhone } from './phone';
 import { NotMeAnswer } from './NotMe';
 import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
@@ -328,6 +329,8 @@ export default function Help() {
           </QA>
 
           <WordFilesHelp />
+          <HomeScreenHelp />
+          <PhotoCleanupHelp />
           <QA id="cannot-send" q="Why can I not send?">
             <ul className="pub-list">
               <li><b>Your email address is not confirmed yet.</b> We sent a 6-digit code when you signed up. Type it in the box at the top of the app, which can also send a new one.</li>

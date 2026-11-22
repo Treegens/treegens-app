@@ -43,6 +43,8 @@ export const SUMMARY_CHOICE = 'Plain summary for signers';
 export const SUMMARY_CHOICE_HINT = 'Signers see a link above the document to a short summary written by AI. It never changes what is signed.';
 /** POST /sign/:token/summary once the person finished: the record line must never come after a signature. */
 export const SUMMARY_AFTER = 'This document is finished, so its summary is no longer shown. The document itself is what was signed.';
+/** Said to someone who finished while others still have the document. */
+export const SUMMARY_AFTER_YOU = 'You have finished this document, so its summary is no longer shown to you. The document itself is what counts.';
 export const DRAFT_BUTTON = 'Draft a message';
 export const MODEL_DOWN = 'The AI is not answering just now. Nothing was changed. Try again in a few minutes, or carry on without it.';
 export const DAILY_FULL = (n: number) => `Your account has used its ${n} AI requests for today. Nothing was changed. You can ask again tomorrow, or carry on without it.`;

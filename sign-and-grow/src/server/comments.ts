@@ -13,6 +13,7 @@ import { id, now } from './util.ts';
 import { pinWords, type Pin } from '../lib/comments.ts';
 import { COMMENTS_NOT_SIGNED } from '../lib/policy.ts';
 import { stampText } from '../lib/dates.ts';
+import { seal } from './colcrypt.ts';
 
 // Which person on a recipient row someone is. A private thread is with a person, not with a row: a row can pass to
 // someone else (a hand-over, a correction to another address, another member of a group), and the next person must
@@ -83,7 +84,7 @@ export function newThread(e: any, o: { private: boolean; recipient_id?: string |
 export function newComment(e: any, threadId: string, o: { by_sender: boolean; author: string; recipient_id?: string | null; party?: string | null; name: string; email?: string | null; body: string }): any {
   const row = { id: id('cmt'), thread_id: threadId, envelope_id: e.id, by_sender: o.by_sender ? 1 : 0, author: o.author, recipient_id: o.recipient_id ?? null, party: o.party ?? null, name: o.name, email: o.email ?? null, body: o.body, at: now() };
   run('INSERT INTO comments (id, thread_id, envelope_id, by_sender, author, recipient_id, party, name, email, body, at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-    row.id, row.thread_id, row.envelope_id, row.by_sender, row.author, row.recipient_id, row.party, row.name, row.email, row.body, row.at);
+    row.id, row.thread_id, row.envelope_id, row.by_sender, row.author, row.recipient_id, row.party, row.name, row.email, seal('comments.body', row.body), row.at);
   // A new word in a settled thread opens it again: somebody has something more to say.
   run('UPDATE comment_threads SET settled_at=NULL, settled_by=NULL WHERE id=?', threadId);
   return row;

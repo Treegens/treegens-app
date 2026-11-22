@@ -21,6 +21,7 @@ import './styles/seclog.css';
 import './styles/secpolicy.css';
 import './styles/retention.css';
 import './styles/customfields.css';
+import './styles/fieldkinds.css';
 import './styles/simplesign.css';
 import './styles/readview.css';
 import './styles/start.css';
@@ -31,6 +32,7 @@ import './styles/pagetools.css';
 import './styles/starters.css';
 import './styles/home.css';
 import './styles/aiassist.css';
+import './styles/phoneapp.css';
 // After globals.css, so its --serif (Lora first) wins. Keep it the last style import.
 import './styles/govpricing.css';
 import './styles/brand.css';
@@ -48,6 +50,8 @@ export const metadata: Metadata = {
   // their tags. The preview's address is absolute, from APP_URL (src/lib/site.ts).
   metadataBase: siteBase(),
   twitter: { card: 'summary_large_image' },
+  // An iPhone's "Add to Home Screen" opens it full screen under this name (the manifest says the same for Android).
+  appleWebApp: { capable: true, title: 'GrowSigning', statusBarStyle: 'default' },
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#134a2c' };
 

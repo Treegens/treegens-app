@@ -6,16 +6,17 @@ import { useState } from 'react';
 import { api, useLoad, toast } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { Dialog } from '@/components/sender/Dialog';
-import { SOURCE_LOCALE, t } from '@/lib/i18n';
+import { SOURCE_LOCALE } from '@/lib/i18n';
+import { senderT as t } from '@/lib/senderlang';
+import { useSenderLangHere } from '@/components/senderLang';
 import { PRINTED_SCRIPTS } from '@/lib/scripts';
 import { MAX_CUSTOM_FIELDS, CUSTOM_NAME_MAX, CUSTOM_VALUE_MAX, CUSTOM_CHOICES_MAX, nameProblem, lineProblem, customKey, type CustomDef } from '@/lib/customfields';
 
-// The sender's own screens are in English until they are translated, so their words are asked for in English.
-const ui = SOURCE_LOCALE;
+// The words are in the sender's language (src/lib/senderlang.ts): the component passes it to the helpers below.
 const TALL = { minHeight: 44 };
 
 /** One short line about a field: its kind, whether it is required, and whether it is printed on the certificate. */
-export const fieldLine = (d: Pick<CustomDef, 'kind' | 'choices' | 'required' | 'on_certificate'>) =>
+export const fieldLine = (d: Pick<CustomDef, 'kind' | 'choices' | 'required' | 'on_certificate'>, ui: string = SOURCE_LOCALE) =>
   [d.kind === 'list' ? t(ui, 'customfields.kind_list_n', { count: d.choices.length }) : t(ui, 'customfields.kind_text'),
     t(ui, d.required ? 'customfields.required' : 'customfields.optional'), t(ui, d.on_certificate ? 'customfields.on_cert' : 'customfields.off_cert')].join(', ');
 
@@ -23,7 +24,7 @@ type Form = { id?: string; name: string; kind: 'text' | 'list'; choices: string;
 const EMPTY: Form = { name: '', kind: 'text', choices: '', required: false, on_certificate: true };
 
 // What the form would be refused for, said before it is sent.
-function formProblem(f: Form, others: CustomDef[]): string | null {
+function formProblem(f: Form, others: CustomDef[], ui: string = SOURCE_LOCALE): string | null {
   const name = f.name.trim();
   const no = nameProblem(name);
   if (no) return no;
@@ -43,6 +44,7 @@ function formProblem(f: Form, others: CustomDef[]): string | null {
 
 export function CustomFieldSettings() {
   const me = useMe();
+  const ui = useSenderLangHere();
   const [data, reload, failed] = useLoad<any>(() => api('/custom-fields'), []);
   const [form, setForm] = useState<Form | null>(null);
   const [gone, setGone] = useState<CustomDef | null>(null);
@@ -58,7 +60,7 @@ export function CustomFieldSettings() {
   const open = (f: Form) => (setForm(f), setError(''));
   async function save() {
     if (!form) return;
-    const wrong = formProblem(form, fields);
+    const wrong = formProblem(form, fields, ui);
     if (wrong) return setError(wrong);
     setBusy(true);
     try {
@@ -102,7 +104,7 @@ export function CustomFieldSettings() {
             <li key={d.id} className="cf-item">
               <div className="grow">
                 <b className="cf-name">{d.name}</b>
-                <div className="muted small">{fieldLine(d)}</div>
+                <div className="muted small">{fieldLine(d, ui)}</div>
                 {d.kind === 'list' && <div className="muted small cf-choices">{t(ui, 'customfields.choices_are', { choices: d.choices.join(', ') })}</div>}
               </div>
               {admin && (

@@ -1278,8 +1278,12 @@ test('the screens offer what the server allows, promise only what it does, and c
   assert.match(page, /An admin of your team still finds it under Documents, in the tab <b>Removed by its sender<\/b>/);
   // A member sees whose public form it is under its name, where a phone shows it, and no buttons that would be refused.
   const forms = source('app/app/powerforms/page.tsx');
-  // The buttons that change it stand under the name too (so a phone reaches them), and only for whoever may.
-  assert.match(forms, /<td><b>\{p\.name\}<\/b>[^\n]*\n\s*\{p\.may_change === false \? <div className="muted small">Only \{p\.owner[^\n]*: \(\n\s*<div className="row wrap"[^\n]*>\n\s*<button[^\n]*shared_device/);
+  // What changes it (shared device, pause, delete) is in the row's More, which a phone reaches without scrolling
+  // sideways, and only for whoever may (repair-ds-web-forms).
+  assert.match(forms, /const mine = p\.may_change !== false;/);
+  assert.match(forms, /\.\.\.\(mine \? \[\n\s*\{ key: 'shared'/);
+  assert.match(forms, /\{!mine && <div className="muted small">Only \{p\.owner/);
+  assert.match(forms, /<MoreMenu kind="item"/);
   assert.match(forms, /Only templates you may change are listed here/);
   // Before closing, nobody is promised that the payment provider has already stopped the subscription.
   const yourData = part(source('app/app/settings/page.tsx'), 'YourData');

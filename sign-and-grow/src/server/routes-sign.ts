@@ -55,6 +55,9 @@ import { changedBy, stepWait } from './agents.ts';
 import { limitForLink, onShownDoc, scrubNames, copyFor } from './visibility.ts';
 import { finishPdf } from './finalpipe.ts';
 import { delegateLinkOf, delegateLook, delegateFacts, delegateAway, delegateTakeOn, delegateFinished, assertDelegateDecline } from './delegation.ts';
+// A first or last name taken from theirs, and a date worked out from another, said in words (fieldkinds.ts).
+import { signerField } from './fieldkinds.ts';
+import { seal } from './colcrypt.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -230,7 +233,7 @@ export function signView(c: Ctx, found: any, quiet = false): any {
     // Files given to read, not signed, are listed apart ("Also for you", supplements.ts), only when there are any.
     documents: toSign(e.documents).map((d: any) => ({ id: d.id, name: d.name, pages: d.pages, sha256: d.sha256 })),
     ...(e.documents.some(isSupplement) ? { supplements: supplementsFor(e, r) } : {}),
-    fields: e.fields.filter((f: any) => f.recipient_id === r.id).map(({ envelope_id: _e, ...f }: any) => f),
+    fields: e.fields.filter((f: any) => f.recipient_id === r.id).map(({ envelope_id: _e, ...f }: any, _i: number, mine: any[]) => signerField(f, r, mine)),
     // What is on the pages besides this person's own fields, shown read-only so they see the document as it stands.
     // Everything the sender wrote is there from the first look, whoever it is assigned to: a note or a read-only
     // value, and the name or address that a full name or email field prints, also for someone who only gets a copy
@@ -246,7 +249,7 @@ export function signView(c: Ctx, found: any, quiet = false): any {
         // signer's own calendar.
         // A value the sender hid from the others shows as dots while the document is out (fieldchecks.ts).
         value: forOthers(f, done ? fieldDisplayValue(f, o, e.date_format, senderZone(e)) : f.type === 'date' ? formatDateValue(words(f), e.date_format) : words(f), e.status),
-        image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : null,
+        image: done && f.value && (f.type === 'signature' || f.type === 'initials') ? (f.type === 'signature' ? o.signature_png : o.initials_png || o.signature_png) : done && f.type === 'drawing' ? f.value || null : null,
         // A finished person's calculated result also as its plain number, so "1.233" is never read as 1233 (logic.ts).
         ...(done && f.formula && f.value && f.calc_num != null ? { num: Number(f.calc_num) } : {}),
         // A stamp: its picture by this signing link, and its name. The sender's from the first look, another
@@ -386,7 +389,7 @@ route('POST', '/sign/:token/save', async (c) => {
   run('UPDATE recipients SET touched_at=? WHERE id=?', now(), r.id);
   // The chosen signature travels with "finish later", so picking up on another device does not mean signing again.
   if (b.signature_png !== undefined || b.initials_png !== undefined)
-    run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', okImage(b.signature_png) ? b.signature_png : r.signature_png, okImage(b.initials_png) ? b.initials_png : r.initials_png, r.id);
+    run('UPDATE recipients SET signature_png=?, initials_png=? WHERE id=?', seal('recipients.signature_png', okImage(b.signature_png) ? b.signature_png : r.signature_png), seal('recipients.initials_png', okImage(b.initials_png) ? b.initials_png : r.initials_png), r.id);
 }, 'public');
 
 route('POST', '/sign/:token/upload', async (c) => {

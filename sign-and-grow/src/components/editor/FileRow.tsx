@@ -1,4 +1,5 @@
 'use client';
+import { pagesButton } from '@/lib/simplicity';
 import { useState, type ReactNode } from 'react';
 import { useMe } from '../AppShell';
 import { scanWarning } from '@/lib/scans';
@@ -12,6 +13,7 @@ import { writtenLine } from '@/lib/writedoc';
 import { ToRead } from './ToRead';
 import { ruleSummary } from '@/lib/supplements';
 import { useTemplateMatch, TemplateMatchLine } from './TemplateMatch';
+import { CleanedLine } from './CleanedLine';
 
 // One file in step 1 (research/ux-charter.md, 2.3): its name, how many pages, and one More with what is done to a
 // file now and then (replace it, move it, remove it). Under the row at most one note; when more than one applies,
@@ -28,6 +30,8 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
   // Most urgent first: what is lost, then what a signer cannot read, then what is slow, then what may look different.
   const notes: ReactNode[] = [];
   // Signatures already in the uploaded PDF do not survive in the signed copy (POST /files, src/lib/seal.ts).
+  // Photos of a page that were cleaned before uploading, with the way back to the photos as taken (scan.ts).
+  if (d.cleaned_pages?.length && !ed.wording) notes.push(<CleanedLine key="cleaned" ed={ed} d={d} />);
   if (d.existing_signatures_note) notes.push(<p key="sig" className="notice warn small ed-file-note">{d.existing_signatures_note}</p>);
   // The server keeps which pages are pictures with the file, so this is also said when a draft is opened again.
   if (scanWarning(d)) notes.push(<p key="scan" className="notice warn small ed-file-note">{scanWarning(d)}</p>);
@@ -46,9 +50,11 @@ export function FileRow({ ed, d, i }: { ed: Ed; d: any; i: number }) {
     <div data-item="file">
       <div className="row ed-doc">
         <input value={d.name} aria-label="File name" maxLength={200} readOnly={!!ed.wording} onChange={(e) => ed.renameDoc(d.id, e.target.value)} />
-        <span className="muted small" style={{ whiteSpace: 'nowrap' }}>{plural(d.pages, 'page')}{d.supplemental ? <span data-feature="ds-supplements">, to read</span> : null}</span>
-        {/* Remove, turn and move pages (PageTools.tsx), opened from here and closed every time the step opens. */}
-        {!ed.wording && <button type="button" className="btn sm ghost" data-feature="ds-page-tools" onClick={() => setPages(true)} aria-label={`Pages of ${name}`}>Pages</button>}
+        {/* The count is the button: "2 pages" opens remove, turn and move (PageTools.tsx), so the row does not say
+            "2 pages" and then "Pages" (pagesButton in src/lib/simplicity.ts). Read-only rows keep the plain count. */}
+        {ed.wording && <span className="muted small" style={{ whiteSpace: 'nowrap' }}>{plural(d.pages, 'page')}</span>}
+        {!ed.wording && <button type="button" className="btn sm ghost" data-feature="ds-page-tools" onClick={() => setPages(true)} aria-label={`${pagesButton(d.pages)} of ${name}: remove, turn or move pages`}>{pagesButton(d.pages)}</button>}
+        {d.supplemental ? <span className="muted small" data-feature="ds-supplements" style={{ whiteSpace: 'nowrap' }}>to read</span> : null}
         {!ed.wording && <button type="button" className="btn sm ghost" data-more="item" aria-expanded={more} aria-controls={panel} aria-label={`More options for ${name}`} onClick={() => setMore(!more)}>More</button>}
       </div>
       {more && !ed.wording && (

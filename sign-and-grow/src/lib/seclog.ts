@@ -24,6 +24,8 @@ export const SECURITY_KIND_LIST = [
   'org.changed', 'org.break_glass',
   // Single sign-on through the organisation's own service, and its email domains (src/server/orgsso.ts).
   'sso.domain_added', 'sso.domain_claimed', 'sso.domain_lost', 'sso.domain_removed', 'sso.changed', 'sso.removed', 'sso.tested', 'sso.way_back',
+  // Members from the organisation's directory (SCIM, src/server/scim.ts).
+  'directory.token_made', 'directory.token_removed', 'directory.changed', 'directory.person_added', 'directory.person_removed',
   // Roles an admin made and groups of members (src/server/routes-perm.ts).
   'role.created', 'role.changed', 'role.deleted', 'member_group.created', 'member_group.changed', 'member_group.deleted',
   // Working for a colleague (src/server/shares.ts).
@@ -48,7 +50,7 @@ export const SECURITY_GROUPS: [string, SecurityKind[]][] = [
   ['keeping', ['retention.changed', 'legal_hold.placed', 'legal_hold.lifted', 'purge.asked', 'purge.cancelled', 'envelope.retention_purged']],
   ['operator', ['operator.paused', 'operator.resumed', 'operator.trusted', 'operator.untrusted']],
   ['organisation', ['org.changed', 'org.break_glass']],
-  ['single_sign_on', ['sso.domain_added', 'sso.domain_claimed', 'sso.domain_lost', 'sso.domain_removed', 'sso.changed', 'sso.removed', 'sso.tested', 'sso.way_back']],
+  ['single_sign_on', ['sso.domain_added', 'sso.domain_claimed', 'sso.domain_lost', 'sso.domain_removed', 'sso.changed', 'sso.removed', 'sso.tested', 'sso.way_back', 'directory.token_made', 'directory.token_removed', 'directory.changed', 'directory.person_added', 'directory.person_removed']],
 ];
 export const securityGroupWords = (group: string, locale: unknown = SOURCE_LOCALE): string => t(locale, `security.group.${group}`) || group;
 
@@ -66,7 +68,7 @@ export const securityLogWords = (days: number, locale: unknown = SOURCE_LOCALE) 
 
 /**
  * A webhook that only carries the security record ("events" is "security.event" and nothing else): it was added in
- * Settings, Security, and API and webhooks lists it as that, not as one that hears about documents.
+ * Settings, Security, and Developers lists it as that, not as one that hears about documents.
  */
 export const securityOnlyHook = (events: unknown): boolean => {
   const list = String(events ?? '').split(',').map((e) => e.trim()).filter(Boolean);

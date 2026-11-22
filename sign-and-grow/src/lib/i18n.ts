@@ -48,6 +48,12 @@ export type Language = {
    * language: until then a recipient gets every email in English, so no two emails about one document differ.
    */
   mail?: boolean;
+  /**
+   * The sender's own screens (editor, documents, Home) and the emails to senders, on their own status: they can be a
+   * machine's draft while the signer's are checked (src/lib/senderlang.ts). Left out: as `ui`. A sender can choose a
+   * language once it is switched on and this is not 'missing'; a draft is marked as one in the list they choose from.
+   */
+  sender?: Status;
 };
 
 /** The language every text starts in, and the one shown when nothing better is there. */
@@ -59,10 +65,10 @@ export const SOURCE_LOCALE = 'en';
  * translation yet, and is switched on only when a person has checked its words (the owner's decision, not a setting).
  */
 export const SUPPORTED_LOCALES: Language[] = [
-  { tag: 'en', english: 'English', own: 'English', ui: 'reviewed', legal: 'reviewed', shipped: true },
-  { tag: 'fr', english: 'French', own: 'Français', ui: 'missing', legal: 'missing', shipped: false },
-  { tag: 'am', english: 'Amharic', own: 'አማርኛ', ui: 'missing', legal: 'missing', shipped: false },
-  { tag: 'om', english: 'Afaan Oromo', own: 'Afaan Oromoo', ui: 'missing', legal: 'missing', shipped: false },
+  { tag: 'en', english: 'English', own: 'English', ui: 'reviewed', legal: 'reviewed', shipped: true, sender: 'reviewed' },
+  { tag: 'fr', english: 'French', own: 'Français', ui: 'missing', legal: 'missing', shipped: false, sender: 'missing' },
+  { tag: 'am', english: 'Amharic', own: 'አማርኛ', ui: 'missing', legal: 'missing', shipped: false, sender: 'missing' },
+  { tag: 'om', english: 'Afaan Oromo', own: 'Afaan Oromoo', ui: 'missing', legal: 'missing', shipped: false, sender: 'missing' },
 ];
 
 /** The catalogues in this build: the source and every language that is switched on. A new one is imported here. */

@@ -94,15 +94,15 @@ first.
 | Call in the code | What it is used for | Files |
 | --- | --- | --- |
 | `crypto.scryptSync` | Password hashes: scrypt with a random 16-byte salt and a 64-byte result. | `src/server/auth.ts` |
-| `crypto.createCipheriv` | AES-256-GCM: stored files, and the text read from PDFs, under a key per file. | `src/server/filecrypt.ts`, `src/server/searchtext.ts` |
-| `crypto.createDecipheriv` | Reading those back; the GCM tag refuses one changed byte. Also opening a seal key in a PKCS#12 file (AES-CBC or 3DES, as the file says). | `src/server/filecrypt.ts`, `src/server/searchtext.ts`, `src/server/p12.ts` |
-| `crypto.hkdfSync` | HKDF-SHA256: the key per file or per text from `FILE_ENCRYPTION_KEY`, a random salt and the file's name. | `src/server/filecrypt.ts`, `src/server/searchtext.ts` |
+| `crypto.createCipheriv` | AES-256-GCM: stored files, and the text read from PDFs, under a key per file; values in the encrypted database columns under a key per column. | `src/server/filecrypt.ts`, `src/server/searchtext.ts`, `src/server/colcrypt.ts` |
+| `crypto.createDecipheriv` | Reading those back; the GCM tag refuses one changed byte. Also opening a seal key in a PKCS#12 file (AES-CBC or 3DES, as the file says). | `src/server/filecrypt.ts`, `src/server/searchtext.ts`, `src/server/p12.ts`, `src/server/colcrypt.ts` |
+| `crypto.hkdfSync` | HKDF-SHA256: the key per file or per text from `FILE_ENCRYPTION_KEY`, a random salt and the file's name; the key per database column from the same key and the table and column. | `src/server/filecrypt.ts`, `src/server/searchtext.ts`, `src/server/colcrypt.ts` |
 | `crypto.pbkdf2Sync` | Opening a PKCS#12 seal key file with its password. | `src/server/p12.ts` |
-| `crypto.createHmac` | HMAC-SHA256 with `APP_SECRET`: signing links, one-time codes kept as keyed hashes, the security record chain, click-to-agree seals, the key id of `FILE_ENCRYPTION_KEY`, a check in a backup that `APP_SECRET` is the same. HMAC-SHA1 for two-step login codes (TOTP, as authenticator apps expect). The PKCS#12 integrity check. Checking the signature on replies and delivery reports from WhatsApp (HMAC-SHA256 with `WHATSAPP_APP_SECRET`, HMAC-SHA1 with `TWILIO_AUTH_TOKEN`, as those providers sign). | `src/server/util.ts`, `src/server/clickwrap.ts`, `src/server/filecrypt.ts`, `src/server/twostep.ts`, `src/server/p12.ts`, `src/server/whatsapp.ts`, `scripts/backup.mjs` |
+| `crypto.createHmac` | HMAC-SHA256 with `APP_SECRET`: signing links, one-time codes kept as keyed hashes, the security record chain, click-to-agree seals, the key id of `FILE_ENCRYPTION_KEY`, a check in a backup that `APP_SECRET` is the same. HMAC-SHA1 for two-step login codes (TOTP, as authenticator apps expect). The PKCS#12 integrity check. Checking the signature on replies and delivery reports from WhatsApp (HMAC-SHA256 with `WHATSAPP_APP_SECRET`, HMAC-SHA1 with `TWILIO_AUTH_TOKEN`, as those providers sign). Checking the signature on payment messages from Stripe Connect (HMAC-SHA256 with `STRIPE_CONNECT_WEBHOOK_SECRET`). | `src/server/util.ts`, `src/server/clickwrap.ts`, `src/server/filecrypt.ts`, `src/server/twostep.ts`, `src/server/p12.ts`, `src/server/whatsapp.ts`, `src/server/collect.ts`, `scripts/backup.mjs` |
 | `crypto.createHash` | SHA-256: file names by contents, the audit trail chain, session and API key fingerprints, the digest a seal signs, certificate fingerprints, the PKCE challenge of a sign-in, backup manifests, checking a time stamp over the audit trail's chain head. SHA-1 only for the first five characters sent to the leaked-password list and for the certificate ids that OCSP asks for (long-term validation of a seal). | `src/server/util.ts`, `src/server/filecrypt.ts`, `src/server/credits.ts`, `src/server/auditstamp.ts`, `src/server/ltv.ts`, `src/server/oidc.ts`, `src/server/p12.ts`, `src/server/pwned.ts`, `src/server/seal.ts`, `src/server/sealcms.ts`, `src/server/sealkey.ts`, `src/server/sealpdf.ts`, `src/server/tsa.ts`, `src/server/x509.ts`, `scripts/backup.mjs`, `scripts/restore.mjs`, `scripts/sbom.mjs` |
 | `crypto.sign` | The digital seal of a completed PDF, when `SEAL_KEY_PEM` is set: RSA-PSS with SHA-256 (2048 bits or more) or ECDSA on P-256. | `src/server/sealkey.ts` |
 | `crypto.verify` | Checking a seal or a time stamp on a PDF; checking revocation answers (OCSP) for long-term validation of a seal; checking the RS256 signature on a Google or Microsoft ID token. | `src/server/sealcms.ts`, `src/server/ltv.ts`, `src/server/oidc.ts` |
-| `crypto.randomBytes` | Session tokens, ids, salts and GCM nonces, the server's own secret when `APP_SECRET` is not set, two-step login secrets, time-stamp and OCSP nonces, the document ID of a PDF/A file. | `src/server/util.ts`, `src/server/auth.ts`, `src/server/db.ts`, `src/server/filecrypt.ts`, `src/server/searchtext.ts`, `src/server/routes-twostep.ts`, `src/server/tsa.ts`, `src/server/ltv.ts`, `src/server/pdfa.ts`, `scripts/encrypt-files.mjs` |
+| `crypto.randomBytes` | Session tokens, ids, salts and GCM nonces, the server's own secret when `APP_SECRET` is not set, two-step login secrets, time-stamp and OCSP nonces, the document ID of a PDF/A file, the one-time value of a Stripe connect. | `src/server/util.ts`, `src/server/auth.ts`, `src/server/db.ts`, `src/server/filecrypt.ts`, `src/server/searchtext.ts`, `src/server/routes-twostep.ts`, `src/server/tsa.ts`, `src/server/ltv.ts`, `src/server/pdfa.ts`, `src/server/collect.ts`, `scripts/encrypt-files.mjs`, `src/server/colcrypt.ts`, `scripts/encrypt-columns.mjs`, `scripts/setup.mjs` |
 | `crypto.randomInt` | Six-digit codes (address confirmation, signer codes, the code that lets a person ask for emails again), two-step recovery codes, a random look for a stamp, the code that connects a person's own screen at a service counter. | `src/server/confirmcode.ts`, `src/server/signercode.ts`, `src/server/routes-bounces.ts`, `src/server/twostep.ts`, `src/server/stamps.ts`, `src/server/counter.ts` |
 | `crypto.timingSafeEqual` | Comparing a password hash and a signed value without leaking time. | `src/server/auth.ts`, `src/server/util.ts` |
 
@@ -117,7 +117,11 @@ TLS is left to the reverse proxy. Mail goes to the relay with the TLS settings o
   and end their other sessions. Changing the password signs every other session out.
 - Two-step login with an authenticator app, and recovery codes, is optional for each person; an owner can require
   it for the account (`src/server/twostep.ts`).
-- Sign-in with Google or Microsoft is optional and off until set up (`src/server/oidc.ts`). There is no SAML.
+- Sign-in with Google or Microsoft is optional and off until set up (`src/server/oidc.ts`). An organisation can
+  have its people sign in through its own OpenID Connect or SAML 2.0 service once it proves its email domain
+  (`src/server/orgsso.ts`; SAML signatures are checked by the `@node-saml/node-saml` library, `src/server/saml.ts`),
+  and its directory can add and remove members by SCIM 2.0 with a token kept only as its SHA-256
+  (`src/server/scim.ts`). There is no SAML single logout.
 - A new password is looked up in a list of leaked passwords, sending only the first five characters of its SHA-1
   (`src/server/pwned.ts`). `PWNED_CHECK=0` switches that off.
 - API keys are kept as fingerprints and carry at most their maker's role (`src/server/auth.ts`).
@@ -175,7 +179,7 @@ accounts share one database and one process. A body that must not share a databa
 - No audit, no certificate of any kind, no penetration test, no outside code review.
 - No encryption of the database by the application, no hardware security module, no keys held by the customer.
 - No malware scan of uploads.
-- No SAML, no directory sync.
+- No SAML single logout, no SAML sign-ins started from the identity provider's portal, no directory groups (SCIM Users only). No real identity provider or directory has been tried end to end yet, only stand-ins in the tests.
 - No high availability, no second site.
 - No log shipping, no intrusion detection, no alerting to an on-call person.
 - No promise from the authors of how fast a weakness is fixed.

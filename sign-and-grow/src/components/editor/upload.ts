@@ -6,14 +6,14 @@ import { screenHeaders } from '../screenToken.ts';
 // is_scan and scan_pages: the pages that are pictures with no text, counted from 1. See src/lib/scans.ts.
 // size: the bytes of the stored PDF, which is what every signer downloads. See src/lib/phone.ts.
 // converted: what the PDF was made from, on a server that turns Word files and the like into PDF (src/lib/convert.ts).
-export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean; scan_pages?: number[]; size?: number; converted?: Converted | null; existing_signatures?: number; existing_signatures_note?: string };
+export type Uploaded = { id: string; name: string; pages: number; page_sizes: { w: number; h: number }[]; is_scan?: boolean; scan_pages?: number[]; size?: number; converted?: Converted | null; existing_signatures?: number; existing_signatures_note?: string; cleaned_pages?: number[] };
 
 export const MAX_BYTES = 25_000_000;
 // What the server takes, and what that costs a signer on a phone (measured, see src/lib/phone.ts): both are true.
 // On a server with a converter the editor shows uploadLimits(true, ...) instead, which names the other kinds.
 export const LIMITS = uploadLimits(false, PHONE_SECONDS_PER_MB);
-// Shown on touch screens only. A phone's own scanner straightens and cleans the page, which a plain photo does not.
-export const PAPER_HINT = 'Starting from paper? Most phones can scan it to a PDF (on an iPhone in Notes or Files, on Android in Google Drive), and that gives the cleanest pages. Plain photos work too: choose all the pages at once and we make one document from them.';
+// Shown on touch screens only. Photos of pages chosen together are cleaned in the browser (photos.ts, scan.ts).
+export const PAPER_HINT = 'Starting from paper? Take a photo of each page and choose them all at once. We straighten each page we can find and make one document.';
 
 const mb = (n: number) => `${(n / 1_000_000).toFixed(n < 100_000_000 ? 1 : 0)} MB`;
 export const fmtSize = (n: number) => (n < 1_000_000 ? `${Math.max(1, Math.round(n / 1000))} KB` : mb(n));
@@ -37,7 +37,7 @@ export function precheck(file: File, shrinksFirst = false, converts = false): st
  * Several pictures given together are sent as one upload, and the server makes one document from them, a page
  * for each, in the order given.
  */
-export function uploadFile(file: File | File[], onProgress: (fraction: number) => void): Promise<Uploaded> {
+export function uploadFile(file: File | File[], onProgress: (fraction: number) => void, extra?: Record<string, File | string>): Promise<Uploaded> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/files');
@@ -60,6 +60,8 @@ export function uploadFile(file: File | File[], onProgress: (fraction: number) =
     xhr.onabort = () => reject(new Error('The upload was stopped. Try again when you are ready.'));
     const form = new FormData();
     for (const f of [file].flat()) form.append('file', f);
+    // The photos that cleaned pictures were made from, kept with the document (photos.ts, src/server/scanphotos.ts).
+    if (extra) for (const [k, v] of Object.entries(extra)) form.append(k, v);
     xhr.send(form);
   });
 }

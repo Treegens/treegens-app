@@ -13,10 +13,14 @@ export const TYPES: [string, string, number, number][] = [
   ['strike', 'Strike out', 0.3, 0.02],
   // A company stamp or seal (src/server/stamps.ts). It starts at 40 mm across: see add() in StepFields.tsx.
   ['stamp', 'Stamp', 0.18, 0],
+  // More kinds (src/lib/fieldkinds.ts). "Date from another date" is a date field with a rule (makeField below).
+  ['drawing', 'Drawing', 0.25, 0.1], ['approve', 'Approve button', 0.2, 0.035], ['decline', 'Decline button', 0.26, 0.035], ['date_from', 'Date from another date', 0.14, 0.026],
 ];
+/** Kinds that are not in the list of fields to add: a name field becomes one of these with "Which name". */
+const OTHER_LABELS: Record<string, string> = { first_name: 'First name', last_name: 'Last name' };
 /** Marks the sender puts on a page that belong to no recipient: words added (a note) and words struck out. */
 export const SENDER_MARK = (type: string) => type === 'note' || type === 'strike';
-export const TLABEL: Record<string, string> = Object.fromEntries(TYPES.map((t) => [t[0], t[1]]));
+export const TLABEL: Record<string, string> = { ...Object.fromEntries(TYPES.map((t) => [t[0], t[1]])), ...OTHER_LABELS };
 export const PREFILL = ['text', 'number', 'date', 'company', 'title', 'note'];
 export const MIN_W = 0.012;
 export const MIN_H = 0.008;
@@ -33,7 +37,11 @@ export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n ==
 
 type Box = { x: number; y: number; w: number; h: number };
 
-export function makeField(type: string, documentId: string, page: number, recipientId: string | null, box: Box, over: any = {}) {
+export function makeField(kind: string, documentId: string, page: number, recipientId: string | null, box: Box, over: any = {}) {
+  // "Date from another date" is a date field that counts from another one, 30 days after until the sender says more.
+  const type = kind === 'date_from' ? 'date' : kind;
+  if (kind === 'date_from') over = { required: false, date_from: { from: '', add: 30, unit: 'days' }, ...over };
+  if (type === 'approve' || type === 'decline') over = { required: false, ...over };
   return {
     id: newId('fld'), document_id: documentId, recipient_id: SENDER_MARK(type) ? null : recipientId, type, page, ...box,
     required: !['checkbox', 'company', 'title', 'attachment', 'strike'].includes(type), label: '', value: type === 'note' ? 'Note' : '',
@@ -73,6 +81,7 @@ export type Ed = {
   markToRead: (id: string, supplemental: { rule: 'none' | 'open' | 'acknowledge'; in_copy: boolean } | null) => void;
   removeDoc: (id: string) => void;
   replaceDoc: (id: string, file: File | null | undefined) => void;
+  swapFile: (id: string, file: any) => void;
   moveDoc: (index: number, by: number) => void;
   /** Pages removed, turned or moved (PageTools.tsx): the document takes the new file and its fields go with their pages. */
   pagesChanged: (id: string, file: any, plan: { from: number; turn: number }[]) => void;

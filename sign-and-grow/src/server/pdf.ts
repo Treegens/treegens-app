@@ -18,6 +18,7 @@ import { payLineForPrint } from '../lib/paylink.ts';
 import { certName, certGroup } from '../lib/groups.ts';
 // Signed by a delegate for a person who was away: who, for whom, under which delegation (delegation.ts).
 import { delegateCertLines } from './delegation.ts';
+import { offlineCertLines } from './offlinesign.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { consentCertValue } from '../lib/disclosure.ts';
 import { certLanguageLine } from './signlang.ts';
@@ -34,6 +35,7 @@ import { hiddenOf } from './logic.ts';
 import { BlendMode } from 'pdf-lib';
 import { stampPng, stampCertLines, senderStampCertLines, stampCertNote } from './stamps.ts';
 import { drawSenderDetails } from './customfields.ts';
+import { collectCertLines } from './collect.ts';
 import { sealLineFor } from './seal.ts';
 import { pdfaLineFor } from './pdfa.ts';
 // Hidden values, currency signs and boxes of fixed size (fieldchecks.ts, src/lib/fieldrules.ts).
@@ -51,6 +53,7 @@ import { notePages, drawFootClear, fieldBox } from './footplace.ts';
 // Files given to read with the document, not signed: after the signed pages, and in the certificate (supplements.ts).
 import { toSign, addSupplements, supplementCert } from './supplements.ts';
 import { hiddenDocLines, TRAIL_NAMES_NOTE } from '../lib/owndocs.ts';
+import { drawKind, drawStyled, kindCertLines } from './fieldkinds.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -209,6 +212,8 @@ export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null, se
     case 'date': return formatDateValue(f.value, dateFormat);
     // A stamp is a picture. Its value is the fingerprint of that picture, never words on the page.
     case 'stamp': return '';
+    // So is a drawing, and a button holds no words (fieldkinds.ts).
+    case 'drawing': case 'approve': case 'decline': return '';
     // An amount in a currency is printed as typed, with the currency's sign in front when it was typed without one.
     case 'number': return printedAmount(f.value || '', fieldChecks(f));
     default: return f.value || '';
@@ -219,6 +224,8 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
   const m = mapper(page);
   const vx = f.x * m.W, vy = f.y * m.H, vw = f.w * m.W, vh = f.h * m.H;
   const r = f.recipient_id ? ctx.recipients.get(f.recipient_id) : null;
+  // A drawing (a picture, never a signature) and the Approve and Decline buttons (fieldkinds.ts).
+  if (await drawKind(ctx.doc, page, f, r, m, ctx.font)) return;
 
   if (f.type === 'signature' || f.type === 'initials') {
     if (!f.value || !r) return;
@@ -290,6 +297,8 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
 
   const text = clean(fieldDisplayValue(f, r, ctx.dateFormat, ctx.tz));
   if (!text) return;
+  // A field with a text style: its font, size, colour and bold (fieldkinds.ts).
+  if (await drawStyled(ctx.doc, page, f, text, m, ctx)) return;
   const base = Math.max(6, Math.min(11, vh * 0.62));
   const multi = vh > base * 2.6 || text.includes('\n');
   // The typesetter picks a font for every script, puts right-to-left text in its reading order with digits and
@@ -414,6 +423,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   for (const [k, v] of senderStampCertLines(e)) s.kv(k, known(v));
   // The custom fields the account prints on the certificate, in the sender's words (customfields.ts).
   drawSenderDetails(s, e, iso, MUTED);
+  // A payment taken while signing, only once Stripe confirmed it (collect.ts): never "paid" without that.
+  for (const [k, v] of collectCertLines(e)) s.kv(k, known(v));
 
   s.h2('Documents');
   for (const d of toSign(e.documents)) {
@@ -439,6 +450,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     for (const [k, v] of witnessCertLines(e, r, ts)) s.kv(k, known(v));
     for (const [k, v] of counterCertLines(e, r, ts)) s.kv(k, known(v));
     for (const [k, v] of delegateCertLines(e, r)) s.kv(k, known(v));
+    // Signed in person on the host's device without a connection: the device's clock, unchecked, and when we got it (offlinesign.ts).
+    for (const [k, v] of offlineCertLines(e, r, ts)) s.kv(k, known(v));
     s.kv('Sent', ts(r.sent_at));
     // Someone who was not asked never had the document: no times, checks or address to show for them.
     if (r.role !== 'cc' && r.status !== 'skipped') {
@@ -474,6 +487,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
       if (r.reassigned_from) s.kv('Reassigned from', known(r.reassigned_from));
       // Each stamp this person put on: which, where, when, and the fingerprint of its picture (stamps.ts).
       for (const [k, v] of stampCertLines(e, r)) s.kv(k, known(v));
+      // The drawings they made, as drawings and never as a signature (fieldkinds.ts).
+      for (const [k, v] of kindCertLines(e, r)) s.kv(k, known(v));
     }
     const img = await image(ctx, r.signature_png);
     if (img && s.y < top) {

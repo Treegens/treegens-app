@@ -560,7 +560,7 @@ test('screens: "Sign on paper instead" only with the account\'s text and only fo
 
   // Settings: behind Sending's one More options, for admins.
   const settings = fs.readFileSync('src/app/app/settings/page.tsx', 'utf8');
-  assert.match(settings, /tab === 'sending' && <div className="stack">.*<MoreOptions><Disclosure \/><\/MoreOptions><\/div>\}/);
+  assert.match(settings, /tab === 'sending' && <div className="stack">.*<MoreOptions><Disclosure \/>(?:<[A-Za-z]+ \/>)*<\/MoreOptions><\/div>\}/);
   const card = fs.readFileSync('src/components/settings/Disclosure.tsx', 'utf8');
   assert.match(card, /if \(!admin\) return null;/);
   assert.match(card, /\{ESIGN_NOTE\}/);

@@ -1,4 +1,5 @@
 // What the person's role allows (perm.ts), where this file once asked for an admin.
+import { limitedPeople } from './visibility.ts';
 import { can } from './perm.ts';
 import { route, json, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
@@ -48,6 +49,7 @@ import { queueOcr } from './ocr.ts';
 import { assertFormNotStacked, tellStackedForm } from './stackedforms.ts';
 // Office files and others turned into a PDF on upload, with the original kept (src/server/converted.ts).
 import { convertUpload, keepOriginal } from './converted.ts';
+import { keepScanPhotos } from './scanphotos.ts';
 import { KNOWN_EXT } from '../lib/convert.ts';
 import { nameFromFile, listName } from '../lib/docname.ts';
 import { record } from './seclog.ts';
@@ -58,6 +60,9 @@ import { existingSignatures, sealFacts } from './seal.ts';
 import { pdfaFacts } from './pdfa.ts';
 import { chainStampFacts } from './auditstamp.ts';
 import { signNowFor } from './signnow.ts';
+// A form's questions, answered before the document (src/server/webforms.ts).
+import { formView, formQuestions, checkAnswers, fillAnswers, dropDraft, resumeAnswers } from './webforms.ts';
+import { unlabelledCount } from '../lib/webforms.ts';
 import { shareFor, shareFacts, sendForOf, noteSentBy, noteMadeFor, ownersSharingWith, shareLevelsWith } from './shares.ts';
 // Fields placed by the words of a document: "anchor" and "auto_tags" (anchors.ts).
 import { placeByWords, assertAllPlaced, refuseWordsWithTemplate } from './anchors.ts';
@@ -121,7 +126,9 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   const ocr = !!accountId && queueOcr(fid, scanPages);
   // Signatures already in the PDF do not survive in the signed copy, which is made from flattened pages (seal.ts).
   const signed = isPdf && accountId ? await existingSignatures(bytes) : 0;
-  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages, converted, ...(ocr ? { ocr: 'queued' } : {}), ...(signed ? { existing_signatures: signed, existing_signatures_note: signaturesLost(signed) } : {}) };
+  // Pictures the sender's browser cleaned come with the photo before cleanup, which is kept (scanphotos.ts).
+  const cleaned = !isPdf && !conv ? await keepScanPhotos(fid, form, accountId, parts.length) : [];
+  return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages, converted, ...(cleaned.length ? { cleaned_pages: cleaned } : {}), ...(ocr ? { ocr: 'queued' } : {}), ...(signed ? { existing_signatures: signed, existing_signatures_note: signaturesLost(signed) } : {}) };
 }
 
 route('POST', '/files', async (c) => noteScreenUpload(c, await storeUpload(c, c.account.id)));
@@ -223,7 +230,8 @@ route('GET', '/envelopes', (c) => {
     const likeWord = (w: string) => `%${w.replace(/[\\%_]/g, '\\$&')}%`;
     // Text kept encrypted (FILE_ENCRYPTION_KEY) cannot be searched by the database: it is opened in memory, for this
     // account only, and the envelopes whose documents hold each word come back as a list (searchtext.ts).
-    const sealed = sealedTextHits(c.account.id, kind, words, own ? c.user.id : undefined);
+    // A member's own and, with nobody chosen, what colleagues share with them: the same people the list shows.
+    const sealed = sealedTextHits(c.account.id, kind, words, own ? [c.user.id, ...sharers] : undefined);
     where.push(`(e.id = ? OR (${words.map(() => word).join(' AND ')}))`);
     p.push(q, ...words.flatMap((w, i) => [...Array(7).fill(likeWord(w)), JSON.stringify(sealed[i])]));
   }
@@ -386,6 +394,8 @@ route('GET', '/envelopes/:id', (c) => {
   // whose wording is locked for this person: what is locked and who can unlock it, so the editor shows it as locked.
   if (e.kind === 'template') env.access = accessOf(c, e);
   else env.wording_lock = wordingLock(c, e);
+  // "Each person sees only their files": who was shown which files, for the sender's page (visibility.ts).
+  if (e.kind !== 'template') env.limited_people = limitedPeople(e);
   // Names and wording in a script the signed PDF has no font for, said here so the sender hears it from the
   // envelope page and not from the finished document. Each entry says where the text stands and which characters.
   const print_problems = e.status === 'completed' && (e.final_sha256 || e.purged_at) ? [] : [...printProblems(e, get('SELECT name FROM users WHERE id=?', e.sender_id)), ...customPrintProblems(e.id)];
@@ -908,7 +918,7 @@ route('POST', '/bulk/:id/void', async (c) => {
 
 // ---- PowerForms: a public link anyone can use to sign a template ---------------------------
 
-function powerformTemplate(templateId: string) {
+export function powerformTemplate(templateId: string) {
   const tpl = loadEnvelope(templateId);
   if (!tpl || tpl.kind !== 'template') throw bad('Template not found.', 404);
   const open = tpl.recipients.filter(rowFills); // a group is filled in by its members, and a witness the signer names by that signer, not by a row or a visitor
@@ -933,6 +943,26 @@ function assertMayRunForm(c: Ctx, tpl: any, doing: string) {
   // a form of one's own there, and the refusal does not suggest one.
   throw bad(`This template belongs to ${owner}, so only ${chosen} can ${doing}. Nothing was changed. ${tpl?.tpl_locked ? `Its wording is locked, so a copy would be locked in the same way. Ask ${owner} or an admin of your team.` : tpl && !copyIsTheirs(c, tpl) ? `It is not for everyone on the team, so a copy would belong to ${owner} too. Ask ${owner} or an admin of your team.` : 'To have a PowerForm of your own, copy the template and make the PowerForm from your copy.'}`, 403);
 }
+// How many questions a visitor answers before the document (webforms.ts). A template that cannot be a form has none.
+function questionCount(templateId: string): number {
+  try {
+    const { tpl, open } = powerformTemplate(templateId);
+    return formQuestions(tpl, open).length;
+  } catch (err) {
+    if (err instanceof HttpError) return 0;
+    throw err;
+  }
+}
+// How many of the visitor's fields have no label, so the form opens as the document instead of questions (webforms.ts).
+function unlabelledOf(templateId: string): number {
+  try {
+    const { tpl, open } = powerformTemplate(templateId);
+    return unlabelledCount(tpl.fields, open.id);
+  } catch (err) {
+    if (err instanceof HttpError) return 0;
+    throw err;
+  }
+}
 // The form a call names, for someone who may change it. The same answer for a form that does not exist and for one
 // in another account.
 function formToChange(c: Ctx, doing: string) {
@@ -955,7 +985,7 @@ route('GET', '/powerforms', (c) => ({
     .map(({ template_ref, ...p }) => ({ p, t: get('SELECT * FROM envelopes WHERE id=?', template_ref) }))
     .filter(({ t }) => !t || can(c, 'edit_any_template') || mayUse(c, t))
     // reminders: whether the envelope each visitor starts reminds them by itself, which it takes from the template.
-    .map(({ p, t }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, t), url: `${baseUrl()}/f/${p.slug}`, reminders: t ? reminderText(t.reminder_days) : null })),
+    .map(({ p, t }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, t), url: `${baseUrl()}/f/${p.slug}`, reminders: t ? reminderText(t.reminder_days) : null, questions: t ? questionCount(t.id) : 0, unlabelled: t ? unlabelledOf(t.id) : 0 })),
 }));
 route('POST', '/powerforms', async (c) => {
   const b = await c.body();
@@ -1004,7 +1034,9 @@ route('GET', '/public/powerforms/:slug', async (c) => {
   const noCustom = posing ? null : formCustomProblem(tpl);
   if (noCustom) await tellFormOwner(p, tpl.sender_id, noCustom);
   // Said before anyone types their name and address into a form that cannot take them.
-  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || !!noCustom || formClosed(p, tpl), shared_device: !!p.shared_device, trees: showsTrees(p.account_id) };
+  return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || !!noCustom || formClosed(p, tpl), shared_device: !!p.shared_device, trees: showsTrees(p.account_id),
+    // The questions the visitor answers before the document (webforms.ts), with what the form page needs to check them.
+    ...(posing || noCustom ? { questions: [] } : formView(tpl, open)) };
 }, 'public');
 
 // The owner of a form hears why it could not take someone, in plain words and once a day at most. The visitor is
@@ -1020,7 +1052,7 @@ async function tellFormOwner(p: any, ownerId: string, why: string) {
 // closed) is the owner's business. A visitor is told only that the form is closed for now, before they type
 // anything, and nothing of theirs is kept.
 const FORM_CLOSED = 'This form cannot take new signatures right now. Please contact whoever gave you the link.';
-const formClosed = (p: any, tpl: any): boolean => {
+export const formClosed = (p: any, tpl: any): boolean => {
   const a = get('SELECT suspended_at s, closing_at c FROM accounts WHERE id=?', p.account_id);
   return !get('SELECT email_verified v FROM users WHERE id=?', tpl.sender_id)?.v || !!a?.s || !!a?.c;
 };
@@ -1054,6 +1086,8 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   if (!name || !isEmail(email)) throw bad('Enter your name and a valid email address.');
   const { tpl, open } = powerformTemplate(p.template_id);
   if (formClosed(p, tpl)) throw bad(FORM_CLOSED, 503);
+  // Answers from the form's questions are checked before anything is made (webforms.ts).
+  const answers = checkAnswers(p, tpl, open, b.answers);
   // Opening the form twice must not create two envelopes. But an email address proves nothing, because anyone can
   // type somebody else's. So an unfinished start is only handed back to the browser that made it, which has held a
   // cookie since then, and only when the same name and address are typed again. Everyone else, and every other
@@ -1061,8 +1095,14 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   const jar = `ts_pf_${p.id}`;
   const [started, seal] = (readCookie(c.req, jar) || '').split('.');
   if (started && seal && safeEqual(seal, hmac(`pf:${p.id}:${started}`))) {
-    const again = get("SELECT r.token FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.id=? AND e.powerform_id=? AND e.status='sent' AND r.status IN ('sent','viewed') AND r.email=? AND lower(r.name)=lower(?)", started, p.id, email, name);
-    if (again) return { url: `${baseUrl()}/sign/${again.token}`, resumed: true };
+    const again = get("SELECT r.token, r.id FROM envelopes e JOIN recipients r ON r.id=e.form_recipient_id WHERE e.id=? AND e.powerform_id=? AND e.status='sent' AND r.status IN ('sent','viewed') AND r.email=? AND lower(r.name)=lower(?)", started, p.id, email, name);
+    if (again) {
+      // Answers given again (the person went back to the form to fix one) go into the start they pick up, so what
+      // they checked is what they sign (webforms.ts resumeAnswers).
+      if (answers) resumeAnswers(started, tpl, open, again.id, answers);
+      dropDraft(c, p);
+      return { url: `${baseUrl()}/sign/${again.token}`, resumed: true };
+    }
   }
   // Every start makes an envelope in the owner's account and sends an email to an address a stranger typed, so one
   // device address may only have a few unfinished ones on a form at a time: more on a form its owner marked as
@@ -1094,6 +1134,12 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
   const visitor = get('SELECT id FROM recipients WHERE envelope_id=? AND position=?', eid, open.position);
   run('UPDATE envelopes SET form_recipient_id=?, form_ip=? WHERE id=?', visitor?.id ?? null, c.ip, eid);
   try {
+    if (visitor) fillAnswers(eid, tpl, visitor.id, answers);
+  } catch (err) {
+    run('DELETE FROM envelopes WHERE id=?', eid);
+    throw err;
+  }
+  try {
     await sendEnvelope(eid, { name: `${name} <${email}> via PowerForm`, ip: c.ip, ua: c.ua });
   } catch (err) {
     // Whatever stopped the send (the owner's daily limit, a rule about what may be sent), no stray draft with the
@@ -1105,6 +1151,7 @@ route('POST', '/public/powerforms/:slug/start', async (c) => {
     throw bad(FORM_CLOSED, 503);
   }
   run('UPDATE powerforms SET uses=uses+1 WHERE id=?', p.id);
+  dropDraft(c, p); // what this browser kept of the form's answers is in the envelope now
   // A form made before fields that cover each other were refused takes its visitors, and its owner is told.
   await tellStackedForm(p, tpl.sender_id);
   // The cookie that lets this browser, and nobody else, pick this start up again. It lasts as long as the start can.

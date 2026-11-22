@@ -120,9 +120,9 @@ test('no total is shown until it means something, and no figure under one tree a
 
 test('Settings: an owner or admin sees at most 10 sections and a member at most 4, and old links still land', () => {
   const owner = sectionsFor('owner'), member = sectionsFor('member');
-  assert.deepEqual(owner.map(([, l]) => l), ['Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps and seals', 'Plan', 'Records and data', 'API and webhooks']);
+  assert.deepEqual(owner.map(([, l]) => l), ['Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps and seals', 'Plan', 'Records and data', 'Developers']);
   assert.deepEqual(sectionsFor('admin'), owner);
-  assert.deepEqual(member.map(([, l]) => l), ['Profile', 'Security', 'Team', 'API and webhooks']);
+  assert.deepEqual(member.map(([, l]) => l), ['Profile', 'Security', 'Team', 'Developers']);
   assert.ok(owner.length <= SETTINGS_MAX.admin && member.length <= SETTINGS_MAX.member);
   assert.deepEqual(sectionsFor(undefined), member, 'nobody is shown the sections of the admins by accident');
   // What moved: the emails about your documents to Profile, everything about signing in to Security.

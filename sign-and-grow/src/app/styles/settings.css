@@ -43,6 +43,12 @@ ul.rules + .btn, ul.rules + .row { margin-top: 16px; }
 .set-more > summary { font-size: 16px; }
 .set-more-body { margin-top: 8px; }
 .set-kept { margin: 6px 0 14px; }
+/* Every button and box inside a Settings card is a thumb-sized target (44 px), at every width. */
+.set-card .btn, .set-card select, .set-card input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='range']) { min-height: 44px; }
+/* And in every other card of every section (Team, Records and data, Developers, Plan): only a minimum, so nothing gets smaller.
+   A link inside a sentence ("cancel the plan") stays the height of its line, as the 44 px rule allows for words in text. */
+#set-panel .btn, #set-panel select, #set-panel input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='range']), #set-panel details > summary { min-height: 44px; }
+#set-panel details > summary { align-content: center; box-sizing: border-box; }
 
 /* Section tabs: a thumb-sized target at every width. */
 .tabs[role='tablist'] button { min-height: 44px; }

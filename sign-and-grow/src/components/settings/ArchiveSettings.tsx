@@ -9,14 +9,14 @@ import { useEffect, useRef, useState } from 'react';
 import { api, useLoad, fmtDate } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { ARCHIVE_MAX_ADDRESSES, ARCHIVE_BOUNCES_TO_PAUSE, ARCHIVE_ONE_LINE, archiveAddress } from '@/lib/archivemail';
-import { SOURCE_LOCALE, t } from '@/lib/i18n';
+import { SOURCE_LOCALE } from '@/lib/i18n';
+import { senderT as t } from '@/lib/senderlang';
+import { useSenderLangHere } from '@/components/senderLang';
 
-// The sender's own screens are in English until they are translated, as in LanguageSettings.
-const ui = SOURCE_LOCALE;
 const TAP = { minHeight: 44 };
 const CARD = { 'data-item': 'card', 'data-feature': 'ds-mail-records' };
 
-function stateLine(a: any): string {
+function stateLine(a: any, ui: string = SOURCE_LOCALE): string {
   if (a.state === 'waiting') return t(ui, 'settings.archive.waiting', { until: fmtDate(a.link_works_until) });
   if (a.state === 'expired') return t(ui, 'settings.archive.expired');
   if (a.state === 'paused') return a.paused_why === 'spam' ? t(ui, 'settings.archive.paused_spam', { day: fmtDate(a.paused_at) }) : t(ui, 'settings.archive.paused_bounced', { day: fmtDate(a.paused_at), n: ARCHIVE_BOUNCES_TO_PAUSE });
@@ -24,6 +24,7 @@ function stateLine(a: any): string {
 }
 
 export function ArchiveSettings() {
+  const ui = useSenderLangHere();
   const me = useMe();
   const [data, reload, failed] = useLoad<any>(() => api('/account/archive-addresses'), []);
   const [email, setEmail] = useState('');
@@ -82,7 +83,7 @@ export function ArchiveSettings() {
           {data.addresses.map((a: any) => (
             <li key={a.id} style={{ borderTop: '1px solid var(--line, #e4dfd3)', padding: '10px 0' }}>
               <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{a.email}</div>
-              <div className={`small${a.state === 'paused' ? '' : ' muted'}`}>{stateLine(a)}</div>
+              <div className={`small${a.state === 'paused' ? '' : ' muted'}`}>{stateLine(a, ui)}</div>
               {a.missed > 0 && <div className="small">{t(ui, 'settings.archive.missed', { count: a.missed })}</div>}
               {a.problem && a.state !== 'paused' && <div className="small">{a.problem}</div>}
               {data.may_change && (

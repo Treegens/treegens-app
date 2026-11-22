@@ -118,7 +118,7 @@ test('stamp: the section of Settings that keeps them is "Stamps and seals", as t
 // ---- repair:ds-mail-records, repair:ds-retention: names and sizes ----------------------------------------------------
 
 test('settings: the section is called "Records and data" everywhere a person reads it', () => {
-  assert.deepEqual(sectionsFor('owner').map(([, l]) => l), ['Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps and seals', 'Plan', 'Records and data', 'API and webhooks']);
+  assert.deepEqual(sectionsFor('owner').map(([, l]) => l), ['Profile', 'Security', 'Account', 'Sending', 'Team', 'Stamps and seals', 'Plan', 'Records and data', 'Developers']);
   assert.equal(sectionsFor('member').some(([, l]) => /data/i.test(l)), false);
   assert.match(landingFor('member', 'data').note || '', /^Records and data is set by the owner and the admins of this account/);
   // Old links keep working: the key in the address did not change.
@@ -344,12 +344,12 @@ test('sec-log: a change of the second line of the deletion schedule is said in w
   for (const s of [...both, ...first]) assert.doesNotMatch(s, /stopped_days|Stopped days/i);
 });
 
-test('sec-log: a webhook added for the security record is said to be that where API and webhooks lists it', async () => {
+test('sec-log: a webhook added for the security record is said to be that where Developers lists it', async () => {
   const { securityOnlyHook } = await import('../src/lib/seclog.ts');
   assert.equal(securityOnlyHook('security.event'), true);
   assert.equal(securityOnlyHook(' security.event '), true);
   for (const e of ['*', '', null, 'envelope.completed', 'security.event,envelope.completed']) assert.equal(securityOnlyHook(e), false, String(e));
-  // The two cards: Security adds one with only that event, API and webhooks lists every webhook with the line.
+  // The two cards: Security adds one with only that event, Developers lists every webhook with the line.
   const owner = await person('Wes Webhook', 'wes@hooks.example');
   const was = process.env.ALLOW_PRIVATE_WEBHOOKS;
   process.env.ALLOW_PRIVATE_WEBHOOKS = '1';

@@ -10,6 +10,7 @@
 import { mt, theirWords } from './maillang.ts';
 import { momentOnScreen, stampText } from '../lib/dates.ts';
 import { SOURCE_LOCALE } from '../lib/i18n.ts';
+import { changerWords } from '../lib/recipienttypes.ts';
 
 export type RequestFacts = {
   kind: 'new' | 'reminder' | 'updated' | 'reopened' | 'expiring' | 'resent' | 'again' | 'resumed';
@@ -32,6 +33,8 @@ export type RequestFacts = {
   zoneKnown: boolean;
   /** When they finished the first time, for "again". */
   before?: string | null;
+  /** The person who "Can change the document" made the change, for "again" and "updated" (agents.ts). */
+  changer?: string | null;
   /** Everything is filled in and only Finish is left (a reminder says so). */
   ready: boolean;
   /** Mangroves planted when they finish, 0 for none. */
@@ -54,6 +57,8 @@ export function requestMail(L: string, f: RequestFacts) {
   const first = /^en(-|$)/.test(L) ? stampText(f.before) : momentOnScreen(f.before, L);
   const deadline = f.deadline ? when(f.deadline) : '';
   const s = f.sender.name;
+  // Who changed it: the editor, said with who asked them (changerWords), or else the sender.
+  const by = changerWords(f.changer, s);
   const subjectUnder = (f.role === 'signer' || f.role === 'viewer') && f.kind !== 'again' && !f.done;
   const subject = {
     new: mt(L, 'mail.request.subject.new', { subject: f.subject }),
@@ -66,7 +71,7 @@ export function requestMail(L: string, f: RequestFacts) {
     again: mt(L, 'mail.request.subject.again', { subject: f.subject }),
   }[f.kind];
   const bare = f.kind === 'again'
-    ? { signed: mt(L, 'mail.request.heading.again.signed', { sender: s }), approved: mt(L, 'mail.request.heading.again.approved', { sender: s }), viewed: mt(L, 'mail.request.heading.again.viewed', { sender: s }) }[fh]
+    ? { signed: mt(L, 'mail.request.heading.again.signed', { sender: f.changer || s }), approved: mt(L, 'mail.request.heading.again.approved', { sender: f.changer || s }), viewed: mt(L, 'mail.request.heading.again.viewed', { sender: f.changer || s }) }[fh]
     : f.done ? mt(L, 'mail.request.heading.done', { subject: f.subject })
       : f.role === 'signer' ? mt(L, 'mail.request.heading.signer', { sender: s })
         : f.role === 'viewer' ? mt(L, 'mail.request.heading.viewer', { sender: s })
@@ -77,10 +82,10 @@ export function requestMail(L: string, f: RequestFacts) {
     ...(subjectUnder ? [f.subject] : []),
     ...(f.shared ? [mt(L, 'mail.request.shared', { name: f.name })] : []),
     ...(f.kind === 'again' ? [
-      { signed: mt(L, 'mail.request.again.signed', { subject: f.subject, when: first, sender: s }), approved: mt(L, 'mail.request.again.approved', { subject: f.subject, when: first, sender: s }), viewed: mt(L, 'mail.request.again.viewed', { subject: f.subject, when: first, sender: s }) }[fh],
+      { signed: mt(L, 'mail.request.again.signed', { subject: f.subject, when: first, sender: by }), approved: mt(L, 'mail.request.again.approved', { subject: f.subject, when: first, sender: by }), viewed: mt(L, 'mail.request.again.viewed', { subject: f.subject, when: first, sender: by }) }[fh],
       f.role === 'approver' ? mt(L, 'mail.request.again.look.approve', { sender: s }) : mt(L, 'mail.request.again.look.sign', { sender: s }),
     ] : []),
-    ...(f.kind === 'updated' ? [mt(L, 'mail.request.updated', { sender: s })] : []),
+    ...(f.kind === 'updated' ? [f.changer ? mt(L, 'mail.request.updated_by', { changer: by }) : mt(L, 'mail.request.updated', { sender: s })] : []),
     ...(f.kind === 'reopened' ? [mt(L, 'mail.request.reopened', { sender: s })] : []),
     ...(f.kind === 'resumed' ? [mt(L, 'mail.request.resumed', { sender: s })] : []),
     ...(f.kind === 'expiring' ? [mt(L, 'mail.request.expiring', { when: deadline, sender: s })] : []),

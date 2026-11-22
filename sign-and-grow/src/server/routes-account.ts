@@ -44,6 +44,9 @@ import { showCode, CONFIRM_CODE_HOURS } from '../lib/confirm.ts';
 import { envelopeOfCopy, subjectOfCopy } from './visibility.ts';
 import { can, myRole, roleIn, roleChoice, assertMayGive, assertMayManage, type RoleChoice } from './perm.ts';
 import { isDeploymentBilling, agreementLine, agreementOf } from '../lib/billingmode.ts';
+import { askedSenderLocale, noteSeenLocale } from './senderlocale.ts';
+import { directoryManaged, invitesAllowed } from './scim.ts';
+import { seal } from './colcrypt.ts';
 
 // The role an invitation or a change gives (perm.ts): "admin", a role the team made (its id), and anything else
 // "member", as it always was. Refused when it can do more than the person giving it.
@@ -56,7 +59,7 @@ function givenRole(c: Ctx, value: unknown): RoleChoice {
 }
 
 // `c`: with an API key, two_step is left out, because no key reads anything of two-step login (twostep.ts).
-export const publicUser = (u: any, c?: Ctx) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, ...(u.email_verified ? {} : { confirm_by_code: codesOpen(u) }), has_password: hasPassword(u), ...(c?.auth?.via === 'api_key' ? {} : { two_step: twoStepOn(u) }), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
+export const publicUser = (u: any, c?: Ctx) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, ...(u.email_verified ? {} : { confirm_by_code: codesOpen(u) }), has_password: hasPassword(u), ...(c?.auth?.via === 'api_key' ? {} : { two_step: twoStepOn(u) }), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u), locale: u.locale || null });
 const okImage = (s: any, max = 700_000) => typeof s === 'string' && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s) && s.length < max;
 
 // `via` names the provider when the login was made by signing in with Google or Microsoft and the provider did not
@@ -395,6 +398,8 @@ route('GET', '/me', (c) => {
       run('UPDATE users SET tz=? WHERE id=?', tz, c.user.id);
     } catch {}
   }
+  // The sender language the browser asks for, for the emails to this person while they chose none (senderlocale.ts).
+  noteSeenLocale(c.user, c.req);
   return {
     user: publicUser(c.user, c),
     role: c.role,
@@ -456,9 +461,13 @@ route('PATCH', '/me', async (c) => {
   // the next send.
   const renamed = b.name != null && str(b.name, 120).trim() !== c.user.name && hasNotPaid(c.account) ? nameRefusal([str(b.name, 120)]) : null;
   if (renamed) throw bad(`${renamed} Nothing was changed.`, 422);
+  // The language of this person's own screens and of the emails to them (Settings, Profile; senderlocale.ts). Checked
+  // before anything is written, so a refusal changes nothing.
+  const locale = askedSenderLocale(b.locale);
+  if (locale !== undefined) run('UPDATE users SET locale=? WHERE id=?', locale, c.user.id);
   run('UPDATE users SET name=?, title=?, company=?, signature_png=?, initials_png=?, notify=? WHERE id=?',
     str(b.name ?? c.user.name, 120).trim() || c.user.name, str(b.title ?? c.user.title, 120) || null, str(b.company ?? c.user.company, 120) || null,
-    b.signature_png === undefined ? c.user.signature_png : b.signature_png || null, b.initials_png === undefined ? c.user.initials_png : b.initials_png || null, notify, c.user.id);
+    seal('users.signature_png', b.signature_png === undefined ? c.user.signature_png : b.signature_png || null), seal('users.initials_png', b.initials_png === undefined ? c.user.initials_png : b.initials_png || null), notify, c.user.id);
   return { user: publicUser(get('SELECT * FROM users WHERE id=?', c.user.id), c) };
 });
 
@@ -558,6 +567,8 @@ route('GET', '/account/members', (c) => ({
   members: all('SELECT u.id, u.name, u.email, m.role, m.created_at, p.id role_id, p.name role_name FROM memberships m JOIN users u ON u.id=m.user_id LEFT JOIN perm_profiles p ON p.id=m.profile_id AND p.account_id=m.account_id WHERE m.account_id=? ORDER BY m.created_at', c.account.id)
     .map((m) => ({ ...m, can: [...roleIn(c.account.id, m.id).things] })),
   invites: can(c, 'team') ? all('SELECT i.id, i.email, i.role, i.created_at, p.id role_id, p.name role_name FROM invites i LEFT JOIN perm_profiles p ON p.id=i.profile_id AND p.account_id=i.account_id WHERE i.account_id=? AND i.accepted_at IS NULL', c.account.id) : [],
+  // "Members are managed by your directory" (scim.ts): the Team tab shows that line in place of Invite.
+  managed_by_directory: directoryManaged(c.account.id),
 }));
 
 route('POST', '/account/invites', async (c) => {
@@ -569,6 +580,8 @@ route('POST', '/account/invites', async (c) => {
   if (!isEmail(email)) throw bad('Enter a valid email address.');
   // Nobody is invited into an account that is about to be deleted.
   if (c.account.closing_at) throw bad(closingText(c.account, 'Nobody can be invited to it now'), 403);
+  // An account whose members come from its directory invites nobody by hand (scim.ts).
+  invitesAllowed(c.account.id);
   if (get('SELECT 1 x FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND u.email=?', c.account.id, email)) throw bad('That person is already on the team.');
   // An invitation is an email to an address the inviter typed, under names the inviter chose. So it has the rules an
   // envelope has: a confirmed address first, then the pause, the check on the names it prints and a daily limit of

@@ -1,6 +1,6 @@
 'use client';
 import { useId } from 'react';
-import { SEND_LATER_MAX_DAYS, SEND_LATER_MIN_MINUTES, atWords, fromLocalInput, sendAtLabel, sendAtProblem, toLocalInput, waitLine } from '@/lib/timing';
+import { SEND_LATER_MAX_DAYS, SEND_LATER_MIN_MINUTES, atWordsHere, fromLocalInput, sendAtLabel, sendAtProblem, toLocalInput, waitLine } from '@/lib/timing';
 import { type Ed } from './shared';
 
 // Send later, in step 3's More options (research/ux-notes.json "ds-timing"). Default: Send now. With a time chosen,
@@ -52,7 +52,7 @@ export function SendLaterChoice({ ed }: { ed: Ed }) {
               onChange={(e) => ed.patchEnv({ send_at: fromLocalInput(e.target.value) || ed.env.send_at })} />
           </label>
           <div id={`${id}-says`} className="muted small" aria-live="polite">
-            {at && !problem ? `It goes out by itself, soon after ${atWords(at)}. Until then you can change the time or send it now from its page.` : `${problem || 'Pick a day and a time.'} Nothing goes out until you do.`}
+            {at && !problem ? `It goes out by itself, soon after ${atWordsHere(at)}. Until then you can change the time or send it now from its page.` : `${problem || 'Pick a day and a time.'} Nothing goes out until you do.`}
           </div>
         </>
       )}

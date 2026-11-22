@@ -258,3 +258,11 @@ body.ed-pulling, body.ed-pulling * { cursor: grabbing !important; user-select: n
    So on touch screens every box that is typed in is 16px: the sign-in form, Settings, the editor. The rule is weak
    on purpose, so the boxes that sit on a document page keep the size of the page they are on. */
 @media (pointer: coarse) { input, select, textarea, label.f input, label.f select, label.f textarea { font-size: 16px; } }
+
+/* 44 px targets at every width, not only on touch screens (charter P11, build-simplicity-r6, TARGET_PX in
+   src/lib/simplicity.ts). :where() keeps the weight at zero, so a box that sits on a document page, a chip or any rule
+   that sets its own size still wins. Checkboxes and radios keep their size: their label is the target. */
+:where(.btn, .steps button, .side button, .tabs button, summary.btn) { min-height: 44px; }
+:where(.pub-toc a) { display: inline-flex; align-items: center; min-height: 44px; }
+:where(input:not([type='checkbox'], [type='radio'], [type='color'], [type='range'], [type='file'], [type='hidden']), select) { min-height: 44px; }
+:where(.btn.sm, .steps button) { min-width: 44px; }

@@ -163,12 +163,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {!closed && <PrintCheck subject={env.subject || ''} docs={docs} rcps={rcps} fields={fields} />}
       {!closed && <PaperCheck envelopeId={env.id} subject={env.subject || ''} docs={docs} sending={!isTpl && !correcting} />}
 
-      {/* The subject and the message, typed where the Send button is. */}
-      {!closed && <SendWords ed={ed} />}
       {closed && <div className="card"><h2>{env.subject || '(no subject)'}</h2></div>}
-
-      {/* The account's own references, such as a case number. Right under the title, so a required one is in view. Absent when the account has none (CustomFieldsStep.tsx). */}
-      {!closed && <CustomFieldsStep ed={ed} />}
       {/* One link above Who gets it: the signing page as these people will see it, in a new tab (SeeWhatTheySee.tsx). */}
       {!closed && <SeeWhatTheySee ed={ed} people={sorted} changed={changed} />}
       {correcting && result ? (
@@ -221,6 +216,11 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
         </div>
       )}
 
+      {/* Charter 2.3 order (STEP3_ORDER in src/lib/simplicity.ts): who gets it first, then the email they get, typed
+          right above the Send button. The account's own references (a case number) go with the title they belong to. */}
+      {!closed && <SendWords ed={ed} />}
+      {/* Absent when the account has none (CustomFieldsStep.tsx). */}
+      {!closed && <CustomFieldsStep ed={ed} />}
       {/* Reminders, the deadline, how dates are written and a payment link: asked once, here, and closed until asked for. */}
       <ReviewMore ed={ed} closed={!!closed} />
 

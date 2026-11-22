@@ -355,7 +355,7 @@ export async function importExport(c: any, zip: ZipFile[]): Promise<Report> {
 
   // Everything else, said by name with what to do.
   for (const m of data.members || []) if (m.email !== c.user.email) rep.not_imported.push({ what: 'Team member', name: `${m.name} <${m.email}> (${m.role})`, why: 'People are never added to a team without being asked. Invite them under Settings, Team.' });
-  for (const h of data.webhooks || []) rep.not_imported.push({ what: 'Webhook', name: h.url, why: 'Each webhook here needs a new signing secret. Add it again under Settings, API and webhooks.' });
+  for (const h of data.webhooks || []) rep.not_imported.push({ what: 'Webhook', name: h.url, why: 'Each webhook here needs a new signing secret. Add it again under Settings, Developers.' });
   for (const cw of data.clickwraps || []) rep.not_imported.push({ what: 'Click-to-agree terms', name: cw.name, why: `Its versions and ${cw.acceptances?.length || 0} acceptance(s) stay in the export file, which is their record. Publish the terms again here for new acceptances.` });
   for (const h of (data.retention?.holds || []).filter((x: any) => !x.lifted_at)) rep.not_imported.push({ what: 'Legal hold', name: h.matter || h.reason, why: 'Holds apply to envelopes on the server that holds them. Archived records brought in are not deleted by a schedule here.' });
   return rep;

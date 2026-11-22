@@ -654,7 +654,7 @@ onMailOutcome('signercode', (m, what) => {
   // English words (lang-mail); the English sentence is the fallback for an email written before.
   const code = row?.expires_at && (new RegExp(`<h1[^>]*>[^<]*?(?<![\\d:./-])(\\d{${SIGNER_CODE_DIGITS}})(?![\\d:./-])[^<]*</h1>`).exec(row.html || '')?.[1]
     || new RegExp(`(\\d{${SIGNER_CODE_DIGITS}}) is your code`).exec(row.html || '')?.[1]);
-  if (code) run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=?", code, code, m.id);
+  if (code) run("UPDATE emails SET html=col_replace(html, ?, '(removed)'), payload=col_replace(payload, ?, '(removed)') WHERE id=?", code, code, m.id);
 });
 const brandOf = (accountId: string) => {
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', accountId);
@@ -775,7 +775,7 @@ export async function requestCode(e: any, r: any, actor: Actor, by: 'text' | 'ca
       locale: L, envelopeId: e.id, brand: brandOf(e.account_id), replyTo: sender.email || undefined, fromName: sender.name, expiresAt: expires,
     });
     // Once the mail server has it, our own copy of the email no longer needs to hold the code.
-    if (delivery === 'sent') run("UPDATE emails SET html=replace(html, ?, '(removed)'), payload=replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE envelope_id=? AND lower(to_email)=lower(?) AND expires_at=?)", code, code, e.id, d.to, expires);
+    if (delivery === 'sent') run("UPDATE emails SET html=col_replace(html, ?, '(removed)'), payload=col_replace(payload, ?, '(removed)') WHERE id=(SELECT MAX(id) FROM emails WHERE envelope_id=? AND lower(to_email)=lower(?) AND expires_at=?)", code, code, e.id, d.to, expires);
   }
   run('UPDATE signer_codes SET delivery=? WHERE id=?', delivery, id);
   const to = `${r.name}: by ${how} to ${d.masked}`;

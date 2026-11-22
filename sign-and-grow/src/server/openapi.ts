@@ -20,6 +20,7 @@ import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUPS_PER_ACCOUNT } from '../lib
 import { WITNESS_RECORDS, WITNESS_NAMES_MAX } from '../lib/witness.ts';
 import { clickwrapPaths } from './openapi-clickwrap.ts';
 import { stampPaths, stampSchema } from './openapi-stamps.ts';
+import { fieldKindProps, fieldKindPaths, FIELD_KINDS_NOTE } from './openapi-fieldkinds.ts';
 import { agentPaths, STEP_ROLES_API } from './openapi-agents.ts';
 import { seclogPaths, securityEventSchema } from './openapi-seclog.ts';
 import { retentionPaths } from './openapi-retention.ts';
@@ -28,13 +29,16 @@ import { archivePaths } from './openapi-archive.ts';
 import { pdfaPaths, archiveFormatSchema } from './openapi-pdfa.ts';
 import { tplcombinePaths, TEMPLATE_IDS_PROP } from './openapi-tplcombine.ts';
 import { impactPaths } from './openapi-impact.ts';
+import { collectPaths } from './openapi-collect.ts';
 import { channelPaths, channelRecipientFields } from './openapi-channels.ts';
 import { tenantPolicyPaths } from './openapi-tenantpolicy.ts';
 import { orgPaths } from './openapi-orgs.ts';
 import { govBillingPaths, BILLING_MODE_NOTE } from './openapi-govbilling.ts';
 import { disclosurePaths } from './openapi-disclosure.ts';
 import { secPolicyPaths } from './openapi-secpolicy.ts';
+import { colCryptPaths } from './openapi-colcrypt.ts';
 import { orgSsoPaths } from './openapi-orgsso.ts';
+import { samlScimPaths, scimSchemas } from './openapi-samlscim.ts';
 import { ocrPaths, OCR_PROP } from './openapi-ocr.ts';
 import { reportPaths } from './openapi-reports.ts';
 import { customFieldPaths, customFieldsProp, documentFieldsProp, customListParams, webhookCustomProps } from './openapi-customfields.ts';
@@ -42,6 +46,7 @@ import { customFieldPaths, customFieldsProp, documentFieldsProp, customListParam
 import { permPaths } from './openapi-perm.ts';
 import { localeProp, rowLanguageProp, localePaths } from './openapi-locales.ts';
 import { readViewPaths } from './openapi-readview.ts';
+import { webformPaths } from './openapi-webforms.ts';
 import { STAMP_IS } from '../lib/stamps.ts';
 import { CONVERT_API, CONVERTED_SCHEMA, ORIGINAL_PATH } from './openapi-convert.ts';
 import { PAGES_PATH } from './openapi-pages.ts';
@@ -54,7 +59,7 @@ import { COUNTER_PATHS } from './openapi-counter.ts';
 // Files given to read with a document, not signed (openapi-supplements.ts).
 import { SUPPLEMENTAL_PROP, SUPPLEMENT_PATHS } from './openapi-supplements.ts';
 // "Each person sees only their files" (openapi-visibility.ts).
-import { OWN_DOCS_PROP, ALSO_SEES_PROP, OWN_COPY_PROP, OWN_COPIES_PROP } from './openapi-visibility.ts';
+import { OWN_DOCS_PROP, ALSO_SEES_PROP, OWN_COPY_PROP, OWN_COPIES_PROP, LIMITED_PEOPLE_PROP } from './openapi-visibility.ts';
 import { ONLY_WHEN_PROP } from './openapi-routing.ts';
 import { starterPaths } from './openapi-starters.ts';
 import { writePaths } from './openapi-writedoc.ts';
@@ -66,6 +71,8 @@ import { delegationPaths } from './openapi-delegation.ts';
 // Working for a colleague: shares, moving, sending for someone (src/server/openapi-shares.ts).
 import { sharesPaths, ON_BEHALF_OF } from './openapi-shares.ts';
 import { keyDatesPaths, keyDatesListParams } from './openapi-airepo.ts';
+import { phoneAppPaths } from './openapi-phoneapp.ts';
+import { offlinePaths } from './openapi-offline.ts';
 
 // A machine-readable description of the developer API, served at /api/openapi.json.
 // It is written by hand and kept honest by a test: every path here must exist in the router.
@@ -94,8 +101,9 @@ export function openapi() {
     servers: [{ url: `${baseUrl()}/api` }],
     security: [{ apiKey: [] }],
     components: {
-      securitySchemes: { apiKey: { type: 'http', scheme: 'bearer', description: 'An API key from Settings, API and webhooks. Send it as "Authorization: Bearer tsk_...". Every key has a scope. "send", the default, covers envelopes, templates, files, contacts, bulk sends, export and reports, and can read the webhook list and delivery log without the signing secrets. "admin" is chosen on purpose when the key is created and also covers account settings, invitations and webhooks; it only works while its creator is an admin. No key of either scope can create or revoke keys, remove a team member, hand over or close the account, see or change the ways its creator signs in (everything under /me/signin: a password link, Google or Microsoft), see or change two-step login (every route with two-step in its path), change the password of a login (POST /me/password, which asks for a two-step code), or change the plan, pay or refund. GET /me with a key leaves two-step login out ("two_step" is null, and the user has no "two_step"). Those answer 403 and need a person signed in to the app. A key that cannot be used answers 401 and says which it is: the header could not be read, the key is unknown or revoked, or the person who created it has left the account. While an account is being closed, or the person who created a key is closing their own login, the key answers 403 until that person signs in again. When a key stops because its creator left a team, by being removed or by closing their login, the admins of the team get an email that names it. Two-step login does not apply to keys: a key is never asked for a code, also not in an account that requires two-step login of its members, so treat a key like a password.' } },
+      securitySchemes: { apiKey: { type: 'http', scheme: 'bearer', description: 'An API key from Settings, Developers. Send it as "Authorization: Bearer tsk_...". Every key has a scope. "send", the default, covers envelopes, templates, files, contacts, bulk sends, export and reports, and can read the webhook list and delivery log without the signing secrets. "admin" is chosen on purpose when the key is created and also covers account settings, invitations and webhooks; it only works while its creator is an admin. No key of either scope can create or revoke keys, remove a team member, hand over or close the account, see or change the ways its creator signs in (everything under /me/signin: a password link, Google or Microsoft), see or change two-step login (every route with two-step in its path), change the password of a login (POST /me/password, which asks for a two-step code), or change the plan, pay or refund. GET /me with a key leaves two-step login out ("two_step" is null, and the user has no "two_step"). Those answer 403 and need a person signed in to the app. A key that cannot be used answers 401 and says which it is: the header could not be read, the key is unknown or revoked, or the person who created it has left the account. While an account is being closed, or the person who created a key is closing their own login, the key answers 403 until that person signs in again. When a key stops because its creator left a team, by being removed or by closing their login, the admins of the team get an email that names it. Two-step login does not apply to keys: a key is never asked for a code, also not in an account that requires two-step login of its members, so treat a key like a password.' }, scimToken: { type: 'http', scheme: 'bearer', description: 'For /scim/v2 only: the directory token made under Settings, Security, Members from your directory (POST /account/directory/token), "Authorization: Bearer tss_...". It is not an API key and an API key does not work there.' } },
       schemas: {
+        ...scimSchemas(),
         Health: { type: 'object', required: ['ok', 'checks', 'problems', 'mail'], properties: { ok: { type: 'boolean' }, checks: { type: 'object', description: 'Each of database, data_folder, disk_space, file_store and timer: "ok" or "failed".', additionalProperties: { type: 'string', enum: ['ok', 'failed'] } }, problems: { type: 'array', items: { type: 'string' }, description: 'What failed, in words. Empty when ok.' }, mail: { type: 'string', enum: ['configured', 'not configured'] } } },
         Error: { type: 'object', required: ['error'], properties: { error: { ...str, description: 'What went wrong and what to do about it, written for people.' }, request_id: { ...str, description: 'Also sent as the X-Request-Id header. Quote it when asking for help.' } } },
         File: { type: 'object', properties: { id: str, name: str, pages: { type: 'integer' }, size: { type: 'integer', description: `Bytes of the stored PDF. Every signer downloads all of it. From ${PHONE_SLOW_BYTES / 1e6} MB the app's editor tells the sender that it is slow to open on a phone.` },page_sizes: { type: 'array', items: { type: 'object', properties: { w: { type: 'number' }, h: { type: 'number' } } } }, is_scan: { type: 'boolean', description: 'true when at least one page is a picture with no text: a scan, a photo, or any PNG or JPEG upload. Such pages cannot be searched or read out by a screen reader.' }, scan_pages: { type: 'array', items: { type: 'integer' }, description: 'The pages that have no text, counted from 1. Empty when every page has text. Kept with the file and repeated on every document that uses it.' }, ocr: OCR_PROP, converted: { ...CONVERTED_SCHEMA } } },
@@ -150,7 +158,7 @@ export function openapi() {
         },
         Field: {
           type: 'object', required: ['document_id', 'type', 'page', 'x', 'y', 'w', 'h'],
-          description: 'Positions and sizes are fractions of the page, measured from its top left corner.',
+          description: `Positions and sizes are fractions of the page, measured from its top left corner. ${FIELD_KINDS_NOTE}`,
           properties: {
             id: { ...str, description: 'Optional.' }, document_id: str, recipient_id: { ...str, description: 'Not used for a "note" or a "strike": those belong to nobody and everyone is shown them, so a recipient_id sent with one is not read. A "stamp" without one is the sender\'s own stamp (see stamp_id); with one, that signer puts their own stamp on when they sign.' },
             stamp_id: { ...str, description: `For a "stamp" field with no recipient_id: the stamp of the account to print there (GET /stamps). Its picture is taken when the field is first saved with it and kept, so changing the stamp under Settings later changes no document; send "stamp_refresh": true to take its picture as it is now. Its "value" is then the SHA-256 of the picture. On a stamp field of a signer, "value" is the SHA-256 of the picture they put on, and is never taken from a request. A stamp prints like ink: multiplied into the page, slightly see-through, without a box. ${STAMP_IS}` },
@@ -181,6 +189,8 @@ export function openapi() {
               example: 'round({Quantity} * {Unit price}, 2)',
             },
             calc_num: { ...str, nullable: true, readOnly: true, description: 'For a calculated field: the number its "value" shows, written plainly with a dot before decimals and no grouping ("1234.5" for "1.234,50", "1.233" for "1,233"). Empty when it holds nothing.', example: '1234.5' },
+            // Same answer as, date from another date, text style (openapi-fieldkinds.ts).
+            ...fieldKindProps(),
           },
         },
         EnvelopeInput: {
@@ -190,6 +200,7 @@ export function openapi() {
             ordered: { type: 'boolean', description: 'Sign in routing_order instead of all at once.' }, reminder_days: { type: 'integer', minimum: 0, maximum: 60, description: `Days between automatic reminder emails to whoever has their turn and has not finished. 0 sends none. Left out, the account's own default applies, which is ${DEFAULT_REMINDER_DAYS} for an account made since reminders are on by default (it is "account.default_reminder_days" in GET /me). Send 0 if your own system does the reminding.` }, expire_days: { type: 'integer', minimum: 1, maximum: 365 },
             date_format: { type: 'string', enum: [...DATE_FORMATS], description: 'How every date on the documents is written: the date each person signs on, which is the calendar day in the time zone their device reports (failing that the sender\'s zone, then UTC), and any date picked in a date field (sent and stored as YYYY-MM-DD, a real calendar day: anything else, like 2026-02-31 or 03/04/2026, is refused with 400, from the sender as a prefilled value and from the signer, and nothing is saved). Left out, a new envelope starts with the account\'s own format, set under Settings, Sending, and failing that with D MMM YYYY (20 Nov 2026). An envelope made before 21 November 2026 that never chose one keeps YYYY-MM-DD.' },
             own_docs: OWN_DOCS_PROP,
+            limited_people: LIMITED_PEOPLE_PROP,
             documents: { type: 'array', items: ref('Document') }, recipients: { type: 'array', items: ref('Recipient') }, fields: { type: 'array', items: ref('Field') }, auto_tags: autoTagsProp(), custom_fields: customFieldsProp(),
           },
         },
@@ -320,7 +331,7 @@ export function openapi() {
       },
       '/envelopes/{id}/comments/{thread}/settle': { parameters: [idParam, { name: 'thread', in: 'path', required: true, schema: str }],
         post: { summary: 'Mark a thread as settled, or open it again', description: 'Only while the envelope is out. Send {"settled": false} to open it again; leave the body out to settle it. A new comment in a settled thread opens it again by itself. Each person can change one thread 10 times an hour (429 after; asking for the state it already has changes nothing and is not counted). The audit trail records who did it, at most once an hour for each thread, so it cannot be filled by changing it back and forth.', requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { settled: { type: 'boolean', default: true } } } } } }, responses: ok({ type: 'object' }) } },
-      '/powerforms': { get: { summary: 'List the public forms (PowerForms) of the account', description: 'Each form is a public link that anyone can open to fill in and sign a template. A form on a template the caller may not use is not listed, and "may_change" says whether the caller may pause, change or delete it: whoever may change its template. Making one (POST /powerforms) is for them as well. There is no call that returns a QR code: the app draws the code in the browser from "url", and any QR tool can do the same.', responses: ok({ type: 'object', properties: { powerforms: { type: 'array', items: { type: 'object', properties: { id: str, name: str, slug: str, url: { type: 'string', format: 'uri', description: 'The public address of the form, built from APP_URL like every link in an email. Whoever has it can open the form, fill it in and sign. It stops working while the form is paused and for good when it is deleted.' }, active: { type: 'integer', description: '0 while the form is paused.' }, shared_device: { type: 'boolean' }, signed: { type: 'integer', description: 'How many people finished.' }, open: { type: 'integer', description: 'How many are filling it in now.' }, reminders: { ...str, nullable: true, description: 'Whether the envelope each visitor starts reminds them by itself, in a sentence. It takes the setting of the template.' }, created_at: time } } } } }) } },
+      '/powerforms': { get: { summary: 'List the public forms (PowerForms) of the account', description: 'Each form is a public link that anyone can open to fill in and sign a template. A form on a template the caller may not use is not listed, and "may_change" says whether the caller may pause, change or delete it: whoever may change its template. Making one (POST /powerforms) is for them as well. There is no call that returns a QR code: the app draws the code in the browser from "url", and any QR tool can do the same.', responses: ok({ type: 'object', properties: { powerforms: { type: 'array', items: { type: 'object', properties: { id: str, name: str, slug: str, url: { type: 'string', format: 'uri', description: 'The public address of the form, built from APP_URL like every link in an email. Whoever has it can open the form, fill it in and sign. It stops working while the form is paused and for good when it is deleted.' }, active: { type: 'integer', description: '0 while the form is paused.' }, shared_device: { type: 'boolean' }, signed: { type: 'integer', description: 'How many people finished.' }, open: { type: 'integer', description: 'How many are filling it in now.' }, reminders: { ...str, nullable: true, description: 'Whether the envelope each visitor starts reminds them by itself, in a sentence. It takes the setting of the template.' }, questions: { type: 'integer', description: 'How many questions a visitor answers, one at a time, before they see the document with their answers in it and sign. 0: they go straight to the document.' }, created_at: time } } } } }) } },
       '/bulk': {
         get: { summary: 'List bulk send batches', description: 'A member gets the batches they sent, an admin gets every batch in the account. When a member is removed from the team, their batches pass to the same person as their envelopes.', responses: ok({ type: 'object', properties: { batches: { type: 'array', items: { type: 'object' } } } }) },
         post: {
@@ -430,6 +441,7 @@ export function openapi() {
       ...localePaths(),
       // Which way the signing page shows the document (src/server/openapi-readview.ts).
       ...readViewPaths(),
+      ...webformPaths(),
       // The security record of an account (src/server/openapi-seclog.ts).
       ...seclogPaths(),
       // The digital seal of completed PDFs, as an account's admins see it (src/server/routes-seal.ts).
@@ -448,6 +460,8 @@ export function openapi() {
       ...sharesPaths(),
       // Trees: what the signing page and the envelope page may say, and the account's switch (src/server/openapi-impact.ts).
       ...impactPaths(),
+      // A payment taken by card while signing, into the account's own Stripe account (src/server/openapi-collect.ts).
+      ...collectPaths(),
       ...channelPaths(),
       // The account's switches for trees on screens and AI answers in the help chat (src/server/openapi-tenantpolicy.ts).
       ...tenantPolicyPaths(),
@@ -457,14 +471,19 @@ export function openapi() {
       ...govBillingPaths(),
       // The account's custom fields, such as a case number (src/server/openapi-customfields.ts).
       ...customFieldPaths(),
+      ...fieldKindPaths(),
       // What each role can do, and groups of members (src/server/openapi-perm.ts).
       ...permPaths(),
       // The account's own consent text, and asking for paper instead (src/server/openapi-disclosure.ts).
       ...disclosurePaths(),
       // The sign-in rules of an account and the leaked-password check (src/server/openapi-secpolicy.ts).
       ...secPolicyPaths(),
+      // Whether this server encrypts what it stores (src/server/openapi-colcrypt.ts).
+      ...colCryptPaths(),
       // Single sign-on of an organisation and its email domains (src/server/openapi-orgsso.ts).
       ...orgSsoPaths(),
+      // SAML 2.0 sign-in and members from a directory (SCIM) (src/server/openapi-samlscim.ts).
+      ...samlScimPaths(),
       ...ocrPaths(),
       // Reports by template and sender, the monthly report email, and saved lists for Send to many (src/server/openapi-reports.ts).
       ...reportPaths(),
@@ -478,6 +497,10 @@ export function openapi() {
       ...aiAssistPaths(),
       // Key dates of completed agreements (src/server/openapi-airepo.ts).
       ...keyDatesPaths(),
+      // Sharing a file into the app saved on a phone, and Undo cleanup of photos (src/server/openapi-phoneapp.ts).
+      ...phoneAppPaths(),
+      // Signing in person without signal (src/server/openapi-offline.ts).
+      ...offlinePaths(),
       '/public/check/report': { post: { summary: 'Report the email a security code came from, without opening its signing link', description: 'Counts exactly like a report made on the signing page: enough different recipients reporting one account pause its sending until a person has looked. The code of an email whose document the sender has deleted since still works: the report is filed against the account that sent it, and the answer has "deleted": true. A report from the visitor of a public form is kept for a person to look at and does not count towards the pause, also after the owner deleted that start. The code of an email to a member of a signing group reports as that member, and nothing more is emailed to that member about the document ("mail_stopped": true), as when they report it on their signing page; the other members are not affected. Answers 404 for a code we do not recognise, and for a code whose document and account are both gone.', security: [], requestBody: body({ type: 'object', required: ['code'], properties: { code: str, reason: { type: 'string', enum: ABUSE_REASONS }, detail: str } }), responses: ok({ type: 'object', properties: { ok: { type: 'boolean' }, mail_stopped: { type: 'boolean' } } }) } },
     },
   };

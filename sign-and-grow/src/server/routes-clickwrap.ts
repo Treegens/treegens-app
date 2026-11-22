@@ -161,7 +161,7 @@ const forCaller = (c: Ctx, a: any) => (!a || seesVisitors(c) ? a : { ...a, ip: u
 // who did it, everywhere it is shown: GrowSigning did not see the click. Only with an API key: it is the website's server
 // that says who accepted, never a person in a browser, who could otherwise record "acceptances" for anybody.
 route('POST', '/clickwraps/:id/acceptances', async (c) => {
-  if (c.auth?.via !== 'api_key') throw bad('Acceptances are recorded through the API by your website\'s server, with an API key (Settings, API and webhooks), not from a browser. Nothing was recorded.', 403, { code: 'api_key_only' });
+  if (c.auth?.via !== 'api_key') throw bad('Acceptances are recorded through the API by your website\'s server, with an API key (Settings, Developers), not from a browser. Nothing was recorded.', 403, { code: 'api_key_only' });
   const cw = loadAgreement(c.params.id, c.account.id);
   const b = await c.body();
   const v = versionOf(cw);

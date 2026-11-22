@@ -379,7 +379,7 @@ export async function tellTeamsAboutKeys(who: { id: string; name: string }, keys
         'Anything that uses one of them now gets an error that says so. To carry on, create a new key and put it into the integration.',
         `Nothing is deleted before ${dayText(until)}. If ${who.name} signs in again before then, the keys work again. If not, they stop for good on that day. You are told by email when either happens.`]],
       back: [`${one ? 'works' : 'work'} again`, `${who.name} kept their login`, [`${who.name} signed in again, so their GrowSigning login is no longer being closed. The API keys ${who.name} created in ${team} work again from that moment:`, list,
-        'If you put a new key into an integration in the meantime, the old one is not needed any more. You can revoke it under Settings, API and webhooks.']],
+        'If you put a new key into an integration in the meantime, the old one is not needed any more. You can revoke it under Settings, Developers.']],
       stopped: ['stopped working', `${who.name} closed their login`, [`${who.name} closed their GrowSigning login, and it has now been deleted. The API keys ${who.name} created in ${team} have stopped for good:`, list,
         'Anything that still uses one of them gets an error that says the key has stopped. To carry on, create a new key and put it into the integration. The stopped keys stay on your list until you clear them.']],
     }[what] as [string, string, string[]];
@@ -554,7 +554,7 @@ export async function purgeClosedAccounts(): Promise<number> {
   // A file attached to such an email (the certificate of a click-to-agree acceptance) goes with it, unless something
   // else still points at it (removeUnusedBlobs).
   const oldMail = `envelope_id IS NULL AND ${NOT_WAITING} AND at < ?`, mailCut = new Date(Date.now() - MAIL_COPY_DAYS * 864e5).toISOString();
-  const oldFiles = attachedFiles(all(`SELECT payload FROM emails WHERE ${oldMail} AND payload LIKE '%"sha256"%'`, mailCut));
+  const oldFiles = attachedFiles(all(`SELECT payload FROM emails WHERE ${oldMail} AND col_find(payload) LIKE '%"sha256"%'`, mailCut));
   run(`DELETE FROM emails WHERE ${oldMail}`, mailCut);
   removeUnusedBlobs(oldFiles);
   // The fingerprint of a security code from a deleted document is kept for a year, then that goes too.

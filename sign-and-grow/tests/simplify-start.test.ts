@@ -217,7 +217,13 @@ test('2. Home has no start button of its own, and the old three are gone', () =>
   assert.match(read('src/components/editor/StepAdd.tsx'), /Add me|Add myself/);
   assert.deepEqual(home.match(/btn[^"`]*primary/g) || [], ["btn sm${n === 0 ? ' primary"]);
   // The empty Home says where the one start button is, by its name, for a wide screen and for a phone.
-  assert.match(home, /Press <b>\{NAV_START\.label\}<\/b><span className="sn-where-wide"> on the left<\/span><span className="sn-where-phone"> \(Send, in the bar at the bottom\)<\/span>/);
+  // (Its words come from en.json since lang-sender: tests/ds-lang-sender.test.ts.)
+  assert.match(home, /<span className="sn-where-wide">\{senderRich\(T\.lang, 'home\.empty\.wide', \{ button: <b>\{T\('nav\.start'\)\}<\/b> \}\)\}<\/span><span className="sn-where-phone">\{senderRich\(T\.lang, 'home\.empty\.phone', \{ button: <b>\{T\('nav\.start'\)\}<\/b> \}\)\}<\/span>/);
+  const words = JSON.parse(read('src/locales/en.json'));
+  // Each layout says it in one whole sentence a translator can reorder, with no "left" that a right-to-left page mirrors.
+  assert.match(words['home.empty.wide'], /^Press \{button\} at the top of the menu to start\./);
+  assert.match(words['home.empty.phone'], /^Press \{button\} \(Send, in the bar at the bottom\) to start\./);
+  assert.equal(words['nav.start'], NAV_START.label);
   // No total of paper, no fraction of a tree and no "..." while something loads.
   assert.ok(!/fmtTrees|of a tree|'…'/.test(home));
   // The shell: the one start button has a class of its own and is not a filled button of the page.
@@ -243,7 +249,7 @@ test('2. Recently completed: the newest completed documents of the account, each
   // The Download of a row is this address.
   const home = read('src/app/app/page.tsx');
   assert.match(home, /api\('\/envelopes\?box=completed&limit=5'\)/);
-  assert.match(home, /<li key=\{e\.id\} data-item="row">[\s\S]*?href=\{`\/api\/envelopes\/\$\{e\.id\}\/download`\} aria-label=\{`Download \$\{listName\(e\.subject\) \|\| 'the signed document'\}`\}>Download<\/a>/);
+  assert.match(home, /<li key=\{e\.id\} data-item="row">[\s\S]*?href=\{`\/api\/envelopes\/\$\{e\.id\}\/download`\} aria-label=\{T\('home\.download_label', \{ document: listName\(e\.subject\) \|\| T\('home\.the_signed'\) \}\)\}>\{T\('home\.download'\)\}<\/a>/);
   const pdf = await c.call('GET', `/envelopes/${first.id}/download`);
   assert.equal(pdf.status, 200);
   assert.match(String(pdf.headers?.get?.('content-type') || pdf.res?.headers.get('content-type') || 'application/pdf'), /pdf/);
@@ -271,14 +277,14 @@ test('3. the sidebar has nine entries in the charter\'s order and words, and Mor
   // One Help, drawn once, after the pages.
   const shell = read('src/components/AppShell.tsx');
   assert.equal((shell.match(/<HelpChatButton/g) || []).length, 1);
-  assert.match(shell, /<SideNav [^\n]*\/>\s*\{\/\*[^*]*\*\/\}\s*<HelpChatButton className="nav hc-open hc-nav">Help<\/HelpChatButton>/);
+  assert.match(shell, /<SideNav [^\n]*\/>\s*\{\/\*[^*]*\*\/\}\s*<HelpChatButton className="nav hc-open hc-nav">\{T\('shell\.help'\)\}<\/HelpChatButton>/);
   // The phone's bar is drawn with the shell, and its Send is the same start as the sidebar's.
   // (can: a role the team made without sending has no Send in the bar, src/lib/perm.ts; built-in roles: as before.)
   assert.match(shell, /<TabBar path=\{path\} menuOpen=\{open\} onMenu=\{\(\) => setOpen\(!open\)\}( can=\{me\.my_role\?\.custom \? me\.my_role\.can : null\})? \/>/);
   assert.equal((shell.match(/>Menu</g) || []).length, 0, 'one Menu on a phone: the one in the bar at the bottom');
   const nav = read('src/components/AppNav.tsx');
-  assert.match(nav, /<nav className="tabbar" aria-label="Main">/);
-  assert.match(nav, /className="tab-send" aria-label=\{NAV_START\.label\}/);
+  assert.match(nav, /<nav className="tabbar" aria-label=\{T\('nav\.main'\)\}>/);
+  assert.match(nav, /className="tab-send" aria-label=\{T\('nav\.start'\)\}/);
 });
 
 test('3. More is marked as the navigation\'s own, closed until opened, open by itself on a page inside it, remembered per person', () => {
@@ -326,7 +332,8 @@ test('3. no total of paper while it is tiny or loading: nothing stands in the si
   const shell = read('src/components/AppShell.tsx');
   assert.match(shell, /\{impact && totalWorthShowing\(impact\.account\.sheets\)\s*\? <div className="impact">/);
   assert.ok(!/'…'|fmtTrees|of a tree/.test(shell));
-  assert.match(shell, /by our estimate/);
+  assert.match(shell, /'shell\.impact'/);
+  assert.match(JSON.parse(read('src/locales/en.json'))['shell.impact'], /by our estimate/);
   // What the shell reads is there, and a new account is far under the line.
   const c = await signUp('Pia Paper', 'pia.paper@start.test', '198.51.100.32');
   const impact = (await c.get('/impact')).data;
@@ -567,10 +574,10 @@ test('repair: the phone menu keeps the bar on top with Close in place of Menu, c
   const shell = read('src/components/AppShell.tsx');
   const nav = read('src/components/AppNav.tsx');
   const css = read('src/app/styles/start.css');
-  assert.match(shell, /<aside id="app-menu" className=\{`side\$\{open \? ' open' : ''\}`\} aria-label="Menu">/);
+  assert.match(shell, /<aside id="app-menu" className=\{`side\$\{open \? ' open' : ''\}`\} aria-label=\{T\('shell\.menu'\)\}>/);
   assert.ok(!shell.includes('Close menu'), 'the way out is the button that opened it, not one at the end of the list');
   assert.match(shell, /e\.key !== 'Escape'/);
-  assert.match(nav, /aria-expanded=\{menuOpen\} aria-controls="app-menu"[^>]*>.*\{menuOpen \? 'Close' : 'Menu'\}/);
+  assert.match(nav, /aria-expanded=\{menuOpen\} aria-controls="app-menu"[^>]*>.*\{menuOpen \? T\('nav\.close'\) : T\('nav\.menu'\)\}/);
   assert.deepEqual(IN_TAB_BAR, ['/app', '/app/envelopes', '/app/inbox']);
   assert.match(css, /\.side\.open \{ inset: 0 0 calc\(64px \+ env\(safe-area-inset-bottom\)\) 0;[^}]*z-index: 54; \}/, 'the open menu ends above the bar (z-index 55)');
   assert.match(css, /\.side\.open \.in-bar \{ display: none; \}/);
@@ -581,10 +588,10 @@ test('repair: the phone menu keeps the bar on top with Close in place of Menu, c
 
 test('repair: a skip link is the first stop of the app, each page has its own tab title, and sign-up puts the keyboard in the code box', () => {
   const shell = read('src/components/AppShell.tsx');
-  assert.match(shell, /<a href="#app-main" className="app-skip" aria-label="Skip to content" \/>\s*<div className="mobilebar">/);
+  assert.match(shell, /<a href="#app-main" className="app-skip" aria-label=\{T\('shell\.skip'\)\} \/>\s*<div className="mobilebar">/);
   assert.match(read('src/app/styles/start.css'), /\.app-skip::before \{ content: 'Skip to content'; \}\s*\.app-skip:focus \{ top: 8px; opacity: 1; \}/);
   assert.match(shell, /<main className="main" id="app-main" tabIndex=\{-1\}>/);
-  assert.match(shell, /const want = pageTitle\(path\);/);
+  assert.match(shell, /const want = pageTitle\(path, \(n\) => \(n\.key \? senderT\(lang, n\.key\) : n\.label\)\);/);
   const titles: [string, string][] = [
     ['/app', 'Home · GrowSigning'], ['/app/envelopes', 'Documents · GrowSigning'], ['/app/envelopes/env_1', 'Documents · GrowSigning'],
     ['/app/envelopes/new', 'Send a document · GrowSigning'], ['/app/envelopes/env_1/edit', 'Send a document · GrowSigning'],

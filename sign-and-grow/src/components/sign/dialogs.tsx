@@ -355,11 +355,12 @@ export function ReviewDialog({ me, sender, items, sig, ini, usesSig, usesIni, ap
 // ---- Typing on a phone -----------------------------------------------------------------------
 
 // Instead of typing into a box a few millimetres tall, the field opens here with room to see what you type.
-export function FieldSheet({ field, value, dateFormat, onChange, onDone, onNext }: { field: any; value: string; dateFormat?: string | null; onChange: (v: string) => void; onDone: () => void; onNext?: () => void }) {
+export function FieldSheet({ field, value, dateFormat, onChange, onDone, onNext, again }: { field: any; value: string; dateFormat?: string | null; onChange: (v: string) => void; onDone: () => void; onNext?: () => void; again?: string }) {
   const input = useRef<any>(null);
   const hint = useId();
   const name = fieldName(field);
-  const problem = problemWith(field, value, dateFormat);
+  // `again`: a number refused at Finish because it reads two ways (src/lib/twoways.ts), until it is typed again.
+  const problem = problemWith(field, value, dateFormat) || again || '';
   // The sheet stays open while moving from one field to the next, so move focus by hand.
   useEffect(() => input.current?.focus({ preventScroll: true }), [field.id]);
   const shared = { dir: 'auto' as const, ref: input, 'aria-label': name, 'aria-describedby': hint, 'aria-required': !!field.required, 'aria-invalid': !!problem, className: 'sg-big-input', value, maxLength: inputLimit(field), 'data-autofocus': true } as const;
@@ -384,7 +385,7 @@ export function FieldSheet({ field, value, dateFormat, onChange, onDone, onNext 
         )}
         {problem
           ? <p id={hint} className="sg-sheet-hint bad" role="alert">{problem}</p>
-          : <p id={hint} className="sg-sheet-hint">{field.type === 'date' && value ? `On the document this date is written as ${formatDateValue(value, dateFormat)}.` : field.type === 'number' ? `${amountHint(field) ? `${amountHint(field)} ` : ''}${NUMBER_HINT}${field.required ? '' : ' Optional.'}` : `${lengthHint(field, value) ? `${lengthHint(field, value)} ` : ''}${field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.'}`}</p>}
+          : <p id={hint} className="sg-sheet-hint">{field.from_name && value === field.from_name && field.name_check ? `${field.name_check}. We took it from the name the sender typed. ` : ''}{field.type === 'date' && value ? `On the document this date is written as ${formatDateValue(value, dateFormat)}.` : field.type === 'number' ? `${amountHint(field) ? `${amountHint(field)} ` : ''}${NUMBER_HINT}${field.required ? '' : ' Optional.'}` : `${lengthHint(field, value) ? `${lengthHint(field, value)} ` : ''}${field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.'}`}</p>}
         <div className="actions">
           <button type="button" className={`btn${onNext ? '' : ' primary'}`} onClick={onDone}>Done</button>
           {onNext && <button className="btn primary">Next</button>}

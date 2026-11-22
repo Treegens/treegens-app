@@ -1,4 +1,5 @@
 'use client';
+import { NEEDS_YOU_LINE, ALWAYS_REACH } from '@/lib/simplicity';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, useLoad, fmtDate, oops, toast, Modal, Leaf } from '@/components/ui';
@@ -22,18 +23,23 @@ import { ArchiveSettings } from '@/components/settings/ArchiveSettings';
 import { SealStatus } from '@/components/settings/SealStatus';
 import { AgreementPlan } from '@/components/settings/AgreementPlan';
 import { ChannelsStatus } from '@/components/settings/ChannelsStatus';
+import { TakePayments } from '@/components/settings/TakePayments';
 import { ArchiveFormat } from '@/components/settings/ArchiveFormat';
 import { ExportImport } from '@/components/settings/ExportImport';
 import { TenantSwitches } from '@/components/settings/TenantSwitches';
 import { AiSettings } from '@/components/settings/AiSettings';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
 import { LanguageSettings } from '@/components/settings/LanguageSettings';
+import { ScreenLanguageCard } from '@/components/settings/ScreenLanguage';
 // The account's own custom fields, such as a case number (src/components/settings/CustomFieldSettings.tsx).
 import { CustomFieldSettings } from '@/components/settings/CustomFieldSettings';
+// The team's saved fields and the text style new fields start with (src/components/settings/SavedFieldSettings.tsx).
+import { SavedFieldsCard } from '@/components/settings/SavedFieldSettings';
 import { SecurityLog } from '@/components/settings/SecurityLog';
 import { securityOnlyHook } from '@/lib/seclog';
 import { SecurityPolicy } from '@/components/settings/SecurityPolicy';
 import { OrgSso } from '@/components/settings/OrgSso';
+import { OrgDirectory } from '@/components/settings/OrgDirectory';
 import { Organisation } from '@/components/settings/Organisation';
 // Sections, cards, "Saved" next to what saved, and the one More options of a section (research/ux-charter.md, 2.2).
 import { sectionsFor, landingFor, closingCount, nextTab, KEYS_AND_TWO_STEP, MEMBER_READS, awayInTeam, AWAY_ANCHOR } from '@/lib/settingsnav';
@@ -56,6 +62,7 @@ import { CounterSettings } from '@/components/settings/CounterSettings';
 // Someone signs for me while I am away: the admins' switch (Team, More options) and the card (Away and sharing).
 import { Delegate, DelegationSwitch } from '@/components/settings/Delegate';
 import { Shares, MoveDocuments } from '@/components/settings/Shares';
+import { SOURCE_LOCALE as DIR_LOCALE, t as dirT } from '@/lib/i18n';
 import '../../styles/counter.css';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
@@ -86,9 +93,12 @@ function Profile() {
           <label className="f"><span>Job title</span><input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></label>
           <label className="f"><span>Company</span><input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} /></label>
         </div>
-        <div className="row between wrap"><span className="muted small">{me.user.email} · {me.user.email_verified ? 'confirmed' : 'not confirmed yet'}</span><span className="row">{said}<button className="btn" onClick={() => save(f)}>Save profile</button></span></div>
+        {/* The address is said once, in the Email address card right below (simplicity.ts, emailLine). */}
+        <div className="row wrap" style={{ justifyContent: 'flex-end' }}><span className="row">{said}<button className="btn" onClick={() => save(f)}>Save profile</button></span></div>
       </div></Card>
       <Card><EmailAddressCard me={me} /></Card>
+      {/* Language of your screens: only once a second sender language ships (ScreenLanguage.tsx). */}
+      <ScreenLanguageCard />
       <Card><div className="card">
         <h2 style={{ marginBottom: 4 }}>Your signature</h2>
         <p className="muted small">Saved here, it is offered when a document is sent to {me.user.email}. You can always change it while signing.</p>
@@ -141,6 +151,8 @@ function Security() {
       {me.role !== 'member' && mayDo(me, 'settings') && <Card><SecurityPolicy /></Card>}
       {/* Single sign-on and Your email domains (OrgSso.tsx). Draws its own card, and nothing without FILE_ENCRYPTION_KEY. */}
       {me.role !== 'member' && mayDo(me, 'settings') && <OrgSso />}
+      {/* Members from your directory (OrgDirectory.tsx): drawn only once single sign-on works. */}
+      {me.role !== 'member' && mayDo(me, 'settings') && <OrgDirectory />}
       {me.role !== 'member' && mayDo(me, 'settings') && <Card><SecurityLog /></Card>}
     </div>
   );
@@ -231,7 +243,8 @@ function SignInWays() {
 
 const NOTIFY: [string, string, string][] = [
   ['completed', 'When everyone has finished', 'One email with the signed document. Most people only need this one.'],
-  ['problems', 'When something needs you', 'Someone declined, an email to a signer could not be delivered, a request sits unopened, a link could not be opened, or the deadline is close or has passed. A few things reach you whatever you choose here, because only you can act on them: a signer passed the document on, changed how their name is written, or asked for more time or for an access code.'],
+  // One line under the switch (charter 2.2); what reaches you anyway is said once under all of them (simplicity.ts).
+  ['problems', 'When something needs you', NEEDS_YOU_LINE],
   ['signed', 'Each time someone signs', 'One email per person as they finish. Off by default to keep your inbox quiet.'],
   ['viewed', 'Each time someone opens it', 'Useful when you want to know it arrived. Off by default.'],
 ];
@@ -260,7 +273,7 @@ function Notifications() {
       ))}
       {/* Owners and admins of a team that has sent something: last month's report by email (reports/MonthlyReport.tsx). */}
       <MonthlyReport />
-      <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>People you send to get one request, the reminders you set on the document, and one copy when it is complete. They can turn reminders off for themselves.</p>
+      <p className="muted small" style={{ marginTop: 12, marginBottom: 0 }}>{ALWAYS_REACH} People you send to get one request, the reminders you set on the document, and one copy when it is complete. They can turn reminders off for themselves.</p>
     </div>
   );
 }
@@ -275,7 +288,7 @@ function Account() {
   return (
     <div className="card">
       <h2 style={{ marginBottom: 12 }}>Account and branding</h2>
-      <label className="f"><span>Account name <span className="hint">(shown to recipients)</span></span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+      <label className="f"><span>Account name <span className="hint">(shown to the people you send to)</span></span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
       <div className="grid g2">
         <label className="f"><span>Brand colour <span className="hint">(emails and the signing screen)</span></span><input type="color" value={f.brand_color} onChange={(e) => setF({ ...f, brand_color: e.target.value })} /></label>
         <div className="f"><span style={{ display: 'block', marginBottom: 5, fontSize: 13, fontWeight: 600 }}>Logo <span className="hint">(PNG or JPEG, under 200 KB)</span></span>
@@ -286,7 +299,7 @@ function Account() {
           </div>
         </div>
       </div>
-      <p className="muted small">Emails to your recipients come from "{me.user.name} via GrowSigning" and replies go straight to you.</p>
+      <p className="muted small">Emails to the people you send to come from "{me.user.name} via GrowSigning" and replies go straight to you.</p>
       <div className="row"><button className="btn" onClick={() => api('/account', { method: 'PATCH', body: f }).then(() => (saved(), me.reload())).catch(oops)}>Save</button>{said}</div>
       {/* Switches that save by themselves, set apart from the Save button above: 'Trees on screens and emails', 'Trees on
           the signing record' under it, and, where a model answers the help chat, 'AI answers in the help chat'. */}
@@ -327,10 +340,12 @@ function Team() {
     <div className="stack">
       {admin && members.length > 0 && adminCount < 2 && (
         <div className="notice warn">
-          <b>This account depends on one person.</b> If you lose access to {me.user.email}, nobody else can manage it. Invite a second admin below: an admin can manage the team, the plan and every document. Only the owner can hand the whole account to someone else (Make owner, below), so do that before you move on.
+          <b>This account depends on one person.</b> If you lose access to {me.user.email}, nobody else can manage it. {d?.managed_by_directory ? dirT(DIR_LOCALE, 'directory.team_one_person') : 'Invite a second admin below.'} An admin can manage the team, the plan and every document. Only the owner can hand the whole account to someone else (Make owner, below), so do that before you move on.
         </div>
       )}
-      {admin && (
+      {/* With "Members are managed by your directory" on (OrgDirectory.tsx) one line takes Invite's place. */}
+      {admin && d?.managed_by_directory && <p className="card muted small" data-feature="ds-sso-saml-scim" style={{ margin: 0 }}>{dirT(DIR_LOCALE, 'directory.team_managed')}{me.my_role?.custom ? '' : ` ${dirT(DIR_LOCALE, 'directory.team_where')}`}</p>}
+      {admin && !d?.managed_by_directory && (
         <form className="card row wrap set-invite" data-item="card" style={{ alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); api('/account/invites', { body: inv }).then(() => (toast('Invitation sent'), setInv({ email: '', role: 'member' }), reload())).catch(oops); }}>
           <label className="f grow" style={{ margin: 0 }}><span>Invite by email</span><input type="email" required value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} style={{ minHeight: 44 }} /></label>
           <label className="f" style={{ margin: 0 }}><span>Role</span><RoleSelect value={inv.role} roles={roles} giver={giver} onChange={(v) => setInv({ ...inv, role: v })} /></label>
@@ -413,7 +428,7 @@ function Team() {
               <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
                 {theirKeys.map((k) => <li key={k.id}><b>{k.name}</b> <span className="mono">{k.prefix}…</span>, {k.last_used_at ? `last used ${fmtDate(k.last_used_at)}` : 'never used'}</li>)}
               </ul>
-              Anything that uses one of them starts failing. If an integration depends on it, create a replacement key on the API and webhooks tab first. All admins and {remove.name} get an email that names these keys.
+              Anything that uses one of them starts failing. If an integration depends on it, create a replacement key on the Developers tab first. All admins and {remove.name} get an email that names these keys.
             </div>
           )}
           <label className="f"><span>Hand their documents to</span>
@@ -1061,9 +1076,11 @@ export default function Settings() {
       {tab === 'away' && me.delegation && <Delegate />}
       {tab === 'account' && <Card><Account /></Card>}
       {tab === 'account' && <LanguageSettings />}
-      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><OwnDocsDefault /><CustomFieldSettings /><MoreOptions><Disclosure /></MoreOptions></div>}
+      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><OwnDocsDefault /><CustomFieldSettings /><MoreOptions><Disclosure /><SavedFieldsCard /></MoreOptions></div>}
       {/* Admins, where the operator set up WhatsApp or calls with a code: one read-only Connections card. */}
       {tab === 'sending' && <ChannelsStatus />}
+      {/* Admins, where the operator set up Stripe Connect: the account's own Stripe account (TakePayments.tsx). */}
+      {tab === 'sending' && <TakePayments />}
       {tab === 'team' && <Team />}
       {/* A member's Away and sharing: under Team, so they keep at most 4 sections (src/lib/settingsnav.ts). */}
       {tab === 'team' && awayInTeam(me.role, away) && <section id={AWAY_ANCHOR} aria-labelledby={`${AWAY_ANCHOR}-h`} className="stack" style={{ marginTop: 16 }}><h2 id={`${AWAY_ANCHOR}-h`} style={{ margin: 0 }}>Away and sharing</h2><Shares />{me.delegation && <Delegate />}</section>}

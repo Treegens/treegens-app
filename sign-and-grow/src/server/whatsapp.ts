@@ -5,7 +5,8 @@ import { normalPhone, maskPhone, PHONE_HOW } from '../lib/checks.ts';
 import { whatsappProvider, waDailyPerAccount, fillWa, WA_AGREE, isStopWord, isStartWord, waStatusWord } from '../lib/channels.ts';
 import { LINK_TEXTS_PER_NUMBER_DAY } from '../lib/policy.ts';
 import { phoneKey, TEXT_RETRY_MINUTES } from './sms.ts';
-import { audit, emailRefusal, signUrl, senderOf, notifySender, type Actor } from './envelopes.ts';
+import { audit, emailRefusal, signUrl, senderOf, notifySender, loadEnvelope, type Actor } from './envelopes.ts';
+import { forPerson } from './visibility.ts';
 import { reporterKey } from './bysender.ts';
 
 // The signing link by WhatsApp, for someone who lives in WhatsApp. Built like sms.ts on purpose: every message is
@@ -242,7 +243,8 @@ export async function waCompleted(e: any, r: any): Promise<void> {
     if (!r?.wa_link) return;
     const fresh = get('SELECT * FROM envelopes WHERE id=?', e.id);
     if (fresh?.status !== 'completed') return;
-    await waFor(fresh, r.id, 'done');
+    // Their own subject, never the name of a file they were not shown (visibility.ts).
+    await waFor(forPerson(loadEnvelope(e.id), r.id), r.id, 'done');
   } catch (err: any) {
     console.error('[whatsapp] could not send the completed link', err?.message);
   }

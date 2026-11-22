@@ -1,0 +1,17 @@
+/* More kinds of field (src/lib/fieldkinds.ts) on the signing page: a drawing, and the Approve and Decline buttons a
+   sender placed on a page. Drawn small on a phone, each still takes a tap 44 px across (24 px on a large screen),
+   like a tick box, from an invisible area behind it. The same buttons are always in the bar too. */
+.sg-doc .field.fill.sg-kbtn, .sg-doc .field.fill.sg-draw { overflow: visible; }
+.sg-doc .field.fill.sg-kbtn::before, .sg-doc .field.fill.sg-draw::before { content: ''; position: absolute; z-index: -1; left: 50%; top: 50%; width: max(100%, 24px); height: max(100%, 24px); transform: translate(-50%, -50%); }
+@media (pointer: coarse) {
+  .sg-doc .field.fill.sg-kbtn::before, .sg-doc .field.fill.sg-draw::before { width: max(100%, 44px); height: max(100%, 44px); }
+}
+.sg-doc .field.fill.sg-draw img { width: 100%; height: 100%; object-fit: contain; }
+.sg-doc .field.fill.sg-kbtn-no { background: #fff; }
+/* A line of words under a field: the rule of a date worked out from another date, and "Check your first name"
+   while a name part still holds what was taken from the person's name. Seen without focus, on every screen. */
+.sg-doc .field.fill.sg-knoted { overflow: visible; }
+.sg-doc .field .sg-knote { position: absolute; top: 100%; left: 0; margin-top: 1px; padding: 0 0.35em; border-radius: 3px; background: rgba(255, 255, 255, 0.9); color: #3b4a42; font-size: max(calc(var(--pw, 800px) * 0.0125), 7px); font-weight: 400; font-style: normal; font-family: system-ui, sans-serif; line-height: 1.3; width: max-content; max-width: 100vw; white-space: nowrap; pointer-events: none; z-index: -1; }
+/* A date that fills in by itself asks nothing of the signer: grey and dashed, not the yellow of a field to fill. */
+.sg-doc .field.fill.sg-dfrom { background: rgba(240, 242, 241, 0.75); border-style: dashed; border-color: #9aa59f; }
+.sg-doc .field.fill.sg-dfrom .sg-val.ph { color: #4f5b55; }

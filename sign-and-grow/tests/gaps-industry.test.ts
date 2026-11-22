@@ -1079,10 +1079,10 @@ test('the screens show the payment link only where the rules say, and every page
   const help = read('src/app/help/page.tsx');
   assert.match(help, /<QA id="payment-link" q="Can someone pay a deposit when they sign\?">/);
   assert.match(help, /\{payNotYet\(PAID_TRUST_DAYS\)\}/);
-  assert.match(read('src/app/security/page.tsx'), /<Point title="No payment collection\.">GrowSigning never takes money for a sender\./);
+  assert.match(read('src/app/security/page.tsx'), /<Point title="No money passes through us\.">GrowSigning never takes money for a sender\./);
   const readme = read('README.md');
   assert.doesNotMatch(readme, /payments collected during signing/, 'the README no longer lists it as missing');
-  assert.match(readme, /Payments are not collected: a trusted account can\s+show a link to its own payment page after Finish/);
+  assert.match(readme, /GrowSigning never holds money: a trusted account can\s+show a link to its own payment page after Finish/);
   // Plain words: no em dash, and no promise about the law.
   for (const t of [pl.payForSigner('X'), pl.payNotUs('X'), pl.PAY_FOR_SENDER, pl.payNotYet(14), ...Object.values(pl.PAY_KINDS), card, choice, read('src/server/routes-paylink.ts')])
     assert.doesNotMatch(t, /\u2014|is valid|will hold up|guarantee/i);

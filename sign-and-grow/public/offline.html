@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#134a2c">
+<title>No connection · GrowSigning</title>
+<style>
+  :root { --paper: #f7f5ef; --ink: #1d2a22; --deep: #134a2c; --muted: #55625a; }
+  @media (prefers-color-scheme: dark) { :root { --paper: #111813; --ink: #e9efe9; --deep: #7cc79a; --muted: #a9b5ad; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: var(--paper); color: var(--ink); font: 17px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 26rem; text-align: center; }
+  img { width: 56px; height: 56px; border-radius: 12px; }
+  h1 { font-size: 22px; margin: 16px 0 8px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  button { min-height: 44px; min-width: 44px; padding: 10px 22px; margin-top: 8px; border: 0; border-radius: 10px; background: var(--deep); color: var(--paper); font: inherit; font-weight: 600; cursor: pointer; }
+  button:focus-visible, a:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  a { display: inline-flex; align-items: center; min-height: 44px; color: var(--deep); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <img src="/brand/icon-192.png" alt="">
+  <h1>No internet connection</h1>
+  <p>GrowSigning needs a connection to open your documents.</p>
+  <p>Check your Wi-Fi or mobile data, then try again.</p>
+  <button type="button" onclick="location.reload()">Try again</button>
+  <p id="in-person" hidden><a href="/in-person">Open the document you got ready to sign in person</a></p>
+  <script>
+    // Shown only when this device holds a document got ready to sign without signal (src/components/sign/offlineInPerson.ts).
+    try { indexedDB.databases().then(function (l) { if (l.some(function (d) { return d.name === 'growsigning-in-person'; })) document.getElementById('in-person').hidden = false; }).catch(function () {}); } catch (e) {}
+  </script>
+</main>
+</body>
+</html>

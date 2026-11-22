@@ -80,8 +80,8 @@ export function SigningGroups() {
       <div className="sn-cardhead sn-contacts-head">
         <div>
           <h2 id="sn-groups-h">Signing groups <span className="muted sn-count">{data ? groups.length : ''}</span></h2>
-          <p className="muted small sn-groups-intro">A group is one recipient made of {GROUP_MIN_MEMBERS} to {GROUP_MAX_MEMBERS} people, any one of whom can act for it, such as &ldquo;HR team&rdquo;. {GROUP_RULE}</p>
-          {data && !admin && <p className="muted small sn-groups-intro">Only an admin of your team can add or change groups. You can choose them as a recipient on your own envelopes and templates.</p>}
+          <p className="muted small sn-groups-intro">A group is one person on a document, made of {GROUP_MIN_MEMBERS} to {GROUP_MAX_MEMBERS} people, any one of whom can act for it, such as &ldquo;HR team&rdquo;. {GROUP_RULE}</p>
+          {data && !admin && <p className="muted small sn-groups-intro">Only an admin of your team can add or change groups. You can add them as a person on your own documents and templates.</p>}
         </div>
         {admin && !draft && <button id="sn-group-new" type="button" className="btn sn-group-btn" onClick={() => open(blank(), 'sn-group-new')}>New group</button>}
       </div>
@@ -148,7 +148,7 @@ export function SigningGroups() {
             reload();
           }}>
           <p>Envelopes already sent to {removing.name} are not affected: they keep the members they went out with, and those people can still sign.</p>
-          {removing.used_by > 0 && <p><b>{plural(removing.used_by, 'draft or template names', 'drafts and templates name')} this group.</b> They cannot be sent until you choose another group or a person for that recipient.</p>}
+          {removing.used_by > 0 && <p><b>{plural(removing.used_by, 'draft or template names', 'drafts and templates name')} this group.</b> They cannot be sent until you choose another group or a person in its place.</p>}
         </ConfirmDialog>
       )}
     </section>

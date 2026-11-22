@@ -171,7 +171,7 @@ function Use({ data, showKey, setShowKey, reload }: { data: any; showKey: boolea
       </div>
       <p className="muted small" style={{ marginTop: 6 }}>Keep the key on your server, like a password. Never put it in a page or an app.</p>
       <h3 style={{ marginTop: 10 }}>4. From your server, through the API</h3>
-      <p className="small">With an API key (Settings, API and webhooks). An acceptance you send is marked everywhere as recorded by your website, because we did not see the click.</p>
+      <p className="small">With an API key (Settings, Developers). An acceptance you send is marked everywhere as recorded by your website, because we did not see the click.</p>
       <div className="cw-snippet">{`POST /api/clickwraps/${id}/acceptances\n{"person": {"id": "c_123", "name": "Ada Lovelace", "email": "ada@example.com"}, "version": ${data.agreement.current_version || 1}, "page_url": "https://your.site/signup"}\n\nGET /api/clickwraps/${id}/status?person_id=c_123\n→ {"accepted": true, "counts_from_version": ..., "latest": {...}}`}</div>
       <p className="muted small" style={{ marginBottom: 0 }}>{data.law}</p>
     </section>

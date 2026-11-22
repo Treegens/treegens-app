@@ -1,5 +1,6 @@
 import { PDFDocument } from 'pdf-lib';
 import { all, get, run, readBlob } from './db.ts';
+import { seal } from './colcrypt.ts';
 import { now, baseUrl, bad, str, id, isEmail, sha256, fmtCode, HttpError } from './util.ts';
 import { sendMail, type MailStatus } from './mail.ts';
 import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnvelope, type Actor } from './envelopes.ts';
@@ -16,6 +17,7 @@ import { stampEvidence } from './stamps.ts';
 import { STAMP_IS } from '../lib/stamps.ts';
 import { originalsEvidence } from './converted.ts';
 import { ORIGINALS_README } from '../lib/convert.ts';
+import { scanPhotosEvidence } from './scanphotos.ts';
 import { dropSignatureFields } from './sealpdf.ts';
 import { evidenceFiles as headStampFiles } from './auditstamp.ts';
 import { counterEvidence } from './counter.ts';
@@ -327,7 +329,7 @@ async function tellOperatorsOfDispute(e: any, p: Disputer, who: string, detail: 
     `It came from internet address ${actor.ip || 'unknown'}, ${onWhat(actor.ua)}${actor.ua ? ` (${String(actor.ua).slice(0, 300)})` : ''}. Only you see this: the sender does not.`,
     'The envelope is marked as disputed and the sender was told, with what they wrote. Nothing was changed or deleted. While this alert is open the sender cannot delete the envelope for good; closing it here closes the dispute.'];
   run("INSERT INTO support_requests (id, email, name, topic, message, account_id, envelope_id, status, at) VALUES (?,?,?,'not-me',?,?,?,'open',?)",
-    id('sup'), to[0] || 'dispute-alert@localhost', ALERT, `${subject}\n\n${lines.join('\n')}`.slice(0, 5000), e.account_id, e.id, now());
+    id('sup'), to[0] || 'dispute-alert@localhost', ALERT, seal('support_requests.message', `${subject}\n\n${lines.join('\n')}`.slice(0, 5000)), e.account_id, e.id, now());
   for (const t of to) await sendMail({ to: t, subject, heading: subject, lines, ...(isEmail(p.email) ? { replyTo: p.email! } : {}), cta: { label: 'Open the queue', url: `${baseUrl()}/app/operator` } });
   if (!to.length) console.error(`[disputes] NOBODY WAS TOLD BY EMAIL (set SUPPORT_EMAIL or OPERATOR_EMAILS). Envelope ${e.id} was disputed; it is in the operator queue.`);
   return to.length > 0;
@@ -440,6 +442,9 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   // The Word file or the like each document was made from, as the sender uploaded it (converted.ts).
   const originals = originalsEvidence(e, notes);
   for (const o of originals) add(o.name, o.data);
+  // The photo the sender's browser says each cleaned page was made from, before cleanup (scanphotos.ts).
+  const photos = scanPhotosEvidence(e, notes);
+  for (const f of photos.files) add(f.name, f.data);
   // The time stamp over the chain head at completion, with the command that checks it (auditstamp.ts).
   const headStamp = headStampFiles(e.id);
   for (const f of headStamp.files) add(f.name, f.data);
@@ -458,6 +463,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     'consent.txt           the words each person agreed to before signing, in the version their audit line names (for a line from before versions were recorded, the wording shown then, marked as inferred).',
     ...(stamps.length ? [`stamps/               every stamp on the pages as a PNG picture, named by the start of its SHA-256, with stamps/index.csv saying who put it on, where and when. The audit trail names each one by its full SHA-256. ${STAMP_IS}`] : []),
     ...(originals.length ? [ORIGINALS_README] : []),
+    ...photos.readme,
     ...headStamp.readme,
     ...counter.readme,
     ...(ownText ? ['consent-own-text.txt  the sender\'s own consent text: which version each person was shown when they agreed, and the exact words of each of those versions.'] : []),

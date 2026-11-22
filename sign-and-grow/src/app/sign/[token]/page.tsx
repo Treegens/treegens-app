@@ -8,6 +8,7 @@ import { AdoptSignature, type SavedMark } from '@/components/SignaturePad';
 import { formatDate, formatDateValue, deviceZone } from '@/lib/dates';
 import { consentWording } from '@/lib/policy';
 import { NUMBER_HINT } from '@/lib/numbers';
+import { twoWaysUnderField } from '@/lib/twoways';
 import { Shell, StateCard, Sender, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
 import { TreeLine, SignerDone } from '@/components/impact/SignerTrees';
 import { PurgedLink } from '@/components/sign/PurgedLink';
@@ -21,6 +22,9 @@ import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
 import { useLiveLogic } from '@/components/sign/logic';
 import { keepTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
+// Drawing, Approve and Decline on the page, first and last name, dates from dates, same answer, text style (fieldkinds).
+import { kindField, useDrawing } from '@/components/sign/KindFields';
+import { spreadLinked, lookCss, lookOf } from '@/lib/fieldkinds';
 import { docUrl, allOnScreen, finishProblem, inputLimit, amountHint, lengthHint, boxRuleHint } from '@/components/sign/fields';
 import { strikeClass } from '@/lib/strike';
 import { pageBoxes } from '@/components/sign/pdfText';
@@ -29,6 +33,7 @@ import { isConnectionError, isAlreadyFinished, finishLanded, finishNotSent, fini
 import { CANNOT_REACH, sameFieldAgain } from '@/components/sign/stuck';
 import { SIGNING_ONLINE } from '@/lib/mobile';
 import { PayLink } from '@/components/sign/PayLink';
+import { PayNow, PayAhead } from '@/components/sign/PayNow';
 import { NoEmailDone, NoEmailWait } from '@/components/sign/NoEmail';
 import { moreTimeWords, laterWords } from '@/lib/bysender';
 // "Questions and comments": the one way to ask the sender something, and the note before Finish (Comments.tsx).
@@ -76,6 +81,7 @@ import { useAwayCheck } from '@/components/sign/away';
 import { isPreviewToken, PREVIEW_NOTHING } from '@/lib/preview';
 import { PreviewProblem } from '@/components/sign/PreviewProblem';
 import { previewT } from '@/components/sign/PreviewBand';
+import { doneLine, doneActions } from '@/lib/simplicity';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 type Open = '' | 'menu' | 'more' | 'name' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback' | 'help' | 'paper';
@@ -131,11 +137,16 @@ export default function SignPage() {
   const [askedCode, setAskedCode] = useState<'' | 'busy' | 'asked'>('');
   const [formError, setFormError] = useState('');
   const [finishError, setFinishError] = useState('');
+  // A number refused at Finish because it reads two ways (src/lib/twoways.ts): said under that field until it is retyped.
+  const [askAgain, setAskAgain] = useState<{ id: string; value: string; text: string } | null>(null);
   const [finished, setFinished] = useState<any>(null);
   const [save, setSave] = useState<Save>('idle');
   const [muted, setMuted] = useState(false);
   // 'code': the "stop reminders" link was followed to a document behind a one-time code, which is asked for first.
   const [muteNote, setMuteNote] = useState<'' | 'done' | 'failed' | 'code'>('');
+  // A Finish that waits for a payment ("pay before finishing", sign/PayNow.tsx): the Pay screen instead of the document.
+  const [payWait, setPayWait] = useState(false);
+  const waitPay = useCallback(() => setPayWait(true), []);
   const [moreTime, setMoreTime] = useState<'' | 'busy' | 'asked'>('');
   // After "Finish later": where the way back is, with "Stop reminder emails" next to it (it left Other actions).
   const [later, setLater] = useState('');
@@ -353,7 +364,9 @@ export default function SignPage() {
   const dateText = formatDate(new Date(), env?.date_format, deviceZone());
   const byId = (id: string | null | undefined) => fields.find((f) => f.id === id);
 
-  const set = useCallback((id: string, v: string) => setValues((s) => ({ ...s, [id]: v })), []);
+  // Typing in a field fills the fields that share its answer too (spreadLinked in src/lib/fieldkinds.ts).
+  const set = useCallback((id: string, v: string) => setValues((s) => spreadLinked(ownFields, s, id, v)), [ownFields]);
+  const drawing = useDrawing(set);
   const pickRadio = useCallback((f: any) => setValues((s) => {
     const n = { ...s };
     fields.filter((x) => x.type === 'radio' && groupKey(x) === groupKey(f)).forEach((x) => (n[x.id] = ''));
@@ -635,11 +648,23 @@ export default function SignPage() {
       // Said in "Check before you finish", opened for it when Finish went straight through: the message stays next to
       // the button, and a Finish that did not get through is sent again from there (see the effect by autosave).
       const say = (said: string) => (me.role !== 'viewer' ? (setOpen('review'), setFinishError(said)) : toast(said, true));
-      if (isAlreadyFinished(e)) {
+      if (e?.code === 'pay_first') {
+        // Nothing is signed yet: the Pay screen, and the part completes once Stripe confirms (sign/PayNow.tsx).
+        setOpen('');
+        setPayWait(true);
+        window.scrollTo({ top: 0 });
+      } else if (isAlreadyFinished(e)) {
         // Sent again after a Finish that went through without its answer reaching us: done, not a mistake.
         landed();
         if (!finishPending) toast('You had already finished this document, so nothing more was sent.');
         await load();
+      } else if (e?.code === 'number_two_ways' && fields.some((f: any) => f.id === e?.data?.field_id)) {
+        // Said under the field itself, which is opened, not in the dialog away from it.
+        const f = fields.find((x: any) => x.id === e.data.field_id);
+        setAskAgain({ id: f.id, value: values[f.id] || '', text: twoWaysUnderField(msg) });
+        if (view === 'text') toast(msg, true);
+        afterClose.current = f;
+        setOpen('');
       } else if (e?.code === 'form_waits') {
         // A public form with no signature free: the server's own sentence says what happens next. Not sent again.
         setFinishPending(false);
@@ -757,6 +782,7 @@ export default function SignPage() {
       {/* The help chat opens from Help in the top bar, never floating over Finish or the fields (components/HelpChat.tsx). */}
       {open === 'help' && <HelpChat screen="signing" link={token} code={data.help_code} who={me.role !== 'inperson' && me.email ? { name: me.name, email: me.email } : null} actions={() => helpActs.current} onClose={() => setOpen('')} />}
       {open === 'ask' && <CommentsDialog base={base} sender={sender} documents={data.documents || []} onClose={() => setOpen('')} />}
+      {drawing.dialog}
       {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : isStepRole(me.role) ? 'Decline' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); tellFrame('declined'); load(); }} />}
       {open === 'paper' && <PaperDialog base={base} sender={sender} lang={data.language?.locale || 'en'} note={groupDeclineText(data)} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
       {open === 'name' && <NameDialog name={me.name} approving={me.role === 'approver'} onRename={rename} onClose={() => setOpen('')} />}
@@ -915,14 +941,14 @@ export default function SignPage() {
             {/* No address for someone whose link the sender passed on: nothing is emailed, so nothing is promised. */}
             {/* At a service counter the copy goes by email only: the link used there is closed (CounterCopy). */}
             {env.counter && inPerson && <CounterCopy allDone={allDone} />}
-            {!(env.counter && inPerson) && <>{me.link_by_sender ? <NoEmailDone sender={sender.name} allDone={allDone} /> : <p>
-              {allDone
-                ? inPerson ? `The completed document, with its certificate, has been emailed to ${sender.name}. Download your own copy here.` : <>A copy has been emailed to {myEmail}. It includes a certificate with the full record of who signed and when.</>
-                : inPerson ? `${sender.name} will get the completed document by email once everyone has finished. You can download it as it stands now.` : <>Others still need to finish. We will email the completed document to {myEmail} as soon as they have.</>}
+            {!(env.counter && inPerson) && <>{me.link_by_sender ? <NoEmailDone sender={sender.name} allDone={allDone} /> : <p style={{ overflowWrap: 'anywhere' }}>
+              {doneLine({ allDone, inPerson, sender: sender.name, email: me.email })}
             </p>}</>}
+            {/* Download is the one main button (charter 2.6); opening it in the browser is the plain second one (simplicity.ts). */}
             {!(env.counter && inPerson) && <div className="row wrap sg-actions">
-              <a className="btn primary lg" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="eye" /> {allDone ? 'View completed document' : 'View document so far'}<span className="sg-vh"> (opens in a new tab)</span></a>
-              <a className="btn lg" href={downloadUrl}><Icon name="download" /> Download PDF</a>
+              {doneActions(allDone).map((a) => a.key === 'download'
+                ? <a key={a.key} className="btn primary lg" href={downloadUrl}><Icon name="download" /> {a.label}</a>
+                : <a key={a.key} className="btn lg" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="eye" /> {a.label}<span className="sg-vh"> (opens in a new tab)</span></a>)}
             </div>}
           </StateCard>
           {/* On the screen facing the person at a service counter: hand it back, then Next person (counter.ts). */}
@@ -933,6 +959,7 @@ export default function SignPage() {
           {/* A signer with a witness: what became of them, and another one after "I was not there" (sign/Witness.tsx). */}
           <WitnessAfter me={me} base={base} onNamed={load} />
           {acts && <PayLink base={base} />}
+          {acts && <PayNow base={base} token={token} />}
           {env.next_person && <NextPerson slug={env.next_person} email={myEmail} />}
         </div>
         {dialogs}
@@ -1159,8 +1186,12 @@ export default function SignPage() {
     const wrong = !auto && !!problemWith(f, value, env.date_format);
     const cls = `field fill sg-f${auto || ok ? ' done' : ''}${f.id === nextField?.id ? ' next' : ''}${isBox(f) ? ' box' : ''}${wrong ? ' bad' : ''}${auto ? ' sg-auto' : ''}`;
     const common = { id: `f-${f.id}`, className: cls, style: { ...pos(f), zIndex: layered.get(f.id) } };
+    // The sender's text style for this field: font, colour and bold (src/lib/fieldkinds.ts).
+    Object.assign(common.style, lookCss(lookOf(f.look), data?.brand?.brand_color));
     const name = fieldName(f);
     const need = f.required ? ', required' : ', optional';
+    const kind = kindField(f, { common, name, need, value, values, fields, role: me.role, dateFormat: env.date_format, sheet: usesSheet(f), openSheet: (x) => goTo(x), set, onDraw: drawing.open, onApprove: pressFinish, onDecline: go('decline') });
+    if (kind) return kind;
 
     // A stamp field: what is pressed is here, the stamp itself is printed in the page's ink layer under it (inkLayer).
     if (f.type === 'stamp')
@@ -1234,7 +1265,8 @@ export default function SignPage() {
     // dir="auto": the direction comes from what is typed, so right-to-left text starts at the right edge of its box.
     // A character limit is said under the box while the person is in it (sign.css .sg-doc-count), so typing that stops is never a mystery.
     const count = lengthHint(f, value);
-    const shared = { dir: 'auto' as const, 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong, 'aria-describedby': count ? `f-${f.id}-count` : undefined, placeholder: name + (f.required ? ' *' : ''), value, maxLength: inputLimit(f), title: wrong ? problemWith(f, value, env.date_format) : f.type === 'number' ? amountHint(f) || NUMBER_HINT : undefined };
+    const again = askAgain && askAgain.id === f.id && askAgain.value === value ? askAgain.text : '';
+    const shared = { dir: 'auto' as const, 'aria-label': name, 'aria-required': !!f.required, 'aria-invalid': wrong || !!again, 'aria-describedby': [count && `f-${f.id}-count`, again && `f-${f.id}-again`].filter(Boolean).join(' ') || undefined, placeholder: name + (f.required ? ' *' : ''), value, maxLength: inputLimit(f), title: wrong ? problemWith(f, value, env.date_format) : f.type === 'number' ? amountHint(f) || NUMBER_HINT : undefined };
     return (
       <div key={f.id} {...common}>
         {isMulti(f)
@@ -1242,6 +1274,7 @@ export default function SignPage() {
           : <input {...shared} type={f.type === 'date' ? 'date' : 'text'} inputMode={f.type === 'number' ? 'decimal' : undefined} onChange={(e) => set(f.id, e.target.value)}
               {...(f.type === 'date' ? { autoFocus: dateOpen === f.id, onFocus: () => setDateOpen(f.id), onBlur: () => setDateOpen(null) } : {})} />}
         {count && <span id={`f-${f.id}-count`} className="sg-doc-count" aria-live="polite">{count}</span>}
+        {again && <span id={`f-${f.id}-again`} className="sg-doc-again" role="alert">{again}</span>}
       </div>
     );
   };
@@ -1312,6 +1345,9 @@ export default function SignPage() {
   const sheetField = byId(sheet);
   const sheetTarget = sheetField && nextAfter(sheetField.id);
 
+  // Pay, for a document that asks for a payment before finishing: after the last signature, before Done.
+  if (payWait && acts) return <Shell data={data} footer={report}>{notice}<PayNow base={base} token={token} onBack={() => setPayWait(false)} onDone={load} />{dialogs}</Shell>;
+
   return (
     <Shell data={data} bar={bar} bottom={bottom} footer={report} titleIsHeading live={live} helpInNewTab onHelp={headHelp}>
       {notice}
@@ -1336,6 +1372,7 @@ export default function SignPage() {
       )}
       {me.role === 'inperson' && <div className="notice warn sg-top">In-person signing for <b>{me.name}</b>. Hand them the device now. {SIGNING_ONLINE}</div>}
       <WitnessNotice me={me} />{/* who witnesses, or what the witness confirmed (sign/Witness.tsx) */}
+      {acts && <PayAhead base={base} onWaiting={waitPay} />}{/* a payment this document asks for, said before signing (sign/PayNow.tsx) */}
       <p className="sg-guide" id="sg-guide">
         {also.left > 0 && !fieldsNext ? also.guide
           : !acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
@@ -1380,7 +1417,7 @@ export default function SignPage() {
       {env.expires_at && <p className="muted small center sg-envelope">Open until {yourMoment(env.expires_at, deviceZone())}</p>}
 
       {sheetField && (
-        <FieldSheet field={sheetField} dateFormat={env.date_format} value={values[sheetField.id] || ''} onChange={(v) => set(sheetField.id, v)} onDone={() => setSheet(null)} onNext={sheetTarget ? () => sheetNext(sheetField.id) : undefined} />
+        <FieldSheet field={sheetField} dateFormat={env.date_format} value={values[sheetField.id] || ''} again={askAgain && askAgain.id === sheetField.id && askAgain.value === (values[sheetField.id] || '') ? askAgain.text : ''} onChange={(v) => set(sheetField.id, v)} onDone={() => setSheet(null)} onNext={sheetTarget ? () => sheetNext(sheetField.id) : undefined} />
       )}
       {signed && (
         <SignedFieldDialog kind={signed.type} image={(signed.type === 'signature' ? sig : ini) || ''} onClose={() => setSignedField(null)}

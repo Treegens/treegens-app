@@ -18,6 +18,7 @@ import { fail } from '@/components/sender/feedback';
 import { AfterSend } from '@/components/sender/AfterSend';
 import { PrintNotice } from '@/components/sender/PrintNotice';
 import { PayLinkNote } from '@/components/sender/PayLinkNote';
+import { CollectNote } from '@/components/sender/CollectNote';
 import { readAllowance, voidCostLine } from '@/components/sender/allowance';
 import { ownLink } from '@/components/sender/OwnLink';
 import { Disputed } from '@/components/sender/Disputed';
@@ -33,6 +34,7 @@ import { ChangeTimeDialog, scheduledWords, pausedWords, sendNow, pauseIt, resume
 // Working for a colleague: the line at the top, and Move to a colleague (src/components/sender/Colleagues.tsx).
 import { SharedNote, MoveDialog, moveAllowed } from '@/components/sender/Colleagues';
 import { shareAllows, MOVE_LABEL, commentsReadOnly } from '@/lib/shares';
+import { seesLine, SEES_REST } from '@/lib/owndocs';
 
 export default function EnvelopeDetail() {
   const { id } = useParams<{ id: string }>();
@@ -366,6 +368,8 @@ export default function EnvelopeDetail() {
 
       {/* The link to the sender's own payment page, when there is one: who was shown it and who pressed it. */}
       <PayLinkNote envelopeId={e.id} closed={!isTpl && e.status !== 'draft' && e.status !== 'sent'} />
+      {/* A payment by card: each person's state as Stripe reported it (components/sender/CollectNote.tsx). */}
+      {!isTpl && <CollectNote envelopeId={e.id} />}
 
       {/* Folded, and closed every time the page opens: comments, history, files, details, checks. */}
       {/* Questions and comments: the threads, who waits for an answer, answer and settle (components/sender/Comments.tsx). */}
@@ -374,6 +378,9 @@ export default function EnvelopeDetail() {
       <Fold title="Files" count={nFiles}>
         {nFiles === 0 && <p className="muted small">{e.purged_at ? `Its files were deleted on ${longDate(e.purged_at)}.` : 'No file has been added yet.'}</p>}
         {e.documents.map((d: any) => <div key={d.id} className="row between" style={{ padding: '5px 0' }}><span className="truncate">{d.name}{d.supplemental ? <span className="muted small" data-feature="ds-supplements">, to read, not sign</span> : null}</span><span className="muted small" style={{ whiteSpace: 'nowrap' }}>{d.pages} page{d.pages === 1 ? '' : 's'}</span></div>)}
+        {/* "Each person sees only their files": who was shown which (limited_people, visibility.ts). Only when it is on. */}
+        {(e.limited_people || []).map((p: any) => <p key={p.id} className="muted small" data-feature="ds-visibility" style={{ margin: '4px 0' }}>{seesLine(p)}</p>)}
+        {(e.limited_people || []).length > 0 && (e.recipients || []).some((r: any) => !e.limited_people.some((p: any) => p.id === r.id)) && <p className="muted small" data-feature="ds-visibility" style={{ margin: '4px 0' }}>{SEES_REST}</p>}
         <p className="muted small">
           {pages} page{pages === 1 ? '' : 's'} · {e.fields.length} field{e.fields.length === 1 ? '' : 's'} · {e.ordered ? 'signed in order' : 'everyone at once'}{out && !e.expires_at ? ' · no closing date' : ''}
         </p>

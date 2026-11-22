@@ -8,11 +8,12 @@
 import { useState } from 'react';
 import { api, useLoad, toast } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
-import { SOURCE_LOCALE, t } from '@/lib/i18n';
+import { senderT as t, senderError } from '@/lib/senderlang';
+import { useSenderLangHere } from '@/components/senderLang';
 
-const ui = SOURCE_LOCALE;
 
 export function ArchiveFormat() {
+  const ui = useSenderLangHere();
   const me = useMe();
   const admin = me.role !== 'member';
   const [d, reload] = useLoad<any>(() => (admin ? api('/account/pdfa').catch(() => null) : Promise.resolve(null)), [admin]);
@@ -29,7 +30,7 @@ export function ArchiveFormat() {
       await api('/account/pdfa', { method: 'PUT', body: { on } });
       setSaved(true);
     } catch (e: any) {
-      toast(`${e?.message || 'That was not saved.'} Try again in a moment.`, true);
+      toast(`${senderError(ui, e)} ${t(ui, 'settings.try_again')}`, true);
     }
     reload();
     setBusy(false);
@@ -41,7 +42,7 @@ export function ArchiveFormat() {
         <input type="checkbox" role="switch" checked={!!d.on} aria-busy={busy} aria-labelledby="pdfa-title" aria-describedby="pdfa-hint" onChange={(e) => flip(e.target.checked)} />
         <span>
           <span className="muted" id="pdfa-hint">{t(ui, 'pdfa.setting.hint')}</span>{' '}
-          <span role="status" className="small" style={{ color: 'var(--green)' }}>{saved ? 'Saved' : ''}</span>
+          <span role="status" className="small" style={{ color: 'var(--green)' }}>{saved ? t(ui, 'settings.saved') : ''}</span>
         </span>
       </label>
       {d.notice && <p className="notice warn" style={{ margin: '12px 0 0' }}>{d.notice}</p>}

@@ -69,11 +69,13 @@ export const withKeptText = (row: any) => (row ? { ...row, text: keptText(row) }
  * opened in memory from the sealed texts of this account only (of one sender, for a member). Texts kept in the clear
  * (before a key was set, or with none) are found by the query itself. Like the query, case does not matter.
  */
-export function sealedTextHits(accountId: string, kind: string, words: string[], senderId?: string): string[][] {
+export function sealedTextHits(accountId: string, kind: string, words: string[], senderId?: string | string[]): string[][] {
   if (!words.length) return [];
   const hits = words.map(() => new Set<string>());
+  // Several senders: a member's own documents and those colleagues share with them today (shares.ts).
+  const senders = senderId == null ? null : Array.isArray(senderId) ? senderId : [senderId];
   const rows = all(`SELECT d.envelope_id eid, f.id, f.text_sealed FROM documents d JOIN files f ON f.id=d.file_id JOIN envelopes e ON e.id=d.envelope_id
-    WHERE e.account_id=? AND e.kind=?${senderId ? ' AND e.sender_id=?' : ''} AND f.text_sealed IS NOT NULL`, accountId, kind, ...(senderId ? [senderId] : []));
+    WHERE e.account_id=? AND e.kind=?${senders ? ' AND e.sender_id IN (SELECT value FROM json_each(?))' : ''} AND f.text_sealed IS NOT NULL`, accountId, kind, ...(senders ? [JSON.stringify(senders)] : []));
   const lower = words.map((w) => w.toLowerCase());
   // A file several envelopes use (a template and what was sent from it) is opened once.
   const open = new Map<string, string>();

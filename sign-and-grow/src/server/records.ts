@@ -23,6 +23,7 @@ import { can } from './perm.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { all, get, run, tx, dataDir } from './db.ts';
+import { seal } from './colcrypt.ts';
 import { bad, id, now, str, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
 import { audit, type Actor } from './envelopes.ts';
@@ -478,7 +479,7 @@ function dropBlobs(shas: string[]) {
       // Someone's own completed copy (visibility.ts).
       || get('SELECT 1 x FROM final_copies WHERE sha256=?', sha)
       // An email still carrying it as an attachment; its text may name the fingerprint, which holds nothing.
-      || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%"sha256":"${sha}"%`) || get('SELECT 1 x FROM clickwrap_versions WHERE file_sha256=?', sha)
+      || get('SELECT 1 x FROM emails WHERE col_find(payload) LIKE ?', `%"sha256":"${sha}"%`) || get('SELECT 1 x FROM clickwrap_versions WHERE file_sha256=?', sha)
       // A document brought in from an export or from DocuSign (importer.ts) keeps its file.
       || get('SELECT 1 x FROM imported_files WHERE sha256=?', sha)) continue;
     fs.rmSync(path.join(dataDir(), 'blobs', sha), { force: true });
@@ -517,7 +518,7 @@ function removeDocuments(e: any): string[] {
   run("UPDATE fields SET value=NULL, stamp_meta=NULL WHERE envelope_id=? AND type='stamp'", e.id);
   for (const s of all('SELECT id, answers, copy_sha256 FROM earlier_signatures WHERE envelope_id=?', e.id)) {
     shas.push(s.copy_sha256);
-    run('UPDATE earlier_signatures SET copy_sha256=NULL, answers=? WHERE id=?', JSON.stringify((parse(s.answers) as any[]).filter((a) => a?.type !== 'attachment' && a?.type !== 'stamp')), s.id);
+    run('UPDATE earlier_signatures SET copy_sha256=NULL, answers=? WHERE id=?', seal('earlier_signatures.answers', JSON.stringify((parse(s.answers) as any[]).filter((a) => a?.type !== 'attachment' && a?.type !== 'stamp'))), s.id);
   }
   // The signed PDF: its fingerprint stays (purged_sha256), so Verify a document can still answer for the file.
   shas.push(e.final_sha256);
@@ -529,12 +530,12 @@ function removeDocuments(e: any): string[] {
   // be sent (archivemail.ts). The files they carried are added to the list.
   forgetArchiveCopies(e.id, shas);
   // Our stored copies of the emails keep their words but not their attachments.
-  for (const m of all("SELECT id, payload FROM emails WHERE envelope_id=? AND payload LIKE '%\"sha256\"%'", e.id)) {
+  for (const m of all("SELECT id, payload FROM emails WHERE envelope_id=? AND col_find(payload) LIKE '%\"sha256\"%'", e.id)) {
     let p: any = null;
     try {
       p = JSON.parse(m.payload);
     } catch {}
-    if (p?.attachments?.length) (shas.push(...p.attachments.map((a: any) => a.sha256)), run('UPDATE emails SET payload=? WHERE id=?', JSON.stringify({ ...p, attachments: [] }), m.id));
+    if (p?.attachments?.length) (shas.push(...p.attachments.map((a: any) => a.sha256)), run('UPDATE emails SET payload=? WHERE id=?', seal('emails.payload', JSON.stringify({ ...p, attachments: [] })), m.id));
   }
   return shas;
 }

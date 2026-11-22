@@ -26,6 +26,8 @@ import { partyOf, sees, threadsOf, newThread, newComment, type Viewer } from './
 import { holdsDevice } from './handlive.ts';
 import { senderRefusal, batchRefusal, signerLure, settleLimit, noteSettle, sameAgain, FILTERED, type Audience } from './commentrules.ts';
 import { pinWords, type Pin } from '../lib/comments.ts';
+// The sender's digest in the sender's language (lang-sender).
+import { senderLocaleOf, st, namesIn, pinIn } from './senderlocale.ts';
 import { COMMENT_MAX_CHARS, COMMENTS_PER_PERSON, COMMENT_BURST, COMMENT_BURST_MINUTES, COMMENT_MAIL_MINUTES, COMMENTS_NOT_SIGNED } from '../lib/policy.ts';
 
 const brandOf = (accountId: string) => {
@@ -376,20 +378,31 @@ function senderDigest(e: any, sender: any, pending: any[]): Mail {
   const visitor = authors.map((_, i) => visitorOf(e, people[i]));
   const one = authors.length === 1 && typeof reaches[0] !== 'string' && !visitor[0] ? authors[0] : null;
   const docs = e.documents.length;
+  // In the sender's language (lang-sender), every line from en.json. A reason we only have in English words keeps
+  // the whole email English, so it is in one language.
+  const L = reaches.every((x) => typeof x !== 'string' || REASON_KEY[x]) ? senderLocaleOf(e) : 'en';
+  const why = (name: string, x: string) => (REASON_KEY[x] ? st(L, `mail.sender.comments.not_mailed.${REASON_KEY[x]}`, { name }) : digestLine(name, x));
   return {
-    to: sender.email, subject: `Questions and comments: ${e.subject}`, heading: `${joinNames(authors.map((a) => a.name))} wrote about "${e.subject}"`,
+    to: sender.email, subject: st(L, 'mail.sender.comments.subject', { subject: e.subject }), heading: st(L, 'mail.sender.comments.heading', { names: namesIn(L, authors.map((a) => a.name)), subject: e.subject }),
     lines: [
-      ...pending.map((p) => said(p, docs)),
-      reaches.every((x) => typeof x !== 'string') ? 'Answer on the envelope page. They see your answer on their signing page, and we email it to them.' : 'Answer on the envelope page. They see your answer on their signing page.',
-      ...authors.flatMap((a, i) => (typeof reaches[i] === 'string' ? [digestLine(a.name, reaches[i] as string)] : [])),
-      ...authors.flatMap((a, i) => (visitor[i] ? [`${a.name} came through your public form and typed that name${a.email ? ' and address' : ''} themselves. We have not checked ${a.email ? 'them' : 'it'}, so this email does not come from them and has no reply address.`] : [])),
-      ...(one ? [`Replying to this email writes to ${one.name} (${one.email}) directly, and that reply is not kept with the document.`] : []),
-      COMMENTS_NOT_SIGNED,
-      `We send at most one email like this every ${COMMENT_MAIL_MINUTES} minutes for each document. Anything written after it comes in the next one.`,
+      ...pending.map((p) => saidIn(L, p, docs)),
+      st(L, reaches.every((x) => typeof x !== 'string') ? 'mail.sender.comments.answer_mailed' : 'mail.sender.comments.answer_page'),
+      ...authors.flatMap((a, i) => (typeof reaches[i] === 'string' ? [why(a.name, reaches[i] as string)] : [])),
+      ...authors.flatMap((a, i) => (visitor[i] ? [st(L, a.email ? 'mail.sender.comments.visitor_address' : 'mail.sender.comments.visitor_name', { name: a.name })] : [])),
+      ...(one ? [st(L, 'mail.sender.comments.reply', { name: one.name, email: one.email })] : []),
+      L === 'en' ? COMMENTS_NOT_SIGNED : st(L, 'mail.sender.comments.not_signed'),
+      st(L, 'mail.sender.comments.every', { minutes: String(COMMENT_MAIL_MINUTES) }),
     ],
-    cta: { label: 'Answer on the envelope page', url: `${baseUrl()}/app/envelopes/${e.id}#comments` },
-    envelopeId: e.id, brand: brandOf(e.account_id), ...(one ? { replyTo: one.email, fromName: one.name } : {}),
+    cta: { label: st(L, 'mail.sender.comments.button'), url: `${baseUrl()}/app/envelopes/${e.id}#comments` },
+    envelopeId: e.id, brand: brandOf(e.account_id), ...(one ? { replyTo: one.email, fromName: one.name } : {}), ...(L !== 'en' ? { locale: L } : {}),
   };
+}
+// The reasons the digest has words for in every language, by the key of those words.
+const REASON_KEY: Record<string, string> = { [R_INPERSON]: 'inperson', [R_NO_ADDRESS]: 'no_address', [R_SPAM]: 'spam', [R_BOUNCED]: 'bounced' };
+/** One comment in the digest, in `L`: who wrote it, for whom, where on the document, then their words as written. */
+function saidIn(L: string, p: any, docs: number): string {
+  const where = p.document_id ? pinIn(L, { document_id: p.document_id, document: p.document, page: p.page, x: p.x, y: p.y }, docs) : '';
+  return `${st(L, `mail.sender.comments.by_${p.private ? 'private' : 'everyone'}${where ? '_about' : ''}`, { name: p.name, where })}\n${p.body}`;
 }
 
 function answerMail(e: any, sender: any, to: { name: string; email: string; url: string; code: string | null; rid: string }, pending: any[]): Mail {

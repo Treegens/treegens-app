@@ -13,10 +13,8 @@ import { api, useLoad } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { CodeField } from '@/components/TwoStep';
 import { wholeIn, IDLE_CHOICES, TEAM_TWO_STEP_HREF } from '@/lib/signinrules';
-import { SOURCE_LOCALE, t } from '@/lib/i18n';
+import { useST } from '@/components/senderLang';
 
-const ui = SOURCE_LOCALE;
-const say = (key: string, vars: Record<string, string | number> = {}) => t(ui, key, vars);
 
 type Rules = {
   min_password_length: number; idle_minutes: number | null; one_session: boolean;
@@ -28,9 +26,10 @@ type Rules = {
 type Form = { min: string; idle: string; one: boolean };
 const formOf = (r: Rules): Form => ({ min: String(r.min_password_length), idle: r.idle_minutes ? String(r.idle_minutes) : '', one: r.one_session });
 /** "15 minutes of no use", "1 hour of no use": one choice of "Sign out after". */
-const idleWords = (m: number) => (m % 60 === 0 ? say('rules.idle.hours', { count: m / 60 }) : say('rules.idle.minutes', { count: m }));
+const idleWords = (say: (key: string, vars?: Record<string, string | number>) => string, m: number) => (m % 60 === 0 ? say('rules.idle.hours', { count: m / 60 }) : say('rules.idle.minutes', { count: m }));
 
 export function SecurityPolicy() {
+  const say = useST();
   const me: any = useMe();
   const admin = me.role === 'owner' || me.role === 'admin';
   const [r, reload, failed] = useLoad<Rules | null>(() => (admin ? api('/account/rules') : Promise.resolve(null)), [admin]);
@@ -102,7 +101,7 @@ export function SecurityPolicy() {
           <div className="sp-num">
             <select id="sp-idle" value={f.idle} aria-describedby={`sp-idle-hint${bad('idle_minutes') ? ' sp-idle-bad' : ''}`} aria-invalid={!!bad('idle_minutes')} onChange={(e) => set({ idle: e.target.value })}>
               <option value="">{say('rules.idle.never')}</option>
-              {choices.map((m) => <option key={m} value={String(m)}>{idleWords(m)}</option>)}
+              {choices.map((m) => <option key={m} value={String(m)}>{idleWords(say, m)}</option>)}
             </select>
           </div>
           <p id="sp-idle-hint" className="hint sp-hint">{say('rules.idle.hint')}</p>

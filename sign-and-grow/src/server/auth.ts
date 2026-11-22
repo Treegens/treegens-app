@@ -106,7 +106,7 @@ export const renewedCookie = (req: Request, secure: boolean): string => {
 // via 'embed': the sender screen inside a customer's app, for one draft alone (embed.ts): envelopeId says which.
 export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key' | 'embed'; sessionId?: string; scope?: 'send' | 'admin'; slid?: boolean; keyId?: string; envelopeId?: string; viewId?: string };
 
-const KEYS_PAGE = 'Settings, API and webhooks';
+const KEYS_PAGE = 'Settings, Developers';
 
 // With "required" (every route that needs signing in), a key that was sent but cannot be used is refused in words
 // that say which thing went wrong, because a program cannot act on "Please sign in." Without it, on public routes,

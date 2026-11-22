@@ -21,8 +21,9 @@
 //   most SSO_SESSION_HOURS (sessions.ends_by), so someone who leaves the organisation, and whose login there is
 //   closed, is out of GrowSigning within that time.
 //
-// Not here: SAML, SCIM (directory sync), sub-domains (a claim covers exactly the domain), and a service that only
-// works without a client secret.
+// SAML 2.0 is the other kind of service (org_idps.kind 'saml'): saml.ts and routes-saml.ts. Members from a directory
+// (SCIM) are scim.ts. Not here: sub-domains (a claim covers exactly the domain), and an OpenID Connect service that
+// only works without a client secret.
 import { promises as dns } from 'node:dns';
 import { all, get, run, tx } from './db.ts';
 import { bad, id, token, now, HttpError } from './util.ts';
@@ -270,7 +271,7 @@ const secretRef = (accountId: string) => `org sign-in secret ${accountId}`;
 /** The service as oidc.ts uses it, or null when there is none or its secret cannot be opened on this server. */
 export async function providerOf(accountId: string): Promise<OrgProvider | null> {
   const r = idpRow(accountId);
-  if (!r) return null;
+  if (!r || r.kind === 'saml') return null;
   const secret = openText(r.secret_sealed, secretRef(accountId));
   if (secret === null) return null;
   // The hosts are checked again on every use, not only when the issuer was saved: the document is fetched again each
@@ -283,7 +284,7 @@ export async function providerOf(accountId: string): Promise<OrgProvider | null>
 export function idpView(accountId: string) {
   const r = idpRow(accountId);
   if (!r) return null;
-  return { name: r.name, issuer: r.issuer, client_id: r.client_id, has_secret: true, enforce: !!r.enforce, join_new: !!r.join_new, tested_at: r.tested_at || null, tested_by: r.tested_by ? get('SELECT name FROM users WHERE id=?', r.tested_by)?.name || null : null, updated_at: r.updated_at };
+  return { kind: r.kind === 'saml' ? 'saml' : 'oidc', name: r.name, issuer: r.issuer, client_id: r.client_id, has_secret: r.kind !== 'saml', enforce: !!r.enforce, join_new: !!r.join_new, tested_at: r.tested_at || null, tested_by: r.tested_by ? get('SELECT name FROM users WHERE id=?', r.tested_by)?.name || null : null, updated_at: r.updated_at };
 }
 
 /** The sign-in service may only be reached at public addresses. Throws DiscoveryProblem 'host' with what was found. */
@@ -325,18 +326,20 @@ export async function saveIdp(c: Ctx, b: any) {
   const clientId = b.client_id === undefined && was ? was.client_id : String(b.client_id ?? '').trim();
   if (!clientId || clientId.length > 300 || /\s/.test(clientId)) throw bad(say('sso.err.client_id_form'), 400, { field: 'client_id' });
   const secret = typeof b.client_secret === 'string' ? b.client_secret.trim() : '';
-  if (!was && !secret) throw bad(say('sso.err.secret_needed'), 400, { field: 'client_secret' });
+  // Coming from SAML (saml.ts) there is no secret kept yet, so one is needed as for a new service.
+  const fromSaml = was?.kind === 'saml';
+  if ((!was || fromSaml) && !secret) throw bad(say('sso.err.secret_needed'), 400, { field: 'client_secret' });
   if (secret.length > 2000) throw bad(say('sso.err.secret_form'), 400, { field: 'client_secret' });
-  const moved = !was || was.issuer !== issuer || was.client_id !== clientId;
+  const moved = !was || fromSaml || was.issuer !== issuer || was.client_id !== clientId;
   if (was?.enforce && moved) throw bad(say('sso.err.enforced_change', { name: was.name }), 409, { code: 'enforced' });
-  if (!was || was.issuer !== issuer) await checkIssuer(issuer);
+  if (!was || fromSaml || was.issuer !== issuer) await checkIssuer(issuer);
   const k = keys().current!;
   const t = now();
   const sealed = secret ? sealText(secret, secretRef(c.account.id), k) : null;
   if (!was) run('INSERT INTO org_idps (account_id, name, issuer, client_id, secret_sealed, secret_key, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)', c.account.id, name, issuer, clientId, sealed, k.id, t, t);
-  else run(`UPDATE org_idps SET name=?, issuer=?, client_id=?, ${sealed ? 'secret_sealed=?, secret_key=?, ' : ''}tested_at=${moved ? 'NULL' : 'tested_at'}, tested_by=${moved ? 'NULL' : 'tested_by'}, updated_at=? WHERE account_id=?`,
+  else run(`UPDATE org_idps SET kind='oidc', name=?, issuer=?, client_id=?, ${sealed ? 'secret_sealed=?, secret_key=?, ' : ''}tested_at=${moved ? 'NULL' : 'tested_at'}, tested_by=${moved ? 'NULL' : 'tested_by'}, updated_at=? WHERE account_id=?`,
     ...[name, issuer, clientId, ...(sealed ? [sealed, k.id] : []), t, c.account.id]);
-  if (was && was.issuer !== issuer) forgetDiscovery(was.issuer);
+  if (was && !fromSaml && was.issuer !== issuer) forgetDiscovery(was.issuer);
   // Another issuer or client id knows people by other ids, so the old connections would refuse them as "taken".
   // They go: each person is connected again, by their address at a claimed domain, the next time they sign in.
   const unlinked = was && moved ? forgetConnections(c.account.id) : 0;
@@ -372,6 +375,8 @@ export function removeIdp(c: Ctx) {
   const r = idpRow(c.account.id);
   if (!r) throw bad(say('sso.err.no_service'), 404);
   run('DELETE FROM org_idps WHERE account_id=?', c.account.id);
+  // A SAML service's metadata goes with it; our own entity id for the account stays the same (saml.ts).
+  run('UPDATE org_saml SET entity_id=NULL, sso_url=NULL, certs=NULL WHERE account_id=?', c.account.id);
   forgetDiscovery(r.issuer);
   const unlinked = forgetConnections(c.account.id);
   record('sso.removed', { c, details: { service: r.name, ...(unlinked ? { connections_removed: unlinked } : {}) } });

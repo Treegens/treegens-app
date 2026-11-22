@@ -362,7 +362,7 @@ test('screens tell the truth during a wait, a pause and a scheduled send', async
   assert.equal(await signAll(e.id, 'ana2@example.com').then((r: any) => r.status), 200);
   page = (await owner.get(`/envelopes/${e.id}`)).data.envelope;
   const at = Date.parse(ana().completed_at) + 48 * HOUR;
-  assert.equal(L.pendingWhen(page, ben(), []), `It goes out soon after ${L.atWords(new Date(at).toISOString())}, after the wait of 2 days you chose.`);
+  assert.equal(L.pendingWhen(page, ben(), []), `It goes out soon after ${L.atWordsHere(new Date(at).toISOString())}, after the wait of 2 days you chose.`);
   // The status sentence names the wait, not "nobody is holding it up".
   const w = L.waitRunning(page);
   assert.equal(w?.name, 'Ben Okafor');
@@ -381,7 +381,7 @@ test('screens tell the truth during a wait, a pause and a scheduled send', async
   const when = ahead(6 * HOUR);
   await owner.post(`/envelopes/${d.id}/send-later`, { send_at: when });
   const row3 = (await owner.get('/envelopes')).data.envelopes.find((x: any) => x.id === d.id);
-  assert.equal(L.timingRow(row3), `Sends at ${L.atWords(when)}`);
+  assert.equal(L.timingRow(row3), `Sends at ${L.atWordsHere(when)}`);
   const sum = (await owner.get('/reports/summary')).data;
   assert.ok(sum.scheduled.count >= 1);
   assert.ok(sum.byStatus.draft >= sum.scheduled.count);

@@ -1,5 +1,6 @@
 import { route } from './router.ts';
 import { get, all, run, tx } from './db.ts';
+import { seal } from './colcrypt.ts';
 import { bad, str, rateLimit, parseCode, sha256, now, HttpError } from './util.ts';
 import { isOperator } from './routes-trust.ts';
 import { loadEnvelope } from './envelopes.ts';
@@ -93,7 +94,7 @@ route('POST', '/operator/disputes/:id', async (c) => {
     const closed = closeDisputes(c.params.id, c.user, how, note);
     for (const t of all("SELECT id FROM support_requests WHERE envelope_id=? AND topic='not-me' AND status!='closed' AND name='GrowSigning (automatic alert)'", c.params.id)) {
       for (const [kind, body] of [['note', note], ['event', how === 'in_error' ? 'Closed the dispute as filed in error' : 'Closed the dispute']])
-        run('INSERT INTO support_messages (request_id, kind, by_id, by_name, body, at) VALUES (?,?,?,?,?,?)', t.id, kind, c.user.id, c.user.name, body, now());
+        run('INSERT INTO support_messages (request_id, kind, by_id, by_name, body, at) VALUES (?,?,?,?,?,?)', t.id, kind, c.user.id, c.user.name, seal('support_messages.body', body), now());
       run("UPDATE support_requests SET status='closed', closed_at=?, closed_how='handled', due_at=NULL, updated_at=? WHERE id=?", now(), now(), t.id);
     }
     return closed;

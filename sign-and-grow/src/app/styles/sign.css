@@ -299,6 +299,9 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 }
 /* A typed field's character count, said under its box on the page while the person is in it (ds-fields-checks). */
 .sg-doc .field .sg-doc-count { display: none; }
+/* A number refused at Finish because it reads two ways: said right under its box until it is typed again (src/lib/twoways.ts). */
+.sg-doc .field:has(.sg-doc-again) { overflow: visible; z-index: 6 !important; }
+.sg-doc .field .sg-doc-again { display: block; position: absolute; top: 100%; left: 0; margin-top: 2px; padding: 4px 8px; border-radius: 4px; background: #8c241c; color: #fff; font-size: 13px; line-height: 1.4; width: max-content; max-width: min(320px, 80vw); z-index: 5; pointer-events: none; }
 .sg-doc .field:focus-within:has(.sg-doc-count) { overflow: visible; z-index: 6 !important; }
 .sg-doc .field:focus-within .sg-doc-count { display: block; position: absolute; top: 100%; left: 0; margin-top: 2px; padding: 2px 6px; border-radius: 4px; background: var(--ink, #1d2a24); color: #fff; font-size: 12px; line-height: 1.4; width: max-content; max-width: min(320px, 80vw); z-index: 5; pointer-events: none; }
 .sg-row-rule { margin: 8px 0 2px; }

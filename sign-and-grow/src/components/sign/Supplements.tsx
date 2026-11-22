@@ -76,6 +76,8 @@ export function Supplements({ base, list, canTick, finish = 'Finish', onLeft }: 
               </button>
               {s.opened ? <span className="muted small">{T('sign.supplements.opened')}</span>
                 : s.rule === 'open' && canTick ? <span className="muted small" aria-hidden="true">{T('sign.supplements.must_open_tag')}</span> : null}
+              {/* Opening a file does not tick it: the tag stays until the box below is ticked. */}
+              {s.rule === 'acknowledge' && canTick && !s.acknowledged ? <span className="muted small" aria-hidden="true">{T('sign.supplements.must_tick_tag')}</span> : null}
             </div>
             {s.rule === 'acknowledge' && canTick && (
               <label className="check" style={{ minHeight: 44, paddingLeft: 4 }}>

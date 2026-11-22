@@ -1,6 +1,6 @@
 // Signing inside a customer's own website, and the sender's screen inside their app.
 //
-// An admin lists up to 5 https websites under Settings, API and webhooks (embed_origins). Then:
+// An admin lists up to 5 https websites under Settings, Developers (embed_origins). Then:
 //   - POST /envelopes/{id}/recipient-view with "frame_origin" gives a signing link that only that website may show
 //     in a frame (embed_views). src/proxy.ts asks frameAncestors() for the Content-Security-Policy of every signing
 //     page: the one website for such a link, our own pages for every other one. Never "*".
@@ -19,15 +19,21 @@ import { isCodeCheck } from '../lib/checks.ts';
 
 // ---- The websites ----------------------------------------------------------------------------------------------
 
-export const originsOf = (accountId: string): string[] => all('SELECT origin FROM embed_origins WHERE account_id=? ORDER BY added_at, origin', accountId).map((r) => r.origin);
-export const isListed = (accountId: string, origin: string) => !!get('SELECT 1 x FROM embed_origins WHERE account_id=? AND origin=?', accountId, origin);
+// A website on this computer (http://localhost) only counts on a server on this computer. One listed before that rule
+// was kept, or on a copy of the database moved to a live server, is never shown, never counted and never frames a page.
+const localServer = () => /^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(baseUrl());
+const usable = (origin: string) => !String(origin).startsWith('http:') || localServer();
+export const originsOf = (accountId: string): string[] => all('SELECT origin FROM embed_origins WHERE account_id=? ORDER BY added_at, origin', accountId).map((r) => r.origin).filter(usable);
+/** Rows kept from before that rule, or from a copied database, that do nothing on this server: shown so an admin can remove them. */
+export const unusedOriginsOf = (accountId: string): string[] => all('SELECT origin FROM embed_origins WHERE account_id=? ORDER BY added_at, origin', accountId).map((r) => r.origin).filter((o) => !usable(o));
+export const isListed = (accountId: string, origin: string) => usable(origin) && !!get('SELECT 1 x FROM embed_origins WHERE account_id=? AND origin=?', accountId, origin);
 
 export function addOrigin(c: Ctx, raw: unknown): string[] {
   const accountId = c.account.id;
   const o = readTypedOrigin(raw);
   if ('why' in o) throw bad(`That website was not added. ${o.why}`);
   // A website on this computer (http://localhost) is for trying it out, so only a server on this computer takes it.
-  if (o.origin.startsWith('http:') && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(baseUrl())) throw bad('That website was not added. An address that starts with http://localhost is only for trying this out on your own computer. Type the address of your website with https:// in front.');
+  if (!usable(o.origin)) throw bad('That website was not added. An address that starts with http://localhost is only for trying this out on your own computer. Type the address of your website with https:// in front.');
   if (isListed(accountId, o.origin)) return originsOf(accountId);
   if (originsOf(accountId).length >= EMBED_ORIGINS_MAX) throw bad(`You can list up to ${EMBED_ORIGINS_MAX} websites, and ${EMBED_ORIGINS_MAX} are listed. Remove one first, then add this one.`);
   run('INSERT INTO embed_origins (account_id, origin, added_by, added_at) VALUES (?,?,?,?)', accountId, o.origin, c.actor.name, now());
@@ -48,7 +54,7 @@ export function removeOrigin(c: Ctx, raw: unknown): string[] {
 function listedOrigin(accountId: string, raw: unknown, what: string): string {
   const o = readOrigin(raw);
   if ('why' in o) throw bad(`${what}: ${o.why}`);
-  if (!isListed(accountId, o.origin)) throw bad(`${o.origin} is not one of the websites that may show your pages. An admin adds it under Settings, API and webhooks, Signing inside your site.`, 403, { code: 'origin_not_listed' });
+  if (!isListed(accountId, o.origin)) throw bad(`${o.origin} is not one of the websites that may show your pages. An admin adds it under Settings, Developers, Signing inside your site.`, 403, { code: 'origin_not_listed' });
   return o.origin;
 }
 

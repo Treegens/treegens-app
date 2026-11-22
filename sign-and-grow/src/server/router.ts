@@ -154,7 +154,7 @@ export async function handle(req: Request): Promise<Response> {
           const never = PERSON_ONLY.find(([re]) => re.test(what));
           if (never) throw new HttpError(403, `An API key cannot ${never[1]}. That needs a person signed in to the app.`);
           if (r.level === 'admin' && auth.scope !== 'admin' && !SEND_KEY_MAY.has(what))
-            throw new HttpError(403, 'This API key has the "send" scope. It covers envelopes, templates, files, contacts, bulk sends and reports, but not account settings. An admin can create a key with the "admin" scope under Settings, API and webhooks.');
+            throw new HttpError(403, 'This API key has the "send" scope. It covers envelopes, templates, files, contacts, bulk sends and reports, but not account settings. An admin can create a key with the "admin" scope under Settings, Developers.');
         }
         // An account that asks everyone for two-step login opens nothing else to a person signed in without it.
         twoStepGate(auth, `${r.method} ${r.path}`);

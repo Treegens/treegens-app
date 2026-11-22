@@ -1,4 +1,5 @@
 'use client';
+import { documentsIntro, countLine } from '@/lib/simplicity';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -170,7 +171,7 @@ export default function Envelopes() {
       <div className="pagehead">
         <div>
           <h1 className="serif">Documents</h1>
-          <div className="muted small" id="sn-export-note">Free, also after you cancel.{isAdmin ? ' For everything, see Settings, Records and data.' : ''}</div>
+          <div className="muted small" id="sn-export-note">{documentsIntro(!!isAdmin)}</div>
         </div>
         <div className="row wrap">
           <button className="btn" onClick={exportAll} disabled={busy === 'export'} aria-describedby="sn-export-note">{busy === 'export' ? 'Preparing…' : 'Download signed PDFs (ZIP)'}</button>
@@ -211,7 +212,7 @@ export default function Envelopes() {
           </>
         ) : (
           <span className="muted small">
-            {!data ? '' : rows.length === 0 ? '' : `${rows.length}${rows.length === PAGE ? ' most recently updated' : ''} document${rows.length === 1 ? '' : 's'}${rows.length === PAGE ? '. Search to find older ones' : ''}.${inRemoved ? '' : ' Tick the boxes to download several as one ZIP.'}`}
+            {!data ? '' : countLine(rows.length, inRemoved ? 0 : pickable.length, PAGE)}
           </span>
         )}
       </div>

@@ -30,6 +30,7 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-trust.ts');
   await import('../src/server/routes-support.ts');
   await import('../src/server/routes-paylink.ts');
+  await import('../src/server/routes-collect.ts');
   await import('../src/server/routes-templates.ts');
   await import('../src/server/routes-tplmatch.ts');
   await import('../src/server/routes-evidence.ts');
@@ -51,6 +52,7 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-convert.ts');
   await import('../src/server/routes-disclosure.ts');
   await import('../src/server/routes-secpolicy.ts');
+  await import('../src/server/routes-colcrypt.ts');
   await import('../src/server/routes-pages.ts');
   await import('../src/server/routes-reports.ts');
   await import('../src/server/routes-bulklists.ts');
@@ -64,6 +66,8 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-writedoc.ts');
   await import('../src/server/routes-exportimport.ts');
   await import('../src/server/routes-orgsso.ts');
+  await import('../src/server/routes-saml.ts');
+  await import('../src/server/routes-scim.ts');
   await import('../src/server/routes-embed.ts');
   await import('../src/server/routes-timing.ts');
   await import('../src/server/routes-supplements.ts');
@@ -75,6 +79,10 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-delegation.ts');
   await import('../src/server/routes-govbilling.ts');
   await import('../src/server/routes-shares.ts');
+  await import('../src/server/routes-fieldlib.ts');
+  await import('../src/server/routes-phoneapp.ts');
+  await import('../src/server/routes-webforms.ts');
+  await import('../src/server/routes-offline.ts');
   await import('../src/server/openapi.ts');
   const billing = await import('../src/server/routes-billing.ts');
   handle = (await import('../src/server/router.ts')).handle;

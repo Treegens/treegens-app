@@ -1,5 +1,6 @@
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx } from './db.ts';
+import { seal } from './colcrypt.ts';
 import { bad, id, now, isEmail, str, rateLimit, baseUrl, shortCode, codeFrom, sha256, hmac, safeEqual, parseCode, HttpError } from './util.ts';
 import { sendMail, onMailOutcome, type MailStatus } from './mail.ts';
 import { loadEnvelope, helpAsked, canBeStuck } from './envelopes.ts';
@@ -69,7 +70,7 @@ const load = (rid: string): any => get('SELECT * FROM support_requests WHERE id=
 
 type By = { id?: string | null; name: string };
 const say = (t: any, kind: 'customer' | 'answer' | 'question' | 'note' | 'event', body: string, by: By) =>
-  run('INSERT INTO support_messages (request_id, kind, by_id, by_name, body, at) VALUES (?,?,?,?,?,?)', t.id, kind, by.id ?? null, by.name, body, now());
+  run('INSERT INTO support_messages (request_id, kind, by_id, by_name, body, at) VALUES (?,?,?,?,?,?)', t.id, kind, by.id ?? null, by.name, seal('support_messages.body', body), now());
 
 // The private link to a request: its secret is made from the server's own secret, so every email about a request
 // can carry the same link. The request itself only holds a fingerprint of it. Our stored copies of the emails about
@@ -221,7 +222,7 @@ function openRequest(r: { email: string; name: string | null; topic: string; mes
   // and it is kept with the request, so the queue, the emails and "Your requests" show the very same one.
   const priority = SUPPORT_URGENT_TOPICS.includes(r.topic) ? 'urgent' : 'normal';
   run('INSERT INTO support_requests (id, ref, email, name, topic, message, envelope_id, user_id, account_id, at, updated_at, priority, due_at, verified, tz, follows, came_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    sid, shortCode(), r.email, r.name, r.topic, r.message, r.envelope_id ?? null, r.user_id ?? null, r.account_id ?? null, now(), now(), priority, dueFrom(priority), r.verified, r.tz ?? null, r.follows ?? null, r.came_by);
+    sid, shortCode(), r.email, r.name, r.topic, seal('support_requests.message', r.message), r.envelope_id ?? null, r.user_id ?? null, r.account_id ?? null, now(), now(), priority, dueFrom(priority), r.verified, r.tz ?? null, r.follows ?? null, r.came_by);
   return load(sid);
 }
 
@@ -523,7 +524,7 @@ route('GET', '/operator/support', (c) => {
   const found = (): any[] => {
     const like = `%${q.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`;
     const code = parseCode(q);
-    const hits = all(`SELECT * FROM support_requests WHERE ref=? OR upper(substr(id, -8))=? OR lower(email) LIKE ? ESCAPE '\\' OR lower(COALESCE(name, '')) LIKE ? ESCAPE '\\' OR lower(message) LIKE ? ESCAPE '\\' ORDER BY ${ORDER} LIMIT 200`, code, q.toUpperCase(), like, like, like);
+    const hits = all(`SELECT * FROM support_requests WHERE ref=? OR upper(substr(id, -8))=? OR lower(email) LIKE ? ESCAPE '\\' OR lower(COALESCE(name, '')) LIKE ? ESCAPE '\\' OR lower(col_find(message)) LIKE ? ESCAPE '\\' ORDER BY ${ORDER} LIMIT 200`, code, q.toUpperCase(), like, like, like);
     const alerts = code.length === 8 ? all('SELECT * FROM support_requests WHERE ref IS NULL AND user_id IS NULL AND name=?', ALERT_NAME).filter((t) => refOf(t) === code && !hits.some((h) => h.id === t.id)) : [];
     return [...alerts, ...hits];
   };

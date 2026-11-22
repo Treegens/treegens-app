@@ -106,7 +106,7 @@ export default function Developers() {
       <main id="main" className="wrap pub-page pub-api stack">
         <header>
           <h1 className="pub-h1">API reference</h1>
-          <p className="pub-lead">Everything the app does goes through this JSON API. Create a key under Settings, then API and webhooks, and send it as a Bearer token.</p>
+          <p className="pub-lead">Everything the app does goes through this JSON API. Create a key under Settings, then Developers, and send it as a Bearer token.</p>
         </header>
 
         <div className="card">
@@ -202,7 +202,7 @@ curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" 
 
         <div className="card" id="webhooks">
           <h2>Webhooks</h2>
-          <p>Add a URL under Settings, then API and webhooks. We POST JSON for these events: <span className="mono">{WEBHOOK_EVENTS.join(', ')}</span>.</p>
+          <p>Add a URL under Settings, then Developers. We POST JSON for these events: <span className="mono">{WEBHOOK_EVENTS.join(', ')}</span>.</p>
           <Code label="Example: a webhook delivery">{`{
   "id": "evt_Xk3...",
   "event": "envelope.completed",
@@ -293,7 +293,7 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers
 
         <div className="card" id="embed">
           <h2>Signing inside your site, and the sender screen in your app</h2>
-          <p>An admin lists your websites under Settings, API and webhooks, <b>Signing inside your site</b> (up to 5, each starting with https://). Only those websites can show our pages inside theirs, and only for links your app asks for. Every other link stays a page of its own.</p>
+          <p>An admin lists your websites under Settings, Developers, <b>Signing inside your site</b> (up to 5, each starting with https://). Only those websites can show our pages inside theirs, and only for links your app asks for. Every other link stays a page of its own.</p>
           <Code label="Example: a signing page inside your page">{`# Ask for the link with the website that shows it
 curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \\
   https://YOUR_HOST/api/envelopes/env_.../recipient-view \\

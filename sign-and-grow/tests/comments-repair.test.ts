@@ -458,7 +458,7 @@ test('screens and emails say who is really emailed: never for someone in person,
   // The digest about a question from someone who marked spam says they are not emailed, not that they are.
   await browser().post(`/sign/${tokenFor(e.id, 'ada.m1@example.com')}/comments`, { text: 'Spam-marker asks' });
   const d = text(mailTo('spam@cr.example').filter((m: any) => m.subject === 'Questions and comments: Reach').at(-1)!.html);
-  assert.match(d, /Answer on the envelope page\. They see your answer on their signing page\. Ada Spam marked an email about this document as spam, so they are not emailed your answer\./);
+  assert.match(d, /Answer on the document's page\. They see your answer on their signing page\. Ada Spam marked an email about this document as spam, so they are not emailed your answer\./);
   assert.doesNotMatch(d, /we email it to them/);
   // A private thread on the card says whether that person is emailed.
   const t = (await s.get(`/envelopes/${e.id}/comments`)).data.threads[0];

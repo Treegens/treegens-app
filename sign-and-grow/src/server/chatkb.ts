@@ -17,6 +17,7 @@ import { replyPromise } from '../lib/support.ts';
 // When signatures expire (decided 2026-11-20), in the same words as the Plan page, /help and the pricing block.
 import { expiryRuleText, HELD_EXPIRY_TEXT } from '../lib/policy.ts';
 import { PRICING, usd, CURRENCY_NOTE } from '../lib/impact.ts';
+import { isDeploymentBilling } from '../lib/billingmode.ts';
 import { MONEY_LINE } from '../lib/impactwords.ts';
 import { CHAT_SCREENS, CHAT_TOOLS, type ChatScreen } from '../lib/chat.ts';
 import { helpTopics, notInIt } from './chatsources.ts';
@@ -247,7 +248,7 @@ ${screenFacts()}
 ${lines(CHAT_TOOLS.map((t) => `${t.label} (${t.href}): ${t.what}`))}
 
 === PRICES ===
-- A new account gets ${sigs(PRICING.welcomeSignatures)} free, once. ${PRICING.planName} is ${usd(PRICING.monthlyUsd)} a month and adds ${sigs(PRICING.monthlySignatures)} with every payment. On ${PRICING.planName}, extra signatures are ${usd(PRICING.topUpUsd)} each. ${CURRENCY_NOTE}
+${isDeploymentBilling(env) ? '- This server is provided under an agreement: nothing is counted or charged on it, and nobody who sends or signs here pays. The prices and refund rules below are for GrowSigning\'s own paid service, not for this server. Settings, then Plan, says which agreement.\n' : ''}- A new account gets ${sigs(PRICING.welcomeSignatures)} free, once. ${PRICING.planName} is ${usd(PRICING.monthlyUsd)} a month and adds ${sigs(PRICING.monthlySignatures)} with every payment. On ${PRICING.planName}, extra signatures are ${usd(PRICING.topUpUsd)} each. ${CURRENCY_NOTE}
 - A signature is one person signing one envelope. It is used only when someone actually signs. Sending holds one per signer; voiding, declining or expiring gives back the ones not used. ${HELD_EXPIRY_TEXT} Running out pauses sending and never creates a charge.
 - ${expiryRuleText()}
 - Always free: signing, for the people who sign; a sender signing their own documents; approvers, viewers and copies; reminders, more time and corrections.
@@ -273,8 +274,9 @@ ${lines(CHAT_TOOLS.map((t) => `${t.label} (${t.href}): ${t.what}`))}
 - Reminders: a new account reminds every ${DEFAULT_REMINDER_DAYS} days by default; the sender changes it before each send; each person can stop the reminders to themselves.
 
 === LIMITS THAT KEEP SCAMMERS OUT ===
-- An account that has not paid can newly email ${newAccountDailyRecipients()} people a day in its first week and ${unpaidDailyRecipients()} a day after that. A payment lifts this once it is ${PAID_TRUST_DAYS} days old and was not refunded or disputed, or a person on our team clears the account.
-- A team can invite ${TEAM_INVITES_PER_DAY} people a day. When ${abuseSuspendAfter()} different recipients report one account, its sending is paused until a person has looked. Documents that read like a fake payment notice cannot be sent by an account that is not trusted yet.
+${isDeploymentBilling(env) ? `- This server is provided under an agreement, so there is no daily limit on how many people an account emails and no limit on team invitations.
+- When` : `- An account that has not paid can newly email ${newAccountDailyRecipients()} people a day in its first week and ${unpaidDailyRecipients()} a day after that. A payment lifts this once it is ${PAID_TRUST_DAYS} days old and was not refunded or disputed, or a person on our team clears the account.
+- A team can invite ${TEAM_INVITES_PER_DAY} people a day. When`} ${abuseSuspendAfter()} different recipients report one account, its sending is paused until a person has looked. Documents that read like a fake payment notice cannot be sent by an account that is not trusted yet.
 
 === CLOSING AND DELETING AN ACCOUNT ===
 - Settings, then Records and data, then Close my account. ${CLOSE_GRACE_DAYS} days to undo it by signing in again; an email ${CLOSING_REMINDER_DAYS} days before the end. It can also be deleted at once.

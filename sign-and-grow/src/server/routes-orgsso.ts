@@ -22,6 +22,8 @@ import {
 } from './orgsso.ts';
 import { safeNext, SIGNIN_MINUTES, SIGNIN_NOTE_COOKIE, type SignInNote } from '../lib/signin.ts';
 import { SSO_CALLBACK_PATH, type SsoError } from '../lib/orgsso.ts';
+import { isSaml, beginSaml, spView, samlView } from './saml.ts';
+import { directoryWaiting } from './scim.ts';
 import { SOURCE_LOCALE, t, type Vars } from '../lib/i18n.ts';
 
 const say = (key: string, vars: Vars = {}) => t(SOURCE_LOCALE, key, vars);
@@ -53,6 +55,8 @@ route('GET', '/account/sso', (c) => {
     session_hours: ssoHours(),
     owner_two_step: !!owner && twoStepOn(owner),
     code_needed: twoStepOn(c.user),
+    // SAML 2.0 (saml.ts): our entity id and ACS to give the identity provider, and what its metadata said.
+    saml: { ...spView(c.account.id), idp: samlView(c.account.id) },
   };
 }, 'admin');
 
@@ -113,6 +117,8 @@ route('DELETE', '/account/sso', async (c) => {
 route('POST', '/account/sso/try', async (c) => {
   person(c);
   rateLimit(`signin:${c.ip}`, 30, 900_000);
+  // A SAML service goes its own way to the provider and back (saml.ts, routes-saml.ts), then ends like this one.
+  if (isSaml(c.account.id)) return { url: await beginSaml(c, c.account.id, { mode: 'test', userId: c.user.id }) };
   let p: OrgProvider | null;
   try {
     p = await providerOf(c.account.id);
@@ -164,6 +170,16 @@ route('GET', '/sso/start', async (c) => {
   }
   const r = ssoFor(email);
   if (!r) return back('off');
+  if (isSaml(r.accountId)) {
+    let to = '';
+    try {
+      to = await beginSaml(c, r.accountId, { mode: 'login', invite: str(c.q.get('invite'), 200) || null, next: safeNext(c.q.get('next'), '') || null });
+    } catch (e) {
+      console.error(`[sso] ${r.accountId} SAML start failed: ${(e as any)?.message}`);
+      return back('off');
+    }
+    return new Response(null, { status: 302, headers: { location: to, 'cache-control': 'no-store' } });
+  }
   let p: OrgProvider | null = null;
   try {
     p = await providerOf(r.accountId);
@@ -189,7 +205,7 @@ function done(c: Ctx, row: any, note: SignInNote): Response {
 }
 
 const nameOf = (claims: any, email: string) => (typeof claims.name === 'string' && claims.name.trim() ? claims.name.trim() : [claims.given_name, claims.family_name].filter((x) => typeof x === 'string' && x.trim()).join(' ') || email.split('@')[0] || 'New member').slice(0, 120);
-const addIdentity = (userId: string, p: OrgProvider, subject: string, email: string) =>
+const addIdentity = (userId: string, p: SignInService, subject: string, email: string) =>
   run('INSERT INTO identities (id, provider, subject, user_id, email, vouched, created_at) VALUES (?,?,?,?,?,1,?)', id('idn'), p.id, subject, userId, email, now());
 
 // An invitation the server makes for itself when "Add people from these domains as members" is on, so joining goes
@@ -235,6 +251,17 @@ route('GET', '/sso/callback', async (c) => {
     console.error(`[sso] ${accountId} sign-in refused: ${e.message}`);
     return fail(c, row, 'failed');
   }
+  return finishOrgSignIn(c, row, accountId, p, claims);
+}, 'public');
+
+/** The service as the end of a sign-in needs it: OpenID Connect (oidc.ts) or SAML (saml.ts, routes-saml.ts). */
+export type SignInService = Pick<OrgProvider, 'id' | 'name' | 'issuer'>;
+
+/**
+ * After the service vouched for someone (claims: email, email_verified, sub, name): who they are here, the same for
+ * OpenID Connect and SAML. `row` is the line of signin_states this browser started, already used up.
+ */
+export async function finishOrgSignIn(c: Ctx, row: any, accountId: string, p: SignInService, claims: Record<string, any>): Promise<Response> {
   // The address the service gives, which it must not say is unconfirmed, at a domain this account proved.
   const email = isEmail(claims.email) ? claims.email.trim().toLowerCase() : '';
   if (!email || claims.email_verified === false) return fail(c, row, 'no_email');
@@ -292,7 +319,8 @@ route('GET', '/sso/callback', async (c) => {
       } catch {
         return fail(c, row, 'busy', email);
       }
-      const invite = row.invite || (rule.joinNew ? joinInvite(accountId, email) : null);
+      // Someone the account's directory added (scim.ts) joins on their first sign-in, whatever join_new says.
+      const invite = row.invite || (rule.joinNew || directoryWaiting(accountId, email) ? joinInvite(accountId, email) : null);
       try {
         const made = await createLogin(c, { name: nameOf(claims, email), email, passwordHash: NO_PASSWORD, verified: true, invite, via: p.name, also: (uid) => void addIdentity(uid, p!, subject, email) });
         return done(c, row, { joined: made.joined, sso_made: p.name });
@@ -305,8 +333,8 @@ route('GET', '/sso/callback', async (c) => {
     }
   }
   const member = !!get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', accountId, u.id);
-  const invite = row.invite || (rule.joinNew && !member ? joinInvite(accountId, email) : null);
+  const invite = row.invite || ((rule.joinNew || directoryWaiting(accountId, email)) && !member ? joinInvite(accountId, email) : null);
   const r = await signInAs(c, u, invite, { next: safeNext(row.next), via: p.name });
   if ('two_step' in r) return redirect('/login/two-step');
   return done(c, row, r as SignInNote);
-}, 'public');
+}

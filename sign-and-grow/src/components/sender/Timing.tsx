@@ -3,7 +3,7 @@ import { useId, useState } from 'react';
 import { api, toast } from '@/components/ui';
 import { Dialog } from './Dialog';
 import { explain } from './lib';
-import { SEND_LATER_MAX_DAYS, SEND_LATER_MIN_MINUTES, atWords, fromLocalInput, sendAtProblem, toLocalInput, waitRunning, goesOutWords } from '@/lib/timing';
+import { SEND_LATER_MAX_DAYS, SEND_LATER_MIN_MINUTES, atWordsHere, fromLocalInput, sendAtProblem, toLocalInput, waitRunning, goesOutWords } from '@/lib/timing';
 export { timingRow, scheduledHome } from '@/lib/timing';
 
 // Send later, and pause and resume, on the document page (research/ux-notes.json "ds-timing"). A draft with a time
@@ -13,8 +13,8 @@ export { timingRow, scheduledHome } from '@/lib/timing';
 /** The two lines of the draft card for a draft with a time, or null for an ordinary draft. */
 export function scheduledWords(e: any): { line: string; sub: string; warn: boolean } | null {
   if (e?.kind !== 'envelope' || e.status !== 'draft' || !e.send_at) return null;
-  if (e.send_error) return { line: `Not sent at ${atWords(e.send_at)}: ${String(e.send_error).replace(/\s+$/, '')}`, sub: 'Nothing went out to anyone. Put that right, then press Send now, or choose Change the time in More.', warn: true };
-  return { line: `Sends at ${atWords(e.send_at)}.`, sub: 'Nothing has gone out yet. It goes out soon after that time, by itself. You can send it now, or change the time in More.', warn: false };
+  if (e.send_error) return { line: `Not sent at ${atWordsHere(e.send_at)}: ${String(e.send_error).replace(/\s+$/, '')}`, sub: 'Nothing went out to anyone. Put that right, then press Send now, or choose Change the time in More.', warn: true };
+  return { line: `Sends at ${atWordsHere(e.send_at)}.`, sub: 'Nothing has gone out yet. It goes out soon after that time, by itself. You can send it now, or change the time in More.', warn: false };
 }
 
 /** The person a wait the sender chose is holding back, and when they are asked, for the page's status sentence. */
@@ -26,7 +26,7 @@ export function waitNow(e: any): { name: string; when: string } | null {
 /** The line on the card of an envelope that is out and paused. */
 export function pausedWords(e: any): string {
   if (e?.status !== 'sent' || !e.paused_at) return '';
-  const day = atWords(e.paused_at).replace(/^.* on /, '');
+  const day = atWordsHere(e.paused_at).replace(/^.* on /, '');
   return `Paused by ${e.paused_by || 'you'} on ${day}. No reminders go out while it is paused, and the deadline moves on by the time it is paused.`;
 }
 
@@ -40,7 +40,7 @@ export async function pauseIt(id: string) {
 }
 export async function resumeIt(id: string) {
   const r = await api(`/envelopes/${id}/resume`, { method: 'POST' });
-  toast(r?.expires_at ? `Resumed. The deadline moved on to ${atWords(r.expires_at)}, and whoever's turn it is was emailed.` : 'Resumed. Whoever\'s turn it is was emailed.');
+  toast(r?.expires_at ? `Resumed. The deadline moved on to ${atWordsHere(r.expires_at)}, and whoever's turn it is was emailed.` : 'Resumed. Whoever\'s turn it is was emailed.');
 }
 export async function keepAsDraft(id: string) {
   await api(`/envelopes/${id}/send-later`, { method: 'DELETE' });
@@ -61,7 +61,7 @@ export function ChangeTimeDialog({ envelope, onClose, onDone }: { envelope: any;
     setError('');
     try {
       await api(`/envelopes/${envelope.id}/send-later`, { body: { send_at: at } });
-      toast(`It goes out soon after ${atWords(at)}.`);
+      toast(`It goes out soon after ${atWordsHere(at)}.`);
       onDone();
     } catch (e: any) {
       setError(explain(e, 'Nothing was changed.'));
@@ -77,7 +77,7 @@ export function ChangeTimeDialog({ envelope, onClose, onDone }: { envelope: any;
           min={toLocalInput(new Date(Date.now() + (SEND_LATER_MIN_MINUTES + 1) * 60_000).toISOString())} max={toLocalInput(new Date(Date.now() + SEND_LATER_MAX_DAYS * 864e5).toISOString())}
           onChange={(e) => (setValue(e.target.value), setError(''))} aria-invalid={!!error} aria-describedby={`${id}-says`} />
       </label>
-      <p className="sn-preview" id={`${id}-says`} aria-live="polite">{at && !problem ? <>It goes out soon after <b>{atWords(at)}</b>, by itself.</> : problem}</p>
+      <p className="sn-preview" id={`${id}-says`} aria-live="polite">{at && !problem ? <>It goes out soon after <b>{atWordsHere(at)}</b>, by itself.</> : problem}</p>
       {error && <div className="notice err" role="alert">{error}</div>}
       <div className="actions">
         <button className="btn" onClick={onClose}>Cancel</button>

@@ -64,6 +64,10 @@ export async function register() {
   // The same for the kept summaries for signers (src/server/aiassist.ts); one no key can open is deleted and rewritten.
   const { sealKeptSummaries } = await import('./server/aiassist');
   sealKeptSummaries();
+  // The same for signatures, answers, comments, stored emails, decline reasons and help messages in the database
+  // (src/server/colsweep.ts), and the warning when no key is set at all.
+  const { columnsAtStart } = await import('./server/colsweep');
+  columnsAtStart();
   const { tick } = await import('./server/cron');
   g.__tscron = setInterval(() => tick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
   g.__tscron.unref?.();

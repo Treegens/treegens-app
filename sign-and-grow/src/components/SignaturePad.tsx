@@ -4,6 +4,7 @@ import { Dialog } from './sign/Dialog';
 import { adoptLine } from '@/lib/policy';
 import { handwritingWrites } from '@/lib/scripts';
 import { drawnProblem, inkShare, pictureProblem, onePen, twoFingers, PEN_WIDTH } from '@/lib/ink';
+import { DRAWING_IS } from '@/lib/fieldkinds';
 
 const STYLES = ['Sig Dancing', 'Sig Caveat', 'Sig Vibes', 'Sig Sacramento'];
 // The handwriting fonts have Latin letters only. A name with none of them is typed in the device's own plain font:
@@ -112,12 +113,18 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Point[]) {
 // The dialog is called "Your signature" and its button "Sign" (research/ux-charter.md, section 4: no "adopt").
 // `doneLabel` is the button where nothing is signed, such as "Save" in Settings. `onDone` also gets the name that was
 // typed, when the signature was typed: the signing page compares it with the name on the document.
-export function AdoptSignature({ kind, name, saved, onDone, onClose, doneLabel }: { kind: 'signature' | 'initials'; name: string; saved?: SavedMark | null; onDone: (png: string, typedText?: string) => void; onClose: () => void; doneLabel?: string }) {
+// kind "drawing": the same box to draw in, for a Drawing field (src/lib/fieldkinds.ts). Only Draw, no style, and none
+// of the words about signing: a drawing is a picture, never a signature.
+export function AdoptSignature({ kind: asked, name, saved, onDone, onClose, doneLabel }: { kind: 'signature' | 'initials' | 'drawing'; name: string; saved?: SavedMark | null; onDone: (png: string, typedText?: string) => void; onClose: () => void; doneLabel?: string }) {
+  const drawing = asked === 'drawing';
+  const kind = asked === 'drawing' ? 'signature' : asked;
+  // A drawing's button is its own (doneLabel from sign/KindFields.tsx: "Put it on the page").
   const sign = doneLabel || (kind === 'signature' ? 'Sign' : 'Add initials');
   const initials = name.split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 4).toUpperCase();
-  const word = kind === 'signature' ? 'signature' : 'initials';
-  const TABS: [Tab, string][] = saved ? [['saved', 'Saved'], ...MAKE] : MAKE;
-  const [tab, setTab] = useState<Tab>(saved ? 'saved' : 'type');
+  // Typed as the two marks adoptLine knows: "drawing" is only ever put into sentences, and a drawing has no adoptLine.
+  const word = (drawing ? 'drawing' : kind === 'signature' ? 'signature' : 'initials') as 'signature' | 'initials';
+  const TABS: [Tab, string][] = drawing ? [['draw', 'Draw']] : saved ? [['saved', 'Saved'], ...MAKE] : MAKE;
+  const [tab, setTab] = useState<Tab>(drawing ? 'draw' : saved ? 'saved' : 'type');
   const [text, setText] = useState(kind === 'signature' ? name : initials);
   const [font, setFont] = useState(STYLES[0]);
   const [error, setError] = useState('');
@@ -243,8 +250,9 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose, doneLabel }
       image = typed(text.trim(), handwritingWrites(text) ? `'${font}', cursive` : PLAIN);
       if (!image) return setError('Type at least one letter or number, then try again.');
     } else if (tab === 'draw') {
-      // A tap or a speck is not a signature: refused in words before it goes on the page (src/lib/ink.ts).
-      const wrong = drawnProblem(strokes.current, size.current, kind);
+      // A tap or a speck is not a signature: refused in words before it goes on the page (src/lib/ink.ts). A drawing
+      // may be anything the person draws.
+      const wrong = drawing ? '' : drawnProblem(strokes.current, size.current, kind);
       if (wrong) return setError(wrong);
       image = strokes.current.length && pad.current ? trim(pad.current) : null;
       if (!image) return setError(`Draw your ${word} in the box first.`);
@@ -288,7 +296,7 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose, doneLabel }
   }
 
   return (
-    <Dialog title={kind === 'signature' ? 'Your signature' : 'Your initials'} onClose={onClose} wide variant="field">
+    <Dialog title={kind === 'signature' ? 'Your signature' : 'Your initials'} {...(drawing ? { title: 'Your drawing' } : {})} onClose={onClose} wide variant="field">
       <div className="tabs sg-sigtabs" role="tablist" aria-label={`How to make your ${word}`} onKeyDown={tabKey}>
         {TABS.map(([t, label]) => (
           <button key={t} type="button" role="tab" id={`${ids}-${t}`} aria-selected={tab === t} aria-controls={`${ids}-panel`} tabIndex={tab === t ? 0 : -1} className={tab === t ? 'on' : ''} onClick={() => (setTab(t), setError(''))}>{label}</button>
@@ -355,9 +363,9 @@ export function AdoptSignature({ kind, name, saved, onDone, onClose, doneLabel }
           to draw in fills the screen, and the buttons, the sentence they agree to and any problem stay in view. */}
       <div className="sg-adopt-foot">
         {error && <div className="notice err sg-problem" role="alert">{error}</div>}
-        <p className="muted small sg-siglegal">
+        {drawing ? <p className="muted small sg-siglegal">{DRAWING_IS}</p> : <p className="muted small sg-siglegal">
           By choosing {tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : sign}, {adoptLine(word)}
-        </p>
+        </p>}
         <div className="actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button type="button" className="btn primary" onClick={adopt}>{tab === 'saved' ? `Use ${kind === 'signature' ? 'this signature' : 'these initials'}` : sign}</button>

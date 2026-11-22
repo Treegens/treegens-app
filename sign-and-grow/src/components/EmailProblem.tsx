@@ -1,4 +1,5 @@
 'use client';
+import { emailLine } from '@/lib/simplicity';
 import { useId, useState } from 'react';
 import { api, toast } from './ui';
 import { bounceDay } from '@/lib/mailnews';
@@ -101,7 +102,7 @@ export function EmailAddressCard({ me }: { me: any }) {
   return (
     <div className="card">
       <h2 style={{ marginBottom: 4 }}>Email address</h2>
-      <p className="muted small">You sign in with {me.user.email}, and our emails to you go there.{me.email_problem ? ' Our last email to it came back, see the notice at the top.' : ''}</p>
+      <p className="muted small">{emailLine(me.user.email, !!me.user.email_verified, !!me.email_problem)}</p>
       <button type="button" className="btn sm" style={TAP} onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={`${id}-change`} data-more="item">Change email address</button>
       <div id={`${id}-change`} hidden={!open}>{open && <EmailChangeForm me={me} onCancel={() => setOpen(false)} />}</div>
     </div>

@@ -137,6 +137,8 @@ route('PUT', '/envelopes/:id/pay-link', async (c: Ctx) => {
     if (!isOpen(e)) throw bad(`This envelope is ${e.status}, so its payment link can only be removed now, not added or changed. Nothing was saved.`, 409);
     const why = payRefusal(e.account_id);
     if (why) throw bad(`${why} Nothing was saved.`, 403);
+    // One way to ask for a payment on a document: here by card (collect.ts) or this link, never both.
+    if (e.collect_currency) throw bad('This document already asks for a payment by card. Take that off first, or keep it and do not add a link. Nothing was saved.', 409);
   };
   let ok: { href: string; host: string } | null = null;
   if (raw) {

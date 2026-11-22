@@ -72,6 +72,24 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
       </div>
     );
   }
+  // The newer kinds (src/lib/fieldkinds.ts): a button on the page is the same as the bar's, a drawing is made on the
+  // pages, and a date worked out from another one is said with its rule.
+  if (f.type === 'approve' || f.type === 'decline') return null;
+  if (f.type === 'drawing')
+    return (
+      <div className="sg-row">
+        <div className="sg-row-label">{name}<Need f={f} /></div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {c.values[f.id] ? <img src={c.values[f.id]} alt="Your drawing" style={{ maxWidth: '100%', maxHeight: 160 }} /> : <p className="muted small" style={{ margin: 0 }}>To draw this, open More and choose Page.</p>}
+      </div>
+    );
+  if (f.date_from)
+    return (
+      <div className="sg-row">
+        <div className="sg-row-label">{name}</div>
+        <div><bdi>{formatDateValue(c.values[f.id] || f.value, c.dateFormat) || 'Fills in by itself'}</bdi> <span className="muted small">{f.date_note}</span></div>
+      </div>
+    );
   if (AUTO.includes(f.type) || f.readonly) {
     const shown = f.type === 'full_name' ? c.me.name : f.type === 'email' ? c.me.email : f.type === 'date_signed' ? c.dateText : f.type === 'checkbox' || f.type === 'radio' ? (f.value === '1' ? 'Ticked' : 'Not ticked') : f.type === 'date' ? formatDateValue(f.value, c.dateFormat) || 'Empty' : f.value || 'Empty';
     return (

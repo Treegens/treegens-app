@@ -2,7 +2,9 @@
 import { useState } from 'react';
 import { api, oops, toast } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
-import { SOURCE_LOCALE, languageOf, shippedLocales, t } from '@/lib/i18n';
+import { languageOf, shippedLocales } from '@/lib/i18n';
+import { senderT as t } from '@/lib/senderlang';
+import { useSenderLangHere } from '@/components/senderLang';
 
 // Settings, Account: the language each new recipient starts in (accounts.default_locale, src/server/locales.ts). The
 // sender can change it for one person in the editor. While English is the only language switched on there is nothing
@@ -15,10 +17,8 @@ export const languageLabel = (tag: string): string => {
   return !l ? tag : l.own === l.english ? l.own : `${l.own} (${l.english})`;
 };
 
-// The sender's own screens are in English until they are translated, so their words are asked for in English.
-const ui = SOURCE_LOCALE;
-
 export function LanguageSettings() {
+  const ui = useSenderLangHere();
   const me = useMe();
   const on = shippedLocales();
   const [value, setValue] = useState<string>(me.account?.default_locale || '');

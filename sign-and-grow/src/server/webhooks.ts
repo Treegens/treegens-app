@@ -142,7 +142,7 @@ export async function deliver(hook: any, event: string, envelopeId: string | nul
       for (const u of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", hook.account_id))
         void sendMail({ to: u.email, subject: 'A GrowSigning webhook keeps failing', heading: 'Your webhook is not receiving events',
           lines: [`The last three deliveries to ${hook.url} failed (${error || `HTTP ${status}`}).`,
-            `The latest ${KEEP_BODIES} events for this webhook are kept in full in the delivery log. Once your side is fixed, you can send each of them again from Settings, API and webhooks.`,
+            `The latest ${KEEP_BODIES} events for this webhook are kept in full in the delivery log. Once your side is fixed, you can send each of them again from Settings, Developers.`,
             'Older events stay listed, but can no longer be sent again. The sooner this is fixed, the less there is to catch up on by hand.'],
           cta: { label: 'Open the delivery log', url: `${baseUrl()}/app/settings?tab=developers` } }).catch(() => {});
     }

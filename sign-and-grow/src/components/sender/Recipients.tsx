@@ -5,6 +5,7 @@ import { fail } from './feedback';
 import { dayTime, howLong, neverOpened } from './lib';
 import { QrDialog } from './QrDialog';
 import { IN_PERSON_LOCK } from '@/lib/phone';
+import { OfflineReadyButton } from './OfflineReady';
 import { maskPhone } from '@/lib/checks';
 import { BackNews, MailStopHint, TryAgainButton, deliveredLine } from './MailNews';
 import { ownLink, ownLinkFact, OwnLinkActions } from './OwnLink';
@@ -358,7 +359,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               </p>
             )}
             {reachable && may('links') && r.muted && !stale ? <p className="sn-hint">They asked for no more reminder emails. You can still send them the link yourself, from their More.</p> : null}
-            {stopped && (may('edit') ? <MailStopHint r={r} /> : <p className="sn-hint warn"><b>The email to them could not be delivered.</b> Only the person this document belongs to, or an admin, can fix the address or send them the link.</p>)}
+            {stopped && (may('edit') ? <MailStopHint r={r} links={may('links')} /> : <p className="sn-hint warn"><b>The email to them could not be delivered.</b> Only the person this document belongs to, or an admin, can fix the address or send them the link.</p>)}
             {/* Their link, the only way it reaches them: while it is their turn and for their copy afterwards. */}
             {may('links') && <>{own && <OwnLinkActions r={r} envelopeStatus={e.status} busy={busy} link={shown === r.id ? links[r.id] || '' : ''}
               onShow={() => linkFor(r).then(() => setShown(r.id)).catch(fail)} onCopy={() => copy(r)} onQr={(el) => showQr(r, el)} onShare={(how) => shareVia(r, how)} />}</>}
@@ -391,6 +392,8 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                   : <button className="btn sm" disabled={!!busy} onClick={() => onCorrect(r)} aria-label={`Change the name or address of ${r.name}`}>Change person</button>}
               </div>
             )}
+            {/* Signing in person where there is no signal: the copy is got ready here, on this device (OfflineReady.tsx). */}
+            {turn && r.role === 'inperson' && may('links') && <OfflineReadyButton envelopeId={e.id} r={r} />}
             {/* Their link, for the sender to pass on. "WhatsApp" and "Text" here open the sender's own app: we send nothing. */}
             {reachable && may('links') && !openGroup && <p className="sn-share-h" id={`${panelId}-share`}>Share the link yourself</p>}
             {(turn || (out && r.status === 'pending')) && may('links') && (

@@ -17,6 +17,7 @@
 // This file imports nothing from mail.ts but its type, so mail.ts can call it. The routes, the email that asks an
 // address to confirm and the news from the mail provider are in routes-archive.ts.
 import { all, get, run } from './db.ts';
+import { seal } from './colcrypt.ts';
 import { baseUrl, fmtCode, now } from './util.ts';
 import type { Mail } from './mail.ts';
 import { ARCHIVE_LINK_REMOVED, ARCHIVE_CODE_REMOVED, ARCHIVE_SUBJECT, ARCHIVE_WHY, archiveFirstLine } from '../lib/archivemail.ts';
@@ -157,7 +158,7 @@ export function markArchiveRow(mid: number | bigint, c: ArchiveCopy) {
     payload = JSON.parse(get('SELECT payload FROM emails WHERE id=?', mid)?.payload || '{}');
   } catch {}
   payload.attachments = c.attachments;
-  run('UPDATE emails SET archive_to=?, archive_envelope=?, payload=? WHERE id=?', c.addressId, c.envelopeId, JSON.stringify(payload), mid);
+  run('UPDATE emails SET archive_to=?, archive_envelope=?, payload=? WHERE id=?', c.addressId, c.envelopeId, seal('emails.payload', JSON.stringify(payload)), mid);
 }
 
 // ---- 3. Before a copy is handed over -------------------------------------------------------------------------------
@@ -211,7 +212,7 @@ export function forgetArchiveCopies(envelopeId?: string, shas?: string[]): numbe
   const which = envelopeId ? 'archive_envelope=?' : 'archive_envelope IS NOT NULL AND archive_envelope NOT IN (SELECT id FROM envelopes WHERE purged_at IS NULL)';
   const args = envelopeId ? [envelopeId] : [];
   if (shas)
-    for (const m of all(`SELECT payload FROM emails WHERE ${which} AND payload LIKE '%"sha256"%'`, ...args)) {
+    for (const m of all(`SELECT payload FROM emails WHERE ${which} AND col_find(payload) LIKE '%"sha256"%'`, ...args)) {
       try {
         for (const a of JSON.parse(m.payload).attachments || []) if (a?.sha256) shas.push(a.sha256);
       } catch {}

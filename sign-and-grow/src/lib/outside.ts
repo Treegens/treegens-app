@@ -30,7 +30,7 @@ import { ssoOffered } from './orgsso.ts';
 type Env = Record<string, string | undefined>;
 
 export type OutsideMode = 'all' | 'listed' | 'none';
-export type ServiceId = 'mail' | 'payments' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks' | 'ocr' | 'whatsapp' | 'orgsso';
+export type ServiceId = 'mail' | 'payments' | 'collect' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks' | 'ocr' | 'whatsapp' | 'orgsso';
 
 export type OutsideService = {
   id: ServiceId;
@@ -126,6 +126,9 @@ export function outsideServices(env: Env = process.env): OutsideService[] {
   out.push({ id: 'mail', name: 'Mail relay', purpose: 'Delivers every email this server sends.', settings: ['SMTP_URL'], on: !!smtp, hosts: smtp ? [hostOfUrl(smtp)].filter(Boolean) : [] });
   const pay = !!clean(env.STRIPE_SECRET_KEY);
   out.push({ id: 'payments', name: 'Payment provider (Stripe)', purpose: 'Takes payments for plans and top-ups, and refunds them.', settings: ['STRIPE_SECRET_KEY', 'STRIPE_PRICE_GROVE', 'STRIPE_WEBHOOK_SECRET'], on: pay, hosts: pay ? ['api.stripe.com'] : [] });
+  // Payments while signing, into each account's own Stripe account (src/server/collect.ts). Off in deployment billing.
+  const collect = !!(clean(env.STRIPE_CONNECT_CLIENT_ID) && clean(env.STRIPE_CONNECT_WEBHOOK_SECRET) && (clean(env.STRIPE_CONNECT_SECRET_KEY) || clean(env.STRIPE_SECRET_KEY))) && String(env.BILLING_MODE || '').trim().toLowerCase() !== 'deployment';
+  out.push({ id: 'collect', name: 'Payments while signing (Stripe Connect)', purpose: 'Connects a sending account\'s own Stripe account, opens Stripe\'s payment page for a signer and checks with Stripe that a payment went through. Card details go to Stripe only.', settings: ['STRIPE_CONNECT_CLIENT_ID', 'STRIPE_CONNECT_SECRET_KEY', 'STRIPE_CONNECT_WEBHOOK_SECRET'], on: collect, hosts: collect ? ['connect.stripe.com', 'api.stripe.com'] : [] });
   const sign = signInProviders(env);
   out.push({ id: 'google', name: 'Google sign-in', purpose: 'Checks a "Continue with Google" sign-in: swaps its code for a token and fetches the keys that token is signed with.', settings: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'], on: sign.includes('google'), hosts: sign.includes('google') ? ['oauth2.googleapis.com', 'www.googleapis.com'] : [] });
   out.push({ id: 'microsoft', name: 'Microsoft sign-in', purpose: 'Checks a "Continue with Microsoft" sign-in the same way.', settings: ['MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'], on: sign.includes('microsoft'), hosts: sign.includes('microsoft') ? ['login.microsoftonline.com'] : [] });

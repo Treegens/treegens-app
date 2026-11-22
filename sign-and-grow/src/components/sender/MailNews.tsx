@@ -24,16 +24,20 @@ export function BackNews({ d }: { d: News }) {
   return null;
 }
 
-/** Why we do not email this person right now, on their card. Null when we do. */
-export function MailStopHint({ r }: { r: any }) {
+/**
+ * Why we do not email this person right now, on their card. Null when we do. `links` false: the viewer is a colleague
+ * whose share does not let them copy a signing link, so the hint does not tell them to send it themselves.
+ */
+export function MailStopHint({ r, links = true }: { r: any; links?: boolean }) {
+  const own = links ? '' : ` Only the person this document belongs to, or an admin, can send them the link.`;
   if (r.complained_at) return (
     <p className="sn-hint warn">
-      <b>Marked as spam.</b> {r.name} marked one of our emails for your account as spam, so we do not email them about its documents again, this one included: no reminders, no notice when you change it and no copy when it is completed. Correcting the address or sending a new envelope does not change that. Only they can undo it, with the button on their signing page. You can still send them their link yourself. <Link href="/help#bounced">What this means</Link>
+      <b>Marked as spam.</b> {r.name} marked one of our emails for your account as spam, so we do not email them about its documents again, this one included: no reminders, no notice when you change it and no copy when it is completed. Correcting the address or sending a new envelope does not change that. Only they can undo it, with the button on their signing page.{links ? ' You can still send them their link yourself.' : own} <Link href="/help#bounced">What this means</Link>
     </p>
   );
   if (r.bounced_at) return (
     <p className="sn-hint warn">
-      <b>Could not be delivered:</b> {r.bounce_reason || 'their mail server will not take email for this address'}. No reminders go to {r.email} until you do something. Choose <b>Change person</b>, in their More, to put in the right address, and a new email goes out at once. If the address is right and the mailbox works again, choose <b>Try again</b>. You can also send them the link yourself. <Link href="/help#bounced">What this means</Link>
+      <b>Could not be delivered:</b> {r.bounce_reason || 'their mail server will not take email for this address'}. No reminders go to {r.email} until you do something. Choose <b>Change person</b>, in their More, to put in the right address, and a new email goes out at once. If the address is right and the mailbox works again, choose <b>Try again</b>.{links ? ' You can also send them the link yourself.' : own} <Link href="/help#bounced">What this means</Link>
     </p>
   );
   return null;
