@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db, dataDir } from './db.ts';
 import { storeState } from './filestore.ts';
-import { HEALTH_MIN_FREE_BYTES, TIMER_STALE_MINUTES, HEALTH_CACHE_MS, HEALTH_CHECKS, type HealthCheck } from '../lib/selfhost.ts';
+import { minFreeFor, TIMER_STALE_MINUTES, HEALTH_CACHE_MS, HEALTH_CHECKS, type HealthCheck } from '../lib/selfhost.ts';
 
 const g = globalThis as any;
 // When this process started, for the timer's first run (15 minutes in).
@@ -30,7 +30,7 @@ export type Health = {
 };
 
 // The tests stand in for the disk (free space, a folder that cannot be written to) through these.
-type Probe = { now?: number; freeBytes?: (dir: string) => number; canWrite?: (dir: string) => boolean; fresh?: boolean };
+type Probe = { now?: number; freeBytes?: (dir: string) => number; totalBytes?: (dir: string) => number; canWrite?: (dir: string) => boolean; fresh?: boolean };
 
 function timerOk(now: number): boolean {
   const stale = TIMER_STALE_MINUTES * 60_000;
@@ -55,6 +55,10 @@ const statFree = (dir: string) => {
   const s = fs.statfsSync(dir);
   return Number(s.bavail) * Number(s.bsize);
 };
+const statTotal = (dir: string) => {
+  const s = fs.statfsSync(dir);
+  return Number(s.blocks) * Number(s.bsize);
+};
 
 export function health(o: Probe = {}): Health {
   const now = o.now ?? Date.now();
@@ -73,7 +77,7 @@ export function health(o: Probe = {}): Health {
     return true;
   });
   set('data_folder', () => (o.canWrite || writable)(dir));
-  set('disk_space', () => (o.freeBytes || statFree)(dir) > HEALTH_MIN_FREE_BYTES);
+  set('disk_space', () => (o.freeBytes || statFree)(dir) > minFreeFor(o.totalBytes ? o.totalBytes(dir) : o.freeBytes ? Infinity : statTotal(dir)));
   set('file_store', () => !storeState(path.join(dir, 'blobs')).stop);
   set('timer', () => timerOk(now));
   const problems = (Object.keys(HEALTH_CHECKS) as HealthCheck[]).filter((k) => checks[k] !== 'ok').map((k) => HEALTH_CHECKS[k]);

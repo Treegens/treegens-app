@@ -97,6 +97,10 @@ test('health: each failure on its own gives 503 and says which, in words', async
   assert.equal(r.data.checks.disk_space, 'failed');
   assert.match(r.data.problems[0], /Less than 1 GB is free/);
   assert.equal(health({ fresh: true, freeBytes: () => HEALTH_MIN_FREE_BYTES + 1 }).ok, true);
+  // A small disk (Render's 1 GB): a tenth of it free is enough, less is not. A big disk still asks for 1 GB.
+  assert.equal(health({ fresh: true, totalBytes: () => 1_000_000_000, freeBytes: () => 400_000_000 }).ok, true);
+  only(health({ fresh: true, totalBytes: () => 1_000_000_000, freeBytes: () => 90_000_000 }), 'disk_space');
+  only(health({ fresh: true, totalBytes: () => 500_000_000_000, freeBytes: () => 900_000_000 }), 'disk_space');
   // DATA_DIR cannot be written to.
   only(health({ fresh: true, canWrite: () => false }), 'data_folder');
   // The database cannot be opened.

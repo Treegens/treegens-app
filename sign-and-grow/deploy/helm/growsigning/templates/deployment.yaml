@@ -58,7 +58,7 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          # 200 only when the database opens, /data can be written to, more than 1 GB is free, storing files is not
+          # 200 only when the database opens, /data can be written to, more than 1 GB (or a tenth of a small disk) is free, storing files is not
           # stopped and the timer ran in the last 30 minutes. Readiness takes the pod out of the Service; liveness is
           # left off on purpose, because restarting does not free a full disk.
           readinessProbe:

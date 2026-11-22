@@ -176,7 +176,7 @@ Postgres, which is not built.
 job of the reverse proxy in front: the app speaks plain http.
 
 **Monitoring.** `GET /api/health` answers 200 only when the database opens, `DATA_DIR` can be written to, more than
-1 GB is free on its disk, storing files is not stopped and the internal timer finished a run in the last 30
+1 GB is free on its disk (a tenth of the disk when it is smaller than 10 GB), storing files is not stopped and the internal timer finished a run in the last 30
 minutes. Otherwise it answers 503 and says which of these failed, in words. It also says whether a mail server is
 set up, which is not a failure. It says nothing about any account. The image's HEALTHCHECK and the chart's
 readiness probe use it.

@@ -6,8 +6,11 @@
 
 type Env = Record<string, string | undefined>;
 
-/** GET /api/health fails when less than this is free on the disk of DATA_DIR: 1 GB (10^9 bytes). */
+/** GET /api/health fails when less than this is free on the disk of DATA_DIR: 1 GB (10^9 bytes). On a disk smaller
+ *  than 10 GB it is a tenth of the disk instead, so a small hosted disk (Render's 1 GB) can pass at all. */
 export const HEALTH_MIN_FREE_BYTES = 1_000_000_000;
+/** The free space the check asks for on a disk of this size. */
+export const minFreeFor = (totalBytes: number) => Math.min(HEALTH_MIN_FREE_BYTES, Math.floor(totalBytes / 10));
 /** It fails when the internal timer (src/server/cron.ts) has not finished a run for this long. It runs every 15 minutes. */
 export const TIMER_STALE_MINUTES = 30;
 /** How long one answer of the health check is reused, so calling it in a loop does not write to the disk in a loop. */
@@ -17,7 +20,7 @@ export const HEALTH_CACHE_MS = 10_000;
 export const HEALTH_CHECKS = {
   database: 'The database cannot be opened or read.',
   data_folder: 'DATA_DIR cannot be written to.',
-  disk_space: 'Less than 1 GB is free on the disk that holds DATA_DIR.',
+  disk_space: 'Less than 1 GB is free on the disk that holds DATA_DIR (on a disk smaller than 10 GB, less than a tenth of it).',
   file_store: 'Storing files is stopped (the server log says why, under [files]).',
   timer: `The internal timer has not finished a run in the last ${TIMER_STALE_MINUTES} minutes, or its last run failed (the server log says why, under [cron]).`,
 } as const;
