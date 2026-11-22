@@ -2671,9 +2671,11 @@ async function syncOnce(ctx: Ctx, bookingId: string, mode: SyncMode): Promise<Sy
   const decided = await settleInvite(ctx, bookingId, () => (eventType?.googleInvite !== false ? 'google' : 'file'));
   if (!decided) return { status: 'skipped' };
   const invitee = decided.inviteVia === 'google';
-  // Their confirmation could not be emailed, so the booking page told them to add the meeting by hand (that
-  // is a booking made before Google was connected, written now). Google's invitation says that copy can go.
-  const handAdded = invitee && (decided.timeline ?? []).some((t) => t.type === 'confirmation_email_skipped');
+  // Decided only now, with no earlier attempt on the booking, after a confirmation that could not be emailed:
+  // a booking made before Google was connected, written now. Its page told them to add the meeting by hand
+  // (with no Google there it promised no invitation), so Google's invitation says that copy can go.
+  const handAdded =
+    invitee && !booking.inviteVia && !decided.google && (decided.timeline ?? []).some((t) => t.type === 'confirmation_email_skipped');
   const input = calendarEventInput(ctx, decided, eventType, organizer.host, pickHosts(booking.hostIds, byId), site, { invitee, handAdded });
   let created: Awaited<ReturnType<typeof googleCreateEvent>>;
   try {

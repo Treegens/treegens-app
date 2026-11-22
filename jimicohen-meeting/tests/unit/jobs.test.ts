@@ -547,6 +547,16 @@ describe('runDueJobs: delivery', () => {
     expect(email.text).toContain('This meeting is not in your Google Calendar, because Google Calendar is not connected. Connect it under Integrations in your dashboard, and this meeting and every new one go into it by themselves.');
   });
 
+  it('tells a co-host without Google where they connect it: their private page, not a dashboard they do not have', async () => {
+    const world = await makeWorld();
+    await book(world, { hostIds: ['host_owner', 'host_alex'] });
+    await runDueJobs(world.ctx);
+    const alex = world.emails.find((e) => e.to[0].includes('alex@example.com'))!;
+    expect(alex.attachments).toBeUndefined();
+    expect(alex.text).toContain('This meeting is not in your Google Calendar, because no Google Calendar is connected for it. Connect yours on your private page, and this meeting and every new one go into it by themselves.');
+    expect(alex.text).not.toContain('Integrations in your dashboard');
+  });
+
   it('sends a text with the facts first, then the link to change plans, inside the limit', async () => {
     const world = await makeWorld();
     await book(world);

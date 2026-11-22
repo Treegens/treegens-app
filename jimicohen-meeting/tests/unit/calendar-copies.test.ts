@@ -172,6 +172,10 @@ describe('a booking made before Google was connected', () => {
     expect(calls(g, 'event_insert')).toHaveLength(0);
     // Connected only once the meeting is over: nothing is sent for a meeting that has happened.
     await setMain(ctx, OWNER, { email: A });
+    // Connected while the meeting is going on: an invitation to a meeting that has started helps nobody.
+    ctx.clock.set(wed('12:05'));
+    const { queueCalendarBackfill } = await import('../../server/lib/booking');
+    expect(await queueCalendarBackfill(ctx, OWNER)).toBe(0);
     ctx.clock.set('2026-11-19T09:00:00.000Z');
     await housekeeping(ctx);
     expect(calls(g, 'event_insert')).toHaveLength(0);
@@ -252,6 +256,26 @@ describe('a first calendar write that fails', () => {
     // Made at the new time: no "updated" notice right after the invitation.
     expect(calls(g, 'event_patch')).toHaveLength(0);
     expect(JSON.parse(inserted.at(-1)!.body).start.dateTime).toBe(wed('14:00'));
+  });
+});
+
+describe('the note about a copy added by hand', () => {
+  it('is not in an invitation her page already promised (Google connected, no email, a first write that failed)', async () => {
+    const ctx = await setup();
+    await setMain(ctx, OWNER, { email: A });
+    const { g } = world(ctx);
+    g.accounts[A] = { fail: 500, failKinds: ['event_insert'] };
+    const booking = await book(ctx);
+    expect(booking.inviteVia).toBe('google');
+    expect((await getManageView(ctx, booking.id))!.booking.delivery).toEqual({ email: false, calendarInvite: true });
+    expect((await getBooking(ctx, booking.id))!.timeline.map((t) => t.type)).toContain('confirmation_email_skipped');
+    // The retry writes it: her page said Google was inviting her and offered no buttons, so there is no hand-made copy.
+    g.accounts[A].fail = undefined;
+    ctx.clock.advance(5 * 60_000);
+    await runDueJobs(ctx, { jobTimeoutMs: 3000 });
+    await ctx.settle();
+    expect((await getBooking(ctx, booking.id))!.google?.eventId).toBeTruthy();
+    expect(descriptionOf(g)).not.toContain(HAND_ADDED_NOTE);
   });
 });
 

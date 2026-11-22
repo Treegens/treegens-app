@@ -53,6 +53,14 @@ describe('a connection with an end date', () => {
     expect(await remindEndingConnections(ctx, await listHosts(ctx))).toEqual({ reminded: 0 });
   });
 
+  it('says nothing about a connection that has already stopped working: the calendar alert covers that', async () => {
+    const ctx = await setup();
+    await setMain(ctx, 'host_owner', { email: 'jimi@gmail.example', refreshExpiresAt: ENDS, status: 'needs_reconnect' });
+    ctx.clock.set(Date.parse(ENDS) - DAY + 60_000);
+    expect(await remindEndingConnections(ctx, await listHosts(ctx))).toEqual({ reminded: 0 });
+    expect(await alerts(ctx)).toHaveLength(0);
+  });
+
   it("names a co-host's connection to the owner, who publishes the app", async () => {
     const ctx = await setup();
     await saveHost(ctx, { ...defaultOwnerHost(NOW, 'UTC'), id: 'host_ian', role: 'member', name: 'Ian Moss', email: 'ian@example.com', googleExtra: [] } as Host);
