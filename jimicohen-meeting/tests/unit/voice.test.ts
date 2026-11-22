@@ -15,7 +15,7 @@ vi.mock('../../server/lib/jobs', () => ({
 
 import { cancelBooking, confirmAttendance } from '../../server/lib/booking';
 import { enqueueJob, runDueJobs } from '../../server/lib/jobs';
-import { getBooking, getCall, getSite, listHosts, saveBooking, saveSecrets, saveSite, updateBooking } from '../../server/lib/repo';
+import { claim, getBooking, getCall, getSite, listHosts, saveBooking, saveSecrets, saveSite, updateBooking } from '../../server/lib/repo';
 import { blockNumber, computeTwilioSignature, unblockNumber } from '../../server/lib/twilio';
 import {
   buildCallScript,
@@ -332,6 +332,10 @@ describe('closingLine (every call ends with the callback number, then goodbye)',
     ['Anything else? Goodbye.', ''],
     ['You are confirmed', 'You are confirmed.'],
     ['Have a great day', 'Have a great day.'],
+    // A goodbye before the number would let the caller hang up before hearing it.
+    ['Got it, I am texting the link now. Goodbye and have a great day.', 'Got it, I am texting the link now.'],
+    ['You are all set. Bye for now, take care!', 'You are all set.'],
+    ['Goodbye, Sam. Your meeting is still on.', 'Your meeting is still on.'],
   ])('"%s"', (line, body) => {
     expect(closingLine(line, REACH)).toBe(`${body ? `${body} ` : ''}${REACH} Goodbye.`);
   });
@@ -1351,6 +1355,19 @@ describe('answering machines', () => {
     expect(jobsOfKind('manage_link')).toHaveLength(1);
     const call = await record(ctx, callId);
     expect(call.turns.filter((t) => t.role === 'assistant' && t.text.includes('A reminder:'))).toHaveLength(1);
+  });
+
+  it('says nothing from a turn that hears the greeting while the machine detection is already switching the call', async () => {
+    const { ctx, net, callId } = await answered();
+    // The detection has taken the message but not yet marked the call: the turn still sees a live call.
+    expect(await claim(ctx, `call-voicemail-said-${callId}`)).toBe(true);
+    const late = await hook(ctx, 'turn', callId, { SpeechResult: 'You have reached Sam. Please leave a message after the tone.' });
+    expect(said(late.xml)).toBe('');
+    expect(late.xml).toContain('<Pause length="10"/><Hangup/>');
+    expect(net.twilio).toHaveLength(1);
+    const call = await record(ctx, callId);
+    expect(call.turns.filter((t) => t.role === 'assistant' && t.text.includes('A reminder:'))).toHaveLength(0);
+    expect(call.voicemailLeft).toBeFalsy();
   });
 
   it('leaves the message from a later turn when switching the call to it failed', async () => {

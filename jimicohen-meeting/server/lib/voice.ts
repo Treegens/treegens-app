@@ -444,6 +444,8 @@ function reachLine(s: Pick<CallScript, 'brandName' | 'hostFirstNames' | 'callbac
 // The end of the sentence before it stays, so a question just before a goodbye is still seen as one.
 const GOODBYE_TAIL = /(?:^|(?<=[.!?])\s+|\s*[,;:]\s*|\s+)(?:(?:and|so)\s+)?(?:good\s?-?bye|bye(?:\s+bye)?)(?:,?\s+[\p{L}][\p{L}'-]*){0,2}[\s.!]*$/iu;
 
+const GOODBYE_OPENING = /^["'(]*(?:(?:and|so|okay|ok|well)[,\s]+)?(?:good\s?-?bye|bye)\b/i;
+
 function withoutTrailingQuestions(text: string): string {
   const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
   while (sentences.length > 0 && /\?["')\s]*$/.test(sentences[sentences.length - 1])) sentences.pop();
@@ -457,6 +459,12 @@ function withoutTrailingQuestions(text: string): string {
  */
 function closingBody(line: string, reach: string): string {
   let body = (reach ? line.split(reach).join(' ') : line).replace(/\s+/g, ' ').trim();
+  // A sentence that opens with a goodbye ("Goodbye and have a great day.") goes too: heard before the
+  // number, it lets the caller hang up before they hear it.
+  body = body
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !GOODBYE_OPENING.test(sentence))
+    .join(' ');
   for (let before = ''; before !== body; ) {
     before = body;
     body = withoutTrailingQuestions(body.replace(GOODBYE_TAIL, '').trim()).trim();
