@@ -60,7 +60,7 @@ import { delegateLinkOf, delegateLook, delegateFacts, delegateAway, delegateTake
 // A first or last name taken from theirs, and a date worked out from another, said in words (fieldkinds.ts).
 import { signerField } from './fieldkinds.ts';
 import { seal } from './colcrypt.ts';
-import { takeShared, sharesWith, sharedProps, noteSharedShown } from './collab.ts';
+import { takeShared, sharesWith, sharedProps, noteSharedShown, cosignerChanged } from './collab.ts';
 import { paperSignFacts, paperGate } from './paper.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
@@ -180,7 +180,7 @@ export function signView(c: Ctx, found: any, quiet = false): any {
       earlier_copy: r.status !== 'completed' && !!r.signed_before && !!get('SELECT 1 x FROM earlier_signatures WHERE envelope_id=? AND recipient_id=? AND copy_sha256 IS NOT NULL', e.id, r.id),
       // changed_by: the person who "Can change the document" whose change asked them to sign again (null: the sender).
       // step_wait: for that person, while they wait again after their own change, who is asked first.
-      changed_by: r.signed_before ? changedBy(e.id, r.id) : null, step_wait: stepWait(e, r) },
+      changed_by: r.signed_before ? changedBy(e.id, r.id) : null, changed_by_signer: !!r.signed_before && cosignerChanged(e.id, r.id), step_wait: stepWait(e, r) },
     // The language this person's screens are in and its direction, with who chose it (signerLanguage in locales.ts).
     language: signerLanguage(r, c.req),
   };

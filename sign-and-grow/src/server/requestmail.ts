@@ -35,6 +35,8 @@ export type RequestFacts = {
   before?: string | null;
   /** The person who "Can change the document" made the change, for "again" and "updated" (agents.ts). */
   changer?: string | null;
+  /** The changer is someone else who signs, who changed a field anyone on the document can fill in (collab.ts). */
+  cosigner?: boolean;
   /** Everything is filled in and only Finish is left (a reminder says so). */
   ready: boolean;
   /** Mangroves planted when they finish, 0 for none. */
@@ -58,7 +60,7 @@ export function requestMail(L: string, f: RequestFacts) {
   const deadline = f.deadline ? when(f.deadline) : '';
   const s = f.sender.name;
   // Who changed it: the editor, said with who asked them (changerWords), or else the sender.
-  const by = changerWords(f.changer, s);
+  const by = changerWords(f.changer, s, f.cosigner);
   const subjectUnder = (f.role === 'signer' || f.role === 'viewer') && f.kind !== 'again' && !f.done;
   const subject = {
     new: mt(L, 'mail.request.subject.new', { subject: f.subject }),

@@ -31,7 +31,7 @@ type Msg = {
 };
 /** A control of the page underneath that an answer may offer as a button: the page's own label and its own action. */
 export type PageAction = { key: string; label: string; onClick?: () => void };
-type Status = { ai: boolean; note: string; do_not_type: string; kept: string };
+type Status = { ai: boolean; note: string; do_not_type: string; kept: string; model_line?: string | null };
 
 // One conversation for the site, and one for each signing link, kept while the tab lives. A device handed to someone
 // to sign does not show them the host's chat.
@@ -88,6 +88,8 @@ export function HelpChat({ screen, link, code, who, actions, onClose }: {
   onClose: () => void;
 }) {
   const key = screen === 'signing' && link ? `sign:${link}` : 'site';
+  // Opened from an account's form or agreement page (/help?form=<slug>): the account's AI switch holds here too.
+  const [form] = useState(() => (typeof window === 'undefined' ? '' : (new URLSearchParams(window.location.search).get('form') || '').slice(0, 120)));
   const [msgs, setMsgs] = useState<Msg[]>(() => memory.get(key) || []);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -103,7 +105,7 @@ export function HelpChat({ screen, link, code, who, actions, onClose }: {
 
   useEffect(() => {
     let live = true;
-    fetch(`/api/public/chat${link ? `?link=${encodeURIComponent(link)}` : ''}`, { credentials: 'same-origin' }).then((r) => r.json()).then((d) => live && d && typeof d.ai === 'boolean' && setStatus(d)).catch(() => {});
+    fetch(`/api/public/chat${link ? `?link=${encodeURIComponent(link)}` : form ? `?form=${encodeURIComponent(form)}` : ''}`, { credentials: 'same-origin' }).then((r) => r.json()).then((d) => live && d && typeof d.ai === 'boolean' && setStatus(d)).catch(() => {});
     return () => {
       live = false;
     };
@@ -165,7 +167,7 @@ export function HelpChat({ screen, link, code, who, actions, onClose }: {
     try {
       const res = await fetch('/api/public/chat', {
         method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, signal: ctl.signal,
-        body: JSON.stringify({ screen, ...(link ? { link } : {}), messages: history.map((m) => ({ role: m.role, content: m.content, ...(m.sig ? { sig: m.sig } : {}) })) }),
+        body: JSON.stringify({ screen, ...(link ? { link } : {}), ...(form ? { form } : {}), messages: history.map((m) => ({ role: m.role, content: m.content, ...(m.sig ? { sig: m.sig } : {}) })) }),
       });
       if ((res.headers.get('content-type') || '').includes('text/event-stream') && res.body) {
         const reader = res.body.getReader();
@@ -324,6 +326,8 @@ export function HelpChat({ screen, link, code, who, actions, onClose }: {
               <a className="btn sm ghost" href="/help" {...(newTab ? { target: '_blank', rel: 'noreferrer' } : {})}>Open the help page{newTab && <span className="sg-vh"> (opens in a new tab)</span>}</a>
               <details className="hc-kept" data-fold><summary>What we keep</summary>{CHAT_DO_NOT_TYPE} {status?.kept || CHAT_KEPT}</details>
             </div>
+            {/* Which model answers here, from the server's settings: inside the app only (designer's note gov-G20). */}
+            {status?.ai && status.model_line && (screen === 'app' || screen === 'editor' || screen === 'plan') && <p className="hc-note hc-model">{status.model_line}</p>}
           </>
         ) : (
           <div className="hc-person-view">

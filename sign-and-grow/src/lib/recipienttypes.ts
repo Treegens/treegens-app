@@ -39,8 +39,10 @@ export const STEP_SAVES_PER_HOUR = 30;
  * Who changed what someone had signed, in the words they are told: the sender, or the person who "Can change the
  * document" with who asked them ("Ed Lawyer, who Rosa Diaz asked to check it,"). Ends with a comma for an editor, so
  * "After that, ${changerWords(...)} changed the document" reads as one sentence either way.
+ * `cosigner`: the changer is someone else who signs, who changed a field anyone on the document can fill in
+ * ("Ben Okafor, who also signs it,"), src/lib/collab.ts.
  */
-export const changerWords = (editor: string | null | undefined, sender: string): string => (String(editor || '').trim() ? `${String(editor).trim()}, who ${sender} asked to check it,` : sender);
+export const changerWords = (editor: string | null | undefined, sender: string, cosigner = false): string => (String(editor || '').trim() ? `${String(editor).trim()}, ${cosigner ? 'who also signs it' : `who ${sender} asked to check it`},` : sender);
 
 /** After "Finish later" on their screen: nothing typed there is kept until they finish (POST .../step/... saves it). */
 export const stepLaterWords = (bySender: boolean): string =>

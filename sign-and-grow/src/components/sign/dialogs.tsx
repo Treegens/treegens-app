@@ -7,6 +7,7 @@ import { fieldName, isMulti, problemWith, inputLimit, amountHint, lengthHint, ty
 import { CANNOT_PRINT_HEAD, CANNOT_PRINT_THEN, shownChars } from '@/lib/scripts';
 import { formatDateValue } from '@/lib/dates';
 import { NUMBER_HINT } from '@/lib/numbers';
+import { sharedNote } from '@/lib/collab';
 import { DISPUTE_DOES, disputeSenderSees } from '@/lib/evidence';
 import { PREVIEW_NOTHING } from '@/lib/preview';
 
@@ -385,7 +386,7 @@ export function FieldSheet({ field, value, dateFormat, onChange, onDone, onNext,
         )}
         {problem
           ? <p id={hint} className="sg-sheet-hint bad" role="alert">{problem}</p>
-          : <p id={hint} className="sg-sheet-hint">{field.from_name && value === field.from_name && field.name_check ? `${field.name_check}. We took it from the name the sender typed. ` : ''}{field.type === 'date' && value ? `On the document this date is written as ${formatDateValue(value, dateFormat)}.` : field.type === 'number' ? `${amountHint(field) ? `${amountHint(field)} ` : ''}${NUMBER_HINT}${field.required ? '' : ' Optional.'}` : `${lengthHint(field, value) ? `${lengthHint(field, value)} ` : ''}${field.required ? 'Required' : 'Optional. Leave it empty if it does not apply.'}`}</p>}
+          : <p id={hint} className="sg-sheet-hint">{field.from_name && value === field.from_name && field.name_check ? `${field.name_check}. We took it from the name the sender typed. ` : ''}{field.type === 'date' && value ? `On the document this date is written as ${formatDateValue(value, dateFormat)}.` : field.type === 'number' ? `${amountHint(field) ? `${amountHint(field)} ` : ''}${NUMBER_HINT}${field.required ? '' : ' Optional.'}` : `${lengthHint(field, value) ? `${lengthHint(field, value)} ` : ''}${field.required ? 'Required' : field.shared ? `Optional. ${sharedNote(field)}` : 'Optional. Leave it empty if it does not apply.'}`}</p>}
         <div className="actions">
           <button type="button" className={`btn${onNext ? '' : ' primary'}`} onClick={onDone}>Done</button>
           {onNext && <button className="btn primary">Next</button>}

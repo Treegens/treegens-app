@@ -306,6 +306,10 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 .sg-doc .field:focus-within .sg-doc-count { display: block; position: absolute; top: 100%; left: 0; margin-top: 2px; padding: 2px 6px; border-radius: 4px; background: var(--ink, #1d2a24); color: #fff; font-size: 12px; line-height: 1.4; width: max-content; max-width: min(320px, 80vw); z-index: 5; pointer-events: none; }
 .sg-row-rule { margin: 8px 0 2px; }
 
-/* Under a field anyone on the document can fill in: who changed it last (src/components/sign/SharedNotes.tsx). */
-.sg-shared-note { position: absolute; margin-top: 2px; padding: 2px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.92); color: #3d4a43; border: 1px solid #c9d3cc; font-size: 12px; line-height: 1.35; width: max-content; pointer-events: none; z-index: 4; }
+/* Under a field anyone on the document can fill in, only while the person is in it, like the character count above:
+   who changed it last (src/components/sign/SharedNotes.tsx). Gone as soon as they leave the field. */
+.sg-shared-note { position: absolute; margin-top: 2px; padding: 2px 6px; border-radius: 4px; background: var(--ink, #1d2a24); color: #fff; font-size: 12px; line-height: 1.4; width: max-content; pointer-events: none; z-index: 7; }
 @media (max-width: 600px) { .sg-shared-note { font-size: 11px; padding: 1px 4px; } }
+/* A field anyone could fill in that can no longer be changed: plainly not done, and not typed into. */
+.field.sg-locked { border-style: dashed; background: rgba(240, 242, 241, 0.85); color: #3d4a43; cursor: default; }
+.field.sg-locked .ph { color: #5f6b65; font-style: italic; }

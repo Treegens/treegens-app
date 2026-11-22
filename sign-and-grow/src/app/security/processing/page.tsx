@@ -6,6 +6,8 @@ import { mailEventsOn, BOUNCE_WARN_DAYS } from '@/lib/policy';
 import { ProcessorTable, Stated } from '../DataPlace';
 import { PrintButton } from './PrintButton';
 import { CHAT_KEPT_PAGE } from '@/lib/chat';
+import { CHAT_NOT_TRAINED, chatTermsLine, modelLine } from '@/lib/chatboundary';
+import { chatProvider } from '@/lib/chatprovider';
 import { readPossible, READ_SENT, READ_KEPT, READ_ALSO } from '@/lib/aiassist';
 import { dayText } from '@/lib/dates';
 import { fileEncryptionOn, PROCESSING_ENCRYPTED, databaseText, processingNotDone } from '@/lib/storedfiles';
@@ -22,6 +24,7 @@ export const dynamic = 'force-dynamic';
 
 export default function ProcessingSummary() {
   const d = dataPlace();
+  const chatAt = chatProvider();
   const today = dayText(new Date());
   return (
     <div className="pub pub-print">
@@ -56,7 +59,7 @@ export default function ProcessingSummary() {
           <li><b>Emails:</b> a copy of every email this server sends, and whether the mail server took it.{mailEventsOn() && ' Afterwards, what the mail provider tells us about it: that it reached the recipient\'s mail server, came back, or was marked as spam, with the reason the mail server gave. That reason is seen only by the people who run this service; senders are told what it means in our own words.'}</li>
           <li><b>Payments, if you pay:</b> what was paid, refunded and bought, and the provider&apos;s reference for it. A full card number never reaches this server.</li>
           <li><b>Help requests:</b> what was written, by whom, and the answers.</li>
-          <li><b>The help chat:</b> {CHAT_KEPT_PAGE}{d.processors.some((p) => p.id === 'chat') ? ' What is typed into it goes to the help chat provider in the table below, to be answered.' : ' On this server it answers from the built-in help, so nothing typed into it leaves the server.'}</li>
+          <li><b>The help chat:</b> {CHAT_KEPT_PAGE}{chatAt && d.processors.some((p) => p.id === 'chat') ? ` What is typed into it goes to the help chat provider in the table below, to be answered. ${modelLine(chatAt)} ${chatAt.inside ? CHAT_NOT_TRAINED : chatTermsLine(chatAt.name, chatAt.style === 'plain')}` : ' On this server it answers from the built-in help, so nothing typed into it leaves the server.'}</li>
           {/* Writing a document in the app (src/server/writedoc.ts) uses the same model and settings as the help chat. */}
           {/* AI help when sending and signing (src/server/aiassist.ts), with the same model and settings. */}
           {d.processors.some((p) => p.id === 'chat') && readPossible() && <li><b>AI help when sending and signing:</b> {READ_SENT} {READ_KEPT}</li>}

@@ -33,7 +33,7 @@ export const paperPaths = () => ({
   },
   '/envelopes/{id}/paper': {
     parameters: [id('id')],
-    get: { summary: 'The scans signed on paper on this document', description: 'Newest first: { scans: [{ id, recipient_id, name, state ("waiting", "accepted" or "asked_again"), at, pages, code, current, decided_at, decided_by, reason }] }. "current" is false for a scan made from the print of an older version of the document.', responses: { 200: { description: 'The scans.' }, default: err } },
+    get: { summary: 'The scans signed on paper on this document', description: 'Newest first: { scans: [{ id, recipient_id, name, state ("waiting", "accepted", "asked_again" or "set_aside"), at, pages, code, current, decided_at, decided_by, reason }] }. "current" is false for a scan made from the print of an older version of the document. "set_aside": it no longer counts and is kept on record, because the request is now for another person (a correction to another address, or another name at the same one) or because the person was asked to sign again after it was accepted.', responses: { 200: { description: 'The scans.' }, default: err } },
   },
   '/envelopes/{id}/recipients/{rid}/paper/scan': {
     parameters: [id('id'), id('rid')],
@@ -41,7 +41,7 @@ export const paperPaths = () => ({
   },
   '/envelopes/{id}/recipients/{rid}/paper/accept': {
     parameters: [id('id'), id('rid')],
-    post: { summary: 'Accept the waiting scan as signed by this person', description: 'The person finishes the way anyone finishes, as of now and from the address the scan came from: it uses a signature like any finished signer, the next person is asked, and when everyone has finished the signed PDF has the scan after a page "Signed on paper by <name>", their places read "Signed on paper: see page N", and the certificate says when and from where the scan came, who accepted it and when, and that GrowSigning did not check the handwriting. Refused (409) with code "no_scan" when nothing waits, "paper_old_version" when the document changed after the print was made, and "not_open" once the document is closed. The sender, an admin who sees the whole account, or a colleague the sender shared their documents with at "manage" may do this.', responses: { 200: { description: '{ ok: true, envelope_status }' }, default: err } },
+    post: { summary: 'Accept the waiting scan as signed by this person', description: 'Only a scan sent by the person the request is for now: 409 "no_scan" otherwise. The person finishes the way anyone finishes, as of now and from the address the scan came from: it uses a signature like any finished signer, the next person is asked, and when everyone has finished the signed PDF has the scan after a page "Signed on paper by <name>", their places read "Signed on paper: see page N", and the certificate says when and from where the scan came, who accepted it and when, and that GrowSigning did not check the handwriting. Refused (409) with code "no_scan" when nothing waits, "paper_old_version" when the document changed after the print was made, and "not_open" once the document is closed. The sender, an admin who sees the whole account, or a colleague the sender shared their documents with at "manage" may do this.', responses: { 200: { description: '{ ok: true, envelope_status }' }, default: err } },
   },
   '/envelopes/{id}/recipients/{rid}/paper/reject': {
     parameters: [id('id'), id('rid')],

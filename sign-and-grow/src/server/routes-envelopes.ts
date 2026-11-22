@@ -242,7 +242,8 @@ route('GET', '/envelopes', (c) => {
     FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE ${where.join(' AND ')} ORDER BY e.updated_at DESC LIMIT ? OFFSET ?`, ...p, limit, Number(c.q.get('offset')) || 0);
   for (const e of rows) {
     // bounced_at, complained_at: an email to them came back for good, or they marked one as spam. The list flags both.
-    e.recipients = all('SELECT id, name, email, role, role_name, status, sent_at, muted, bounced_at, complained_at, routing_order, wait_hours, completed_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
+    // paper_state: a scan signed on paper that waits for the sender is shown as theirs to look at, without Remind (paper.ts).
+    e.recipients = all('SELECT id, name, email, role, role_name, status, sent_at, muted, bounced_at, complained_at, routing_order, wait_hours, completed_at, paper_state FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
     // True when the latest email to someone who has not opened it yet did not leave. Lets the list flag it.
     e.email_failed = all("SELECT m.status FROM emails m WHERE m.envelope_id=? AND m.id IN (SELECT MAX(id) FROM emails WHERE envelope_id=? GROUP BY COALESCE(recipient_id, to_email))", e.id, e.id).some((m) => m.status === 'failed');
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;

@@ -343,9 +343,10 @@ test('outside: what each mode allows', () => {
   assert.ok(hostAllowed(outsidePolicy(FULL), 'anything.example'));
   // listed: what the settings imply, OUTBOUND_ALLOW, the webhook hosts, this machine; SNS only by its shape.
   const listed = outsidePolicy({ ...FULL, OUTSIDE_CALLS: 'listed', OUTBOUND_ALLOW: 'proxy.internal', WEBHOOK_ALLOW_HOSTS: 'hooks.example.org' });
-  for (const h of ['smtp.example.org', 'api.stripe.com', 'www.googleapis.com', 'login.microsoftonline.com', 'api.twilio.com', 'tsa2.example.net', 'llm.example.com', 'gotenberg', 'proxy.internal', 'hooks.example.org', 'localhost', 'sns.eu-west-1.amazonaws.com'])
+  for (const h of ['smtp.example.org', 'api.stripe.com', 'www.googleapis.com', 'login.microsoftonline.com', 'api.twilio.com', 'tsa2.example.net', 'gotenberg', 'proxy.internal', 'hooks.example.org', 'localhost', 'sns.eu-west-1.amazonaws.com'])
     assert.ok(hostAllowed(listed, h), h);
-  for (const h of ['evil.example', 'accounts.google.com', 'api.stripe.com.evil.example', 'sns.evil.example', 's3.amazonaws.com', '203.0.113.5'])
+  // The help chat's model only at a private address or a host in OUTBOUND_ALLOW (gov-G20, src/lib/chatboundary.ts).
+  for (const h of ['llm.example.com', 'evil.example', 'accounts.google.com', 'api.stripe.com.evil.example', 'sns.evil.example', 's3.amazonaws.com', '203.0.113.5'])
     assert.ok(!hostAllowed(listed, h), h);
   assert.match(refusalWords(listed, 'evil.example'), /^This server does not connect to evil\.example: OUTSIDE_CALLS=listed .* Add evil\.example to OUTBOUND_ALLOW if it should\.$/);
   // none: the mail relay and OUTBOUND_ALLOW only.
@@ -365,11 +366,13 @@ test('outside: what each mode allows', () => {
 test('outside: OUTSIDE_CALLS=none switches off every service that needs another host, so it is absent, and keeps mail', () => {
   const env: Record<string, string | undefined> = { ...FULL, OUTSIDE_CALLS: 'none', OUTBOUND_ALLOW: 'gotenberg' };
   const off = applyOutsideCalls(env);
-  assert.deepEqual(off.map((s) => s.id), ['payments', 'google', 'microsoft', 'sms', 'tsa', 'chat', 'pwned']);
+  // The help chat is not among them: its model at a public name that is not in OUTBOUND_ALLOW is never used under
+  // OUTSIDE_CALLS=none at all (gov-G20, src/lib/chatboundary.ts), and the server says so when it starts.
+  assert.deepEqual(off.map((s) => s.id), ['payments', 'google', 'microsoft', 'sms', 'tsa', 'pwned']);
   // The leaked-password check is on without a setting, so it is switched off by one.
   assert.equal(env.PWNED_CHECK, '0');
   assert.deepEqual(off.find((s) => s.id === 'payments')!.settings, ['STRIPE_SECRET_KEY', 'STRIPE_PRICE_GROVE', 'STRIPE_WEBHOOK_SECRET']);
-  for (const k of ['STRIPE_SECRET_KEY', 'GOOGLE_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'TWILIO_AUTH_TOKEN', 'TSA_URL', 'SUPPORT_CHAT_API_KEY']) assert.equal(env[k], undefined, k);
+  for (const k of ['STRIPE_SECRET_KEY', 'GOOGLE_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'TWILIO_AUTH_TOKEN', 'TSA_URL']) assert.equal(env[k], undefined, k);
   // Each feature now reads itself as not set up, the same way as on a server where it never was.
   assert.deepEqual(signInProviders(env), []);
   assert.equal(smsProvider(env), null);

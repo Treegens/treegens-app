@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { cloneElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api, toast, fmtDate } from '@/components/ui';
 import { PdfDoc } from '@/components/PdfDoc';
@@ -19,7 +19,7 @@ import { MenuDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDia
 import { HelpChat } from '@/components/HelpChat';
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
-import { SharedNotes, sharedSaid, ownAnswers, needsInitials, INITIALS_FIRST } from '@/components/sign/SharedNotes';
+import { SharedNotes, sharedSaid, ownAnswers, needsInitials, INITIALS_FIRST, autosaved, LockedShared } from '@/components/sign/SharedNotes';
 import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
 import { useLiveLogic } from '@/components/sign/logic';
 import { keepTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
@@ -55,7 +55,7 @@ import { StampDialog, sameStampOf } from '@/components/stamps/StampDialog';
 import { stampTurn, turnStyle } from '@/lib/stamps';
 import { layers } from '@/lib/stacked';
 // The page made simpler: Other actions in one order, Finish that signs unless something needs a look, Next that opens.
-import { otherActions, bySwitches, lookAgain, nextOpens, nameDiffers, laterAtConsent, laterLabel, reviewTitle, GUIDE_NEXT, GUIDE_FINISH, FLAG_MARGIN, type ActionKey } from '@/components/sign/actions';
+import { otherActions, bySwitches, lookAgain, nextOpens, nameDiffers, laterAtConsent, laterLabel, reviewTitle, witnessPlaces, GUIDE_NEXT, GUIDE_FINISH, FLAG_MARGIN, type ActionKey } from '@/components/sign/actions';
 import { ConsentTop } from '@/components/sign/ConsentTop';
 import { SummaryLink } from '@/components/sign/Summary';
 import { Supplements, focusAlso, NO_ALSO, type AlsoLeft } from '@/components/sign/Supplements';
@@ -69,7 +69,7 @@ import { yourMoment } from '@/lib/dates';
 // The account's own consent text under ours, and "Sign on paper instead" (sign/OwnTerms.tsx, sign/Withdraw.tsx).
 import { OwnTermsBlock } from '@/components/sign/OwnTerms';
 // Printing it, signing by hand and sending back a photo, when the sender's account offers it (sign/Paper.tsx).
-import { PaperChoice, PaperScreen, paperFirst, withPrint } from '@/components/sign/Paper';
+import { PaperChoice, PaperScreen, PaperAskedNote, paperFirst, withPrint } from '@/components/sign/Paper';
 import { t } from '@/lib/i18n';
 // Inside a frame on the sender's own website: what happened is told to that website alone (sign/frame.ts).
 import { frameBody, tellFrame } from '@/components/sign/frame';
@@ -178,6 +178,9 @@ export default function SignPage() {
   const helpActs = useRef<MenuItem[]>([]);
 
   const valuesRef = useRef(values);
+  // The fields as last loaded, for the autosave (a change that asks others to sign again waits for Finish).
+  const heldFields = useRef<any[]>([]);
+  heldFields.current = data?.fields || [];
   valuesRef.current = values;
   const kept = useRef<{ sig: string | null; ini: string | null }>({ sig: null, ini: null });
   kept.current = { sig, ini };
@@ -387,9 +390,10 @@ export default function SignPage() {
     // are sent when they changed, not with every keystroke. From a closing page they only go along when the whole
     // request stays small: a request the browser finishes on its own has a size limit, and one that is too big
     // would lose the answers with it.
-    // sign_again: a field anyone can fill in says under it who is asked to sign again when it changes (SharedNotes.tsx).
-    let body: any = { ...saveBody(valuesRef.current, version.current, kept.current, savedMarks.current), ...hows.current, sign_again: true };
+    // A change to a field anyone can fill in that asks others to sign again is not autosaved: it goes with Finish (SharedNotes.tsx).
+    let body: any = { ...saveBody(valuesRef.current, version.current, kept.current, savedMarks.current), ...hows.current };
     if (leaving && JSON.stringify(body).length > 60_000) body = saveBody(valuesRef.current, version.current, savedMarks.current, savedMarks.current);
+    body.values = autosaved(heldFields.current, body.values);
     const marks = { sig: body.signature_png, ini: body.initials_png };
     if (json === lastSaved.current && !marks.sig && !marks.ini) return true;
     const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' as const };
@@ -1012,7 +1016,7 @@ export default function SignPage() {
               signed the first time is still theirs to download meanwhile. */}
           {me.signed_before && me.earlier_copy && !data.locked && (
             <>
-              <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this on {fmtDate(me.signed_before, true)}. After that, {changerWords(me.changed_by, sender.name)} changed the document, so you will be asked to {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again when it is your turn. What you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} then is kept on record, and you can download it.</p>
+              <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this on {fmtDate(me.signed_before, true)}. After that, {changerWords(me.changed_by, sender.name, !!me.changed_by_signer)} changed the document, so you will be asked to {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again when it is your turn. What you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} then is kept on record, and you can download it.</p>
               <div className="row wrap sg-actions"><a className="btn lg" href={`${downloadUrl}?earlier=1`}><Icon name="download" /> Download what you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'}</a></div>
             </>
           )}
@@ -1086,14 +1090,20 @@ export default function SignPage() {
   // the same Other actions as every signer screen (charter 2.6).
   // Signed on paper and waiting for the sender to check, or asked to sign on paper only (sign/Paper.tsx).
   const paperScreen = paperFirst(me.paper_sign, stage);
-  if (paperScreen)
+  // The sender asked for the photos again: their reason where the person lands, with one button to the steps.
+  const paperNote = <PaperAskedNote ps={me.paper_sign} sender={sender} lang={data.language?.locale || 'en'} onOpen={go('paper')} />;
+  if (paperScreen) {
+    // Other actions works here too: while the scan waits only a question or declining means anything.
+    const paperMenu = menu.filter((m) => (paperScreen === 'waiting' ? m.key === 'ask' || m.key === 'decline' : m.key !== 'paper' || !!data.own_terms));
     return (
       <Shell data={data} bar={other} footer={report} plainBar onHelp={headHelp}>
         {notice}
-        <PaperScreen kind={paperScreen} base={base} ps={me.paper_sign} sender={sender} email={me.link_by_sender ? null : me.email} lang={data.language?.locale || 'en'} onSent={load} />
+        <PaperScreen kind={paperScreen} base={base} ps={me.paper_sign} sender={sender} email={me.link_by_sender ? null : me.email} subject={env.subject} lang={data.language?.locale || 'en'} onSent={load} />
+        {menuDialog && cloneElement(menuDialog, { items: paperMenu })}
         {dialogs}
       </Shell>
     );
+  }
 
   if (stepFirst(data, stage))
     return (
@@ -1116,6 +1126,7 @@ export default function SignPage() {
       <Shell data={data} bar={other} footer={report} helpInNewTab plainBar onHelp={headHelp}>
         {notice}
         {laterNote}
+        {paperNote}
         <div className="card sg-consent">
           {/* Who asks, the document, from and for whom, the sender's words; kept to 120 words before the tick. The
               sender is named once, with the account's name only when it says more ("at Acme Ltd"). */}
@@ -1243,6 +1254,8 @@ export default function SignPage() {
     if (f.type === 'full_name' && me.role !== 'viewer')
       return <button key={f.id} type="button" {...common} title="Added for you" aria-haspopup="dialog" onClick={go('name')} aria-label={`Your name, added for you: ${me.name}. Fix its spelling`}><span className="sg-val" dir="auto">{me.name}</span></button>;
     if (AUTO.includes(f.type)) return <div key={f.id} {...common} title="Added for you"><span className="sg-val" dir="auto">{f.type === 'full_name' ? me.name : f.type === 'email' ? me.email : dateText}</span></div>;
+    // A field anyone could fill in that someone's Finish has closed: what it says and why (SharedNotes.tsx).
+    if (f.readonly && f.locked_by?.length) return <LockedShared key={f.id} f={f} common={common} box={isBox(f)} shown={isBox(f) ? (f.value === '1' ? '1' : '') : f.value || ''} />;
     if (f.readonly) return <div key={f.id} {...common} title={f.calc_note}><span className="sg-val" dir="auto">{isBox(f) ? (f.value === '1' ? '✓' : '') : f.type === 'date' ? formatDateValue(f.value, env.date_format) : f.value}</span>{f.calc_note && <span className="sg-vh">{f.calc_note}</span>}</div>;
     // Tick boxes and radio buttons are the browser's own controls, drawn in the place the page gives them. So the
     // keyboard works as everywhere else (Space ticks, the arrow keys move through a group of radio buttons) and a
@@ -1416,6 +1429,7 @@ export default function SignPage() {
         {!allShown && !hasNext && <> The document is still loading: you can {acts ? 'finish' : me.role === 'approver' ? 'approve' : 'confirm'} as soon as its pages are on your screen. If they do not appear, reload this page.</>}
       </p>
       {laterNote}
+      {paperNote}
       {/* The view, the size of the pages and Download are in the toolbar's More (sign/More.tsx), and Questions and
           comments in Other actions, so the pages start near the top of a phone. Someone on a keyboard or a screen reader meets the text view right here, before the
           pages, which are pictures: this button shows itself when it has the focus, like the skip link. */}
@@ -1467,7 +1481,7 @@ export default function SignPage() {
           usesSig={fields.some((f) => f.type === 'signature' && filled(f))} usesIni={fields.some((f) => f.type === 'initials' && filled(f))}
           onChangeSig={changeMark} onBack={() => setOpen('')} onFinish={complete}
           printCheck={() => api(`${base}/print-check`, { body: { values } })}
-          title={finishError ? undefined : reviewTitle(lookAgain({ questions, witness: me.witness, typedName: sig ? typedName : null, name: me.name }), me.role === 'approver') === 'Check before you finish' ? undefined : reviewTitle(lookAgain({ questions, witness: me.witness, typedName: sig ? typedName : null, name: me.name }), me.role === 'approver')}
+          title={finishError ? undefined : reviewTitle(lookAgain({ questions, witness: me.witness, typedName: sig ? typedName : null, name: me.name }), me.role === 'approver', witnessPlaces(me)) === 'Check before you finish' ? undefined : reviewTitle(lookAgain({ questions, witness: me.witness, typedName: sig ? typedName : null, name: me.name }), me.role === 'approver', witnessPlaces(me))}
           checkFailed={checkFailed}
           onRename={rename} />
       )}

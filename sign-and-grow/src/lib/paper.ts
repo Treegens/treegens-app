@@ -23,12 +23,12 @@ export type PaperWay = 'may' | 'only' | null;
 export type PaperPick = 'link' | 'screen' | 'paper';
 export const paperPick = (r: { allow_paper?: any; require_paper?: any }): PaperPick => (r.require_paper ? 'paper' : r.allow_paper === 0 || r.allow_paper === false ? 'screen' : 'link');
 export const PICK_WORDS: Record<PaperPick, string> = {
-  link: 'On screen, or on paper if they prefer',
+  link: 'On screen or on paper',
   screen: 'On screen only',
   paper: 'On paper only',
 };
 /** The line in a person's More, short. */
-export const PICK_SHORT: Record<PaperPick, string> = { link: 'On paper allowed', screen: 'On screen only', paper: 'On paper only' };
+export const PICK_SHORT: Record<PaperPick, string> = { link: 'On screen or on paper', screen: 'On screen only', paper: 'On paper only' };
 
 export const PAPER_WORDS = {
   setting: 'People may sign on paper',

@@ -108,7 +108,8 @@ export function FieldLookMore({ field, fields, patch, patchMany }: { field: any;
     const next = p === null ? null : lookOf({ ...(look || {}), ...p });
     patch({ look: next });
   };
-  const same = LINKABLE.includes(field.type) && !dateFromOf(field) ? fields.filter((g) => g.id !== field.id && g.recipient_id === field.recipient_id && g.type === field.type && !g.readonly && !dateFromOf(g)) : [];
+  // A field for anyone on the document never shares an answer with another (SharedChoice.tsx).
+  const same = LINKABLE.includes(field.type) && !dateFromOf(field) && !field.shared ? fields.filter((g) => g.id !== field.id && g.recipient_id === field.recipient_id && g.type === field.type && !g.readonly && !dateFromOf(g)) : [];
   const link = linkOf(field);
   const partner = link ? fields.find((g) => g.id !== field.id && g.recipient_id === field.recipient_id && g.type === field.type && linkOf(g) === link) : null;
   const pick = (id: string) => {

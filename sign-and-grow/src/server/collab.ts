@@ -19,14 +19,20 @@
 import { all, get, run, tx, saveBlob } from './db.ts';
 import { bad, now, str } from './util.ts';
 import { seal, sealField } from './colcrypt.ts';
-import { audit, buildPdf, advance, okImage, setAside, senderOf, type Actor } from './envelopes.ts';
+import { audit, buildPdf, advance, okImage, setAside, senderOf, applyValues, type Actor } from './envelopes.ts';
 import { assertLimits } from './fieldchecks.ts';
 import { assertCanStore } from './filestore.ts';
 import { settleWitnesses, witnessesSetAside } from './witness.ts';
+import { settlePaper } from './paper.ts';
 import { isStepRole } from '../lib/recipienttypes.ts';
 import { isHidden } from '../lib/fieldrules.ts';
 import { dayText } from '../lib/dates.ts';
-import { isShareable, isShared, canShare, listNames, saidValue, ANYONE } from '../lib/collab.ts';
+import { isShareable, isShared, canShare, listNames, saidValue, ANYONE, SHARED_MAX } from '../lib/collab.ts';
+
+/** Whether the last change that asked `rid` to sign again was made by someone else who signs (a field anyone can fill
+ *  in), so their emails and copies say so (changerWords). */
+export const cosignerChanged = (eid: string, rid: string): boolean =>
+  !!get('SELECT changed_by_signer s FROM earlier_signatures WHERE envelope_id=? AND recipient_id=? ORDER BY id DESC LIMIT 1', eid, rid)?.s;
 
 const NO = ' Nothing was saved.';
 type Entry = { fid: string; f: any; rid: string | null; which: string };
@@ -123,7 +129,8 @@ export function noteSharedShown(e: any, r: any) {
 const asStored = (f: any, v: any): string => {
   let s = str(v, 4000);
   if (f.type === 'checkbox' || f.type === 'radio') s = s ? '1' : '';
-  if (f.type === 'dropdown' && s && !(f.options || []).includes(s)) s = '';
+  // A dropdown answer that is not one of its options is refused, as for anyone's own dropdown: never quietly emptied.
+  if (f.type === 'dropdown' && s && !(f.options || []).includes(s)) throw bad(`${label(f)} has no option "${str(s, 60)}". Choose one of its options.${NO}`, 400, { code: 'not_an_option', field_id: f.id });
   return s;
 };
 
@@ -167,12 +174,21 @@ export function sharedNow(e: any, r: any, body: any, actor: Actor, finishing = f
     if (base !== stored) throw stale(f);
     changes.push({ f, before: stored, after: v });
   }
-  // A choice taken takes the others of its group off, as one change of the group.
+  // A choice taken takes the others of its group off, as one change of the group. A choice that is on now but was
+  // off on this person's screen was taken by someone else since: that is refused like any other out-of-date screen,
+  // so a stale screen never takes someone else's choice off.
   for (const c of [...changes]) {
     if (c.f.type !== 'radio' || c.after !== '1') continue;
-    for (const g of shared) if (g.id !== c.f.id && g.type === 'radio' && g.recipient_id === c.f.recipient_id && (g.group_name || g.id) === (c.f.group_name || c.f.id) && g.value === '1' && !changes.some((x) => x.f.id === g.id)) changes.push({ f: g, before: '1', after: '' });
+    for (const g of shared) {
+      if (g.id === c.f.id || g.type !== 'radio' || g.recipient_id !== c.f.recipient_id || (g.group_name || g.id) !== (c.f.group_name || c.f.id) || g.value !== '1' || changes.some((x) => x.f.id === g.id)) continue;
+      if (g.id in shown && (shown[g.id] ?? '') !== '1') throw stale(g);
+      changes.push({ f: g, before: '1', after: '' });
+    }
   }
   if (!changes.length) return none;
+  // However long the document is open, one person's changes to these fields stay a readable record.
+  const made = Number(get('SELECT COUNT(*) n FROM shared_changes WHERE envelope_id=? AND recipient_id=?', e.id, r.id)?.n || 0);
+  if (made + changes.length > SHARED_MAX) throw bad(`You have changed the fields anyone on the document can fill in ${made} times on this document, which is as many as we keep. Nothing more was saved. If something still needs to change, tell ${senderOf(e)?.name || 'the sender'}, who can change the document.`, 429, { code: 'shared_limit' });
   assertLimits(changes.map((c) => c.f), Object.fromEntries(changes.map((c) => [c.f.id, c.after])));
   const done = finishedOthers(e, r);
   const names = listNames(done.map((x: any) => x.name));
@@ -180,20 +196,25 @@ export function sharedNow(e: any, r: any, body: any, actor: Actor, finishing = f
     const c = changes.find((x) => !x.f.shared_after);
     if (c) throw bad(`${names} already finished, so ${label(c.f)} can no longer be changed.${NO} If it is wrong, tell ${senderOf(e)?.name || 'the sender'}, who can change the document.`, 409, { code: 'shared_locked', field_id: c.f.id });
     if (body?.sign_again !== true)
-      throw bad(`${names} already finished. Changing ${label(changes[0].f)} now asks ${done.length === 1 ? names : 'them'} to sign again, and what they signed first stays on record.${NO} To go ahead, send the change again with "sign_again": true.`, 409, { code: 'shared_sign_again', field_id: changes[0].f.id, sign_again: done.map((x: any) => x.name) });
+      throw bad(`${names} already finished. Changing ${label(changes[0].f)} now asks ${done.length === 1 ? names : 'them'} to sign again, and what they signed first stays on record.${NO} To go ahead, confirm that ${done.length === 1 ? names : 'they'} will be asked to sign again.`, 409, { code: 'shared_sign_again', field_id: changes[0].f.id, sign_again: done.map((x: any) => x.name) });
     assertCanStore();
+    // Finish asks the others to sign again only when it can go through: a Finish refused for a missing signature or
+    // answer changes nothing and asks nobody to sign again. Checked as Finish checks it, then undone (as payFirst does).
+    if (finishing) dryFinish(e, r, body);
   }
-  const ask = changes.find((c) => c.f.shared_initials);
+  // Initials are asked for a change of an answer that is there, not for the first answer in an empty field.
+  const ask = changes.find((c) => c.f.shared_initials && c.before !== '');
   const initials = okImage(body?.initials_png) ? body.initials_png : okImage(r.initials_png) ? r.initials_png : null;
   if (ask && !initials) throw bad(`Add your initials to change ${label(ask.f)}. The sender asks for initials whenever it changes.${NO}`, 400, { code: 'initials_for_change', field_id: ask.f.id });
   const who = r.name || 'Someone';
   const told = changes.filter((c) => c.after !== '' || c.f.type !== 'radio').map((c) => `${label(c.f)} on page ${Number(c.f.page) + 1} from ${saidValue(c.f.type, c.before)} to ${saidValue(c.f.type, c.after)}`);
-  const changer: Actor = { ...actor, name: who, editor: true, editor_id: r.id, editor_name: who };
+  // cosigner: the emails and copies say "who also signs it", not that the sender asked them to check it.
+  const changer: Actor = { ...actor, name: who, editor: true, editor_id: r.id, editor_name: who, cosigner: true };
   const t = now();
   tx(() => {
     for (const c of changes) {
       run('UPDATE fields SET value=? WHERE id=?', sealField(c.f.type, c.after || null), c.f.id);
-      const img = c.f.shared_initials ? initials : null;
+      const img = c.f.shared_initials && c.before !== '' ? initials : null;
       run('INSERT INTO shared_changes (envelope_id, field_id, recipient_id, name, before, after, initials_png, sign_again, at) VALUES (?,?,?,?,?,?,?,?,?)',
         e.id, c.f.id, r.id, who, seal('shared_changes.before', c.before || null), seal('shared_changes.after', c.after || null), img ? seal('shared_changes.initials_png', img) : null, done.length ? names : null, t);
       if (c.f.type === 'radio' && c.after === '') continue;
@@ -213,6 +234,8 @@ export function sharedNow(e: any, r: any, body: any, actor: Actor, finishing = f
     }
     witnessesSetAside(e, done, byId, changer);
     settleWitnesses(e.id);
+    // Someone who signed on paper and is asked to sign again: the scan accepted before no longer counts (paper.ts).
+    settlePaper(e.id);
     run('UPDATE envelopes SET last_change=? WHERE id=?', `${who} changed ${told.join('; ')}.`.slice(0, 2000), e.id);
   });
   // A copy of what each of them signed, from the envelope as it was before this change (see correctEnvelope).
@@ -228,6 +251,23 @@ export function sharedNow(e: any, r: any, body: any, actor: Actor, finishing = f
     await advance(e.id);
   };
   return { changed: changes.length, sign_again: done.map((x: any) => x.name), later };
+}
+
+/** Finish's own checks of this person's answers, signature and initials, with nothing kept. */
+function dryFinish(e: any, r: any, body: any) {
+  const ROLLBACK = new Error('rollback');
+  try {
+    tx(() => {
+      applyValues(e, r, body?.values || {}, true, (hidden) => {
+        const mine = e.fields.filter((f: any) => f.recipient_id === r.id && !hidden.has(f.id));
+        if (mine.some((f: any) => f.type === 'signature' && (f.required || f.value)) && !okImage(body?.signature_png)) throw bad('Your signature is missing. Make it on the page, then finish again. Nothing was changed.');
+        if (mine.some((f: any) => f.type === 'initials' && (f.required || f.value)) && !okImage(body?.initials_png)) throw bad('Your initials are missing. Add them on the page, then finish again. Nothing was changed.');
+      });
+      throw ROLLBACK;
+    });
+  } catch (x) {
+    if (x !== ROLLBACK) throw x;
+  }
 }
 
 /** The certificate: every field anyone could fill in that someone changed, with each change. */

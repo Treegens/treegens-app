@@ -11,7 +11,8 @@
 // It reads the environment: server code and server components only.
 import { signInProviders } from './signin.ts';
 import { smsProvider } from './checks.ts';
-import { chatProvider, chatModelOn, CHAT_SENT, CHAT_WHO } from './chatprovider.ts';
+import { chatProvider, chatModelOn, INSIDE_NAME, CHAT_SENT, CHAT_WHO } from './chatprovider.ts';
+import { CHAT_SERVER_KEEPS_NOTHING, CHAT_SERVER_STORES_NOTHING, chatTermsLine } from './chatboundary.ts';
 import { readPossible, READ_SENT, READ_WHO } from './aiassist.ts';
 
 type Env = Record<string, string | undefined>;
@@ -130,13 +131,17 @@ export function dataPlace(env: Env = process.env): DataPlace {
   // The help chat: listed when a model answers it, from the same function the server asks (src/lib/chatprovider.ts).
   const chat = chatProvider(env);
   if (chat && chatModelOn(env)) {
+    // A model inside this server's own network is not an outside company: its country is this server's network.
+    const name = chat.name === INSIDE_NAME ? "The people who run this server, with their own model" : chat.name.charAt(0).toUpperCase() + chat.name.slice(1);
     processors.push({
-      id: 'chat', name: chat.name, country: chat.country,
-      purpose: `Writes the answers of the help chat (the AI model ${chat.model}, reached at ${chat.host}). What it keeps of a question, and for how long, is set by its own terms.`,
+      id: 'chat', name, country: chat.inside ? chat.country || 'Same network as this server' : chat.country,
+      purpose: chat.inside
+        ? `Writes the answers of the help chat (the AI model ${chat.model}, which runs inside this server's own network at ${chat.host}). ${CHAT_SERVER_KEEPS_NOTHING} What the model's own program logs is set by the people who run it.`
+        : `Writes the answers of the help chat (the AI model ${chat.model}, reached at ${chat.host}). ${CHAT_SERVER_STORES_NOTHING} ${chatTermsLine('it', chat.style === 'plain')}`,
       // AI help when sending and signing uses the same model (src/server/aiassist.ts): said here where it can happen.
       data: readPossible(env) ? `${CHAT_SENT} For AI help when sending and signing: ${READ_SENT}` : CHAT_SENT,
       who: readPossible(env) ? READ_WHO : CHAT_WHO,
-      missing: need(chat.country, 'in which country its help chat provider handles what people type'),
+      missing: chat.inside ? [] : need(chat.country, 'in which country its help chat provider handles what people type'),
     });
   }
   // Without one nothing is added to `off`: /security says it under "Privacy and AI" (chatPrivacyPoint).

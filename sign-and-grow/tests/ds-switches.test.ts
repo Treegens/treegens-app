@@ -307,7 +307,8 @@ test('the signing page asks bySwitches; with no switches nothing changes', async
     assert.deepEqual(bySwitches(keys, { pass_on: true, comments: true }), keys);
   }
   const page = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/app/sign/[token]/page.tsx', import.meta.url), 'utf8'));
-  assert.match(page, /bySwitches\(otherActions\(me, \{ stage, deadline: !!env\.expires_at, paper: [^}]*\}\), data\.switches\)/);
+  // The menu goes through bySwitches with the page's switches, whatever else builds the list (others change that part).
+  assert.match(page, /const menu: MenuItem\[\] = bySwitches\(.*otherActions\(me, .*\), data\.switches\)\.map/);
 });
 
 // ---- Repairs after the skeptic and the simplicity review (tests/out/verify-ds-switches, tests/out/ux-ds-switches) ----

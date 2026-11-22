@@ -4,6 +4,8 @@ import { bad, rateLimit, str, HttpError } from './util.ts';
 import { addressKey } from './clickwrap.ts';
 import { answer, cleanConversation } from './chat.ts';
 import { aiAnswersFor, accountOfLink } from './tenantpolicy.ts';
+import { accountOfForm } from './chattenant.ts';
+import { modelLine } from '../lib/chatboundary.ts';
 import { chatProvider, chatModelOn } from '../lib/chatprovider.ts';
 import { chatScreen, CHAT_AI_NOTE, CHAT_BUILTIN_NOTE, CHAT_DO_NOT_TYPE, CHAT_KEPT, CHAT_PER_ADDRESS_MINUTE, CHAT_PER_ADDRESS_DAY, CHAT_PER_LINK_DAY, CHAT_PER_ACCOUNT_DAY, CHAT_BODY_BYTES } from '../lib/chat.ts';
 
@@ -64,14 +66,22 @@ route('GET', '/public/chat', (c) => {
   const p = chatProvider();
   // Not for an account that switched AI answers off, nor for the people who sign its documents (the signing page
   // sends its link as ?link=). They are told what is true for them: the answers come from the built-in help.
-  const ai = chatModelOn() && aiAnswersFor(c.account?.id) && aiAnswersFor(accountOfLink(str(c.q.get('link'), 200)));
+  // The same for the people on one of its forms or agreement pages, which link to /help?form=<slug>.
+  const link = str(c.q.get('link'), 200), form = str(c.q.get('form'), 120);
+  const ai = chatModelOn() && aiAnswersFor(c.account?.id) && aiAnswersFor(accountOfLink(link)) && aiAnswersFor(accountOfForm(form));
+  // Who and which model on which host, from the settings: only for someone signed in to the app, never on a signing
+  // page, a form or to a visitor (designer's note gov-G20): an agency's model may sit at an internal address. The
+  // dialog shows the model line at its foot on the app's own screens.
+  const inApp = ai && !!c.account && !link && !form;
   return {
-    ai, provider: ai ? p!.name : null, note: ai ? CHAT_AI_NOTE : CHAT_BUILTIN_NOTE, do_not_type: CHAT_DO_NOT_TYPE, kept: CHAT_KEPT,
+    ai, provider: inApp ? p!.name : null,
+    model_line: inApp ? modelLine(p!) : null, note: ai ? CHAT_AI_NOTE : CHAT_BUILTIN_NOTE, do_not_type: CHAT_DO_NOT_TYPE, kept: CHAT_KEPT,
     limits: { per_address_minute: CHAT_PER_ADDRESS_MINUTE, per_address_day: CHAT_PER_ADDRESS_DAY, per_link_day: CHAT_PER_LINK_DAY, per_account_day: CHAT_PER_ACCOUNT_DAY },
   };
 }, 'public');
 
-// One question. Body: { messages: [{ role: 'user' | 'assistant', content, sig? }], screen, link? }. `link` is the
+// One question. Body: { messages: [{ role: 'user' | 'assistant', content, sig? }], screen, link?, form? } (`form`: the
+// slug of the account's form or agreement page the person came from, src/server/chattenant.ts). `link` is the
 // signing link's own secret, sent only by the signing page, only to this server and only to count its limit: it is
 // looked up here and never goes further. An unknown one counts for nothing.
 route('POST', '/public/chat', async (c) => {
@@ -87,6 +97,6 @@ route('POST', '/public/chat', async (c) => {
   const token = str(b.link, 200);
   const signer = token ? get('SELECT id FROM recipients WHERE token=?', token) : null;
   // 'AI answers in the help chat' off, for the account signed in here or for the account whose document is being signed.
-  const noModel = !aiAnswersFor(c.account?.id) || (!!signer && !aiAnswersFor(accountOfLink(token)));
+  const noModel = !aiAnswersFor(c.account?.id) || (!!signer && !aiAnswersFor(accountOfLink(token))) || !aiAnswersFor(accountOfForm(str(b.form, 120)));
   return answer(conv, chatScreen(b.screen), { ip: c.ip, link: signer?.id || null, account: c.account?.id || null, gone: c.req.signal, noModel });
 }, 'public');

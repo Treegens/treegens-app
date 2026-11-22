@@ -75,7 +75,7 @@ test('the provider comes from the settings, first match wins, and the key never 
   const gen = prov.chatProvider(env({ SUPPORT_CHAT_API_KEY: 'k', MOONSHOT_API_KEY: 'k' }))!;
   assert.deepEqual([gen.baseUrl, gen.model, gen.style, gen.keyVar], ['https://openrouter.ai/api/v1', 'moonshotai/kimi-k3-20260715', 'openrouter', 'SUPPORT_CHAT_API_KEY']);
   const own = prov.chatProvider(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.example.org/v1/', SUPPORT_CHAT_MODEL: 'm' }))!;
-  assert.deepEqual([own.baseUrl, own.model, own.style, own.name], ['https://llm.example.org/v1', 'm', 'plain', 'The service at llm.example.org']);
+  assert.deepEqual([own.baseUrl, own.model, own.style, own.name], ['https://llm.example.org/v1', 'm', 'plain', 'the service at llm.example.org']);
   assert.equal(prov.chatProvider(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://api.moonshot.ai/v1' }))!.style, 'moonshot');
   // The key never travels in the clear: plain http only to this machine itself.
   assert.equal(prov.chatProvider(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'http://llm.example.org/v1' })), null);

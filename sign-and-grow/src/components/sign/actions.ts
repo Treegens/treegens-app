@@ -134,8 +134,17 @@ export const laterLabel = (role: string): string => (role === 'viewer' ? 'Read i
  * The title of the step that opens at Finish, by the first thing that needs a look, so it says why it came.
  * "Check before you finish" is left for a Finish that did not get through, or a check that could not be made.
  */
-export const reviewTitle = (why: LookAgain[], approving = false): string =>
-  why[0] === 'name' ? 'Check your name' : why[0] === 'question' ? 'One question is not answered' : why[0] === 'witness' ? 'Name your witness'
+/** How many witness places the signer still has to name, of how many (me.witnesses from GET /sign/:token). */
+export const witnessPlaces = (me: any): { open: number; total: number } => {
+  const list: any[] = Array.isArray(me?.witnesses) && me.witnesses.length ? me.witnesses : me?.witness ? [me.witness] : [];
+  return { open: list.filter((w) => w?.may_name && (!w.name || w.state === 'absent')).length, total: list.length };
+};
+
+const witnessTitle = (w?: { open: number; total: number }): string =>
+  !w || w.total < 2 ? 'Name your witness' : w.open >= 2 ? 'Name your two witnesses' : 'Name your other witness';
+
+export const reviewTitle = (why: LookAgain[], approving = false, witnesses?: { open: number; total: number }): string =>
+  why[0] === 'name' ? 'Check your name' : why[0] === 'question' ? 'One question is not answered' : why[0] === 'witness' ? witnessTitle(witnesses)
     : why[0] === 'print' ? 'Some characters cannot be printed' : approving ? 'Approve this document' : 'Check before you finish';
 
 // ---- The Done screen -----------------------------------------------------------------------------------------------

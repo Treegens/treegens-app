@@ -75,6 +75,22 @@ replacing one, and the customer may object within [ ] days.
 > `SUPPORT_CHAT_BASE_URL`; with `DEPLOYMENT_PROFILE=government` the hosted routes are never used); or list the
 > provider here and check that its terms fit clause 3. Without one of these, clause 3 is not true for the chat.
 
+The help chat: the software stores nothing typed into it. [Where the model runs inside the operator's own network:
+nothing typed into it is sent to train a model.] [Where a sub-processor's model answers: what that sub-processor
+keeps, and whether it trains on it, is set by its own terms, listed in schedule [ ].] The software keeps only counts
+of questions, for up to two days, to hold its limits, and a chat that a person chooses to send with a help request,
+as part of that request. Where an AI model answers the chat, it is [the model] at [the host], run by [the operator
+inside its own boundary / the sub-processor named above]; /security and /security/processing of the server name the
+model and host from its settings.
+
+> Made true by the software for the software itself: the chat route writes nothing but the limit counts
+> (`chat_counts`) and, when a person sends one, the help request (`src/server/chat.ts`; tested in
+> tests/gov-g20.test.ts), and it asks no provider to train on anything. With `DEPLOYMENT_PROFILE=government` or
+> `OUTSIDE_CALLS=listed` or `none`, a model answers only at a private network address or a host in `OUTBOUND_ALLOW`,
+> never a hosted service (`src/lib/chatboundary.ts`). A promise only for the model server itself: what it logs is set
+> by whoever runs it (docs/self-hosted-model.md says how to switch its logging off), and for a hosted provider by its
+> own terms, as above.
+
 ## 5. Security
 
 The operator keeps the measures in [schedule 2].

@@ -36,7 +36,7 @@ import { ChangeTimeDialog, scheduledWords, pausedWords, sendNow, pauseIt, resume
 import { SharedNote, MoveDialog, moveAllowed } from '@/components/sender/Colleagues';
 import { shareAllows, MOVE_LABEL, commentsReadOnly } from '@/lib/shares';
 import { seesLine, SEES_REST } from '@/lib/owndocs';
-import { PaperReview, PaperWaitingLine, scanWaiting } from '@/components/sender/PaperReview';
+import { PaperReview, PaperWaitingLine, scanWaiting, scanHeadline } from '@/components/sender/PaperReview';
 
 export default function EnvelopeDetail() {
   const { id } = useParams<{ id: string }>();
@@ -179,7 +179,8 @@ export default function EnvelopeDetail() {
   // Someone sent back a scan signed on paper, and it waits for a look (sender/PaperReview.tsx).
   const paperScan = scanWaiting(e);
   // Someone printed it to sign on paper: the page does not say that paper was saved.
-  const onPaper = e.recipients.some((r: any) => r.paper_state === 'waiting' || r.paper_state === 'accepted');
+  // Anyone on the paper path (asked to, chose to, or was asked again): no "paper saved" line (sender/PaperReview.tsx).
+  const onPaper = e.recipients.some((r: any) => !!r.paper_state || !!r.require_paper);
   const whyNot = paused ? 'Sending is paused on this account, so this has to wait.' : undefined;
   // Opened through a colleague's share: only what the share lets this person do is offered (src/lib/shares.ts).
   const shareOk = (k: string) => !data.shared || shareAllows(data.shared.level, k);
@@ -278,9 +279,9 @@ export default function EnvelopeDetail() {
         <section className="card sn-now" aria-label="Where this stands">
           <div className="sn-now-main">
             <div>
-              <p className="sn-now-line">{waitingSentence(people, { paused: !!e.paused_at, wait: waitNow(e) })}{e.sent_at ? ` Sent ${howLong(e.sent_at)} ago.` : ''}</p>
+              <p className="sn-now-line">{paperScan ? scanHeadline(paperScan) : waitingSentence(people, { paused: !!e.paused_at, wait: waitNow(e) })}{e.sent_at ? ` Sent ${howLong(e.sent_at)} ago.` : ''}</p>
               {e.paused_at && <p className="sn-now-sub warn" data-feature="ds-timing">{pausedWords(e)}</p>}
-              {paperScan && <PaperWaitingLine r={paperScan} />}
+              {paperScan && <PaperWaitingLine r={paperScan} after={!!e.ordered && e.recipients.some((x: any) => x.status === 'pending' && x.routing_order > paperScan.routing_order)} />}
               {bounced.length > 0 && <p className="sn-now-sub warn">The email to {joinNames(bounced.map((r: any) => r.name))} {bounced.some((r: any) => lastEmailTo(deliveries, r.email, r.id)?.next_try_at) ? 'has not gone out yet, and we keep trying' : 'did not go out'}. Open their More below to change the address or share the link yourself.</p>}
               <MailStopLines people={stopped} />
               {almost.length > 0 && <p className="sn-now-sub warn" id="sn-almost"><b>{joinNames(almost.map((r: any) => r.name))}</b> {almost.length === 1 ? 'has' : 'have'} filled in everything but {almost.length === 1 ? 'has' : 'have'} not pressed Finish, so {almost.length === 1 ? 'their part is' : 'their parts are'} not signed yet. A reminder tells them that one button is left.</p>}

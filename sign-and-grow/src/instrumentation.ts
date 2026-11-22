@@ -22,13 +22,14 @@ export async function register() {
   const contact = securityContactWarning();
   if (contact) console.error(contact);
   // A DEPLOYMENT_PROFILE nobody knows (a typo of "government") runs as the ordinary profile; the operator hears it.
-  const { deploymentProfileWarning, governmentChatWarning } = await import('./lib/deployment');
+  const { deploymentProfileWarning } = await import('./lib/deployment');
   const profile = deploymentProfileWarning();
   if (profile) console.error(profile);
-  // And a government server with a hosted AI service in its settings, which the help chat never uses there.
-  const { chatProvider, chatModelOn, ownModel } = await import('./lib/chatprovider');
-  const chatAt = chatProvider();
-  const chatOff = governmentChatWarning(chatAt && !ownModel(chatAt) ? chatAt.keyVar : null, chatModelOn());
+  // And a government or closed-network server with a model in its settings that the help chat may not use there:
+  // a hosted service, or an address that is neither private nor in OUTBOUND_ALLOW (src/lib/chatboundary.ts).
+  const { chatProvider } = await import('./lib/chatprovider');
+  const { boundaryChatWarning } = await import('./lib/chatboundary');
+  const chatOff = boundaryChatWarning(chatProvider());
   if (chatOff) console.error(chatOff);
   // Said once, loudly, when a production server starts with nobody set up to receive help requests.
   const { supportWarning } = await import('./lib/policy');

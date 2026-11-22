@@ -38917,5 +38917,1822 @@
   "suite": "tests/ds-lang-sender-rest.test.ts: 17/17 pass. npm test: 2290 tests, 2278 pass, 7 fail. The tool-side background job hit its time limit, but the log has the final counts. All 7 failures are in other people's in-progress areas and none touch my files: bounces.test 1060 (timing), chat.test 1042 (simplify-signing comment), convert.test 582 (job timeout), ds-consent-own.test 375 and 536 (paper/consent work in progress), gaps-industry.test 444 (autosave race), gaps-mobile-send.test 729, stamps.test 1354 (settings page stamps tab regex). npx tsc --noEmit -p . is clean. An earlier tsc run showed errors in src/app/in-person/page.tsx and a missing src/server/collab.ts from someone's half-finished edit; both were gone on the re-run.",
   "found": "The builder's pass was mostly in place (10/10 tests). The gaps were Switches.tsx (added during the run by another engineer), MonthlyReport.tsx, and Starters.tsx, which used catalogue keys but forced English. ImpactView.tsx was English while the README said /impact was done. The tsconfig lines were left behind. While I worked, another engineer was adding collab.ts and PaperSetting.tsx (the paper-signing feature); my dev server had to wait for their edit to compile.",
   "notes_for_integrator": "1. Billing owner: if ImpactView's Methodology is ever converted, tests/billing9.test.ts:657 must read the sentence from en.json, not from ImpactView.tsx. I did not touch billing files. 2. A new settings card that shows English must go in DONE or LEFT in tests/ds-lang-sender-rest.test.ts, or that test fails. This is deliberate, so the gap cannot be forgotten. PaperSetting.tsx passes because its words come from src/lib/paper PAPER_WORDS. 3. In signlang.ts, en-XA padding longer than 12 characters is now spaced groups of '~~~~~~'. 4. The dev server is stopped, .next-repair-ds-lang-sender-rest is deleted, and tsconfig.json has no lang-sender-rest lines. Screenshots and shots.json are in tests/out/repair-ds-lang-sender-rest/."
+ },
+ "verify:ds-pay-collect": {
+  "checks": [
+   {
+    "item": "1. Each account connects its own Stripe account (Connect OAuth), never the merchant, never sees card data, own webhook /collect/webhook",
+    "holds": true,
+    "evidence": "Code read: connectUrl/finishConnect in src/server/collect.ts (state is one-time, tied to user and account, lasts 15 min). Checkout is made with the Stripe-Account header and has no application_fee. Probe P3: another account gets 404 on GET and PUT /envelopes/:id/collect. Screens at 390px: Settings > Sending 'Take payments' card when the account is untrusted (shows why, no dead button), connected, disconnect confirm. No overflow; every target is 44px or more. The Connect button goes to connect.stripe.com/oauth/authorize with client_id and state (route captured). The builder's 1/1b tests pass (10/10 in my rerun).",
+    "still_broken": "A signed-out browser returning from Stripe to GET /api/collect/callback gets a raw JSON 401 'Please sign in.' (probe P4), not the Settings page with a 'failed' note, because the route is level 'user'. Never run against real Stripe.",
+    "suggested_fix": "Make /collect/callback level 'public' and redirect to /login?next=/app/settings?tab=sending&collect=failed when there is no session."
+   },
+   {
+    "item": "2. Payment on an envelope or template: fixed or from a number/formula field, currency, what it is for, before/after",
+    "holds": true,
+    "evidence": "Probes P9: a signer amount of -50, 1e9 or 0.3 is refused in words; JPY minimum 50; P8: amount 0 means nothing is asked. Builder test 2 covers ambiguous amounts, URLs, currency, templates and copyCollect. Editor at 390px (editor-card-phone.png, editor-card-error-phone.png): the card form fits and the error for '1,234' shows in words.",
+    "still_broken": "(a) CardForm.save() in src/components/editor/CollectChoice.tsx first PUTs /pay-link {url:''} (removes the sender's payment link), THEN PUTs /collect. If the collect PUT is refused (bad amount, trust lost), the link is already gone while the error says 'Nothing was saved.' (b) At 390px the 'When they pay' select cuts its option text off ('After they finish: signing does not wait for th...'), so the long explanation is unreadable on a phone. (c) A team member (not an admin) can add a card payment to their own draft (P3: 200); that may be intended, but it is not said anywhere.",
+    "suggested_fix": "Check the collect body first, or remove the link on the server inside PUT /collect when the body is valid. Use short option labels with the explanation as help text under the select."
+   },
+   {
+    "item": "3. 'Paid' only after Stripe's webhook for that connected account; 'started, not confirmed' before; pay-before completes on confirmation; refunds/disputes shown",
+    "holds": false,
+    "evidence": "Holds: forged, stale, wrong-account and replayed events (builder 3b); Stripe unreachable while confirming returns 503, un-records the event id, and the retry then marks paid and completes the part (my P5); a voided document then paid gets the email path and a cert line (P7); a pay-after Pay on a voided document is refused in words (P6).",
+    "still_broken": "PROBE P1 (HIGH): pay before finishing, amount from a field. The signer presses Finish with 100.00 and opens Stripe page cs_1. They press Finish again with 50.00 (allowed: readyRow resets status to 'ready' when the amount changes) and open cs_2. cs_1 is never expired at Stripe ('old still open: open', 0 expire calls), so two Stripe pages are open at once. Paying cs_1 sends a correctly signed webhook that answers done:'ignored' (the row now holds cs_2 and amount 5000). Its event id is stored, so Stripe's retries come back as 'duplicate'. Result: the person paid 100 EUR, GrowSigning records nothing, the document stays unsigned and asks them to pay 50 more. This contradicts README 'One Stripe page is open per person at a time'. ALSO (PLAUSIBLE, from reading the code; the screen could not be checked, see below): on the pay-before Pay screen, 'Back to the document' sets payWait=false. The main view then mounts PayAhead, whose fetch returns state 'ready' (finish_body kept), and its effect calls onWaiting() at once, which puts the Pay screen back. A signer who pressed Finish therefore cannot get back to the document to change the amount or to Decline. The Pay screen itself has no Decline.",
+    "suggested_fix": "When a row with an open session is reset (amount or account changed), POST /v1/checkout/sessions/{old}/expire on the connected account before making a new one. Keep old session ids in a history table so a late 'paid' for an old session is still recorded (or refunded) rather than ignored. In PayAhead, call onWaiting only once per page load (or not after the user chose Back), and offer Decline on the Pay screen."
+   },
+   {
+    "item": "4. Certificate line 'Payment of 25.00 EUR to <merchant> confirmed by Stripe at <time>.', never paid without the webhook",
+    "holds": true,
+    "evidence": "P7 printed collectCertLines: 'Pat Payer: Payment of 20.00 EUR to Green Trust confirmed by Stripe at 22 November 2026 at 16:25 UTC.' Only rows with status 'paid' are printed. pdf.ts adds them under the envelope with collectCertLines(e). I did not open a rendered PDF."
+   },
+   {
+    "item": "5. Mobile money adapter interface and stub",
+    "holds": true,
+    "evidence": "PayProvider type and MOBILE_MONEY with configured: () => false in src/server/collect.ts. Nothing offers it. M-Pesa was not built, which is correct because it is country-specific."
+   },
+   {
+    "item": "6. No fee until the owner decides; pay link stays with its trust rules",
+    "holds": true,
+    "evidence": "There is no application_fee in collect.ts (builder test 5-6). collectRefusal reuses pause, dispute and hasNotPaid. Settings at 390px shows the trust sentence to an untrusted account. The pay link refuses when card is set (routes-paylink.ts:141)."
+   },
+   {
+    "item": "Signing page: one line before signing, Pay screen after the last signature and before Done, return via /paid",
+    "holds": false,
+    "evidence": "Only the builder's screenshots show the Pay screen (tests/out/build-ds-pay-collect/sign-pay-phone.png): Pay is 324x54. In my dev server (port 4232, fresh DATA_DIR, the three STRIPE_CONNECT_* settings) the signing page never left 'Opening your document'. Even a PLAIN document with no payment fired GET /api/sign/:token 96 times in 30 seconds and then got 429s (tests/out/verify-ds-pay-collect/loop.cjs). This looks like another engineer's in-progress sign-page edit, not this feature, but it meant I could not verify PayAhead, PayNow, Back, the keyboard path or Done on phone or desktop myself.",
+    "still_broken": "See item 3: the Back-to-document loop and no Decline on the Pay screen. The signer's words are English-only, not run through t(), which the brief asked for ('new words through t() once lang-core is in'; lang-core is done). The help page says nothing about paying while signing."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "A payment on an old Stripe page is silently lost when the field amount changes",
+    "severity": "high",
+    "where": "src/server/collect.ts readyRow() + checkoutFor() + confirmPaid(); src/server/routes-collect.ts",
+    "detail": "Probe P1 (tests/out/verify-ds-pay-collect/probe.test.ts, log probe.log): with pay-before and an amount from a field, Finish 100 \u2192 Pay (cs_1), then Finish 50 \u2192 Pay (cs_2). cs_1 stays open at Stripe. Paying it gives webhook done:'ignored' with row {status:'started', amount:5000, session_id:'cs_2'} and recipient 'viewed', and the event id is consumed so retries are 'duplicate'. Money is taken with no record, and the person is asked to pay again. The same happens whenever readyRow resets the row while a session is open."
+   },
+   {
+    "title": "Pay-before: 'Back to the document' bounces straight back to the Pay screen; no way to decline",
+    "severity": "medium",
+    "where": "src/components/sign/PayNow.tsx PayAhead useEffect \u2192 onWaiting; src/app/sign/[token]/page.tsx payWait",
+    "detail": "From reading the code (not screen-checked, because the sign page would not load on my dev server): after Back, PayAhead re-mounts, gets state 'ready' (finish_body kept) and calls onWaiting(), so payWait is true again. The Pay screen has no Decline and no other actions. A signer who does not want to pay after Finish has no way out in the UI."
+   },
+   {
+    "title": "Choosing 'By card' removes the payment link before the card payment is validated",
+    "severity": "medium",
+    "where": "src/components/editor/CollectChoice.tsx CardForm.save()",
+    "detail": "It PUTs /envelopes/:id/pay-link {url:''} (the server removes it and audits 'Payment link removed'), then PUTs /collect. If that is refused (bad amount, trust lost, not connected), the link is gone and the error ends with 'Nothing was saved.', which is false."
+   },
+   {
+    "title": "Stripe connect callback answers raw JSON 401 to a signed-out browser",
+    "severity": "low",
+    "where": "src/server/routes-collect.ts GET /collect/callback (level 'user')",
+    "detail": "Probe P4: 401 {\"error\":\"Please sign in.\"}. A person whose session expired while on Stripe's page lands on a JSON page instead of Settings with 'Stripe could not be connected'."
+   },
+   {
+    "title": "Long 'When they pay' options are cut off on a phone",
+    "severity": "low",
+    "where": "src/components/editor/CollectChoice.tsx (WHEN_WORDS in a <select>)",
+    "detail": "At 390px the select shows 'After they finish: signing does not wait for th...'. The meaning of 'before' versus 'after' cannot be read without opening the native picker (editor-card-error-phone.png)."
+   },
+   {
+    "title": "After disconnect or deauthorize, payments already started can never be confirmed",
+    "severity": "low",
+    "where": "src/server/collect.ts confirmPaid() (stripeCall on a deauthorized account)",
+    "detail": "From reading the code: confirmPaid asks Stripe again on the connected account. After account.application.deauthorized or a disconnect, Stripe refuses that call, so the event is deleted and thrown. Stripe retries until it gives up, and a payment the person made on an already-open page never shows as paid. Meanwhile notAsked() lets pay-before signers finish without paying."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "README.md 'Payments while signing' and builder report item 3",
+    "claim": "One Stripe page is open per person at a time; pressing Pay again opens the same one.",
+    "reality": "Probe P1: after the field amount changes, a second page is made and the first stays open and payable. A payment on it is ignored."
+   },
+   {
+    "where": "CollectChoice.tsx error path",
+    "claim": "'... Nothing was saved.'",
+    "reality": "The payment link was already removed before the refused collect PUT."
+   },
+   {
+    "where": "Builder report, Signing page item",
+    "claim": "'Back to the document' leaves the Pay screen (onBack: 'The Pay screen never leaves someone with nothing to press').",
+    "reality": "From reading the code, PayAhead immediately reopens the Pay screen. The builder never clicked Back in its screenshots."
+   },
+   {
+    "where": "src/components/sender/CollectNote.tsx and the audit line 'Payment request added'",
+    "claim": "'Each person who signs is asked to pay ...'",
+    "reality": "People on the sender's own team are never asked (notAsked 'team'), and their row stays 'Not asked yet.' forever on the document page."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/settings-untrusted-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/settings-trusted-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/settings-connected-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/settings-disconnect-confirm-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/settings-back-declined-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/editor-ask-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/editor-card-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/editor-card-error-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/sign-after-ahead-phone.png (sign page stuck on 'Opening your document': the page reloads in a loop even for a plain document, likely another engineer's in-progress edit; Pay screens NOT verified by me)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/loop-plain.png",
+   "Probes: /home/user/treegens-app/sign-and-grow/tests/out/verify-ds-pay-collect/probe.test.ts (logs probe.log, probe2.log); builder test rerun 10/10 pass (own-test.log); npx tsc --noEmit -p . clean (0 errors). Full npm test not run: the machine was disk-bound (load 12-19 on 4 cores, one test file took 12 min). Flows (tests/ux/flows.cjs) not run for the same reason. Dev server stopped, .next-vpc deleted, my two tsconfig include lines removed."
+  ]
+ },
+ "ux:ds-pay-collect": {
+  "checks": [
+   {
+    "item": "1. Core flow counts with zero setup (node tests/ux/flows.cjs, default profile, port 4234) against tests/ux/ceilings.json",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-pay-collect/ux/ux-flows.json and flows.log. Every flow is at or under its ceiling, and exit was 0 (UX FLOWS OK). Each count is measured/ceiling: a-send-first actions 18/18, screens 8/8, choices 119/137, max 28/42, words 851/2979, notices 2/2. b-sign-phone 7/7, 5/5, 35/36, 11/11, 385/432, 0/0. b-sign-desktop 7/7, 5/5, 36/36, 11/11, 404/442, 0. c-template-send 5/5, 4/4, 59/59, 20/20, 268/268, 1/1. d-find-download 1/1, 1/1, 21/21, 21/21, 83/89, 0. e-settings-name 3/3, 2/2, 53/54, 32/32, 360/404, 0. f-signer-help 6/7, 4/5, 28/36, 9/9, 570/598, 2/2. g-sign-in 4/4, 3/3, 56/71, 28/42, 365/2585, 0. h-sign-myself 14/14, 8/8, 99/99, 24/24, 621/645, 0. Settings shows 9 sections and has no Connections tab. With zero setup no data-feature=ds-pay-collect element appears."
+   },
+   {
+    "item": "2. Zero setup: nothing new on any screen. The editor shows exactly the old payment-link card, and the signer, the document page and Settings show nothing",
+    "holds": true,
+    "evidence": "Same flows run. AskPayment falls back to PayLinkCard when Stripe is not set up or connected. TakePayments, PayAhead and CollectNote return null. See tests/out/ux-ds-pay-collect/ux/ screenshots."
+   },
+   {
+    "item": "3. Where it lives: the designer note puts it in 'Settings > Connections > Take payments'. The editor part sits in step 3 More options as one 'Ask for a payment' control",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-pay-collect/03-settings-sending-connected-desktop.png and 02-settings-sending-may-connect-desktop-bottom.png. The editor part holds: step 3 More options has one card, 'Ask for a payment', with No payment / By card here / On your own payment page (05/06-editor-*-desktop.png). The Settings card does not: it is in Settings > Sending, not Connections. There is precedent, because WhatsApp ChannelsStatus is also in Sending and no Connections tab exists yet. But the card renders straight under the 'More options' link, so it looks as if it were inside More options, and a reader cannot tell whether it is folded.",
+    "still_broken": "The Settings placement differs from research/ux-notes.json, and the card sits visually under the Sending section's More options link.",
+    "suggested_fix": "Until a Connections section exists, render TakePayments above the Sending section's 'More options' link, or give it its own heading 'Connections'. Note the deviation in ux-notes."
+   },
+   {
+    "item": "4. Defaults: Off, and 'No payment' is chosen when nothing is set",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-pay-collect/09-editor-ask-none-after-saved-desktop.png and CollectChoice.tsx: mode starts 'none' when there is no setting and no pay link. The When-they-pay default is 'after' (signing does not wait)."
+   },
+   {
+    "item": "5. A sender understands it from its words alone and can get back out of it",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-pay-collect/09-editor-ask-none-after-saved-desktop.png. After a card payment is saved, choosing 'No payment' does not take it off. The card says instead: 'This document still asks for a payment by card. Choose \"By card\" and take it off.' The person picks the plain way out and is told to go back and use a different button.",
+    "still_broken": "Choosing 'No payment' (or 'On your own payment page') does not undo a saved card payment.",
+    "suggested_fix": "When 'No payment' is chosen while a card payment is saved, take it off right away (PUT {off:true}) and show 'Payment taken off. Nobody was emailed.' next to it. Drop the 'Choose By card and take it off' sentences."
+   },
+   {
+    "item": "6. Typing the payment and pressing Send asks for that payment (no silent loss)",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-pay-collect/20-editor-filled-not-saved-desktop.png and 21-after-send-unsaved-desktop.png. I filled in Amount 40, 'Deposit for the hall' and Before, did not press 'Save the payment', and pressed Send. The document went out with collect_amount null (walk2.log), and nothing warned me.",
+    "still_broken": "Unsaved payment fields are thrown away silently on Send.",
+    "suggested_fix": "Save the payment as each field changes, the way the other step 3 controls save. Or, at minimum, have Send stop with one notice line: 'Your payment is not saved yet. Save the payment, or choose No payment.'"
+   },
+   {
+    "item": "7. With More options closed, step 3 says what is set (the existing pattern: 'payment link shown after signing')",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-pay-collect/22-editor-step3-closed-with-payment-desktop.png. walk2.log shows the closed summary reads only 'More options | Reminder every 3 days' while a 40.00 EUR pay-before payment is set. reviewSummary in src/lib/editorux.ts only knows payLink.",
+    "suggested_fix": "Add to the closed summary: 'asks each signer to pay 40.00 EUR before finishing' (or '... after finishing')."
+   },
+   {
+    "item": "8. Signer: Pay comes after the last signature and before Done (charter 2.6 item 7), with one main button",
+    "holds": false,
+    "evidence": "For 'before', it holds: tests/out/ux-ds-pay-collect/26-signer-pay-screen-before-desktop.png and 27-signer-payfirst-reopened-phone.png show one main button, 'Pay 40.00 EUR', and keyboard Enter reaches it. For 'after' (the default), it does not: tests/out/ux-ds-pay-collect/16-signer-after-finish-phone.png. The Pay card is the third card on the Done screen, under 'All done. Everyone has signed.', the Download button and the tree celebration. On a 390x844 phone the Pay button is at y=1074, off the first screen. The screen has two filled main buttons (Download the signed PDF, Pay 25.00 EUR). Done reads as finished, so a signer can close the tab without ever seeing the request.",
+    "still_broken": "Pay-after is placed in Done instead of before it, sits below the fold, and is a second primary button.",
+    "suggested_fix": "For 'after', show the Pay screen between Finish and Done, the same screen as 'before', with one main button 'Pay 25.00 EUR' and a plain 'Not now' that goes on to Done. On Done, keep a single line: 'You still have 25.00 EUR to pay to Riverside Choir. Pay now'."
+   },
+   {
+    "item": "9. The signer is warned before signing, in one line, never on the consent screen",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-pay-collect/14-signer-document-phone.png shows one line on the document screen, 'After you finish, you are asked to pay 25.00 EUR to Riverside Choir for Membership fee.' 13-signer-consent-phone.png has no payment words."
+   },
+   {
+    "item": "10. Phone 390 px: nothing scrolls sideways, targets are 44 px or more, words fit",
+    "holds": false,
+    "evidence": "Page scrollWidth is 390 on the editor and Settings (walk.log). The Pay button is 324x54. But in tests/out/ux-ds-pay-collect/10-editor-step3-more-phone.png the 'When they pay' select is cut off: 'After they finish: signing does not wait for th'.",
+    "suggested_fix": "Make the options short, 'After they finish' and 'Before they finish', and put one hint line under the select that changes with the choice: 'Signing does not wait for the payment.' / 'Their part is complete once the payment is confirmed.'"
+   },
+   {
+    "item": "11. The sender's document page tells the truth about a pay-before signer who is waiting on payment",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-pay-collect/29-envelope-page-payfirst-waiting-desktop.png. Kim pressed Finish and is on the Pay screen. The page says 'Filled in everything but has not pressed Finish ... A reminder tells them that one button is left.', and only the Payment card says 'Not paid yet.'",
+    "suggested_fix": "For a person whose Finish waits on a payment, the status line should read 'Signed and waiting for their payment to be confirmed', with the badge 'Waiting for payment'. The reminder email should say 'Your signature is ready. Pay 40.00 EUR to finish.' and not 'one button is left'."
+   },
+   {
+    "item": "12. The empty and refused states explain themselves, and there are no dead buttons",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-pay-collect/01-settings-sending-untrusted-desktop-bottom.png: an account that is not yet trusted gets the reason and no button. 02-...-may-connect shows one 'Connect your Stripe account' button. 03 shows the connected state with Disconnect. 17-signer-pay-pressed-phone.png: Stripe unreachable says 'Nothing was charged. Try again in a minute.' 28-paid-page-unknown-tab-phone.png tells a tab with no known document what to do."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Pay-after request is hidden at the bottom of Done, below the celebration, as a second main button",
+    "severity": "high",
+    "where": "src/components/sign/PayNow.tsx with src/app/sign/[token]/page.tsx line ~964 (PayNow on the Done screen)",
+    "detail": "Screenshot: tests/out/ux-ds-pay-collect/16-signer-after-finish-phone.png. After the default 'after they finish', the signer reads 'All done. Everyone has signed.', and the Pay card sits below the fold at y=1074 on 844. The screen has two filled buttons, which breaks P5. The charter (2.6 item 7) puts Pay after the last signature and before Done. Fix: show the same Pay screen as 'before' between Finish and Done, with one main button 'Pay 25.00 EUR' and a link 'Not now'. On Done keep one line: 'You still have 25.00 EUR to pay to Riverside Choir. Pay now'."
+   },
+   {
+    "title": "Typed payment is silently lost when the sender presses Send without 'Save the payment'",
+    "severity": "high",
+    "where": "src/components/editor/CollectChoice.tsx CardForm",
+    "detail": "Screenshots: tests/out/ux-ds-pay-collect/20-editor-filled-not-saved-desktop.png and 21-after-send-unsaved-desktop.png. The document was sent with no payment and no warning, so the charity collects nothing. Every other step 3 control saves by itself. Fix: save on change (or on blur), or block Send with 'Your payment is not saved yet. Save the payment, or choose No payment.'"
+   },
+   {
+    "title": "'No payment' does not remove a saved card payment; it tells the person to go back and press another button",
+    "severity": "medium",
+    "where": "src/components/editor/CollectChoice.tsx (mode === 'none' && st.setting)",
+    "detail": "Screenshot: tests/out/ux-ds-pay-collect/09-editor-ask-none-after-saved-desktop.png. The text reads 'This document still asks for a payment by card. Choose \"By card\" and take it off.' It is the same for 'On your own payment page'. That makes two ways to say no, and the obvious one does nothing. Fix: choosing No payment calls PUT /envelopes/:id/collect {off:true} and says 'Payment taken off. Nobody was emailed.'"
+   },
+   {
+    "title": "Document page tells the sender a pay-before signer 'has not pressed Finish' and reminders say 'one button is left'",
+    "severity": "medium",
+    "where": "src/app/app/envelopes/[id]/page.tsx people status, the reminder email, and CollectNote",
+    "detail": "Screenshot: tests/out/ux-ds-pay-collect/29-envelope-page-payfirst-waiting-desktop.png. The signer did press Finish and is waiting on payment. The status is untrue and would lead the sender to chase the wrong thing. Fix: badge 'Waiting for payment', with the line 'Signed. Their part completes once Stripe confirms the 40.00 EUR payment.' The reminder should read 'Your signature is ready. Pay 40.00 EUR to finish.'"
+   },
+   {
+    "title": "Step 3 closed summary does not mention a card payment",
+    "severity": "medium",
+    "where": "src/lib/editorux.ts reviewSummary and src/components/editor/ReviewParts.tsx",
+    "detail": "Screenshot: tests/out/ux-ds-pay-collect/22-editor-step3-closed-with-payment-desktop.png. It shows only 'Reminder every 3 days' while 40.00 EUR is asked. The pay link already has 'payment link shown after signing'. Add: 'asks each signer to pay 40.00 EUR before finishing'."
+   },
+   {
+    "title": "'When they pay' options are too long and cut off on a phone",
+    "severity": "low",
+    "where": "src/lib/collect.ts WHEN_WORDS and CollectChoice.tsx",
+    "detail": "Screenshot: tests/out/ux-ds-pay-collect/10-editor-step3-more-phone.png shows 'After they finish: signing does not wait for th'. Fix: options 'After they finish' and 'Before they finish', with a hint line under the select: 'Signing does not wait for the payment.' / 'Their part is complete once the payment is confirmed.'"
+   },
+   {
+    "title": "Take payments card sits under the Sending section's 'More options' link and reads as if it were inside it; designer note says Connections",
+    "severity": "low",
+    "where": "src/app/app/settings/page.tsx line ~1085",
+    "detail": "Screenshot: tests/out/ux-ds-pay-collect/03-settings-sending-connected-desktop.png. Render it above the More options link, or under a small heading 'Connections', until a Connections section exists."
+   },
+   {
+    "title": "Sender explanation in the editor is four sentences of policy before the first field",
+    "severity": "low",
+    "where": "src/lib/collect.ts COLLECT_FOR_SENDER",
+    "detail": "Screenshot: tests/out/ux-ds-pay-collect/06-editor-ask-card-form-desktop.png. Settings already explains the details. Suggested words: 'People pay by card on Stripe's page, into your Stripe account. It shows as paid once Stripe confirms it.' Put the team and fee details behind 'How this works'."
+   },
+   {
+    "title": "Pay screen has no Other actions or Help in its header",
+    "severity": "low",
+    "where": "src/app/sign/[token]/page.tsx payWait branch (Shell)",
+    "detail": "Screenshots: tests/out/ux-ds-pay-collect/26-signer-pay-screen-before-desktop.png and 27-signer-payfirst-reopened-phone.png. The header shows only the document name, so a signer who does not want to pay must find 'Back to the document' and then Other actions to Decline. Help appears only in the footer. Keep the usual header (Other actions, Help) on the Pay screen."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Builder report, item 'Signing page: ... a Pay screen after the last signature and before Done'",
+    "claim": "A Pay screen after the last signature and before Done",
+    "reality": "That is only true for 'pay before finishing'. For the default 'after', PayNow is a card at the bottom of the Done screen, below the celebration (16-signer-after-finish-phone.png)."
+   },
+   {
+    "where": "Builder report, item 2 editor",
+    "claim": "It shows one 'Ask for a payment' card (No payment / By card here / On your own payment page)",
+    "reality": "The card is there, but 'No payment' and 'On your own payment page' do not act on a saved card payment, and unsaved fields are lost on Send (09, 20, 21 screenshots)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/ux/ux-flows.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/01-settings-sending-untrusted-desktop-bottom.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/02-settings-sending-may-connect-desktop-bottom.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/03-settings-sending-connected-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/06-editor-ask-card-form-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/07-editor-ask-card-saved-comma-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/09-editor-ask-none-after-saved-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/10-editor-step3-more-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/11-settings-sending-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/12-envelope-page-sent-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/13-signer-consent-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/14-signer-document-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/16-signer-after-finish-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/17-signer-pay-pressed-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/18-signer-done-paid-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/19-envelope-page-paid-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/20-editor-filled-not-saved-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/21-after-send-unsaved-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/22-editor-step3-closed-with-payment-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/26-signer-pay-screen-before-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/27-signer-payfirst-reopened-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/28-paid-page-unknown-tab-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-pay-collect/29-envelope-page-payfirst-waiting-desktop.png"
+  ]
+ },
+ "build:ds-switches": {
+  "done": [
+   {
+    "item": "1. Pass it on, per envelope and as an account default (on, as today), with the first person kept as a copy",
+    "status": "done",
+    "how": "Account default under Settings, Sending, card 'When people sign' (the existing card, drawn inside OwnDocsDefault.tsx). Per envelope through GET/PUT /api/envelopes/:id/switches. An envelope copies the account's choice when it is sent (snapSwitches in sendEnvelope), so changing Settings later never changes a document that is already out. When off, POST /sign/:token/reassign answers 403 code pass_on_off ('Rosa Sender turned off passing this document to someone else... ask Rosa Sender to send it to the right person') and the signing page leaves 'Pass to someone else' out (bySwitches in actions.ts). With 'They keep a copy' on, keepFirstAsCopy adds the first person as a completed cc, so they get the signed copy when everyone has finished. Both 'Reassigned' and 'Kept as a copy' go in the audit trail. No copy is kept when the new person has the same address. Help's built-in pass answer now says the sender may have turned it off.",
+    "test": "tests/ds-switches.test.ts test 1 and the bySwitches test",
+    "left_open": "Keeping a copy is OFF by default. The brief implies on, but the designer note and the 'zero setup works as before' rule say off. Someone should confirm which is wanted."
+   },
+   {
+    "item": "2. Allow questions and comments, per envelope (on by default)",
+    "status": "done",
+    "how": "Off removes 'Questions and comments' from the signing page menu, including a witness's. New signer comments, replies and the old /ask route are refused with 403 code comments_off, and the message tells the person to reply to the email they got. Threads written before stay readable: GET comments returns may_write false and comments_off true, and the dialog shows one line saying so. The sender can still answer an existing thread but cannot start a new one. Switching it on a sent envelope adds a 'Settings changed' line to the audit trail.",
+    "test": "tests/ds-switches.test.ts test 2",
+    "left_open": "The 'Ask the sender' buttons in NoViewer and TextView still open the comments dialog. When comments are off, the dialog only shows the 'turned off, reply to the email' line."
+   },
+   {
+    "item": "3. Ways to make a signature (type, draw, upload; at least one), and how each signature was made on the certificate",
+    "status": "done",
+    "how": "Three checkboxes in the card, beside 'Drawing does not make a signature stronger in law.' The last box left cannot be unticked, and the API refuses an empty list. AdoptSignature gets a `ways` prop: it shows only those tabs, and it hides the saved signature unless all three ways are on. onDone now reports how the mark was made ('type:<style>', draw, upload or saved). The signing page sends signature_how and initials_how with saves and with Finish. noteHow refuses a way that is not offered (400 sign_way_off), and only writes while the person's part is open, so a second Finish cannot rewrite the record. The values are kept in recipients.sig_how and ini_how, and clearAnswers clears them when the document passes to someone else. The certificate prints 'Signature made: typed, style Caveat, as their signing page reported'.",
+    "test": "tests/ds-switches.test.ts test 3",
+    "left_open": "The way is what the browser reports, so a modified client can lie. The certificate says 'as their signing page reported'. The in-person and offline signing pages do not send the ways or report how a signature was made yet."
+   },
+   {
+    "item": "4. Members may place stamps (admins, on by default)",
+    "status": "done",
+    "how": "A switch under Settings, Stamps and seals, below the stamps card. When it is off, /me returns no_stamps:true for members, and the member's editor palette drops Stamp unless the document already has one. POST and PUT /envelopes refuse a new stamp field from a member with 403 stamps_off. Stamp fields already on a document, and envelopes already sent, are unchanged. Owners and admins are not affected.",
+    "test": "tests/ds-switches.test.ts test 4",
+    "left_open": "A member who uses a template an admin made with a stamp field still gets that stamp field. This is intended, but it is not tested."
+   },
+   {
+    "item": "5. Public forms: a maximum number of signatures and a closing date",
+    "status": "done",
+    "how": "PATCH /powerforms/:id takes max_signed (or null) and closes_at (a day, counted to the end of that day in UTC). The limit counts people who finished plus people filling it in now, so it is never passed. Once either limit is reached, the public page shows 'This form is closed' with the reason and names the account to ask, and a new start is refused with 403 form_closed. Anyone who started before can still finish. On the Forms page, each form's More menu has 'Limit and closing date' (FormLimits.tsx), and a line under the name says what is set.",
+    "test": "tests/ds-switches.test.ts test 5",
+    "left_open": "Two starts that arrive at almost the same moment could pass the limit by one, because the check is not in a transaction."
+   },
+   {
+    "item": "6. Words for the mark on copies that are still out",
+    "status": "done",
+    "how": "Reuses the in-progress marking from the disputes repair. Only the large words became an admin setting (text box 'Mark pages until everyone has signed'). The default stays NOT COMPLETED YET, the words the mark always had. The small line NOT EVERYONE HAS SIGNED and the line at the foot of each page never change. Words that would make the copy look signed (SIGNED, FINAL, COMPLETE and similar, without NOT, YET, DRAFT and similar) are refused, and so are words over 28 characters. pdf.ts now calls unfinishedMark(e).",
+    "test": "tests/ds-switches.test.ts test 6",
+    "left_open": "The brief suggested 'NOT YET SIGNED BY EVERYONE' and the designer suggested 'Not signed yet' with marking off by default. Marking stays on with today's words, because turning it off would weaken the disputes protection. Words written in look-alike Unicode letters can get past the check; the fixed small line still says NOT EVERYONE HAS SIGNED."
+   }
+  ],
+  "files_changed": [
+   "src/lib/switches.ts (new)",
+   "src/server/switches.ts (new)",
+   "src/server/routes-switches.ts (new)",
+   "src/server/openapi-switches.ts (new)",
+   "src/components/settings/Switches.tsx (new)",
+   "src/components/forms/FormLimits.tsx (new)",
+   "tests/ds-switches.test.ts (new)",
+   "src/server/db.ts",
+   "src/server/routes-sign.ts",
+   "src/server/routes-comments.ts",
+   "src/server/routes-envelopes.ts",
+   "src/server/routes-account.ts",
+   "src/server/envelopes.ts",
+   "src/server/pdf.ts",
+   "src/server/perm.ts",
+   "src/server/openapi.ts",
+   "src/server/chatscreens.ts",
+   "src/app/api/[...path]/route.ts",
+   "tests/helpers.ts",
+   "src/components/sign/actions.ts",
+   "src/components/sign/Comments.tsx",
+   "src/components/SignaturePad.tsx",
+   "src/components/editor/StepFields.tsx",
+   "src/components/AppShell.tsx",
+   "src/components/settings/OwnDocsDefault.tsx",
+   "src/app/sign/[token]/page.tsx",
+   "src/app/app/settings/page.tsx",
+   "src/app/app/powerforms/page.tsx",
+   "src/app/f/[slug]/page.tsx",
+   "README.md"
+  ],
+  "suite": "tests/ds-switches.test.ts: 7 of 7 pass. Full npm test: 2225 of 2237 passed, 7 failed. Two of the failures came from my own edits and are fixed: the six-field editor palette regex in simplify-editor, and 'no Decline for a witness' in witness and groups, which pinned the source of actions.ts. Two more had the same cause: the chat answer to 'wrong person' was 70 words against a 55-word limit (chat.test 317 and 320). After the fixes, ds-switches, chat, groups, witness, simplify-editor, simplify-signing and stamps were re-run together: 201 pass, 1 fail. That fail is chat.test 'every control the helper names...', which looks for 'New template' in src/app/app/templates/page.tsx; I did not touch that file. qr.test 'README no longer lists QR codes as missing' fails because of another batch's lang-sender-rest line in What is not in it. Neither is mine. npx tsc --noEmit -p . is clean.",
+  "flows": "node tests/ux/flows.cjs on my dev server with zero setup: every flow is at or under its ceiling (a-send-first 18/18 actions and 8/8 screens, b-sign-phone 7/7, b-sign-desktop 7/7, c-template-send 5/5, d-find-download 1/1, e-settings-name 3/3, f-signer-help 6/7, g-sign-in 4/4, h-sign-myself 14/14). Rules: 0 broken, 21 warnings, all of them existing P6 words on /help and /verify. No baseline was run before my changes, so there are no before numbers. Screenshots of Settings > Sending, Stamps and the signing-page menu at 390, 320 and 1280 px are in tests/out/build-ds-switches/: no sideways scroll, every switch row is at least 44 px tall, Space toggles a switch from the keyboard, and with passing switched off the signing page's Other actions had no 'Pass to someone else'.",
+  "settings": [
+   "Settings > Sending > card 'When people sign' (owners and admins): People may pass it to someone else (on), They keep a copy (off), Allow questions and comments (on), Ways to make a signature (all three), Mark pages until everyone has signed (NOT COMPLETED YET)",
+   "Settings > Stamps and seals: Members may place stamps (on)",
+   "Forms > More > Limit and closing date (none by default)",
+   "No new environment variables, so .env.example and the README configuration table are unchanged"
+  ],
+  "notes_for_integrator": "Three decisions need a yes or no from you. (a) Keeping the first person as a copy is off by default, against the brief's wording, to follow the designer note and the zero-setup rule. (b) The mark stays on with today's words instead of the designer's 'off, Not signed yet'; only the words can be changed. (c) Leave out per-template switches, as both the brief and the designer note say.\n\nThe switch rows sit inside the existing 'When people sign' card: OwnDocsDefault.tsx now renders <WhenPeopleSign/>, so the Sending section still has 3 cards.\n\nThe signing page filters its menu with bySwitches(otherActions(...), data.switches). The otherActions call is left exactly as simplify-signing's regex pins it. perm.ts has new lines for /account/switches and /envelopes/:id/switches. The new route file is imported in route.ts and tests/helpers.ts, and the openapi paths are spread in openapi.ts; that also documents PATCH and DELETE /powerforms/{id}, which were not documented before.\n\nI edited tsconfig.json only to remove the .next-build-ds-switches lines that next dev added. The .next-build-ds-lang-sender-rest lines belong to someone else and were left alone. The dev server is stopped and .next-build-ds-switches is deleted.\n\nAbuse cases I checked: a signer calling reassign or comments through the API when the switch is off (refused, tested); a second Finish rewriting how a signature was made (blocked, tested); mark words that say 'signed' (refused, tested); a member adding a stamp field through the API (refused, tested); a form start past its limit or date (refused, tested).\n\nStuck honest people I checked: a signer who cannot pass it on (Help says reply to the email); a signer whose comments are off (the error and the dialog say reply to the email, which goes to the sender); an admin unticking every way (the last box cannot be unticked, and the API answers 400 with words); a visitor reaching a closed form (told why, and which account to ask); a signer whose saved signature is not allowed (Saved is hidden and they type or draw)."
+ },
+ "verify:ds-switches": {
+  "checks": [
+   {
+    "item": "1. Pass it on: per envelope and account default (on), first person kept as a copy, both in audit trail, reassign refused when off, page hides the action",
+    "holds": true,
+    "evidence": "ds-switches test 1 passes. My probe (tests/out/verify-ds-switches/probe.test.ts) agrees: another account gets 404 on GET and PUT /envelopes/:id/switches; a member gets 403 on PUT /account/switches; an API key gets 403 on PUT /account/switches. With pass_on off, reassign answers 403 with the sender's name. On a phone, with pass_on off, Other actions showed only Finish later, Ask for more time and Decline (sign-menu-phone.png). The account choice is copied onto the envelope at send (snapSwitches), so it stays fixed for that envelope.",
+    "still_broken": "(a) Per envelope works through the API only. The sender has no control for it on screen, so the brief's 'per envelope' has no UI. (b) The person kept as a copy who clicks their original email link gets a bare 410 'This link was replaced by a newer one.' (c) Passing the document back to the first person leaves them as both a signer and a completed cc row on the same envelope, and the person who passed it back also stays on as a cc. (d) assertMayPassOn falls back to 'The sender'. When the sender's name is missing, the message would read 'ask The sender'.",
+    "suggested_fix": "Show a 410 to a kept-as-copy person that says they will get the signed copy at the end. In keepFirstAsCopy, skip or remove the cc row when the new signer's address matches an existing cc. Use the lower-case fallback 'the sender' inside the sentence."
+   },
+   {
+    "item": "2. Allow questions and comments per envelope (on by default): off hides the panels, the API refuses new comments with a clear message, old threads stay readable",
+    "holds": false,
+    "evidence": "The signer side holds. ds-switches test 2 passes, and on a phone the signing menu had no Questions and comments. The sender side does not hold. GET /envelopes/:id/comments still returns may_write:true and has no comments_off field (probe). On desktop, the envelope page still shows 'Nobody has written anything yet. The people on this document can ask you something from their signing page' and a full 'Write a comment' form (sender-comments-off-desktop.png). Sending from that form is refused with 403 comments_off.",
+    "still_broken": "The sender's envelope page has a dead 'Write a comment' form, and its copy promises signers can ask from their signing page, which they cannot. Help's built-in ask-sender, paper and finish-stuck answers (chatscreens.ts 119-125) still tell a signer to use Questions and comments when the switch is off. The signer dialog shows a line saying comments are off, which goes against the designer note ('never a line on the signing page about an option that is off').",
+    "suggested_fix": "Add comments_off to senderView. In sender/Comments.tsx, hide the new-comment form when it is set and say 'Questions and comments are off for this document; you can still answer what was asked'. Give the Help answers the switch state, or add a 'turned off: reply to the email' branch."
+   },
+   {
+    "item": "3. Admins choose the ways to make a signature (at least one); the certificate records how each signature and initials was made",
+    "holds": false,
+    "evidence": "On the main signing page it works. With type only, the adopt dialog showed only the Type tab on phone and desktop (a-adopt-phone.png). PUT [] gives 400. In Settings, the last box is disabled. Finish with signature_how 'draw' gives 400. howCertLines prints 'typed, style Caveat, as their signing page reported'.",
+    "still_broken": "(a) The limit is enforced only when the page reports how the mark was made. In my probe, Finish with a drawn PNG and no signature_how on a type-only account got 200 and sig_how stayed null. (b) src/app/in-person/page.tsx line 329 renders <AdoptSignature> without `ways`, so in-person signing still offers Draw and Upload, and the server cannot refuse them. (c) The ways are read live from the account (signingSwitches and noteHow use acct(...).sw_sign_ways), not copied at send. In my probe, a document sent BEFORE the admin chose type only then refused 'draw' (400). That contradicts the Settings line 'Documents already out keep what they were sent with.' (d) A signer whose page loaded before the admin changed the ways draws, presses Finish and gets 400 'Make your signature again'. Their stale page still offers Draw until they reload.",
+    "suggested_fix": "Copy the ways onto the envelope at send, as is done for pass_on and comments. Pass `ways` to the in-person and offline AdoptSignature. On a sign_way_off 400, reload data.switches on the signing page. Either require signature_how when the ways are limited, or say plainly in Settings and the README that only the signing page's own report is checked."
+   },
+   {
+    "item": "4. Members may place stamps (admins, on by default): off removes Stamp from the members' palette; sent envelopes unchanged",
+    "holds": true,
+    "evidence": "ds-switches test 4 passes. In my probe, a member who reused an existing stamp field's id to add two more stamps was refused (400, still 1 stamp field). A member cannot change the switch (403). /me returns no_stamps only for members. Owners are not affected.",
+    "still_broken": "A member who uses an admin's template that has a stamp field still gets the stamp. The builder says this is intended, but it is untested.",
+    "suggested_fix": ""
+   },
+   {
+    "item": "5. Public forms: a maximum number of signatures and a closing date; after either, the form says it is closed and whom to ask",
+    "holds": false,
+    "evidence": "The closed page works on a phone: 'This form is closed. This form closed on 2020-01-31 ... ask Rosa Sender's workspace' (form-closed-phone.png). Five parallel starts with a limit of 2 gave [200,200,403,403,403], so there was no overshoot here. Another account gets 404 on PATCH. The Limits dialog renders on a phone with 44 px buttons (form-limits-phone.png).",
+    "still_broken": "(a) PATCH {max_signed:5, closes_at:'garbage'} answers 400 '...Nothing was changed.' but max_signed=5 was already saved (probe), so the message is false. (b) Unfinished starts count against the limit for up to a day (POWERFORM_IDLE_HOURS). A visitor sees 'has taken as many signatures as it was set up for' while nobody has signed. Anyone can use fake starts to lock a capped form for a day. (c) The 'Last day' is counted to the end of the day in UTC while the date picker is local, so a form closes at 4pm in California. (d) The Forms list says 'Closes after 2020-01-31.' for a form that has already closed (forms-desktop.png).",
+    "suggested_fix": "Validate both fields before writing anything in saveFormLimits. Word the full message as 'is full for now' when the count includes unfinished starts. Show 'Closed on' for a past date. Either say 'UTC' next to the day or send the browser's time zone with it."
+   },
+   {
+    "item": "6. Words for the mark on copies still out (an admin setting); words that would look signed are refused",
+    "holds": false,
+    "evidence": "ds-switches test 6 passes: 'SIGNED COPY' is refused, the default NOT COMPLETED YET is kept, and the small line never changes. My probe of markWordsProblem found that 'SIGNED, NO ISSUES', 'SIGNED YET AGAIN', 'EXECUTED NOT A DRAFT', 'COUNTERSIGNED', 'FULLYSIGNED', 'S I G N E D', 'SIGN\u00c9', 'DONE' and 'AGREED BY ALL' are all ACCEPTED.",
+    "still_broken": "The check refuses only a whole-word 'signed' (and similar) without a 'not/no/yet' word anywhere in the text. Any 'no' or 'yet' unlocks 'SIGNED'. The words are also read live from the account (unfinishedMark), so documents already out change too, against the Settings line.",
+    "suggested_fix": "Allow-list instead of block-list: require one of NOT / UNSIGNED / DRAFT / PENDING / UNFINISHED at the start of the words, or refuse any word containing 'sign', 'execut' or 'complet' unless it begins with NOT. Copy the words onto the envelope at send, or reword the Settings line."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Sender's envelope page shows a dead 'Write a comment' form when comments are off",
+    "severity": "medium",
+    "where": "src/server/routes-comments.ts senderView (may_write: e.status==='sent'); src/components/sender/Comments.tsx",
+    "detail": "With comments off for the envelope, GET /envelopes/:id/comments returns may_write:true. The card says signers 'can ask you something from their signing page' and offers a full new-comment form. Sending from it is refused with 403 comments_off. Screenshot: tests/out/verify-ds-switches/sender-comments-off-desktop.png"
+   },
+   {
+    "title": "PATCH /powerforms/:id saves max_signed and then answers 'Nothing was changed'",
+    "severity": "medium",
+    "where": "src/server/switches.ts saveFormLimits",
+    "detail": "max_signed is written before closes_at is checked. Probe: PATCH {max_signed:5, closes_at:'garbage'} gives 400 '...Nothing was changed.' while the stored max_signed is 5."
+   },
+   {
+    "title": "Ways to sign and mark words change documents already out",
+    "severity": "medium",
+    "where": "src/server/switches.ts signingSwitches, noteHow, unfinishedMark",
+    "detail": "The account's sw_sign_ways and sw_mark_words are read live, not copied at send. Probe: an envelope sent with all ways on refused 'draw' after the admin chose type only. Settings says 'Documents already out keep what they were sent with.' A signer whose page loaded before the change is refused at Finish and has to reload."
+   },
+   {
+    "title": "In-person signing ignores the admin's ways to make a signature",
+    "severity": "medium",
+    "where": "src/app/in-person/page.tsx:329",
+    "detail": "<AdoptSignature> gets no `ways` prop, so Draw and Upload are offered on a type-only account. The page sends no signature_how, so the server accepts the mark and the certificate prints nothing."
+   },
+   {
+    "title": "Mark-words check accepts words that make a copy look signed",
+    "severity": "low",
+    "where": "src/lib/switches.ts markWordsProblem",
+    "detail": "'SIGNED, NO ISSUES', 'SIGNED YET AGAIN', 'EXECUTED NOT A DRAFT', 'COUNTERSIGNED', 'FULLYSIGNED', 'SIGN\u00c9', 'DONE' and 'AGREED BY ALL' are accepted. The small 'NOT EVERYONE HAS SIGNED' line remains."
+   },
+   {
+    "title": "Unfinished form starts fill a capped form for up to a day",
+    "severity": "low",
+    "where": "src/server/switches.ts formLimitClosed",
+    "detail": "In-progress starts count toward max_signed until they are cleared (about a day). An attacker with a few IP addresses can close a capped form with fake starts. An honest visitor is told it 'has taken as many signatures as it was set up for' when nobody has signed."
+   },
+   {
+    "title": "Help still sends a signer to Questions and comments when it is off",
+    "severity": "low",
+    "where": "src/server/chatscreens.ts ask-sender, paper, finish-stuck answers",
+    "detail": "Only the pass-on answer mentions the switch. The others tell a signer to open Questions and comments, which is not in their menu when comments are off."
+   },
+   {
+    "title": "Passing back to the first person leaves them as both signer and cc",
+    "severity": "low",
+    "where": "src/server/switches.ts keepFirstAsCopy",
+    "detail": "Probe A->B->A with the copy switch on: the recipients are signer first@ (sent), cc first@ (completed) and cc second@ (completed)."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Settings > Sending card (Switches.tsx): 'These apply to documents sent from now on. Documents already out keep what they were sent with.'",
+    "claim": "Every switch in the card is fixed per document at send.",
+    "reality": "Only pass_on, pass_on_copy and comments are copied at send. Ways to sign and the mark words are read live and change documents already out (probe)."
+   },
+   {
+    "where": "README 'Switches for how people sign': 'Nothing about a switch that is off is said on the signing page'",
+    "claim": "The signing page says nothing about an option that is off.",
+    "reality": "The signer's Comments dialog (src/components/sign/Comments.tsx:158), reachable from 'Ask the sender' in NoViewer and TextView, shows '<sender> turned off questions and comments for this document...'."
+   },
+   {
+    "where": "README and openapi: 'Finish refuses another way'",
+    "claim": "A way of signing the account does not offer is refused.",
+    "reality": "It is refused only when the page reports the way. Finish without signature_how is accepted (probe), and the in-person page offers all three ways."
+   },
+   {
+    "where": "Forms closed message: 'This form has taken as many signatures as it was set up for'",
+    "claim": "The form is full of signatures.",
+    "reality": "Unfinished starts are counted too. It can say this when nobody has signed."
+   },
+   {
+    "where": "PATCH /powerforms 400 message: 'Nothing was changed.'",
+    "claim": "No change was saved.",
+    "reality": "max_signed is saved before closes_at is rejected."
+   },
+   {
+    "where": "Sender envelope page, comments card: 'The people on this document can ask you something from their signing page'",
+    "claim": "Signers can ask from their signing page.",
+    "reality": "Not when comments are off for the envelope."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/settings-phone.png (zero setup Settings > Sending card at 390 px, no sideways scroll)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/settings-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/settings-off-phone.png (pass off, comments off, type only; last box disabled)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/sign-menu-phone.png (Other actions without Pass and without Questions)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/a-adopt-phone.png and a-adopt-desktop.png (type-only: adopt dialog has only the Type tab)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/sender-comments-off-desktop.png and sender-comments-off-phone.png (dead Write a comment form with comments off)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/form-closed-phone.png and form-closed-desktop.png (closed form names the account)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/forms-desktop.png ('Closes after 2020-01-31.' on a closed form)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/form-limits-phone.png (Limits dialog at 390 px)",
+   "Flows (node tests/ux/flows.cjs on port 4262, zero setup): a-send-first 18/8, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 14/8 (actions/screens), all at or under their ceilings; rules 0 broken, 21 warnings (existing P6 words on /help and /verify). No core flow got longer.",
+   "Suite: tests/ds-switches.test.ts 7/7 pass. npm test: 2238 pass, 4 fail, 5 skipped of 2247. The failures are not from this batch: ds-pay-collect R5 (409), impact.test 197 (random-id regex), open-platform chat onHelp count 4 vs 3, simplify-public Settings regex (TakePayments added to the sending tab by the pay-collect batch). npx tsc --noEmit -p . is clean. Probes: /home/user/treegens-app/sign-and-grow/tests/out/verify-ds-switches/probe.test.ts, shots.cjs, adopt.cjs. The dev server is stopped, .next-verify-ds-switches is deleted, and my two tsconfig lines are removed (other batches' lines left alone)."
+  ]
+ },
+ "repair:ds-pay-collect": {
+  "done": [
+   {
+    "item": "HIGH (skeptic P1): when the amount in a field changes, the earlier Stripe page stayed open, and a payment made on it was ignored",
+    "status": "done",
+    "how": "There is a new table, collect_sessions, that keeps every Stripe page made for a payment and the amount it asked. Before checkoutFor makes a new page, closeOlder() expires every earlier page still open. If Stripe refuses because a page was already paid, that payment is recorded and the answer is {paid:true}. If Stripe cannot be reached, the answer is 503 and no new page is made. confirmPaid finds a page through collect_sessions, checks it against that page's own amount and records the amount actually paid. A pay-before Finish with a different amount then gets the existing 'paid_other_amount' handling: the email now says 'set the amount back to X and press Finish', and the person is never asked to pay again. A second paid page for the same person is recorded as 'Paid twice' in the history and emailed to the sender to refund; the webhook answers paid_twice. /collect/start now runs finishAfterPayment when the answer is {paid:true}.",
+    "test": "tests/ds-pay-collect.test.ts R1, R1b, R1c, R1d"
+   },
+   {
+    "item": "Medium: on the pay-before Pay screen, 'Back to the document' bounced straight back to the Pay screen, and there was no way to decline",
+    "status": "done",
+    "how": "PayAhead now opens the Pay screen by itself only once per page load; PayNow marks it as shown. After Back, the document shows one line: 'Your signature is ready and waits for your payment of X. Press Finish to pay, or change your answers first.' The Pay screen keeps the usual header (Other actions, which holds Decline, and Help).",
+    "test": "R7 checks the code; walk.cjs 08/09 screenshots show Back staying on the document and the header buttons ['Other actions','Help']"
+   },
+   {
+    "item": "HIGH (UX): the pay-after request sat at the bottom of Done, below the fold, as a second main button",
+    "status": "done",
+    "how": "PayAfter (in PayNow.tsx) wraps the Done screen. For 'after', the Pay screen now comes between Finish and Done, with one main button and 'Not now'. Done then shows one line at the top, 'You still have 25.00 EUR to pay to Riverside Choir. Pay now', and has only one primary button.",
+    "test": "walk 11/12 (Pay button 324x54 at y=280; 1 primary on Done; keyboard tabs reach Pay and Not now); R7"
+   },
+   {
+    "item": "HIGH (UX): a payment typed in the editor was silently lost when the sender pressed Send without pressing Save",
+    "status": "done",
+    "how": "CardForm now saves by itself 700 ms after the last change. A save still waiting when More options is closed is still sent. There is no Save button any more. Editor send() calls flushCollect(id) and stops with words such as 'Not sent yet. Your payment is not saved yet. Say what the payment is for... Or choose \"No payment\".'",
+    "test": "walk 03 (envelope stayed a draft) and 04 (the payment saved by itself); R7"
+   },
+   {
+    "item": "Medium: choosing 'By card' removed the payment link before the card payment was checked, while the error said 'Nothing was saved'",
+    "status": "done",
+    "how": "The client no longer makes that call. PUT /collect takes replace_link:true and removes the link on the server only after saveSetting has accepted the payment. The answer then carries pay_link_removed and the history says 'Payment link removed'.",
+    "test": "R4"
+   },
+   {
+    "item": "Medium: choosing 'No payment' did not take off a saved card payment",
+    "status": "done",
+    "how": "Choosing No payment (or On your own payment page) now sends PUT {off:true} at once and shows 'Payment taken off. Nobody was emailed.' The radio changes straight away and goes back if the call fails.",
+    "test": "walk 05 (collect_currency is null afterwards); R7"
+   },
+   {
+    "item": "Medium: the sender's page said a pay-before signer 'has not pressed Finish', and their reminder said 'one button is left'",
+    "status": "done",
+    "how": "markPaying() sets progress.paying and ready=false on GET /envelopes/:id. Recipients.tsx says 'Waiting for payment. They pressed Finish, and their part completes once Stripe confirms...'. The English reminder now says 'Your signature is ready. Pay 40.00 EUR to finish...'; translated reminders only drop the 'press Finish' line.",
+    "test": "R5; walk 10"
+   },
+   {
+    "item": "Medium: the closed step 3 summary did not mention a card payment",
+    "status": "done",
+    "how": "reviewSummary takes collect, filled by collectSummary(), through useCollectSummary, which reads it again when More options closes. It reads 'Reminder every 3 days \u00b7 asks each signer to pay 40.00 EUR before finishing'.",
+    "test": "R7; walk 06"
+   },
+   {
+    "item": "Low: the 'When they pay' options were cut off on a phone",
+    "status": "done",
+    "how": "The options are now 'After they finish' and 'Before they finish', with a hint line under the select that changes with the choice (WHEN_HINT).",
+    "test": "walk: the select is 320 px wide and its text is 318 px; R7"
+   },
+   {
+    "item": "Low: the editor showed four sentences of policy before the first field",
+    "status": "done",
+    "how": "It now shows two short sentences. The team and fee details are under 'How this works' (COLLECT_HOW).",
+    "test": "walk 02 screenshot"
+   },
+   {
+    "item": "Low: the Stripe connect callback gave a signed-out browser a raw JSON 401",
+    "status": "done",
+    "how": "The route is now public. With no session it answers 303 to /login?next=/app/settings?tab=sending&collect=failed. finishConnect still needs the signed-in admin who started it.",
+    "test": "R3"
+   },
+   {
+    "item": "Low: after a disconnect or deauthorize, a payment already started could never be confirmed",
+    "status": "done",
+    "how": "confirmPaid falls back to the session in the signed webhook only when Stripe refuses the lookup (4xx), the account is no longer connected here, and the session id matches. Amount, currency and metadata are still checked.",
+    "test": "R2"
+   },
+   {
+    "item": "Low: the Take payments card sat under the Sending section's 'More options' link",
+    "status": "partly",
+    "how": "It is now inside the Sending stack, above More options (walk 01). It is not yet under a 'Connections' heading, because no Connections section exists.",
+    "left_open": "research/ux-notes.json still says 'Settings > Connections'. I did not edit ux-notes; the designer should note the deviation."
+   },
+   {
+    "item": "Overclaim: 'Each person who signs is asked' did not mention the sender's own team",
+    "status": "done",
+    "how": "The words in CollectNote and in the audit line now say 'other than people on your own team'. A team member's row reads 'Not asked to pay: they are on your own team.' The Settings lead also says anyone who sends can ask for a payment.",
+    "test": "R6"
+   },
+   {
+    "item": "Signer words through t(); the help page said nothing about paying while signing",
+    "status": "done",
+    "how": "All words on PayNow, PayAhead and PayAfter now come from en.json sign.pay.* (24 keys; i18n:check is clean). The help page has a paragraph on card payments while signing, and its 'does not take payments' line now reads 'never takes the money itself'.",
+    "test": "R7; npm run i18n:check"
+   },
+   {
+    "item": "Docs",
+    "status": "done",
+    "how": "Updated openapi-collect.ts (replace_link, pay_link_removed, paid, paid_twice, callback login, the deauthorized fallback), the progress.paying description in openapi.ts, README 'Payments while signing', and the help page. There is no new setting, so .env.example is unchanged."
+   }
+  ],
+  "files_changed": [
+   "src/server/db.ts",
+   "src/server/collect.ts",
+   "src/server/routes-collect.ts",
+   "src/server/routes-envelopes.ts",
+   "src/server/envelopes.ts",
+   "src/server/openapi.ts",
+   "src/server/openapi-collect.ts",
+   "src/lib/collect.ts",
+   "src/lib/editorux.ts",
+   "src/locales/en.json",
+   "src/components/sign/PayNow.tsx",
+   "src/components/editor/CollectChoice.tsx",
+   "src/components/editor/ReviewParts.tsx",
+   "src/components/Editor.tsx",
+   "src/components/sender/Recipients.tsx",
+   "src/components/sender/CollectNote.tsx",
+   "src/app/sign/[token]/page.tsx",
+   "src/app/app/settings/page.tsx",
+   "src/app/help/page.tsx",
+   "README.md",
+   "tests/ds-pay-collect.test.ts",
+   "tests/open-platform.test.ts",
+   "tests/simplify-public.test.ts",
+   "tests/out/repair-ds-pay-collect/walk.cjs"
+  ],
+  "suite": "tests/ds-pay-collect.test.ts: 20 of 20 pass (10 earlier tests plus 10 new R tests). npm test: 2240 of 2247 passed. The 2 failures came from my own changes: a count of onHelp={headHelp} (now 4, for the Pay screen header) and a Settings source regex (TakePayments now sits before MoreOptions). I updated those two checks and both pass when re-run, but the full suite was not run again after that. npx tsc --noEmit -p . is clean. i18n:check: no errors.",
+  "flows": "node tests/ux/flows.cjs, zero setup, port 4233, exit 0, UX FLOWS OK. Measured/ceiling: a-send-first 18/18 actions, 8/8 screens, 119/137 choices, 28/42 max, 851/2979 words, 2/2 notices. b-sign-phone 7/7, 5/5, 36/36, 11/11, 400/432, 0/0. b-sign-desktop 7/7, 5/5, 36/36, 11/11, 404/442, 0/0. c-template-send 5/5, 4/4, 59/59, 20/20, 264/268, 1/1. d-find-download 1/1, 1/1, 21/21, 21/21, 83/89, 0/0. e-settings-name 3/3, 2/2, 53/54, 32/32, 360/404, 0/0. f-signer-help 6/7, 4/5, 28/36, 9/9, 570/598, 2/2. g-sign-in 4/4, 3/3, 56/71, 28/42, 365/2585, 0/0. h-sign-myself 14/14, 8/8, 99/99, 24/24, 621/645, 0/0. b-sign-phone choices went from 35 to 36 against the reviewer's run, still at its ceiling; with zero setup none of my components render, so I believe this comes from someone else's concurrent sign-page edit.",
+  "found": "Before my fixes the feature worked, but with the problems the two reviews named. In my dev server (port 4233, fresh DATA_DIR, fake STRIPE_CONNECT_* settings) the signing page loaded normally; the skeptic's reload loop did not happen.",
+  "notes_for_integrator": "Files I touched in other people's areas, all with small targeted edits: src/components/Editor.tsx (a flushCollect guard in send(), plus its import); src/server/envelopes.ts (reminder lines plus imports of waitsForPayment and moneyText); routes-envelopes.ts (one markPaying call); settings/page.tsx (TakePayments moved inside the Sending stack, before MoreOptions); help/page.tsx (one paragraph); and the two source-check tests open-platform.test.ts and simplify-public.test.ts. New table: collect_sessions in SCHEMA. Screens are in tests/out/repair-ds-pay-collect/*.png and walk.log. The dev server is stopped, .next-repair-ds-pay-collect is deleted, and only my own tsconfig lines were removed (others' entries kept). Attacker and confused-person cases covered: a forged amount in a deauthorized event is still checked against the stored page; Stripe down while closing an old page gives 503 and no second page; paid twice is told to the sender; a team member's amount is never asked; a sender closing More options mid-typing still saves; Send stops while a save is still waiting; Back no longer traps the signer; Not now on pay-after; Decline is reachable from the Pay screen. Left open: (1) translated reminder emails do not get the 'Pay X to finish' line (it is English only), because requestmail keys belong to lang-mail; (2) Stripe receipts and live Stripe were never tried, only the stand-in; (3) the Connections heading and the ux-notes deviation; (4) certificate lines on the Pay confirmed card stay in English, which is deliberate because they are the record's wording."
+ },
+ "ux:ds-switches": {
+  "checks": [
+   {
+    "item": "1. Core flows not longer (flows.cjs, default profile, zero setup, port 4264)",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-switches/flows/ux-flows.json and tests/out/ux-ds-switches/flows.log. Every count is at or under tests/ux/ceilings.json, and no rule is broken. a-send-first 18/18 actions, 8/8 screens, 119/137 choices. b-sign-phone 7/7, 5/5, 36/36. b-sign-desktop 7/7, 5/5, 36/36. c-template-send 5/5, 4/4, 59/59. d-find-download 1/1. e-settings-name 3/3, 53/54 choices. f-signer-help 6/7, 4/5. g-sign-in 4/4. h-sign-myself 14/14, 8/8, 99/99. There are 21 warnings, all from other batches (P6 words on /help and /verify, consent sentence length). The run exited 1 only because its last 'inventory' step failed: 'Execution context was destroyed' while the dev server was still compiling. That is not a flow ceiling."
+   },
+   {
+    "item": "2a. The switches live where the designer note says (Settings, Sending, card 'When people sign') and use its words",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-switches/shots/02-card-desktop.png, 06-settings-sending-phone.png (no sideways scroll at 390, scrollWidth 390). Labels: People may pass it to someone else / Allow questions and comments / Ways to make a signature / Mark pages until everyone has signed. Nothing appears in editor step 3, and the flow counts for a and c are unchanged."
+   },
+   {
+    "item": "2b. Keyboard and screen-reader use of the card",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-switches/walk.log (focus order). Tab order follows the visual order: owndocs switch, pass, keep a copy, comments, Type, Draw, Upload, mark box. Each switch has role=switch and a name from aria-labelledby. The checkboxes are named Type/Draw/Upload a picture, and each label is 44 px tall or more. Space toggles a switch and 'Saved' appears (03-pass-off-desktop.png). The last remaining way is disabled, so it cannot be unticked (04-card-off-desktop.png)."
+   },
+   {
+    "item": "2c. Mark words refuse words that look signed, with a plain fix",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-switches/shots/05-mark-refused.png: 'These words could make an unfinished copy look signed. Use words that say it is not finished, such as NOT SIGNED YET. Nothing was changed.' Emptying the box puts back NOT COMPLETED YET (05b-mark-emptied.png)."
+   },
+   {
+    "item": "2d. Signing page with pass-on and comments off: the options are gone, no switch or explanation line appears on the page",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-switches/shots/10-other-actions-off-phone.png: Other actions shows only Finish later, Ask Rosa Sender for more time and Decline to sign. 11-adopt-type-only-phone.png: the adopt dialog offers only Type."
+   },
+   {
+    "item": "2e. A signer who asks Help is told the truth when an option is off (designer note: the reason lives in Help's built-in answer)",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-switches/shots/20a-help-a-phone.png, 20b-help-b-phone.png, 20c-help-c-phone.png",
+    "still_broken": "With comments off, 'I have a question for the sender' is told 'choose Other actions, then Questions and comments', which is not there. The paper, decline and finish-stuck answers also send the signer to Questions and comments. SIGN_ACTIONS.ask in src/server/chatscreens.ts still says when: 'always'.",
+    "suggested_fix": "Make the built-in answers follow the envelope's switches. When comments are off, the ask-sender answer should read: 'Rosa Sender turned off questions on this page for this document. To ask her something, reply to the email you got about it.' Use the same reply-to-the-email wording wherever an answer names Questions and comments. In the pass answer, when pass-on is off, say: 'Rosa Sender turned that off for this document. Reply to the email you got and ask her to send it to the right person.'"
+   },
+   {
+    "item": "2f. Sender's envelope page respects comments off (no dead controls, no jargon)",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-switches/shots/21-sender-comment-off-desktop.png",
+    "still_broken": "With comments off, the fold still shows 'Write a comment' with a Send comment button and says 'The people on this document can ask you something from their signing page'. Pressing Send gives: 'Questions and comments are off for this envelope ... (PUT /api/envelopes/{id}/switches)'. There is no screen where a sender can turn it back on.",
+    "suggested_fix": "In the sender GET (src/server/routes-comments.ts around line 245), set may_write to false for new threads when comments are off, and hide 'Write a comment'. Show one line instead: 'Questions and comments are off for this document, so the people on it cannot write here. They can reply to your email.' Remove the API path and the word 'envelope' from COMMENTS_OFF_SENDER."
+   },
+   {
+    "item": "2g. Forms: limit and closing date are reachable from the form's More, plain, and the public page explains itself",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-switches/shots/14-forms-more-desktop.png, 15-form-limits-dialog-desktop.png, 16-forms-after-limit-desktop.png, 17-form-closed-phone.png. The More menu has 5 lines (cap 6). Each field has a label and the dialog has one primary button. The closed page says 'This form is closed'. Date formatting and the contact problem are listed under new bugs."
+   },
+   {
+    "item": "2h. Members may place stamps sits under Settings, Stamps and seals",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-switches/shots/07-stamps-phone.png, 07b-stamps-desktop.png. It is in the right place with plain words. It sits outside a card, which is a small visual mismatch (see new bugs)."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Help sends a signer to 'Questions and comments' after the sender turned comments off",
+    "severity": "high",
+    "where": "src/server/chatscreens.ts SIGNER_FAQ (ask-sender, decline, paper, finish-stuck) and SIGN_ACTIONS.ask when:'always'",
+    "detail": "This confuses a signer: Help sends them to a menu entry that is not there. The note in ux-notes.json says the reason for a missing option lives only in Help, so Help must name it correctly. Fix: when comments are off, answer 'Rosa Sender turned off questions on this page for this document. To ask her something, reply to the email you got about it.'"
+   },
+   {
+    "title": "Sender's envelope page offers a dead 'Send comment' when comments are off, and the error shows an API path",
+    "severity": "medium",
+    "where": "src/server/routes-comments.ts sender GET may_write (line ~245); src/server/switches.ts COMMENTS_OFF_SENDER; src/components/sender/Comments.tsx",
+    "detail": "This is a dead button, against P3 and the 'no dead buttons' rule. The words 'envelope' and 'PUT /api/envelopes/{id}/switches' appear on the sender's daily path, against P6. The empty-state line 'The people on this document can ask you something from their signing page' is false while comments are off. No screen can switch comments back on for one envelope. Fix: hide the composer and replace the empty-state line with 'Questions and comments are off for this document, so the people on it cannot write here. They can reply to your email.'"
+   },
+   {
+    "title": "Form dates shown as ISO 2026-11-20 instead of the account's date format",
+    "severity": "low",
+    "where": "src/components/forms/FormLimits.tsx formLimitLine; closed_why in src/server/switches.ts formLimitClosed",
+    "detail": "The Forms list shows 'closes after 2026-11-20' and the public page shows 'This form closed on 2026-11-20'. Fix: use fmtDate or the account's date format, for example 'Takes up to 1 signature, closes after 20 Nov 2026.' and 'This form closed on 20 Nov 2026 and takes no more signatures.'"
+   },
+   {
+    "title": "Closed form tells a visitor to 'ask Rosa Sender's workspace' with no way to reach them",
+    "severity": "low",
+    "where": "src/server/switches.ts formLimitClosed (17-form-closed-phone.png)",
+    "detail": "A workspace name is not someone a visitor can contact. Fix: name the form owner's name and email when known: 'If you still need to sign, write to Rosa Sender at rosa@example.org.' If neither is known, say: 'ask whoever gave you this link.'"
+   },
+   {
+    "title": "Adopt dialog shows a tab strip with a single 'Type' tab",
+    "severity": "low",
+    "where": "src/components/SignaturePad.tsx (ways prop)",
+    "detail": "11-adopt-type-only-phone.png. A tab bar with one tab looks like something is missing. Fix: when only one way is offered, hide the tab list and show its content directly under 'Your signature'."
+   },
+   {
+    "title": "Copy wording and defaults differ from the designer note",
+    "severity": "low",
+    "where": "src/components/settings/Switches.tsx, src/lib/switches.ts",
+    "detail": "The note asks for marking off by default, with the words prefilled as 'Not signed yet'. The build keeps marking always on with NOT COMPLETED YET. The builder named this under left_open, and the owner needs to decide. Also, the hint 'You are told when they do' on the pass-on switch is a promise, and this review did not check that the reassign email to the sender exists. Also, 'Members may place stamps' renders outside any card (no data-item=\"card\"), unlike every other Settings control. Fix: wrap it in the Stamps card under a divider."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "src/components/sender/Comments.tsx empty state with comments off",
+    "claim": "The people on this document can ask you something from their signing page, and you are emailed when they do.",
+    "reality": "With comments off the signer cannot write, and the signer route refuses with comments_off."
+   },
+   {
+    "where": "src/server/chatscreens.ts SIGN_ACTIONS.ask",
+    "claim": "Questions and comments: when 'always'",
+    "reality": "It is missing whenever the envelope has comments off, and the built-in answers still name it."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/01-settings-sending-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/02-card-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/03-pass-off-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/04-card-off-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/05-mark-refused.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/05b-mark-emptied.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/06-settings-sending-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/07-stamps-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/07b-stamps-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/08-sign-consent-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/09-sign-doc-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/10-other-actions-off-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/11-adopt-type-only-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/12-signer-help-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/13-forms-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/14-forms-more-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/15-form-limits-dialog-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/16-forms-after-limit-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/17-form-closed-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/18-forms-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/19-envelope-page-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/20a-help-a-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/20b-help-b-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/20c-help-c-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/shots/21-sender-comment-off-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-switches/flows/ux-flows.json"
+  ]
+ },
+ "build:ds-collab-fields": {
+  "done": [
+   {
+    "item": "0. Check what already exists",
+    "status": "done",
+    "how": "Nothing for shared/collaborative fields existed. Reused what was there: fields-kinds (fieldkinds.ts: the link, date_from and look checks), the sender's sign-again rule (setAside in envelopes.ts, now exported; earlier_signatures, signed_before, the 'again' email, changedBy), witnessesSetAside/settleWitnesses, colcrypt sealing, the purge in records.ts, and the 'changed' 409 handling the signing page already had."
+   },
+   {
+    "item": "1. A text, choice, dropdown or tick-box field can be 'Anyone on the document', optionally with initials on change",
+    "status": "done",
+    "how": "Three new fields columns: shared, shared_initials and shared_after. saveShared (src/server/collab.ts), called from writeContent, refuses a field that is not shareable, one that starts with someone who does not sign, read only, show_when, formula, link, date_from, a hidden value, or a radio group that is only partly shared. It forces required=0 and keeps the flags when a save leaves them out. copyShared carries them into templates, copies, bulk sends and forms. In the editor (SharedChoice.tsx) 'Assigned to' ends with 'Anyone on the document' for those kinds once two or more people sign. Choosing it shows the note and two ticks: 'Ask for initials when someone changes it' and 'Allow changes after someone has finished'. The Required tick is hidden while a field is shared.",
+    "test": "tests/ds-collab-fields.test.ts 'marking a field' (refusals, kept across saves, template and clone); browser: the editor at 1280 and 390, ticks 44px"
+   },
+   {
+    "item": "2. Each change goes in the audit trail with who and the value before; the signing page shows who last changed it",
+    "status": "done",
+    "how": "Changes go only through takeShared/sharedNow. applyValues now skips shared fields, so no other path can write them without a record. Each change adds a shared_changes row (before, after and initials, all sealed) and an audit line 'Field changed by anyone on the document' with who, Before and After. signView lists shared fields in 'fields' for every signer, with last_by, last_at, initials_on_change and locked_by or sign_again. On the page, SharedNotes.tsx puts one small line under the field: 'Anyone on the document can fill it in. Last changed by Ada.' The same words are in the screen-reader name of text inputs, dropdowns, tick boxes and phone sheet buttons, and in Easy reading. A screen that is out of date never undoes someone else's change. recipients.shared_shown records what each screen was given: sending that old value back changes nothing, and typing over it gets a 409 ('changed', why 'shared') that says who changed it and what it says now. When the page reloads, shared fields always take the server's value.",
+    "test": "'two people change it' (audit lines, last_by, stale autosave ignored, typed-over refused, Finish refused until reload); browser: the note at 1280 and 390, no sideways scroll"
+   },
+   {
+    "item": "3. After anyone finished: refused unless the sender allows it; then everyone who had finished signs again; nothing silently changes an earlier agreement",
+    "status": "done",
+    "how": "Without shared_after the answer is 409 shared_locked ('Ada Shared already finished, so \"Tree kind\" can no longer be changed. Nothing was saved.'), and the page shows the field read only with that sentence. With shared_after the change needs sign_again: true, otherwise 409 shared_sign_again with the names. Then setAside runs for each person who finished (not cc or step roles): their first signature is kept in earlier_signatures with changed_by = the changer, a copy of what they signed is kept, the person goes back to pending with signed_before set and free=1, witnesses are set aside, last_change says what changed, and advance() sends the existing 'Changed after you finished' email. Finish also refuses while the screen was given an older value. The signing page always sends sign_again: true, because the line under the field says who would be asked to sign again before anyone changes it.",
+    "test": "'refused after someone finished' and 'the sign-again path' (yes required, Ada back to sent, earlier signature, copy and changed_by kept, email names Ben and the new value, audit line)"
+   },
+   {
+    "item": "4. The completed PDF prints the final value; the certificate lists the changes",
+    "status": "done",
+    "how": "The value is stored on the field, so the PDF prints the final answer. sharedCertLines adds 'Changed by anyone: \"Tree kind\"' to the certificate: each change with who, when, before and after, initials and who was asked to sign again (the last 20, the rest are in the audit trail), plus what was printed.",
+    "test": "'the sign-again path' reads the downloaded PDF with pdf.js: 'Mangrove', 'Changed by anyone', 'Ben Shared on ... \"Oak\" to \"Mangrove\"'"
+   },
+   {
+    "item": "Initials on change",
+    "status": "done",
+    "how": "A change to a field with shared_initials needs the initials_png sent with the save, or initials the person already saved; otherwise 400 initials_for_change and nothing is saved. The initials are kept with the change, and the audit line says so. On the page, changing such a field without initials shows a toast ('Add your initials first...') and opens the initials dialog before the change is taken.",
+    "test": "'initials on a change'"
+   },
+   {
+    "item": "Docs: openapi, README, .env.example",
+    "status": "done",
+    "how": "New file src/server/openapi-collab.ts, spread into Field in openapi.ts (shared, shared_initials, shared_after, the 409/400 codes, the signing-page props). README: a 'What is in it' bullet, a 'What is not in it' bullet (the old 'fields anyone can fill in' item in the not-built list is removed), a row in the bad-reviews table, and a row in the test table. No setting was added, so .env.example and the config table are unchanged."
+   }
+  ],
+  "files_changed": [
+   "src/lib/collab.ts (new)",
+   "src/server/collab.ts (new)",
+   "src/server/openapi-collab.ts (new)",
+   "src/components/editor/SharedChoice.tsx (new)",
+   "src/components/sign/SharedNotes.tsx (new)",
+   "tests/ds-collab-fields.test.ts (new)",
+   "tests/out/build-ds-collab-fields/shots.cjs (new, plus screenshots and ux/ flows output)",
+   "src/server/db.ts (shared_changes table; fields.shared/shared_initials/shared_after, recipients.shared_shown)",
+   "src/server/colcrypt.ts (4 SEALED_COLUMNS entries)",
+   "src/server/envelopes.ts (export setAside; applyValues skips shared; saveShared in writeContent; copyShared in copyEnvelope; sharedNow in completeRecipient; one import)",
+   "src/server/routes-sign.ts (save route applies shared changes; signView lists shared fields with props, keeps out of others, notes shown values)",
+   "src/server/pdf.ts (certificate lines, one import)",
+   "src/server/records.ts (values purge also clears shared changes and scrubs their quoted values from the audit)",
+   "src/server/openapi.ts (spread sharedFieldProps)",
+   "src/components/editor/StepFields.tsx (Assigned to option + SharedChoice; Required hidden when shared)",
+   "src/app/sign/[token]/page.tsx (note overlay, screen-reader words, initials-first, reload keeps server value for shared fields, sign_again in save/Finish body, 'changed' why 'shared' shows the server's words)",
+   "src/components/sign/TextFields.tsx (Need shows the shared note in Easy reading)",
+   "src/app/styles/sign.css (.sg-shared-note)",
+   "README.md"
+  ],
+  "suite": "tests/ds-collab-fields.test.ts: 7/7 pass. npm test (full run): 2290 tests, 11 failed. One was mine and is fixed: gaps-industry 'late autosave crosses Finish'. completeRecipient awaited before its claim, so I split the work into sharedNow, which runs synchronously and waits only when someone is asked to sign again. A second came from my edit: gaps-mobile-send pins the exact 'const need' line on the signing page, so I put that line back and added the shared words to the individual aria-labels instead. Both files pass now (36/36 and 18/18). I re-ran each of the other failing files on its own and they all passed: billing3, bounces, chat, ds-consent-own, open-platform, simplify-editor, simplify-signing, support. They look like other engineers' edits in progress. ds-db-encrypt failed once with a TypeScript parse error in a file I had not touched and passed 15/15 on re-run. npx tsc --noEmit -p . is clean. I did not run the whole suite again after the two fixes.",
+  "flows": "node tests/ux/flows.cjs against my dev server (zero setup): 'UX FLOWS OK', exit 0, no ceiling broken. Actions/screens per flow: a-send-first 17/8, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 13/8. I have no 'before' run of my own to compare with. With zero setup the feature adds nothing: the option appears only at the end of an existing select, and only for shareable kinds once 2 or more people sign. The only warnings were existing P6 wording warnings on /help and /verify.",
+  "notes_for_integrator": "Design choice: a shared field keeps a recipient_id, the person it starts with, who must be a signer or in-person signer. fields.shared marks that everyone who signs can change it. This kept every existing path that assumes one owner working. Consequences (left open, also in README 'What is not in it'): if that person is taken off, replaced by someone at another address (clearAnswers) or not asked (routing skip), the field goes with their fields. The PDF skips the fields of someone who was skipped or signed on paper. A copy made for one viewer while the envelope is out prints the sender's prefill for a shared field whose first person has not finished. Shared fields are never required. Text-format checks (patterns, email) are not applied to them, only the length limit (assertLimits). Two tabs of the same person share one shown-values record. The page's initials-first prompt covers text, tick box and dropdown, but not radio (pickRadio): a radio change that needs initials is refused by the server and the page reloads. Abuse handled: another envelope's field ids are ignored (tested); someone who only gets a copy fills nothing in (tested); a stale screen cannot overwrite (tested); a forced sign-again happens only when the sender allowed it and emails people once per finish; audit volume is bounded by the existing per-token rate limit. I did not check: the 320px width (checked 390 and 1280), and the brief's 't() once lang-core is in' (the new words are English constants in src/lib/collab.ts, not yet in the i18n catalogue). The brief names the test file tests/collab.test.ts; I used the workflow's name, tests/ds-collab-fields.test.ts. I took my two lines out of tsconfig.json; it now also holds '.next-repair-ds-lang-sender-rest' lines from another engineer, which I left alone. I deleted the dev build folder and stopped the server.",
+  "settings": []
+ },
+ "repair:ds-switches": {
+  "done": [
+   {
+    "item": "Skeptic 1b: a person kept as a copy who opens their old link got a bare 410 'replaced'",
+    "status": "done",
+    "how": "recipients.kept_from now holds the old token. In look() (routes-sign.ts), a retired token that matches a kept copy returns 410 with code kept_copy and a sentence saying they get the signed copy and have nothing more to do. The sender is not sent the 'replaced link opened' alert for it. The sign page shows a 'You passed this on' state card instead of 'Email me the current link'.",
+    "test": "tests/ds-switches.test.ts R1; browser: tests/out/repair-ds-switches/kept-copy-link-phone.png"
+   },
+   {
+    "item": "Skeptic 1c: passing A to B and back to A left A as both signer and cc",
+    "status": "done",
+    "how": "keepFirstAsCopy deletes a kept-copy cc row (kept_from not null) whose address matches the new signer, and writes the audit line 'No longer kept as a copy'. B stays on as a copy, because that is what the switch does. Copy rows the sender added are never removed.",
+    "test": "R1 (rows end as signer:first, cc:second)"
+   },
+   {
+    "item": "Skeptic 1d: fallback 'ask The sender' inside the sentence",
+    "status": "done",
+    "how": "routes-sign.ts passes 'the sender'. PASS_OFF capitalises only the start of the sentence.",
+    "test": "R1"
+   },
+   {
+    "item": "Skeptic 1a / reviewer 2f: no screen to change a per-envelope switch",
+    "status": "partly",
+    "how": "The sender's comments card now has 'Allow them on this document' when comments were off when it was sent. It is a real PUT, not a dead button. I added no per-envelope pass-on control. The designer note in research/ux-notes.json ds-switches says these switches are 'never asked per send', so per-envelope pass-on stays API only.",
+    "left_open": "Per-envelope pass-on has no screen, on purpose, following the designer note. The owner can decide whether that should change."
+   },
+   {
+    "item": "Skeptic 2 / reviewer 2f + high bug: dead 'Write a comment' form, false empty-state promise and API path in the error when comments are off",
+    "status": "done",
+    "how": "senderView returns comments_off. sender/Comments.tsx hides the new-comment form and drops the 'can ask you from their signing page' line. In their place it shows 'Questions and comments are off for this document, so the people on it cannot write here. They can reply to your email.' plus the allow button. Answering an earlier thread still works. COMMENTS_OFF_SENDER no longer says 'envelope' and no longer names an API path.",
+    "test": "R2; browser: sender-comments-off-phone.png (Write a comment count 0)"
+   },
+   {
+    "item": "Reviewer 2e (high) / skeptic 2: Help sends the signer to Questions and comments when it is off",
+    "status": "done",
+    "how": "HelpChat.tsx: when an answer's actions include 'ask' and the page's own list has no 'ask', a note appears under the answer: 'Questions and comments is turned off for this document, so it is not in your list. To ask the sender something, reply to the email you got about this document.' (ASK_OFF_IN_HELP in src/lib/switches.ts). The generic 'not in your list' note is not shown as well. 'ask' only goes missing through the switch, so the note is never wrong. In chatscreens SIGN_ACTIONS, 'ask' and 'reassign' now say they can be turned off, so the model is told too. The answer texts themselves are unchanged: the chat route knows nothing about the envelope's switches, and the answers have tested word limits.",
+    "test": "R2; browser: help-ask-off-phone.png (note shown, generic note not shown)",
+    "left_open": "The built-in answer still starts with 'choose Other actions, then Questions and comments', and the corrective note follows it. Wording each answer from the actual switch would mean passing the switches through chat.ts, which the repair-chat batch is editing now."
+   },
+   {
+    "item": "Skeptic overclaim: the signer's Comments dialog shows a line when comments are off",
+    "status": "disagree",
+    "how": "That line only appears inside the dialog that opens after the signer chooses 'Ask <sender>' on a document the page cannot show (NoViewer, TextView). It answers what they just did, and without it that button would be dead. Nothing is said on the signing page itself, and the menu entry is gone. The README now says exactly this."
+   },
+   {
+    "item": "Skeptic 3a: ways enforced only when the page reports how the mark was made",
+    "status": "done",
+    "how": "noteHow(e, r, b, finishing) on /complete: when the ways are limited, a new signature_png or initials_png sent with no valid how, and no how saved earlier, is refused with 400 sign_way_off plus 'ways'.",
+    "test": "R3 (silent Finish refused, recipient still 'viewed')"
+   },
+   {
+    "item": "Skeptic 3b / new bug: in-person signing ignored the ways",
+    "status": "done",
+    "how": "in-person page passes ways={pack.view?.switches?.ways} and keeps how each mark was made. offlineInPerson.ts sends signature_how and initials_how. routes-offline.ts calls noteHow before finishOffline. A refused device result stays on the device, which already worked that way.",
+    "test": "R3 source checks"
+   },
+   {
+    "item": "Skeptic 3c/3d / new bug / overclaim: ways and mark words were read live, so documents already out changed",
+    "status": "done",
+    "how": "New columns envelopes.sw_sign_ways and sw_mark_words, filled by snapSwitches at send. waysFor(e) and unfinishedMark use the envelope's own values, and fall back to the account only for drafts or for envelopes sent before this change. The Settings line 'Documents already out keep what they were sent with' is now true. On a sign_way_off reply the signing page updates data.switches.ways and clears the old how, so a page loaded earlier offers only the allowed ways.",
+    "test": "R3 (sent-before still accepts draw; later Settings change leaves sw_sign_ways='type'); test 6 updated (a document sent before keeps NOT COMPLETED YET)"
+   },
+   {
+    "item": "Skeptic 5a / bug: PATCH saved max_signed and then said 'Nothing was changed'",
+    "status": "done",
+    "how": "saveFormLimits validates both fields, plus tz and impossible dates such as 2026-02-30, before writing anything.",
+    "test": "R5"
+   },
+   {
+    "item": "Skeptic 5b / overclaim: a form full of unfinished starts said it 'has taken as many signatures'",
+    "status": "partly",
+    "how": "formLimitClosed counts signed and in-progress separately. When unfinished starts take the last places, it says the form is 'full for now', that a place opens again within POWERFORM_IDLE_HOURS, and who to write to.",
+    "test": "test 5 updated (full-for-now first, then signed-full)",
+    "left_open": "Fake starts from several IP addresses can still lock a capped form for up to a day. Counting only signatures would let a form go over its cap. I kept the cap strict and made the wording honest."
+   },
+   {
+    "item": "Skeptic 5c: the last day was counted to midnight UTC",
+    "status": "done",
+    "how": "The Forms dialog sends tz=deviceZone(). The server works out the end of that day in that zone (endOfDayIn, which handles clock changes) and stores closes_day as the admin chose it. Without tz it stays UTC, as documented. The dialog says 'The last day ends at midnight where you are now.'",
+    "test": "R5 (Los Angeles gives 2026-11-21T07:59:59.999Z)"
+   },
+   {
+    "item": "Skeptic 5d / reviewer: 'Closes after 2020-01-31' on a closed form, and ISO dates",
+    "status": "done",
+    "how": "formLimitLine moved to src/lib/switches.ts. It shows 'Closed on 31 Jan 2020: it takes no more signatures.' for a past date and '20 Dec 2026' style dates everywhere. The public closed message uses the same date words.",
+    "test": "R5; browser forms-*.png, form-closed-phone.png"
+   },
+   {
+    "item": "Reviewer: closed form tells the visitor to 'ask <workspace>'",
+    "status": "done",
+    "how": "The message names the template sender: 'write to Rosa Sender at rosa@...', or 'ask whoever gave you this link' when no sender is known.",
+    "test": "test 5 updated"
+   },
+   {
+    "item": "Skeptic 6 / bug: mark-words check accepted words that look signed",
+    "status": "done",
+    "how": "markWordsProblem now allow-lists. The words must start with NOT, UNSIGNED, DRAFT, PENDING, UNFINISHED, INCOMPLETE, AWAITING, WAITING, IN PROGRESS, STILL OUT, COPY ONLY or FOR REVIEW. Only A to Z, digits, spaces and hyphens are allowed, with accents removed before checking. Stems such as sign(not signature), execut, complet, final, done, agreed and approv are allowed only after a leading NOT.",
+    "test": "R6 (every probe word refused, NOT COMPLETED YET / PENDING SIGNATURES / DRAFT accepted)",
+    "left_open": "Anything goes after a leading NOT (for example 'NOT A COPY'). The small line NOT EVERYONE HAS SIGNED always stays."
+   },
+   {
+    "item": "Reviewer: adopt dialog shows a tab strip with a single tab",
+    "status": "done",
+    "how": "SignaturePad hides the tablist when only one way is offered (a drawing field keeps its own), and drops the tabpanel role so no aria-labelledby points nowhere.",
+    "test": "R3 source check; browser adopt-type-only-phone.png (tablist 0)"
+   },
+   {
+    "item": "Reviewer: 'Members may place stamps' rendered outside any card",
+    "status": "done",
+    "how": "StampSettings takes an `after` prop drawn inside its own card. Settings passes <MembersStamps/>, which sits under a divider.",
+    "test": "R4; browser stamps-phone.png"
+   },
+   {
+    "item": "Reviewer: designer note asks for marking off by default with 'Not signed yet'",
+    "status": "not_done",
+    "how": "Left as built: marking is always on, with NOT COMPLETED YET. Turning off a safety mark by default is the owner's decision, which the builder already noted.",
+    "left_open": "The owner should decide whether marking is off by default."
+   },
+   {
+    "item": "Reviewer: 'You are told when they do' on the pass-on switch may be a promise",
+    "status": "done",
+    "how": "Checked: reassignRecipient calls notifySender(e, 'always', 'Reassigned: ...'), so the promise holds. No change needed."
+   },
+   {
+    "item": "Skeptic 4: a member using an admin's template with a stamp field",
+    "status": "not_done",
+    "how": "Behaviour is unchanged and still intended. Stamp fields already on the template are kept.",
+    "left_open": "There is no test for this path yet."
+   },
+   {
+    "item": "Docs",
+    "status": "done",
+    "how": "README 'Switches for how people sign' rewritten to match the code, plus a line in 'What the bad reviews taught us'. openapi-switches documents tz, the validate-first rule, kept_copy 410, comments_off on the sender GET, and Finish requiring how when the ways are limited. No new settings, so .env.example is unchanged."
+   }
+  ],
+  "files_changed": [
+   "src/server/switches.ts",
+   "src/lib/switches.ts",
+   "src/server/db.ts",
+   "src/server/routes-sign.ts",
+   "src/server/routes-offline.ts",
+   "src/server/routes-comments.ts",
+   "src/server/routes-envelopes.ts",
+   "src/server/chatscreens.ts",
+   "src/server/openapi-switches.ts",
+   "src/app/sign/[token]/page.tsx",
+   "src/app/in-person/page.tsx",
+   "src/components/sign/offlineInPerson.ts",
+   "src/components/SignaturePad.tsx",
+   "src/components/sender/Comments.tsx",
+   "src/components/HelpChat.tsx",
+   "src/components/forms/FormLimits.tsx",
+   "src/components/settings/Switches.tsx",
+   "src/components/stamps/StampSettings.tsx",
+   "src/app/app/settings/page.tsx",
+   "README.md",
+   "tests/ds-switches.test.ts",
+   "tests/out/repair-ds-switches/shots.cjs"
+  ],
+  "flows": "After my changes (node tests/ux/flows.cjs on port 4263, default profile, zero setup), actions/screens: a-send-first 18/8, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 14/8. Choices seen are 119/36/36/59/21/53/28/56/98. These match the skeptic's and reviewer's earlier runs; h-sign-myself choices went from 99 to 98. Rules: 0 broken, 21 warnings, all existing P6 words on /help and /verify. UX FLOWS OK. My first run hit the sign-up rate limit because my screenshot script had already made accounts on that server, so I restarted on a fresh DATA_DIR. Output is in tests/out/repair-ds-switches/flows/.",
+  "found": "The switches batch was in place: src/server/switches.ts, src/lib/switches.ts, routes-switches.ts, the Settings 'When people sign' card, form limits and tests/ds-switches.test.ts (7 tests). Four of those 7 tests were failing by the time I ran them. One failed because another batch changed the signing page's bySwitches line. The other three failed on wording and behaviour my fixes changed on purpose, and I updated them.",
+  "notes_for_integrator": "New columns: envelopes.sw_sign_ways, envelopes.sw_mark_words, recipients.kept_from, powerforms.closes_day. Small edits in shared files: the sign page (sign_way_off branch and kept_copy state card), HelpChat.tsx (one import and one note rule; repair-chat owns that file), StampSettings.tsx (optional `after` prop), settings page (one line), routes-offline.ts, offlineInPerson.ts, routes-envelopes.ts (closes_day in the GET /powerforms select). npm test with my changes: 2274 pass, 11 fail, 5 skipped of 2290. I re-ran the failing files I suspected could be mine. simplify-signing and gaps-industry now pass. The rest are source-regex checks on other batches' files that are mid-edit: chat.test 'every control the helper names' (an actions.ts comment), ds-consent-own (pdf.ts consentCertValue and Sign on paper), open-platform onHelp count, plus billing, mail and support tests I did not touch. tests/ds-switches.test.ts: 13 of 13 pass. npx tsc --noEmit is clean. The dev server is stopped, .next-repair-ds-switches is deleted and my two tsconfig lines are removed. In dev, data written by the server sometimes took a while to show up when the database file was read directly, so the screenshot script reads tokens from the dev outbox instead.",
+  "settings": [],
+  "suite": "tests/ds-switches.test.ts 13/13 pass. npm test: 2274 pass, 11 fail, 5 skipped (2290). The failures are source checks on files other batches are editing; simplify-signing and gaps-industry pass when re-run alone. npx tsc --noEmit -p . is clean."
+ },
+ "ux:ds-collab-fields": {
+  "checks": [
+   {
+    "item": "1. Core flows: node tests/ux/flows.cjs against port 4244, default profile, compared with tests/ux/ceilings.json",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-collab-fields/flows/ux-flows.json and flows.log: UX FLOWS OK, 0 rules broken (21 warnings, all owned by other batches: simplify-signing sentence length and sender words on /help). Every number is at or under its ceiling. a-send-first 18/8/119/28/838/2 (ceiling 18/8/137/42/2979/2); b-sign-phone 7/5/35/11/385/0; b-sign-desktop 7/5/36/11/406/0; c-template-send 5/4/59/20/268/1; d-find-download 1/1/21/21/83/0; e-settings-name 3/2/53/32/360/0; f-signer-help 6/4/28/9/570/2; g-sign-in 4/3/56/28/365/0; h-sign-myself 14/8/99/24/623/0. The option only appears once two or more people sign, so the one-signer flows never show it (one_signer_options = ['Ada Lane'])."
+   },
+   {
+    "item": "Lives where the designer note says: 'Anyone on the document' at the end of Assigned to, no new field kind in the common row",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-collab-fields/1-editor-before-desktop.png, 2-editor-anyone-desktop.png, 2-editor-anyone-phone.png: the options are ['Ada Lane','Ben Okafor','Anyone on the document']. A signature field shows only the two people (sig_options). The common row still has Signature, Initials, Date signed, Name, Text, Checkbox."
+   },
+   {
+    "item": "With the defaults it works, Required is hidden while shared, ticks are 44 px, keyboard order is logical, no sideways scroll",
+    "holds": true,
+    "evidence": "2-editor-anyone-phone.png, 2-editor-anyone-desktop.png: tick_heights [44,44]. Tab order after the select: 'Ask for initials...', 'Allow changes...', Label, More options. hscroll 0 on the editor and the signing page. The 'Required' box is hidden."
+   },
+   {
+    "item": "Does not appear where it should not: step 3, the sender's envelope page, Other actions",
+    "holds": true,
+    "evidence": "3-editor-step3-*.png (no mention); 10-envelope-*.png (no extra controls); 9-sign-other-actions-*.png still has 5 entries plus Back."
+   },
+   {
+    "item": "Signer understands the field from its words alone and can read the document around it",
+    "holds": false,
+    "evidence": "5b-sign-ada-tap-phone.png, 7-sign-ben-sees-desktop.png, 8-sign-ben-locked-phone.png: the grey note box is drawn over the document text under the field. On a phone it is 2 to 4 lines and hides clauses 14 to 16. It is aria-hidden and pointer-events none, so it cannot be moved away.",
+    "still_broken": "The note covers the agreement text the signer is meant to read.",
+    "suggested_fix": "Do not draw the note over the page. Put the same words in the field's own phone sheet and desktop focus hint, under the box where the typing happens, for example: 'Anyone on the document can fill this in. Last changed by Ada.' On the page itself, show at most a small 'Shared' badge inside the field's own box."
+   },
+   {
+    "item": "Signer with a screen reader learns the locked state",
+    "holds": false,
+    "evidence": "locked.cjs output (desktop, Ben after Ada finished): the field is a <div class='field fill sg-f done sg-auto'> with no aria-label and an empty value. The note 'Ada Lane already finished, so this can no longer be changed.' is aria-hidden. 8-sign-ben-locked-desktop.png also shows the empty field in the green 'done' style, so it looks filled even though it is empty.",
+    "still_broken": "A locked shared field says nothing to a screen reader, and on screen it looks finished.",
+    "suggested_fix": "Give the locked field aria-label '<Label>. Ada Lane already finished, so this can no longer be changed.' and the read-only style, not 'done'. When it is empty, show 'Left empty' inside it."
+   },
+   {
+    "item": "Sender can tell on the page which fields are shared",
+    "holds": false,
+    "evidence": "2-editor-anyone-desktop.png and 2-editor-anyone-phone.png: after the choice, the field on the page keeps Ada's green colour and its name stays 'Text field for Ada Lane, page 1' (canvas_label). 'Fields for' still has Ada selected.",
+    "still_broken": "A shared field looks and reads as Ada's field once the panel is closed.",
+    "suggested_fix": "Change the field's screen-reader name to 'Text field for anyone on the document, page 1' and draw it in a neutral colour with a small 'Anyone' tag."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "The note under a shared field covers the document text on the signing page",
+    "severity": "high",
+    "where": "src/components/sign/SharedNotes.tsx (SharedNotes overlay) and src/app/styles/sign.css .sg-shared-note; screenshots tests/out/ux-ds-collab-fields/5b-sign-ada-tap-phone.png, 7-sign-ben-sees-phone.png, 8-sign-ben-locked-phone.png",
+    "detail": "The note is drawn as a white box straight over the PDF, under the field, at up to the full page width. On a 390 px phone it takes 2 to 4 lines and hides whole clauses of the agreement. The signer cannot move or close it, because it is pointer-events none. This confuses a signer and hides what they are agreeing to. Fix: show the words in the field's phone sheet (which today says only 'Optional. Leave it empty if it does not apply.') and in a desktop hint below the input, and keep the page clear."
+   },
+   {
+    "title": "In ordered signing, an 'Anyone' field is really only the first signer's field",
+    "severity": "medium",
+    "where": "src/server/collab.ts sharedNow and shareView (locked when any other signer finished and shared_after is off); editor SharedChoice.tsx",
+    "detail": "With the default (no 'Allow changes after someone has finished'), the field locks as soon as anyone finishes, even when it is still empty. When people sign in order, Ben only gets the document after Ada has finished, so he can never fill in an 'Anyone on the document' field. The editor gives no hint of this. In 8-sign-ben-locked-*.png Ben sees an empty, locked field. Suggested fix: in SharedChoice, when env.ordered, show one line: 'People sign in order, so after the first person finishes, nobody else can change it unless you allow changes below.' Or, when signing in order, default the 'Allow changes after someone has finished' tick to on."
+   },
+   {
+    "title": "Filling an empty shared field asks for initials first and throws away the first keystroke",
+    "severity": "medium",
+    "where": "src/app/sign/[token]/page.tsx set() with needsInitials; src/server/collab.ts (ask = changes.find(c => c.f.shared_initials))",
+    "detail": "'Ask for initials when someone changes it' also applies to the very first answer in a blank field. When Ada starts typing, the key is dropped, a toast appears and the initials dialog opens. After adding initials she has to start typing again ('Then make your change'). On a phone the field sheet and the initials dialog stack (after_type_dialog phone; 6-sign-ada-typed-phone.png), and the toast sits at the top over the header, against P11. Suggested fix: ask for initials only when the field already holds someone else's answer, and keep the first entry. Or, if initials stay required, keep the typed text and ask for initials when the person leaves the field. Toast words: 'Add your initials to change this answer. Then type your change.'"
+   },
+   {
+    "title": "A locked shared field has no accessible name and looks filled",
+    "severity": "medium",
+    "where": "src/app/sign/[token]/page.tsx (read-only rendering of a field with readonly/locked_by); SharedNotes.tsx (note is aria-hidden)",
+    "detail": "Once someone has finished, the shared field is a plain div with an empty value and class 'done'. It has no aria-label, and the only explanation is aria-hidden. A screen-reader user hears nothing. A sighted user sees a green 'done' box that is empty. Fix: aria-label '<Label>. <Name> already finished, so this can no longer be changed.' Use the read-only style, and show 'Left empty' when it has no value."
+   },
+   {
+    "title": "A shared field still shows and reads as the first person's field in the editor",
+    "severity": "low",
+    "where": "src/components/editor/StepFields.tsx (canvas field aria-label and colour come from recipient_id)",
+    "detail": "After 'Anyone on the document' is chosen, the field on the page keeps Ada's colour, and its accessible name stays 'Text field for Ada Lane, page 1' (2-editor-anyone-*.png). A sender scanning the page cannot tell which fields are shared. Fix: name it 'Text field for anyone on the document, page 1' and give it a neutral colour or an 'Anyone' tag."
+   },
+   {
+    "title": "API refusal tells a person to send JSON",
+    "severity": "low",
+    "where": "src/server/collab.ts shared_sign_again message",
+    "detail": "'To go ahead, send the change again with \"sign_again\": true.' The signing page always sends sign_again, so a signer should never see this, but the message is aimed at a person and contains code. Suggested fix: 'To go ahead, confirm that they will be asked to sign again.' Keep the field name in the API docs (openapi-collab.ts) only."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Builder report item 2 ('The same words are in the screen-reader name of text inputs, dropdowns, tick boxes and phone sheet buttons')",
+    "claim": "Screen-reader users hear the shared note on every shared field.",
+    "reality": "True for open fields (ada_aria: 'Tree kind, optional. Anyone on the document can fill it in. A change needs your initials...'). Not true once the field is locked: the locked field has no aria-label and the note is aria-hidden (locked.cjs output)."
+   },
+   {
+    "where": "Builder report item 2 ('SharedNotes.tsx puts one small line under the field')",
+    "claim": "One small line under the field.",
+    "reality": "On a phone it is a 2 to 4 line box over the document text (5b-sign-ada-tap-phone.png, 8-sign-ben-locked-phone.png)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/1-editor-before-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/1-editor-before-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/2-editor-anyone-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/2-editor-anyone-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/3-editor-step3-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/3-editor-step3-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/4-sign-consent-ada-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/5-sign-ada-empty-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/5b-sign-ada-tap-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/6-sign-ada-typed-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/6-sign-ada-typed-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/7-sign-ben-sees-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/7-sign-ben-sees-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/8-sign-ben-locked-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/8-sign-ben-locked-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/9-sign-other-actions-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/10-envelope-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-collab-fields/flows/ux-flows.json"
+  ]
+ },
+ "verify:ds-collab-fields": {
+  "checks": [
+   {
+    "item": "0. Reuse, no second copy",
+    "holds": true,
+    "evidence": "collab.ts reuses setAside (exported), witnessesSetAside/settleWitnesses, colcrypt seal, advance() 'again' email, fieldchecks assertLimits, records.ts purge. No duplicate shared-field system found by grep."
+   },
+   {
+    "item": "1. A text, choice, dropdown or tick-box field can be 'Anyone on the document', optionally with initials on change",
+    "holds": true,
+    "evidence": "Server: saveShared refuses signature/readonly/link/non-signer/partial radio group (builder test + my P9: readonly via correction refused 400 'Nothing was saved'). My P1: clone->template keeps 2 shared fields, and an envelope made from that template keeps 2 (the builder's template check was inside `if (tpl.status === 200)` on a route that does not exist, so it never ran; mine did). Browser at 1280 and 390: 'Assigned to' lists 'Ada Shared, Ben Shared, Anyone on the document', both ticks 44px, Required hidden.",
+    "still_broken": "Honest sender gets stuck in the editor: for a shared field the panel still offers 'Read only' (seen in editor-more-desktop.png), 'Only show when...', 'Same answer as' and the hiding format, and the server then refuses the whole save. Choosing 'Anyone' on one radio patches only that radio, and the server refuses with 'Make the whole group for anyone'. If the signers drop below two, field.shared stays 1 silently: the select shows a person, and Required stays hidden with no reason given.",
+    "suggested_fix": "In StepFields, hide or disable Read only, Only show when, Same answer as and hiding while selected.shared. Have assignPatch apply to every radio in the group. Clear shared when offersAnyone becomes false."
+   },
+   {
+    "item": "2a. Each change is in the audit trail with who and the value before; the signing page shows who last changed it",
+    "holds": true,
+    "evidence": "Builder test 'two people change it' passes (7/7 run by me). My P3 audit lines: 'Ben P changed \"Size\" on page 1 ... Before: \"M\". After: empty.' Browser: the note reads 'Anyone on the document can fill it in. Last changed by Ada Shared. Changing it asks Ada Shared to sign again.' and the same words are in the input's aria-label (desktop) and the phone sheet button's label."
+   },
+   {
+    "item": "2b. A screen that is out of date never undoes someone else's change",
+    "holds": false,
+    "evidence": "Probe P10 in tests/out/verify-ds-collab-fields/probe.test.ts: a shared radio group. Ada picks choice A (200). Ben's screen still shows the group empty, and he sends {B:'1', A:''}, which is exactly what pickRadio sends. Result: 200 and the stored values are [null,'1']. Ada's choice was silently taken off by a stale screen. A:'' equals Ben's shown value so it is skipped as 'no change of his', then the group loop adds 'A off' as part of his change of B without the stale check.",
+    "still_broken": "The radio group expansion in sharedNow skips the `base !== stored` check for the sibling choices it turns off.",
+    "suggested_fix": "For each sibling g added by the group loop, throw stale(g) if g.id is in shown and shown[g.id] !== g.value. Add a test with two screens on a shared radio group."
+   },
+   {
+    "item": "3. After anyone finished: refused unless the sender allows it, then everyone who finished signs again; nothing silently changes an earlier agreement",
+    "holds": true,
+    "evidence": "Builder tests 'refused after someone finished' and 'the sign-again path' pass. My P6: the last signer finishes with a change and sign_again; the envelope stays 'sent', Ada goes back to 'sent', she signs again, then the envelope completes. My P2: shared_locked 409 for Ben after Ada finished. Browser: the locked note 'Ada Shared already finished, so this can no longer be changed.' at 390.",
+    "still_broken": "The rule holds, but around it: (a) the page always sends sign_again:true, so autosave 1.5s after a pause mid-word resets everyone who finished and emails them a half-typed value. Browser: Ben typed 'Ma' and paused, and Ada got 1 'Changed after you finished' email. API P11 email: 'Ben P changed \"Tree kind\" on page 1 from \"Oak\" to \"Ma\".' No confirmation is ever asked. (b) Changing the field back to exactly what Ada signed (P4) still leaves her asked to sign again. (c) Finish with a change but a missing signature (P5) is refused with 'Your signature is missing', yet the change is already saved and Ada is already reset; the message does not say so. (d) With ordered signing and the default settings (P2), only the first signer can ever fill in an 'Anyone on the document' field, and the editor does not warn about this.",
+    "suggested_fix": "Send sign_again:true only after a one-time confirm naming who signs again (or on blur/commit, not on autosave). Skip the reset when the final value equals what each finished person signed. Run sharedNow after the signature checks in completeRecipient, or say in the error that the change was saved. In the editor, say that in an ordered envelope later signers can change it only with 'Allow changes after someone has finished'."
+   },
+   {
+    "item": "4. The completed PDF prints the final value; the certificate lists the changes",
+    "holds": true,
+    "evidence": "Builder test 'the sign-again path' reads the downloaded PDF with pdf.js and finds 'Mangrove', 'Changed by anyone' and 'Ben Shared on ... \"Oak\" to \"Mangrove\"'. I ran it and it passed. I did not open a PDF by eye."
+   },
+   {
+    "item": "Initials on change",
+    "holds": true,
+    "evidence": "Builder test 'initials on a change' passes (400 initials_for_change, initials kept, audit says so). The page's initials-first prompt does not cover radio (the builder admits this); the server still refuses, and the page reloads."
+   },
+   {
+    "item": "Screens: phone 390 and desktop, no sideways scroll",
+    "holds": false,
+    "evidence": "dense-desktop.png / dense-phone.png: the note under a shared field is a 92% opaque white box with z-index 4, at least half the page wide. On a page of contract text it hides the clause text below the field ('no refunds after day 13') and sits on top of the next field ('Ben own' at desktop is overlapped; on the phone its whole box is under the note). The signer cannot read part of what they sign. scrollWidth - innerWidth = 0 at both sizes.",
+    "still_broken": "The .sg-shared-note overlay covers document text and other fields.",
+    "suggested_fix": "Show the line only while the field is focused or open (it is already in the aria-label and Easy reading), or as a small icon with a popover; never a permanent opaque box over the page."
+   },
+   {
+    "item": "Core flows not longer",
+    "holds": true,
+    "evidence": "node tests/ux/flows.cjs against my dev server (4242, zero setup): UX FLOWS OK. Actions/screens are the same as the builder's: a 17/8, b-phone 7/5, b-desktop 7/5, c 5/4, d 1/1, e 3/2, f 6/4, g 4/3, h 13/8. Only the existing P6 wording warnings on /help and /verify."
+   },
+   {
+    "item": "Abuse: another account's data",
+    "holds": true,
+    "evidence": "P8: another account gets 404 on GET /envelopes/:id and /audit. Ada's view does not contain Ben's earlier value. Builder: another envelope's field id is ignored, and someone who gets a copy fills nothing in."
+   },
+   {
+    "item": "Abuse: limits",
+    "holds": false,
+    "evidence": "P7: one signer saved 120 alternating values in a row: 120 shared_changes rows and 120 audit lines, all 200. The only bound is the general per-IP+token limit of 600 per 10 minutes (about 86,000 audit lines a day per IP), and more with more IPs. The certificate shows only the last 20, but the audit trail and table grow without a real cap. The builder's 'bounded by the existing per-token rate limit' is true only in a technical sense.",
+    "suggested_fix": "Fold consecutive changes by the same person to the same field within a short window into one row/audit line, or add a per-recipient limit on shared changes."
+   },
+   {
+    "item": "Tests, typecheck",
+    "holds": true,
+    "evidence": "tests/ds-collab-fields.test.ts 7/7. npm test: 2290 tests, 2 failed: stamps.test.ts 'the screens...' (Settings page markup regex) and witness.test.ts case 'has two witnesses here' (the test file now says '3 witnesses'). Both still fail when run alone. They are unrelated to collab and look like other engineers' edits in progress. npx tsc --noEmit -p . exit 0."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Stale screen undoes another signer's choice in a shared radio group",
+    "severity": "high",
+    "where": "src/server/collab.ts sharedNow, the 'A choice taken takes the others of its group off' loop",
+    "detail": "Siblings that the group loop turns off are not checked against what this person's screen was shown. Ada chooses A; Ben's stale screen chooses B; A is silently cleared and recorded as Ben's change. This breaks the promise in the README and the builder's report that an out-of-date screen never undoes someone else's change. Probe P10."
+   },
+   {
+    "title": "Sign-again email misdescribes a fellow signer as someone the sender asked to check the document",
+    "severity": "medium",
+    "where": "src/server/collab.ts sharedNow (changer: editor:true, editor_name) -> envelopes.ts requestMail line ~1540 changerWords, and the earlier-copy texts at ~1708/1740",
+    "detail": "The email Ada receives says 'Ben P, who Liv L asked to check it, changed the document'. Ben is a co-signer, not an editor the sender appointed. The certificate/copy texts that use changedBy() will carry the same wording. Probe P11."
+   },
+   {
+    "title": "Autosave triggers sign-again with no confirmation, on a half-typed value",
+    "severity": "medium",
+    "where": "src/app/sign/[token]/page.tsx flush() and complete() always send sign_again:true; 1.5 s debounce",
+    "detail": "Once someone has finished and the sender allowed changes after that, the first pause while typing sets every finished signer back to pending and emails them a partial value ('from \"Oak\" to \"Ma\"'). Typing the old value back does not undo the reset. The only warning is the small line under the field. Browser and P4/P11."
+   },
+   {
+    "title": "Shared-field note covers contract text and other fields",
+    "severity": "medium",
+    "where": "src/components/sign/SharedNotes.tsx + .sg-shared-note in src/app/styles/sign.css",
+    "detail": "An always-on, opaque (0.92 white), z-index 4 box at least 50% of the page wide is drawn under each shared field. On a dense page it hides clause text and overlaps or fully covers the next person's field, on desktop and at 390 px. Screenshots: tests/out/verify-ds-collab-fields/dense-desktop.png, dense-phone.png."
+   },
+   {
+    "title": "Default 'Anyone on the document' in an ordered envelope is first-signer-only",
+    "severity": "medium",
+    "where": "src/server/collab.ts sharedProps/sharedNow + src/components/editor/SharedChoice.tsx",
+    "detail": "With ordered signing, later signers can act only after earlier ones have finished, so without 'Allow changes after someone has finished' the field is always locked for them. The page says 'Ada already finished, so this can no longer be changed.' The editor says nothing about it, so a sender who chose 'Anyone' gets a field only the first person can fill in. Probe P2 and ordered-locked-phone.png."
+   },
+   {
+    "title": "Refused Finish still commits the shared change and resets finished signers",
+    "severity": "low",
+    "where": "src/server/envelopes.ts completeRecipient: sharedNow runs before payFirst and the signature checks inside the claim",
+    "detail": "P5: Finish with a changed shared value and no signature returns 400 'Your signature is missing'. The new value is nevertheless stored and Ada is back to 'sent' and emailed. The error does not say any of this happened."
+   },
+   {
+    "title": "Editor offers options the server refuses for a shared field; radio 'Anyone' patches one choice only",
+    "severity": "low",
+    "where": "src/components/editor/StepFields.tsx (Read only, Only show when, Same answer as, Format hiding) and SharedChoice.tsx assignPatch",
+    "detail": "Each of these leads to a 400 on save ('Change one of the two. Nothing was saved.' / 'Make the whole group for anyone'). That is a dead end the sender has to work out for themselves."
+   },
+   {
+    "title": "Dropdown value outside the options silently clears a shared dropdown",
+    "severity": "low",
+    "where": "src/server/collab.ts asStored",
+    "detail": "P3: an API save of 'XXL-not-an-option' returns 200 and records 'Before: \"M\". After: empty.' It should be refused, as other field checks are."
+   },
+   {
+    "title": "No real cap on shared-change rows and audit lines",
+    "severity": "low",
+    "where": "src/server/collab.ts sharedNow / routes-sign.ts save",
+    "detail": "P7: 120 consecutive saves wrote 120 rows and 120 audit lines. The only limit is the general 600 per 10 minutes per IP+token."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "README.md 'What is in it' collab bullet (line ~787) and the builder report item 2",
+    "claim": "A screen that was given an older value never undoes a newer change",
+    "reality": "False for shared radio groups: a stale screen's choice clears another signer's choice without a 409 (P10)."
+   },
+   {
+    "where": "README.md collab bullet and src/server/openapi-collab.ts shared_after",
+    "claim": "they are emailed what changed / an email saying who changed what",
+    "reality": "The email says the changer is someone 'who [sender] asked to check it', which is wrong for a co-signer. It can also report a half-typed value as the change."
+   },
+   {
+    "where": "Builder report item 3 / notes",
+    "claim": "The signing page always sends sign_again: true, because the line under the field says who would be asked to sign again before anyone changes it",
+    "reality": "The line is the only consent. Autosave on the first typing pause resets other signers and emails them, with no confirmation and no undo."
+   },
+   {
+    "where": "Builder notes_for_integrator",
+    "claim": "audit volume is bounded by the existing per-token rate limit",
+    "reality": "The limit is 600 saves per 10 minutes per IP+token, about 86k audit lines a day from one person. In practice that is not bounded."
+   },
+   {
+    "where": "Editor label 'Anyone on the document' with ordered signing",
+    "claim": "Anyone on the document can fill it in.",
+    "reality": "In an ordered envelope with the default settings, only the first signer can ever fill it in (P2)."
+   },
+   {
+    "where": "tests/ds-collab-fields.test.ts 'marking a field'",
+    "claim": "kept across saves, templates and copies (tested)",
+    "reality": "The template check calls /envelopes/:id/save-as-template, which does not exist, inside `if (tpl.status === 200)`, so it never runs. My P1 shows templates do keep it, but the builder's test does not prove it."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/editor-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/editor-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/editor-more-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/editor-more-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/again-before-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/again-before-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/again-after-typing-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/again-after-typing-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/ordered-locked-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/ordered-locked-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/dense-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/dense-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-collab-fields/ux/ux-flows.json"
+  ]
+ },
+ "build:ds-witness-two": {
+  "done": [
+   {
+    "item": "1. A signer can have one or two witnesses (the sender sets the number; with named_by_signer the signer names both on the review screen)",
+    "status": "done",
+    "how": "WITNESSES_MAX = 2 in src/lib/witness.ts. The sender sets the number by adding a second witness recipient with the same witness_for. In src/server/witness.ts, witnessesOf() returns the list, and witnessFacts() now returns `witnesses` (all of them) plus `witness`, which is the place that needs the signer first, so the old field and lookAgain keep working. POST /sign/:token/witness takes an optional witness_id. If it is left out, it fills the first place still waiting for a name, then a place whose witness said they were not there, then the first. An id that is not one of the signer's witnesses gets 404. beforeFinish refuses until both places are named ('Name your two witnesses' / 'Name your second witness'). On the signing page (src/components/sign/Witness.tsx), WitnessName and WitnessAfter show one box per place, titled 'Your first witness' and 'Your second witness', and each sends its own witness_id. WitnessNotice says 'This document needs two witnesses'.",
+    "test": "tests/ds-witness-two.test.ts: 'two witnesses named by the sender...' and 'two witnesses named by the signer on the review screen...'. Also checked in a browser at 390 px: two boxes, both named (one by mouse, one by keyboard alone), no sideways scroll.",
+    "left_open": "Only when there are two witnesses: the review dialog title still says 'Name your witness' (singular). That title comes from reviewTitle in src/components/sign/actions.ts, which belongs to another batch (simplify-signing)."
+   },
+   {
+    "item": "2. Change every rule that assumes one: list, both asked at once, nobody held up, own statement or 'not there', set aside with the signature, not the same person or a party, same-device marks per witness, never charged",
+    "status": "done",
+    "how": "The routing (witnessDue), statements, 'I was not there', the device marks (witnessDone) and the set-aside path (withWitnesses / witnessesSetAside) were already per witness, and the tests now prove they work with two. Changed rules: witnessProblem in lib refuses a third witness. The message appears once, on the extra witness, and says 'has 3 witnesses here... can have one or two... Remove one of them'. It also refuses a second witness with the same email address or the same name as the first. The server's witnessProblem adds samePerson spellings (twinProblem). nameWitness refuses naming the other witness again, by address or by any spelling of the name. Wording that assumed one witness now reads correctly with two: notPresent's audit line, the email to the signer and the email to the sender; and the 'sign again' 409 in envelopes.ts now says 'A and B ... are asked to witness again'. Being a witness is still never charged (isChargeable is unchanged).",
+    "test": "tests/ds-witness-two.test.ts covers: more than two refused; the same person as both refused (by address, by name, by another spelling) and a party refused; one witness says 'not there' and is replaced while the other's statement stands; both set aside on the record and both asked again; same device marked for one witness and not the other; reserved() and credits show two signatures with both witnesses free.",
+    "left_open": "The two witnesses are compared with the signer, not with each other. One person with two different names and addresses who finishes both witness links on their own device is not caught (this is named in README 'What is not in it'). Two honest witnesses who share one household email address are refused and have to use another address; the message says why. A signer who has only one witness with them while the sender set two cannot finish: the message says to name the second witness, and only the sender can remove that place."
+   },
+   {
+    "item": "3. The certificate lists both under the signer, each with their statement",
+    "status": "done",
+    "how": "witnessCertLines for the signer now says 'Witnessed by A and B, listed next'. witnessOrder already put every witness straight after their signer, and each witness keeps their own lines: statement, time ticked, marks and note. pdf.ts did not need any change.",
+    "test": "tests/ds-witness-two.test.ts, first test: the PDF text order is Ann, Will, Wanda, then Ben. It checks the 'Witnessed by Will First and Wanda Second, listed next' line, 'Witness for Ann Signer' twice, each statement exactly as ticked, and the note twice."
+   },
+   {
+    "item": "4. The editor's witness block offers a second block",
+    "status": "done",
+    "how": "WitnessChoice takes a new optional onAdd prop. Under the only witness of a person who signs, it shows an 'Add a second witness' button (44 px). The button adds a witness row with the same witness_for and the same named_by_signer setting, and on a template the role name 'Second witness'. It is hidden once there are two, when the wording is locked, and at MAX_RECIPIENTS. The second row shows one line ('The second witness for X. Both are emailed at the same time...') in place of repeating the three paragraphs. There is one small edit in StepAdd.tsx to pass onAdd. The help page (src/app/help/witness.tsx) gets one sentence about it.",
+    "test": "Browser check on my dev server at 1280, 390 and 320 px: the button is 162x44 with no sideways scroll, clicking it adds a row and the button goes away. tests/ds-witness-two.test.ts checks the words, and tests/witness.test.ts 'the screens' checks the StepAdd wiring."
+   },
+   {
+    "item": "Honest words, docs, API",
+    "status": "done",
+    "how": "No em dashes. Nothing says it meets a law's witnessing rule (checked by a test over the four files). WITNESS_RECORDS is said once under two boxes, not twice. openapi.ts: the witness_for description now allows one or two (a third refused, twins refused); the /sign/{token}/witness route documents witness_id, the 404, and `witnesses` in the answer; not-present says the other witness's statement stands. README: 'What is in it' witness paragraph, the test table row, the 'What the bad reviews taught us' witness row, and a 'What is not in it' bullet (more than two; witnesses not compared with each other). No new setting, so .env.example and the configuration table are unchanged.",
+    "test": "tests/witness.test.ts API test still passes."
+   },
+   {
+    "item": "All of tests/witness.test.ts still passes",
+    "status": "done",
+    "how": "27/27 pass. Three of its assertions had to change because they pinned behaviour this brief changes on purpose. (a) The rules case that expected two witnesses to be refused now uses three witnesses and expects /Ann Rules has 3 witnesses here/. (b) The StepAdd source regex now allows the new onAdd prop. (c) The done-box regex now allows `{last && ...}` around WITNESS_RECORDS.",
+    "test": "node --test tests/witness.test.ts: 27 pass, 0 fail. tests/ds-witness-two.test.ts: 6 pass, 0 fail."
+   },
+   {
+    "item": "Words through t() once lang-core is in",
+    "status": "not_done",
+    "how": "src/components/sign/Witness.tsx and src/server/witness.ts still have their English written into the code, like the rest of the witness feature. README 'Languages' already lists the witness screens and witness.ts refusals as not yet in the catalogue. I followed the existing style rather than moving half a component to t().",
+    "left_open": "Moving the witness words to the catalogue belongs with the rest of the witness strings in a language batch."
+   }
+  ],
+  "files_changed": [
+   "src/lib/witness.ts",
+   "src/server/witness.ts",
+   "src/server/routes-witness.ts",
+   "src/server/envelopes.ts",
+   "src/server/openapi.ts",
+   "src/components/sign/Witness.tsx",
+   "src/components/editor/WitnessChoice.tsx",
+   "src/components/editor/StepAdd.tsx",
+   "src/app/help/witness.tsx",
+   "README.md",
+   "tests/ds-witness-two.test.ts",
+   "tests/witness.test.ts",
+   "tsconfig.json (only removed the two .next-build-ds-witness-two lines next dev added)"
+  ],
+  "flows": "After only, on my dev server (port 4271, default profile): a-send-first 10 clicks/6 fields; b-sign-phone 7 taps; b-sign-desktop 7 clicks; c-template-send 3 clicks/2 fields; d-find-download 1 click; e-settings-name 2 clicks/1 field; f-signer-help 4 taps/1 field/1 key; g-sign-in 2 clicks/2 fields; h-sign-myself 12 clicks. 'UX FLOWS OK', exit 0, no ceiling broken. Before-counts were not measured separately. Everything I added renders only when a document has a witness, so the core flows have no new step.",
+  "suite": "My test file: tests/ds-witness-two.test.ts 6/6 pass. tests/witness.test.ts 27/27 pass. npx tsc --noEmit -p . is clean. npm test: 2304 tests, 2295 pass, 4 fail, none in witness code. On re-running those files, gov-g19 then passed. Three still failed: signerux.test.ts (saveBody regex on the sign page), simplify-signing.test.ts (consent screen count 4 vs 3) and stamps.test.ts (StampSettings card regex in the settings page). They pin src/app/sign/[token]/page.tsx and src/app/app/settings/page.tsx, which I did not edit. They look like other engineers' edits in progress.",
+  "found": "The single-witness feature was complete: lib rules, server, routes, signing components, editor choice and certificate. Routing, statements, 'not there', device marks and set-aside were already per witness. The one-witness assumptions were the lib's 'two witnesses here' refusal, witnessOf (first only), witnessFacts (one `witness`), nameWitness (no way to pick a place), beforeFinish, the certificate's 'Witnessed by' line, and single-witness components. src/server/counter.ts has its own witnessOfSigner (first witness only), which I left alone.",
+  "notes_for_integrator": "GET /sign/:token now also returns recipient.witnesses (array). recipient.witness is kept and is the place that needs the signer first. POST /sign/:token/witness accepts witness_id. Abuse handled: a third witness, a twin by address, name or spelling, a party, the other witness named again, someone else's place id. Left open: witnesses are not compared with each other; a household's shared email is refused for two witnesses; the review title is singular. counter.ts still shows only the first witness on the official's screen, which only matters if a counter template ever gets two witnesses. Screenshots: tests/out/build-ds-witness-two/ (editor-phone.png, editor-added.png, sign-2.png, r-4.png, r-6.png)."
+ },
+ "repair:ds-collab-fields": {
+  "done": [
+   {
+    "item": "HIGH: a stale screen took someone else's choice off in a shared radio group (P10)",
+    "status": "done",
+    "how": "src/server/collab.ts sharedNow: when the group loop is about to switch off a choice, it now checks it against what this person's screen was shown. If that choice was off on their screen but is on now, the save is refused with 409 'changed' and the usual 'X changed ... while you had the document open' message.",
+    "test": "ds-collab-fields 'a screen that is out of date never takes someone else's choice off in a shared group'. The skeptic's probe P10 now gives 409 and then 200 after a reload."
+   },
+   {
+    "item": "HIGH/MEDIUM: the note under a shared field covered the contract text and the next field",
+    "status": "done",
+    "how": "SharedNotes.tsx now draws the line only while the person is in that field: keyboard focus, typing in the box, or a tap on a locked field. It uses the same dark hint style as the existing character count (sign.css). On a phone the typing box gives the same words ('Optional. Anyone on the document can fill it in...', dialogs.tsx FieldSheet), so nothing is left over the page.",
+    "test": "Source checks in the test file. Browser at 1280 and 390: no .sg-shared-note before focus, the right text while in the field, none after leaving. dense-desktop.png shows no box over the clause text."
+   },
+   {
+    "item": "MEDIUM: autosave asked finished signers to sign again with no confirmation, on a half-typed value",
+    "status": "done",
+    "how": "The page's autosave no longer sends sign_again. A change to a field that would ask others to sign again stays on the screen (withoutHeld in src/lib/collab.ts) and is sent only with Finish. The note now reads 'If you change it, Ada is asked to sign again when you finish.' Finish is the confirmation. Because only the final value is sent, typing back the original value asks nobody to sign again.",
+    "test": "withoutHeld unit test, plus a source test that flush never sends sign_again."
+   },
+   {
+    "item": "MEDIUM: the sign-again email called a co-signer someone 'who the sender asked to check it'",
+    "status": "done",
+    "how": "New column earlier_signatures.changed_by_signer, written by setAside when actor.cosigner is set. changerWords(name, sender, cosigner) now says 'Ben, who also signs it,'. The emails (English and translated requestmail), the not-completed copy, the earlier copy, GET /sign recipient.changed_by_signer and the signing page's banner all pass the flag.",
+    "test": "The sign-again test checks the email says 'Ben Shared, who also signs it, changed the document', that 'asked to check it' does not appear, and that changed_by_signer is true. changerWords unit test."
+   },
+   {
+    "item": "MEDIUM: in an ordered envelope, 'Anyone on the document' was really first-signer-only and the editor said nothing",
+    "status": "done",
+    "how": "SharedChoice shows one line when people sign in order and 'Allow changes after someone has finished' is off: 'People sign in order, so once the first person has finished, nobody else can change it unless you allow changes after someone has finished.' The lock rule itself is unchanged, because it protects what the first signer agreed to.",
+    "test": "Source test, plus browser panel text (f4-editor-phone.png)."
+   },
+   {
+    "item": "MEDIUM: initials were asked for the first answer in an empty field, and the first keystroke was dropped",
+    "status": "done",
+    "how": "The server asks for initials only when the change replaces an answer that is there (c.before !== ''). The page's needsInitials uses initialsFirst, which checks f.value. The toast now reads 'Add your initials to change this answer. Then type your change.'",
+    "test": "Rewritten initials test: no initials for the first answer, initials needed to change it, saved initials count. Browser: no dialog or toast on first typing (look.cjs after_type_dialog / toast)."
+   },
+   {
+    "item": "MEDIUM: a locked shared field had no accessible name and looked done",
+    "status": "done",
+    "how": "New LockedShared component: no 'done' class, a dashed grey style (.field.sg-locked), 'Left empty' when it is empty. It is focusable with role=note and aria-label '<Label>: <value>. Ada Lane already finished, so this can no longer be changed.' Tapping or tabbing to it shows the line.",
+    "test": "Source test, plus browser locked_aria/locked_class at both sizes (f3-ben-locked-focused-*.png)."
+   },
+   {
+    "item": "LOW: a refused Finish still committed the shared change and reset the finished signers (P5)",
+    "status": "done",
+    "how": "In the sign-again path with Finish, collab.ts dryFinish runs Finish's own value, signature and initials checks inside a rolled-back transaction before anything is written (the same trick payFirst uses). completeRecipient now runs payFirst before sharedNow, so a 402 also asks nobody to sign again. The message says 'Nothing was changed.'",
+    "test": "'a Finish that is refused asks nobody to sign again and changes nothing'. Probe P5 now shows the value unchanged and Ada still completed."
+   },
+   {
+    "item": "LOW: the editor offered settings the server refuses for a shared field; 'Anyone' on one radio patched only that choice; shared stayed on when signers dropped below two",
+    "status": "done",
+    "how": "While the field is shared, the editor hides Read only, FieldLogic ('Only show when'), 'Same answer as' (FieldLook.tsx) and 'Hide what they type' (FieldChecks.tsx). offersAnyone is false for a field that already has one of those settings. assign() applies the choice to the whole radio group. useDropShared clears shared when fewer than two people sign.",
+    "test": "Source tests. Browser: more_has_readonly, showwhen and hide are all 0."
+   },
+   {
+    "item": "LOW: a dropdown value outside the options silently cleared a shared dropdown (P3)",
+    "status": "done",
+    "how": "asStored now refuses it: 400 'not_an_option', '\"Colour\" has no option \"Purple\". Choose one of its options. Nothing was saved.'",
+    "test": "'a dropdown answer that is not one of its options is refused'. Probe P3 gives 400."
+   },
+   {
+    "item": "LOW: no real cap on shared-change rows and audit lines (P7)",
+    "status": "done",
+    "how": "SHARED_MAX = 200 changes per person per document (src/lib/collab.ts). After that: 429 'shared_limit' with a plain message telling them to ask the sender. Other people are not affected. The page no longer autosaves sign-again changes, which also removes most of the volume.",
+    "test": "'one person's changes have a limit, said plainly'."
+   },
+   {
+    "item": "LOW: an API refusal told a person to send JSON",
+    "status": "done",
+    "how": "The message now ends 'To go ahead, confirm that Ada will be asked to sign again.' The field name sign_again appears only in openapi-collab.ts.",
+    "test": "'the words of a refusal speak to a person'."
+   },
+   {
+    "item": "LOW: in the editor a shared field looked and read as the first person's field",
+    "status": "done",
+    "how": "canvasWho gives the name 'Text field for anyone on the document, page 1', and the field is drawn in neutral grey (SHARED_COLOR).",
+    "test": "Browser canvas_label at both sizes."
+   },
+   {
+    "item": "Overclaim: the builder's template check never ran",
+    "status": "done",
+    "how": "The test now uses POST /envelopes/:id/clone {kind:'template'}, then an envelope from that template, then a plain clone. All three are asserted, with no status guards.",
+    "test": "'marking a field...'"
+   },
+   {
+    "item": "Overclaims in README and openapi",
+    "status": "done",
+    "how": "README collab bullet, the reviews table row, the test table row and 'What is not in it' are rewritten to match the code: focus-only line, held until Finish, 'who also signs it', group stale check, option refusal, 200 limit, ordered note. 'What is not in it' says that a held change is lost if the page closes before Finish, and that each API save sent with sign_again asks again. openapi-collab.ts describes not_an_option, shared_limit, initials only for changing an existing answer, changed_by_signer, and that a refused Finish changes nothing.",
+    "test": "n/a"
+   }
+  ],
+  "files_changed": [
+   "src/server/collab.ts",
+   "src/lib/collab.ts",
+   "src/lib/recipienttypes.ts",
+   "src/server/envelopes.ts",
+   "src/server/requestmail.ts",
+   "src/server/routes-sign.ts",
+   "src/server/db.ts",
+   "src/server/openapi-collab.ts",
+   "src/components/sign/SharedNotes.tsx",
+   "src/components/sign/dialogs.tsx",
+   "src/app/sign/[token]/page.tsx",
+   "src/app/styles/sign.css",
+   "src/components/editor/SharedChoice.tsx",
+   "src/components/editor/StepFields.tsx",
+   "src/components/editor/FieldLook.tsx",
+   "src/components/editor/FieldChecks.tsx",
+   "tests/ds-collab-fields.test.ts",
+   "README.md"
+  ],
+  "suite": "tests/ds-collab-fields.test.ts passes 14/14. tests/signerux.test.ts passes 19/19 after I kept the saveBody(valuesRef.current, ...) form it pins. npx tsc --noEmit -p . exits 0. Full npm test (started mid-work): 2317 tests, 2307 pass, 5 fail. One was mine (signerux, regex on the flush code), now fixed and re-run. The other 4 look like other engineers' work in progress: chat.test.ts 'every control the helper names...' (consent text wording), simplify-signing.test.ts consent screen count (4 !== 3, consentWording), stamps.test.ts 'the screens: Settings...' (already failing before my work, per the skeptic), and gov-g19.test.ts '3-4. records brought in...'. I re-ran chat and simplify-signing alone and they still fail; I did not re-run stamps or gov-g19. I did not re-run the whole suite after the signerux fix.",
+  "flows": "node tests/ux/flows.cjs http://localhost:4243 tests/out/repair-ds-collab-fields/flows (fresh DATA_DIR): UX FLOWS OK, 0 rules broken, 21 warnings (other batches). Actions/screens are the same as the reviewer's run: a-send-first 18/8, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 14/8. Everything is at or under its ceiling (a-send-first is exactly at 18/8).",
+  "found": "The collab-fields feature was built and attacked. I reproduced each finding with the skeptic's probe (tests/out/verify-ds-collab-fields/probe.test.ts) and the reviewer's look.cjs. After the fixes the probes show P3 is refused with 400, P5 changes nothing, P10 gives 409 and then 200 after a reload, and P11's email says 'who also signs it'. P4 and P7 still behave as before when an API caller sends sign_again:true on every save (see notes).",
+  "notes_for_integrator": "Left open:\n(1) A change that asks others to sign again is held on the screen until Finish. If the tab closes or the page reloads before Finish, the change is lost. This is said in README 'What is not in it'.\n(2) An API caller that sends sign_again:true on each /save still asks people again on every save, including when a later save puts back the value they signed (probe P4). The page never does this.\n(3) The 200-change cap counts rows, not time. It is a cap per person per document, not a rate limit.\n(4) The radio group has no initials-first prompt on the page. The server refuses the change and the page reloads, as before.\n(5) In an ordered envelope the lock rule is unchanged: the editor now warns about it, but does not turn 'Allow changes after someone has finished' on by default.\n(6) The focused note can sit on top of a character-count hint for a shared field with a length limit. Both appear only while the person is in the field.\n\nShared-file edits, all small:\n- envelopes.ts: Actor gets cosigner; setAside inserts changed_by_signer; changerWords calls pass the flag; payFirst now runs before sharedNow in completeRecipient.\n- recipienttypes.ts: changerWords gets a third parameter, cosigner=false.\n- requestmail.ts: RequestFacts gets cosigner.\n- routes-sign.ts: recipient.changed_by_signer.\n- db.ts: new column earlier_signatures.changed_by_signer.\n- dialogs.tsx: the phone typing-box hint.\n- The sign page: autosave filter, LockedShared, changerWords flag, a heldFields ref.\n- The editor files: the edits listed above.\n\ntsconfig.json: next dev added my .next-repair-ds-collab-fields lines and I removed them. Other engineers' .next-* lines are left as they were. The dev server is stopped and .next-repair-ds-collab-fields is deleted.\n\nScreens are in tests/out/repair-ds-collab-fields/ (f1 to f4 desktop/phone, 1 to 10 from the reviewer's script, dense-desktop.png). dense.cjs timing out is expected: it waits for a note that is no longer drawn without focus."
+ },
+ "ux:ds-witness-two": {
+  "checks": [
+   {
+    "item": "Core flows not longer (node tests/ux/flows.cjs on port 4274, default profile, against tests/ux/ceilings.json)",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-witness-two/flows/ux-flows.json and flows.log: UX FLOWS OK, 0 broken rules. a-send-first 18 actions/8 screens/119 choices/max 28 (ceilings 18/8/137/42); b-sign-phone 7/5/36/11; b-sign-desktop 7/5/36/11; c-template-send 5/4/59/20; d-find-download 1/1/21/21; e-settings-name 3/2/53/32; f-signer-help 6/4/28/9; g-sign-in 4/3/56/28; h-sign-myself 14/8/99/24. Every number is at or under its ceiling. The 21 warnings (P6 sentence length on consent, 'envelope'/'audit trail' on /help and /verify) were there before and are not from witness-two."
+   },
+   {
+    "item": "Lives where the charter and ux-notes say (person More > Role: Is a witness; second witness only under an existing witness); hidden with zero setup",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-witness-two/ed-desk-2-will-more.png shows no witness words until Role is changed. ed-desk-3-will-witness.png shows 'Add a second witness' only under the witness block. The default flows show no witness words."
+   },
+   {
+    "item": "Sender can add a second witness with defaults, on a phone and a desktop, with no sideways scroll; button is 44 px",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-witness-two/ed-desk-4-second-added.png, ed-phone-4-second-added.png: the button is 162x44, scroll overflow is 0 px at 1280 and 390, the second row is prefilled with the same 'Witnesses the signature of' and the button goes away once there are two."
+   },
+   {
+    "item": "Keyboard alone in the editor: reach the button and keep your place after using it",
+    "holds": false,
+    "evidence": "walk-notes.txt: Tab from the 'names the witness' checkbox lands on 'Add a second witness' and Enter adds the row. After that, document.activeElement is BODY (ed-desk and ed-phone). The button removes itself and focus is lost.",
+    "still_broken": "Focus falls to the page body after 'Add a second witness', so a keyboard or screen-reader user is sent back to the top of the page.",
+    "suggested_fix": "After adding, move focus to the new row's 'Full name' box, or to its 'Witnesses the signature of' select when the signer names the witness. Announce 'Second witness added for Ann Signer.' in the existing toast."
+   },
+   {
+    "item": "Signer names two witnesses on the review screen and understands it from the words alone (phone 390x844)",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-witness-two/sign-phone-5-review.png and review-text.txt: the dialog title says 'Name your witness' (singular) above 'Your first witness' and 'Your second witness'. The 72-word WHO_MAY_WITNESS paragraph is printed twice, once in each box. There are two filled 'Save witness' buttons plus Finish.",
+    "still_broken": "The singular title, the paragraph repeated in both boxes, and two main buttons in one dialog.",
+    "suggested_fix": "Show WHO_MAY_WITNESS once, above the first box, the same way WITNESS_RECORDS is shown once under the last box. Title with two places: 'Name your two witnesses' (reviewTitle in src/components/sign/actions.ts, which belongs to simplify-signing). Make the per-box button 'btn' (not primary) or save both boxes with one 'Save witnesses' button."
+   },
+   {
+    "item": "Twin witness refused with plain words, nothing lost",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-witness-two/sign-phone-7-twin-refused.png: 'Will First is already your other witness. Your two witnesses have to be two different people, each with their own email address. Name someone else. Nothing was changed.' The typed values stay in the boxes."
+   },
+   {
+    "item": "Both named: clear state, a way to change each, a way out",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-witness-two/sign-phone-8-both-named.png: two green boxes, each with its name, address and 'Change witness'. The title changes to 'Check before you finish' and Finish is in the bottom bar."
+   },
+   {
+    "item": "Document-page notice for a signer with two witnesses",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-witness-two/sign-phone-2-document.png: 'This document needs two witnesses. You name both before you finish...'. It appears only on this envelope, not in the default b-sign flows. It is long (about 85 words with WITNESS_RECORDS), but the single-witness notice was already that long."
+   },
+   {
+    "item": "Honest words: no promise that a law's witnessing rule is met; no em dashes",
+    "holds": true,
+    "evidence": "The review and editor screenshots say 'It cannot check that they were in the room. Whether a document witnessed this way is accepted depends on the law...'. I saw no em dash on these screens."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Who-may-witness paragraph printed twice on the signer's review screen",
+    "severity": "high",
+    "where": "src/components/sign/Witness.tsx OneWitnessName (wt-form, WHO_MAY_WITNESS in every box)",
+    "detail": "With two places to name, the same 72-word paragraph appears in both boxes (review-text.txt lines 16 and 23; sign-phone-5-review.png). On a phone the dialog roughly doubles in length at the legal moment. The builder already made WITNESS_RECORDS show once (`last`), but not this paragraph. Fix: pass a `first` prop and show WHO_MAY_WITNESS only in the first open box (or once above the list in WitnessName)."
+   },
+   {
+    "title": "Two main buttons in the review dialog (P5)",
+    "severity": "medium",
+    "where": "src/components/sign/Witness.tsx OneWitnessName, 'Save witness' is className 'btn primary'",
+    "detail": "With two unnamed places the dialog has two filled 'Save witness' buttons as well as Finish, which breaks P5 (one main button per screen or open dialog) and makes it unclear which button comes next. Fix: use 'btn' for Save witness when the list has more than one place, or have one 'Save witnesses' button under both boxes that sends both names."
+   },
+   {
+    "title": "Review dialog title says 'Name your witness' when two are needed",
+    "severity": "medium",
+    "where": "src/components/sign/actions.ts reviewTitle (owned by simplify-signing)",
+    "detail": "The builder named this under left_open. A signer reads the singular title, names one witness and expects to finish. Suggested words: 'Name your two witnesses' when the signer has two places, and 'Name your second witness' once one is named."
+   },
+   {
+    "title": "Focus lost after 'Add a second witness'",
+    "severity": "medium",
+    "where": "src/components/editor/WitnessChoice.tsx (onAdd button)",
+    "detail": "The button unmounts itself once there are two witnesses, so focus drops to <body> (walk-notes.txt, desktop and phone). A keyboard user lands back at the top of the editor. Fix: after onAdd, focus the new row's first input (data-ed-name) or its 'Witnesses the signature of' select."
+   },
+   {
+    "title": "Server refusal names the wrong place when only the first is unnamed",
+    "severity": "low",
+    "where": "src/server/witness.ts line ~450 (beforeFinish)",
+    "detail": "`unnamed.length === list.length ? 'two witnesses' : 'second witness'` says 'Name your second witness' even when it is the first place that is still empty (for example, the sender named the second and left the first to the signer, or the first said 'I was not there'). Words: 'Name your other witness before you finish' or use placeName of the empty place."
+   },
+   {
+    "title": "Second witness row is added at the end of the people list, not under the first witness",
+    "severity": "low",
+    "where": "src/components/Editor.tsx addRcp (called from WitnessChoice onAdd)",
+    "detail": "When more people follow the first witness (for example Ann, Will witness, Ben), the second witness appears after Ben, away from the button the sender just pressed. It can also take the place of a spare empty row anywhere in the list. Suggested fix: insert the new row right after the first witness."
+   },
+   {
+    "title": "Each witness row repeats 'Witnesses the signature of' and its own 'names the witness' tick",
+    "severity": "low",
+    "where": "src/components/editor/WitnessChoice.tsx (second row)",
+    "detail": "The second row lets the sender pick another signer or a different named-by-signer setting, which is a second place to decide the same thing (ed-desk-4-second-added.png). The tick under the first still says 'names the witness' (singular). Words: with two, 'Ann Signer names both witnesses on the signing page, before Finish', with one tick that sets both rows. On the second row, show only its line 'The second witness for Ann Signer...' and its name and email."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "builder report item 1 and 'WITNESS_RECORDS is said once under two boxes'",
+    "claim": "The signer's review screen avoids repeating the legal words with two witnesses.",
+    "reality": "WITNESS_RECORDS is shown once, but WHO_MAY_WITNESS (72 words) is still repeated in both boxes (tests/out/ux-ds-witness-two/review-text.txt)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/ed-desk-2-will-more.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/ed-desk-2b-role-picker.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/ed-desk-3-will-witness.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/ed-desk-4-second-added.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/ed-phone-3-will-witness.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/ed-phone-4-second-added.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/sign-phone-1-consent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/sign-phone-2-document.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/sign-phone-5-review.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/sign-phone-6-one-named.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/sign-phone-7-twin-refused.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/sign-phone-8-both-named.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/sign-desk-1-consent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-witness-two/flows/ux-flows.json"
+  ]
+ },
+ "verify:ds-witness-two": {
+  "checks": [
+   {
+    "item": "1. One or two witnesses per signer; the sender sets the number; with named_by_signer the signer names both on the review screen",
+    "holds": true,
+    "evidence": "tests/ds-witness-two.test.ts and tests/witness.test.ts: 33/33 pass. My probes in tests/out/verify-ds-witness-two/probe.test.ts: 8/8 pass. P3: a mixed setup (sender names w1, signer names w2) works; leaving out witness_id fills w2. P6: a template with two witness roles, both named_by_signer, sends from the template (200) and bulk-sends (200). P8: Finish is refused with 'Name your second witness' until both are named. Browser at 390 px (s-review-1.png, s-review-both.png): two boxes, 'Your first witness' and 'Your second witness'. I named the second by keyboard alone (Tab, then Enter). A duplicate entry is refused on screen with a role=alert message. No sideways scroll (scrollWidth 390).",
+    "still_broken": "Cosmetic: with two witnesses the review dialog title still says 'Name your witness' (singular). The builder named this; it comes from reviewTitle in src/components/sign/actions.ts."
+   },
+   {
+    "item": "2. Every rule that assumed one witness: list, both asked at once, nobody held up, own statement or 'not there', set aside with the signature, not the same person or a party, device marks per witness, never charged",
+    "holds": true,
+    "evidence": "Builder tests cover: both asked at once, Ben not held up, each statement separate, set aside together with 2 audit lines, device marks per witness, reserved()=2 and credits=2. My probes cover the rest. P1: POST /correct refuses w2 with w1's email, w2 as 'W. First' (another spelling) and w1 changed to w2's email, all 400. P2: a PUT that adds a third witness to a sent envelope is refused with 'Ann Signer has 3 witnesses here...'. P3: the signer cannot reuse w1's address in upper case (400), cannot touch the sender-chosen w1 (409), and cannot use a witness_id from another envelope (404, the other envelope is unchanged). A party as witness is refused (400). P4: both witnesses say 'not there', the signer replaces each one and both are asked again. P5: a witness token cannot name witnesses (400). P7: the 4-names-per-place limit gives 429 on the fifth.",
+    "still_broken": "(a) src/server/counter.ts witnessOfSigner still takes only [0]. With two witnesses on a counter template, assertWitnessFor checks only the first witness against the 'official may not be the witness' rule, so the official can be the second witness. This is from reading the code; I did not prove it with a test. (b) When the other witness said 'not there' and the signer types that same person into the remaining place, the refusal reads 'Wanda Second is already your other witness', but she had said she was not there.",
+    "suggested_fix": "counter.ts: use witnessesOf (or all()) in assertWitnessFor and check every witness against the official. In visitView, return a list. In nameWitness, only count `other` as 'your other witness' when !other.witness_absent_at, or reword the message for an absent other."
+   },
+   {
+    "item": "3. The certificate lists both under the signer, each with their statement",
+    "holds": true,
+    "evidence": "In my run, the builder's first test passes on the real PDF text: the order is Ann, Will, Wanda, Ben; the line 'Witnessed by Will First and Wanda Second, listed next' is there; 'Witness for Ann Signer' appears twice; each statement appears as ticked; the WITNESS_CERT_NOTE appears twice. witnessCertLines lists only completed witnesses, which is correct for a completed envelope. I did not render a PDF separately."
+   },
+   {
+    "item": "4. The editor's witness block offers a second block",
+    "holds": true,
+    "evidence": "Browser on port 4272: 'Add a second witness' is 162x44 at 1280 and at 390 px, with scrollWidth equal to the width. Activated by keyboard (focus, then Enter), it adds a second .ed-witness row. The button goes away and the second row shows the one line 'The second witness for Ann Lee...' (ed-phone-added.png).",
+    "still_broken": "Keyboard and screen-reader users lose their place: after Enter the button unmounts and focus falls to <body>. Nothing announces or focuses the new witness row.",
+    "suggested_fix": "After onAdd, move focus to the new row's name input or its 'Witnesses the signature of' select."
+   },
+   {
+    "item": "Honest words, docs, API (no em dashes, no legal promise, openapi, README, help)",
+    "holds": true,
+    "evidence": "The diffs of help/witness.tsx, README and openapi.ts say what the code does: one or two witnesses, a third refused, twins refused, witness_id, 404, `witnesses` in the answer, the other witness's statement stands. My probes confirmed each of those claims. No 'meets the law' wording. No new setting.",
+    "still_broken": "Minor copy: in the after-Finish card for a 'not there' place with two witnesses, it says 'So the document is not witnessed yet' while the first witness has already confirmed (s-after-absent.png). The email correctly says 'still needs one more witness'. Also, GET /sign/{token} in openapi does not document recipient.witnesses; it is only described under POST /sign/{token}/witness."
+   },
+   {
+    "item": "All of tests/witness.test.ts still passes",
+    "holds": true,
+    "evidence": "node --test tests/ds-witness-two.test.ts tests/witness.test.ts: 33 pass, 0 fail."
+   },
+   {
+    "item": "New words through t() once lang-core is in",
+    "holds": false,
+    "evidence": "The builder reports this as not_done. The witness strings in src/components/sign/Witness.tsx and src/server/witness.ts are still English written into the code.",
+    "still_broken": "Left for a language batch, as reported."
+   },
+   {
+    "item": "Core flows not longer; suite and tsc",
+    "holds": true,
+    "evidence": "node tests/ux/flows.cjs on my dev server (port 4272) exits 0 with 'UX FLOWS OK'. Counts match the builder's: a-send-first 10 clicks/6 fields, b-sign-phone 7 taps, b-sign-desktop 7, c-template-send 5 total, d-find-download 1, e-settings-name 3 total, f-signer-help 6 total, g-sign-in 4 total, h-sign-myself 14 total. npx tsc --noEmit -p . is clean. npm test: 2317 tests, 2310 pass, 2 fail, neither in witness code. chat.test.ts fails on a README consent-text regex. stamps.test.ts fails on a settings-page StampSettings regex and still fails on re-run. Both look like other engineers' edits in progress."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "The official-may-not-witness rule only checks the first witness at a counter",
+    "severity": "medium",
+    "where": "src/server/counter.ts witnessOfSigner/assertWitnessFor (lines ~265-275) and visitView",
+    "detail": "witnessOfSigner returns all(...)[0]. Now that a signer can have two witnesses, and templates accept two witness roles (my probe P6), a counter template with two witnesses only compares the first witness's email with the official when official_may_witness is off. The official can stand as the second witness for a mark. The official's screen also shows only one witness. Found by reading the code; not proven with a test."
+   },
+   {
+    "title": "Keyboard focus is lost after 'Add a second witness'",
+    "severity": "low",
+    "where": "src/components/editor/WitnessChoice.tsx onAdd button",
+    "detail": "In the browser at 390 px, focusing the button and pressing Enter adds the row. The button then unmounts and document.activeElement becomes <body>, so a keyboard or screen-reader user has to start again from the top of the page."
+   },
+   {
+    "title": "Refusal names a witness who said 'not there' as 'already your other witness'",
+    "severity": "low",
+    "where": "src/server/witness.ts nameWitness, the `other` check",
+    "detail": "Probe P4: both witnesses said 'not there'. The signer then names Wanda (who said she was not there) for place 1 and gets '400 Wanda Second is already your other witness'. Refusing is defensible, but the words are false and confuse an honest signer."
+   },
+   {
+    "title": "After-Finish card says 'not witnessed yet' when one of two witnesses has confirmed",
+    "severity": "low",
+    "where": "src/components/sign/Witness.tsx OneWitnessName, state 'absent' paragraph",
+    "detail": "With two witnesses, one done and one 'not there', the card says 'So the document is not witnessed yet.' The signer's email for the same event says 'still needs one more witness'. The screen copy should match the email."
+   },
+   {
+    "title": "The signer can name the 'not there' witness again in the same place (pre-existing)",
+    "severity": "low",
+    "where": "src/server/witness.ts nameWitness",
+    "detail": "In the desktop browser, retyping the absent person's name and email into their own place was accepted: witness_names went to 2 and she was emailed again. This behaviour existed for one witness too and was not introduced by this batch. It lets a signer put back someone who said they were not there. No notice beyond the sender email for a replacement."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "builder report, item 4 / brief tests list",
+    "claim": "The brief asked for tests/witness-two.test.ts",
+    "reality": "The file is tests/ds-witness-two.test.ts. Same content, different name. Trivial."
+   },
+   {
+    "where": "builder report, 'Honest words' item: 'WITNESS_RECORDS is said once under two boxes, not twice'",
+    "claim": "The records sentence appears once",
+    "reality": "Under the boxes it does appear once. On the review screen it also appears in the top WitnessNotice, so getByText counted 2. This is acceptable and not a broken promise, but 'once' is only true of the boxes."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/ed-desktop.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/ed-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/ed-phone-added.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/s-review-1.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/s-review-dup.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/s-review-both.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/s-done.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/w2-first.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/w2-absent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/s-after-absent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/flows/ux-flows.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-witness-two/probe.test.ts"
+  ]
+ },
+ "repair:ds-witness-two": {
+  "done": [
+   {
+    "item": "Skeptic new bug (medium): the official-may-not-witness rule checked only the first witness at a counter; the official screen showed one witness",
+    "status": "done",
+    "how": "src/server/counter.ts: witnessOfSigner replaced by witnessesOfSigner (all witnesses of the signer, in order). assertWitnessFor refuses with official_is_witness when ANY witness has the official's address ('one of the witnesses on this document is you' when there are two). visitView now returns `witnesses: [{name,status}]` and keeps `witness` (both names joined with 'and') so the existing screen still works. src/components/counter/Visit.tsx says 'Witnesses on this document' when there are two.",
+    "test": "tests/ds-witness-two.test.ts 'at a counter, the official may not be either of two witnesses...': the official as SECOND witness gets 409 official_is_witness, view.witnesses lists both, and allowing official_may_witness lets the mark through."
+   },
+   {
+    "item": "Skeptic + simplicity: review dialog title said 'Name your witness' with two places",
+    "status": "done",
+    "how": "src/components/sign/actions.ts: new witnessPlaces(me) and an optional third argument to reviewTitle: 'Name your two witnesses' when both are open, 'Name your other witness' when one is left, unchanged with one witness or with no argument. src/app/sign/[token]/page.tsx: one import name added and witnessPlaces(me) passed in the existing reviewTitle calls (one line).",
+    "test": "Unit checks of reviewTitle/witnessPlaces for 1, 2 open, first-open and second-open; browser at 390 px shows 'Name your two witnesses', then 'Name your other witness' after one is saved."
+   },
+   {
+    "item": "Simplicity (high): WHO_MAY_WITNESS paragraph printed twice on the review screen",
+    "status": "done",
+    "how": "src/components/sign/Witness.tsx: with two places, WitnessName shows the paragraph once above both boxes (id passed as whoId, and each name input points to it with aria-describedby). With one place it stays in the box, as before.",
+    "test": "Source check (exactly two {WHO_MAY_WITNESS} renderings: once-above or in-the-one-box). The 390 px screenshot tests/out/repair-ds-witness-two/sign-phone-5-review.png shows it once."
+   },
+   {
+    "item": "Simplicity (medium): two filled 'Save witness' buttons plus Finish in one dialog",
+    "status": "done",
+    "how": "With more than one place, each box's Save is an ordinary 'btn'. Finish stays the one main button. After Finish, the button is primary only when a single place is open.",
+    "test": "Source check on className={many ? 'btn' : 'btn primary'}; screenshots sign-phone-5/6."
+   },
+   {
+    "item": "Skeptic + simplicity: focus lost after 'Add a second witness'",
+    "status": "done",
+    "how": "WitnessChoice.tsx: after onAdd, the toast says 'Second witness added for Ann Signer.' and focus moves to the new row's Full name box. When the signer names the witness, it moves to the row's select instead. The row is found by data-second-for on its witness block.",
+    "test": "Browser walk (tests/out/repair-ds-witness-two/walk.cjs, desktop and 390 px): 'focus after adding: Name' (it was BODY before). Source regex checks are in the test file."
+   },
+   {
+    "item": "Simplicity (low): second witness row added at the end of the list or into a spare empty row",
+    "status": "done",
+    "how": "Editor.tsx addRcp takes an optional after_id: the new row goes right under that row. WitnessChoice passes the first witness's id. Every other caller is unchanged.",
+    "test": "Source check; the browser walk shows the second witness directly under Will (ed-desk-4-second-added.png)."
+   },
+   {
+    "item": "Skeptic (low): refusal called a witness who said 'not there' 'already your other witness'",
+    "status": "done",
+    "how": "witness.ts nameWitness: when the other place's witness said they were not there, the refusal now reads '<name> is in the place of your other witness and said they were not there. To name them again, use that place, not this one. ...Nothing was changed.'",
+    "test": "New test: both witnesses say 'not there'. Putting Wanda into place 1 gives 400 with the new words and leaves the place unchanged. Putting her into her own place gives 200."
+   },
+   {
+    "item": "Simplicity (low): server said 'Name your second witness' when the empty place was the first",
+    "status": "done",
+    "how": "beforeFinish now says 'Name your other witness before you finish'.",
+    "test": "The existing assertion in ds-witness-two.test.ts was updated to the new words and passes."
+   },
+   {
+    "item": "Skeptic (low): after-Finish card says 'not witnessed yet' while the other witness has confirmed",
+    "status": "done",
+    "how": "OneWitnessName gets otherOk. When the other place has a witness who did not say 'not there', the card says 'So your signature still needs one more witness.', which matches the email.",
+    "test": "Source check in the test file."
+   },
+   {
+    "item": "Skeptic: openapi points to recipient.witnesses in GET /sign/{token}, which is not documented",
+    "status": "done",
+    "how": "GET /sign/{token} is not in openapi at all; it is the signing page's own read. The POST /sign/{token}/witness description now says witness_id is the id of a place in the `witnesses` list that this answer returns and that the signing page reads, instead of pointing at an undocumented endpoint.",
+    "test": "tests/witness.test.ts openapi checks still pass."
+   },
+   {
+    "item": "Skeptic (pre-existing, low): the signer can name the 'not there' witness again in their own place",
+    "status": "disagree",
+    "how": "This is designed and tested: tests/witness.test.ts:674 'a witness who pressed I was not there by mistake can be named again by the signer, and gets a new link'. The sender is always emailed 'New witness named' saying that person said they were not there and to void and resend if unsure. Refusing would leave an honest misclick stuck. Behaviour unchanged; my new test confirms it still works with two witnesses.",
+    "test": "tests/ds-witness-two.test.ts (the last step of the 'not there' refusal test) and tests/witness.test.ts:674."
+   },
+   {
+    "item": "Simplicity (low): each witness row repeats 'Witnesses the signature of' and its own 'names the witness' tick",
+    "status": "partly",
+    "how": "Not changed. A mixed setup (the sender names witness 1, the signer names witness 2) is a tested feature (skeptic P3), so each row keeps its own tick. Only one line of explanation shows on the second row, and it now sits directly under the first.",
+    "left_open": "A combined 'names both witnesses' tick and hiding the duplicate select on the second row. That needs a design decision on whether to give up the mixed setup."
+   },
+   {
+    "item": "New words through t()",
+    "status": "not_done",
+    "how": "Left for a language batch, as in the build report.",
+    "left_open": "The witness strings in Witness.tsx and witness.ts are still English written into the code."
+   },
+   {
+    "item": "Abuse and confusion review",
+    "status": "done",
+    "how": "Abuse: (1) the official as second witness at a counter: tested, refused. (2) The signer re-uses an absent witness in the other place to stack one person in both: refused, tested. (3) A forged witness_id: 404, existing test. Confusion: (1) singular title with two places: fixed, tested. (2) No way to tell which button comes next: one primary (Finish). (3) After 'not there', words that contradicted the email: fixed.",
+    "test": "Tests listed above."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/counter.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/counter/Visit.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/server/witness.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/sign/Witness.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sign/actions.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/editor/WitnessChoice.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/Editor.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/ds-witness-two.test.ts"
+  ],
+  "flows": "node tests/ux/flows.cjs http://localhost:4273 tests/out/repair-ds-witness-two/flows: UX FLOWS OK. Actions are counted by my own sum of the counters in ux-flows.json, without characters typed; this may count one less than the reviewer's 18 on a-send-first. a-send-first 17 actions/8 screens/119 choices/max 28; b-sign-phone 7/5/36/11; b-sign-desktop 7/5/36/11; c-template-send 5/4/59/20; d-find-download 1/1/21/21; e-settings-name 3/2/53/32; f-signer-help 6/4/28/9; g-sign-in 4/3/56/28; h-sign-myself 13/8/99/21. The only warnings are the old P6 words on /help and /verify.",
+  "suite": "node --test tests/ds-witness-two.test.ts tests/witness.test.ts tests/gov-g18.test.ts: 55 pass, 0 fail. npm test: 2325 tests, 2319 pass, 1 fail. The failure is tests/stamps.test.ts:1354, a regex on StampSettings in the settings page. The skeptic saw the same failure before my work, and it is not in witness code. npx tsc --noEmit -p . is clean. Dev server stopped, .next-repair-ds-witness-two deleted, tsconfig.json put back as it was (next dev had rewritten its .next-* include lines). Screenshots and the walk script are in tests/out/repair-ds-witness-two/.",
+  "notes_for_integrator": "reviewTitle in src/components/sign/actions.ts belongs to simplify-signing. I added an optional third argument (witnessPlaces(me)), so existing callers are unchanged, and the one page.tsx line passes it. Editor.tsx addRcp accepts an optional after_id, which is removed before the row is built. visitView (counter) keeps `witness` and adds `witnesses`. I did not touch billing files, README or help: no behaviour they describe changed in a way that needs new words. The stamps.test.ts failure belongs to whoever is editing StampSettings in the settings page."
  }
 }

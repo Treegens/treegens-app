@@ -21,7 +21,7 @@ import { stampBox, STAMP_DEFAULT_MM, turnStyle } from '@/lib/stamps';
 import { ConvertNotes } from './ConvertNotes';
 // First or last name, dates from dates, same answer, text style and the team's saved fields (src/lib/fieldkinds.ts).
 import { NameChoice, DateFrom, FieldLookMore, SavedPalette, kindTitle, onlyDateSource, ButtonWordsNote } from './FieldLook';
-import { AnyoneOption, SharedChoice, assignedValue, assignPatch } from './SharedChoice';
+import { AnyoneOption, SharedChoice, assignedValue, assignPatch, assignIds, canvasWho, offersAnyone, useDropShared, SHARED_COLOR } from './SharedChoice';
 import { paletteKinds, personLabel } from '@/lib/editorux';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
@@ -76,6 +76,13 @@ export function StepFields({ ed }: { ed: Ed }) {
   if (me?.no_stamps && !list.some((f) => f.type === 'stamp') && kinds.includes('stamp')) kinds.splice(kinds.indexOf('stamp'), 1);
   const selLocked = !!selected && isLockedField(selected);
   const patchField = (fid: string, p: any, key = Object.keys(p).join()) => setFields((l) => l.map((f) => (f.id === fid ? { ...f, ...p } : f)), { tag: `prop:${fid}:${key}` });
+  // "Assigned to": a choice of a group goes with its whole group when it is or becomes for anyone (SharedChoice.tsx).
+  const assign = (f: any, v: string) => {
+    const p = assignPatch(v, f, open);
+    const ids = p.shared || f.shared ? assignIds(f, list) : [f.id];
+    setFields((l) => l.map((g) => (g.id === f.id ? { ...g, ...p } : ids.includes(g.id) ? { ...g, shared: p.shared, ...(p.shared ? { recipient_id: p.recipient_id, required: false } : {}) } : g)), { tag: `prop:${ids.join()}:assign` });
+  };
+  useDropShared(list, open, (ids) => setFields((l) => l.map((g) => (ids.includes(g.id) ? { ...g, shared: 0 } : g)), { tag: `prop:${ids.join()}:unshare` }));
   // Fields that depended on the deleted one are put right in the same step, and the sender is told (withoutField).
   // AI suggestions for pages where "Place fields for me" found nothing, only where the account allows it.
   const suggest = useSuggest(ed, { signers, active, label, reveal: (id) => (reveal.current = { id, focus: false }) });
@@ -529,8 +536,8 @@ export function StepFields({ ed }: { ed: Ed }) {
                         const owner = f.recipient_id ? rcps.find((r) => r.id === f.recipient_id) : null;
                         return (
                           <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${f.type === 'stamp' ? ' stamp' : ''}${strikeClass(f)}${locked ? ' locked' : ''}`}
-                            style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, ['--fc' as any]: color(f.recipient_id), borderRadius: f.type === 'radio' ? '50%' : undefined }}
-                            tabIndex={0} role="button" aria-label={`${kindTitle(f, list, true)} field${owner ? ` for ${label(owner)}` : senderStamp(f) ? ', your own stamp' : ''}, page ${page + 1}${locked ? ', locked' : ''}`}
+                            style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, ['--fc' as any]: f.shared && offersAnyone(f, open) ? SHARED_COLOR : color(f.recipient_id), borderRadius: f.type === 'radio' ? '50%' : undefined }}
+                            tabIndex={0} role="button" aria-label={`${kindTitle(f, list, true)} field${canvasWho(f, open, owner ? ` for ${label(owner)}` : senderStamp(f) ? ', your own stamp' : '')}, page ${page + 1}${locked ? ', locked' : ''}`}
                             onClick={(e) => e.stopPropagation()} onFocus={() => setSel(f.id)} onPointerDown={(e) => drag(e, f, 'move')}>
                             {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || kindTitle(f, list)}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
                             {sel === f.id && !locked && <span className="grip" onPointerDown={(e) => drag(e, f, 'resize')} />}
@@ -594,7 +601,7 @@ export function StepFields({ ed }: { ed: Ed }) {
                   <StampChoice field={selected} open={open} envelopeId={env.id} page={docs.find((d) => d.id === selected.document_id)?.page_sizes?.[selected.page] || { w: 612, h: 792 }} patch={(p) => patchField(selected.id, p)} />
                 ) : !SENDER_MARK(selected.type) && (
                   <label className="f"><span>Assigned to</span>
-                    <select value={assignedValue(selected, open)} onChange={(e) => patchField(selected.id, assignPatch(e.target.value, selected, open))}>
+                    <select value={assignedValue(selected, open)} onChange={(e) => assign(selected, e.target.value)}>
                       {/* An Approve or Decline button can also be for someone who approves (src/lib/fieldkinds.ts). */}
                       {(selected.type === 'approve' || selected.type === 'decline' ? [...open, ...rcps.filter((r) => r.role === 'approver' && !ed.isIdle(r))] : open).map((r) => <option key={r.id} value={r.id}>{label(r)}</option>)}
                       {/* "Anyone on the document", for text, choice, dropdown and tick-box fields (SharedChoice.tsx). */}
@@ -602,7 +609,7 @@ export function StepFields({ ed }: { ed: Ed }) {
                     </select>
                   </label>
                 )}
-                <SharedChoice field={selected} people={open} patch={(p) => patchField(selected.id, p)} />
+                <SharedChoice field={selected} people={open} ordered={!!env.ordered} patch={(p) => patchField(selected.id, p)} />
                 {/* A calculated field is never typed into: not required, no prefilled value (FieldLogic.tsx). */}
                 {!SENDER_MARK(selected.type) && !senderStamp(selected) && !['date_signed', 'full_name', 'email', 'approve', 'decline'].includes(selected.type) && selected.formula == null && !selected.date_from && !selected.shared && (
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
@@ -624,14 +631,15 @@ export function StepFields({ ed }: { ed: Ed }) {
                     <label className="f"><span>Prefilled value</span>{selected.type === 'date'
                       ? <input type="date" style={{ minHeight: 44 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} />
                       : <textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} />}</label>
-                    <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.readonly} onChange={(e) => patchField(selected.id, { readonly: e.target.checked })} /> Read only</label>
+                    {/* A field for anyone is typed into by everyone, so it is never read only (SharedChoice.tsx). */}
+                    {!selected.shared && <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.readonly} onChange={(e) => patchField(selected.id, { readonly: e.target.checked })} /> Read only</label>}
                   </>
                 )}
                 {/* Format and limits: formats, character limit, fixed size, hiding, number range and currency, tick-box group rules (FieldChecks.tsx). */}
                 <FieldChecks key={`checks-${selected.id}`} field={selected} fields={list} dateFormat={env.date_format} pageSize={docs.find((d) => d.id === selected.document_id)?.page_sizes?.[selected.page] || null}
                   patch={(p) => patchField(selected.id, p)} patchMany={(ids, p) => setFields((l) => l.map((f) => (ids.includes(f.id) ? { ...f, ...p } : f)), { tag: `prop:group:${ids.join()}` })} />
                 {/* "Only show when..." and "Calculate from...", each said back as a sentence (FieldLogic.tsx). */}
-                <FieldLogic key={selected.id} field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />
+                {!selected.shared && <FieldLogic key={selected.id} field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />}
                 {/* "Same answer as", "Text style" and, for an admin, "Save for the team" (FieldLook.tsx). */}
                 <FieldLookMore field={selected} fields={list} patch={(p) => patchField(selected.id, p)} patchMany={(ids, p) => setFields((l) => l.map((f) => (ids.includes(f.id) ? { ...f, ...p } : f)), { tag: `prop:link:${ids.join()}` })} />
                 <div className="grid ed-size">

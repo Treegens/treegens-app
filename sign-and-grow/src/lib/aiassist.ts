@@ -54,7 +54,8 @@ export const NOT_ALLOWED = 'AI help is not switched on for this account. An admi
 export const READ_OFF = 'The AI may not read document text on this account. An admin can turn on "Let the AI read document text" in Settings, Account.';
 
 /** The line the Settings card shows under the switch: who gets the text, on which host and in which country. */
-export function whereLine(o: { name: string; model: string; host: string; country: string | null }): string {
+export function whereLine(o: { name: string; model: string; host: string; country: string | null; inside?: boolean }): string {
+  if (o.inside) return `The text goes to the model ${o.model}, which runs inside this server's own network (${o.host}).`;
   return `The text goes to ${o.name} (${o.host}), which runs the model ${o.model}${o.country ? `, in ${o.country}` : ''}.${o.country ? '' : ' Whoever runs this server has not said in which country.'}`;
 }
 

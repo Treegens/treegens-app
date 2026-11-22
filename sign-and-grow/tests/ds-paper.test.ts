@@ -320,3 +320,144 @@ test('the words: no em dash, never "electronic signature" for a paper signer, an
   assert.match(read('src/app/api/[...path]/route.ts'), /routes-paper/);
   assert.match(read('.env.example') + read('README.md'), /sign on paper/i);
 });
+
+// ---- Repairs after review (tests/out/verify-ds-paper, tests/out/ux-ds-paper) ----------------------------------------
+
+const rowOf = (eid: string, email: string) => S.db.get('SELECT * FROM recipients WHERE envelope_id=? AND email=?', eid, email);
+const accept = (s: Client, eid: string, rid: string) => s.post(`/envelopes/${eid}/recipients/${rid}/paper/accept`, {});
+
+test('repair: sign again after a paper acceptance needs a new signature, keeps the new values and drops the old scan', async () => {
+  const { s, e, tok, ada, adaEmail } = await setup('rs1');
+  assert.equal((await send(ada, tok, 1)).status, 200);
+  const rid = rowOf(e.id, adaEmail).id;
+  assert.equal((await accept(s, e.id, rid)).status, 200);
+  assert.ok(rowOf(e.id, adaEmail).paper_scan_id);
+  // The sender changes the document and asks Ada to sign again.
+  const env = (await s.get(`/envelopes/${e.id}`)).data.envelope ?? (await s.get(`/envelopes/${e.id}`)).data;
+  const fields = env.fields.map((f: any) => ({ id: f.id, document_id: f.document_id, recipient_id: f.recipient_id, type: f.type, label: f.label, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h }));
+  fields.push({ id: 'new', document_id: env.documents[0].id, recipient_id: rid, type: 'text', label: 'New line', page: 0, x: 0.1, y: 0.3, w: 0.3, h: 0.03 });
+  const put = await s.put(`/envelopes/${e.id}`, { resign: true, documents: env.documents.map((d: any) => ({ id: d.id, file_id: d.file_id })), recipients: env.recipients.map((r: any) => ({ id: r.id, role: r.role, name: r.name, email: r.email, routing_order: r.routing_order })), fields });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  const row = rowOf(e.id, adaEmail);
+  assert.equal(row.paper_scan_id, null, 'the old acceptance no longer counts');
+  assert.equal(row.paper_state, null);
+  assert.equal(S.db.get("SELECT state FROM paper_scans WHERE recipient_id=? ORDER BY at DESC LIMIT 1", rid).state, 'set_aside', 'the old scan is kept on record, set aside');
+  assert.ok(S.db.all('SELECT action FROM audit WHERE envelope_id=?', e.id).some((a: any) => a.action === 'Scan signed on paper set aside'));
+  const tok2 = tokenFor(e.id, adaEmail);
+  // Finish with no consent and no signature: refused, as for anyone who signs on screen.
+  const bare = await ada.post(`/sign/${tok2}/complete`, { values: { new: 'x' } });
+  assert.notEqual(bare.status, 200);
+  assert.equal(rowOf(e.id, adaEmail).status === 'completed', false);
+  // A body that tries to claim the paper path is ignored: a symbol cannot travel in JSON.
+  const forged = await ada.post(`/sign/${tok2}/complete`, { values: {}, onPaper: true, paper_scan_id: row.paper_scan_id, 'Symbol(growsigning.paper.finish)': 'x' });
+  assert.notEqual(forged.status, 200);
+  // She may sign on paper again: the page offers it as before (not stuck on "accepted").
+  const ps = (await view(ada, tok2)).recipient.paper_sign;
+  assert.equal(ps.state, null);
+  // Signed on screen: her values are kept, her signature is hers, and nothing says paper about her any more.
+  assert.equal((await signAll(e.id, adaEmail)).status, 200);
+  const done = rowOf(e.id, adaEmail);
+  assert.equal(done.status, 'completed');
+  assert.ok(done.signature_png, 'an on-screen signature is stored');
+  assert.equal(done.paper_scan_id, null);
+  assert.equal(paper.paperSigned(S.env.loadEnvelope(e.id)).size, 0, 'the signed PDF does not reuse the scan of the old version');
+});
+
+test('repair: a waiting scan stays with the person who sent it; after a correction to someone else it is set aside', async () => {
+  const { s, e, tok, ada, adaEmail } = await setup('rs2');
+  assert.equal((await send(ada, tok, 1)).status, 200);
+  const rid = rowOf(e.id, adaEmail).id;
+  const c = await s.post(`/envelopes/${e.id}/correct`, { recipient_id: rid, name: 'Cy Other', email: 'rs2-cy@example.com' });
+  assert.equal(c.status, 200, JSON.stringify(c.data));
+  const row = S.db.get('SELECT * FROM recipients WHERE id=?', rid);
+  assert.equal(row.paper_state, null, 'Cy does not inherit Ada\'s waiting scan');
+  // Ada's scan cannot be accepted as signed by Cy.
+  const a = await accept(s, e.id, rid);
+  assert.equal(a.status, 409);
+  assert.equal(a.data.code, 'no_scan');
+  assert.notEqual(S.db.get('SELECT status FROM recipients WHERE id=?', rid).status, 'completed');
+  assert.ok(S.db.all('SELECT detail FROM audit WHERE envelope_id=? AND action=?', e.id, 'Scan signed on paper set aside').some((x: any) => /Cy Other/.test(x.detail)));
+  // Cy starts as anyone does: their page is the normal one, and they can sign on screen.
+  const cy = new Client();
+  cy.ip = ip();
+  const ct = tokenFor(e.id, 'rs2-cy@example.com');
+  assert.equal((await view(cy, ct)).recipient.paper_sign.state, null);
+  assert.equal((await signAll(e.id, 'rs2-cy@example.com')).status, 200);
+  // The same address under another person's name is another person too.
+  const two = await setup('rs3');
+  assert.equal((await send(two.ada, two.tok, 1)).status, 200);
+  const r2 = rowOf(two.e.id, two.adaEmail).id;
+  assert.equal((await two.s.post(`/envelopes/${two.e.id}/correct`, { recipient_id: r2, name: 'Zed Someone', email: two.adaEmail })).status, 200);
+  assert.equal(S.db.get('SELECT paper_state FROM recipients WHERE id=?', r2).paper_state, null);
+  assert.equal((await accept(two.s, two.e.id, r2)).status, 409);
+  // A spelling fix of the same person keeps the scan waiting, and it can be accepted.
+  const three = await setup('rs4');
+  assert.equal((await send(three.ada, three.tok, 1)).status, 200);
+  const r3 = rowOf(three.e.id, three.adaEmail).id;
+  assert.equal((await three.s.post(`/envelopes/${three.e.id}/correct`, { recipient_id: r3, name: 'Ada  Paper', email: three.adaEmail })).status, 200);
+  assert.equal(S.db.get('SELECT paper_state FROM recipients WHERE id=?', r3).paper_state, 'waiting');
+  // Still hers: accepted, or (when the change made a new version of the document) refused only for that reason.
+  const a3 = await accept(three.s, three.e.id, r3);
+  assert.ok(a3.status === 200 || a3.data.code === 'paper_old_version', JSON.stringify(a3.data));
+});
+
+test('repair: the completion email does not say "signed on screen" when someone signed on paper', async () => {
+  const { s, e, tok, ada, email, adaEmail, benEmail } = await setup('rs5');
+  assert.equal((await send(ada, tok, 1)).status, 200);
+  assert.equal((await accept(s, e.id, rowOf(e.id, adaEmail).id)).status, 200);
+  assert.equal((await signAll(e.id, benEmail)).status, 200);
+  const mails = [...mailTo(email), ...mailTo(adaEmail), ...mailTo(benEmail)].filter((m: any) => /^Completed/.test(m.subject));
+  assert.ok(mails.length >= 3);
+  for (const m of mails) assert.doesNotMatch(m.html, /signed on screen/i, m.subject);
+});
+
+test('repair: the print carries no signing link and no "Signed with" badge; the asked-again reason is on the page', async () => {
+  const { s, e, tok, ada, adaEmail } = await setup('rs6');
+  const pr = await ada.get(`/sign/${tok}/paper/print`);
+  const text = (await extractPages(pr.data)).join(' ');
+  assert.ok(!text.replace(/\s+/g, '').includes(tok), 'the token is not printed');
+  assert.ok(!/\/sign\//.test(text), 'no signing address on paper');
+  assert.doesNotMatch(text, /Signed with/i);
+  assert.match(text.replace(/\s+/g, ' '), /Print all 3 pages|Print both pages/);
+  // Asked again: the facts carry the reason, and the page draws it where they land (consent and sign screens).
+  assert.equal((await send(ada, tok, 1)).status, 200);
+  assert.equal((await s.post(`/envelopes/${e.id}/recipients/${rowOf(e.id, adaEmail).id}/paper/reject`, { reason: 'Page 2 is blurry' })).status, 200);
+  const ps = (await view(ada, tok)).recipient.paper_sign;
+  assert.equal(ps.state, 'asked_again');
+  assert.equal(ps.reason, 'Page 2 is blurry');
+  assert.equal(ps.mail, true);
+  const page = read('src/app/sign/[token]/page.tsx');
+  assert.equal((page.match(/\{paperNote\}/g) || []).length, 2, 'the note is on the consent screen and the signing screen');
+  // Paper switched off since: they are told why, and that they sign on screen now (no silent change).
+  await switchOn(s, false);
+  const off = (await view(ada, tok)).recipient.paper_sign;
+  assert.equal(off.off, true);
+  assert.equal(off.reason, 'Page 2 is blurry');
+  assert.equal((await ada.get(`/sign/${tok}/paper/print`)).status, 409);
+});
+
+test('repair: a reminder for someone whose scan waits says why none went out', async () => {
+  const { s, e, tok, ada, adaEmail } = await setup('rs7');
+  assert.equal((await send(ada, tok, 1)).status, 200);
+  const all = await s.post(`/envelopes/${e.id}/remind`);
+  assert.equal(all.status, 409);
+  assert.equal(all.data.code, 'paper_waiting');
+  assert.match(all.data.error, /^No reminder went out\. Ada Paper already sent back a scan signed on paper\. Look at the scan/);
+  assert.doesNotMatch(all.data.error, /turned reminders off/);
+  // The list the Home page and Documents read carries the state, so they say it waits for the sender.
+  const list = (await s.get('/envelopes?box=waiting&limit=100')).data.envelopes;
+  assert.equal(list.find((x: any) => x.id === e.id).recipients.find((r: any) => r.email === adaEmail).paper_state, 'waiting');
+  for (const f of ['src/app/app/page.tsx', 'src/app/app/envelopes/page.tsx']) assert.match(read(f), /scanWaiting\(e\)/, f);
+});
+
+test('repair: Other actions works on the paper screens, and the hidden file input takes no Tab stop', () => {
+  const page = read('src/app/sign/[token]/page.tsx');
+  const at = page.indexOf('if (paperScreen) {');
+  assert.ok(at > 0);
+  const block = page.slice(at, page.indexOf('</Shell>', at));
+  assert.match(block, /\{menuDialog && cloneElement\(menuDialog, \{ items: paperMenu \}\)\}/);
+  assert.match(block, /paperScreen === 'waiting' \? m\.key === 'ask' \|\| m\.key === 'decline'/);
+  const ui = read('src/components/sign/Paper.tsx');
+  assert.match(ui, /id="sg-paper-files" type="file" className="sg-vh" tabIndex=\{-1\} aria-hidden="true"/);
+  assert.match(ui, /<h2 className="sg-paper-h">\{t\(lang, 'sign\.paper\.step_sign'\)\}<\/h2>/);
+});

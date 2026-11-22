@@ -15,6 +15,11 @@ import { headingFor } from '@/lib/consentfit';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** A signer's witnesses, one or two (src/lib/witness.ts WITNESSES_MAX), as GET /sign/:token lists them. */
+const witnessesOf = (me: any): any[] => (Array.isArray(me?.witnesses) && me.witnesses.length ? me.witnesses : me?.witness ? [me.witness] : []);
+/** "Your witness", or with two "Your first witness" and "Your second witness". */
+const placeName = (i: number, total: number): string => (total > 1 ? (i === 0 ? 'Your first witness' : 'Your second witness') : 'Your witness');
+
 /** Whether the witness's own screen takes the place of the usual one: before they ticked, while waiting, after "not there". */
 export const witnessFirst = (data: any, stage: string): boolean => {
   const w = data?.recipient?.role === 'witness' ? data.recipient.witness_of : null;
@@ -115,8 +120,17 @@ export function WitnessFirst({ data, base, onDone }: { data: any; base: string; 
 /** On the document itself: to a signer, who witnesses and what that asks of them; to a witness, what they confirmed. */
 export function WitnessNotice({ me }: { me: any }) {
   if (me?.witness_of?.said) return <div className="notice sg-top">You confirmed that you were physically present and saw {me.witness_of.name} sign. Now fill in your witness block and sign it. {WITNESS_RECORDS}</div>;
-  const w = me?.witness;
-  if (!w || w.state === 'done') return null;
+  const list = witnessesOf(me);
+  if (!list.length || list.every((w) => w.state === 'done')) return null;
+  if (list.length > 1) {
+    const named = list.filter((w) => w.name).map((w) => w.name);
+    return (
+      <div className="notice warn sg-top">
+        <b>This document needs two witnesses.</b> {named.length === 2 ? `Your witnesses are ${named[0]} and ${named[1]}.` : named.length === 1 ? `Your first witness is ${named[0]}. You name the second before you finish.` : 'You name both before you finish.'} Both have to be with you, in the same room, and watch you sign. Straight after you finish, we email each of them a link to confirm that and sign as witness. {WITNESS_RECORDS}
+      </div>
+    );
+  }
+  const w = list[0];
   return (
     <div className="notice warn sg-top">
       <b>This document needs a witness.</b> {w.name ? `Your witness is ${w.name}.` : 'You name your witness before you finish.'} They have to be with you, in the same room, and watch you sign. Straight after you finish, we email them a link to confirm that and sign as witness. {WITNESS_RECORDS}
@@ -129,7 +143,20 @@ export function WitnessNotice({ me }: { me: any }) {
  * be a witness. Also after Finish, when the first witness said they were not there. `after` says which.
  */
 export function WitnessName({ me, base, onNamed, after = false }: { me: any; base: string; onNamed: () => void; after?: boolean }) {
-  const w = me?.witness;
+  const list = witnessesOf(me);
+  const whoId = useId();
+  // With two places, who may be a witness is said once, above both boxes (like WITNESS_RECORDS once under them).
+  const once = list.length > 1 && list.some((w) => w?.may_name);
+  return <>{once && <p className="muted small wt-note" id={whoId}>{WHO_MAY_WITNESS}</p>}
+    {list.map((w, i) => <OneWitnessName key={w.id || i} w={w} title={placeName(i, list.length)} base={base} onNamed={onNamed} after={after} last={i === list.length - 1} whoId={once ? whoId : undefined} many={list.length > 1} otherOk={list.some((x, j) => j !== i && x?.name && x.state !== 'absent')} />)}</>;
+}
+
+/** One witness place: with two, each has its own box, and the name goes to that place only (witness_id). */
+// `last`: the line on what GrowSigning records is said once, under the last box, not in each of two.
+// `whoId`: the paragraph on who may witness is shown once above both boxes, and this box points to it.
+// `many`: two places, so each box's Save is an ordinary button and Finish stays the one main button.
+// `otherOk`: the other place has a witness who has not said "not there", so one more is needed, not none.
+function OneWitnessName({ w, title, base, onNamed, after, last = true, whoId, many = false, otherOk = false }: { w: any; title: string; base: string; onNamed: () => void; after: boolean; last?: boolean; whoId?: string; many?: boolean; otherOk?: boolean }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -144,7 +171,7 @@ export function WitnessName({ me, base, onNamed, after = false }: { me: any; bas
     setBusy(true);
     setError('');
     try {
-      await api(`${base}/witness`, { body: { name: name.trim(), email: email.trim() } });
+      await api(`${base}/witness`, { body: { witness_id: w.id, name: name.trim(), email: email.trim() } });
       setEdit(false);
       toast(after ? `Done. We emailed ${name.trim()}.` : `${name.trim()} is your witness. We email them straight after you finish.`);
       onNamed();
@@ -156,42 +183,46 @@ export function WitnessName({ me, base, onNamed, after = false }: { me: any; bas
   };
   return (
     <div className={`notice ${open ? 'warn' : ''} wt-card`} role="group" aria-labelledby={`${ids}-h`}>
-      <h3 id={`${ids}-h`}>{w.state === 'absent' ? `${w.absent_name} said they were not there` : 'Your witness'}</h3>
-      {w.state === 'absent' && <p className="wt-note">So the document is not witnessed yet. If someone else was with you and watched you sign, name them here and we email them. If nobody else saw you sign, ask the sender what to do: you may have to sign again with a witness there.</p>}
+      <h3 id={`${ids}-h`}>{w.state === 'absent' ? `${w.absent_name} said they were not there` : title}</h3>
+      {w.state === 'absent' && <p className="wt-note">{otherOk ? 'So your signature still needs one more witness.' : 'So the document is not witnessed yet.'} If someone else was with you and watched you sign, name them here and we email them. If nobody else saw you sign, ask the sender what to do: you may have to sign again with a witness there.</p>}
       {!edit && w.name && w.state !== 'absent' && (
         <p className="wt-who"><b>{w.name}</b> <span className="muted">({w.email})</span>{' '}
           {w.state === 'asked' ? 'has been emailed and is asked to confirm that they saw you sign.' : w.state === 'waiting' ? 'is emailed straight after you finish.' : ''}</p>
       )}
-      {!edit && w.may_name && w.name && w.state !== 'absent' && <button type="button" className="btn sm" style={{ minHeight: 44 }} onClick={() => (setName(w.name), setEmail(w.email), setEdit(true))}>Change witness</button>}
+      {!edit && w.may_name && w.name && w.state !== 'absent' && <button type="button" className="btn sm" style={{ minHeight: 44 }} aria-label={title === 'Your witness' ? undefined : `Change ${title.toLowerCase()}`} onClick={() => (setName(w.name), setEmail(w.email), setEdit(true))}>Change witness</button>}
       {edit && (
         <div className="wt-form">
-          <p className="muted small wt-note" id={`${ids}-who`}>{WHO_MAY_WITNESS}</p>
+          {!whoId && <p className="muted small wt-note" id={`${ids}-who`}>{WHO_MAY_WITNESS}</p>}
           <div className="row">
-            <label><span>Witness&rsquo;s full name</span><input dir="auto" value={name} maxLength={120} autoComplete="off" aria-describedby={`${ids}-who`} onChange={(e) => (setName(e.target.value), setError(''))} /></label>
+            <label><span>Witness&rsquo;s full name</span><input dir="auto" value={name} maxLength={120} autoComplete="off" aria-describedby={whoId || `${ids}-who`} onChange={(e) => (setName(e.target.value), setError(''))} /></label>
             <label><span>Witness&rsquo;s email address</span><input type="email" inputMode="email" value={email} maxLength={254} autoComplete="off" onChange={(e) => (setEmail(e.target.value), setError(''))} /></label>
           </div>
           {error && <div className="notice err sg-problem" role="alert">{error}</div>}
           <div className="wt-actions">
-            <button type="button" className="btn primary" style={{ minHeight: 44 }} disabled={busy} onClick={save}>{busy ? 'Saving' : after ? 'Name and email them' : 'Save witness'}</button>
+            <button type="button" className={many ? 'btn' : 'btn primary'} style={{ minHeight: 44 }} disabled={busy} onClick={save}>{busy ? 'Saving' : after ? 'Name and email them' : 'Save witness'}</button>
             {w.name && w.state !== 'absent' && <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={() => setEdit(false)}>Keep {w.name}</button>}
           </div>
         </div>
       )}
-      <p className="muted small wt-note">{WITNESS_RECORDS}</p>
+      {last && <p className="muted small wt-note">{WITNESS_RECORDS}</p>}
     </div>
   );
 }
 
 /** After the signer's Finish: what became of their witness, and a way to name another one after "not there". */
 export function WitnessAfter({ me, base, onNamed }: { me: any; base: string; onNamed: () => void }) {
-  const w = me?.witness;
+  const list = witnessesOf(me);
+  return <>{list.map((w, i) => <OneWitnessAfter key={w.id || i} w={w} title={placeName(i, list.length)} base={base} onNamed={onNamed} last={i === list.length - 1} many={list.filter((x) => x?.state === 'absent' || (x?.state === 'open' && x.may_name)).length > 1} otherOk={list.some((x, j) => j !== i && x?.name && x.state !== 'absent')} />)}</>;
+}
+
+function OneWitnessAfter({ w, title, base, onNamed, last, many, otherOk }: { w: any; title: string; base: string; onNamed: () => void; last: boolean; many: boolean; otherOk: boolean }) {
   if (!w) return null;
-  if (w.state === 'absent' || (w.state === 'open' && w.may_name)) return <WitnessName me={me} base={base} onNamed={onNamed} after />;
+  if (w.state === 'absent' || (w.state === 'open' && w.may_name)) return <OneWitnessName w={w} title={title} base={base} onNamed={onNamed} after last={last} many={many} otherOk={otherOk} />;
   return (
     <div className="notice wt-card" role="status">
-      <h3>Your witness</h3>
+      <h3>{title}</h3>
       <p className="wt-who">{w.state === 'done' ? <><b>{w.name}</b> confirmed that they saw you sign, and signed as your witness.</> : <><b>{w.name}</b> has been emailed and is asked to confirm that they were with you and saw you sign. We tell you if they say they were not there.</>}</p>
-      <p className="muted small wt-note">{WITNESS_RECORDS}</p>
+      {last && <p className="muted small wt-note">{WITNESS_RECORDS}</p>}
     </div>
   );
 }

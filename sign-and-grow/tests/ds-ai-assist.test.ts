@@ -87,7 +87,7 @@ test('the read switch is off by default, admins only, never by API key, on the s
   const c = await person();
   const info = (await c.get('/ai/assist')).data;
   assert.deepEqual([info.available, info.read, info.draft, info.fields, info.summary], [true, false, true, false, false]);
-  assert.equal(info.where, 'The text goes to The service at llm.example.org (llm.example.org), which runs the model kimi-test, in Iceland.');
+  assert.equal(info.where, 'The text goes to the service at llm.example.org (llm.example.org), which runs the model kimi-test, in Iceland.');
   const f = await c.post('/ai/fields', { pages: [page] });
   assert.equal(f.status, 403);
   assert.equal(f.data.code, 'read_off');

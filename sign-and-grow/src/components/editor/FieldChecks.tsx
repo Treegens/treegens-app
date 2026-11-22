@@ -87,8 +87,9 @@ export function FieldChecks({ field, fields, dateFormat, pageSize, patch, patchM
         </label>
         <label className="check ed-tap"><input type="checkbox" checked={!!c.fixed} onChange={(e) => set({ fixed: e.target.checked || undefined })} aria-describedby={`${id}-fixed`} /> Fixed size</label>
         <p id={`${id}-fixed`} className="muted small" style={{ marginTop: 0 }}>Text shrinks to fit, then no more can be typed{fits ? ` (about ${fits} characters)` : ''}.</p>
-        <label className="check ed-tap"><input type="checkbox" checked={!!c.hide} onChange={(e) => set({ hide: e.target.checked || undefined, hide_in_copy: e.target.checked ? c.hide_in_copy : undefined })} aria-describedby={`${id}-hide`} /> Hide what they type</label>
-        <p id={`${id}-hide`} className="muted small" style={{ marginTop: 0 }}>{HIDE_SAYS}</p>
+        {/* A field for anyone on the document is seen by everyone, so it cannot hide what is typed (SharedChoice.tsx). */}
+        {!field.shared && <><label className="check ed-tap"><input type="checkbox" checked={!!c.hide} onChange={(e) => set({ hide: e.target.checked || undefined, hide_in_copy: e.target.checked ? c.hide_in_copy : undefined })} aria-describedby={`${id}-hide`} /> Hide what they type</label>
+        <p id={`${id}-hide`} className="muted small" style={{ marginTop: 0 }}>{HIDE_SAYS}</p></>}
         {c.hide && (
           <>
             <label className="check ed-tap"><input type="checkbox" checked={!!c.hide_in_copy} onChange={(e) => set({ hide_in_copy: e.target.checked || undefined })} aria-describedby={`${id}-copy`} /> Also hide it in the completed copy</label>

@@ -131,7 +131,7 @@ export function StepAdd({ ed }: { ed: Ed }) {
                 </div>
                 {more !== r.id && <PersonSummary r={r} />}
                 {more === r.id && <PersonMore ed={ed} r={r} />}
-                <WitnessChoice r={r} rcps={rcps} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
+                <WitnessChoice r={r} rcps={rcps} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} onAdd={wording || rcps.length >= MAX_RECIPIENTS ? undefined : (p) => ed.addRcp(p)} />
                 {/* Only after someone who chooses who comes next: this place may stay empty (src/lib/recipienttypes.ts). */}
                 {!isTpl && isOpenPlace(r, rcps, !!env.ordered) && <div className="muted small" data-feature="ds-recipient-types" style={{ marginTop: 6 }}>{chooserBefore(r, rcps, !!env.ordered)?.name || 'The person who chooses who comes next'} can fill this in. You can leave it empty.</div>}
                 {r.role === 'inperson' && <div className="muted small" style={{ marginTop: 6 }}>You host the signing on your own device. The link is emailed to you. While they hold the device your account is locked in that browser, and you type your password to come back.</div>}

@@ -1752,6 +1752,8 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // The name of the person who "Can change the document" whose change set this signature aside, or NULL when the
   // sender did: what the person asked to sign again is told (who changed it), in emails and on their pages.
   ['earlier_signatures', 'changed_by', 'TEXT'],
+  // 1: the change was made by someone else who signs, in a field anyone on the document can fill in (collab.ts).
+  ['earlier_signatures', 'changed_by_signer', 'INTEGER'],
   // A role an admin made (perm_profiles, src/server/perm.ts). NULL: the built-in role in memberships.role.
   ['memberships', 'profile_id', 'TEXT'],
   ['invites', 'profile_id', 'TEXT'],
@@ -1852,6 +1854,11 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['recipients', 'require_paper', 'INTEGER NOT NULL DEFAULT 0'],
   ['recipients', 'paper_state', 'TEXT'],
   ['recipients', 'paper_scan_id', 'TEXT'],
+  // paper_scans.person_gen and email: who the request was for when the scan came in. A scan is that person's only:
+  // after a correction to someone else it is set aside (settlePaper), never accepted as the new person's.
+  // state 'set_aside': it no longer counts (the person changed, or was asked to sign again), kept on record.
+  ['paper_scans', 'person_gen', 'INTEGER'],
+  ['paper_scans', 'email', 'TEXT'],
   // A field anyone on the document can fill in, instead of one person (src/server/collab.ts). shared_initials: whoever
   // changes it adds their initials. shared_after: the sender allows a change after someone finished, and then everyone
   // who finished is asked to sign again. recipients.shared_shown: what this person's screen was last given for those

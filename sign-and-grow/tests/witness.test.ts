@@ -120,7 +120,8 @@ test('a witness is tied to one person who signs: every way that cannot work is s
     [[ann, { id: 'w', role: 'witness', name: 'Wes', email: 'wes@rules.example' }], block('w'), /Choose whose signature they witness/],
     [[ann, { id: 'w', role: 'witness', witness_for: 'nobody', name: 'Wes', email: 'wes@rules.example' }], block('w'), /no longer on this document/],
     [[ann, { id: 'v', role: 'viewer', name: 'Vic', email: 'vic@rules.example' }, { id: 'w', role: 'witness', witness_for: 'v', name: 'Wes', email: 'wes@rules.example' }], block('w'), /Vic, who does not sign this document/],
-    [[ann, { id: 'w', role: 'witness', witness_for: 'a', name: 'Wes', email: 'wes@rules.example' }, { id: 'x', role: 'witness', witness_for: 'a', name: 'Xia', email: 'xia@rules.example' }], [...block('w'), ...block('x', 'd', 0.3)], /Ann Rules has two witnesses here/],
+    // Two witnesses for one signer are allowed (tests/ds-witness-two.test.ts); a third is not.
+    [[ann, { id: 'w', role: 'witness', witness_for: 'a', name: 'Wes', email: 'wes@rules.example' }, { id: 'x', role: 'witness', witness_for: 'a', name: 'Xia', email: 'xia@rules.example' }, { id: 'y', role: 'witness', witness_for: 'a', name: 'Yan', email: 'yan@rules.example' }], [...block('w'), ...block('x', 'd', 0.3), ...block('y', 'd', 0.1)], /Ann Rules has 3 witnesses here/],
     [[ann, { id: 'w', role: 'witness', witness_for: 'a', name: 'Ann Rules', email: 'ann@rules.example' }], block('w'), /witness of their own signature/],
     [[ann, { id: 'w', role: 'witness', witness_for: 'a', name: 'Wes', email: 'wes@rules.example' }], [], /has no signature field yet\. Place the witness block for them near the signature of Ann Rules/],
     [[ann, { id: 'w', role: 'witness', witness_for: 'a', name: 'Wes', link_by_sender: true }], block('w'), /Untick "I will send the link myself"/],
@@ -658,7 +659,7 @@ test('the screens: a witness of their own on the signing page, the choice in the
   assert.match(first, />I was not there<\/button>/);
   assert.match(first, /<span>Witness&rsquo;s email address<\/span><input type="email"/);
   const editor = read('src/components/editor/StepAdd.tsx');
-  assert.match(editor, /<WitnessChoice r=\{r\} rcps=\{rcps\} isTpl=\{isTpl\} onChange=\{\(p\) => ed\.patchRcp\(r\.id, p\)\} \/>/);
+  assert.match(editor, /<WitnessChoice r=\{r\} rcps=\{rcps\} isTpl=\{isTpl\} onChange=\{\(p\) => ed\.patchRcp\(r\.id, p\)\} onAdd=/);
   assert.match(editor, /\{!signerNames\(r\) && <>/);
   assert.match(read('src/components/editor/StepFields.tsx'), /<WitnessBlockButton ed=\{ed\}/);
   assert.match(read('src/components/Editor.tsx'), /witness_for: r\.witness_for \|\| null, named_by_signer: !!r\.named_by_signer/);
@@ -1055,7 +1056,7 @@ test('the signer\'s own screens say what is recorded and that it cannot be check
   const sign = read('src/components/sign/Witness.tsx');
   assert.ok((sign.match(/\{WITNESS_RECORDS\}/g) || []).length >= 6, 'the notice on the document, the review box, the done box and the witness\'s screens');
   assert.match(sign, /we email them a link to confirm that and sign as witness\. \{WITNESS_RECORDS\}/, 'the signer\'s notice on the document');
-  assert.match(sign, /We tell you if they say they were not there\.<\/>\}<\/p>\s*<p className="muted small wt-note">\{WITNESS_RECORDS\}<\/p>/, 'the signer\'s done box');
+  assert.match(sign, /We tell you if they say they were not there\.<\/>\}<\/p>\s*\{last && <p className="muted small wt-note">\{WITNESS_RECORDS\}<\/p>\}/, 'the signer\'s done box (said once under two witnesses)');
 });
 
 test('an envelope that went out before these rules can still be put right: only a witness problem the change itself makes is refused', async () => {

@@ -26,6 +26,7 @@ import { chatProvider, chatModelOn } from './chatprovider.ts';
 import { READ_OUTSIDE } from './aiassist.ts';
 import { pwnedUrl } from './signinrules.ts';
 import { ssoOffered } from './orgsso.ts';
+import { isPrivateAddress } from './chatboundary.ts';
 
 type Env = Record<string, string | undefined>;
 
@@ -190,7 +191,8 @@ export type OutsidePolicy = {
 };
 
 /** Which hosts a service needs that a policy in mode none does not allow. Mail is always allowed. */
-const blockedInNone = (s: OutsideService, extra: string[]) => s.id !== 'mail' && s.id !== 'webhooks' && s.on && (s.id === 'sns' ? !extra.length : s.hosts.some((h) => !isLoopback(h) && !onList(extra, h)));
+// The help chat's own model may also sit at a private network address (src/lib/chatboundary.ts): that setting only.
+const blockedInNone = (s: OutsideService, extra: string[]) => s.id !== 'mail' && s.id !== 'webhooks' && s.on && (s.id === 'sns' ? !extra.length : s.hosts.some((h) => !isLoopback(h) && !onList(extra, h) && !(s.id === 'chat' && isPrivateAddress(h))));
 
 export function outsidePolicy(env: Env = process.env): OutsidePolicy {
   const { mode } = outsideMode(env);

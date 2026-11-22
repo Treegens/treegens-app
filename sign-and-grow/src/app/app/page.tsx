@@ -13,6 +13,8 @@ import { neverOpened, waitingOn } from '@/components/sender/lib';
 import { scheduledHome } from '@/components/sender/Timing';
 import { InstallHint } from '@/components/InstallHint';
 import { OnePersonLine } from '@/components/sender/OnePersonLine';
+import { scanWaiting, scanRowText } from '@/components/sender/PaperReview';
+import { PAPER_WORDS } from '@/lib/paper';
 // Every word in the sender's language (lang-sender, src/components/senderLang.tsx).
 import { useST, senderRich } from '@/components/senderLang';
 import { howLongIn, joinIn } from '@/lib/senderlang';
@@ -69,7 +71,7 @@ export default function Home() {
       <div className="pagehead" style={{ marginBottom: 0 }}>
         <div>
           <h1 className="serif">{senderRich(T.lang, 'home.hello', { name: <bdi>{me.user.name}</bdi> })}</h1>
-          <div className="muted">{T('home.tagline')}</div>
+          <div className="muted">{T(me.paper_signing ? 'home.tagline_paper' : 'home.tagline')}</div>
         </div>
       </div>
 
@@ -97,6 +99,18 @@ export default function Home() {
               <ul role="list">
                 {others.slice(0, SHOWN).map(({ e, w }: any) => {
                   const cold = e.recipients.some((r: any) => neverOpened(r));
+                  // Someone sent back a scan signed on paper: it waits for you, so no Remind (sender/PaperReview.tsx).
+                  const scan = scanWaiting(e);
+                  if (scan)
+                    return (
+                      <li key={e.id} data-item="row">
+                        <div className="grow">
+                          <Link href={`/app/envelopes/${e.id}`} className="sn-subject">{listName(e.subject) || T('sender.untitled')}</Link>
+                          <div className="small"><b>{scanRowText(scan)}</b></div>
+                        </div>
+                        <Link className="btn sm" href={`/app/envelopes/${e.id}`}>{PAPER_WORDS.look}</Link>
+                      </li>
+                    );
                   return (
                     <li key={e.id} data-item="row">
                       <div className="grow">

@@ -2,7 +2,8 @@
 // one (a deed in England and Wales, for example). The rules and the words that both the pages and the server quote
 // live here. Plain values and functions, so a page may import them. The server side is src/server/witness.ts.
 //
-// What the role means everywhere: a witness belongs to one person who signs (witness_for), is asked straight after
+// What the role means everywhere: a witness belongs to one person who signs (witness_for), who can have one or two
+// (WITNESSES_MAX, set by the sender adding a second). Each is asked straight after
 // that person has signed whatever the signing order says, never uses a signature, and fills in a block the sender
 // places near that person's signature. The sender names the witness, or leaves it to the signer (named_by_signer),
 // who then names them on the review screen before Finish. GrowSigning records what the witness states. It cannot check
@@ -17,6 +18,8 @@ export const WITNESS_SOURCE = 'https://www.gov.uk/government/publications/execut
 export const WITNESSED_ROLES = ['signer', 'inperson'];
 /** How many times one witness place can be given to a person by the signer: a first name and a few corrections. */
 export const WITNESS_NAMES_MAX = 4;
+/** How many witnesses one person who signs can have: one, or two for the documents that need two. Never more. */
+export const WITNESSES_MAX = 2;
 
 export const isWitness = (r: any): boolean => r?.role === 'witness';
 /** A witness with no address yet: the signer has to name them (or name another one, after "I was not there"). */
@@ -96,8 +99,13 @@ export function witnessProblem(r: any, e: { recipients?: any[]; fields?: any[]; 
   if (r.group_id || r.group_name) return `A witness is one named person, not a group. Name the person who will watch ${whose} sign.`;
   if (target.group_id || target.group_name) return `${whose} is a group, so nobody knows in advance who will sign for it, and a witness watches one person sign. Remove the witness, or put the person who signs on the document by name.`;
   if (!WITNESSED_ROLES.includes(target.role)) return `${name} is the witness for ${whose}, who does not sign this document. A witness can only be there for someone who signs.`;
-  const second = people.find((x) => x.id !== r.id && isWitness(x) && x.witness_for === r.witness_for);
-  if (second) return `${whose} has two witnesses here. A person who signs has one witness on GrowSigning. Remove one of them.`;
+  // One or two witnesses for one person who signs (WITNESSES_MAX), and two are two different people.
+  // Said once, on the witness that is one too many (the third, in the order they are listed), not on all of them.
+  const all = people.filter((x) => isWitness(x) && x.witness_for === r.witness_for);
+  const before = all.slice(0, Math.max(0, all.findIndex((x) => x.id === r.id)));
+  if (before.length >= WITNESSES_MAX) return `${whose} has ${all.length} witnesses here. A person who signs can have one or two witnesses on GrowSigning. Remove ${all.length - WITNESSES_MAX === 1 ? 'one' : `${all.length - WITNESSES_MAX}`} of them.`;
+  const twin = waitsForName(r) ? null : before.find((x) => !waitsForName(x) && (norm(x.email) === norm(r.email) || sameName(x.name, r.name)));
+  if (twin) return `${whose} has two witnesses with ${norm(twin.email) === norm(r.email) ? 'the same email address' : 'the same name'} (${nameOf(twin)}). Two witnesses have to be two different people, each with their own email address, because each gets their own link.`;
   if (r.link_by_sender) return `${name} is a witness, and a witness gets their own email straight after ${whose} signs. Untick "I will send the link myself" for them.`;
   if (r.named_by_signer && r.verify === 'sms_code') return `${whose} names the witness, so there is no mobile number for them to check a code with. Choose a code by email or no extra check for the witness.`;
   if (!waitsForName(r) && norm(r.email) === norm(target.email) && sameName(r.name, target.name)) return `${name} would be the witness of their own signature. A witness has to be somebody else.`;

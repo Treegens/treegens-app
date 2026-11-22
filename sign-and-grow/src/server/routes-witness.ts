@@ -14,7 +14,9 @@ route('POST', '/sign/:token/witness', async (c) => {
   const { e, r, actor } = look(c);
   // Each name is an email to a new person in the sender's name. The total for one witness place is capped as well.
   rateLimit(`witness:${r.id}`, 12, 3600_000);
-  return { witness: (await nameWitness(e, r, b, actor)).witness };
+  // With two witnesses, "witness_id" in the body says which one; the answer has both ("witnesses").
+  const facts = await nameWitness(e, r, b, actor);
+  return { witness: facts.witness, witnesses: facts.witnesses };
 }, 'public');
 
 // The witness ticks the statement on their first screen, as their own words.

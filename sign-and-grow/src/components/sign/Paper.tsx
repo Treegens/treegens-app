@@ -16,14 +16,16 @@ import { t } from '@/lib/i18n';
 import { shrinkPhoto, isPicture } from '@/components/editor/photos';
 import { fmtDate } from '@/components/ui';
 
-export type PaperSign = { way: 'may' | 'only'; state: 'waiting' | 'asked_again' | 'accepted' | null; sent_at: string | null; pages: number | null; reason?: string; code: string; max_mb: number };
+// off: the sender asked again, and paper has since been switched off for the account: they sign on screen now.
+// mail: whether an "Ask again" is emailed to them (not to an address that marked our email as spam).
+export type PaperSign = { way: 'may' | 'only'; state: 'waiting' | 'asked_again' | 'accepted' | null; sent_at: string | null; pages: number | null; reason?: string; code: string; max_mb: number; off?: boolean; mail?: boolean };
 
 /** Which screen of its own signing on paper takes, if any: the waiting card, or "on paper only". */
 export const paperFirst = (ps: PaperSign | null | undefined, stage: string): '' | 'waiting' | 'only' =>
   !ps || (stage !== 'consent' && stage !== 'sign') ? '' : ps.state === 'waiting' ? 'waiting' : ps.way === 'only' ? 'only' : '';
 
 /** Whether Other actions offers "Sign on paper instead" for printing it: not while a scan waits or once accepted. */
-export const offersPrint = (ps: PaperSign | null | undefined): boolean => !!ps && ps.state !== 'waiting' && ps.state !== 'accepted';
+export const offersPrint = (ps: PaperSign | null | undefined): boolean => !!ps && !ps.off && ps.state !== 'waiting' && ps.state !== 'accepted';
 
 /**
  * Other actions with "Sign on paper instead" for printing it (sign/actions.ts keeps the one order and the cap): the list
@@ -71,7 +73,7 @@ export function PaperSteps({ base, ps, sender, lang, onSent }: { base: string; p
       {ps.state === 'asked_again' && (
         <div className="notice warn" role="note">
           <b>{t(lang, 'sign.paper.asked_again', { sender: sender.name })}</b>
-          {ps.reason && <p className="sg-quote" style={{ margin: '6px 0 0' }}><span className="muted small">{t(lang, 'sign.paper.their_reason')}</span> {ps.reason}</p>}
+          {ps.reason && <p className="sg-quote" style={{ margin: '6px 0 0', overflowWrap: 'anywhere' }}><span className="muted small">{t(lang, 'sign.paper.their_reason')}:</span> {ps.reason}</p>}
         </div>
       )}
       <div>
@@ -79,10 +81,14 @@ export function PaperSteps({ base, ps, sender, lang, onSent }: { base: string; p
         <a className="btn lg" href={`/api${base}/paper/print`} download style={{ minHeight: 44 }}>{t(lang, 'sign.paper.download')}</a>
         <p className="muted small" style={{ margin: '6px 0 0' }}>{t(lang, 'sign.paper.code', { code: ps.code })}</p>
       </div>
-      <p style={{ margin: 0 }}><b>{t(lang, 'sign.paper.step_sign')}</b></p>
+      <div>
+        <h2 className="sg-paper-h">{t(lang, 'sign.paper.step_sign')}</h2>
+        <p style={{ margin: 0 }}>{t(lang, 'sign.paper.step_sign_hint')}</p>
+      </div>
       <div>
         <h2 className="sg-paper-h">{t(lang, 'sign.paper.step_send')}</h2>
-        <input ref={input} id="sg-paper-files" type="file" className="sg-vh" multiple accept="application/pdf,image/jpeg,image/png" aria-describedby="sg-paper-files-hint"
+        {/* The button below is the control: the hidden input takes no Tab stop and is not read out twice. */}
+        <input ref={input} id="sg-paper-files" type="file" className="sg-vh" tabIndex={-1} aria-hidden="true" multiple accept="application/pdf,image/jpeg,image/png" aria-describedby="sg-paper-files-hint"
           onChange={(e) => (setFiles(Array.from(e.target.files || [])), setError(''))} />
         <button type="button" className="btn lg" style={{ minHeight: 44 }} onClick={() => input.current?.click()}>{t(lang, 'sign.paper.choose_files')}</button>
         <p className="muted small" id="sg-paper-files-hint" style={{ margin: '6px 0 0' }}>{t(lang, 'sign.paper.files_hint', { mb: ps.max_mb })}</p>
@@ -127,19 +133,35 @@ export function PaperChoice({ base, ps, byPost, sender, lang, note, onClose, onD
 }
 
 /** The person's own screen while their scan waits, or when the sender asked them to sign on paper only. */
-export function PaperScreen({ kind, base, ps, sender, email, lang, onSent }: { kind: 'waiting' | 'only'; base: string; ps: PaperSign; sender: { name: string }; email?: string | null; lang: string; onSent: () => void }) {
+export function PaperScreen({ kind, base, ps, sender, email, subject, lang, onSent }: { kind: 'waiting' | 'only'; base: string; ps: PaperSign; sender: { name: string }; email?: string | null; subject?: string; lang: string; onSent: () => void }) {
   if (kind === 'waiting')
     return (
       <StateCard tone="wait" title={t(lang, 'sign.paper.waiting_title', { sender: sender.name })}>
         <p>{t(lang, 'sign.paper.waiting_body', { pages: pagesWords(lang, ps.pages), when: fmtDate(ps.sent_at || '', true), sender: sender.name })}</p>
-        {email && <p className="muted" style={{ overflowWrap: 'anywhere' }}>{t(lang, 'sign.paper.waiting_mail', { email })}</p>}
+        {email && ps.mail !== false ? <p className="muted" style={{ overflowWrap: 'anywhere' }}>{t(lang, 'sign.paper.waiting_mail', { email })}</p> : <p className="muted">{t(lang, 'sign.paper.waiting_nomail')}</p>}
       </StateCard>
     );
   return (
     <div className="card sg-state" data-feature="ds-paper">
-      <h1 className="serif" id="sg-h1" tabIndex={-1}>{t(lang, 'sign.paper.only_title', { sender: sender.name })}</h1>
+      <h1 className="serif" id="sg-h1" tabIndex={-1}>{t(lang, 'sign.paper.only_title', { sender: sender.name, doc: subject || 'this document' })}</h1>
       <p>{t(lang, 'sign.paper.only_lead')}</p>
       <PaperSteps base={base} ps={ps} sender={sender} lang={lang} onSent={onSent} />
+    </div>
+  );
+}
+
+/**
+ * On the consent and signing screens, where the person lands from the email: the sender asked for the photos again,
+ * with their reason, and one button that opens the steps (or, with paper switched off since, that they sign on
+ * screen). In place, not a popup. Nothing when they were not asked again.
+ */
+export function PaperAskedNote({ ps, sender, lang, onOpen }: { ps: PaperSign | null | undefined; sender: { name: string }; lang: string; onOpen: () => void }) {
+  if (ps?.state !== 'asked_again') return null;
+  return (
+    <div className="notice warn sg-top" role="note" data-feature="ds-paper">
+      <b>{ps.off ? t(lang, 'sign.paper.asked_off', { sender: sender.name }) : t(lang, 'sign.paper.asked_note', { sender: sender.name })}</b>
+      {ps.reason && <p className="sg-quote" style={{ margin: '6px 0 0', overflowWrap: 'anywhere' }}><span className="muted small">{t(lang, 'sign.paper.their_reason')}:</span> {ps.reason}</p>}
+      {!ps.off && <p style={{ margin: '8px 0 0' }}><button type="button" className="btn" style={{ minHeight: 44 }} onClick={onOpen}>{t(lang, 'sign.paper.send_again')}</button></p>}
     </div>
   );
 }

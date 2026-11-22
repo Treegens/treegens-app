@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { toast } from '../ui';
 import { makeField, who, type Ed } from './shared';
-import { WITNESSED_ROLES, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_BLOCK } from '@/lib/witness';
+import { WITNESSED_ROLES, WHO_MAY_WITNESS, WITNESS_RECORDS, WITNESS_BLOCK, WITNESSES_MAX } from '@/lib/witness';
 
 // A witness for one person who signs (src/lib/witness.ts). Under a witness's row in step 1: whose signature they
 // witness, and whether that person names them on their signing page. What the product does and does not do is said
@@ -14,7 +14,11 @@ const witnessable = (rcps: any[], r: any) => rcps.filter((x) => x.id !== r.id &&
 /** A witness the signer names, who has no name yet: the sender types neither a name nor an address for them. */
 export const signerNames = (r: any): boolean => r.role === 'witness' && !!r.named_by_signer && !String(r.email || '').trim();
 
-export function WitnessChoice({ r, rcps, isTpl, onChange }: { r: any; rcps: any[]; isTpl: boolean; onChange: (p: any) => void }) {
+/**
+ * `onAdd` adds a person to step 1 (ed.addRcp). Given, the only witness of a person who signs offers "Add a second
+ * witness", for the documents that need two: the same person who signs, and named the same way as this one.
+ */
+export function WitnessChoice({ r, rcps, isTpl, onChange, onAdd }: { r: any; rcps: any[]; isTpl: boolean; onChange: (p: any) => void; onAdd?: (p: any) => void }) {
   const people = r.role === 'witness' ? witnessable(rcps, r) : [];
   const target = rcps.find((x) => x.id === r.witness_for);
   // With one person who signs, that is whom the witness is for. With more, the sender chooses.
@@ -24,8 +28,10 @@ export function WitnessChoice({ r, rcps, isTpl, onChange }: { r: any; rcps: any[
   }, [only]); // eslint-disable-line react-hooks/exhaustive-deps
   if (r.role !== 'witness') return null;
   const id = `ed-wit-${r.id}`;
+  const mine = target ? rcps.filter((x) => x.role === 'witness' && x.witness_for === target.id) : [];
+  const second = mine.length > 1 && mine[0].id !== r.id;
   return (
-    <div className="ed-witness">
+    <div className="ed-witness" data-second-for={second ? target.id : undefined}>
       <label className="f" htmlFor={`${id}-for`} style={{ margin: 0 }}>
         <span>Witnesses the signature of</span>
         <select id={`${id}-for`} value={target ? r.witness_for : ''} onChange={(e) => onChange({ witness_for: e.target.value || null })}>
@@ -40,11 +46,24 @@ export function WitnessChoice({ r, rcps, isTpl, onChange }: { r: any; rcps: any[
           onChange={(e) => onChange(e.target.checked ? { named_by_signer: true, name: '', email: '', witness_before_tick: { name: r.name, email: r.email } } : { named_by_signer: false, name: r.witness_before_tick?.name || '', email: r.witness_before_tick?.email || '' })} />
         <span>{target ? `${who(target)} names the witness` : 'The person who signs names the witness'}<span className="muted"> on {isTpl ? 'their' : 'the'} signing page, before Finish</span></span>
       </label>
-      <div id={`${id}-how`} className="muted small ed-witness-how">
+      {onAdd && target && mine.length < WITNESSES_MAX && (
+        <button type="button" className="btn sm" style={{ minHeight: 44, justifySelf: 'start' }}
+          onClick={() => {
+            onAdd({ after_id: r.id, role: 'witness', witness_for: target.id, named_by_signer: !!r.named_by_signer, name: '', email: '', ...(isTpl ? { role_name: 'Second witness' } : {}) });
+            toast(`Second witness added for ${who(target)}.`);
+            // This button goes away once there are two: the keyboard goes on in the new row, not at the top of the page.
+            setTimeout(() => {
+              const row = document.querySelector(`[data-second-for="${target.id}"]`)?.closest('.rcpt');
+              (row?.querySelector<HTMLElement>('input[data-ed-name]') || row?.querySelector<HTMLElement>('select'))?.focus();
+            }, 0);
+          }}>Add a second witness</button>
+      )}
+      {/* A second witness: the words are under the first one already, so one line here. */}
+      {second ? <p id={`${id}-how`} className="muted small ed-witness-how">The second witness for {who(target)}. Both are emailed at the same time, straight after {who(target)} has signed, and each makes their own statement.</p> : <div id={`${id}-how`} className="muted small ed-witness-how">
         <p>We email the witness straight after {target ? who(target) : 'that person'} has signed, whatever the signing order says, and nobody else waits for them. A witness uses none of your signatures. On their first screen they tick a statement as their own, that they were physically present and saw the signature, or say that they were not there. Place their block in step 2, near the signature they witness.</p>
         <p>{WHO_MAY_WITNESS}</p>
         <p>{WITNESS_RECORDS}</p>
-      </div>
+      </div>}
     </div>
   );
 }

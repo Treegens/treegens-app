@@ -152,7 +152,7 @@ function Helps({ v, onDone }: { v: any; onDone: () => void }) {
             <button type="button" className="btn ghost" aria-label={`Take back ${h.label}`} onClick={() => api(`/counter/visits/${v.visit.id}/helps/${h.id}`, { method: 'DELETE' }).then(onDone).catch(oops)}>Take back</button>
           </div>
         ))}
-        {v.witness ? <p className="muted small" style={{ margin: 0 }}>Witness on this document: {v.witness.name}.</p> : null}
+        {v.witness ? <p className="muted small" style={{ margin: 0 }}>{(v.witnesses?.length || 1) > 1 ? 'Witnesses' : 'Witness'} on this document: {v.witness.name}.</p> : null}
         <form className="stack" onSubmit={add}>
           <fieldset className="ct-radio">
             <legend>What help did you give?</legend>

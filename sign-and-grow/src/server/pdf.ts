@@ -346,16 +346,21 @@ export class Sheet {
   font: PDFFont;
   bold: PDFFont;
   footer: string;
-  constructor(doc: PDFDocument, font: PDFFont, bold: PDFFont, footer: string) {
+  // badge false: no "Signed with growsigning" at the foot, for a sheet of something nobody signed yet (the print to
+  // sign on paper, paper.ts). The footer line is still there.
+  badge: boolean;
+  constructor(doc: PDFDocument, font: PDFFont, bold: PDFFont, footer: string, badge = true) {
     this.doc = doc;
     this.font = font;
     this.bold = bold;
     this.footer = footer;
+    this.badge = badge;
     this.add();
   }
   add() {
     this.page = this.doc.addPage([this.W, this.H]);
-    drawSheetFoot(this.page, { L: this.L, footer: this.footer, font: this.font, color: MUTED });
+    if (this.badge) drawSheetFoot(this.page, { L: this.L, footer: this.footer, font: this.font, color: MUTED });
+    else if (this.footer) this.page.drawText(this.footer, { x: this.L, y: 26.8, size: 7, font: this.font, color: MUTED });
     this.y = this.H - 56;
   }
   need(h: number) {
@@ -713,7 +718,7 @@ export const senderZone = (e: any): string | null => validZone(e?.sender_id ? ge
 // `notice` is for a copy of an envelope that was never completed (voided, declined or out of time), made for someone
 // who had signed it: the copy opens with a page that says so and why, and every page carries the words too.
 // `unfinished`: a copy of an envelope that is still out is marked as such across every page too (stamp.ts).
-export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any; viewer?: string; notice?: { title: string; lines: string[] }; unfinished?: boolean }): Promise<Uint8Array> {
+export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificate: boolean; sender?: any; viewer?: string; notice?: { title: string; lines: string[] }; unfinished?: boolean; foot?: boolean }): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
@@ -755,7 +760,8 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
       const m = mapper(page);
       // The stamp and the envelope ID, side by side at the foot, where the page has neither words nor pictures nor
       // one of our fields (footplace.ts); nothing of ours at the top.
-      drawFootClear(page, m, fields.filter((f: any) => f.document_id === d.id && f.page === i).map((f: any) => fieldBox(f, m)), { line: footLine, font, color: MUTED });
+      // foot false: the print to sign on paper, which carries its own line and is not signed with us (paper.ts).
+      if (opts.foot !== false) drawFootClear(page, m, fields.filter((f: any) => f.document_id === d.id && f.page === i).map((f: any) => fieldBox(f, m)), { line: footLine, font, color: MUTED });
       if (mark) drawStamp(page, bold, mark); // and across the whole page (stamp.ts)
     }
     if (mark) markFields(pages, fields.filter((f: any) => f.document_id === d.id), bold, mark);
@@ -786,12 +792,12 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
 // A record of our own that is not an envelope (the certificate of a click-to-agree acceptance, src/server/clickwrap.ts),
 // drawn with the same fonts, scripts and sheet as the certificate of completion. `draw` fills the sheet; `after` may
 // add pages behind it (the terms as they were shown, when they were a PDF).
-export async function sheetPdf(title: string, footer: string, draw: (s: Sheet) => void | Promise<void>, after?: (doc: PDFDocument) => Promise<void>): Promise<Uint8Array> {
+export async function sheetPdf(title: string, footer: string, draw: (s: Sheet) => void | Promise<void>, after?: (doc: PDFDocument) => Promise<void>, o?: { badge?: boolean }): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
   const bold = await doc.embedFont(fontBytes('DejaVuSans-Bold.ttf'), { subset: true });
-  const s = new Sheet(doc, font, bold, footer);
+  const s = new Sheet(doc, font, bold, footer, o?.badge !== false);
   drawBrandHeader(s.page, { W: s.W, H: s.H, L: s.L, title: clean(title), bold });
   s.y = s.H - 112;
   await draw(s);

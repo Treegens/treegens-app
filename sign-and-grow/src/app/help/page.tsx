@@ -24,7 +24,6 @@ import { PAID_TRUST_DAYS } from '@/lib/policy';
 import { isDeploymentBilling, GOV_HELP } from '@/lib/billingmode';
 import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUP_RULE } from '@/lib/policy';
 import { TWO_STEP_LOST, TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES } from '@/lib/policy';
-import { chatModelOn } from '@/lib/chatprovider';
 import { HelpChatButton } from '@/components/HelpChat';
 
 export const metadata = { title: 'Help', description: 'Help for people who sign and people who send, without logging in. A helper answers at once. Find your documents, stop a subscription, or write to us.' };
@@ -61,7 +60,7 @@ export default function Help() {
       <main id="main" className="wrap pub-page">
         <header className="pub-top">
           <h1 className="pub-h1">Help</h1>
-          <p className="pub-lead">You do not need an account to get help. {chatModelOn() ? 'An AI helper' : 'Our helper, with answers from this page,'} answers at once{support.promised ? ', and a person is one click away from every answer' : ''}. Most things can be fixed right on this page.{support.promised ? ' For everything else, write to us at the bottom and a person replies.' : ''}</p>
+          <p className="pub-lead">You do not need an account to get help. Answers come at once{support.promised ? ', and a person is one click away from every answer' : ''}. Most things can be fixed right on this page.{support.promised ? ' For everything else, write to us at the bottom and a person replies.' : ''}</p>
           <p><HelpChatButton className="btn primary hc-open">Ask a question</HelpChatButton></p>
         </header>
 

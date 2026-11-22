@@ -11,9 +11,16 @@ import { PAPER_WORDS, PAPER_REASON_MAX } from '@/lib/paper';
 /** The person whose scan waits for the sender, if anyone's does. */
 export const scanWaiting = (e: any): any => (e?.status === 'sent' ? (e.recipients || []).find((r: any) => r.paper_state === 'waiting' && (r.status === 'sent' || r.status === 'viewed')) || null : null);
 
+/** For a list row (Home, Documents) whose scan waits: it waits for the sender, so the words say so and there is no Remind. */
+export const scanRowText = (r: any): string => `Waiting for you: look at the scan ${r.name || 'they'} signed on paper`;
+
+/** The headline of "Where this stands" while a scan waits. */
+export const scanHeadline = (r: any): string => `${r.name || 'Someone'} signed on paper. Look at the scan to accept it or ask again.`;
+
 /** The line under "Where this stands" while a scan waits. */
-export function PaperWaitingLine({ r }: { r: any }) {
-  return <p className="sn-now-sub warn" data-feature="ds-paper"><b>{r.name}</b> signed on paper and sent back a scan. Look at it, then accept it or ask again. Until then nobody after them is asked.</p>;
+export function PaperWaitingLine({ r, after }: { r: any; after: boolean }) {
+  if (!after) return null;
+  return <p className="sn-now-sub warn" data-feature="ds-paper">Until then nobody after {r.name} is asked.</p>;
 }
 
 /** The main button and its dialog. */

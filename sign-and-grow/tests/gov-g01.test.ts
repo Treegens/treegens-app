@@ -28,7 +28,7 @@ const root = new URL('../', import.meta.url).pathname;
 const read = (p: string) => englishIf(p, readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 const textOf = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
 
-const ENV = ['DEPLOYMENT_PROFILE', 'SUPPORT_CHAT_API_KEY', 'SUPPORT_CHAT_BASE_URL', 'SUPPORT_CHAT_MODEL', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY', 'SUPPORT_CHAT_DAILY_LIMIT', 'SUPPORT_CHAT_PROVIDER_NAME'];
+const ENV = ['DEPLOYMENT_PROFILE', 'SUPPORT_CHAT_API_KEY', 'SUPPORT_CHAT_BASE_URL', 'SUPPORT_CHAT_MODEL', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY', 'SUPPORT_CHAT_DAILY_LIMIT', 'SUPPORT_CHAT_PROVIDER_NAME', 'OUTBOUND_ALLOW'];
 const savedEnv = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 const realFetch = globalThis.fetch;
 let modelCalls: any[] = [];
@@ -43,7 +43,7 @@ const noModel = () => {
 /** A model answers the chat: the operator's own, or a hosted one. Every call to it is kept in modelCalls. */
 function model(kind: 'own' | 'openrouter' | 'moonshot') {
   noModel();
-  if (kind === 'own') Object.assign(process.env, { SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.agency.example/v1', SUPPORT_CHAT_MODEL: 'local-1', SUPPORT_CHAT_PROVIDER_NAME: 'The agency model' });
+  if (kind === 'own') Object.assign(process.env, { SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.agency.example/v1', SUPPORT_CHAT_MODEL: 'local-1', SUPPORT_CHAT_PROVIDER_NAME: 'The agency model', OUTBOUND_ALLOW: 'llm.agency.example' });
   if (kind === 'openrouter') process.env.OPENROUTER_API_KEY = 'k';
   if (kind === 'moonshot') process.env.MOONSHOT_API_KEY = 'k';
   modelCalls = [];
@@ -292,7 +292,8 @@ test('DEPLOYMENT_PROFILE: unset or "government", and a value nobody knows is sai
   assert.equal(governmentChatWarning(null, false, gov), null, 'no AI set up: nothing to say');
   assert.equal(governmentChatWarning(null, true, gov), null, 'its own model answers');
   const boot = read('src/instrumentation.ts');
-  assert.match(boot, /governmentChatWarning\(chatAt && !ownModel\(chatAt\) \? chatAt\.keyVar : null, chatModelOn\(\)\)/);
+  // Since gov-G20 the server says it with boundaryChatWarning (src/lib/chatboundary.ts), which covers this case too.
+  assert.match(boot, /boundaryChatWarning\(chatProvider\(\)\)/);
 });
 
 test('an account starts with trees and AI answers on, under both profiles; the government profile only takes the trees off its record', async () => {
@@ -522,7 +523,7 @@ test('AI answers in the help chat, off: the account\'s people and its signers ge
   const told = (await p.c.get('/public/chat')).data;
   assert.deepEqual([told.ai, told.provider, told.note], [false, null, lib.CHAT_BUILTIN_NOTE]);
   assert.equal((await signer().get(`/public/chat?link=${link}`)).data.ai, false);
-  assert.match(read('src/components/HelpChat.tsx'), /\/api\/public\/chat\$\{link \? `\?link=\$\{encodeURIComponent\(link\)\}` : ''\}/);
+  assert.match(read('src/components/HelpChat.tsx'), /\/api\/public\/chat\$\{link \? `\?link=\$\{encodeURIComponent\(link\)\}` : /);
   // Someone signed in to an account with AI on, signing a document of the account with it off: off wins.
   assert.deepEqual([(await ask(q.c, { link })).data.mode], ['builtin']);
   assert.equal(modelCalls.length, 0);
@@ -547,9 +548,11 @@ test('a government installation never sends the chat to a hosted AI service; a m
   assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k' })), false, 'a key alone goes to OpenRouter by default');
   assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://openrouter.ai/api/v1' })), false);
   assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://api.moonshot.ai/v1' })), false);
-  assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.agency.example/v1' })), true);
+  // A name counts once it is listed in OUTBOUND_ALLOW (G20, tests/gov-g20.test.ts); a private address always does.
+  assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.agency.example/v1' })), false);
+  assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.agency.example/v1', OUTBOUND_ALLOW: 'llm.agency.example' })), true);
   assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'http://localhost:11434/v1' })), true);
-  assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.agency.example/v1', SUPPORT_CHAT_DAILY_LIMIT: '0' })), false);
+  assert.equal(prov.chatModelOn(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.agency.example/v1', OUTBOUND_ALLOW: 'llm.agency.example', SUPPORT_CHAT_DAILY_LIMIT: '0' })), false);
   assert.equal(prov.chatModelOn({ OPENROUTER_API_KEY: 'k' }), true, 'the ordinary profile is as it was');
   // So the pages that name where the chat goes name nobody.
   const { dataPlace } = await import('../src/lib/dataplace.ts');

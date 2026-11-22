@@ -36,7 +36,7 @@ import { bouncedBefore, bouncedRefusal, bouncedLine } from './bounces.ts';
 import { attachGroups, groupNames, saveGroups, copyGroup, assertGroups, groupReach, groupReachNew, snapshotGroups, settleGroups, groupPeople, notifyMembers, groupLine, groupWords, groupChange, groupsCorrected, memberLinks, assertGroupCorrection, memberMailStop } from './groups.ts';
 import { isOpenGroup, whoIs } from '../lib/groups.ts';
 // Signing on paper: what the sender chose for each person, and copies of it (paper.ts).
-import { savePaper, copyPaper } from './paper.ts';
+import { savePaper, copyPaper, settlePaper } from './paper.ts';
 // Someone who signs for a person while they are away (src/server/delegation.ts).
 import { attachDelegates, delegateLines, alsoDelegate, delegateCorrected } from './delegation.ts';
 // A person whose link the sender passes on themselves, with no email address (src/server/bysender.ts).
@@ -92,7 +92,7 @@ import { PAUSED_NO_REMINDER } from '../lib/timing.ts';
 import { supplementalOf, saveSupplement, noFieldsOn, copySupplement, assertSupplements, assertSomethingToSign, ruleChangeWords } from './supplements.ts';
 // People who change the envelope on their turn: what stops a send, and the places they fill in (agents.ts).
 import { stepProblem, nameOpenPlaces, changedBy } from './agents.ts';
-import { saveShared, copyShared, sharedNow } from './collab.ts';
+import { saveShared, copyShared, sharedNow, cosignerChanged } from './collab.ts';
 import { counterFinished } from './counter.ts';
 import { isOpenPlace, isStepRole, STEP_MAIL, changerWords } from '../lib/recipienttypes.ts';
 import { seal, sealField } from './colcrypt.ts';
@@ -112,7 +112,7 @@ const ACTS = (role: string) => role === 'signer' || role === 'inperson' || role 
 
 // editor: the change is made by someone on the envelope who "Can change the document" (agents.ts), not by the sender.
 // editor_id, editor_name: that person's recipient id and plain name, for the words other people are emailed.
-export type Actor = { name: string; ip?: string; ua?: string; editor?: boolean; editor_id?: string; editor_name?: string };
+export type Actor = { name: string; ip?: string; ua?: string; editor?: boolean; editor_id?: string; editor_name?: string; cosigner?: boolean };
 
 // ---- Audit trail (hash chained) ------------------------------------------------------------
 
@@ -339,7 +339,7 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
       const o = oldRecs.get(rid);
       const same = o.role === role && o.name === vals[2] && sameEmail(o.email, email) && o.routing_order === vals[4];
       if (!same && !resign)
-        throw bad(`${o.name} has already finished, so their name, email address, role and place in the order can no longer be changed. Nothing was saved. If you did not mean to change them, load the envelope again: their details may be newer than your copy. To change them anyway, send the same request with "resign": true, and ${o.name} is asked to sign again.${witnessedBy(e, o).length ? ` ${witnessedBy(e, o).join(', ')} witnessed their signature and is asked to witness again too.` : ''}`, 409, { code: 'sign_again', sign_again: [o.name, ...witnessedBy(e, o)], changes: [`The name, email address, role or place in the order of ${o.name} <${o.email}>.`] });
+        throw bad(`${o.name} has already finished, so their name, email address, role and place in the order can no longer be changed. Nothing was saved. If you did not mean to change them, load the envelope again: their details may be newer than your copy. To change them anyway, send the same request with "resign": true, and ${o.name} is asked to sign again.${witnessedBy(e, o).length ? ` ${witnessedBy(e, o).join(' and ')} witnessed their signature and ${witnessedBy(e, o).length > 1 ? 'are' : 'is'} asked to witness again too.` : ''}`, 409, { code: 'sign_again', sign_again: [o.name, ...witnessedBy(e, o)], changes: [`The name, email address, role or place in the order of ${o.name} <${o.email}>.`] });
       if (same) {
         // The access code and the private note are not part of what they signed, so those are saved like anyone's.
         run('UPDATE recipients SET position=?, access_code=?, note=? WHERE id=?', i, vals[6], vals[7], rid);
@@ -467,6 +467,8 @@ export function newerVersion(envelopeId: string, by: Actor, how: string) {
   run('UPDATE envelopes SET edit_version=edit_version+1, edited_by=?, edited_at=?, edited_how=?, updated_at=? WHERE id=?', by.name || null, t, str(how, 300), t, envelopeId);
   // A witness still to be named is called after their signer as the signer is named now (witness.ts).
   openNames(envelopeId);
+  // A scan signed on paper is the person's who sent it: after a correction or a hand-over it is set aside (paper.ts).
+  settlePaper(envelopeId);
 }
 
 // Replaces the whole draft: documents, recipients and fields. The editor sends its full state on every save.
@@ -802,8 +804,8 @@ export function setAside(e: any, o: any, actor: Actor, after?: any) {
   const removed = !after, passed = !!after && !sameSigner(o, after);
   const answers = e.fields.filter((f: any) => f.recipient_id === o.id && !f.readonly && f.value != null && f.value !== '')
     .map((f: any) => ({ id: f.id, type: f.type, label: f.label, document_id: f.document_id, page: f.page, value: f.value }));
-  run('INSERT INTO earlier_signatures (envelope_id, recipient_id, name, email, role, completed_at, ip, signature_png, initials_png, answers, set_aside_at, changed_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-    e.id, o.id, o.name, o.email, o.role, o.completed_at, o.ip, seal('earlier_signatures.signature_png', o.signature_png), seal('earlier_signatures.initials_png', o.initials_png), seal('earlier_signatures.answers', JSON.stringify(answers)), now(), actor.editor ? actor.editor_name || actor.name : null);
+  run('INSERT INTO earlier_signatures (envelope_id, recipient_id, name, email, role, completed_at, ip, signature_png, initials_png, answers, set_aside_at, changed_by, changed_by_signer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    e.id, o.id, o.name, o.email, o.role, o.completed_at, o.ip, seal('earlier_signatures.signature_png', o.signature_png), seal('earlier_signatures.initials_png', o.initials_png), seal('earlier_signatures.answers', JSON.stringify(answers)), now(), actor.editor ? actor.editor_name || actor.name : null, actor.cosigner ? 1 : null);
   const said = answers.filter((a: any) => a.type !== 'signature' && a.type !== 'initials')
     .map((a: any) => `${a.label || a.type.replace('_', ' ')} on page ${a.page + 1}: ${a.type === 'checkbox' || a.type === 'radio' ? 'ticked' : a.type === 'attachment' ? 'a file' : a.type === 'stamp' ? `a stamp, whose picture has the SHA-256 ${str(a.value, 64)}` : `"${str(a.value, 300)}"`}`);
   const mark = ACTS(o.role) ? 'signature' : o.role === 'approver' ? 'approval' : 'confirmation';
@@ -947,6 +949,8 @@ export async function correctEnvelope(e: any, body: any, accountId: string, acto
     }
     // Members get their links, and a group nobody has taken on keeps none of its own: see settleGroups in groups.ts.
     settleGroups(e.id);
+    // A scan signed on paper stays with the person who sent it, and counts only while they stay finished (paper.ts).
+    settlePaper(e.id);
     // A witness whose signer is asked to sign again waits for that signature again (witness.ts).
     settleWitnesses(e.id);
     if (creditsEnabled()) {
@@ -1525,7 +1529,7 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
   const brand = brandOf(e.account_id);
   // Someone whose language is not English gets our words in theirs (lang-mail, requestmail.ts); English is below.
   const L = mailLocale(r);
-  const own = translatable(L, r, e.last_change) ? requestMail(L, { kind, role: r.role, name: r.name, sender, subject: e.subject, message: e.message, note: r.note, accessCode: !!r.access_code, shared, done, complete: e.status === 'completed', deadline: deadline ? e.expires_at : '', tz: zoneForEmail(e, r), zoneKnown: !!validZone(r.tz), before, changer: kind === 'again' ? changer : kind === 'updated' ? e.changed_by_editor || null : null, ready: kind === 'reminder' && fieldProgress(e, r).ready && !waitsForPayment(r), trees: kind === 'new' && showsTrees(e.account_id) ? treesInInvite(r) : 0, url: signUrl(r) }) : null;
+  const own = translatable(L, r, e.last_change) ? requestMail(L, { kind, role: r.role, name: r.name, sender, subject: e.subject, message: e.message, note: r.note, accessCode: !!r.access_code, shared, done, complete: e.status === 'completed', deadline: deadline ? e.expires_at : '', tz: zoneForEmail(e, r), zoneKnown: !!validZone(r.tz), before, changer: kind === 'again' ? changer : kind === 'updated' ? e.changed_by_editor || null : null, cosigner: kind === 'again' && cosignerChanged(e.id, r.id), ready: kind === 'reminder' && fieldProgress(e, r).ready && !waitsForPayment(r), trees: kind === 'new' && showsTrees(e.account_id) ? treesInInvite(r) : 0, url: signUrl(r) }) : null;
   const mailed = await sendMail({
     to,
     subject: `${NOTICE_PREFIX[kind]}${e.subject}`,
@@ -1537,7 +1541,7 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
       ...(subjectUnder ? [e.subject] : []),
       ...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []),
       ...(kind === 'again' ? [
-        `${r.role === 'inperson' ? `${r.name} ${finishedHow(r)}` : `You ${finishedHow(r)}`} "${e.subject}" on ${ts(before)}. After that, ${changerWords(changer, sender.name)} changed the document, so what was ${finishedHow(r)} then no longer counts. It is kept on record, and so is the change.`,
+        `${r.role === 'inperson' ? `${r.name} ${finishedHow(r)}` : `You ${finishedHow(r)}`} "${e.subject}" on ${ts(before)}. After that, ${changerWords(changer, sender.name, cosignerChanged(e.id, r.id))} changed the document, so what was ${finishedHow(r)} then no longer counts. It is kept on record, and so is the change.`,
         ...whatChanged,
         `Please look at the document again and ${redo} again if you agree. Answers given the first time are still filled in to check. If you do not agree, you can decline or ask ${sender.name} a question from the same page.`,
       ] : []),
@@ -1705,7 +1709,7 @@ export function notCompletedNotice(e: any, r: any, asSigned = false): { title: s
     lines: [
       `"${e.subject}" was not completed by everyone, so this is not a finished agreement. ${why}`,
       ...(first ? [
-        `This copy is for ${r.name}. ${r.name} ${finishedHow(r)} on ${ts(first)}. After that, ${changerWords(changedBy(e.id, r.id), sender?.name || 'the sender')} changed the document and asked ${r.name} to ${redo} again, and the envelope was closed before that happened. So what ${r.name} ${finishedHow(r)} then no longer counts. It is kept on record, together with the change.`,
+        `This copy is for ${r.name}. ${r.name} ${finishedHow(r)} on ${ts(first)}. After that, ${changerWords(changedBy(e.id, r.id), sender?.name || 'the sender', cosignerChanged(e.id, r.id))} changed the document and asked ${r.name} to ${redo} again, and the envelope was closed before that happened. So what ${r.name} ${finishedHow(r)} then no longer counts. It is kept on record, together with the change.`,
         asSigned ? `The pages show the document exactly as ${r.name} ${finishedHow(r)} it on ${ts(first)}, before that change. They are not the document as it stood when it was closed. It has no certificate of completion.`
           : `The pages show the document as it stood when it was closed, after the change, with what ${r.name} had filled in and what others who had finished by then had filled in.${ACTS(r.role) ? ` The signature ${r.name} gave is not on them.` : ''} It has no certificate of completion.`,
         ...(e.last_change ? [`What ${changedBy(e.id, r.id) || sender?.name || 'the sender'} changed last: ${e.last_change}`] : []),
@@ -1737,7 +1741,7 @@ export async function earlierCopy(e: any, r: any, closed: boolean): Promise<Uint
     title: 'Signed before the document was changed',
     lines: [
       `This copy is for ${r.name}. It shows "${e.subject}" exactly as ${r.name} ${finishedHow(r)} it on ${ts(first)}.`,
-      `After that, ${changerWords(changedBy(e.id, r.id), sender?.name || 'the sender')} changed the document and asked ${r.name} to ${ACTS(r.role) ? 'sign' : r.role === 'approver' ? 'approve' : 'confirm'} again. What ${r.name} ${finishedHow(r)} then no longer counts, and it is kept on record together with the change. This copy is that record. It is not the document as it is now, and it is not a finished agreement.`,
+      `After that, ${changerWords(changedBy(e.id, r.id), sender?.name || 'the sender', cosignerChanged(e.id, r.id))} changed the document and asked ${r.name} to ${ACTS(r.role) ? 'sign' : r.role === 'approver' ? 'approve' : 'confirm'} again. What ${r.name} ${finishedHow(r)} then no longer counts, and it is kept on record together with the change. This copy is that record. It is not the document as it is now, and it is not a finished agreement.`,
       ...(e.last_change ? [`What ${changedBy(e.id, r.id) || sender?.name || 'the sender'} changed last: ${e.last_change}`] : []),
       ...notSealedLines(), // when this server seals completed PDFs: this one is not sealed (src/lib/seal.ts)
       `Questions go to ${sender ? `${sender.name} <${sender.email}>` : 'the sender'}. Envelope ${e.id}.`,
@@ -1761,7 +1765,8 @@ async function completeEnvelope(e: any) {
   const lines = [
     pdf ? 'Everyone has finished. The signed document and its certificate of completion are ready.' : 'Everyone has finished. The signed document and its certificate of completion are being prepared and will be at the link below shortly.',
     // The paper estimate belongs to 'Trees on screens and emails' (tenantpolicy.ts): an account that switched it off gets none.
-    ...(showsTrees(e.account_id) ? [`Because this was signed on screen, about ${fmtNum(i.sheets)} ${i.sheets === 1 ? 'sheet' : 'sheets'} of paper and ${fmtNum(i.litresWater)} litres of water were not used. That is an estimate: ${baseUrl()}/impact shows how it is worked out.`] : []),
+    // Not when someone printed it and signed on paper: then it was not all signed on screen (paper.ts).
+    ...(showsTrees(e.account_id) && !fresh.recipients.some((r: any) => r.paper_scan_id) ? [`Because this was signed on screen, about ${fmtNum(i.sheets)} ${i.sheets === 1 ? 'sheet' : 'sheets'} of paper and ${fmtNum(i.litresWater)} litres of water were not used. That is an estimate: ${baseUrl()}/impact shows how it is worked out.`] : []),
   ];
   const attachments = pdf && pdf.length < 8_000_000 ? [{ filename: `${(fresh.subject || 'signed').replace(/[^\w .-]+/g, '_').slice(0, 80)}.pdf`, content: Buffer.from(pdf) }] : undefined;
   // The fingerprint of the signed PDF, so every person holds a reference of their own outside this service, and
@@ -1797,7 +1802,7 @@ async function completeEnvelope(e: any) {
   }
   if (sender && !sent.has(sender.email.toLowerCase()) && notifyPrefs(sender).completed)
     // In the sender's language, every line from en.json (senderlocale.ts); in English the same words as the lines above.
-    noteCopyMailed(e, { name: sender.name, email: sender.email, sender: true }, copy, await (async (L) => sendMail({ ...senderCompletedMail(L, fresh, { ready: !!pdf, copy, impact: showsTrees(e.account_id) ? i : null }), to: sender.email, envelopeId: e.id, brand, attachments, ...(L !== 'en' ? { locale: L } : {}) }))(senderLocaleOf(e)));
+    noteCopyMailed(e, { name: sender.name, email: sender.email, sender: true }, copy, await (async (L) => sendMail({ ...senderCompletedMail(L, fresh, { ready: !!pdf, copy, impact: showsTrees(e.account_id) && !fresh.recipients.some((r: any) => r.paper_scan_id) ? i : null }), to: sender.email, envelopeId: e.id, brand, attachments, ...(L !== 'en' ? { locale: L } : {}) }))(senderLocaleOf(e)));
 }
 
 export function finalPdf(e: any): Buffer | null {
@@ -1914,6 +1919,9 @@ export async function remindEnvelope(e: any, actor: Actor, recipientId?: string)
   // A place still waiting for the person who chooses who comes next has nobody to remind (agents.ts).
   // Nor has someone whose scan signed on paper waits for the sender to look at it: they did their part (paper.ts).
   const waiting = e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && (!recipientId || r.id === recipientId) && !(r.place_open && !String(r.email || '').trim()) && r.paper_state !== 'waiting');
+  // Nobody else to remind, and someone's scan waits: say so, instead of a reason that is not true (paper.ts).
+  const scanned = e.recipients.find((r: any) => (r.status === 'sent' || r.status === 'viewed') && (!recipientId || r.id === recipientId) && r.paper_state === 'waiting');
+  if (!waiting.length && scanned) throw bad(`No reminder went out. ${scanned.name || 'They'} already sent back a scan signed on paper. Look at the scan on the document's page to accept it or ask again.`, 409, { code: 'paper_waiting' });
   // Someone whose link the sender passes on has no address: a nudge by hand is refused in words, and the timer's
   // reminder for them goes to the sender (bysender.ts).
   assertNudgeable(e, recipientId, actor);
@@ -2230,7 +2238,10 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // Someone whose scan signed on paper the sender has just accepted (paper.ts acceptScan sets paper_scan_id, and nothing
   // else does) finishes here without an electronic signature: no agreement to electronic records, no files to have
   // opened on screen, nothing typed or drawn. What they wrote is on the scan.
-  const onPaper = !!r.paper_scan_id;
+  // Only acceptScan's own call carries the mark (a symbol, which no request body can), and only for the scan it just
+  // accepted: a scan accepted before a "sign again" never waves a later Finish through.
+  const paperMark = body?.[Symbol.for('growsigning.paper.finish')];
+  const onPaper = !!paperMark && paperMark === r.paper_scan_id;
   if (!r.consent_at && !onPaper) throw bad('Please agree to use electronic records and signatures first.');
   if (!onPaper) assertSupplements(e, r);
   // What other people filled in that this person's formulas count must be what their screen was given: someone who
@@ -2239,10 +2250,11 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // Fields anyone on the document can fill in: nobody finishes on a value someone changed since, and a change sent
   // with Finish is on the record like any other (collab.ts).
   // Nothing is waited for here unless someone is asked to sign again, so nothing gets in before the claim below.
+  // "Pay before finishing": nothing is signed until Stripe confirmed this person's payment (402 pay_first, collect.ts).
+  // Asked before the shared fields, so a Finish that has to pay first asks nobody to sign again.
+  payFirst(e, r, body, actor);
   const sharedLater = onPaper ? null : sharedNow(e, r, body, actor, true).later;
   if (sharedLater) await sharedLater();
-  // "Pay before finishing": nothing is signed until Stripe confirmed this person's payment (402 pay_first, collect.ts).
-  payFirst(e, r, body, actor);
   let verb = 'Viewed';
   if (ACTS(r.role)) verb = r.role === 'witness' ? 'Witnessed' : 'Signed';
   else if (r.role === 'approver') verb = 'Approved';
@@ -2306,6 +2318,8 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
     formTook = false;
     await formWaits();
   }
+  // Finished on screen: a scan accepted for an earlier version is not what they signed now (paper.ts settlePaper).
+  if (!onPaper && (r.paper_scan_id || r.paper_state)) run('UPDATE recipients SET paper_scan_id=NULL, paper_state=NULL WHERE id=?', r.id);
   // Each stamp they put on: which, where, when and its fingerprint (stamps.ts). A stamp uses no signature.
   if (ACTS(r.role)) stampsFinished(e, r, actor);
   // Someone signing for the second time, after the sender changed the document, is recorded as exactly that.

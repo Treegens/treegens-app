@@ -370,9 +370,13 @@ export function Editor({ id, embedded }: { id: string; embedded?: { onDone: (eve
     else go();
   }
 
-  function addRcp(p: any = {}) {
+  function addRcp(given: any = {}) {
+    // `after_id`: the new row goes right under that one (a second witness under the first, editor/WitnessChoice.tsx).
+    const { after_id, ...p } = given;
     // A group, or anyone who arrives filled in, takes the place of the empty row instead of standing under it.
     setRcps((l) => {
+      const at = after_id ? l.findIndex((x) => x.id === after_id) : -1;
+      if (at >= 0) return [...l.slice(0, at + 1), newRcp(l, isTpl, p), ...l.slice(at + 1)];
       const spare = Object.keys(p).length ? l.find((x) => isIdle(x)) : null;
       return spare ? l.map((x) => (x === spare ? { ...newRcp(l, isTpl, p), id: x.id, routing_order: x.routing_order } : x)) : [...l, newRcp(l, isTpl, p)];
     });

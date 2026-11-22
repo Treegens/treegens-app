@@ -13,6 +13,8 @@ import { levelCovers, sharedRowLabel, MOVE_LABEL } from '@/lib/shares';
 import { fail } from '@/components/sender/feedback';
 import { cap, exportUrl, howLong, joinNames, neverOpened, waitingOn } from '@/components/sender/lib';
 import { remindedText } from '@/components/sender/MailNews';
+import { scanWaiting, scanRowText } from '@/components/sender/PaperReview';
+import { PAPER_WORDS } from '@/lib/paper';
 import { listName } from '@/lib/docname';
 import { mayDo } from '@/lib/perm';
 // Send later, a pause and a wait before a person, said in the row (sender/Timing.tsx).
@@ -254,7 +256,9 @@ export default function Envelopes() {
                 const cold = e.status === 'sent' && !dead.length && e.recipients.some((r: any) => neverOpened(r));
                 const title = listName(e.subject) || 'Untitled draft';
                 const timed = e.status === 'sent' ? timingRow(e) : '';
-                const waitingText = timed ? <span className="muted">{timed}</span> : w ? <><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{dead.length ? <span className="sn-cold"> · {dead.some((r: any) => r.bounced_at && !r.complained_at) ? 'could not be delivered' : 'marked as spam'}</span> : cold ? <span className="sn-cold"> · not opened</span> : null}</>
+                // A scan signed on paper waits for you to look at it: said so, and Look at the scan instead of Remind.
+                const scan = scanWaiting(e);
+                const waitingText = scan ? <b>{scanRowText(scan)}</b> : timed ? <span className="muted">{timed}</span> : w ? <><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{dead.length ? <span className="sn-cold"> · {dead.some((r: any) => r.bounced_at && !r.complained_at) ? 'could not be delivered' : 'marked as spam'}</span> : cold ? <span className="sn-cold"> · not opened</span> : null}</>
                   : e.status === 'draft' ? <span className="muted">{timingRow(e) || 'Not sent yet'}</span>
                   : e.status === 'completed' ? <span className="muted">Everyone finished</span>
                   : <span className="muted">{closedWhy(e)}</span>;
@@ -270,13 +274,14 @@ export default function Envelopes() {
                       {e.shared_level && <div className="muted small" data-feature="ds-colleagues">{sharedRowLabel(e.sender)}, shared with you</div>}
                       <div className="sn-only-sm sn-rowmeta">
                         <Status s={e.status} label={rowStatusLabel(e.status, w)} />
-                        {e.status === 'sent' && <span className="small">{timed ? waitingText : <>Waiting on {waitingText}</>}</span>}
+                        {e.status === 'sent' && <span className="small">{timed || scan ? waitingText : <>Waiting on {waitingText}</>}</span>}
                         <span className="muted small">{fmtDate(e.updated_at)}</span>
                         {view?.col && customValue(e, view.col) && <span className="small cf-col">{view.col}: {customValue(e, view.col)}</span>}
                       </div>
                       {e.bulk_id && <Link href={`/app/bulk?batch=${e.bulk_id}`} className="small sn-batchlink" onClick={(ev) => ev.stopPropagation()}>Sent with Send to many</Link>}
                       <div className="sn-only-sm sn-inlineactions" onClick={(ev) => ev.stopPropagation()}>
-                        {e.status === 'sent' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
+                        {scan && <Link className="btn sm" href={open(e)}>{PAPER_WORDS.look}</Link>}
+                        {e.status === 'sent' && !scan && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
                         {e.status === 'completed' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
                         {inRemoved ? <button className="btn sm" disabled={busy === e.id} onClick={() => putBack(e)} aria-label={`Put ${title} back in the lists`}>{busy === e.id ? 'Putting back…' : 'Put back'}</button>
                           : !e.shared_level && <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move to folder</button>}
@@ -288,7 +293,8 @@ export default function Envelopes() {
                     {view?.col && <td className="hide-sm small cf-col">{customValue(e, view.col)}</td>}
                     <td className="hide-sm muted small" style={{ whiteSpace: 'nowrap' }}>{fmtDate(e.updated_at)}</td>
                     <td className="hide-sm sn-rowactions" onClick={(ev) => ev.stopPropagation()}>
-                      {e.status === 'sent' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
+                      {scan && <Link className="btn sm" href={open(e)}>{PAPER_WORDS.look}</Link>}
+                      {e.status === 'sent' && !scan && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
                       {e.status === 'completed' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
                       {inRemoved ? <button className="btn sm" disabled={busy === e.id} onClick={() => putBack(e)} aria-label={`Put ${title} back in the lists`}>{busy === e.id ? 'Putting back…' : 'Put back'}</button>
                         : !e.shared_level && <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move to folder</button>}

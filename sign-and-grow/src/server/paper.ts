@@ -26,7 +26,7 @@ import { toSign } from './supplements.ts';
 import { sendMail } from './mail.ts';
 import { whoIs } from '../lib/groups.ts';
 import { labelOf } from '../lib/bysender.ts';
-import { momentText } from '../lib/dates.ts';
+import { momentText, dayText } from '../lib/dates.ts';
 import { PAPER_ROLES, PAPER_REASON_MAX, PAPER_WORDS, printMark, placeWords, placeShort, dividerTitle, paperCertSentence, type PaperWay } from '../lib/paper.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
@@ -70,6 +70,40 @@ export function paperWay(e: any, r: any): PaperWay {
 export const paperCode = (e: any, r: any): string => fmtCode(hmac(`paper:${e.id}:${r.id}:${e.content_version}`).slice(0, 8).toUpperCase());
 
 const scansOf = (rid: string) => all('SELECT * FROM paper_scans WHERE recipient_id=? ORDER BY at DESC, rowid DESC', rid);
+
+/**
+ * The mark acceptScan puts on what it hands completeRecipient. A symbol, so no request body (JSON) can ever carry it:
+ * only an accepted scan finishes someone without an electronic signature (completeRecipient in envelopes.ts).
+ */
+export const PAPER_FINISH = Symbol.for('growsigning.paper.finish');
+
+/** Whether a scan came from the person the request is for now (the same person_gen and address). */
+const sameUploader = (s: any, r: any): boolean =>
+  s.person_gen == null || ((Number(s.person_gen) || 0) === (Number(r.person_gen) || 0) && String(s.email || '').toLowerCase() === String(r.email || '').toLowerCase());
+
+/**
+ * Keeps each person's paper state true after a change (a correction, sign again, a hand-over). Called after every
+ * change of who someone is or whether they finished (newerVersion and correctEnvelope in envelopes.ts, collab.ts),
+ * and again before anything reads or acts on a scan.
+ *   - An accepted scan counts only while its person stays finished. Asked to sign again, it is set aside and kept on
+ *     record: they sign the new version again, on screen or on paper.
+ *   - A scan waiting or asked again belongs to the person who sent it. When the request is now for someone else, it
+ *     is set aside: the new person starts as anyone does, and nobody can accept it as theirs.
+ */
+export function settlePaper(envelopeId: string) {
+  for (const r of all("SELECT * FROM recipients WHERE envelope_id=? AND (paper_state IS NOT NULL OR paper_scan_id IS NOT NULL)", envelopeId)) {
+    const s = latestScan(r.id);
+    if (r.status !== 'completed' && (r.paper_scan_id || r.paper_state === 'accepted')) {
+      run("UPDATE paper_scans SET state='set_aside' WHERE recipient_id=? AND state='accepted'", r.id);
+      run('UPDATE recipients SET paper_scan_id=NULL, paper_state=NULL WHERE id=?', r.id);
+      audit(envelopeId, { name: 'System' }, 'Scan signed on paper set aside', `${whoIs(r)} is asked to sign again, so the scan accepted before no longer counts. It is kept on record. They sign the document as it is now, on screen or on paper.`);
+    } else if ((r.paper_state === 'waiting' || r.paper_state === 'asked_again') && (!s || !sameUploader(s, r))) {
+      run("UPDATE paper_scans SET state='set_aside' WHERE recipient_id=? AND state IN ('waiting','asked_again')", r.id);
+      run('UPDATE recipients SET paper_state=NULL WHERE id=?', r.id);
+      if (s && !sameUploader(s, r)) audit(envelopeId, { name: 'System' }, 'Scan signed on paper set aside', `This request is now for ${whoIs(r)}, so the scan another person sent back before no longer counts. It is kept on record and cannot be accepted as signed by ${r.name || 'them'}.`);
+    }
+  }
+}
 const latestScan = (rid: string) => get('SELECT * FROM paper_scans WHERE recipient_id=? ORDER BY at DESC, rowid DESC LIMIT 1', rid);
 
 // ---- Saving what the sender chose ------------------------------------------------------------------------------------
@@ -116,20 +150,27 @@ export function copyPaper(from: any, newId_: string) {
  * how they may sign, where their latest scan stands and, after "Ask again", the sender's reason.
  */
 export function paperSignFacts(e: any, r: any, token: string) {
+  settlePaper(e.id);
   const way = paperWay(e, r);
-  const s = latestScan(r.id);
+  const s0 = latestScan(r.id);
+  // A scan set aside (the person changed, or they were asked to sign again) is no longer theirs to act on.
+  const s = s0 && s0.state !== 'set_aside' ? s0 : null;
   // A scan that waits is shown as waiting even if the sender has since switched paper off: it is still theirs to check.
-  // Accepted: so the Done screen knows they printed it (no "signed without paper" for them).
-  if (!way && s?.state !== 'waiting' && s?.state !== 'accepted') return null;
+  // Accepted: so the Done screen knows they printed it (no "signed without paper" for them). Asked again after the
+  // switch went off: they are told why, and that they now sign on screen ("off").
+  if (!way && s?.state !== 'waiting' && s?.state !== 'accepted' && s?.state !== 'asked_again') return null;
   if (way && token && isDelegateLink(token)) return null;
   return {
     way: way || 'may',
+    ...(!way && s?.state === 'asked_again' ? { off: true } : {}),
     state: s?.state || null,
     sent_at: s?.at || null,
     pages: s?.pages || null,
     ...(s?.state === 'asked_again' ? { reason: s.reason || '' } : {}),
     code: paperCode(e, r),
     max_mb: 25,
+    // Whether "Ask again" reaches them by email (askAgain sends none to an address that marked ours as spam).
+    mail: !!r.email && !r.complained_at,
   };
 }
 
@@ -146,7 +187,8 @@ function isDelegateLink(token: string): boolean {
  * no electronic signing, and someone whose scan waits for the sender cannot also sign on screen.
  */
 export function paperGate(e: any, r: any) {
-  if (r?.paper_state === 'waiting') throw bad(`You sent back a scan signed on paper, and ${senderOf(e)?.name || 'the sender'} has not looked at it yet. Wait for their answer: we email you if they ask you to send it again.`, 409, { code: 'paper_waiting' });
+  settlePaper(e.id);
+  if (get('SELECT paper_state FROM recipients WHERE id=?', r.id)?.paper_state === 'waiting') throw bad(`You sent back a scan signed on paper, and ${senderOf(e)?.name || 'the sender'} has not looked at it yet. Wait for their answer: we email you if they ask you to send it again.`, 409, { code: 'paper_waiting' });
   if (paperWay(e, r) === 'only') throw bad(`${senderOf(e)?.name || 'The sender'} asked you to sign this on paper. Print it, sign it by hand and send back a photo of every page from this page.`, 409, { code: 'paper_only' });
 }
 
@@ -160,26 +202,28 @@ export function paperGate(e: any, r: any) {
 export async function printPdf(e: any, r: any): Promise<Uint8Array> {
   const sender = senderOf(e);
   const code = paperCode(e, r);
-  const body = await renderEnvelopePdf(e, [], { certificate: false, viewer: r.id, sender });
+  // Nobody has signed this with us, so its pages carry our own line at the top and no "Signed with growsigning".
+  const body = await renderEnvelopePdf(e, [], { certificate: false, viewer: r.id, sender, foot: false });
   const src = await PDFDocument.load(body, { updateMetadata: false });
   const docs = toSign(e.documents || []);
   const total = src.getPageCount() + 1;
   const cover = await sheetPdf('How to sign this on paper', `Envelope ${e.id} · Security code ${code}`, (s) => {
     s.text(`${r.name}, ${sender?.name || 'the sender'} asked you to sign "${e.subject || 'this document'}". To sign it on paper:`, { size: 11, gap: 10 });
     const steps = [
-      `Print all ${total} pages, this one too. Keep the pages in order.`,
+      `${total === 2 ? 'Print both pages' : `Print all ${total} pages`}, this one too. Keep the pages in order.`,
       'Sign and fill in only where a dashed box is marked: "Sign here", "Initial here" or a box to write in.',
       'Do not change the words of the document. Anything written outside the marked boxes may not be accepted.',
       'Take a clear photo or scan of every signed page. The code at the top of each page must be easy to read.',
-      `Open your link again: ${signUrl(r)}. Choose Other actions, then Sign on paper instead, then send the photos. A PDF, JPEG or PNG works, several photos become one document, up to 25 MB.`,
+      // Never the link itself: it opens the document as this person, and paper lies about at printers and in the post.
+      `Open the email from ${sender?.name || 'the sender'} again and press its button, or open the same page you printed this from.${r.require_paper ? '' : ' Choose Other actions, then Sign on paper instead.'} Send the photos there. A PDF, JPEG or PNG works, several photos become one document, up to 25 MB.`,
       `${sender?.name || 'The sender'} looks at it and accepts it as signed by you, or asks you to send it again and says why.`,
     ];
     steps.forEach((t, i) => s.text(`${i + 1}. ${t}`, { size: 10.5, gap: 6 }));
     s.rule(8);
     s.text(`Security code: ${code}. It is printed on every page and only fits this version of the document. If the document changes, print it again.`, { size: 9.5, gap: 4 });
-    if (e.expires_at) s.text(`Send it back before ${momentText(e.expires_at)}. After that the document closes.`, { size: 9.5, gap: 4 });
+    if (e.expires_at) s.text(`Send it back by ${dayText(e.expires_at)}. After that the document closes.`, { size: 9.5, gap: 4 });
     s.text('Please do not email or post the paper to us. GrowSigning only takes it through your link, and does not read or check handwriting.', { size: 9, color: MUTED, gap: 4 });
-  });
+  }, undefined, { badge: false });
   const out = await PDFDocument.create();
   out.registerFontkit(fontkit);
   const font = await out.embedFont(fontBytes('DejaVuSans.ttf'), { subset: true });
@@ -234,9 +278,10 @@ function markPlace(page: PDFPage, f: any, words: string, font: any, bold: any) {
  * and tells the sender. `file` is what storeUpload answered.
  */
 export async function keepScan(e: any, r: any, file: { id: string; pages: number }, actor: Actor) {
+  settlePaper(e.id);
   const way = paperWay(e, r);
   if (!way) throw bad('Signing on paper is not offered on this document any more. Nothing was sent. Sign on screen, or ask the sender.', 409, { code: 'paper_not_offered' });
-  if (r.paper_state === 'waiting') throw bad(`You already sent back a scan, and ${senderOf(e)?.name || 'the sender'} has not looked at it yet. Wait for their answer: we email you if they ask for it again.`, 409, { code: 'paper_waiting' });
+  if (get('SELECT paper_state FROM recipients WHERE id=?', r.id)?.paper_state === 'waiting') throw bad(`You already sent back a scan, and ${senderOf(e)?.name || 'the sender'} has not looked at it yet. Wait for their answer: we email you if they ask for it again.`, 409, { code: 'paper_waiting' });
   const f = get('SELECT sha256 FROM files WHERE id=?', file.id);
   const sid = newId('pap');
   const t = now();
@@ -245,8 +290,10 @@ export async function keepScan(e: any, r: any, file: { id: string; pages: number
   const claimed = run("UPDATE recipients SET paper_state='waiting' WHERE id=? AND status IN ('sent','viewed') AND COALESCE(paper_state, '')<>'waiting' AND (SELECT status FROM envelopes WHERE id=?)='sent'", r.id, e.id).changes;
   if (!claimed) throw bad('This document is no longer open for signing, or a scan from you is already waiting. Nothing was sent.', 409, { code: 'paper_not_open' });
   run('UPDATE files SET via_envelope=? WHERE id=?', e.id, file.id);
-  run('INSERT INTO paper_scans (id, envelope_id, recipient_id, file_id, pages, sha256, content_version, code, at, ip, ua) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-    sid, e.id, r.id, file.id, file.pages, f?.sha256 || '', e.content_version, code, t, actor.ip || null, (actor.ua || '').slice(0, 300) || null);
+  // Who the request is for at this moment: the scan is theirs alone (settlePaper, acceptScan).
+  const who = get('SELECT person_gen, email FROM recipients WHERE id=?', r.id);
+  run('INSERT INTO paper_scans (id, envelope_id, recipient_id, file_id, pages, sha256, content_version, code, at, ip, ua, person_gen, email) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    sid, e.id, r.id, file.id, file.pages, f?.sha256 || '', e.content_version, code, t, actor.ip || null, (actor.ua || '').slice(0, 300) || null, Number(who?.person_gen) || 0, String(who?.email || '').toLowerCase());
   audit(e.id, actor, 'Sent back a scan signed on paper', `${whoIs(r)}. ${file.pages} page${file.pages === 1 ? '' : 's'}, SHA-256 ${f?.sha256 || ''}, made from the print with security code ${code}. Waiting for the sender to look at it.`);
   const name = r.name || 'Someone';
   const waits = e.ordered && e.recipients.some((x: any) => x.status === 'pending' && x.routing_order > r.routing_order);
@@ -260,17 +307,21 @@ export async function keepScan(e: any, r: any, file: { id: string; pages: number
 
 // ---- The sender decides ----------------------------------------------------------------------------------------------
 
-function waitingScan(e: any, rid: string) {
+function waitingScan(e0: any, rid: string) {
+  settlePaper(e0.id);
+  const e = loadEnvelope(e0.id) || e0;
   const r = e.recipients.find((x: any) => x.id === rid);
   if (!r) throw bad('That person is not on this document. Open the document again to see who is.', 404);
   const s = latestScan(r.id);
+  // A scan is the person's who sent it, never the next person's on the same request (settlePaper sets it aside).
+  if (s?.state === 'waiting' && !sameUploader(s, r)) throw bad(`This scan was sent by the person before ${r.name || 'this person'} on this request, so it cannot be accepted as theirs. Nothing was changed.`, 409, { code: 'no_scan' });
   if (!s || s.state !== 'waiting') throw bad(`There is no scan from ${r.name || 'this person'} waiting to be looked at. Open the document again to see how it stands.`, 409, { code: 'no_scan' });
-  return { r, s };
+  return { e, r, s };
 }
 
 /** "Accept as signed by <name>": the person finishes through completeRecipient, as having signed on paper. */
-export async function acceptScan(e: any, rid: string, actor: Actor) {
-  const { r, s } = waitingScan(e, rid);
+export async function acceptScan(e0: any, rid: string, actor: Actor) {
+  const { e, r, s } = waitingScan(e0, rid);
   if (e.status !== 'sent') throw bad('This document is no longer out for signing, so the scan cannot be accepted. Nothing was changed.', 409, { code: 'not_open' });
   if (s.content_version !== e.content_version) throw bad(`You changed the document after ${r.name} printed it, so the scan is of an older version. Choose "${PAPER_WORDS.again}" so they print the new one. Nothing was changed.`, 409, { code: 'paper_old_version' });
   const no = notForPaper(e, r);
@@ -284,7 +335,7 @@ export async function acceptScan(e: any, rid: string, actor: Actor) {
     const fresh = loadEnvelope(e.id);
     const fr = fresh.recipients.find((x: any) => x.id === r.id);
     // The person finishes as if from their link: the moment is now, the address and browser those of the upload.
-    await completeRecipient(fresh, fr, { version: fresh.content_version }, { name: labelOf(fr), ip: s.ip || undefined, ua: s.ua || undefined });
+    await completeRecipient(fresh, fr, { version: fresh.content_version, [PAPER_FINISH]: s.id }, { name: labelOf(fr), ip: s.ip || undefined, ua: s.ua || undefined });
   } catch (x: any) {
     run("UPDATE paper_scans SET state='waiting', decided_at=NULL, decided_by=NULL WHERE id=?", s.id);
     run("UPDATE recipients SET paper_scan_id=NULL, paper_state='waiting' WHERE id=? AND status<>'completed'", r.id);
@@ -296,11 +347,11 @@ export async function acceptScan(e: any, rid: string, actor: Actor) {
 }
 
 /** "Ask again" with a reason: the scan is set aside, the person is emailed the reason and may send a new one. */
-export async function askAgain(e: any, rid: string, reasonIn: any, actor: Actor) {
+export async function askAgain(e0: any, rid: string, reasonIn: any, actor: Actor) {
   const reason = str(reasonIn, PAPER_REASON_MAX * 2).replace(/\s+/g, ' ').trim();
   if (!reason) throw bad('Say why you ask again, so they know what to do differently. Nothing was sent.', 400, { code: 'reason_needed' });
   if (reason.length > PAPER_REASON_MAX) throw bad(`The reason can be up to ${PAPER_REASON_MAX} characters. Make it shorter and try again.`, 400);
-  const { r, s } = waitingScan(e, rid);
+  const { e, r, s } = waitingScan(e0, rid);
   if (e.status !== 'sent') throw bad('This document is no longer out for signing, so there is nothing to ask again. Nothing was sent.', 409, { code: 'not_open' });
   const mail = !!r.email && !r.complained_at;
   // The reason is emailed in the sender's words, so it goes through the same guard as every email they cause.
@@ -331,6 +382,7 @@ export async function askAgain(e: any, rid: string, reasonIn: any, actor: Actor)
 
 /** The scans of a document for its envelope page, newest first, with what the sender needs to check each one. */
 export function scansView(e: any) {
+  settlePaper(e.id);
   const code = (r: any) => paperCode(e, r);
   return all('SELECT * FROM paper_scans WHERE envelope_id=? ORDER BY at DESC, rowid DESC', e.id).map((s: any) => {
     const r = e.recipients.find((x: any) => x.id === s.recipient_id);

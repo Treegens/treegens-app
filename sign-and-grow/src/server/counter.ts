@@ -262,17 +262,18 @@ export function withdrawHelp(c: Ctx, visitId: string, helpId: string) {
 
 // The witness of someone who signs with a mark: the existing witness role, for this person. The official may be
 // that witness only where the account's rules allow it (counter_settings.official_may_witness).
-function witnessOfSigner(envelopeId: string, r: any) {
-  return all("SELECT * FROM recipients WHERE envelope_id=? AND role='witness' AND witness_for=?", envelopeId, r.id)[0] || null;
+// A signer may have one or two witnesses (src/lib/witness.ts WITNESSES_MAX): every one of them counts here.
+function witnessesOfSigner(envelopeId: string, r: any): any[] {
+  return all("SELECT * FROM recipients WHERE envelope_id=? AND role='witness' AND witness_for=? ORDER BY routing_order, position", envelopeId, r.id).filter((w: any) => isWitness(w));
 }
 function assertWitnessFor(accountId: string, envelopeId: string, r: any, official: { id: string; name?: string; email?: string } | null) {
-  const w = witnessOfSigner(envelopeId, r);
-  if (!w || !isWitness(w)) throw bad(`Signing with a mark needs a witness for ${r.name} on the document. Use a counter template with a witness for the person who signs in person.`, 409, { code: 'no_witness' });
+  const ws = witnessesOfSigner(envelopeId, r);
+  if (!ws.length) throw bad(`Signing with a mark needs a witness for ${r.name} on the document. Use a counter template with a witness for the person who signs in person.`, 409, { code: 'no_witness' });
   if (official && !settingsOf(accountId).official_may_witness) {
     const o = get('SELECT name, email FROM users WHERE id=?', official.id) || official;
-    if (sameEmail(w.email, o.email)) throw bad(`Your account's rules say the official may not be the witness, and the witness on this document is you. Ask a colleague or another person to be the witness.`, 409, { code: 'official_is_witness' });
+    if (ws.some((w: any) => sameEmail(w.email, o.email))) throw bad(`Your account's rules say the official may not be the witness, and ${ws.length > 1 ? 'one of the witnesses' : 'the witness'} on this document is you. Ask a colleague or another person to be the witness.`, 409, { code: 'official_is_witness' });
   }
-  return w;
+  return ws[0];
 }
 
 // ---- Gates on the signing page ------------------------------------------------------------------------------------
@@ -425,7 +426,7 @@ export function visitView(c: Ctx, visitId: string) {
   const fields = all('SELECT id, type, label, value FROM fields WHERE envelope_id=? AND recipient_id=? ORDER BY page, y', e.id, r.id);
   const filled = fields.filter((f: any) => f.value != null && String(f.value) !== '').length;
   const showValues = !!get('SELECT show_values x FROM counter_templates WHERE template_id=?', e.template_id)?.x;
-  const w = witnessOfSigner(e.id, r);
+  const ws = witnessesOfSigner(e.id, r);
   const hs = helpsOf(v.id);
   return {
     visit: { id: v.id, official: v.official_name, mine: v.official_id === c.user.id, closed: !!v.closed_at, started_at: v.created_at },
@@ -433,7 +434,8 @@ export function visitView(c: Ctx, visitId: string) {
     person: { name: r.name, email: r.email, status: r.status, opened: !!r.viewed_at, agreed: !!r.consent_at, finished_at: r.completed_at },
     identity: v.id_at ? { method: v.id_method, doc_type: v.id_doc_type, last4: v.id_last4, country: v.id_country, at: v.id_at, words: idWords(v), picture: !!v.id_scan } : null,
     helps: hs.map((h: any) => ({ id: h.id, kind: h.kind, label: HELPS[h.kind as HelpKind]?.label || h.kind, language: h.language, interpreter: h.interpreter, by: h.by_name, by_me: h.by_id === c.user.id, second: h.second_name, needs_second: h.kind === 'behalf' && !h.second_at })),
-    witness: w ? { name: w.name, status: w.status } : null,
+    witness: ws[0] ? { name: ws.map((w: any) => w.name).join(' and '), status: ws[0].status } : null,
+    witnesses: ws.map((w: any) => ({ name: w.name, status: w.status })),
     progress: { fields: fields.length, filled, ...(showValues ? { values: fields.map((f: any) => ({ label: f.label || f.type, value: f.type === 'signature' || f.type === 'initials' ? (f.value ? 'Signed' : '') : f.value || '' })) } : {}) },
     screen: !!get('SELECT 1 x FROM counter_screens WHERE visit_id=? AND ended_at IS NULL', v.id),
     screen_at: get('SELECT created_at x FROM counter_screens WHERE visit_id=? AND ended_at IS NULL ORDER BY created_at DESC LIMIT 1', v.id)?.x || null,
