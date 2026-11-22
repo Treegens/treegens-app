@@ -1,3 +1,5 @@
+// What the person's role allows (perm.ts): 'see_all' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { route } from './router.ts';
 import { all, get, run } from './db.ts';
 import { bad, baseUrl, now } from './util.ts';
@@ -22,14 +24,16 @@ route('GET', '/reports/csv', (c) => {
 // deleted is counted nowhere here, so these numbers match the lists they link to. The paper it saved was saved all
 // the same, so GET /impact and the public totals still count it.
 route('GET', '/reports/summary', (c) => {
-  const scope = `${c.admin ? '' : ' AND sender_id=?'} AND hidden_at IS NULL`;
-  const p = c.admin ? [c.account.id] : [c.account.id, c.user.id];
+  const scope = `${can(c, 'see_all') ? '' : ' AND sender_id=?'} AND hidden_at IS NULL`;
+  const p = can(c, 'see_all') ? [c.account.id] : [c.account.id, c.user.id];
   const byStatus = Object.fromEntries(all(`SELECT status, COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope'${scope} GROUP BY status`, ...p).map((r) => [r.status, r.n]));
   const done = get(`SELECT COUNT(*) n, AVG((julianday(completed_at) - julianday(sent_at)) * 24) hours, COALESCE(SUM(sheets),0) sheets FROM envelopes WHERE account_id=? AND kind='envelope' AND status='completed'${scope}`, ...p);
   const months = all(`SELECT substr(sent_at,1,7) month, COUNT(*) sent, SUM(status='completed') completed FROM envelopes WHERE account_id=? AND kind='envelope' AND sent_at IS NOT NULL${scope} GROUP BY 1 ORDER BY 1 DESC LIMIT 12`, ...p).reverse();
-  const senders = c.admin ? all("SELECT u.name, COUNT(*) sent, SUM(e.status='completed') completed FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL AND e.hidden_at IS NULL GROUP BY u.id ORDER BY sent DESC LIMIT 20", c.account.id) : [];
+  const senders = can(c, 'see_all') ? all("SELECT u.name, COUNT(*) sent, SUM(e.status='completed') completed FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL AND e.hidden_at IS NULL GROUP BY u.id ORDER BY sent DESC LIMIT 20", c.account.id) : [];
   const sent = Object.entries(byStatus).reduce((n, [k, v]) => n + (k === 'draft' ? 0 : (v as number)), 0);
-  return { byStatus, sent, completed: done.n, avgHours: done.hours, completionRate: sent ? done.n / sent : null, months, senders, impact: impactOf(done.sheets) };
+  // Drafts with a time to go out by itself (Send later, timing.ts), and the soonest: Home says these apart from the rest.
+  const later = get(`SELECT COUNT(*) n, MIN(send_at) next FROM envelopes WHERE account_id=? AND kind='envelope' AND status='draft' AND send_at IS NOT NULL AND send_error IS NULL${scope}`, ...p);
+  return { byStatus, scheduled: { count: later.n, next: later.next || null }, sent, completed: done.n, avgHours: done.hours, completionRate: sent ? done.n / sent : null, months, senders, impact: impactOf(done.sheets) };
 });
 
 // ---- The monthly report email ----------------------------------------------------------------------------------

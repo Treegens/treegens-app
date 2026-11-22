@@ -76,5 +76,11 @@ read; without the second, old click-to-agree seals and the security record chain
 - The stored copies of emails and text messages.
 - The account's consent texts and their versions.
 
-A full export of all of this, in documented formats, is planned work (G19 in `research/government.json`) and not
-built. Until then, a body that needs all of it should run its own server and use way 2.
+Since 21 November 2026 an owner or admin can take most of this too, with the full export (G19 in `research/government.json`; Settings, Records and
+data, Export everything; `GET /api/export/full`, `src/server/exportfull.ts`): templates with their fields and rules,
+drafts with their documents, contacts and signing groups, the team list and roles, webhooks without their secrets,
+the plain account settings, click-to-agree terms with every version and acceptance, and every envelope as data in a
+published, versioned JSON Schema (`docs/schema/growsigning-export-v1.schema.json`), with its files by SHA-256 and
+its evidence pack. Still not in it: API keys, the stored copies of emails and text messages (each evidence pack has
+an envelope's emails), and the consent texts as a list of their own. Another server running this software can bring
+the full export in (`src/server/importer.ts`); envelopes still out for signature have to finish where they started.

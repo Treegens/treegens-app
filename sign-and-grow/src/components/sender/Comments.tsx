@@ -20,7 +20,8 @@ function newsLine(n: any, mins: number, paused = false): string {
     : `Waiting to be emailed to ${n.to}. We send at most one email every ${mins} minutes to each person, so it goes with the next one.`;
 }
 
-export function EnvelopeComments({ envelope }: { envelope: any }) {
+// `readOnly`: said in place of the write boxes for a colleague whose share lets them read but not write (src/lib/shares.ts).
+export function EnvelopeComments({ envelope, readOnly }: { envelope: any; readOnly?: string }) {
   const e = envelope;
   const ids = useId();
   const [data, setData] = useState<any>(null);
@@ -118,7 +119,7 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
               </li>
             ))}
           </ol>
-          {data.may_write && (replyTo === t.id ? (
+          {data.may_write && !readOnly && (replyTo === t.id ? (
             <form className="cm-reply" onSubmit={async (ev) => {
               ev.preventDefault();
               if (!reply.trim()) return setError('Type your answer first. Nothing was sent.');
@@ -144,7 +145,8 @@ export function EnvelopeComments({ envelope }: { envelope: any }) {
 
       {error && <div className="notice err" role="alert" style={{ marginTop: 10 }}>{error}</div>}
       {data && !data.may_write && <p className="muted small" style={{ marginTop: 10 }}>This document is no longer out, so these can be read and no longer added to. They are kept with it, and its export and its full record for disputes carry them.</p>}
-      {data?.may_write && !replyTo && (
+      {readOnly && data?.may_write && <p className="muted small" style={{ marginTop: 10 }}>{readOnly}</p>}
+      {data?.may_write && !readOnly && !replyTo && (
         <form className="cm-new" style={{ marginTop: 14 }} onSubmit={async (ev) => {
           ev.preventDefault();
           if (!text.trim()) return setError('Type your comment first. Nothing was sent.');

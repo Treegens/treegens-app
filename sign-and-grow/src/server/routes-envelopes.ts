@@ -1,5 +1,9 @@
+// What the person's role allows (perm.ts), where this file once asked for an admin.
+import { can } from './perm.ts';
 import { route, json, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
+// Send later ("send_at" on POST /envelopes/:id/send) and what a send by hand clears (timing.ts).
+import { scheduleSend, clearSchedule } from './timing.ts';
 import { bad, id, token, now, str, rateLimit, rateWait, isEmail, baseUrl, sha256, HttpError } from './util.ts';
 import { inspectPdf, imageToPdf, imagesToPdf } from './pdf.ts';
 import { extractPages, textOf } from './text.ts';
@@ -48,13 +52,21 @@ import { KNOWN_EXT } from '../lib/convert.ts';
 import { nameFromFile, listName } from '../lib/docname.ts';
 import { record } from './seclog.ts';
 // The account's own custom fields (customfields.ts): values on envelopes and templates, bulk columns, the list filter.
+import { endsWithinFilter } from './airepo.ts';
 import { readCustom, writeCustom, assertBulkCustom, bulkCustomRefusal, applyRowCustom, formCustomProblem, customFilter, attachCustom, customPrintProblems } from './customfields.ts';
 import { existingSignatures, sealFacts } from './seal.ts';
 import { pdfaFacts } from './pdfa.ts';
 import { chainStampFacts } from './auditstamp.ts';
 import { signNowFor } from './signnow.ts';
+import { shareFor, shareFacts, sendForOf, noteSentBy, noteMadeFor, ownersSharingWith, shareLevelsWith } from './shares.ts';
+// Fields placed by the words of a document: "anchor" and "auto_tags" (anchors.ts).
+import { placeByWords, assertAllPlaced, refuseWordsWithTemplate } from './anchors.ts';
+import { framedLink, noteScreenUpload, endScreenOnSend } from './embed.ts';
 import { signaturesLost } from '../lib/seal.ts';
 import { dayText } from '../lib/dates.ts';
+import { assertNoStepRoles } from './agents.ts';
+// One envelope from several templates (tplcombine.ts).
+import { readTemplateIds, combineTemplates, combinedLine } from './tplcombine.ts';
 
 // ---- Files ---------------------------------------------------------------------------------
 
@@ -112,14 +124,19 @@ export async function storeUpload(c: Ctx, accountId: string | null) {
   return { id: fid, name, pages: info.pages, page_sizes: info.sizes, size: bytes.length, is_scan: scanPages.length > 0, scan_pages: scanPages, converted, ...(ocr ? { ocr: 'queued' } : {}), ...(signed ? { existing_signatures: signed, existing_signatures_note: signaturesLost(signed) } : {}) };
 }
 
-route('POST', '/files', (c) => storeUpload(c, c.account.id));
+route('POST', '/files', async (c) => noteScreenUpload(c, await storeUpload(c, c.account.id)));
 route('GET', '/files/:id/content', (c) => {
   const f = get('SELECT * FROM files WHERE id=? AND account_id=?', c.params.id, c.account.id);
   if (!f) throw bad('File not found.', 404);
   // A document of a template that is not for this person is read only through something they can open that holds it
   // (tplroles.ts), the same answer as a file that does not exist.
-  const opens = (eid: string) => { try { return !!mine(c, eid); } catch { return false; } };
-  if (fileHeldBack(c, f.id) && !all('SELECT DISTINCT envelope_id FROM documents WHERE file_id=?', f.id).some((d) => opens(d.envelope_id))) throw bad('File not found.', 404);
+  let refusal: any = null;
+  const opens = (eid: string) => { try { return !!mine(c, eid); } catch (err: any) { if (err?.status === 403) refusal = err; return false; } };
+  const uses = all('SELECT DISTINCT d.envelope_id, e.kind FROM documents d JOIN envelopes e ON e.id=d.envelope_id WHERE d.file_id=?', f.id);
+  if (fileHeldBack(c, f.id) && !uses.some((d) => opens(d.envelope_id))) throw bad('File not found.', 404);
+  // A file that is only in envelopes is read by someone who can open one of them: their own, an admin, or a colleague
+  // whose share covers opening files (shares.ts: not 'see'). Their answer when the share is too low; else not found.
+  if (uses.length && uses.every((d) => d.kind === 'envelope') && !uses.some((d) => opens(d.envelope_id))) throw refusal || bad('File not found.', 404);
   return pdfResponse(readBlob(f.sha256), f.name, true);
 });
 
@@ -129,14 +146,15 @@ export function mine(c: Ctx, envelopeId: string, kind?: string, o: { removed?: b
   const e = loadEnvelope(envelopeId);
   if (!e || e.account_id !== c.account.id || (kind && e.kind !== kind)) throw bad('Envelope not found.', 404);
   // Members see what they sent. Admins see the whole account. Templates are shared with the team.
-  if (e.kind === 'envelope' && !c.admin && e.sender_id !== c.user.id) throw bad('Envelope not found.', 404);
+  // A colleague the sender shared their documents with gets through for what the share's level covers (shares.ts).
+  if (e.kind === 'envelope' && !can(c, 'see_all') && e.sender_id !== c.user.id && !shareFor(c, e)) throw bad('Envelope not found.', 404);
   // A template can be for admins only or for chosen members (tplroles.ts). Every way of reading, using, copying or
   // changing a template comes through here, so one who may not use it gets no further, and is told who to ask.
   if (e.kind === 'template') assertMayUse(c, e);
   // An envelope its sender deleted after somebody had signed is gone for the sender: no list, no search, no
   // change. Its recipients still have it, and so does the account: an admin can open it, download it and put it
   // back (the three routes that pass `removed`), and do nothing else to it until it is back.
-  if (e.hidden_at && !(o.removed && c.admin)) throw bad('Envelope not found.', 404);
+  if (e.hidden_at && !(o.removed && can(c, 'see_all'))) throw bad('Envelope not found.', 404);
   return e;
 }
 
@@ -163,23 +181,33 @@ route('GET', '/envelopes', (c) => {
   // are in nobody's ordinary list, search, export or report. The account is a party to those documents too, so
   // its admins can still find them here, and put one back with POST /envelopes/:id/restore. Members cannot.
   const removed = box === 'removed';
-  if (removed && !c.admin) throw bad('Envelopes that were removed by their sender are shown to the admins of the account only. Ask an admin of your team to look for it and put it back.', 403);
+  if (removed && !can(c, 'see_all')) throw bad('Envelopes that were removed by their sender are shown to the admins of the account only. Ask an admin of your team to look for it and put it back.', 403);
   const kind = c.q.get('kind') === 'template' && !removed ? 'template' : 'envelope';
   const hidden = removed ? 'hidden_at IS NOT NULL' : 'hidden_at IS NULL';
   const where = ['e.account_id=?', 'e.kind=?', `e.${hidden}`];
   const p: any[] = [c.account.id, kind];
   // Members see what they sent, and the folders of what they sent. Templates and their folders are the team's.
-  const own = kind === 'envelope' && !c.admin;
-  if (own) (where.push('e.sender_id=?'), p.push(c.user.id));
+  const own = kind === 'envelope' && !can(c, 'see_all');
+  // ?shared=1: the documents colleagues share with this person today, in place of their own; ?sender=<id> of one of
+  // those colleagues: theirs alone (shares.ts).
+  const sharers = own ? ownersSharingWith(c) : [];
+  if (kind === 'envelope' && c.q.get('shared') === '1') (where.push('e.sender_id IN (SELECT value FROM json_each(?))'), p.push(JSON.stringify(own ? sharers : ownersSharingWith(c))));
+  else if (own && sharers.includes(c.q.get('sender') || '')) (where.push('e.sender_id=?'), p.push(c.q.get('sender')));
+  // With nobody chosen, a member someone shares with sees their own and the shared ones together, each shared row
+  // marked with its level below, so a colleague's documents are never hidden behind the "Sent by" choice.
+  else if (own && sharers.length && !c.q.get('sender')) (where.push('e.sender_id IN (SELECT value FROM json_each(?))'), p.push(JSON.stringify([c.user.id, ...sharers])));
+  else if (own) (where.push('e.sender_id=?'), p.push(c.user.id));
   // A template someone may not use is not listed at all, and neither is its folder (tplroles.ts).
   const [usable, usableP] = kind === 'template' ? usableSql(c) : ['', []];
   if (usable) (where.push(usable), p.push(...usableP));
   const boxes: Record<string, string> = { drafts: "e.status='draft'", sent: "e.status!='draft'", waiting: "e.status='sent'", completed: "e.status='completed'", closed: "e.status IN ('voided','declined','expired')" };
   if (kind === 'envelope' && boxes[box]) where.push(boxes[box]);
   if (c.q.get('folder')) (where.push('e.folder=?'), p.push(c.q.get('folder')));
-  if (c.admin && c.q.get('sender')) (where.push('e.sender_id=?'), p.push(c.q.get('sender')));
+  if (can(c, 'see_all') && c.q.get('sender')) (where.push('e.sender_id=?'), p.push(c.q.get('sender')));
   // ?field=Case number&value=2026/114: only those with that value of a custom field, any value when it is empty.
   customFilter(c.q, where, p);
+  // ?ends_within=90: only those with a checked end date in the next 90 days (Key dates, airepo.ts).
+  endsWithinFilter(c.q, where, p);
   const q = (c.q.get('q') || '').trim();
   // Every word that was typed has to be found somewhere: in the subject, the folder, on a person or in the name of
   // a role, in a document's name or in the words inside the documents. So "texas progress" finds the template
@@ -200,26 +228,33 @@ route('GET', '/envelopes', (c) => {
     p.push(q, ...words.flatMap((w, i) => [...Array(7).fill(likeWord(w)), JSON.stringify(sealed[i])]));
   }
   const limit = Math.min(200, Number(c.q.get('limit')) || 100);
-  const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, e.sender_id, u.name sender, e.hidden_at removed_at
+  const rows = all(`SELECT e.id, e.kind, e.status, e.subject, e.folder, e.created_at, e.updated_at, e.sent_at, e.completed_at, e.expires_at, e.sheets, e.bulk_id, e.sender_id, u.name sender, e.hidden_at removed_at, e.ordered, e.send_at, e.send_error, e.paused_at
     FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE ${where.join(' AND ')} ORDER BY e.updated_at DESC LIMIT ? OFFSET ?`, ...p, limit, Number(c.q.get('offset')) || 0);
   for (const e of rows) {
     // bounced_at, complained_at: an email to them came back for good, or they marked one as spam. The list flags both.
-    e.recipients = all('SELECT id, name, email, role, role_name, status, sent_at, muted, bounced_at, complained_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
+    e.recipients = all('SELECT id, name, email, role, role_name, status, sent_at, muted, bounced_at, complained_at, routing_order, wait_hours, completed_at FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
     // True when the latest email to someone who has not opened it yet did not leave. Lets the list flag it.
     e.email_failed = all("SELECT m.status FROM emails m WHERE m.envelope_id=? AND m.id IN (SELECT MAX(id) FROM emails WHERE envelope_id=? GROUP BY COALESCE(recipient_id, to_email))", e.id, e.id).some((m) => m.status === 'failed');
     e.pages = get('SELECT COALESCE(SUM(f.pages),0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n;
+  }
+  // A colleague's row: whose it is and the level of the share, so the list offers only what that level allows.
+  if (own && sharers.length) {
+    const levels = shareLevelsWith(c);
+    for (const e of rows) if (e.sender_id !== c.user.id && levels[e.sender_id]) e.shared_level = levels[e.sender_id];
   }
   // Each row's custom fields, for the column the list can show (customfields.ts).
   attachCustom(rows);
   // Only the folders of what this person can see: a folder name such as "Layoffs 2026" says something by itself.
   const folders = all(`SELECT DISTINCT folder FROM envelopes e WHERE account_id=? AND kind=? AND ${hidden} AND folder IS NOT NULL AND folder != ''${own ? ' AND sender_id=?' : ''}${usable ? ` AND ${usable}` : ''}`, ...(own ? [c.account.id, kind, c.user.id] : [c.account.id, kind]), ...usableP).map((r) => r.folder);
   // Admins can narrow the list to one person's envelopes.
-  const senders = c.admin ? all(`SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind=? AND e.${hidden} ORDER BY u.name`, c.account.id, kind) : [];
+  const senders = can(c, 'see_all') ? all(`SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind=? AND e.${hidden} ORDER BY u.name`, c.account.id, kind)
+    // A member someone shares with: themselves and each colleague who shares, so "Sent by" can show theirs (shares.ts).
+    : sharers.length ? [{ id: c.user.id, name: c.user.name }, ...sharers.map((id) => ({ id, name: get('SELECT name FROM users WHERE id=?', id)?.name || 'A colleague', shared: true }))] : [];
   // On a template, may_change says whether this person may change it, and access what they may do with it and its
   // rule (use, change, locked), so the page shows the right buttons and an "Admins only" or lock mark (tplroles.ts).
   if (kind === 'template') markList(c, rows);
   // For admins: how many envelopes in the account were removed by their sender, so the list can offer to show them.
-  const removedCount = c.admin && kind === 'envelope' ? get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND hidden_at IS NOT NULL", c.account.id).n : undefined;
+  const removedCount = can(c, 'see_all') && kind === 'envelope' ? get("SELECT COUNT(*) n FROM envelopes WHERE account_id=? AND kind='envelope' AND hidden_at IS NOT NULL", c.account.id).n : undefined;
   return { envelopes: rows, folders, senders, ...(removedCount === undefined ? {} : { removed: removedCount }) };
 });
 
@@ -230,7 +265,7 @@ route('GET', '/inbox', (c) => {
     // First what is waiting for a group this person is a member of, each with their own link (memberInbox in groups.ts).
     items: [...memberInbox(c.user.email), ...all(`SELECT e.id, e.subject, e.status, e.sent_at, e.completed_at, u.name sender, r.role, r.status my_status, r.token
       FROM recipients r JOIN envelopes e ON e.id=r.envelope_id JOIN users u ON u.id=e.sender_id
-      WHERE r.email=? AND e.kind='envelope' AND e.status!='draft' AND e.purged_at IS NULL AND r.status!='pending' AND r.role!='inperson' ORDER BY e.updated_at DESC LIMIT 100`, c.user.email)],
+      WHERE r.email=? AND e.kind='envelope' AND e.status!='draft' AND e.purged_at IS NULL AND r.status NOT IN ('pending','skipped') AND r.role!='inperson' ORDER BY e.updated_at DESC LIMIT 100`, c.user.email)],
   };
 });
 
@@ -264,7 +299,25 @@ route('POST', '/envelopes', async (c) => {
     if (prior) return new Response(JSON.stringify({ envelope: publicEnvelope(prior) }), { headers: { 'content-type': 'application/json; charset=utf-8', 'idempotent-replay': 'true' } });
   }
   let eid: string;
-  if (b.template_id) {
+  // Fields placed by "anchor" and "auto_tags" become ordinary fields before anything is made (anchors.ts). The key
+  // is kept with the body as it was sent, so a retry with the same key is still the same request.
+  const sentHash = bodyHash(b);
+  // "on_behalf_of": made in the name of a colleague who shared sending with this person, or by an admin-scope key
+  // (shares.ts). Who pressed Send is kept with it, and recipients read both names.
+  const forId = sendForOf(c, b);
+  const placing = b.template_id || b.template_ids !== undefined ? refuseWordsWithTemplate(b) : await placeByWords(c.account.id, b);
+  if (send && kind === 'envelope') assertAllPlaced(placing);
+  // "template_ids": one envelope from two or more templates, one after the other (tplcombine.ts).
+  if (b.template_ids !== undefined && b.template_ids !== null) {
+    const ids = readTemplateIds(b);
+    const tpls = ids.map((x) => mine(c, x, 'template'));
+    const fill = b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined;
+    tpls.forEach((t) => assertTemplateGroups(t, [fill || null], !!send));
+    const custom = readCustom(c.account.id, tpls[0], { custom_fields: b.custom_fields }, { merge: true });
+    eid = combineTemplates(c, tpls, { senderId: forId ?? c.user.id, subject: b.subject, message: b.message, fill });
+    writeCustom(eid, custom, c.actor);
+    audit(eid, c.actor, 'Started from templates', combinedLine(tpls));
+  } else if (b.template_id) {
     const tpl = mine(c, str(b.template_id), 'template');
     // A locked template keeps its own message for whoever may not change it. The subject is the envelope's name.
     assertMessageKept(c, tpl, b.message);
@@ -273,13 +326,13 @@ route('POST', '/envelopes', async (c) => {
     // "kind": "template" with a template_id is a copy of the template, held to the same rule as /clone (cloneOwner).
     // "custom_fields" set or empty the ones named, and the template's values stand for the rest (customfields.ts).
     const custom = readCustom(c.account.id, tpl, { custom_fields: b.custom_fields }, { merge: true });
-    eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: cloneOwner(c, tpl, kind), kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
+    eid = copyEnvelope(tpl, { accountId: c.account.id, senderId: forId ?? cloneOwner(c, tpl, kind), kind, subject: b.subject, message: b.message, fill: b.recipients && !Array.isArray(b.recipients) ? b.recipients : undefined });
     writeCustom(eid, custom, c.actor);
     if (kind === 'template') noteCopy(c, eid, tpl);
   } else {
     // "custom_fields" and "documents[].fields", checked before anything is made (customfields.ts).
     const custom = readCustom(c.account.id, null, b);
-    eid = createEnvelope(c.account, c.user.id, kind, b);
+    eid = createEnvelope(c.account, forId ?? c.user.id, kind, b);
     try {
       // Anything the body says about the envelope goes through the same checks as a save, so a setting that cannot
       // be carried out (a date format that does not exist, say) is refused here too and never dropped.
@@ -293,10 +346,12 @@ route('POST', '/envelopes', async (c) => {
   }
   // The key row goes when its envelope goes (the database deletes it with the envelope), so a key never points at
   // nothing. REPLACE covers the one case left: a key whose envelope now belongs to somebody else.
-  if (idem) run('INSERT OR REPLACE INTO idempotency_keys (account_id, user_id, key, envelope_id, request_hash, at) VALUES (?,?,?,?,?,?)', c.account.id, c.user.id, idem, eid, bodyHash(b), now());
+  if (idem) run('INSERT OR REPLACE INTO idempotency_keys (account_id, user_id, key, envelope_id, request_hash, at) VALUES (?,?,?,?,?,?)', c.account.id, c.user.id, idem, eid, sentHash, now());
+  if (forId) (noteSentBy(c, eid), noteMadeFor(c, eid));
   if (send && kind === 'envelope') {
     try {
       // "send_anyway": the caller has seen that an address on it bounced before, and wants it sent all the same.
+      noteSentBy(c, eid);
       await sendEnvelope(eid, c.actor, { anyway: b.send_anyway === true });
     } catch (e) {
       // "Create and send" either sends or leaves nothing behind. No stray drafts after a refusal, and the key is
@@ -307,7 +362,7 @@ route('POST', '/envelopes', async (c) => {
   }
   const made = loadEnvelope(eid);
   // What was sent goes out with what the check before sending found. It is a list to read, never a refusal.
-  return { envelope: publicEnvelope(made), ...(send && kind === 'envelope' ? { warnings: sendWarnings(made) } : {}) };
+  return { envelope: publicEnvelope(made), ...(send && kind === 'envelope' ? { warnings: sendWarnings(made) } : {}), ...(placing ? { anchors: placing } : {}) };
 });
 
 route('GET', '/envelopes/:id', (c) => {
@@ -337,7 +392,8 @@ route('GET', '/envelopes/:id', (c) => {
   // texts: what became of every text message about this envelope, like deliveries for email. Numbers are masked.
   // kept_on_delete: whether deleting it now would only take it out of the lists (deleting.ts), for the delete dialog.
   // retention: how long it is kept, a purge asked for or announced, holds, and what a purge left (records.ts).
-  return { envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), whatsapp: waOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e), seal: sealFacts(e), archive_format: pdfaFacts(e), record_stamp: chainStampFacts(e.id, verifyChain(e.id).ok) };
+  // shared, sent_by_name, first_sender_name: whose it is when it came through a share, who sent it for whom (shares.ts).
+  return { ...shareFacts(c, e), envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), whatsapp: waOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e), seal: sealFacts(e), archive_format: pdfaFacts(e), record_stamp: chainStampFacts(e.id, verifyChain(e.id).ok) };
 });
 
 // The same check for text that is not saved yet: the editor asks before sending, with what stands on screen.
@@ -366,6 +422,8 @@ route('PUT', '/envelopes/:id', async (c) => {
   // Started from a template whose wording is locked for this person: the locked parts stay as they are (tplroles.ts).
   assertWordingKept(c, e, b);
   // "custom_fields" and "documents[].fields", checked before anything is saved and written after (customfields.ts).
+  // Fields placed by "anchor" and "auto_tags" (anchors.ts), looked for in the saved documents when the body has none.
+  const placing = await placeByWords(c.account.id, b, e);
   const custom = readCustom(c.account.id, e, b);
   // A draft on hold is frozen: saving could empty it, which is deleting by another name (records.ts).
   if (e.kind === 'envelope' && e.status === 'draft') assertNotHeld([e.id], c.actor.name, 'change it');
@@ -374,7 +432,7 @@ route('PUT', '/envelopes/:id', async (c) => {
   if (e.kind === 'envelope' && e.status === 'sent') await correctEnvelope(e, b, c.account.id, c.actor);
   else saveDraft(e, b, c.account.id, c.actor);
   writeCustom(e.id, custom, c.actor);
-  return { envelope: publicEnvelope(loadEnvelope(e.id)) };
+  return { envelope: publicEnvelope(loadEnvelope(e.id)), ...(placing ? { anchors: placing } : {}) };
 });
 
 route('POST', '/envelopes/:id/extend', async (c) => {
@@ -433,7 +491,7 @@ route('DELETE', '/envelopes/:id', (c) => {
 // same moment leave one line in the record. Checked here rather than by the router's admin level, so an admin's
 // "send" key, which can already list and open these, is not told that this is an account setting.
 route('POST', '/envelopes/:id/restore', (c) => {
-  if (!c.admin) throw bad('Only an admin of the account can put back an envelope that its sender removed. Ask an admin of your team.', 403);
+  if (!can(c, 'see_all')) throw bad('Only an admin of the account can put back an envelope that its sender removed. Ask an admin of your team.', 403);
   const e = mine(c, c.params.id, 'envelope', { removed: true });
   if (run('UPDATE envelopes SET hidden_at=NULL WHERE id=? AND hidden_at IS NOT NULL', e.id).changes) {
     audit(e.id, c.actor, 'Put back in the sender\'s lists', 'An admin of the account put this envelope back after it had been removed from the sender\'s lists.');
@@ -448,10 +506,18 @@ route('POST', '/envelopes/:id/restore', (c) => {
 route('POST', '/envelopes/:id/send', async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const e = mine(c, c.params.id, 'envelope');
+  // Who pressed Send, now or for later, when it is not the person it belongs to (shares.ts).
+  noteSentBy(c, e.id);
+  // "send_at": a time to send it later instead of now (timing.ts). It stays a draft until then.
+  if (b?.send_at != null && b.send_at !== '') return { send_at: scheduleSend(e, b.send_at, c.actor), envelope: publicEnvelope(loadEnvelope(e.id)) };
   // "sign_now": true from the person the envelope belongs to, when they are the only person on it: no invitation is
   // emailed to them and the answer carries their signing page (signnow.ts). In every other case it changes nothing.
   const now = signNowFor(e, senderOf(e), c.user?.email, b?.sign_now);
   await sendEnvelope(e.id, c.actor, { anyway: b?.send_anyway === true, signNow: now?.id || null });
+  // Sent from the sender screen inside an app: that screen ends here (embed.ts).
+  endScreenOnSend(c);
+  // Sent by hand: a time it was set to go out at is over (timing.ts).
+  clearSchedule(e.id);
   const sent = loadEnvelope(e.id);
   const mine_ = now ? sent.recipients.find((r: any) => r.id === now.id) : null;
   return { envelope: publicEnvelope(sent), warnings: sendWarnings(sent), ...(mine_?.token ? { sign_url: signUrl(mine_) } : {}) };
@@ -478,13 +544,16 @@ route('POST', '/envelopes/:id/remind', async (c) => {
   // reminded and the answer names who was left out and why, so nobody is dropped without the sender knowing.
   const waiting = e.status === 'sent' ? e.recipients.filter((r: any) => r.status === 'sent' || r.status === 'viewed') : [];
   const one = b?.recipient_id ? waiting.find((r: any) => r.id === str(b.recipient_id)) : null;
+  // Someone whose "Only when..." was not met is not on the request at all (routing.ts): said, never a quiet 0.
+  const skipped = b?.recipient_id && !one ? e.recipients.find((r: any) => r.id === str(b.recipient_id) && r.status === 'skipped') : null;
+  if (skipped) throw bad(`${skipped.name || 'This person'} was not asked, because the rule for them was not met, so there is nothing to remind them of. Nothing was sent. To ask them anyway, add them again with Edit.`, 409, { code: 'not_asked' });
   if (one && mailStop(one)) throw bad(mailStopText(one), 409, { code: mailStop(one) === 'complaint' ? 'marked_as_spam' : 'email_bounced' });
   // Someone whose link the sender passes on has no address at all: named too, so the sender knows to send it again.
   // The member of a signing group who has it and reported it is refused like a person who marked our email as spam.
   // The members of a group nobody has taken on who get no reminder are named, also when only that group is asked.
   const members = membersNotReminded(e, one ? [one] : waiting);
   if (one?.claimed_by && members.length) throw bad(`${one.name} reported this document, so we do not email them about it. Only they can change that, on their signing page. If someone else in ${one.group_name} should act, choose "Give back to the group".`, 409, { code: 'reported' });
-  const not_reminded = [...(b?.recipient_id ? [] : waiting.filter((r: any) => mailStop(r) || (r.link_by_sender && !r.email)).map((r: any) => ({ recipient_id: r.id, name: r.name, why: r.link_by_sender && !r.email ? 'link_by_sender' : mailStop(r) === 'complaint' ? 'marked_as_spam' : 'email_bounced' }))), ...members];
+  const not_reminded = [...(b?.recipient_id ? [] : waiting.filter((r: any) => mailStop(r) || (r.link_by_sender && !r.email) || (r.place_open && !r.email)).map((r: any) => ({ recipient_id: r.id, name: r.name, why: r.place_open && !r.email ? 'not_named_yet' : r.link_by_sender && !r.email ? 'link_by_sender' : mailStop(r) === 'complaint' ? 'marked_as_spam' : 'email_bounced' }))), ...members];
   return { reminded: await remindEnvelope(e, c.actor, b?.recipient_id ? str(b.recipient_id) : undefined), not_reminded };
 });
 
@@ -545,9 +614,12 @@ route('POST', '/envelopes/:id/recipient-view', async (c) => {
   const rid = str(body.recipient_id);
   const e = mine(c, c.params.id, 'envelope');
   // In a group every member has a link of their own, and "member_id" says whose is wanted (memberLink in groups.ts).
-  const theirs = memberLink(e, rid, body.member_id, c.actor);
+  // "frame_origin": the link for a frame on one of the account's websites, which only that website may show (embed.ts).
+  const inFrame = body.frame_origin != null && body.frame_origin !== '';
+  const theirs = !inFrame && memberLink(e, rid, body.member_id, c.actor);
   if (theirs) return theirs;
   const r = e.recipients.find((x: any) => x.id === rid);
+  const framed = r && inFrame ? framedLink(e, r, body.frame_origin) : null;
   if (!r || !r.token) throw bad('Recipient not found, or the envelope has not been sent.', 404);
   // Handing out the link belongs in the record, but one line a day says it. An integration that asks for the link
   // on every page view must not fill the audit trail, which is printed in full on the certificate. A link that
@@ -557,7 +629,7 @@ route('POST', '/envelopes/:id/recipient-view', async (c) => {
     OR link_issued_at <= COALESCE((SELECT MAX(retired_at) FROM retired_tokens WHERE recipient_id=recipients.id), ''))`,
     now(), r.id, new Date(Date.now() - 864e5).toISOString()).changes;
   if (first) audit(e.id, c.actor, 'Signing link issued', labelOf(r));
-  return { url: signUrl(r) };
+  return { url: framed || signUrl(r) };
 });
 
 route('GET', '/envelopes/:id/download', async (c) => {
@@ -577,7 +649,7 @@ route('GET', '/envelopes/:id/download', async (c) => {
 route('GET', '/bulk', (c) => ({
   batches: all(`SELECT b.id, b.name, b.total, b.created_at, t.subject template,
       (SELECT COUNT(*) FROM envelopes e WHERE e.bulk_id=b.id AND e.hidden_at IS NULL) created, (SELECT COUNT(*) FROM envelopes e WHERE e.bulk_id=b.id AND e.status='completed' AND e.hidden_at IS NULL) completed
-    FROM bulk_batches b LEFT JOIN envelopes t ON t.id=b.template_id WHERE b.account_id=?${c.admin ? '' : ' AND b.sender_id=?'} ORDER BY b.created_at DESC LIMIT 50`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id])),
+    FROM bulk_batches b LEFT JOIN envelopes t ON t.id=b.template_id WHERE b.account_id=?${can(c, 'see_all') ? '' : ' AND b.sender_id=?'} ORDER BY b.created_at DESC LIMIT 50`, ...(can(c, 'see_all') ? [c.account.id] : [c.account.id, c.user.id])),
 }));
 
 // Batches that a request in this process is sending right now. A repeat of the call never sends alongside it: it is
@@ -727,6 +799,8 @@ route('POST', '/bulk', async (c) => {
     return json(batchResult(prior.id), busy ? 202 : 200, { 'idempotent-replay': 'true' });
   }
   const tpl = mine(c, str(b.template_id), 'template');
+  // Each copy of a Send to many goes out by itself, so nobody on it can change it or choose who comes next (agents.ts).
+  assertNoStepRoles(tpl, 'bulk');
   const rows: any[] = Array.isArray(b.rows) ? b.rows : [];
   if (!rows.length) throw bad('Add at least one row of recipients.');
   if (rows.length > 500) throw bad('Send up to 500 envelopes per batch.');
@@ -780,7 +854,7 @@ route('POST', '/bulk', async (c) => {
 // A batch is one thing: see everyone's status, nudge the stragglers, or void what is still open, in one go.
 function batch(c: Ctx, bulkId: string) {
   const b = get('SELECT * FROM bulk_batches WHERE id=? AND account_id=?', bulkId, c.account.id);
-  if (!b || (!c.admin && b.sender_id !== c.user.id)) throw bad('Batch not found.', 404);
+  if (!b || (!can(c, 'see_all') && b.sender_id !== c.user.id)) throw bad('Batch not found.', 404);
   return b;
 }
 route('GET', '/bulk/:id', (c) => {
@@ -806,7 +880,8 @@ route('POST', '/bulk/:id/remind', async (c) => {
   let reminded = 0;
   for (const row of all("SELECT id FROM envelopes WHERE bulk_id=? AND status='sent'", b.id)) {
     const e = loadEnvelope(row.id);
-    if (e?.status === 'sent') reminded += await remindEnvelope(e, c.actor);
+    // One its sender paused is passed over: it takes no reminders until it is resumed (timing.ts).
+    if (e?.status === 'sent' && !e.paused_at) reminded += await remindEnvelope(e, c.actor);
   }
   return { reminded };
 });
@@ -878,7 +953,7 @@ route('GET', '/powerforms', (c) => ({
     // request header. The app copies it and draws the form's QR code from it.
     // A form on a template this person may not use is not listed, like the template itself (tplroles.ts).
     .map(({ template_ref, ...p }) => ({ p, t: get('SELECT * FROM envelopes WHERE id=?', template_ref) }))
-    .filter(({ t }) => !t || c.admin || mayUse(c, t))
+    .filter(({ t }) => !t || can(c, 'edit_any_template') || mayUse(c, t))
     // reminders: whether the envelope each visitor starts reminds them by itself, which it takes from the template.
     .map(({ p, t }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, t), url: `${baseUrl()}/f/${p.slug}`, reminders: t ? reminderText(t.reminder_days) : null })),
 }));
@@ -886,6 +961,8 @@ route('POST', '/powerforms', async (c) => {
   const b = await c.body();
   const tpl = mine(c, str(b.template_id), 'template');
   assertMayRunForm(c, tpl, 'publish it as a PowerForm');
+  // Nobody can change the document or choose who comes next on a form: each visitor fills it in alone (agents.ts).
+  assertNoStepRoles(tpl, 'form');
   // A visitor types their own details, so the open role can be checked with a code by email and never by text.
   assertFormChecks(powerformTemplate(tpl.id).open);
   // A form whose every start would be refused because it reads like a fake payment notice (its name is the subject

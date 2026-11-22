@@ -144,11 +144,12 @@ test('Settings: an owner or admin sees at most 10 sections and a member at most 
 
 test('Settings: the page is built from those sections, with sign-in under Security and the sending defaults under Sending', () => {
   const page = read('src/app/app/settings/page.tsx');
-  assert.match(page, /const TABS = sectionsFor\(me\.role(, !!me\.org_admin)?\);/);
-  assert.match(page, /const to = landingFor\(me\.role, q\.get\('tab'\), window\.location\.hash, !!\(q\.get\('signin'\) \|\| q\.get\('signin_error'\)\)(, !!me\.org_admin)?\);/);
+  // A role the team made may leave sections out (src/lib/perm.ts): the third argument, null for the built-in roles.
+  assert.match(page, /const TABS = sectionsFor\(me\.role(, !!me\.org_admin)?(, me\.my_role\?\.custom \? me\.my_role\.can : null)?(, (!!me\.delegation|away))?\);/);
+  assert.match(page, /const to = landingFor\(me\.role, q\.get\('tab'\), window\.location\.hash, !!\(q\.get\('signin'\) \|\| q\.get\('signin_error'\)\)(, !!me\.org_admin)?(, me\.my_role\?\.custom \? me\.my_role\.can : null)?(, (!!me\.delegation|away))?\);/);
   // Security: one card "Your sign-in" for everyone, then the security record for admins.
   assert.match(page, /<h2 id="your-signin-h" className="set-group">Your sign-in<\/h2>\s*<SignInWays \/>\s*<TwoStepCard \/>\s*<SignedIn \/>/);
-  assert.match(page, /\{me\.role !== 'member' && <Card><SecurityLog \/><\/Card>\}/);
+  assert.match(page, /\{me\.role !== 'member' &&( mayDo\(me, 'settings'\) &&)? <Card><SecurityLog \/><\/Card>\}/);
   const profile = page.slice(page.indexOf('function Profile()'), page.indexOf('function Security()'));
   assert.doesNotMatch(profile, /<SignInWays|<TwoStepCard|<SignedIn/, 'Profile no longer mixes in the password and two-step login');
   assert.match(profile, /Your password, two-step login and the places you are signed in are under/, 'and says where they went');
@@ -156,14 +157,15 @@ test('Settings: the page is built from those sections, with sign-in under Securi
   // A member keeps what was theirs to do under Records and data: export, and closing their own login.
   assert.match(profile, /\{member && <MoreOptions>[\s\S]*?<YourData \/>\s*<\/MoreOptions>\}/);
   // Sending: reminders, deadline and date format left Account.
-  assert.match(page, /\{tab === 'sending' && <div className="stack"><Card><SendingDefaults \/><\/Card><CustomFieldSettings \/><MoreOptions><Disclosure \/><\/MoreOptions><\/div>\}/);
+  assert.match(page, /\{tab === 'sending' && <div className="stack"><Card><SendingDefaults \/><\/Card><OwnDocsDefault \/><CustomFieldSettings \/><MoreOptions><Disclosure \/>(?:<[A-Za-z]+ \/>)*<\/MoreOptions><\/div>\}/);
   const account = page.slice(page.indexOf('function Account()'), page.indexOf('function Team()'));
   assert.doesNotMatch(account, /default_reminder_days|default_expire_days|default_date_format/);
   const sending = read('src/components/settings/SendingDefaults.tsx');
   assert.match(sending, /id="set-reminders"><b>New documents start like this\.<\/b> \{reminderText\(/);
   assert.match(sending, /<h2 id="set-new-h" style=\{\{ marginBottom: 4 \}\}>New documents<\/h2>/);
   // The Plan section is the payment owner's component, placed as it is.
-  assert.match(page, /\{tab === 'billing' && <Billing \/>\}/);
+  // BILLING_MODE=deployment shows the agreement line in place of the plan (gov-G14); anywhere else it is <Billing />.
+  assert.match(page, /\{tab === 'billing' && <AgreementPlan plan=\{<Billing \/>\} \/>\}/);
 });
 
 test('Settings: "Saved" stands next to what saved, the long lists are folded, and each section has one More options at most', () => {

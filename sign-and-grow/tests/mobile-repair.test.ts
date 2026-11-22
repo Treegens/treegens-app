@@ -465,7 +465,7 @@ test('templates and public forms are checked when they are saved or made, and a 
   const told = s.db.all("SELECT subject, html FROM emails WHERE to_email='nia-r@example.com' AND subject LIKE 'Two fields on your form%'");
   assert.equal(told.length, 1, 'once a day, not once a visitor');
   assert.equal(told[0].subject, 'Two fields on your form "Intake form" cover each other');
-  assert.match(told[0].html, /Text view/);
+  assert.match(told[0].html, /Easy reading/);
   // Only the start is let in: the owner correcting a visitor's envelope keeps to the rule.
   const visitorEnv = s.db.get("SELECT e.id FROM envelopes e JOIN recipients r ON r.envelope_id=e.id WHERE r.email='walkin1-r@example.com'").id;
   const out = (await c.get(`/envelopes/${visitorEnv}`)).data.envelope;

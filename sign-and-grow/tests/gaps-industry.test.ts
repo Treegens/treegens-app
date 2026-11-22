@@ -561,7 +561,7 @@ test('the screens say it: Finish asks to be pressed once everything is filled in
   // (simplify-signing: no dialog opens by itself any more, research/ux-charter.md P9. Once nothing required is left
   // the main button is Finish, it asks to be pressed once, the line above the pages says what it does, and Finish
   // then signs without a second step unless something needs a look.)
-  assert.match(page, /const ready = stage === 'sign' && acts && required\.length > 0 && left\.length === 0 && allShown;/, 'when nothing required is left');
+  assert.match(page, /const ready = stage === 'sign' && acts && required\.length > 0 && left\.length === 0 &&(?: also\.left === 0 &&)? allShown;/, 'when nothing required is left');
   assert.match(page, /className=\{`btn go finish\$\{big \? ' sg-big' : ''\}\$\{ready \? ' sg-ready' : ''\}`\}/);
   assert.match(read('src/app/styles/simplesign.css'), /\.btn\.go\.finish\.sg-ready \{ animation: sg-ready/);
   assert.equal((await import('../src/components/sign/actions.ts')).GUIDE_FINISH, 'Everything needed is filled in. Choose Finish to sign and send it.');

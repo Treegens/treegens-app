@@ -5,6 +5,7 @@ import { publicFacts, abuseFacts } from '@/app/help/facts';
 import { CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION, LANGUAGE_NOTE } from '@/lib/policy';
 import { WHO_CAN_SEE, WHO_CARRIES, WHO_CARRIES_TEXTS, NO_BAA_TITLE, NO_BAA_TEXT, NO_BAA_FIRST, NO_BAA_AFTER } from '@/lib/policy';
 import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
+import { ssoOffered, ssoHours } from '@/lib/orgsso';
 import { CHECK_PROVES, CHECK_LIMITS, smsProvider } from '@/lib/checks';
 import { CALL_PROVES, voiceProvider, whatsappProvider } from '@/lib/channels';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODES_PER_HOUR } from '@/lib/policy';
@@ -22,6 +23,7 @@ import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '@/lib/evidence';
 import { sealSet, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/seal';
 import { DEVICE_COOKIE_WORDS } from '@/lib/witness';
 import { chatPrivacyPoint } from '@/lib/chatprovider';
+import { readPossible, READ_SENT, READ_KEPT } from '@/lib/aiassist';
 import { mailTlsPoint } from '@/lib/mailtls';
 // Every certification a buyer may ask about, and the one sentence about each (src/lib/claims.ts).
 import { claimsSummary, noneHeld, CLAIMS_PAGE } from '@/lib/claims';
@@ -124,7 +126,7 @@ export default function Security() {
         </Block>
 
         <Block id="your-documents" title="Your documents stay yours">
-          <Point title="Export everything, free, at any time.">One ZIP file with every signed PDF, every audit trail and a list of all envelopes. It is free on every plan and keeps working after you cancel.</Point>
+          <Point title="Export everything, free, at any time.">For owners and admins, under Settings, Records and data: one ZIP file with every signed PDF and its full record for disputes, every document and the full history of each, templates, contacts, groups and settings, in an open, published format. It is free on every plan and keeps working after you cancel.</Point>
           <Point title="Stopping payment never costs you your documents.">Cancelling, a failed payment or moving to the free plan deletes nothing and locks nothing. A paused account can still open, download and export everything.</Point>
           <Point title={`Closing an account can be undone for ${closeGraceDays} days.`}>Nothing is deleted during that time, and signing in again brings the account straight back. While it is closing nothing new starts in it: nothing is sent, nobody joins, and its API keys are off. {CLOSING_REMINDER_DAYS} days before the end the owner is emailed the date, how to keep the account and how to export everything first.</Point>
           <Point title="Deleted means deleted.">When an account is deleted, at once or after the {closeGraceDays} days, this goes for good. {DELETED_WITH_ACCOUNT.join(' ')}</Point>
@@ -143,7 +145,10 @@ export default function Security() {
         </Block>
 
         <Block id="privacy" title="Privacy and AI">
-          <Point title="Your documents are not sent to any AI system.">Nothing you upload or sign is passed to an AI service, and nothing is used to train one.</Point>
+          {/* AI help when sending and signing reads documents only where an account's admin allows it (src/server/aiassist.ts). */}
+          {readPossible()
+            ? <Point title="Documents go to an AI service only where an account's admin allows it.">{READ_SENT} {READ_KEPT} It goes to the same service as the help chat, listed under &ldquo;Where your data is&rdquo; below. We do not use documents to train an AI.</Point>
+            : <Point title="Your documents are not sent to any AI system.">Nothing you upload or sign is passed to an AI service, and nothing is used to train one.</Point>}
           {/* The help chat, from the same settings the server answers from (src/lib/chatprovider.ts). */}
           <Point title={chatPrivacyPoint().title}>{chatPrivacyPoint().text}</Point>
           <Point title="Search stays inside your account.">The text of PDFs you upload is indexed so you can search your own envelopes. Files that signers attach are not indexed.{encrypted ? ' On this server that text is kept encrypted with the same key as the files, and a search opens it only for the account that is searching.' : ''}</Point>
@@ -186,7 +191,9 @@ export default function Security() {
           <Point title="Not advanced or qualified signatures.">These are standard electronic signatures with an audit trail. If a law or the other party requires an advanced or a qualified signature, use a service that provides those. For high-stakes documents, ask a lawyer whether a standard electronic signature fits your case and country. <Link href="/help#outside-us">What we know about signing outside the United States, and which documents not to sign here</Link>.</Point>
           <Point title="Not translated yet.">{LANGUAGE_NOTE} That includes the text every signer agrees to before signing, and the certificate.</Point>
           <Point title="No check of identity documents.">We do not look at a passport, an identity card or a face. A signer is known by access to their email inbox, plus an access code or a one-time code {textsOn ? 'by email or by text message' : 'by email'} if the sender asks for one. What each of those proves is said under <a href="#signers">For people who sign</a>.</Point>
-          {signIn
+          {ssoOffered()
+            ? <Point title="No SAML or directory sync.">An organisation can have its people sign in through its own OpenID Connect service, once it shows with a DNS record that its email domain is its own. There is no SAML and no SCIM, so members are not added or removed from a directory: when the organisation has everyone sign in through its service, someone who leaves is signed out within {ssoHours()} hours of their login there being closed, but API keys they made keep working until an admin removes them from the team.</Point>
+            : signIn
             ? <Point title="No single sign-on for a whole organization.">Accounts are protected by a password, or by signing in with {signIn}, and by our own two-step login when it is switched on. There is no SAML, and a team cannot make its members sign in one particular way: an owner can only require two-step login.</Point>
             : <Point title="No single sign-on.">Accounts are protected by a password, and by our own two-step login when it is switched on. There is no SAML or other sign-in through an organization&apos;s own system.</Point>}
           <Point title="No text-message codes or security keys for signing in.">The second step of our two-step login is an authenticator app only. Codes by text message to sign in, passkeys and hardware keys are not built.</Point>

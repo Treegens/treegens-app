@@ -1021,7 +1021,9 @@ test('someone with no address who asks for more time is never told "by email", a
   // (simplify-signing: Other actions has no descriptions, so the hint is gone and two uses are left; Finish later
   // answers in a note on the page, and "Stop reminder emails" moved from Other actions into that note.)
   assert.equal(page.match(/moreTimeWords\(sender\.name, !!me\.link_by_sender\)/g)?.length, 2);
-  assert.match(page, /setLater\(stage === 'consent' \? laterAtConsent\(!!me\.link_by_sender\) : laterWords\(!!me\.link_by_sender\)\)/);
+  // Someone who changes the document or chooses who comes next gets the same words without "saved" (recipienttypes.ts).
+  assert.match(page, /setLater\(stage === 'consent' \? laterAtConsent\(!!me\.link_by_sender\) : (isStepRole\(me\.role\) \? stepLaterWords\(!!me\.link_by_sender\) : )?laterWords\(!!me\.link_by_sender\)\)/);
+  assert.doesNotMatch((await import('../src/lib/recipienttypes.ts')).stepLaterWords(true), /email/i);
   assert.match(page, /\{!muted && me\.role !== 'inperson' && !me\.link_by_sender && <button type="button" className="sg-link" onClick=\{\(\) => mute\(\)\}>Stop reminder emails<\/button>\}/);
 
   // The sender's email: the deadline by their own clock too, and a plain word that there is no address to answer.

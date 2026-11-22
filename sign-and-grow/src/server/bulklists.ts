@@ -1,3 +1,5 @@
+// What the person's role allows (perm.ts): 'see_all' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { all, get, run, tx } from './db.ts';
 import { bad, id, now, str } from './util.ts';
 import type { Ctx } from './router.ts';
@@ -15,7 +17,7 @@ export const listDays = (a: any): number => Number(a?.list_days) || LIST_DAYS_DE
 const deletesAt = (l: any, days: number) => new Date(Date.parse(l.used_at || l.created_at) + days * 86400_000).toISOString();
 const view = (l: any, c: Pick<Ctx, 'admin' | 'user'>, days: number) => ({
   id: l.id, name: l.name, rows: l.rows, created_by: l.created_by_name, created_at: l.created_at, used_at: l.used_at, deletes_at: deletesAt(l, days),
-  may_delete: !!c.admin || l.created_by === c.user.id,
+  may_delete: !!can(c, 'see_all') || l.created_by === c.user.id,
 });
 
 export function listLists(c: Pick<Ctx, 'admin' | 'user' | 'account'>) {
@@ -63,7 +65,7 @@ export function openList(c: Pick<Ctx, 'admin' | 'user' | 'account'>, listId: str
 export function deleteList(c: Pick<Ctx, 'admin' | 'user' | 'account'>, listId: string) {
   const l = get('SELECT created_by FROM bulk_lists WHERE id=? AND account_id=?', listId, c.account.id);
   if (!l) throw bad('That list is not there any more. Nothing was deleted.', 404);
-  if (!c.admin && l.created_by !== c.user.id) throw bad('Only the person who saved this list, or an admin, can delete it. Nothing was deleted.', 403);
+  if (!can(c, 'see_all') && l.created_by !== c.user.id) throw bad('Only the person who saved this list, or an admin, can delete it. Nothing was deleted.', 403);
   run('DELETE FROM bulk_lists WHERE id=?', listId);
 }
 

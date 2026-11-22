@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { api, Modal } from '../ui';
 import { planPages, moveFields, fieldWords, unchanged, type PageOp } from '@/lib/pages';
 import { plural, who, type Ed } from './shared';
+import { screenHeaders } from '../screenToken';
 
 let lib: Promise<any> | null = null;
 function pdfjs(): Promise<any> {
@@ -29,7 +30,7 @@ function usePictures(fileId: string, count: number) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     let live = true;
-    pdfjs().then((m) => m.getDocument({ url: `/api/files/${fileId}/content`, withCredentials: true }).promise).then((d) => {
+    pdfjs().then((m) => m.getDocument({ url: `/api/files/${fileId}/content`, withCredentials: true, httpHeaders: screenHeaders() }).promise).then((d) => {
       if (!live) return d.destroy();
       doc.current = d;
       setTick((t) => t + 1);

@@ -1,4 +1,6 @@
 // The routes of keeping closed envelopes for a set time, and of legal holds. The rules are in src/server/records.ts.
+// What the person's role allows (perm.ts): 'settings' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { route } from './router.ts';
 import { all, get } from './db.ts';
 import { bad, now, str, HttpError, rateLimit } from './util.ts';
@@ -16,13 +18,13 @@ import { retentionStays, LEVEL_NAME, removesAt, PURGE_LEVELS, RETENTION_NOTICE_D
 // the queue and the record are for the admins.
 route('GET', '/account/retention', (c) => {
   const policy = policyOf(c.account.id);
-  const templates = all(`SELECT id, subject, retention_days days FROM envelopes WHERE account_id=? AND kind='template' ${c.admin ? '' : 'AND retention_days IS NOT NULL '}ORDER BY subject`, c.account.id);
+  const templates = all(`SELECT id, subject, retention_days days FROM envelopes WHERE account_id=? AND kind='template' ${can(c, 'settings') ? '' : 'AND retention_days IS NOT NULL '}ORDER BY subject`, c.account.id);
   return {
     policy, templates, notice_days: RETENTION_NOTICE_DAYS,
     levels: PURGE_LEVELS.map((l) => ({ id: l, name: LEVEL_NAME[l], removes: removesAt(l) })),
     stays: retentionStays(dataPlace().backups),
-    may_change: c.admin,
-    ...(c.admin ? {
+    may_change: can(c, 'settings'),
+    ...(can(c, 'settings') ? {
       holds: activeHolds([c.account.id]).map((h) => ({ ...holdView(h, true), subject: h.envelope_id ? get('SELECT subject FROM envelopes WHERE id=?', h.envelope_id)?.subject ?? null : null })),
       // What the timer has announced or someone asked for, soonest first.
       queue: all(`SELECT q.envelope_id id, e.subject, q.goes_at, COALESCE(q.asked_level, q.level) level, q.asked_by, q.asked_at FROM retention_queue q JOIN envelopes e ON e.id=q.envelope_id

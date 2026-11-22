@@ -1,3 +1,5 @@
+// What the person's role allows (perm.ts), where this file once asked for an admin.
+import { can } from './perm.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { route, type Ctx } from './router.ts';
@@ -11,12 +13,14 @@ import { audit, helpAsked, type Actor } from './envelopes.ts';
 import { stopBillingFor, pendingRefundLines } from './routes-billing.ts';
 import { sameEmail } from './credits.ts';
 import { unpaidDailyRecipients, PAID_TRUST_DAYS } from '../lib/policy.ts';
+import { isDeploymentBilling } from '../lib/billingmode.ts';
 import { advance, emailRefusal, hasNotPaid, dailyCap, PAUSED_MEANS } from './envelopes.ts';
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, MAIL_COPY_DAYS } from '../lib/policy.ts';
 import { zipStream, safeName, ZIP_MAX_BYTES, ZIP_MAX_FILES, type ZipEntry } from './zip.ts';
 import { memberForCode, memberReported, removedMemberCheck } from './groups.ts';
 import { forgetChosen } from './tplroles.ts';
 import { dropPayLinksOf } from './paydrop.ts';
+import { endSharesOf } from './shares.ts';
 import { keepFingerprint, forgetOldFingerprints } from './evidence.ts';
 import { commentsText } from './comments.ts';
 import { forgetCommentHooks } from './commentrules.ts';
@@ -149,13 +153,13 @@ const csv = (cells: any[]) => cells.map((v) => `"${String(v ?? '').replace(/"/g,
 route('GET', '/export', (c) => {
   const only = (c.q.get('ids') || '').split(',').filter(Boolean);
   const bulk = c.q.get('bulk');
-  const scope = c.admin ? '' : ' AND sender_id=?';
+  const scope = can(c, 'see_all') ? '' : ' AND sender_id=?';
   // A completed envelope its sender deleted is not in the sender's export either: only its recipients still have it.
-  const rows = all(`SELECT * FROM envelopes WHERE account_id=? AND kind='envelope' AND status!='draft' AND hidden_at IS NULL${scope} ORDER BY sent_at`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id]))
+  const rows = all(`SELECT * FROM envelopes WHERE account_id=? AND kind='envelope' AND status!='draft' AND hidden_at IS NULL${scope} ORDER BY sent_at`, ...(can(c, 'see_all') ? [c.account.id] : [c.account.id, c.user.id]))
     .filter((e) => (!only.length || only.includes(e.id)) && (!bulk || e.bulk_id === bulk));
   if (!rows.length) throw bad('There is nothing to export yet.');
   // "everything": no envelopes or batch picked, so all the caller can export (an admin: the account's; a member: their own).
-  record('export.made', { c, details: { everything: !only.length && !bulk, whose: c.admin ? 'account' : 'own', envelopes: rows.length } });
+  record('export.made', { c, details: { everything: !only.length && !bulk, whose: can(c, 'see_all') ? 'account' : 'own', envelopes: rows.length } });
 
   function* entries(): Generator<ZipEntry> {
     const head = ['envelope_id', 'subject', 'status', 'sent_at', 'completed_at', 'recipients', 'signed_pdf_sha256', 'file'];
@@ -220,10 +224,10 @@ route('GET', '/export', (c) => {
     const lists = listExport(c.account.id);
     for (const l of lists) yield l;
     // The account's security record, for its admins only (seclog.ts).
-    if (c.admin) yield* securityExport(c.account.id);
+    if (can(c, 'settings')) yield* securityExport(c.account.id);
     // The deletion record (records.ts), for its admins: once the account is closed its lines lose their names and
     // words, so this copy is the one that keeps them. Only when there is a line.
-    const deletions = c.admin && !!get('SELECT 1 x FROM retention_log WHERE account_id=? LIMIT 1', c.account.id);
+    const deletions = can(c, 'settings') && !!get('SELECT 1 x FROM retention_log WHERE account_id=? LIMIT 1', c.account.id);
     if (deletions) yield { name: 'deletion-record.csv', data: Buffer.from(retentionCsv(c.account.id)) };
     yield { name: 'README.txt', data: Buffer.from([
       `GrowSigning export for ${c.account.name}, made ${now()}.`, '',
@@ -233,7 +237,7 @@ route('GET', '/export', (c) => {
       ...(originals ? [ORIGINALS_EXPORT_README] : []),
       ...(lists.length ? ['lists/         the lists your team saved for Send to many, each as it was saved, with who saved it and when in lists/index.csv. They hold personal data.'] : []),
       ...(stamps.length ? ['stamps/        the stamps your team keeps under Settings, Stamps and seals, as pictures, with their names and settings in stamps/index.csv'] : []),
-      ...(c.admin ? [`security/      the security record of the account as it stands now (Settings, Security), oldest first. ${securityWords()}`] : []),
+      ...(can(c, 'settings') ? [`security/      the security record of the account as it stands now (Settings, Security), oldest first. ${securityWords()}`] : []),
       ...(deletions ? ['deletion-record.csv  every change to the deletion schedule, every keep, hold and deletion of files, and every attempt the software refused, with the fingerprint of each deleted signed PDF (Settings, Records and data). Once the account is closed, the copy we keep loses its names and words.'] : []),
       `envelopes.csv  one row per envelope${custom.head.length ? ', with a column for each detail your account keeps on envelopes' : ''}`,
       '', `Check any signed PDF at ${baseUrl()}/verify. It must be the exact file from this export.`,
@@ -254,7 +258,11 @@ export function removeUnusedBlobs(shas: string[]) {
   // Stamp pictures are kept in the database, not as files: the ones nothing points at any more go too (stamps.ts).
   pruneStampImages();
   for (const sha of new Set(shas.filter(Boolean))) {
-    if (get('SELECT 1 x FROM files WHERE sha256=? OR original_sha256=?', sha, sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)) continue;
+    if (get('SELECT 1 x FROM files WHERE sha256=? OR original_sha256=?', sha, sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha) || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%${sha}%`)
+      // Someone's own completed copy on an envelope that stays (visibility.ts).
+      || get('SELECT 1 x FROM final_copies WHERE sha256=?', sha)
+      // A document brought in from an export or from DocuSign (importer.ts) keeps its file.
+      || get('SELECT 1 x FROM imported_files WHERE sha256=?', sha)) continue;
     fs.rmSync(path.join(dataDir(), 'blobs', sha), { force: true });
   }
 }
@@ -284,6 +292,8 @@ export function forgetEnvelopes(ids: string[], account = false): string[] {
     // A completed one leaves the fingerprint of its signed PDF, its id and its day behind, nothing else (evidence.ts).
     keepFingerprint(eid);
     shas.push(get('SELECT final_sha256 s FROM envelopes WHERE id=?', eid)?.s);
+    // And the completed copies made for people shown only some of the files (visibility.ts).
+    shas.push(...all('SELECT sha256 s FROM final_copies WHERE envelope_id=?', eid).map((x) => x.s));
     // The copies of what people signed before a correction go with the envelope too (earlier_signatures.copy_sha256).
     shas.push(...all('SELECT copy_sha256 s FROM earlier_signatures WHERE envelope_id=? AND copy_sha256 IS NOT NULL', eid).map((x) => x.s));
     // The emails about this document are still in people's inboxes, each with its security code. Only a fingerprint
@@ -325,6 +335,8 @@ export function handOver(accountId: string, from: { id: string; name: string; em
   const to = get('SELECT name, email FROM users WHERE id=?', toId);
   // Their payment links lead to their own payment page, so those go with them and are not handed on (paydrop.ts).
   dropPayLinksOf(accountId, from, actor, why);
+  // Every share they gave or received here ends for good, and drafts made for them go back to whoever made them (shares.ts).
+  endSharesOf(accountId, from.id);
   const moved = all('SELECT id FROM envelopes WHERE account_id=? AND sender_id=?', accountId, from.id);
   for (const e of moved) audit(e.id, actor, 'Handed over', `From ${from.name} <${from.email}> to ${to.name} <${to.email}>: ${why}`);
   run('UPDATE envelopes SET sender_id=? WHERE account_id=? AND sender_id=?', toId, accountId, from.id);
@@ -680,7 +692,10 @@ route('POST', '/operator/accounts/:id', async (c) => {
     // to this account now: the first-week limit in its first week, and nothing at all when a payment of its own
     // is old enough to have lifted the checks anyway.
     const { cap, firstWeek } = dailyCap(a);
-    const again = hasNotPaid({ ...a, trusted_at: null })
+    const again = isDeploymentBilling()
+      // A server under a government agreement has no daily limit and takes no payments (dailyCap in envelopes.ts).
+      ? 'What it sends is checked for fake payment notices again, until a person who runs this server clears it again. There is no daily limit on this server.'
+      : hasNotPaid({ ...a, trusted_at: null })
       ? `Until the account has a payment that is at least ${PAID_TRUST_DAYS} days old and was not refunded or disputed, it can send to at most ${cap} people a day${firstWeek ? ` (${unpaidDailyRecipients()} a day after its first week)` : ''} and is checked for fake payment notices again.`
       : `For you nothing changes: the account has a payment that is more than ${PAID_TRUST_DAYS} days old and was not refunded or disputed, so the daily limit and the check for fake payment notices do not apply to it.`;
     if (b.trusted !== !!a.trusted_at)

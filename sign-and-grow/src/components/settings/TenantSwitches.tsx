@@ -47,7 +47,7 @@ export function TenantSwitches() {
     <>
       {row('impact_display', 'Trees on screens and emails', 'Tells the people who sign how much paper their signature saved, and any trees it paid for: next to Finish, after they finish and in emails about the document. Saves by itself.')}
       <TreesOnRecord />
-      {d.ai_available && row('ai_helper', 'AI answers in the help chat', `Questions your team types into Help while signed in, and that people type into Help while signing your documents, go to ${d.ai_provider || 'an AI service'}, which writes the answer. Off: Help answers them from the built-in help pages and sends those questions nowhere. Saves by itself.`)}
+      {d.ai_available && row('ai_helper', 'AI answers in the help chat', `Questions your team types into Help while signed in, and that people type into Help while signing your documents, go to ${d.ai_provider || 'an AI service'}, which writes the answer. Off: Help answers them from the built-in help pages and sends those questions nowhere.${d.ai_assist ? ' It also turns on Draft a message when you send.' : ''} Saves by itself.`)}
     </>
   );
 }

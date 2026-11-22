@@ -650,7 +650,7 @@ test('a request that cannot be carried out in full is refused with the reason, n
   }
   const role = await jo.post('/envelopes', { ...base, recipients: [{ id: 'r', role: 'signatory', name: 'A', email: 'a@example.com' }], fields: [good] });
   assert.equal(role.status, 400);
-  assert.match(role.data.error, /^Recipient 1 \(A\) has the role "signatory", which does not exist\. Use one of: signer, approver, cc, viewer, inperson, witness\./); // witness: tests/witness.test.ts
+  assert.match(role.data.error, /^Recipient 1 \(A\) has the role "signatory", which does not exist\. Use one of: signer, approver, cc, viewer, inperson, witness, editor, agent\./); // witness: tests/witness.test.ts; editor, agent: tests/ds-recipient-types.test.ts
   assert.equal(drafts(), 0, 'a refused request leaves no half-made draft behind');
 
   // The same when saving a draft that exists: refused, and the draft keeps what it had.

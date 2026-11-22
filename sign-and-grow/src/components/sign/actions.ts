@@ -37,7 +37,8 @@ export function otherActions(me: Signer, o: { stage: string; deadline: boolean; 
     reassign: (me.role === 'signer' || me.role === 'approver') && !me.group,
     ask: true,
     // Asking for paper stops this person's part, so only someone who has a part to stop gets it (askForPaper).
-    paper: !!o.paper && me.role !== 'viewer' && me.role !== 'cc',
+    // Nor someone who changes the document or chooses who comes next: they sign nothing (src/lib/recipienttypes.ts).
+    paper: !!o.paper && me.role !== 'viewer' && me.role !== 'cc' && me.role !== 'editor' && me.role !== 'agent',
     decline: me.role !== 'viewer' && me.role !== 'cc',
   };
   const keys: ActionKey[] = ACTION_ORDER.filter((k) => on[k]);

@@ -22,6 +22,12 @@ export const SECURITY_KIND_LIST = [
   'retention.changed', 'legal_hold.placed', 'legal_hold.lifted', 'purge.asked', 'purge.cancelled', 'envelope.retention_purged',
   // What an organisation above the account did to it, and emergency access to a document (src/server/orgs.ts).
   'org.changed', 'org.break_glass',
+  // Single sign-on through the organisation's own service, and its email domains (src/server/orgsso.ts).
+  'sso.domain_added', 'sso.domain_claimed', 'sso.domain_lost', 'sso.domain_removed', 'sso.changed', 'sso.removed', 'sso.tested', 'sso.way_back',
+  // Roles an admin made and groups of members (src/server/routes-perm.ts).
+  'role.created', 'role.changed', 'role.deleted', 'member_group.created', 'member_group.changed', 'member_group.deleted',
+  // Working for a colleague (src/server/shares.ts).
+  'share.given', 'share.ended', 'envelope.moved',
 ] as const;
 export type SecurityKind = (typeof SECURITY_KIND_LIST)[number];
 export const isSecurityKind = (k: any): k is SecurityKind => typeof k === 'string' && (SECURITY_KIND_LIST as readonly string[]).includes(k);
@@ -35,13 +41,14 @@ export const SECURITY_KINDS = Object.fromEntries(SECURITY_KIND_LIST.map((k) => [
 export const SECURITY_GROUPS: [string, SecurityKind[]][] = [
   ['signing_in', ['signin.succeeded', 'signin.failed', 'session.ended', 'signout.everywhere']],
   ['logins', ['password.changed', 'password.reset', 'email.changed', 'two_step.on', 'two_step.off', 'two_step.reset', 'two_step.codes_renewed', 'two_step.devices_forgotten', 'signin_method.connected', 'signin_method.removed', 'account.closing', 'account.close_undone']],
-  ['team', ['member.invited', 'member.invite_withdrawn', 'member.joined', 'member.removed', 'member.role_changed', 'member.left', 'owner.handed_over']],
+  ['team', ['member.invited', 'member.invite_withdrawn', 'member.joined', 'member.removed', 'member.role_changed', 'member.left', 'owner.handed_over', 'role.created', 'role.changed', 'role.deleted', 'member_group.created', 'member_group.changed', 'member_group.deleted']],
   ['keys', ['api_key.created', 'api_key.revoked', 'api_key.new_address', 'webhook.created', 'webhook.removed']],
-  ['documents', ['export.made', 'envelope.deleted', 'envelope.purged', 'envelope.restored', 'template.rules_changed']],
+  ['documents', ['export.made', 'envelope.deleted', 'envelope.purged', 'envelope.restored', 'template.rules_changed', 'share.given', 'share.ended', 'envelope.moved']],
   ['settings', ['settings.changed']],
   ['keeping', ['retention.changed', 'legal_hold.placed', 'legal_hold.lifted', 'purge.asked', 'purge.cancelled', 'envelope.retention_purged']],
   ['operator', ['operator.paused', 'operator.resumed', 'operator.trusted', 'operator.untrusted']],
   ['organisation', ['org.changed', 'org.break_glass']],
+  ['single_sign_on', ['sso.domain_added', 'sso.domain_claimed', 'sso.domain_lost', 'sso.domain_removed', 'sso.changed', 'sso.removed', 'sso.tested', 'sso.way_back']],
 ];
 export const securityGroupWords = (group: string, locale: unknown = SOURCE_LOCALE): string => t(locale, `security.group.${group}`) || group;
 
@@ -108,6 +115,8 @@ export function securityDetail(kind: string, details: Record<string, any> | null
     for (const k of keys) done.add(k);
   };
   const role = (r: unknown) => w(r === 'owner' ? 'role_owner' : r === 'admin' ? 'role_admin' : 'role_member');
+  // A role an admin made is named by the name it had then (role_name, from_name, to_name), the built-in ones as always.
+  const named = (r: unknown, name: unknown) => (typeof name === 'string' && name ? name : role(r));
 
   if (kind === 'signin.succeeded' || kind === 'signin.failed') {
     const m = String(d.method || 'password');
@@ -134,11 +143,11 @@ export function securityDetail(kind: string, details: Record<string, any> | null
   } else if (kind === 'signin_method.connected' || kind === 'signin_method.removed') {
     say(d.provider ? sentence(capital(String(d.provider))) : '', 'provider', 'how');
   } else if (kind === 'member.invited' || kind === 'member.invite_withdrawn') {
-    say(w('invited_as', { role: role(d.role) }), 'role');
+    say(w('invited_as', { role: named(d.role, d.role_name) }), 'role', 'role_name');
   } else if (kind === 'member.joined') {
-    say(w('joined_as', { role: role(d.role) }), 'role', 'invite');
+    say(w('joined_as', { role: named(d.role, d.role_name) }), 'role', 'invite', 'role_name');
   } else if (kind === 'member.role_changed') {
-    say(w('role_changed', { from: role(d.from), to: role(d.to) }), 'from', 'to');
+    say(w('role_changed', { from: named(d.from, d.from_name), to: named(d.to, d.to_name) }), 'from', 'to', 'from_name', 'to_name', 'group');
   } else if (kind === 'member.removed' || kind === 'member.left') {
     say(w('was_role', { role: role(d.role) }), 'role', 'handed_to');
     say(Number(d.keys_stopped) ? w('keys_stopped_n', { count: Number(d.keys_stopped) }) : '', 'keys_stopped');

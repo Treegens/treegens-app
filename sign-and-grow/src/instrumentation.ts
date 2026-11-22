@@ -4,6 +4,12 @@ export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   const g = globalThis as any;
   if (g.__tscron) return;
+  // BILLING_MODE=deployment: the payment settings are taken away before anything reads them (src/server/billingmode.ts).
+  const { applyBillingMode, paymentSettingsIgnored } = await import('./server/billingmode');
+  applyBillingMode();
+  const { billingModeWarnings } = await import('./lib/billingmode');
+  for (const line of billingModeWarnings()) console.error(line);
+  if (paymentSettingsIgnored().length) console.error(`BILLING_MODE=deployment: ${paymentSettingsIgnored().join(', ')} ignored. Nothing is counted or charged on this server, and the payment provider is never called.`);
   // Before anything else reads a setting or opens a connection: OUTSIDE_CALLS (src/lib/outside.ts). In mode none the
   // settings of every service that needs an outside host are taken away here, so those features are simply absent;
   // in listed and none the guard in src/server/outside.ts refuses other hosts. The list is logged either way.
@@ -55,6 +61,9 @@ export async function register() {
   // key was set, and text under an old key moves to the current one (src/server/searchtext.ts).
   const { sealKeptTexts } = await import('./server/searchtext');
   sealKeptTexts();
+  // The same for the kept summaries for signers (src/server/aiassist.ts); one no key can open is deleted and rewritten.
+  const { sealKeptSummaries } = await import('./server/aiassist');
+  sealKeptSummaries();
   const { tick } = await import('./server/cron');
   g.__tscron = setInterval(() => tick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
   g.__tscron.unref?.();

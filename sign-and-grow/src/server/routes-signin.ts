@@ -10,6 +10,7 @@ import { PROVIDER_IDS, PROVIDER_NAMES, SIGNIN_MINUTES, callbackPath, isProviderI
 import { forgetEarlierSetup } from './reclaim.ts';
 import { secondStepWaits } from './twostep.ts';
 import { record } from './seclog.ts';
+import { enforcedFor } from './orgsso.ts';
 
 // Signing in and signing up with Google or Microsoft, next to email and password. The talking to the provider and
 // the checking of what it answers are in oidc.ts. This file decides who the person is, and that rule is short:
@@ -191,6 +192,10 @@ route('GET', '/auth/:provider/callback', async (c) => {
     return back(e.code);
   }
   const known = get('SELECT * FROM identities WHERE provider=? AND subject=?', p.id, who.subject);
+  // An address whose organisation signs everyone in through its own service is not signed in, made or connected
+  // with Google or Microsoft (orgsso.ts): neither the address in the token nor the login it would open.
+  const ownerOfLogin = known ? get('SELECT email FROM users WHERE id=?', known.user_id)?.email : row.user_id ? c.user?.email : null;
+  if (enforcedFor(who.email) || (ownerOfLogin && enforcedFor(ownerOfLogin))) return back('org_sso');
 
   // ---- Connecting a provider to the login that is signed in (started under Settings) ----
   if (row.user_id) {

@@ -1,6 +1,8 @@
 // Click-to-agree: the team's agreements, the page visitors accept on (also inside a frame on the team's own website),
 // the API a website's server uses, the list of acceptances with its CSV, and the certificate. The rules are in
 // clickwrap.ts and the words in src/lib/clickwrap.ts.
+// What the person's role allows (perm.ts): 'clickwrap' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { route, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, readBlob } from './db.ts';
 import { bad, baseUrl, id, isEmail, now, rateLimit, rateWait, sha256, str, token } from './util.ts';
@@ -152,7 +154,7 @@ route('DELETE', '/clickwraps/:id', (c) => {
 
 // The internet address, browser and page of a visitor are for the owner and the admins, as in the list of
 // acceptances: a member, or a key with the "send" scope, is told whether and how someone accepted, without them.
-const seesVisitors = (c: Ctx) => c.admin && (c.auth?.via === 'session' || c.auth?.scope === 'admin');
+const seesVisitors = (c: Ctx) => can(c, 'clickwrap') && (c.auth?.via === 'session' || c.auth?.scope === 'admin');
 const forCaller = (c: Ctx, a: any) => (!a || seesVisitors(c) ? a : { ...a, ip: undefined, user_agent: undefined, page_url: undefined, given_ip: undefined, given_user_agent: undefined });
 
 // Records an acceptance the website collected itself. It is marked as recorded by the website through the API, with

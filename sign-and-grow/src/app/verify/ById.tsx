@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { api, fmtDate } from '@/components/ui';
 import { screenLocale } from '@/lib/dates';
+import { OWN_COPY_VERIFY } from '@/lib/owndocs';
 
 // For the holder of a printed or scanned copy, who has the envelope ID at the foot of every page and nothing else.
 // The server says what an ID may reveal (lookupEnvelope in src/server/evidence.ts): never a name, an address or the
@@ -117,6 +118,8 @@ export function ById() {
               <p className="muted small" style={{ marginTop: 8 }}>The file is fingerprinted in your browser where it can be, so it is not sent anywhere.</p>
               {same && (same.hash === res.sha256
                 ? <div className="notice" role="status"><b>{same.name} is that signed file,</b> byte for byte. The printed copy can still differ from it: compare the pages with your paper.</div>
+                : (res.own_copies || []).includes(same.hash)
+                ? <div className="notice" role="status" data-feature="ds-visibility"><b>{same.name} is a signed copy of this document,</b> byte for byte. {OWN_COPY_VERIFY} The printed copy can still differ from it: compare the pages with your paper.</div>
                 : <div className="notice err" role="status"><b>{same.name} is not that signed file.</b> It may have been changed, saved again by a viewer, or be another document. Its fingerprint is <span className="mono">{same.hash}</span>.</div>)}
             </>
           )}

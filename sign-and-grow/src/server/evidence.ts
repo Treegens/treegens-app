@@ -18,6 +18,8 @@ import { originalsEvidence } from './converted.ts';
 import { ORIGINALS_README } from '../lib/convert.ts';
 import { dropSignatureFields } from './sealpdf.ts';
 import { evidenceFiles as headStampFiles } from './auditstamp.ts';
+import { counterEvidence } from './counter.ts';
+import { ownCopies } from './visibility.ts';
 import { dayText, stampText } from '../lib/dates.ts';
 
 const SYSTEM: Actor = { name: 'System' };
@@ -129,7 +131,8 @@ export async function lookupEnvelope(envelopeId: string): Promise<any> {
     const d = get('SELECT * FROM forgotten_disputes WHERE envelope_id=?', envelopeId);
     return d ? { found: true, id: d.envelope_id, status: 'deleted', was: d.status, completed_at: null, deleted_at: String(d.at).slice(0, 10), sha256: d.file_sha256 || null, disputed_at: d.disputed_on, dispute_open: true } : { found: false };
   }
-  const people = all("SELECT role, status FROM recipients WHERE envelope_id=? AND role IN ('signer','inperson','approver')", e.id);
+  // Someone who was not asked (their "Only when..." was not met, routing.ts) was never one of the people to sign.
+  const people = all("SELECT role, status FROM recipients WHERE envelope_id=? AND role IN ('signer','inperson','approver') AND status != 'skipped'", e.id);
   const signers = people.filter((r) => r.role !== 'approver');
   const closed = e.status === 'sent' || e.status === 'completed' ? null : get(`SELECT at FROM audit WHERE envelope_id=? AND action IN (${CLOSING.map(() => '?').join(',')}) ORDER BY seq DESC LIMIT 1`, e.id, ...CLOSING)?.at || null;
   return {
@@ -137,6 +140,8 @@ export async function lookupEnvelope(envelopeId: string): Promise<any> {
     pages: { documents: get('SELECT COALESCE(SUM(f.pages), 0) n FROM documents d JOIN files f ON f.id=d.file_id WHERE d.envelope_id=?', e.id).n, signed_file: e.final_sha256 ? await finalPages(e) : null },
     signers: signers.length, signed: signers.filter((r) => r.status === 'completed').length, approvers: people.length - signers.length,
     sha256: e.final_sha256 || null,
+    // A person shown only some of the files has a completed copy of their own (visibility.ts): their fingerprints too.
+    ...(e.final_sha256 && ownCopies(e.id).length ? { own_copies: ownCopies(e.id).map((x) => x.sha256) } : {}),
     disputed_at: e.disputed_at || null, ...disputeFacts(e.id),
   };
 }
@@ -340,7 +345,7 @@ const ALERT = 'GrowSigning (automatic alert)';
 // over the documents' keys. The fingerprint of each stored email as it was is in emails/index.csv.
 const csvRow = (cells: any[]) => cells.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',');
 const SIGN_LINK = /\/sign\/[A-Za-z0-9_-]{8,}/g;
-const HASH_HOW = 'Each line\'s hash is the SHA-256 of JSON.stringify([prev_hash, envelope_id, at, actor, action, detail, ip or ""]). The first line\'s prev_hash is empty. user_agent is stored with a line but is not part of its hash.';
+export const HASH_HOW = 'Each line\'s hash is the SHA-256 of JSON.stringify([prev_hash, envelope_id, at, actor, action, detail, ip or ""]). The first line\'s prev_hash is empty. user_agent is stored with a line but is not part of its hash.';
 
 export async function evidencePack(e: any, madeBy: string): Promise<{ entries: ZipEntry[]; name: string }> {
   const out: ZipEntry[] = [];
@@ -351,6 +356,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
 
   // The signed PDF and its certificate, or, before or without completion, the document as it stands, marked.
   let pdfName = '', certName = '';
+  const ownNames: string[] = [];
   if (e.final_sha256) {
     try {
       const pdf = readBlob(e.final_sha256);
@@ -358,6 +364,12 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
       const cert = await certificatePages(e, pdf);
       if (cert) add(certName = 'certificate.pdf', cert);
       else notes.push('The certificate could not be taken out of the signed PDF on its own. It is the last pages of signed.pdf.');
+      // The completed copy each person shown only some of the files was given (visibility.ts), as stored.
+      for (const o of ownCopies(e.id)) {
+        const who = e.recipients.find((x: any) => x.id === o.recipient_id);
+        add(`own-copies/${safeName(who?.name || o.recipient_id)} ${o.sha256.slice(0, 8)}.pdf`, readBlob(o.sha256));
+        ownNames.push(`${who?.name || 'Someone'}: SHA-256 ${o.sha256}`);
+      }
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
       notes.push('The signed PDF could not be read from storage, so it is not in this pack: its stored copy failed its check. The people who run this server have been told. Everything else is here.');
@@ -431,11 +443,15 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   // The time stamp over the chain head at completion, with the command that checks it (auditstamp.ts).
   const headStamp = headStampFiles(e.id);
   for (const f of headStamp.files) add(f.name, f.data);
+  // What an official stated at a service counter, and the ID picture the agency kept, if any (counter.ts).
+  const counter = counterEvidence(e);
+  for (const f of counter.files) add(f.name, f.data);
 
   add('README.txt', [
     `GrowSigning evidence pack for envelope ${e.id}, "${e.subject}".`, `Made on ${now()} by ${madeBy}. It shows the envelope as it stood at that moment.`, '',
     ...(pdfName === 'signed.pdf' ? [`signed.pdf            the signed document exactly as stored when everyone had finished, with its certificate of completion. SHA-256 ${e.final_sha256}. Anyone can check a copy at ${baseUrl()}/verify, or look the envelope up there by its ID.`] : pdfName ? [`${pdfName.padEnd(22)}the document as it stands, ${e.status === 'sent' ? 'while it is still out for signature' : 'marked as not completed on every page'}. It is not a signed document and has no certificate.`] : []),
     ...(certName ? [`certificate.pdf       the certificate of completion on its own, to read: an extract of the last pages of signed.pdf. To check a file, use signed.pdf. It was drawn when everyone had finished, so it does not show what happened after that.${e.seal_level ? ' The digital seal is in signed.pdf, not in this extract: a PDF reader shows no seal for certificate.pdf, and that is as it should be.' : ''}`] : []),
+    ...(ownNames.length ? [`own-copies/           the completed copy given to each person who was shown only some of the files ("Each person sees only their files"): their files and the certificate, where each other file is listed by its SHA-256 only. Each one is checked at ${baseUrl()}/verify like signed.pdf. ${ownNames.join('; ')}.`] : []),
     'audit-trail.txt       every line of the audit trail, to read: time in UTC, who, internet address, what, and each line\'s hash.',
     `audit-trail.json      the same lines with prev_hash and hash, the browser string stored with each line, the people on the envelope, and the chain as checked now. ${HASH_HOW}`,
     'emails/               a copy of every email we stored about this envelope, as HTML. Signing links and security codes are taken out of these copies, because they would still open the document; nothing else is changed. emails/index.csv says what became of each: whether the mail server took it, every try, and what the mail provider told us later (delivered, came back, marked as spam), with the SHA-256 of the email as stored before anything was taken out.',
@@ -443,6 +459,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
     ...(stamps.length ? [`stamps/               every stamp on the pages as a PNG picture, named by the start of its SHA-256, with stamps/index.csv saying who put it on, where and when. The audit trail names each one by its full SHA-256. ${STAMP_IS}`] : []),
     ...(originals.length ? [ORIGINALS_README] : []),
     ...headStamp.readme,
+    ...counter.readme,
     ...(ownText ? ['consent-own-text.txt  the sender\'s own consent text: which version each person was shown when they agreed, and the exact words of each of those versions.'] : []),
     ...(said ? ['comments.txt          the questions and comments written on the envelope, every thread in full with who wrote what and when; comments.json is the same as data. They were not printed on the document and are not part of what was signed.'] : []),
     ...(disputes.length ? ['disputes.txt          each dispute: when, under which name, how the person reached us, what they wrote, and whether a person at GrowSigning has closed it.'] : []), '',

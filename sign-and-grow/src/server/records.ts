@@ -18,6 +18,8 @@
 //
 // Nothing here calls into another module while it is being loaded, so the modules that import it may be imported by
 // it in turn.
+// What the person's role allows (perm.ts): 'settings' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { all, get, run, tx, dataDir } from './db.ts';
@@ -31,6 +33,7 @@ import { forgetCommentHooks } from './commentrules.ts';
 import { disputeOpen } from './evidence.ts';
 import { record } from './seclog.ts';
 import { purgeCustom } from './customfields.ts';
+import { purgeKeyTerms } from './airepo.ts';
 import type { Ctx } from './router.ts';
 import { dataPlace } from '../lib/dataplace.ts';
 import { dayText } from '../lib/dates.ts';
@@ -149,7 +152,7 @@ const assertHoldKey = (c: Ctx) => {
 };
 
 export function placeHold(c: Ctx, o: { envelopeId?: string | null; folder?: string | null; reason: any; matter?: any }) {
-  if (!c.admin) throw bad('Only an admin of the account can put something on hold. Ask an admin of your team.', 403);
+  if (!can(c, 'settings')) throw bad('Only an admin of the account can put something on hold. Ask an admin of your team.', 403);
   assertHoldKey(c);
   const reason = str(o.reason, 500).trim();
   const matter = str(o.matter, 120).trim() || null;
@@ -191,7 +194,7 @@ function lift(h: any, by: { name: string; actor: Actor; log: string }, reason: s
 }
 
 export function liftHold(c: Ctx, holdId: string, reasonIn: any) {
-  if (!c.admin) throw bad('Only an admin of the account can lift a hold. Ask an admin of your team.', 403);
+  if (!can(c, 'settings')) throw bad('Only an admin of the account can lift a hold. Ask an admin of your team.', 403);
   assertHoldKey(c);
   const h = get('SELECT * FROM legal_holds WHERE id=? AND account_id=?', holdId, c.account.id);
   if (!h) throw bad('Hold not found.', 404);
@@ -265,7 +268,7 @@ const scheduleText = (days: number | null, stopped: number | null, level: PurgeL
 
 /** What PUT /account/retention changes. `dry` answers what would happen without saving. */
 export function setPolicy(c: Ctx, b: any) {
-  if (!c.admin) throw bad('Only an admin of the account can change the deletion schedule. Ask an admin of your team.', 403);
+  if (!can(c, 'settings')) throw bad('Only an admin of the account can change the deletion schedule. Ask an admin of your team.', 403);
   const before = policyOf(c.account.id);
   // Left out, a period stays as it is; null or "" switches that line off, and "on": false switches both off.
   const read = (v: any, was: number | null, name: string): number | null => {
@@ -334,7 +337,7 @@ const queueRow = (e: any) => {
 /** Where one envelope stands, for its page and for the API. */
 export function retentionFacts(c: Ctx, e: any) {
   if (e.kind !== 'envelope') return null;
-  const holds = (isHeld([e.id]).get(e.id) || []).map((h) => holdView(h, c.admin));
+  const holds = (isHeld([e.id]).get(e.id) || []).map((h) => holdView(h, can(c, 'settings')));
   const q = get('SELECT * FROM retention_queue WHERE envelope_id=?', e.id) || {};
   const closed = isClosed(e.status) ? closedAt(e.id) : null;
   const period = closed ? periodFor(e) : null;
@@ -350,7 +353,7 @@ export function retentionFacts(c: Ctx, e: any) {
     purged_at: e.purged_at || null, purged_level: e.purged_level || null, purged_sha256: e.purged_sha256 || null,
     // Whether the account has a deletion schedule at all: only then do the screens list Keep it and Hold.
     schedule_on: policy.on,
-    may_purge: !e.purged_at && !!closed && !holds.length, may_hold: c.admin,
+    may_purge: !e.purged_at && !!closed && !holds.length, may_hold: can(c, 'settings'),
     stays: retentionStays(dataPlace().backups),
   };
 }
@@ -472,8 +475,12 @@ function dropBlobs(shas: string[]) {
   pruneStampImages();
   for (const sha of new Set(shas.filter((s) => /^[0-9a-f]{64}$/.test(String(s || ''))))) {
     if (get('SELECT 1 x FROM files WHERE sha256=? OR original_sha256=?', sha, sha) || get('SELECT 1 x FROM envelopes WHERE final_sha256=?', sha) || get('SELECT 1 x FROM earlier_signatures WHERE copy_sha256=?', sha)
+      // Someone's own completed copy (visibility.ts).
+      || get('SELECT 1 x FROM final_copies WHERE sha256=?', sha)
       // An email still carrying it as an attachment; its text may name the fingerprint, which holds nothing.
-      || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%"sha256":"${sha}"%`) || get('SELECT 1 x FROM clickwrap_versions WHERE file_sha256=?', sha)) continue;
+      || get('SELECT 1 x FROM emails WHERE payload LIKE ?', `%"sha256":"${sha}"%`) || get('SELECT 1 x FROM clickwrap_versions WHERE file_sha256=?', sha)
+      // A document brought in from an export or from DocuSign (importer.ts) keeps its file.
+      || get('SELECT 1 x FROM imported_files WHERE sha256=?', sha)) continue;
     fs.rmSync(path.join(dataDir(), 'blobs', sha), { force: true });
   }
 }
@@ -515,6 +522,9 @@ function removeDocuments(e: any): string[] {
   // The signed PDF: its fingerprint stays (purged_sha256), so Verify a document can still answer for the file.
   shas.push(e.final_sha256);
   run('UPDATE envelopes SET purged_sha256=COALESCE(final_sha256, purged_sha256), final_sha256=NULL, final_size=NULL WHERE id=?', e.id);
+  // The completed copies made for people shown only some of the files go with it (visibility.ts).
+  shas.push(...all('SELECT sha256 FROM final_copies WHERE envelope_id=?', e.id).map((x) => x.sha256));
+  run('DELETE FROM final_copies WHERE envelope_id=?', e.id);
   // Our stored copies for the archive addresses go as a whole, at every level, also one that was still waiting to
   // be sent (archivemail.ts). The files they carried are added to the list.
   forgetArchiveCopies(e.id, shas);
@@ -589,6 +599,7 @@ function removePersonal(e: any, gone: string): string[] {
   forgetArchiveCopies(e.id); // and our stored copies for the archive addresses (archivemail.ts)
   run('DELETE FROM webhook_deliveries WHERE envelope_id=?', e.id);
   note(...purgeCustom(e.id)); // the account's own details on it, such as a case number (customfields.ts)
+  purgeKeyTerms(e.id); // its key dates, found in its text (airepo.ts)
   return found;
 }
 

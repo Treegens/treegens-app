@@ -4,6 +4,9 @@ import { twoStepGate } from './twostep.ts';
 import { rulesGate } from './secpolicy.ts';
 import { keyUsedFrom } from './seclog.ts';
 import { heldAsMember } from './orgs.ts';
+import { assertEmbedRoute } from './embed.ts';
+import { routeAllowed } from './perm.ts';
+import { closedRoute, CLOSED_TEXT } from './billingmode.ts';
 import type { Actor } from './envelopes.ts';
 
 export type Ctx = {
@@ -125,11 +128,15 @@ export async function handle(req: Request): Promise<Response> {
   // Every answer carries an id that also appears in the server log, so "it failed at 3pm" becomes findable.
   const requestId = id('req');
   try {
+    // BILLING_MODE=deployment: the plan's routes are not there (src/server/billingmode.ts).
+    if (closedRoute(path)) throw new HttpError(404, CLOSED_TEXT);
     for (const r of routes) {
       if (r.method !== req.method) continue;
       const m = r.re.exec(path);
       if (!m) continue;
       const auth = authenticate(req, r.level !== 'public');
+      // The sender screen inside a customer's app reaches its one draft and nothing else (embed.ts).
+      if (auth?.via === 'embed') assertEmbedRoute(auth, r.method, r.path, Object.fromEntries(r.keys.map((k, i) => [k, decodePart(m[i + 1])])));
       // An admin of an organisation above this account is a member here, whatever its membership says (orgs.ts).
       if (auth && heldAsMember(auth)) auth.role = 'member';
       // The first use of a key from an internet address is a line in the account's security record (seclog.ts).
@@ -139,7 +146,8 @@ export async function handle(req: Request): Promise<Response> {
       if (auth?.slid) cookies.push(renewedCookie(req, proto === 'https'));
       if (r.level !== 'public') {
         if (!auth) throw new HttpError(401, 'Please sign in.');
-        if (r.level === 'admin' && auth.role !== 'owner' && auth.role !== 'admin') throw new HttpError(403, 'Only account admins can do that.');
+        // What the person's role allows: the built-in roles as always, a role an admin made by its list (perm.ts).
+        await routeAllowed(auth, r.method, r.path, r.level, Object.fromEntries(r.keys.map((k, i) => [k, decodePart(m[i + 1])])), req, url);
         // A key never carries its creator's whole role. One leaked integration key must not be the whole account.
         if (auth.via === 'api_key') {
           const what = `${r.method} ${r.path}`;

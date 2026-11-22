@@ -6,9 +6,14 @@ import { LockedLine } from '../templates/WhoCanUse';
 import { keptLine } from '@/lib/tplroles';
 import { shippedLocales } from '@/lib/i18n';
 import { ROLE_CHOICES, ROLE_WORDS, moreLines, personInSentence, personSummary, type MoreLine } from '@/lib/editorux';
+import { STEP_ROLES, STEP_ROLE_WORDS, STEP_ROLE_LINE, isStepRole } from '@/lib/recipienttypes';
 import { SendMyself } from './SendMyself';
 import { WaLink, DeliverPick, usesDeliverPick } from './WaLink';
 import { RecipientLanguage } from './RecipientLanguage';
+// "Wait before this person", only with a signing order on (WaitChoice.tsx).
+import { WaitChoice } from './WaitChoice';
+// "Only when...", only once there is an earlier answer to test (RecipientRule.tsx).
+import { RecipientRule } from './RecipientRule';
 import { type Ed } from './shared';
 
 // One person's More in step 1 (research/ux-charter.md, 2.3). Everything about a person that is not their name and
@@ -44,9 +49,14 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
     if (key === 'role')
       return (
         <label className="f" style={{ margin: 0 }}><span>What {name} does</span>
-          <select value={r.role === 'inperson' ? 'signer' : r.role} aria-label="Role" disabled={!!wording} onChange={(e) => patch({ role: e.target.value })}>
+          <select value={r.role === 'inperson' ? 'signer' : r.role} aria-label="Role" disabled={!!wording} onChange={(e) => { patch({ role: e.target.value }); if (isStepRole(e.target.value) && !ed.env?.ordered) ed.patchEnv({ ordered: true }); }}>
             {ROLE_CHOICES.map((k) => <option key={k} value={k}>{ROLE_WORDS[k]}</option>)}
+            {/* A group of their own: people who change the envelope on their turn and do not sign (src/lib/recipienttypes.ts). */}
+            <optgroup label="Does not sign">
+              {STEP_ROLES.map((k) => <option key={k} value={k}>{STEP_ROLE_WORDS[k]}</option>)}
+            </optgroup>
           </select>
+          {isStepRole(r.role) && <span className="muted small" style={{ display: 'block', marginTop: 6 }} data-feature="ds-recipient-types">{STEP_ROLE_LINE[r.role]}</span>}
         </label>
       );
     // Email or "I will send the link myself", and where this server sends texts the link by text message as well.
@@ -71,16 +81,22 @@ export function PersonMore({ ed, r }: { ed: Ed; r: any }) {
     return <label className="f" style={{ margin: 0 }}><span>Private note <span className="hint">{kept?.note ? '(from the template, locked)' : '(only they see it)'}</span></span><input value={r.note || ''} maxLength={1000} readOnly={!!kept?.note} onChange={(e) => patch({ note: e.target.value })} /></label>;
   };
 
+  const line = (l: MoreLine) => (
+    <div key={l.key} className="ed-line">
+      <button type="button" className="ed-line-btn" aria-expanded={pick === l.key} onClick={() => setPick(pick === l.key ? null : l.key)}>
+        <span>{l.label}: <b>{l.value}</b></span><span aria-hidden="true" className="ed-line-go">{pick === l.key ? 'Close' : 'Change'}</span>
+      </button>
+      {pick === l.key && <div className="ed-pick">{picker(l.key)}</div>}
+    </div>
+  );
+
   return (
     <div id={morePanelId(r.id)} ref={panel} className="ed-more" role="group" aria-label={`More options for ${name}`}>
-      {lines.map((l) => (
-        <div key={l.key} className="ed-line">
-          <button type="button" className="ed-line-btn" aria-expanded={pick === l.key} onClick={() => setPick(pick === l.key ? null : l.key)}>
-            <span>{l.label}: <b>{l.value}</b></span><span aria-hidden="true" className="ed-line-go">{pick === l.key ? 'Close' : 'Change'}</span>
-          </button>
-          {pick === l.key && <div className="ed-pick">{picker(l.key)}</div>}
-        </div>
-      ))}
+      {/* The charter's order (2.3): Only when... and Wait come before the Private note. */}
+      {lines.filter((l) => l.key !== 'note').map(line)}
+      <RecipientRule ed={ed} r={r} />
+      <WaitChoice ed={ed} r={r} />
+      {lines.filter((l) => l.key === 'note').map(line)}
       {kept && <LockedLine>{keptLine(kept, wording!.ask)}</LockedLine>}
     </div>
   );

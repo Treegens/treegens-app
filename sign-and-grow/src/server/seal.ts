@@ -307,7 +307,8 @@ export function signaturesInBytes(pdf: Uint8Array): number {
 export async function sealForVerify(bytes: Uint8Array): Promise<(SealCheck & { sealed_part: { envelope_id: string; completed_at: string | null } | null }) | null> {
   const c = await checkSeal(bytes);
   if (!c) return null;
-  const e = c.intact && c.sealed_part_sha256 ? get("SELECT id, completed_at FROM envelopes WHERE final_sha256=? AND status='completed'", c.sealed_part_sha256) : null;
+  // The sealed part may be the completed copy made for one person (final_copies, visibility.ts).
+  const e = c.intact && c.sealed_part_sha256 ? get("SELECT id, completed_at FROM envelopes WHERE (final_sha256=? OR id IN (SELECT envelope_id FROM final_copies WHERE sha256=?)) AND status='completed'", c.sealed_part_sha256, c.sealed_part_sha256) : null;
   return { ...c, sealed_part: e ? { envelope_id: e.id, completed_at: e.completed_at } : null };
 }
 

@@ -20,9 +20,12 @@ import { StampSettings } from '@/components/stamps/StampSettings';
 import { RetentionSettings } from '@/components/settings/RetentionSettings';
 import { ArchiveSettings } from '@/components/settings/ArchiveSettings';
 import { SealStatus } from '@/components/settings/SealStatus';
+import { AgreementPlan } from '@/components/settings/AgreementPlan';
 import { ChannelsStatus } from '@/components/settings/ChannelsStatus';
 import { ArchiveFormat } from '@/components/settings/ArchiveFormat';
+import { ExportImport } from '@/components/settings/ExportImport';
 import { TenantSwitches } from '@/components/settings/TenantSwitches';
+import { AiSettings } from '@/components/settings/AiSettings';
 // The language new recipients start in (src/components/settings/LanguageSettings.tsx).
 import { LanguageSettings } from '@/components/settings/LanguageSettings';
 // The account's own custom fields, such as a case number (src/components/settings/CustomFieldSettings.tsx).
@@ -30,16 +33,30 @@ import { CustomFieldSettings } from '@/components/settings/CustomFieldSettings';
 import { SecurityLog } from '@/components/settings/SecurityLog';
 import { securityOnlyHook } from '@/lib/seclog';
 import { SecurityPolicy } from '@/components/settings/SecurityPolicy';
+import { OrgSso } from '@/components/settings/OrgSso';
 import { Organisation } from '@/components/settings/Organisation';
 // Sections, cards, "Saved" next to what saved, and the one More options of a section (research/ux-charter.md, 2.2).
-import { sectionsFor, landingFor, closingCount, nextTab, KEYS_AND_TWO_STEP, MEMBER_READS } from '@/lib/settingsnav';
+import { sectionsFor, landingFor, closingCount, nextTab, KEYS_AND_TWO_STEP, MEMBER_READS, awayInTeam, AWAY_ANCHOR } from '@/lib/settingsnav';
 import { Card, MoreOptions, useSaved } from '@/components/settings/Frame';
 import { SendingDefaults } from '@/components/settings/SendingDefaults';
+// How alike an upload must be to a template before the editor suggests it (src/server/tplmatch.ts).
+// "When people sign": whether new documents start with "Each person sees only their files" on (admins).
+import { OwnDocsDefault } from '@/components/settings/OwnDocsDefault';
 // "Your consent text", the account's own words on the consent screen, behind Sending's More options (admins).
 import { Disclosure } from '@/components/settings/Disclosure';
 import { MonthlyReport } from '@/components/reports/MonthlyReport';
 import { ListDaysSetting } from '@/components/reports/SavedLists';
 import { screenLocale } from '@/lib/dates';
+import { EmbedSites } from '@/components/settings/EmbedSites';
+// What each role can do and groups of members, behind Team's More options; the role list itself (Profiles.tsx).
+import { Profiles, RoleSelect, useRoles, roleValue, roleLabel, mayGive } from '@/components/settings/Profiles';
+import { mayDo } from '@/lib/perm';
+// Team, for admins: who works at a service counter and which templates are used there (gov-G18).
+import { CounterSettings } from '@/components/settings/CounterSettings';
+// Someone signs for me while I am away: the admins' switch (Team, More options) and the card (Away and sharing).
+import { Delegate, DelegationSwitch } from '@/components/settings/Delegate';
+import { Shares, MoveDocuments } from '@/components/settings/Shares';
+import '../../styles/counter.css';
 
 const fileToDataUrl = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
@@ -121,8 +138,10 @@ function Security() {
         </section>
       </Card>
       {/* Sign-in rules for the team: shortest password, sign out after no use, one session at a time (SecurityPolicy.tsx). */}
-      {me.role !== 'member' && <Card><SecurityPolicy /></Card>}
-      {me.role !== 'member' && <Card><SecurityLog /></Card>}
+      {me.role !== 'member' && mayDo(me, 'settings') && <Card><SecurityPolicy /></Card>}
+      {/* Single sign-on and Your email domains (OrgSso.tsx). Draws its own card, and nothing without FILE_ENCRYPTION_KEY. */}
+      {me.role !== 'member' && mayDo(me, 'settings') && <OrgSso />}
+      {me.role !== 'member' && mayDo(me, 'settings') && <Card><SecurityLog /></Card>}
     </div>
   );
 }
@@ -272,14 +291,20 @@ function Account() {
       {/* Switches that save by themselves, set apart from the Save button above: 'Trees on screens and emails', 'Trees on
           the signing record' under it, and, where a model answers the help chat, 'AI answers in the help chat'. */}
       <TenantSwitches />
+      {/* 'Let the AI read document text', only where a model answers for this account (settings/AiSettings.tsx). */}
+      <AiSettings />
     </div>
   );
 }
 
 function Team() {
   const me = useMe();
-  const admin = me.role !== 'member';
+  // Who may invite, change roles and remove people: the role's "Team" (src/lib/perm.ts). Settings of the account stay admins'.
+  const admin = mayDo(me, 'team');
+  const setsAccount = me.role !== 'member';
   const [d, reload] = useLoad(() => api('/account/members'));
+  // Roles the team made, after Member and Admin in the same role list (Profiles.tsx). None: the two as before.
+  const [roles, reloadRoles] = useRoles();
   const [inv, setInv] = useState({ email: '', role: 'member' });
   // An invitation is an email, so the server refuses it while sending is paused or the address is not confirmed. The
   // button says so before it is pressed.
@@ -294,7 +319,10 @@ function Team() {
   const myKeys: any[] = (keys?.keys || []).filter((k: any) => k.mine && !k.stopped_at);
   const theirKeys: any[] = remove ? (keys?.keys || []).filter((k: any) => k.user_id === remove.id && !k.stopped_at) : [];
   const members: any[] = d?.members || [];
-  const adminCount = members.filter((m) => m.role !== 'member').length;
+  // Who can look after the account: a made role counts only when it keeps the team and the settings (src/lib/perm.ts).
+  const adminCount = members.filter((m) => m.role !== 'member' && (!m.can || (m.can.includes('team') && m.can.includes('settings')))).length;
+  // What the person's own role can do: the role lists offer only what they may give (Profiles.tsx).
+  const giver: string[] | null = me.my_role?.custom ? me.my_role.can : null;
   return (
     <div className="stack">
       {admin && members.length > 0 && adminCount < 2 && (
@@ -305,7 +333,7 @@ function Team() {
       {admin && (
         <form className="card row wrap set-invite" data-item="card" style={{ alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); api('/account/invites', { body: inv }).then(() => (toast('Invitation sent'), setInv({ email: '', role: 'member' }), reload())).catch(oops); }}>
           <label className="f grow" style={{ margin: 0 }}><span>Invite by email</span><input type="email" required value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} style={{ minHeight: 44 }} /></label>
-          <label className="f" style={{ margin: 0 }}><span>Role</span><select value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })} style={{ minHeight: 44 }}><option value="member">Member</option><option value="admin">Admin</option></select></label>
+          <label className="f" style={{ margin: 0 }}><span>Role</span><RoleSelect value={inv.role} roles={roles} giver={giver} onChange={(v) => setInv({ ...inv, role: v })} /></label>
           <button className="btn primary" disabled={!!inviteHeld} aria-describedby={inviteHeld ? 'invite-held' : undefined} style={{ minHeight: 44 }}>Send invite</button>
           {inviteHeld && <p id="invite-held" className="muted small" style={{ flexBasis: '100%', margin: 0 }}>{inviteHeld}</p>}
         </form>
@@ -317,24 +345,29 @@ function Team() {
             {members.map((m) => (
               <tr key={m.id}>
                 <td><b>{m.name}</b>{m.id === me.user.id ? ' (you)' : ''}<div className="muted small">{m.email}</div></td>
-                <td>{admin && m.role !== 'owner' && m.id !== me.user.id ? (
-                  <select value={m.role} style={{ width: 120 }} aria-label={`Role for ${m.name}`} onChange={(e) => api(`/account/members/${m.id}`, { method: 'PATCH', body: { role: e.target.value } }).then(reload).catch(oops)}><option value="member">Member</option><option value="admin">Admin</option></select>
-                ) : <span style={{ textTransform: 'capitalize' }}>{m.role}</span>}</td>
+                <td>{admin && m.role !== 'owner' && m.id !== me.user.id && mayGive(giver, m.can || []) ? (
+                  <RoleSelect value={roleValue(m)} roles={roles} giver={giver} width={roles.length ? 160 : 120} label={`Role for ${m.name}`} onChange={(v) => api(`/account/members/${m.id}`, { method: 'PATCH', body: { role: v } }).then(() => (reload(), reloadRoles())).catch(oops)} />
+                ) : <span>{roleLabel(m)}</span>}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {me.role === 'owner' && m.id !== me.user.id && <button className="btn sm ghost" onClick={() => window.confirm(`Make ${m.name} the owner of this account? You stay on as an admin.`) && api('/account/transfer-owner', { body: { user_id: m.id } }).then(() => (toast(`${m.name} is now the owner`), me.reload(), reload())).catch(oops)}>Make owner</button>}
-                  {admin && m.role !== 'owner' && m.id !== me.user.id && <button className="btn sm ghost danger" onClick={() => (reloadKeys(), setRemove(m), setTo(me.user.id))}>Remove</button>}
+                  {admin && m.role !== 'owner' && m.id !== me.user.id && mayGive(giver, m.can || []) && <button className="btn sm ghost danger" onClick={() => (reloadKeys(), setRemove(m), setTo(me.user.id))}>Remove</button>}
                 </td>
               </tr>
             ))}
             {(d?.invites || []).map((i: any) => (
-              <tr key={i.id}><td><b>{i.email}</b><div className="muted small">Invited {fmtDate(i.created_at)}</div></td><td style={{ textTransform: 'capitalize' }}>{i.role} · pending</td>
+              <tr key={i.id}><td><b>{i.email}</b><div className="muted small">Invited {fmtDate(i.created_at)}</div></td><td>{roleLabel(i)} · pending</td>
                 <td style={{ textAlign: 'right' }}><button className="btn sm ghost danger" onClick={() => api(`/account/invites/${i.id}`, { method: 'DELETE' }).then(reload).catch(oops)}>Cancel</button></td></tr>
             ))}
           </tbody>
         </table></div>
       </div>
-      {admin && <Card><TeamTwoStep /></Card>}
-      <p className="muted small">Documents belong to the account, not to one login. Members see what they sent, admins see everything. Templates are shared: everyone can use them, and only the person a template belongs to or an admin can change or delete it. Everyone on the team is covered by the one plan: there is no charge per person.</p>
+      {setsAccount && mayDo(me, 'settings') && <Card><TeamTwoStep /></Card>}
+      {/* What each role can do, and groups of members (Profiles.tsx), for whoever looks after the team. */}
+      {admin && setsAccount && <MoreOptions><Profiles members={members} onChanged={() => (reload(), reloadRoles())} />{mayDo(me, 'settings') && <CounterSettings />}{mayDo(me, 'settings') && <DelegationSwitch />}<MoveDocuments members={members} /></MoreOptions>}
+      {/* With roles the team made, the two-role sentence is no longer true for everyone who reads it. */}
+      <p className="muted small">{roles.length
+        ? 'Documents belong to the account, not to one login. What each person sees and can change depends on their role: see More options, What each role can do. Everyone on the team is covered by the one plan: there is no charge per person.'
+        : 'Documents belong to the account, not to one login. Members see what they sent, admins see everything. Templates are shared: everyone can use them, and only the person a template belongs to or an admin can change or delete it. Everyone on the team is covered by the one plan: there is no charge per person.'}</p>
       {me.role !== 'owner' && members.length > 1 && (
         <div className="card row wrap" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
           {/* The text may shrink to a readable column and no further; below that the button wraps onto its own line. */}
@@ -400,7 +433,8 @@ function Team() {
 
 function Developers() {
   const me = useMe();
-  const admin = me.role !== 'member';
+  // Webhooks and keys with admin rights: the role's "Webhooks and admin keys" (src/lib/perm.ts).
+  const admin = me.role !== 'member' && mayDo(me, 'webhooks');
   const [keys, reloadKeys] = useLoad(() => api('/api-keys'));
   // The delivery log: one webhook or all of them, the newest page first, older pages added underneath on request.
   const [only, setOnly] = useState('');
@@ -515,6 +549,7 @@ function Developers() {
           )}
         </div>
       )}
+      {admin && <EmbedSites />}
     </div>
   );
 }
@@ -906,7 +941,7 @@ function YourData({ only }: { only?: 'export' | 'close' } = {}) {
           <h2>Take everything with you</h2>
           <p className="muted" style={{ margin: '6px 0 0' }}>One ZIP file with every signed PDF with its signing record, the full history of every document, and a spreadsheet listing them all. Free on every plan, as often as you like, and it keeps working if you cancel.</p>
         </div>
-        <a className="btn" href="/api/export">Export everything</a>
+        <a className="btn" href="/api/export">Download signed PDFs (ZIP)</a>
       </div>}
 
       {only !== 'export' && <div className="card" data-item="card">
@@ -969,12 +1004,15 @@ export default function Settings() {
   // Said once when a link asked for a section this person does not have (src/lib/settingsnav.ts).
   const [note, setNote] = useState('');
   // The sections this person has: an owner or admin at most 10, a member at most 4.
-  const TABS = sectionsFor(me.role, !!me.org_admin);
+  // Away and sharing: on a team, where documents can be shared (Shares.tsx) and, when the admins allowed it, someone
+  // can sign for you (Delegate.tsx). Alone in an account, neither can ever do anything.
+  const away = Number(me.members) >= 2;
+  const TABS = sectionsFor(me.role, !!me.org_admin, me.my_role?.custom ? me.my_role.can : null, away);
   // A member reading the plan or the stamps is in a section that has no tab of its own.
   const listed = TABS.some(([k]) => k === tab);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    const to = landingFor(me.role, q.get('tab'), window.location.hash, !!(q.get('signin') || q.get('signin_error')), !!me.org_admin);
+    const to = landingFor(me.role, q.get('tab'), window.location.hash, !!(q.get('signin') || q.get('signin_error')), !!me.org_admin, me.my_role?.custom ? me.my_role.can : null, away);
     setTab(to.tab);
     setNote(to.note || '');
     // An old link to something that moved: bring it into view once its section is drawn.
@@ -1019,19 +1057,25 @@ export default function Settings() {
       <div id="set-panel" role="tabpanel" aria-labelledby={listed ? `set-tab-${tab}` : undefined} aria-label={listed ? undefined : 'What the admins set'}>
       {tab === 'profile' && <Profile />}
       {tab === 'security' && <Security />}
+      {tab === 'away' && Number(me.members) >= 2 && <Shares />}
+      {tab === 'away' && me.delegation && <Delegate />}
       {tab === 'account' && <Card><Account /></Card>}
       {tab === 'account' && <LanguageSettings />}
-      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><CustomFieldSettings /><MoreOptions><Disclosure /></MoreOptions></div>}
+      {tab === 'sending' && <div className="stack"><Card><SendingDefaults /></Card><OwnDocsDefault /><CustomFieldSettings /><MoreOptions><Disclosure /></MoreOptions></div>}
       {/* Admins, where the operator set up WhatsApp or calls with a code: one read-only Connections card. */}
       {tab === 'sending' && <ChannelsStatus />}
       {tab === 'team' && <Team />}
-      {tab === 'billing' && <Billing />}
+      {/* A member's Away and sharing: under Team, so they keep at most 4 sections (src/lib/settingsnav.ts). */}
+      {tab === 'team' && awayInTeam(me.role, away) && <section id={AWAY_ANCHOR} aria-labelledby={`${AWAY_ANCHOR}-h`} className="stack" style={{ marginTop: 16 }}><h2 id={`${AWAY_ANCHOR}-h`} style={{ margin: 0 }}>Away and sharing</h2><Shares />{me.delegation && <Delegate />}</section>}
+      {tab === 'billing' && <AgreementPlan plan={<Billing />} />}
       {tab === 'data' && <Card><RetentionSettings /></Card>}
       {/* Admins, once a list for Send to many is saved: after how many days an unused one is deleted (reports/SavedLists.tsx). */}
       {tab === 'data' && <ListDaysSetting />}
       {tab === 'data' && <ArchiveSettings />}
       {tab === 'data' && <SealStatus />}
-      {tab === 'data' && <YourData only="export" />}
+      {/* The full export, and bringing documents in (ExportImport.tsx). Members keep the simple export under Profile. */}
+      {/* A role the team made without "See every document" has neither: both hold every document of the account. */}
+      {tab === 'data' && mayDo(me, 'see_all') && <ExportImport />}
       {tab === 'data' && <MoreOptions><ArchiveFormat /><YourData only="close" /></MoreOptions>}
       {tab === 'developers' && <Developers />}
       {tab === 'stamps' && <Card><StampSettings /></Card>}

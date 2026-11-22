@@ -1,3 +1,5 @@
+// What the person's role allows (perm.ts): 'stamps' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { route, type Ctx } from './router.ts';
 import { get, run, tx } from './db.ts';
 import { bad, now, str, rateLimit, rateWait } from './util.ts';
@@ -8,6 +10,7 @@ import { find, look } from './routes-sign.ts';
 import { mine } from './routes-envelopes.ts';
 import { notOpen, shownVersion, changedSince } from './envelopes.ts';
 import { accountStamps, accountStamp, publicStamp, createStamp, updateStamp, deleteStamp, saveStampImage, stampPng, pngResponse, lookOf, isSenderStamp, stampSize, metaOf, type StampMeta } from './stamps.ts';
+import { onShownDoc } from './visibility.ts';
 import { STAMP_IS_TEAM, STAMP_IS_YOU, STAMPS_PER_ACCOUNT, STAMP_UPLOADS_PER_LINK_HOUR, STAMP_UPLOADS_PER_ADDRESS_HOUR, stampTurn } from '../lib/stamps.ts';
 
 // Stamps (src/server/stamps.ts). The account's own stamps, kept by admins under Settings and used by everyone on the
@@ -19,7 +22,7 @@ const ACTS = (role: string) => role === 'signer' || role === 'inperson' || role 
 // ---- The account's stamps ------------------------------------------------------------------------------------
 
 route('GET', '/stamps', (c) => ({
-  stamps: accountStamps(c.account.id).map(publicStamp), max: STAMPS_PER_ACCOUNT, may_change: c.admin, what_a_stamp_is: STAMP_IS_TEAM,
+  stamps: accountStamps(c.account.id).map(publicStamp), max: STAMPS_PER_ACCOUNT, may_change: can(c, 'stamps'), what_a_stamp_is: STAMP_IS_TEAM,
 }));
 
 route('POST', '/stamps', async (c) => {
@@ -139,7 +142,8 @@ route('GET', '/sign/:token/stamp-image/:sha', (c) => {
   const { e, r } = find(c);
   const sha = str(c.params.sha, 64);
   const by = new Map<string, any>(e.recipients.map((x: any) => [x.id, x]));
-  const may = e.fields.some((f: any) => f.type === 'stamp' && f.value === sha && (f.recipient_id === r.id || isSenderStamp(f) || by.get(f.recipient_id)?.status === 'completed'));
+  // Only from a file this link shows: one the person was not shown is not theirs to open (visibility.ts).
+  const may = e.fields.some((f: any) => f.type === 'stamp' && f.value === sha && onShownDoc(e, f.document_id) && (f.recipient_id === r.id || isSenderStamp(f) || by.get(f.recipient_id)?.status === 'completed'));
   const png = may ? stampPng(sha) : null;
   if (!png) throw refuse('stamp_not_yours', 404);
   return pngResponse(png);

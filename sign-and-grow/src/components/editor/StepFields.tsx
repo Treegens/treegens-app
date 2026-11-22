@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { newId, toast } from '../ui';
 import { PdfDoc } from '../PdfDoc';
-import { findFields, overlap, scanPdf, type Found } from '@/lib/autoplace';
+import { findFields, overlap, scanPdf, type Found, type PageScan } from '@/lib/autoplace';
+import { useSuggest } from './SuggestFields';
 import { snapBox, type Guide } from './snap';
 import { Lock, UndoRedo, Wand } from './parts';
 import { MAX_FIELDS, MIN_H, MIN_W, PREFILL, SIGNS, TLABEL, TYPES, clamp, makeField, plural, type Ed } from './shared';
@@ -69,6 +70,8 @@ export function StepFields({ ed }: { ed: Ed }) {
   const selLocked = !!selected && isLockedField(selected);
   const patchField = (fid: string, p: any, key = Object.keys(p).join()) => setFields((l) => l.map((f) => (f.id === fid ? { ...f, ...p } : f)), { tag: `prop:${fid}:${key}` });
   // Fields that depended on the deleted one are put right in the same step, and the sender is told (withoutField).
+  // AI suggestions for pages where "Place fields for me" found nothing, only where the account allows it.
+  const suggest = useSuggest(ed, { signers, active, label, reveal: (id) => (reveal.current = { id, focus: false }) });
   const remove = (fid: string) => {
     const r = withoutField(fields.current(), fid);
     setFields(() => r.list);
@@ -315,13 +318,19 @@ export function StepFields({ ed }: { ed: Ed }) {
     const setFound = (text: string) => setNote({ text, count: fields.current().length });
     try {
       const all: (Found & { doc: string })[] = [];
-      for (const d of docs) {
+      const scans: { doc: string; pages: PageScan[] }[] = [];
+      for (const d of docs.filter((x) => !x.supplemental)) {
         const pdf = pdfs[d.id];
         if (!pdf) throw new Error('The document is still loading. Try again in a moment.');
         const pages = await scanPdf(pdf, (n, total) => setFinding(total > 3 ? `Looking at page ${n} of ${total}` : 'Looking through your documents'));
+        scans.push({ doc: d.id, pages });
         all.push(...findFields(pages).map((f) => ({ ...f, doc: d.id })));
       }
-      if (!all.length) return setFound('We found no blanks or form fields in this document. Pick a field and click where it goes.');
+      // Pages where nothing was found go to the AI, where the account allows it (SuggestFields.tsx); its suggestions
+      // are listed under the button for the sender to add.
+      const askedAi = suggest.ask(scans, all);
+      // When the AI was asked, its panel says that nothing was found, in one notice with what it suggests.
+      if (!all.length) return askedAi ? undefined : setFound('We found no blanks or form fields in this document. Pick a field and click where it goes.');
 
       const cur = fields.current();
       const fresh: any[] = [];
@@ -404,7 +413,8 @@ export function StepFields({ ed }: { ed: Ed }) {
     return () => window.removeEventListener('keydown', key);
   }); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ready = docs.length > 0 && docs.every((d) => pdfs[d.id]);
+  // A file to read, not sign, is not shown here and has no fields (ToRead.tsx).
+  const ready = docs.length > 0 && docs.every((d) => d.supplemental || pdfs[d.id]);
   const pct = (n: number) => +(n * 100).toFixed(1);
   const setSize = (f: any, key: 'w' | 'h', value: string) => {
     const n = Number(value) / 100;
@@ -412,6 +422,14 @@ export function StepFields({ ed }: { ed: Ed }) {
     patchField(f.id, key === 'w' ? { w: clamp(n, MIN_W, 1 - f.x) } : { h: clamp(n, MIN_H, 1 - f.y) });
   };
   const undoRedo = <UndoRedo canUndo={fields.canUndo} canRedo={fields.canRedo} undo={ed.undo} redo={ed.redo} />;
+
+  // Every file is to read, not sign (ToRead.tsx): there is nowhere to put a field, so no palette, only the way back.
+  if (docs.length > 0 && docs.every((d) => d.supplemental)) return (
+    <div className="card" data-feature="ds-supplements" style={{ padding: 16, display: 'grid', gap: 10, justifyItems: 'start' }}>
+      <p style={{ margin: 0 }}>Every file is to read, not sign, so there is nowhere to put fields. Go back to step 1 and switch one file to sign.</p>
+      <button type="button" className="btn" style={{ minHeight: 44 }} onClick={() => ed.go(1)}>Back to step 1</button>
+    </div>
+  );
 
   return (
     <div className="editor">
@@ -464,6 +482,7 @@ export function StepFields({ ed }: { ed: Ed }) {
         </div>
         {/* The result stays until the fields change again, so it never describes something that is no longer true. */}
         <p className="small ed-status" role="status">{finding ? `${finding}…` : note && note.count === list.length ? note.text : ''}</p>
+        {suggest.panel}
         <p className="muted small ed-hint">
           {ed.wording ? `The wording is locked, so the fields stay as the template has them. Select a field to see it, and to fill in one the template left empty for you. To change the fields, ask ${ed.wording.ask}.` : tool ? `Click on the page to place the ${TLABEL[tool].toLowerCase()} field.` : 'Drag a field onto the page, or pick one and click where it goes.'}
           {!ed.wording && !tool && <span className="ed-hide-sm"> Drag to move, pull the corner to resize.</span>}
@@ -482,7 +501,7 @@ export function StepFields({ ed }: { ed: Ed }) {
         </div>
         <div className="canvas" ref={canvas} style={{ cursor: tool ? 'crosshair' : undefined }}>
           <div className="stack">
-            {docs.map((d) => (
+            {docs.map((d) => d.supplemental ? <p key={d.id} className="muted small" style={{ textAlign: 'center' }} data-feature="ds-supplements">{d.name} is to read, not sign, so it has no fields.</p> : (
               <div key={d.id} data-doc={d.id}>
                 <div className="small" style={{ fontWeight: 600, marginBottom: 6, textAlign: 'center' }}>{d.name}</div>
                 {/* Pages made from a Word file or the like: check them before placing fields (ConvertNotes.tsx). */}
@@ -506,6 +525,8 @@ export function StepFields({ ed }: { ed: Ed }) {
                           </div>
                         );
                       })}
+                      {/* Fields the AI suggests, as dashed outlines until the sender adds them (SuggestFields.tsx). */}
+                      {suggest.outlines(d.id, page)}
                       {guides && guides.doc === d.id && guides.page === page && guides.lines.map((g, i) => (
                         <span key={i} className={`ed-guide ${g.axis}`} aria-hidden="true"
                           style={g.axis === 'x' ? { left: `${g.at * 100}%`, top: `${g.from * 100}%`, height: `${(g.to - g.from) * 100}%` } : { top: `${g.at * 100}%`, left: `${g.from * 100}%`, width: `${(g.to - g.from) * 100}%` }} />

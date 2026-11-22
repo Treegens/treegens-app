@@ -17,6 +17,12 @@ import { noteTickStart, noteTick } from './selfhost.ts';
 import { monthlyReports } from './routes-reports.ts';
 import { purgeOldLists } from './bulklists.ts';
 import { ocrTick } from './ocr.ts';
+import { recheckDomains } from './orgsso.ts';
+import { timingTick } from './timing.ts';
+import { forgetOldExports } from './exportfull.ts';
+import { forgetImportedFiles } from './importer.ts';
+import { keyDatesTick, keyReminders } from './airepo.ts';
+import { counterTick } from './counter.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -38,7 +44,9 @@ export async function tick() {
 }
 async function tickOnce() {
   // Text messages the provider would not take are tried again the same way (`texts`).
-  const r = { ...(await cronTick()), mail: await retryMail(), texts: await retryTexts(), whatsapp: await retryWhatsApp() };
+  // Drafts set to go out now (Send later), and people whose wait before their step has ended (timing.ts).
+  const timing = await timingTick();
+  const r = { ...(await cronTick()), timing, mail: await retryMail(), texts: await retryTexts(), whatsapp: await retryWhatsApp() };
   return { ...r, renewals: await renewalReminders(),
     // Signatures whose date has passed and that nobody holds expire, with a line in the plan history (credits.ts),
     // and top-ups about to expire unused are announced 30 and 3 days before (routes-billing.ts).
@@ -66,15 +74,24 @@ async function tickOnce() {
     // Where each account's security record stands, noted once a day in a folder outside the database, when
     // SECURITY_HEADS_DIR names one (secheads.ts).
     security_heads_noted: exportSecurityHeads(),
+    // Full exports past their 7 days, and files of records brought in whose record has gone (exportfull.ts, importer.ts).
+    exports_forgotten: forgetOldExports(), imported_files_forgotten: forgetImportedFiles(),
     // Closed envelopes at the end of their retention period: the email 14 days before, then the purge (records.ts).
     retention: await retentionTick(),
     // Our stored archive copies about envelopes deleted or purged since, once they have left (archivemail.ts).
     archive_copies_forgotten: sweepArchiveCopies(),
+    // Counter codes past their day, screens past their hours, and ID pictures of purged documents (counter.ts).
+    counter: counterTick(),
     // Last month's report for the admins who asked for it, on the first days of a month (routes-reports.ts).
     monthly_reports: await monthlyReports().catch((e) => (console.error('[cron] monthly reports', e?.message), 0)),
     // Saved lists for Send to many that nobody used for the account's number of days (bulklists.ts).
     lists_deleted: purgeOldLists(),
     // Text of scanned pages still waiting to be read, when OCR_CMD or OCRMYPDF_URL is set (ocr.ts).
     // It waits at most 20 seconds: a long batch goes on by itself and never holds up the timer (ocrTick).
-    ocr_read: await ocrTick() };
+    ocr_read: await ocrTick(),
+    // Email domains claimed for single sign-on, looked at again once a day: a DNS line that is gone pauses it (orgsso.ts).
+    sso_domains_checked: await recheckDomains().catch((e) => (console.error('[cron] sso domains', e?.message), 0)),
+    // Key dates: completed documents read by the AI a few at a time, and "Remind me" emails before a checked date (airepo.ts).
+    key_dates_read: await keyDatesTick().catch((e) => (console.error('[cron] key dates', e?.message), 0)),
+    key_dates_reminded: await keyReminders().catch((e) => (console.error('[cron] key date reminders', e?.message), 0)) };
 }

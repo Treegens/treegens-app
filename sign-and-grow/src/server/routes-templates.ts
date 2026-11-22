@@ -48,12 +48,18 @@ route('PUT', '/envelopes/:id/access', async (c) => {
       return { id: uid, can_change: m?.can_change === true };
     });
   }
+  // "groups": the whole list of chosen groups of members (Settings, Team), in the same form as "members".
+  const groupLines = chosenGroups(c, b.groups);
   const before = accessSentence(accessOf(c, t));
   tx(() => {
     run('UPDATE envelopes SET tpl_use=?, tpl_change=?, tpl_locked=? WHERE id=?', use, change, locked ? 1 : 0, t.id);
     if (lines) {
       run('DELETE FROM template_members WHERE template_id=?', t.id);
       for (const l of lines) run('INSERT OR REPLACE INTO template_members (template_id, account_id, user_id, can_change) VALUES (?,?,?,?)', t.id, c.account.id, l.id, l.can_change ? 1 : 0);
+    }
+    if (groupLines) {
+      run('DELETE FROM template_member_groups WHERE template_id=?', t.id);
+      for (const l of groupLines) run('INSERT OR REPLACE INTO template_member_groups (template_id, group_id, can_change) VALUES (?,?,?)', t.id, l.id, l.can_change ? 1 : 0);
     }
   });
   const now = loadRule(t.id, c);
@@ -68,3 +74,17 @@ route('PUT', '/envelopes/:id/access', async (c) => {
 });
 
 const loadRule = (templateId: string, c: Ctx) => accessOf(c, get('SELECT * FROM envelopes WHERE id=?', templateId));
+
+/** The groups of members a body chooses, or null when it says nothing about them. Only groups of this team. */
+function chosenGroups(c: Ctx, v: unknown): { id: string; can_change: boolean }[] | null {
+  if (v === undefined) return null;
+  if (!Array.isArray(v)) throw bad('"groups" must be a list of { "id": "<group id>", "can_change": true or false }. Nothing was changed.');
+  if (v.length > 50) throw bad('Choose up to 50 groups. Nothing was changed.');
+  const mine = new Set(all('SELECT id FROM member_groups WHERE account_id=?', c.account.id).map((g) => g.id as string));
+  return v.map((g: any, i: number) => {
+    const gid = str(typeof g === 'string' ? g : g?.id, 80);
+    if (!mine.has(gid)) throw bad(`Group ${i + 1} ("${gid}") is not a group of members of your team. Use the ids from GET /envelopes/:id/access or GET /account/member-groups. Nothing was changed.`);
+    if (g?.can_change != null && typeof g.can_change !== 'boolean') throw bad(`"can_change" of group ${i + 1} has to be true or false, written without quotes. Nothing was changed.`);
+    return { id: gid, can_change: g?.can_change === true };
+  });
+}

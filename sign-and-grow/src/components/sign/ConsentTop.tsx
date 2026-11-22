@@ -14,7 +14,10 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CONSENT_WORDS, wordsIn } from '@/components/sign/actions';
 import { SenderWords } from '@/components/sign/SenderWords';
 import { groupFor } from '@/components/sign/GroupNotice';
+import { useDelegateFor } from '@/components/sign/DelegateNotice';
 import { orgOf } from '@/lib/sendername';
+// A colleague pressed Send for the owner: only this line names both (src/server/sentfor.ts).
+import { sentByName } from '@/lib/shares';
 import { consentFit, headingFor, splitAsk } from '@/lib/consentfit';
 
 /** A word joiner: the full stop after the address (an inline block) never wraps onto a line of its own. */
@@ -44,14 +47,16 @@ export function ConsentTop({ data, ask, myEmail }: { data: any; ask: string; myE
   const heading = headingFor(env.subject, !!ask);
   const { prefix, rest } = splitAsk(heading);
   const org = orgOf(data.brand?.name, sender.name);
-  const group = groupFor(data);
+  // A delegate's For line names the person they sign for (DelegateNotice.tsx).
+  const delegateFor = useDelegateFor(data);
+  const group = groupFor(data) || delegateFor;
   // Only the plain line may go: a group's name, and the note that the sender handed over the link, always stay.
   const plainFor = !group && !me.link_by_sender;
   return (
     <div ref={top}>
       {ask && <p className="sg-kicker">{ask}</p>}
       <h1 className="serif" id="sg-h1" tabIndex={-1}>{prefix && level < 3 ? <span data-fit="prefix">{prefix}</span> : null}{rest}</h1>
-      <p className="sg-from">From <b>{sender.name}</b>{org ? <> at {org}</> : null}, <a href={`mailto:${sender.email}`}>{sender.email}</a></p>
+      <p className="sg-from">From <b>{sender.sent_by ? sentByName(sender.name, sender.sent_by) : sender.name}</b>{org ? <> at {org}</> : null}, <a href={`mailto:${sender.email}`}>{sender.email}</a></p>
       {/* "Report this request" is in the footer of every screen, so it is not said a second time here. */}
       {/* In person the notice below says whose turn it is, so "For ..." is not said as well. */}
       {me.role !== 'inperson' && !(plainFor && level >= 4) && (

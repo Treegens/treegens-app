@@ -16,6 +16,8 @@
 // An API key can read the list but not change it, because a leaked key that added its own address would receive the
 // account's emails from then on. Every change is in the account's security record, and the owner and admins are
 // emailed when an address starts taking copies, is removed, or is paused.
+// What the person's role allows (perm.ts): 'settings' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx } from './db.ts';
 import { bad, baseUrl, id, isEmail, now, rateLimit, sha256, str, token } from './util.ts';
@@ -51,7 +53,7 @@ route('GET', '/account/archive-addresses', (c) => {
   const rows = all('SELECT * FROM archive_addresses WHERE account_id=? ORDER BY added_at', c.account.id);
   const taking = rows.filter((a) => a.confirmed_at && !a.paused_at).length;
   // A member, and a key with the "send" scope, learn only that copies go somewhere: the addresses are for admins.
-  if (!c.admin || (c.auth?.via === 'api_key' && c.auth.scope !== 'admin')) return { may_change: false, taking };
+  if (!can(c, 'settings') || (c.auth?.via === 'api_key' && c.auth.scope !== 'admin')) return { may_change: false, taking };
   const refused = all('SELECT email, at, until, why FROM archive_refused WHERE account_id=? AND until > ? ORDER BY at', c.account.id, now());
   return {
     may_change: c.auth?.via !== 'api_key', taking, max: ARCHIVE_MAX_ADDRESSES, addresses: rows.map(view),

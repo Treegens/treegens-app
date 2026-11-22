@@ -1,14 +1,21 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, useLoad, Status, fmtDate, toast } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
+import { BroughtInLink } from '@/components/settings/BroughtInLink';
 import { Dialog } from '@/components/sender/Dialog';
+// Working for a colleague: a shared row offers only what its share allows; several chosen can move to a colleague.
+import { MoveDialog as MoveToColleague } from '@/components/sender/Colleagues';
+import { levelCovers, sharedRowLabel, MOVE_LABEL } from '@/lib/shares';
 import { fail } from '@/components/sender/feedback';
 import { cap, exportUrl, howLong, joinNames, neverOpened, waitingOn } from '@/components/sender/lib';
 import { remindedText } from '@/components/sender/MailNews';
 import { listName } from '@/lib/docname';
+import { mayDo } from '@/lib/perm';
+// Send later, a pause and a wait before a person, said in the row (sender/Timing.tsx).
+import { timingRow } from '@/components/sender/Timing';
 // A custom field to filter by and to show as a column (sender/CustomFieldFilter.tsx).
 import { CustomFieldFilter, customValue } from '@/components/sender/CustomFieldFilter';
 
@@ -24,7 +31,8 @@ function closedWhy(e: any): string {
   const acting = e.recipients.filter((r: any) => r.role !== 'cc');
   if (e.status === 'declined') return `${joinNames(acting.filter((r: any) => r.status === 'declined').map((r: any) => r.name)) || 'Someone'} declined`;
   if (e.status === 'expired') return `Closed before ${joinNames(acting.filter((r: any) => r.status !== 'completed').map((r: any) => r.name)) || 'everyone'} finished`;
-  return 'Nobody. It was cancelled';
+  if (e.status === 'voided') return 'Nobody. It was cancelled';
+  return 'Nobody right now';
 }
 
 type View = { box: string; q: string; folder: string; sender: string; field: string; value: string; col: string };
@@ -44,6 +52,8 @@ function restore(): View {
   const box = url.get('box');
   if (box && BOXES.some(([k]) => k === box)) Object.assign(v, { box, q: url.get('q') || '', folder: '', sender: '' });
   else if (url.get('q')) v.q = url.get('q') || '';
+  // From Settings, Away and sharing: the documents one colleague shares (src/components/settings/Shares.tsx).
+  if (url.get('sender')) Object.assign(v, { box: 'all', sender: url.get('sender') || '', folder: '' });
   if (!BOXES.some(([k]) => k === v.box)) v.box = 'all';
   return v;
 }
@@ -55,10 +65,13 @@ export default function Envelopes() {
   const [typed, setTyped] = useState('');
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [moving, setMoving] = useState<any>(null);
+  const [handing, setHanding] = useState(false);
   const [busy, setBusy] = useState('');
 
+  // Read once: an effect that runs twice (development) must not lose a link's ?sender= or ?box= on its second run.
+  const restored = useRef<View | null>(null);
   useEffect(() => {
-    const v = restore();
+    const v = (restored.current ??= restore());
     setView(v);
     setTyped(v.q);
     if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
@@ -92,7 +105,7 @@ export default function Envelopes() {
 
   const rows: any[] = data?.envelopes || [];
   // What was removed by its sender is not in the export, so there is nothing to tick there.
-  const pickable = useMemo(() => (view?.box === REMOVED ? [] : rows.filter((e) => e.status !== 'draft').map((e) => e.id as string)), [rows, view?.box]);
+  const pickable = useMemo(() => (view?.box === REMOVED ? [] : rows.filter((e) => e.status !== 'draft' && !e.shared_level).map((e) => e.id as string)), [rows, view?.box]);
   const chosen = pickable.filter((id) => picked.has(id));
   const allPicked = pickable.length > 0 && chosen.length === pickable.length;
   const filtered = !!view && (view.q !== '' || view.folder !== '' || view.sender !== '' || view.box !== 'all' || view.field !== '');
@@ -135,6 +148,8 @@ export default function Envelopes() {
 
   const open = (e: any) => (e.status === 'draft' ? `/app/envelopes/${e.id}/edit` : `/app/envelopes/${e.id}`);
   const isAdmin = me.role !== 'member';
+  // Documents brought in hold every document of the account: a made role without "See every document" has no link to them.
+  const seesBroughtIn = isAdmin && mayDo(me, 'see_all');
   const inRemoved = view?.box === REMOVED;
 
   async function putBack(e: any) {
@@ -155,10 +170,10 @@ export default function Envelopes() {
       <div className="pagehead">
         <div>
           <h1 className="serif">Documents</h1>
-          <div className="muted small" id="sn-export-note">Export everything is free on every plan and keeps working after you cancel.</div>
+          <div className="muted small" id="sn-export-note">Free, also after you cancel.{isAdmin ? ' For everything, see Settings, Records and data.' : ''}</div>
         </div>
         <div className="row wrap">
-          <button className="btn" onClick={exportAll} disabled={busy === 'export'} aria-describedby="sn-export-note">{busy === 'export' ? 'Preparing…' : 'Export everything (ZIP)'}</button>
+          <button className="btn" onClick={exportAll} disabled={busy === 'export'} aria-describedby="sn-export-note">{busy === 'export' ? 'Preparing…' : 'Download signed PDFs (ZIP)'}</button>
         </div>
       </div>
 
@@ -180,7 +195,7 @@ export default function Envelopes() {
         )}
         {data && data.senders.length > 1 && (
           <select value={view?.sender || ''} onChange={(e) => change({ sender: e.target.value })} aria-label="Sent by">
-            <option value="">Sent by anyone</option>{data.senders.map((s: any) => <option key={s.id} value={s.id}>{s.id === me.user.id ? 'Sent by me' : `Sent by ${s.name}`}</option>)}
+            <option value="">Sent by anyone</option>{data.senders.map((s: any) => <option key={s.id} value={s.id}>{s.id === me.user.id ? 'Sent by me' : s.shared ? `Shared with me by ${s.name}` : `Sent by ${s.name}`}</option>)}
           </select>
         )}
         {view && <CustomFieldFilter view={view} onChange={change} />}
@@ -191,6 +206,7 @@ export default function Envelopes() {
           <>
             <b>{chosen.length} selected</b>
             <a className="btn sm primary" href={exportUrl(chosen)}>Download selected (ZIP)</a>
+            {Number(me.members) >= 2 && <button className="btn sm" onClick={() => setHanding(true)}>{MOVE_LABEL}</button>}
             <button className="btn sm ghost" onClick={() => setPicked(new Set())}>Clear selection</button>
           </>
         ) : (
@@ -210,6 +226,8 @@ export default function Envelopes() {
             <h3>{filtered ? 'Nothing matches' : 'No documents yet'}</h3>
             {filtered ? 'No document fits this tab and search.' : <>Press <b>Send a document</b><span className="sn-where-phone"> (Send, in the bar at the bottom)</span> to start. Upload a PDF, add who needs to sign and place the fields. It takes about a minute.</>}
             {filtered && <div style={{ marginTop: 14 }}><button className="btn" onClick={() => (setTyped(''), change({ ...START }))}>Show all documents</button></div>}
+            {/* One link for admins (research/ux-notes.json, gov-G19): to bring documents in, or to those brought in. */}
+            {!filtered && seesBroughtIn && <BroughtInLink empty />}
           </div>
         ) : (
           <div className="tablewrap"><table className="t sn-list">
@@ -230,31 +248,33 @@ export default function Envelopes() {
                 const dead = e.status === 'sent' ? e.recipients.filter((r: any) => (r.status === 'sent' || r.status === 'viewed') && (r.bounced_at || r.complained_at)) : [];
                 const cold = e.status === 'sent' && !dead.length && e.recipients.some((r: any) => neverOpened(r));
                 const title = listName(e.subject) || 'Untitled draft';
-                const waitingText = w ? <><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{dead.length ? <span className="sn-cold"> · {dead.some((r: any) => r.bounced_at && !r.complained_at) ? 'could not be delivered' : 'marked as spam'}</span> : cold ? <span className="sn-cold"> · not opened</span> : null}</>
-                  : e.status === 'draft' ? <span className="muted">Not sent yet</span>
+                const timed = e.status === 'sent' ? timingRow(e) : '';
+                const waitingText = timed ? <span className="muted">{timed}</span> : w ? <><b>{cap(w.label)}</b>{w.since ? <span className="muted"> for {howLong(w.since)}</span> : null}{dead.length ? <span className="sn-cold"> · {dead.some((r: any) => r.bounced_at && !r.complained_at) ? 'could not be delivered' : 'marked as spam'}</span> : cold ? <span className="sn-cold"> · not opened</span> : null}</>
+                  : e.status === 'draft' ? <span className="muted">{timingRow(e) || 'Not sent yet'}</span>
                   : e.status === 'completed' ? <span className="muted">Everyone finished</span>
                   : <span className="muted">{closedWhy(e)}</span>;
                 return (
                   <tr key={e.id} className="click" onClick={() => router.push(open(e))}>
                     <td className="sn-tick" onClick={(ev) => ev.stopPropagation()}>
-                      {!inRemoved && e.status !== 'draft' && <label className="sn-check"><input type="checkbox" checked={picked.has(e.id)} onChange={() => toggle(e.id)} aria-label={`Select ${title}`} /></label>}
+                      {!inRemoved && e.status !== 'draft' && !e.shared_level && <label className="sn-check"><input type="checkbox" checked={picked.has(e.id)} onChange={() => toggle(e.id)} aria-label={`Select ${title}`} /></label>}
                     </td>
                     <td className="sn-main">
                       <Link href={open(e)} className="sn-subject" onClick={(ev) => ev.stopPropagation()}>{title}</Link>
                       <div className="muted small sn-to">To {e.recipients.map((r: any) => r.name).filter(Boolean).join(', ') || 'nobody yet'}</div>
                       {inRemoved && <div className="muted small">Sent by {e.sender}. Removed from their lists on {fmtDate(e.removed_at)}.</div>}
+                      {e.shared_level && <div className="muted small" data-feature="ds-colleagues">{sharedRowLabel(e.sender)}, shared with you</div>}
                       <div className="sn-only-sm sn-rowmeta">
                         <Status s={e.status} />
-                        {e.status === 'sent' && <span className="small">Waiting on {waitingText}</span>}
+                        {e.status === 'sent' && <span className="small">{timed ? waitingText : <>Waiting on {waitingText}</>}</span>}
                         <span className="muted small">{fmtDate(e.updated_at)}</span>
                         {view?.col && customValue(e, view.col) && <span className="small cf-col">{view.col}: {customValue(e, view.col)}</span>}
                       </div>
                       {e.bulk_id && <Link href={`/app/bulk?batch=${e.bulk_id}`} className="small sn-batchlink" onClick={(ev) => ev.stopPropagation()}>Part of a bulk send</Link>}
                       <div className="sn-only-sm sn-inlineactions" onClick={(ev) => ev.stopPropagation()}>
-                        {e.status === 'sent' && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
-                        {e.status === 'completed' && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
+                        {e.status === 'sent' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
+                        {e.status === 'completed' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
                         {inRemoved ? <button className="btn sm" disabled={busy === e.id} onClick={() => putBack(e)} aria-label={`Put ${title} back in the lists`}>{busy === e.id ? 'Putting back…' : 'Put back'}</button>
-                          : <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move</button>}
+                          : !e.shared_level && <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move to folder</button>}
                       </div>
                     </td>
                     <td className="hide-sm"><Status s={e.status} /></td>
@@ -263,10 +283,10 @@ export default function Envelopes() {
                     {view?.col && <td className="hide-sm small cf-col">{customValue(e, view.col)}</td>}
                     <td className="hide-sm muted small" style={{ whiteSpace: 'nowrap' }}>{fmtDate(e.updated_at)}</td>
                     <td className="hide-sm sn-rowactions" onClick={(ev) => ev.stopPropagation()}>
-                      {e.status === 'sent' && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
-                      {e.status === 'completed' && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
+                      {e.status === 'sent' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <button className="btn sm" disabled={busy === e.id} onClick={() => remind(e)} aria-label={`Send a reminder for ${title}`}>{busy === e.id ? 'Sending…' : 'Remind'}</button>}
+                      {e.status === 'completed' && (!e.shared_level || levelCovers(e.shared_level, 'manage')) && <a className="btn sm" href={`/api/envelopes/${e.id}/download`} aria-label={`Download signed PDF of ${title}`}>Download</a>}
                       {inRemoved ? <button className="btn sm" disabled={busy === e.id} onClick={() => putBack(e)} aria-label={`Put ${title} back in the lists`}>{busy === e.id ? 'Putting back…' : 'Put back'}</button>
-                        : <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move</button>}
+                        : !e.shared_level && <button className="btn sm ghost" onClick={() => setMoving(e)} aria-label={`Move ${title} to a folder`}>Move to folder</button>}
                     </td>
                   </tr>
                 );
@@ -275,7 +295,9 @@ export default function Envelopes() {
           </table></div>
         )}
       </div>
+      {seesBroughtIn && !filtered && rows.length > 0 && <BroughtInLink />}
 
+      {handing && <MoveToColleague ids={chosen} onClose={() => setHanding(false)} onDone={() => (setHanding(false), setPicked(new Set()), toast('Moved. Each history says who moved it.'), reload())} />}
       {moving && <MoveDialog envelope={moving} folders={data?.folders || []} onClose={() => setMoving(null)} onDone={() => (setMoving(null), reload())} />}
     </div>
   );

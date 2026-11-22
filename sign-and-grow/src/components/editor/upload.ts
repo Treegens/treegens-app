@@ -1,6 +1,7 @@
 'use client';
 import { PHONE_SECONDS_PER_MB } from '../../lib/policy.ts';
 import { isConvertible, notTaken, uploadLimits, type Converted } from '../../lib/convert.ts';
+import { screenHeaders } from '../screenToken.ts';
 
 // is_scan and scan_pages: the pages that are pictures with no text, counted from 1. See src/lib/scans.ts.
 // size: the bytes of the stored PDF, which is what every signer downloads. See src/lib/phone.ts.
@@ -40,6 +41,8 @@ export function uploadFile(file: File | File[], onProgress: (fraction: number) =
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/files');
+    // The sender screen inside a customer's app has no cookie, only its token (ui.tsx screenHeaders).
+    for (const [k, v] of Object.entries(screenHeaders())) xhr.setRequestHeader(k, v);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.upload.onload = () => onProgress(1);
     xhr.onload = () => {

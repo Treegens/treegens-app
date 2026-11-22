@@ -2,6 +2,7 @@
 import { Dialog } from '@/components/sign/Dialog';
 import { ZoomControl } from '@/components/sign/Zoom';
 import { Icon } from '@/components/sign/parts';
+import { useT } from '@/components/sign/lang';
 
 // The toolbar's More on the signing page (research/ux-charter.md, 2.6): how the document is shown, the size of its
 // pages, and its download. They used to stand in a row above the document and took the top of a phone screen.
@@ -22,16 +23,17 @@ export function MoreDialog({ view, onView, zoom, onZoom, downloadUrl, onClose }:
   downloadUrl: string;
   onClose: () => void;
 }) {
+  const T = useT();
   return (
     <Dialog title="More" onClose={onClose}>
       <div className="sg-moredlg">
         <div role="group" aria-labelledby="sg-more-view">
-          <h3 id="sg-more-view">How to read the document</h3>
+          <h3 id="sg-more-view">{T('sign.read.title')}</h3>
           <div className="sg-seg">
-            <button type="button" aria-pressed={view === 'doc'} onClick={() => (onView('doc'), onClose())}>Pages</button>
-            <button type="button" aria-pressed={view === 'text'} onClick={() => (onView('text'), onClose())}>Text view</button>
+            <button type="button" aria-pressed={view === 'doc'} onClick={() => (onView('doc'), onClose())}>{T('sign.read.page')}</button>
+            <button type="button" aria-pressed={view === 'text'} onClick={() => (onView('text'), onClose())}>{T('sign.read.easy')}</button>
           </div>
-          <p className="muted small">Text view shows the same document as plain text, with your fields as an ordinary form.</p>
+          <p className="muted small">{T('sign.read.about')}</p>
         </div>
         {view === 'doc' && (
           <div>

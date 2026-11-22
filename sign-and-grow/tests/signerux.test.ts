@@ -664,7 +664,7 @@ test('the signing screens keep what they promise in markup: new tab, labels, rea
   // Document view: told once that Text view has the whole document as text, and the page pictures are labelled.
   // (simplify-signing: the Text view switch moved into More, so this is now a button of its own before the pages,
   // read out in place and shown when it has the keyboard focus.)
-  assert.match(page, /\{view === 'doc' && <button type="button" className="sg-skip sg-skip-text" onClick=\{\(\) => chooseView\('text'\)\}>The pages below are pictures\. Read the document as text instead<\/button>\}/);
+  assert.match(page, /\{view === 'doc' && <button type="button" className="sg-skip sg-skip-text" onClick=\{\(\) => chooseView\('text'\)\}>\{T\('sign\.read\.skip'\)\}<\/button>\}/);
   assert.match(read('components/PdfDoc.tsx'), /<canvas ref=\{canvas\} role="img" aria-label=\{`Page \$\{index \+ 1\} of/);
   // Tick boxes and radio buttons in Document view are the browser's own, and radio buttons sit in a named group.
   assert.match(page, /<input type="checkbox" className="sg-vh" checked=/);

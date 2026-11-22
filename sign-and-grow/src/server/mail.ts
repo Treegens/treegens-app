@@ -7,6 +7,7 @@ import { archiveDraft, takeArchiveCopies, markArchiveRow, archiveCheck, noteArch
 import { smtpRequireTls, tlsRefusal } from '../lib/mailtls.ts';
 // Our words in the reader's language (lang-mail): the footer below and the lines of the text part.
 import { mt, mailHtml, mailLangAttrs, listIn, storedLocale, mailLine, unquote } from './maillang.ts';
+import { withSentBy } from './sentfor.ts';
 
 export type Mail = {
   to: string;
@@ -282,6 +283,8 @@ async function archiveAfter(id: number | bigint) {
 // process stopped) is picked up by the timer after MAIL_STUCK_MS, and each hand-over first claims the row, so the
 // timer and the code that wrote it never both send it.
 export function recordMail(m: Mail): number | bigint {
+  // Sent by a colleague for the person it belongs to: both names, in the From line and at the foot (sentfor.ts).
+  m = withSentBy(m);
   const html = renderMail(m);
   // What a later try needs besides the html. Attachments go to the file store (a signed PDF is there already) and
   // the row only names them.

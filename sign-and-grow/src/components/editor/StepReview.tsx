@@ -19,7 +19,13 @@ import { CustomFieldsStep } from './CustomFieldsStep';
 import { phoneWeight } from '@/lib/phone';
 import { isGroupRow, groupLine } from './GroupRecipient';
 import { noAddressWords, personLabel } from '@/lib/editorux';
+import { isOpenPlace, chooserBefore } from '@/lib/recipienttypes';
 import { ConfirmToSend, isConfirmRefusal } from './ConfirmToSend';
+// Send later: the button's words once a time is chosen, and a wait before a person (SendLater.tsx).
+import { sendLaterLabel, waitNote } from './SendLater';
+import { RuleLine } from './RecipientRule';
+import { SeeWhatTheySee } from './SeeWhatTheySee';
+import { OwnDocsLine } from './OwnDocsChoice';
 
 const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
@@ -117,7 +123,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
   const pages = docs.reduce((n, d) => n + d.pages, 0);
   const sorted = [...rcps].sort((a, b) => (env.ordered ? a.routing_order - b.routing_order : 0));
   const blocked = busy || problems.length > 0 || !!closed || conflict.length > 0 || (correcting && !changed);
-  const label = isTpl ? 'Save template' : correcting ? (busy ? 'Saving…' : 'Save changes') : busy ? (ed.signNow ? 'Opening…' : 'Sending…') : ed.signNow ? 'Sign now' : 'Send';
+  const label = isTpl ? 'Save template' : correcting ? (busy ? 'Saving…' : 'Save changes') : busy ? (ed.signNow ? 'Opening…' : 'Sending…') : ed.signNow ? 'Sign now' : sendLaterLabel(ed) || 'Send';
 
   return (
     <div className="main stack ed-narrow ed-review">
@@ -163,6 +169,8 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
 
       {/* The account's own references, such as a case number. Right under the title, so a required one is in view. Absent when the account has none (CustomFieldsStep.tsx). */}
       {!closed && <CustomFieldsStep ed={ed} />}
+      {/* One link above Who gets it: the signing page as these people will see it, in a new tab (SeeWhatTheySee.tsx). */}
+      {!closed && <SeeWhatTheySee ed={ed} people={sorted} changed={changed} />}
       {correcting && result ? (
         <div className="card">
           <h2>What happens when you save</h2>
@@ -188,7 +196,7 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       ) : (
         <div className="card">
           <h2 style={{ marginBottom: 4 }}>{isTpl ? 'Roles' : 'Who gets it'}</h2>
-          <p className="muted small" style={{ margin: 0 }}>{plural(docs.length, 'file')}, {plural(pages, 'page')} · {env.ordered ? 'signed in order' : 'everyone at once'}</p>
+          <p className="muted small" style={{ margin: 0 }}>{plural(docs.length, 'file')}, {plural(pages, 'page')}{docs.some((d) => d.supplemental) ? <span data-feature="ds-supplements"> ({docs.filter((d) => d.supplemental).length} to read, not sign)</span> : null} · {env.ordered ? 'signed in order' : 'everyone at once'}</p>
           <ul className="ed-people">
             {sorted.map((r) => {
               const n = fields.filter((f) => f.recipient_id === r.id).length;
@@ -198,8 +206,12 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
                   <span className="dot" style={{ background: ed.color(r.id) }} />
                   <div className="grow">
                     <b className="ed-break">{personLabel(r, ed.rcps.indexOf(r))}</b>
-                    <div className="muted small ed-break">{isGroupRow(r) && !r.claimed_by ? groupLine(r) : r.email || noAddressWords(r, isTpl)}</div>
-                    <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{r.verify === 'sms_code' ? ' · code by text message' : r.verify === 'email_code' ? ' · code by email' : ''}{r.text_link ? ' · link also by text' : ''}{r.whatsapp ? ' · link also by WhatsApp' : ''}{n ? ` · ${plural(n, 'field')}` : ''}</div>
+                    <div className="muted small ed-break">{isGroupRow(r) && !r.claimed_by ? groupLine(r) : r.email || noAddressWords(r, isTpl, isOpenPlace(r, ed.rcps, !!env.ordered) ? chooserBefore(r, ed.rcps, !!env.ordered)?.name || '' : null)}</div>
+                    <div className="small" style={{ marginTop: 3 }}>{ROLE_LABEL[r.role]}{r.access_code ? ' · access code' : ''}{r.verify === 'sms_code' ? ' · code by text message' : r.verify === 'email_code' ? ' · code by email' : ''}{r.text_link ? ' · link also by text' : ''}{r.whatsapp ? ' · link also by WhatsApp' : ''}{n ? ` · ${plural(n, 'field')}` : ''}{waitNote(ed, r) ? ` · ${waitNote(ed, r)}` : ''}</div>
+                    {/* A set "Only when..." is one line under its person (RecipientRule.tsx). */}
+                    <RuleLine ed={ed} r={r} />
+                    {/* With "Each person sees only their files" on: which files this person gets (OwnDocsChoice.tsx). */}
+                    <OwnDocsLine ed={ed} r={r} />
                   </div>
                 </li>
               );

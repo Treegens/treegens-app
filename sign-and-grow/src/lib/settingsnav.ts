@@ -10,11 +10,15 @@
 // read the plan and the stamps (MEMBER_READS: shown without a tab of their own).
 
 export type Role = 'owner' | 'admin' | 'member';
-export type SectionKey = 'profile' | 'security' | 'account' | 'sending' | 'team' | 'stamps' | 'billing' | 'data' | 'developers' | 'organisation';
+export type SectionKey = 'profile' | 'security' | 'away' | 'account' | 'sending' | 'team' | 'stamps' | 'billing' | 'data' | 'developers' | 'organisation';
 
-const SECTIONS: { key: SectionKey; label: string; admins?: true; orgAdmins?: true }[] = [
+const SECTIONS: { key: SectionKey; label: string; admins?: true; orgAdmins?: true; away?: true }[] = [
   { key: 'profile', label: 'Profile' },
   { key: 'security', label: 'Security' },
+  // Only for an account with 2 or more members (sharing with a colleague) or once an admin allowed delegates
+  // (src/server/delegation.ts): "Someone signs for me while I am away". A member has no tab for it, so they keep at
+  // most 4 sections: the same cards are at the end of their Team section (AWAY_IN_TEAM), where their colleagues are.
+  { key: 'away', label: 'Away and sharing', away: true },
   { key: 'account', label: 'Account', admins: true },
   { key: 'sending', label: 'Sending', admins: true },
   { key: 'team', label: 'Team' },
@@ -28,11 +32,20 @@ const SECTIONS: { key: SectionKey; label: string; admins?: true; orgAdmins?: tru
 
 export const SETTINGS_MAX = { admin: 10, member: 4, cards: 4 };
 
+// What a section of the admins needs of a role an admin made (src/lib/perm.ts). `can` is given only for such a role,
+// so the built-in roles see what they always saw.
+const SECTION_NEEDS: Partial<Record<SectionKey, string>> = { account: 'settings', sending: 'settings', data: 'settings', stamps: 'stamps', billing: 'billing' };
+
 /** The sections this person sees, in order. */
-export function sectionsFor(role: string | null | undefined, orgAdmin = false): [SectionKey, string][] {
+export function sectionsFor(role: string | null | undefined, orgAdmin = false, can?: readonly string[] | null, away = false): [SectionKey, string][] {
   const member = role !== 'owner' && role !== 'admin';
-  return SECTIONS.filter((s) => !(member && s.admins) && (!s.orgAdmins || orgAdmin)).map((s) => [s.key, s.label]);
+  return SECTIONS.filter((s) => !(member && s.admins) && (!s.orgAdmins || orgAdmin) && (!s.away || (away && !member)) && !(can && SECTION_NEEDS[s.key] && !can.includes(SECTION_NEEDS[s.key]!))).map((s) => [s.key, s.label]);
 }
+
+/** Whether Away and sharing shows at the end of Team instead of in a tab of its own: a member, on a team. */
+export const awayInTeam = (role: string | null | undefined, away: boolean): boolean => away && role !== 'owner' && role !== 'admin';
+/** The id the cards of Away and sharing stand under, so a link to it can bring them into view. */
+export const AWAY_ANCHOR = 'away-and-sharing';
 
 export type Landing = {
   /** The section to open. */
@@ -48,8 +61,8 @@ export type Landing = {
  * carries the answer of a sign-in provider. Old addresses keep working, and a member who follows a link to a section
  * of the admins is told so in words instead of being shown an empty page.
  */
-export function landingFor(role: string | null | undefined, tab: string | null | undefined, hash = '', signin = false, orgAdmin = false): Landing {
-  const mine = sectionsFor(role, orgAdmin).map(([k]) => k);
+export function landingFor(role: string | null | undefined, tab: string | null | undefined, hash = '', signin = false, orgAdmin = false, can?: readonly string[] | null, away = false): Landing {
+  const mine = sectionsFor(role, orgAdmin, can, away).map(([k]) => k);
   const asked = String(tab || '').toLowerCase();
   const anchor = hash.replace(/^#/, '');
   if (asked === 'notifications') return { tab: 'profile', focus: 'notifications' };
@@ -58,6 +71,8 @@ export function landingFor(role: string | null | undefined, tab: string | null |
   if (!known) return { tab: 'profile' };
   // A member may read the plan and the stamps. They have no tab for them and change nothing there.
   if (!mine.includes(known.key) && MEMBER_READS.some(([k]) => k === known.key)) return { tab: known.key, note: `${known.label} is set by the owner and the admins of this account. You can read it here, and they are the ones who change it.` };
+  if (known.key === 'away' && awayInTeam(role, away)) return { tab: 'team', focus: AWAY_ANCHOR };
+  if (known.key === 'away' && !mine.includes('away')) return { tab: 'profile', note: 'Away and sharing is there once this account has a second member, or once an admin allows people to name someone who signs for them while they are away. Ask one of them: Team lists who they are.' };
   if (!mine.includes(known.key)) return { tab: 'profile', note: `${known.label} is set by the owner and the admins of this account, so it is not in your Settings. Ask one of them: Team lists who they are.` };
   return { tab: known.key, focus: anchor || undefined };
 }

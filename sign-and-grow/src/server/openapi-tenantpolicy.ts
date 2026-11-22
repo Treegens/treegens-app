@@ -24,6 +24,7 @@ const view = {
     record_fixed: bool('True when the server is set up for a public body (DEPLOYMENT_PROFILE=government): the signing record never carries trees, so there is no switch for it.'),
     ai_available: bool('True when a model answers the help chat on this server. False: there is nothing to switch on, and "ai_helper" changes nothing. On a server set up for a public body only a model the operator runs answers, never a hosted service.'),
     ai_provider: { type: 'string', nullable: true, description: 'Who writes the answers, as the operator named them, when "ai_available" is true.' },
+    ai_assist: bool('True when "ai_helper" also turns on AI help when sending and signing (Draft a message, and with "Let the AI read document text" suggested fields and a summary for signers). False when AI_ASSIST_DAILY_LIMIT is 0. Absent when no model answers.'),
   },
 };
 

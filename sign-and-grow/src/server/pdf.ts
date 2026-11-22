@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { firstSender, certSentBy } from './sentfor.ts';
 import { PDFDocument, PDFPage, PDFFont, PDFName, PDFDict, PDFRef, PDFArray, PDFNumber, PDFStream, rgb, degrees, pushGraphicsState, popGraphicsState, translate, drawObject, concatTransformationMatrix } from 'pdf-lib';
 import { jpegOrientation, markUpright, uprightMatrix, liesOnItsSide, pictureLimit } from './exif.ts';
 import fontkitMod from '@pdf-lib/fontkit';
@@ -15,12 +16,18 @@ import { PRINT_MARK, codePoints } from '../lib/scripts.ts';
 import { strikeLines } from '../lib/strike.ts';
 import { payLineForPrint } from '../lib/paylink.ts';
 import { certName, certGroup } from '../lib/groups.ts';
+// Signed by a delegate for a person who was away: who, for whom, under which delegation (delegation.ts).
+import { delegateCertLines } from './delegation.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { consentCertValue } from '../lib/disclosure.ts';
 import { certLanguageLine } from './signlang.ts';
+import { viewsLine } from '../lib/readview.ts';
 import { readableWording } from '../lib/wordingday.ts';
 // A witness is listed under the person they witnessed, with their statement (src/server/witness.ts).
 import { witnessOrder, witnessCertLines } from './witness.ts';
+import { stepCertLines, stepStatus } from '../lib/recipienttypes.ts';
+// What an official recorded at a service counter, as their statements (counter.ts).
+import { counterCertLines } from './counter.ts';
 import { drawStamp, stampFor, stampForMark, markFields } from './stamp.ts';
 import { hiddenOf } from './logic.ts';
 // A company stamp on the page, printed like ink (src/server/stamps.ts). Not the large "VOIDED" mark of stamp.ts.
@@ -36,9 +43,14 @@ import { printedAmount, fieldChecks, FIXED_MIN_PT } from '../lib/fieldrules.ts';
 const FIXED_FLOOR_PT = 2;
 import { chainStampLine } from './auditstamp.ts';
 import { STAMP_OPACITY, stampTurn } from '../lib/stamps.ts';
+// "Not asked: Ben, because Amount was 800 (rule: more than 1000)." for a person whose "Only when..." was not met.
+import { notAskedStatus } from '../lib/routing.ts';
 // The logo in the certificate's header and the "Signed with growsigning" stamp at the foot of pages (brandpdf.ts).
 import { drawBrandHeader, drawSheetFoot } from './brandpdf.ts';
 import { notePages, drawFootClear, fieldBox } from './footplace.ts';
+// Files given to read with the document, not signed: after the signed pages, and in the certificate (supplements.ts).
+import { toSign, addSupplements, supplementCert } from './supplements.ts';
+import { hiddenDocLines, TRAIL_NAMES_NOTE } from '../lib/owndocs.ts';
 
 const fontkit: any = (fontkitMod as any).default || fontkitMod;
 const GREEN = rgb(0.12, 0.44, 0.26);
@@ -369,7 +381,7 @@ export class Sheet {
   }
 }
 
-const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approver', cc: 'Receives a copy', viewer: 'Needs to view', inperson: 'In-person signer', witness: 'Witness' };
+const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approver', cc: 'Receives a copy', viewer: 'Needs to view', inperson: 'In-person signer', witness: 'Witness', editor: 'Can change the document', agent: 'Chooses who comes next' };
 // A moment on the signing record: the day with the month as a word, so nobody can misread it, and the time in UTC.
 const ts = (s: string | null | undefined) => (s ? `${dayText(s)} ${s.slice(11, 19)} UTC` : '-');
 
@@ -389,7 +401,11 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   s.kv('Envelope ID', e.id);
   s.kv('Subject', iso(e.subject) || '(no subject)');
   s.kv('Status', e.status === 'completed' ? 'Completed' : e.status);
-  s.kv('Sender', sender ? `${iso(sender.name)} <${sender.email}>` : '-');
+  // The first sender stays on the certificate after a move; who sent it for whom has a line of its own (sentfor.ts).
+  const first = firstSender(e) || sender;
+  s.kv('Sender', first ? `${iso(first.name)} <${first.email}>` : '-');
+  const sentBy = certSentBy(e);
+  if (sentBy) s.kv('Sent by', known(sentBy));
   s.kv('Sent', ts(e.sent_at));
   s.kv('Completed', ts(e.completed_at));
   s.kv('Signing order', e.ordered ? 'Sequential' : 'Everyone at once');
@@ -400,10 +416,13 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   drawSenderDetails(s, e, iso, MUTED);
 
   s.h2('Documents');
-  for (const d of e.documents) {
+  for (const d of toSign(e.documents)) {
     s.text(`${iso(d.name)} (${d.pages} page${d.pages === 1 ? '' : 's'})`, { size: 9, bold: true });
     s.text(`SHA-256 of the original: ${d.sha256}`, { size: 7, color: MUTED, gap: 3 });
   }
+  // A copy made for one person: each file they were not shown, by its fingerprint only (visibility.ts).
+  for (const [k, v] of hiddenDocLines(e.hidden_documents)) (s.text(k, { size: 9, bold: true }), s.text(v, { size: 7, color: MUTED, gap: 3 }));
+  supplementCert(e, s, iso, ts);
 
   s.h2('Recipients');
   // A witness comes straight after the person they witnessed (witnessOrder in witness.ts).
@@ -413,11 +432,16 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
     // For a group: the member who acted and the group ("Maya Lopez, for HR team"), see certName in src/lib/groups.ts.
     s.text(certName(r, iso), { size: 10, bold: true, maxW: 330 });
     s.kv('Role', ROLE_LABEL[r.role] || r.role);
-    s.kv('Status', r.status === 'completed' ? (r.role === 'cc' ? 'Copied' : r.role === 'viewer' ? 'Viewed' : r.role === 'approver' ? 'Approved' : r.role === 'witness' ? 'Witnessed' : 'Signed') : r.status);
+    s.kv('Status', r.status === 'skipped' ? notAskedStatus(r) : stepStatus(r) || (r.status === 'completed' ? (r.role === 'cc' ? 'Copied' : r.role === 'viewer' ? 'Viewed' : r.role === 'approver' ? 'Approved' : r.role === 'witness' ? 'Witnessed' : 'Signed') : r.status));
+    // What someone who changes the document could do, and who named this person (src/lib/recipienttypes.ts).
+    for (const [k, v] of stepCertLines(e, r, ts)) s.kv(k, known(v));
     // Whose signature a witness witnessed, their statement as ticked, when, and what a challenge would look at.
     for (const [k, v] of witnessCertLines(e, r, ts)) s.kv(k, known(v));
+    for (const [k, v] of counterCertLines(e, r, ts)) s.kv(k, known(v));
+    for (const [k, v] of delegateCertLines(e, r)) s.kv(k, known(v));
     s.kv('Sent', ts(r.sent_at));
-    if (r.role !== 'cc') {
+    // Someone who was not asked never had the document: no times, checks or address to show for them.
+    if (r.role !== 'cc' && r.status !== 'skipped') {
       s.kv('Viewed', ts(r.viewed_at));
       // Someone who finished, was asked to sign again because the sender changed the document, and did: both
       // times are shown. The audit trail below says what changed in between.
@@ -435,6 +459,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
       s.kv('E-record consent', consentCertValue(r, ts));
       // In which language they read the signing page and the consent wording (signlang.ts). Absent when neither was recorded.
       { const l = certLanguageLine(r, audit); if (l) s.kv('Language', l); }
+      // Which ways of showing the document they used: the pages, Easy reading, or both (src/lib/readview.ts).
+      { const v = viewsLine(r.views_used); if (v) s.kv('Read as', v); }
       s.kv('IP address', r.ip || '-');
       // The same moments by this person's own clock, in the time zone their device reported. The date of signing on
       // the pages is the calendar day there, so the certificate shows what that day rests on, next to UTC above.
@@ -474,6 +500,7 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   }
   s.h2('Audit trail');
   s.text('Each event is hashed together with the one before it, so the history cannot be edited without breaking the chain.', { size: 7.5, color: MUTED, gap: 4 });
+  if (e.hidden_documents?.length) s.text(TRAIL_NAMES_NOTE, { size: 7.5, color: MUTED, gap: 4 });
   for (const a of audit) {
     s.need(24);
     const y0 = s.y;
@@ -680,12 +707,13 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
   // completed copy when they asked for that too (fieldchecks.ts).
   const seen = printedFields(e.fields.map(asSeen), ctx.recipients, opts.certificate ? 'completed' : e.status, opts.viewer);
   const hide = hiddenOf(seen);
-  const fields = seen.filter((f: any) => !hide.has(f.id));
+  // Nor do the fields of someone who was not asked (routing.ts): not even their name, as if they had taken part.
+  const fields = seen.filter((f: any) => !hide.has(f.id) && ctx.recipients.get(f.recipient_id)?.status !== 'skipped');
   // The mark of a copy that must not pass for a signed document: closed, or still out (stamp.ts).
   const mark = opts.notice ? stampFor(e.status) : opts.unfinished && e.status === 'sent' && !opts.certificate ? stampFor('sent') : null;
 
   const footLine = `GrowSigning Envelope ID: ${e.id}${opts.notice ? ' · NOT COMPLETED BY EVERYONE, see the first page' : mark ? ' · NOT COMPLETED YET: not everyone has signed' : ''}`;
-  for (const d of e.documents) {
+  for (const d of toSign(e.documents)) {
     const pages = await flatPages(doc, d.sha256);
     pages.forEach((p) => doc.addPage(p));
     for (const f of fields.filter((f: any) => f.document_id === d.id)) {
@@ -714,6 +742,7 @@ export async function renderEnvelopePdf(e: any, audit: any[], opts: { certificat
       if (opts.certificate && (err?.data?.code === 'file_damaged' || err?.data?.code === 'file_locked')) throw err;
     }
   }
+  await addSupplements(e, { flat: (sha) => flatPages(doc, sha), add: (p) => doc.addPage(p), sheet: () => new Sheet(doc, font, bold, footLine), foot: (p) => (drawFootClear(p, mapper(p), [], { line: footLine, font, color: MUTED }), mark && drawStamp(p, bold, mark)) });
   if (opts.certificate) await drawCertificate(ctx, e, audit, opts.sender);
   doc.setTitle(e.subject || 'Signed document');
   doc.setProducer('GrowSigning');

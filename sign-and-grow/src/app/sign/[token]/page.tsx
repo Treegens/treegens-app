@@ -12,6 +12,7 @@ import { Shell, StateCard, Sender, Icon, useMedia, bringIntoView } from '@/compo
 import { TreeLine, SignerDone } from '@/components/impact/SignerTrees';
 import { PurgedLink } from '@/components/sign/PurgedLink';
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
+import { PausedLink } from '@/components/sign/Paused';
 import { CodeCheck } from '@/components/sign/CodeCheck';
 import { MenuDialog, ReportDialog, DeclineDialog, ReassignDialog, SignedFieldDialog, ReviewDialog, FieldSheet, type MenuItem } from '@/components/sign/dialogs';
 import { HelpChat } from '@/components/HelpChat';
@@ -34,9 +35,15 @@ import { moreTimeWords, laterWords } from '@/lib/bysender';
 import { CommentsDialog, OpenQuestion, useMyQuestions } from '@/components/sign/Comments';
 import { MailAgain } from '@/components/sign/MailAgain';
 import { NextPerson, FormCleared } from '@/components/sign/SharedDevice';
+import { CounterDone } from '@/components/sign/CounterDone';
+import { CounterCopy, CounterWait } from '@/components/counter/SignParts';
 import { witnessFirst, WitnessFirst, WitnessNotice, WitnessName, WitnessAfter } from '@/components/sign/Witness';
+import { stepFirst, NameNext } from '@/components/sign/NameNext';
+import { changerWords, isStepRole, stepLaterWords } from '@/lib/recipienttypes';
 // A document sent to a signing group: what this member's own link is to the group (src/server/groups.ts).
 import { GroupAway, GroupConsentNote, HandBackDialog, groupAway, groupDeclineText, groupNoteId } from '@/components/sign/GroupNotice';
+// Someone signing for a person who is away, and that person's own link (src/server/delegation.ts).
+import { DelegateAway, DelegateConsentNote, delegateAway, delegateNoteId, delegateWaiting } from '@/components/sign/DelegateNotice';
 // A stamp field: the signer puts their own stamp on, printed like ink (src/components/stamps, src/server/stamps.ts).
 import { StampDialog, sameStampOf } from '@/components/stamps/StampDialog';
 import { stampTurn, turnStyle } from '@/lib/stamps';
@@ -44,20 +51,31 @@ import { layers } from '@/lib/stacked';
 // The page made simpler: Other actions in one order, Finish that signs unless something needs a look, Next that opens.
 import { otherActions, lookAgain, nextOpens, nameDiffers, laterAtConsent, laterLabel, reviewTitle, GUIDE_NEXT, GUIDE_FINISH, FLAG_MARGIN, type ActionKey } from '@/components/sign/actions';
 import { ConsentTop } from '@/components/sign/ConsentTop';
+import { SummaryLink } from '@/components/sign/Summary';
+import { Supplements, focusAlso, NO_ALSO, type AlsoLeft } from '@/components/sign/Supplements';
 import { readTypedName, writeTypedName } from '@/components/sign/typedName';
 import { FixName } from '@/components/sign/dialogs';
 import { MoreButton, MoreDialog } from '@/components/sign/More';
+// Easy reading: the first use of each view goes to the audit trail, and "See this on the page" (sign/readview.ts).
+import { noteView, showOnPage, focusEasy, backToPart, partId } from '@/components/sign/readview';
 import { NameDialog } from '@/components/sign/NameDialog';
 import { yourMoment } from '@/lib/dates';
 // The account's own consent text under ours, and "Sign on paper instead" (sign/OwnTerms.tsx, sign/Withdraw.tsx).
 import { OwnTermsBlock } from '@/components/sign/OwnTerms';
 import { PaperDialog } from '@/components/sign/Withdraw';
 import { t } from '@/lib/i18n';
+// Inside a frame on the sender's own website: what happened is told to that website alone (sign/frame.ts).
+import { frameBody, tellFrame } from '@/components/sign/frame';
+import { codeForgottenInFrame, OwnTabLink } from '@/components/sign/FrameTab';
+import { FRAME_CODE_LOST } from '@/lib/embed';
 // The words of this page in the signer's language, and refusals said from their code (src/lib/signlang.ts).
 import { signT, shownError, consentNote, signLangAttr } from '@/lib/signlang';
 import { useSignLang, richText } from '@/components/sign/lang';
 // An account's "Sign out after N minutes": the link is checked again after a break that long (sign/away.ts).
 import { useAwayCheck } from '@/components/sign/away';
+import { isPreviewToken, PREVIEW_NOTHING } from '@/lib/preview';
+import { PreviewProblem } from '@/components/sign/PreviewProblem';
+import { previewT } from '@/components/sign/PreviewBand';
 
 type Save = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 type Open = '' | 'menu' | 'more' | 'name' | 'decline' | 'reassign' | 'ask' | 'report' | 'review' | 'handback' | 'help' | 'paper';
@@ -69,7 +87,8 @@ const TOUCH = '(max-width: 600px), (pointer: coarse)';
 
 export default function SignPage() {
   const { token } = useParams<{ token: string }>();
-  const base = `/sign/${token}`;
+  // A sender's "See what each person sees" talks to /preview/..., where nothing is recorded or sent (PreviewBand.tsx).
+  const base = isPreviewToken(token) ? `/preview/${token}` : `/sign/${token}`;
   const [data, setData] = useState<any>(null);
   const [problem, setProblem] = useState<{ status: number; message: string; code?: string; day?: string } | null>(null);
   const [handedTo, setHandedTo] = useState('');
@@ -96,6 +115,11 @@ export default function SignPage() {
   // The date field whose picker is open. A date that was picked is otherwise shown the way it will be printed.
   const [dateOpen, setDateOpen] = useState<string | null>(null);
   const [view, setView] = useState<'doc' | 'text'>('doc');
+  // Easy reading (sign/readview.ts): the part a person left with "See this on the page", to come back to, and the
+  // views that really were on the screen, for the audit trail.
+  const [back, setBack] = useState<{ doc: string; id: string } | null>(null);
+  const [seenIn, setSeenIn] = useState<{ page?: boolean; easy?: boolean }>({});
+  const sawIn = useCallback((v: 'page' | 'easy') => setSeenIn((s) => (s[v] ? s : { ...s, [v]: true })), []);
   // The size of the pages: 1, 1.5 or 2 times the width of the screen (Zoom.tsx).
   const [zoom, setZoom] = useState(1);
   const [busy, setBusy] = useState(false);
@@ -160,7 +184,7 @@ export default function SignPage() {
   const who = useRef<string | null>(null);
   const stageRef = useRef('loading');
   // This person's questions that nobody has answered yet: mentioned when they press Finish, never in the way of it.
-  const questions = useMyQuestions(base, !!data?.fields && open !== 'ask', open === 'review');
+  const questions = useMyQuestions(base, !!data?.fields && open !== 'ask' && !delegateWaiting(data), open === 'review');
 
   const load = useCallback(async () => {
     try {
@@ -201,6 +225,11 @@ export default function SignPage() {
   useEffect(() => {
     load();
   }, [load]);
+  // Paused by its sender while this page was open: load again, so the paused card shows (src/server/timing.ts).
+  useEffect(() => {
+    window.addEventListener('sg:paused', load);
+    return () => window.removeEventListener('sg:paused', load);
+  }, [load]);
   // The language of this page: the header menu's choice in this tab, else the server's (src/components/sign/lang.tsx).
   const lang = useSignLang(data);
   const T = (key: string, vars?: Record<string, string | number>) => signT(lang, key, vars);
@@ -225,15 +254,22 @@ export default function SignPage() {
 
   useEffect(() => {
     try {
-      if (localStorage.getItem('sg:view') === 'text') setView('text');
+      // Remembered for this link only: on a shared computer the next person's document opens on its pages.
+      if (localStorage.getItem(`sg:view:${base}`) === 'text') setView('text');
     } catch {
       /* no storage: start in the document view */
     }
-  }, []);
+  }, [base]);
   function chooseView(v: 'doc' | 'text') {
     setView(v);
+    // Into Easy reading the focus follows: back to the part left for "See this on the page", or to its banner.
+    if (v === 'text') {
+      if (back) backToPart(back.id);
+      else focusEasy();
+      setBack(null);
+    }
     try {
-      localStorage.setItem('sg:view', v);
+      localStorage.setItem(`sg:view:${base}`, v);
     } catch {
       /* the choice just is not remembered */
     }
@@ -283,8 +319,15 @@ export default function SignPage() {
   // A closed or not-yet-ready document says so straight away, before anyone is asked for an access code.
   // `wantCopy`: someone who signed a document that was closed later asks for their copy, and it is behind an access
   // code that this browser has not been given (or no longer remembers). Then the code is asked for after all.
-  const stage = handedTo ? 'handed' : !data ? (problem ? 'problem' : 'loading') : closed && !(wantCopy && data.locked) ? 'closed' : me.status === 'pending' ? 'pending' : data.locked ? 'locked' : iAmDone ? 'done' : !me.consented || (data.own_terms?.each_visit && !agreedHere) ? 'consent' : 'sign';
+  const stage = handedTo ? 'handed' : !data ? (problem ? 'problem' : 'loading') : closed && !(wantCopy && data.locked) ? 'closed' : env?.paused && !iAmDone ? 'paused' : me.status === 'pending' ? 'pending' : data.locked ? 'locked' : iAmDone ? 'done' : data.preview && agreedHere ? 'sign' : !me.consented || (data.own_terms?.each_visit && !agreedHere) ? 'consent' : 'sign';
   canSave.current = stage === 'sign' && acts && fields.length > 0;
+  // The first use of the pages and of Easy reading, for the audit trail and the certificate (sign/readview.ts).
+  useEffect(() => {
+    // Only once that view really was on the screen: the pages drawn, or the words of Easy reading read.
+    if (stage !== 'sign' || data?.preview) return;
+    if (seenIn.page) noteView(base, 'page');
+    if (seenIn.easy) noteView(base, 'easy');
+  }, [stage, seenIn, base, data?.preview]);
 
   // When the screen changes, start reading from its heading rather than from wherever focus was left.
   useEffect(() => {
@@ -540,7 +583,9 @@ export default function SignPage() {
   const NOT_SHOWN = 'The document is still loading. You can finish as soon as its pages are on your screen.';
 
   // Nothing required is left: Finish glows once where it is. No dialog opens by itself (research/ux-charter.md, P9).
-  const ready = stage === 'sign' && acts && required.length > 0 && left.length === 0 && allShown;
+  // Files given to read that still have to be opened or ticked count as places left (sign/Supplements.tsx).
+  const [also, setAlso] = useState<AlsoLeft>(NO_ALSO);
+  const ready = stage === 'sign' && acts && required.length > 0 && left.length === 0 && also.left === 0 && allShown;
 
   async function pressFinish() {
     if (!allShown) return toast(NOT_SHOWN, true);
@@ -571,6 +616,8 @@ export default function SignPage() {
   }
 
   async function complete() {
+    // A preview signs nothing: Finish says so and the page stays as it is.
+    if (data?.preview) return (setOpen(''), toast(PREVIEW_NOTHING));
     // The server refuses a Finish from an older version. This is the other half: the version this page sends is only
     // ever one whose pages it has drawn.
     if (!allShown) return (setOpen(''), toast(NOT_SHOWN, true));
@@ -580,9 +627,9 @@ export default function SignPage() {
     const offline = navigator.onLine === false;
     const finish = me.role === 'approver' ? 'Approve' : 'Finish';
     // What the page does once the server has this person's part, however that became known.
-    const landed = (r?: any) => (canSave.current = false, writeKept(token, null, null), writeTypedName(token, null), dropAnswers(token), setFinishPending(false), setOpen(''), r && setFinished(r));
+    const landed = (r?: any) => (canSave.current = false, writeKept(token, null, null), writeTypedName(token, null), dropAnswers(token), setFinishPending(false), setOpen(''), tellFrame('signing_complete'), r && setFinished(r));
     try {
-      landed(await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, inputs: data?.inputs ?? null, tz: deviceZone() } }));
+      landed(await api(`${base}/complete`, { body: { values, signature_png: sig, initials_png: ini, version: version.current, inputs: data?.inputs ?? null, tz: deviceZone(), ...frameBody() } }));
     } catch (e: any) {
       const msg = e?.message || 'Something went wrong on our side.';
       // Said in "Check before you finish", opened for it when Finish went straight through: the message stays next to
@@ -613,6 +660,12 @@ export default function SignPage() {
         setChangedOpen(e?.data?.why === 'inputs' ? msg : true);
         await load();
         window.scrollTo({ top: 0 });
+      } else if (e?.code === 'supplements_missing') {
+        // A file given to read still has to be opened or ticked (the file was replaced meanwhile, say): the list is
+        // loaded again from the server and says it in place, above the document, with no toast over it.
+        setOpen('');
+        await load();
+        requestAnimationFrame(focusAlso);
       } else if (/no longer open|not your turn/i.test(msg)) {
         setOpen('');
         toast(msg, true);
@@ -661,7 +714,9 @@ export default function SignPage() {
     );
   if (!data && problem) {
     // The sender's retention rule or their own request purged it (src/server/records.ts).
+    if (isPreviewToken(token)) return <PreviewProblem message={problem.message} />;
     if (problem.code === 'purged') return <PurgedLink day={problem.day} />;
+    if (problem.code === 'counter_id_first') return <CounterWait message={problem.message} onRetry={load} />;
     if (problem.status === 410) return <ReplacedLink token={token} />;
     if (problem.status === 404) return <UnknownLink />;
     return <LoadProblem message={problem.message} onRetry={load} />;
@@ -702,7 +757,7 @@ export default function SignPage() {
       {/* The help chat opens from Help in the top bar, never floating over Finish or the fields (components/HelpChat.tsx). */}
       {open === 'help' && <HelpChat screen="signing" link={token} code={data.help_code} who={me.role !== 'inperson' && me.email ? { name: me.name, email: me.email } : null} actions={() => helpActs.current} onClose={() => setOpen('')} />}
       {open === 'ask' && <CommentsDialog base={base} sender={sender} documents={data.documents || []} onClose={() => setOpen('')} />}
-      {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
+      {open === 'decline' && <DeclineDialog base={base} sender={sender} note={groupDeclineText(data)} title={me.role === 'approver' ? 'Decline to approve' : isStepRole(me.role) ? 'Decline' : 'Decline to sign'} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); tellFrame('declined'); load(); }} />}
       {open === 'paper' && <PaperDialog base={base} sender={sender} lang={data.language?.locale || 'en'} note={groupDeclineText(data)} onClose={() => setOpen('')} onDone={() => { canSave.current = false; writeKept(token, null, null); setOpen(''); load(); }} />}
       {open === 'name' && <NameDialog name={me.name} approving={me.role === 'approver'} onRename={rename} onClose={() => setOpen('')} />}
       {open === 'reassign' && <ReassignDialog base={base} sender={sender} fixName={<FixName name={me.name} onRename={rename} />} onClose={() => setOpen('')} onDone={(name) => { canSave.current = false; writeKept(token, null, null); setOpen(''); setHandedTo(name); }} />}
@@ -712,6 +767,15 @@ export default function SignPage() {
 
   // A colleague in the group has the document, or the sender took this person out of the group: who has it, and
   // the one thing left to do here, which is to ask the sender (sign/GroupNotice.tsx).
+  if (delegateAway(data) && stage !== 'locked')
+    return (
+      <Shell data={data} footer={report}>
+        {notice}
+        <DelegateAway data={data} />
+        {dialogs}
+      </Shell>
+    );
+
   if (groupAway(data) && stage !== 'locked')
     return (
       <Shell data={data} footer={report}>
@@ -759,6 +823,7 @@ export default function SignPage() {
           setFormError('');
           try {
             await api(`${base}/unlock`, { body: { code } });
+            if (await codeForgottenInFrame(base)) return setFormError(FRAME_CODE_LOST);
             await load();
           } catch (err: any) {
             // The server says what happened in full: a wrong code and how many tries are left, a short wait after
@@ -779,6 +844,7 @@ export default function SignPage() {
           {data.code_next && <p className="muted">After that there is one more check: we send you a one-time code, and you type it in on the next screen.</p>}
           <label className="f"><span>Access code</span><input value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" autoCapitalize="off" spellCheck={false} aria-invalid={!!formError} /></label>
           {formError && <div className="notice err sg-problem" role="alert">{formError}</div>}
+          {formError === FRAME_CODE_LOST && <OwnTabLink />}
           <button className="btn primary lg" disabled={busy}>{busy ? 'Opening' : 'Open document'}</button>
           <p className="muted small sg-after">Do not have a code? {sender.name} chose it and is the only one who can give it to you.</p>
           <div style={{ marginTop: 10 }}>{askSender}</div>
@@ -843,21 +909,26 @@ export default function SignPage() {
         {notice}
         <div className="stack">
           {/* In person, the device is not the signer's: the first thing the done screen says is to hand it back. */}
-          {inPerson && <HandBack signer={me.name} sender={sender.name} envelopeId={env.id} />}
+          {/* On the screen facing the person at a service counter there is no account to hand back: CounterDone below. */}
+          {!env.counter?.screen && <>{inPerson && <HandBack signer={me.name} sender={sender.name} envelopeId={env.id} />}</>}
           <StateCard tone="ok" title={title}>
             {/* No address for someone whose link the sender passed on: nothing is emailed, so nothing is promised. */}
-            {me.link_by_sender ? <NoEmailDone sender={sender.name} allDone={allDone} /> : <p>
+            {/* At a service counter the copy goes by email only: the link used there is closed (CounterCopy). */}
+            {env.counter && inPerson && <CounterCopy allDone={allDone} />}
+            {!(env.counter && inPerson) && <>{me.link_by_sender ? <NoEmailDone sender={sender.name} allDone={allDone} /> : <p>
               {allDone
                 ? inPerson ? `The completed document, with its certificate, has been emailed to ${sender.name}. Download your own copy here.` : <>A copy has been emailed to {myEmail}. It includes a certificate with the full record of who signed and when.</>
                 : inPerson ? `${sender.name} will get the completed document by email once everyone has finished. You can download it as it stands now.` : <>Others still need to finish. We will email the completed document to {myEmail} as soon as they have.</>}
-            </p>}
-            <div className="row wrap sg-actions">
+            </p>}</>}
+            {!(env.counter && inPerson) && <div className="row wrap sg-actions">
               <a className="btn primary lg" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer"><Icon name="eye" /> {allDone ? 'View completed document' : 'View document so far'}<span className="sg-vh"> (opens in a new tab)</span></a>
               <a className="btn lg" href={downloadUrl}><Icon name="download" /> Download PDF</a>
-            </div>
+            </div>}
           </StateCard>
+          {/* On the screen facing the person at a service counter: hand it back, then Next person (counter.ts). */}
+          {env.counter?.screen && <CounterDone />}
           {/* Trees and paper: the picture the first time someone signs, one small card after that (impact/SignerTrees.tsx). */}
-          <SignerDone base={base} impact={finished?.impact || env.impact} />
+          {!env.counter?.screen && <SignerDone base={base} impact={finished?.impact || env.impact} />}
           {/* The sender's own payment page, when they set one and may: only after Finish (src/components/sign/PayLink.tsx). */}
           {/* A signer with a witness: what became of them, and another one after "I was not there" (sign/Witness.tsx). */}
           <WitnessAfter me={me} base={base} onNamed={load} />
@@ -880,17 +951,21 @@ export default function SignPage() {
       </Shell>
     );
 
+  // Paused by its sender (sign/Paused.tsx, src/server/timing.ts).
+  if (stage === 'paused') return <PausedLink data={data} footer={report} notice={notice} dialogs={dialogs} />;
   if (stage === 'pending')
     return (
       <Shell data={data} footer={report}>
         {notice}
         <StateCard tone="wait" title="It is not your turn yet">
-          {me.link_by_sender ? <NoEmailWait sender={sender.name} /> : <p>Others need to finish first. We will email {myEmail} as soon as the document is ready for you. There is nothing to do until then.</p>}
+          {/* Someone who changes the document waits after their own change: who signs again first, and why (agents.ts). */}
+          {me.step_wait ? <p>{me.step_wait.again.join(', ')} {me.step_wait.again.length === 1 ? 'is' : 'are'} asked to sign again first, because of your change. We will email {myEmail} when it is your turn, and you finish then.</p>
+            : me.link_by_sender ? <NoEmailWait sender={sender.name} /> : <p>Others need to finish first. We will email {myEmail} as soon as the document is ready for you. There is nothing to do until then.</p>}
           {/* Someone who signed, and is asked to sign again after a change, waits here for their turn. What they
               signed the first time is still theirs to download meanwhile. */}
           {me.signed_before && me.earlier_copy && !data.locked && (
             <>
-              <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this on {fmtDate(me.signed_before, true)}. After that, {sender.name} changed the document, so you will be asked to {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again when it is your turn. What you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} then is kept on record, and you can download it.</p>
+              <p>You {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} this on {fmtDate(me.signed_before, true)}. After that, {changerWords(me.changed_by, sender.name)} changed the document, so you will be asked to {acts ? 'sign' : me.role === 'approver' ? 'approve' : 'confirm'} again when it is your turn. What you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'} then is kept on record, and you can download it.</p>
               <div className="row wrap sg-actions"><a className="btn lg" href={`${downloadUrl}?earlier=1`}><Icon name="download" /> Download what you {acts ? 'signed' : me.role === 'approver' ? 'approved' : 'viewed'}</a></div>
             </>
           )}
@@ -903,7 +978,7 @@ export default function SignPage() {
   // ---- Other actions, shared by the consent screen and the document ---------------------------------
 
   const go = (o: Open) => () => setOpen(o);
-  const declineLabel = me.role === 'approver' ? 'Decline to approve' : 'Decline to sign';
+  const declineLabel = me.role === 'approver' ? 'Decline to approve' : isStepRole(me.role) ? 'Decline' : 'Decline to sign';
   // One list in one order, no descriptions, never more than six (src/components/sign/actions.ts). Gone from it, not
   // from the page: Download and the view (the toolbar's More, sign/More.tsx), Help (the top bar's own button), "Change
   // my signature" (tap the signature itself) and "Stop reminder emails" (the note after Finish later, and every
@@ -913,7 +988,9 @@ export default function SignPage() {
     const ok = await flush();
     setOpen('');
     if (!ok) return;
-    setLater(stage === 'consent' ? laterAtConsent(!!me.link_by_sender) : laterWords(!!me.link_by_sender));
+    tellFrame('saved');
+    // Someone who changes the document or chooses people saves only when they finish: the note says so (NameNext.tsx).
+    setLater(stage === 'consent' ? laterAtConsent(!!me.link_by_sender) : isStepRole(me.role) ? stepLaterWords(!!me.link_by_sender) : laterWords(!!me.link_by_sender));
     window.scrollTo({ top: 0 });
   };
   const absent = async () => {
@@ -958,6 +1035,19 @@ export default function SignPage() {
     </div>
   );
 
+  // Someone who changes the envelope on their turn and does not sign: their own screen (sign/NameNext.tsx), with
+  // the same Other actions as every signer screen (charter 2.6).
+  if (stepFirst(data, stage))
+    return (
+      <Shell data={data} bar={other} footer={report} helpInNewTab plainBar onHelp={headHelp}>
+        {notice}
+        {laterNote}
+        <NameNext data={data} base={base} downloadUrl={downloadUrl} onDone={load} />
+        {menuDialog}
+        {dialogs}
+      </Shell>
+    );
+
   if (stage === 'consent') {
     // Who it is for when it is not a signature: a signer reads "sign" in the words under the tick.
     // Three words at most: the screen holds 120 words before the tick, and our own text takes most of them.
@@ -973,7 +1063,8 @@ export default function SignPage() {
               sender is named once, with the account's name only when it says more ("at Acme Ltd"). */}
           <ConsentTop data={data} ask={ask} myEmail={myEmail} />
           {/* In person: whose turn it is. The line about the connection is said on the document, where it matters. */}
-          {me.role === 'inperson' && <div className="notice warn sg-gap">{richText(lang, 'sign.consent.hand_over', { name: <b>{me.name}</b> })}</div>}
+          {/* Not on the person's own counter screen: they already hold it (counter.ts). */}
+          {me.role === 'inperson' && !env.counter?.screen && <div className="notice warn sg-gap">{richText(lang, 'sign.consent.hand_over', { name: <b>{me.name}</b> })}</div>}
           {/* One way to read it first: the PDF in a new tab, where it can be saved or printed. */}
           <p className="sg-read"><a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer" aria-label={T('sign.consent.download_label')}><Icon name="download" /> {T('sign.consent.download')}</a></p>
           {/* The words come from src/lib/policy.ts with a version, and the version goes back with the agreement, so the
@@ -990,8 +1081,9 @@ export default function SignPage() {
           </label>
           {/* A group's member: what Continue does for the group, right above it (GroupNotice.tsx). */}
           <GroupConsentNote data={data} />
+          <DelegateConsentNote data={data} />
           {formError && <div id="sg-agree-err" className="notice err sg-problem" role="alert">{formError}</div>}
-          <button type="button" className="btn primary lg sg-continue" disabled={busy} aria-describedby={groupNoteId(data)} onClick={async () => {
+          <button type="button" className="btn primary lg sg-continue" disabled={busy} aria-describedby={groupNoteId(data) || delegateNoteId(data)} onClick={async () => {
             if (!agree) return setFormError(T('sign.consent.tick_first'));
             setBusy(true);
             try {
@@ -1021,19 +1113,23 @@ export default function SignPage() {
   // ---- The document -----------------------------------------------------------------------------------
 
   const finishLabel = me.role === 'approver' ? 'Approve' : me.role === 'viewer' ? 'Mark as viewed' : 'Finish';
-  const hasNext = acts && left.length > 0;
-  const count = !acts ? '' : !required.length ? 'Nothing is required' : left.length ? `${left.length} of ${required.length} left` : 'Ready to finish';
+  const fieldsNext = acts && left.length > 0;
+  // Next also goes to a file given to read that is still to open or tick, once no field is left.
+  const hasNext = fieldsNext || also.left > 0;
+  const toDo = required.length + also.total, stillLeft = left.length + also.left;
+  const count = !acts ? '' : !toDo ? 'Nothing is required' : stillLeft ? `${stillLeft} of ${toDo} left` : 'Ready to finish';
   const mainButton = (big: boolean) => hasNext
     // Next goes to the field and opens it. "Cannot reach this field?" only for a field Next does not open itself.
-    ? <button type="button" className={`btn go${big ? ' sg-big' : ''}`} onClick={() => (nextAgain(nextField.id) && view === 'doc' && !opensOnNext(nextField) && toast(CANNOT_REACH), goTo(nextField, true))}>Next</button>
+    ? <button type="button" className={`btn go${big ? ' sg-big' : ''}`} onClick={() => !fieldsNext ? focusAlso() : (nextAgain(nextField.id) && view === 'doc' && !opensOnNext(nextField) && toast(CANNOT_REACH), goTo(nextField, true))}>Next</button>
     : <button type="button" className={`btn go finish${big ? ' sg-big' : ''}${ready ? ' sg-ready' : ''}`} disabled={busy || !allShown} aria-describedby={allShown ? undefined : 'sg-guide'} onClick={pressFinish}>{finishLabel}</button>;
-  const done = required.length - left.length;
+  const done = toDo - stillLeft;
+  const saveText = data?.preview ? previewT('preview.save') : SAVE_TEXT[save];
   const bar = (
     <>
       {acts && (
         <div className="sg-count sg-wide">
-          {required.length > 0 && <div className="progress" aria-hidden="true"><i style={{ width: `${(done / required.length) * 100}%` }} /></div>}
-          <div><b>{count}</b><span aria-hidden="true"> · {SAVE_TEXT[save]}</span></div>
+          {toDo > 0 && <div className="progress" aria-hidden="true"><i style={{ width: `${(done / toDo) * 100}%` }} /></div>}
+          <div><b>{count}</b><span aria-hidden="true"> · {saveText}</span></div>
         </div>
       )}
       <span className="sg-wide"><MoreButton open={open === 'more'} onOpen={go('more')} /></span>
@@ -1045,13 +1141,14 @@ export default function SignPage() {
   );
   const bottom = (
     <>
-      {acts && <div className="sg-bottom-info"><b>{count}</b><span aria-hidden="true">{SAVE_TEXT[save]}</span></div>}
+      {acts && <div className="sg-bottom-info"><b>{count}</b><span aria-hidden="true">{saveText}</span></div>}
       <MoreButton open={open === 'more'} onOpen={go('more')} className="btn sg-morebtn" />
       <TreeLine base={base} show={acts && !hasNext} />
       {mainButton(true)}
     </>
   );
-  const live = save === 'saved' ? 'Saved' : save === 'error' ? 'Not saved yet. We will keep trying.' : '';
+  // A preview keeps what is typed in this tab only: it never says Saved (src/server/preview.ts).
+  const live = data?.preview ? '' : save === 'saved' ? 'Saved' : save === 'error' ? 'Not saved yet. We will keep trying.' : '';
 
   const docField = (f: any) => {
     const ok = filled(f);
@@ -1240,7 +1337,8 @@ export default function SignPage() {
       {me.role === 'inperson' && <div className="notice warn sg-top">In-person signing for <b>{me.name}</b>. Hand them the device now. {SIGNING_ONLINE}</div>}
       <WitnessNotice me={me} />{/* who witnesses, or what the witness confirmed (sign/Witness.tsx) */}
       <p className="sg-guide" id="sg-guide">
-        {!acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
+        {also.left > 0 && !fieldsNext ? also.guide
+          : !acts ? (me.role === 'approver' ? 'Read the document, then choose Approve. To say no, choose Decline to approve from Other actions.' : 'Read the document, then choose Mark as viewed.')
           : hasNext ? GUIDE_NEXT
           : GUIDE_FINISH}
         {/* Finish is switched off until the pages of the document, as it is now, are on the screen. Said here, so a
@@ -1251,23 +1349,30 @@ export default function SignPage() {
       {/* The view, the size of the pages and Download are in the toolbar's More (sign/More.tsx), and Questions and
           comments in Other actions, so the pages start near the top of a phone. Someone on a keyboard or a screen reader meets the text view right here, before the
           pages, which are pictures: this button shows itself when it has the focus, like the skip link. */}
-      {view === 'doc' && <button type="button" className="sg-skip sg-skip-text" onClick={() => chooseView('text')}>The pages below are pictures. Read the document as text instead</button>}
+      {/* "Also for you": files given to read with the document, only when the sender gave some (sign/Supplements.tsx). */}
+      <Supplements base={base} list={data.supplements} canTick={me.role !== 'witness' && me.role !== 'cc' && me.status !== 'completed'} finish={finishLabel} onLeft={setAlso} />
+      {/* "Summary (written by AI, check it)": only when the sender switched it on (sign/Summary.tsx). */}
+      <SummaryLink base={base} offered={!!data.ai_summary} many={data.documents.length > 1} />
+      {view === 'doc' && <button type="button" className="sg-skip sg-skip-text" onClick={() => chooseView('text')}>{T('sign.read.skip')}</button>}
 
       {view === 'doc' ? (
         <div className={`stack sg-doc sg-pan${zoom > 1 ? ' zoomed' : ''}`}>
           {data.documents.map((d: any) => (
-            <div key={d.id}>
+            <div key={d.id} data-doc={d.id}>
+              {back?.doc === d.id && <p className="sg-flow-back"><button type="button" className="btn sm" onClick={() => chooseView('text')}>{T('sign.read.back')}</button></p>}
               {data.documents.length > 1 && <h2 className="sg-docname">{d.name}</h2>}
               {/* The address and the key carry the fingerprint of the file. A file the sender replaced is fetched and
                   drawn afresh, and onShown says when its first page is really on the screen. */}
-              <PdfDoc key={d.sha256 || d.id} url={docUrl(base, d)} zoom={zoom} overlay={overlay(d.id)} ink={inkLayer(d.id)} onShown={() => markShown(d)} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }}
+              <PdfDoc key={d.sha256 || d.id} url={docUrl(base, d)} zoom={zoom} overlay={overlay(d.id)} ink={inkLayer(d.id)} onShown={() => (markShown(d), sawIn('page'))} onDocument={(pdf) => { pdfs.current[d.id] = pdf; setPdfReady((n) => n + 1); }}
                 failed={(why, retry, said) => <NoViewer why={why} retry={retry} said={said} sender={sender.name} downloadUrl={downloadUrl} onAsk={go('ask')} />} />
             </div>
           ))}
         </div>
       ) : (
-        <TextView documents={data.documents} urlFor={(id) => docUrl(base, data.documents.find((d: any) => d.id === id) || { id })} ocrUrl={`/api${base}/ocr`} onShown={markShown} senderName={sender.name} onAsk={go('ask')}
-          fields={(docId, page, near) => <PageFields docId={docId} page={page} c={ctx} near={near} />}
+        <TextView documents={data.documents} urlFor={(id) => docUrl(base, data.documents.find((d: any) => d.id === id) || { id })} ocrUrl={`/api${base}/ocr`} onShown={(d) => (markShown(d), sawIn('easy'))} senderName={sender.name} onAsk={go('ask')}
+          fields={(docId, page, near, ids) => <PageFields docId={docId} page={page} c={ctx} near={ids ? (f: any) => (f.type === 'radio' ? near(f) : '') : near} only={ids} title={ids ? T('sign.read.here') : undefined} />}
+          mine={(docId, page) => ctx.ordered.filter((f: any) => f.document_id === docId && f.page === page)}
+          onSee={(docId, page, y, part) => (setBack({ doc: docId, id: partId(docId, page, part) }), chooseView('doc'), showOnPage(docId, page, y))}
           others={(docId, page, near) => <PageOthers others={data.others.filter((f: any) => f.document_id === docId && f.page === page)} senderName={sender.name} near={near} />} />
       )}
       {/* No impact figure here: one tree line at most, by Finish, and the Done screen (research/ux.json, "ux:check"). */}

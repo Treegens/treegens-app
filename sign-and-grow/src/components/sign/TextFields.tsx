@@ -135,13 +135,17 @@ function Row({ f, c, near }: { f: any; c: FieldCtx; near?: string }) {
 }
 
 /** Everything this signer has on one page, in reading order. Returns nothing when the page has no fields for them. */
-export function PageFields({ docId, page, c, near }: { docId: string; page: number; c: FieldCtx; near?: (f: any) => string }) {
-  const here = c.ordered.filter((f) => f.document_id === docId && f.page === page);
+// `only`: Easy reading shows the fields of a page in a few places, each where it sits in the text (sign/reflow.ts),
+// so it names which fields go here, and `title` says "here" instead of "on this page".
+export function PageFields({ docId, page, c, near, only, title }: { docId: string; page: number; c: FieldCtx; near?: (f: any) => string; only?: string[]; title?: string }) {
+  const here = c.ordered.filter((f) => f.document_id === docId && f.page === page && (!only || only.includes(f.id)))
+    // A choice group is shown where its first button is: a part of the text with only later buttons shows no empty box.
+    .filter((f) => !only || f.type !== 'radio' || f.readonly || c.ordered.find((x) => x.type === 'radio' && !x.readonly && groupKey(x) === groupKey(f))?.id === f.id);
   if (!here.length) return null;
   const seen = new Set<string>();
   return (
     <div className="sg-form" role="group" aria-label={`Your fields on page ${page + 1}`}>
-      <div className="sg-form-title">For you to fill in on this page</div>
+      <div className="sg-form-title">{title || 'For you to fill in on this page'}</div>
       {here.map((f) => {
         // The first tick box of a group with a rule says the rule, so nobody learns it only when Finish is refused.
         const rule = f.type === 'checkbox' && !f.readonly && c.ordered.find((x) => x.type === 'checkbox' && x.group_name === f.group_name)?.id === f.id ? boxRuleHint(f, c.ordered) : '';

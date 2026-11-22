@@ -7,6 +7,7 @@ import { orgOf } from '@/lib/sendername';
 import { headingFor } from '@/lib/consentfit';
 import { signT } from '@/lib/signlang';
 import { useSignLang, useDocumentLang, SignLangProvider, LanguageMenu, langAttrs } from '@/components/sign/lang';
+import { PreviewBand, PreviewChip } from '@/components/sign/PreviewBand';
 
 /** The roles whose screens never say "Please sign": they approve, read or witness. */
 const NOT_SIGNING = ['approver', 'viewer', 'witness'];
@@ -95,6 +96,8 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
     <SignLangProvider value={lang}>
     <div className="sg-shell" {...langAttrs(lang)}>
       <a className="sg-skip" href="#sg-main">{T('sign.shell.skip')}</a>
+      {/* The sender's "See what each person sees": absent on every real signing link (PreviewBand.tsx). */}
+      {data?.preview && <PreviewBand preview={data.preview} />}
       <header className="signbar sg-bar" style={style}>
         {brand?.brand_logo ? <img className="sg-logo" src={brand.brand_logo} alt={brand.name || T('sign.shell.logo')} /> : named && <Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} />}
         {/* With no subject to show (a link that did not open), the bar shows the drawn logo, never the mark beside the typed name. */}
@@ -103,6 +106,7 @@ export function Shell({ data, children, bar, bottom, footer, titleIsHeading, liv
           const shown = named ? <span dir="auto">{title}</span> : <><span className="sg-logo-full"><Logo height={20} tone={brand?.brand_color ? 'mono' : 'dark'} style={{ display: 'block' }} /></span><span className="sg-logo-small"><Mark size={24} tone={brand?.brand_color ? 'mono' : 'dark'} /></span></>;
           return titleIsHeading ? <h1 className="sg-title grow truncate">{shown}</h1> : <div className="sg-title grow truncate">{shown}</div>;
         })()}
+        {data?.preview && <PreviewChip />}
         <LanguageMenu lang={lang} />
         {bar}
         {onHelp && <button type="button" className="btn sm sg-other sg-help" aria-haspopup="dialog" onClick={onHelp}>{T('sign.shell.help')}</button>}

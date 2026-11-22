@@ -18,8 +18,9 @@ function dosTime(d: Date) {
 
 export const safeName = (s: string) => (s || 'untitled').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'untitled';
 
-export function zipStream(entries: Iterable<ZipEntry>): ReadableStream<Uint8Array> {
-  const it = entries[Symbol.iterator]();
+// `entries` may also be an async generator, for a ZIP whose parts take time to make (the full export, exportfull.ts).
+export function zipStream(entries: Iterable<ZipEntry> | AsyncIterable<ZipEntry>): ReadableStream<Uint8Array> {
+  const it: Iterator<ZipEntry> | AsyncIterator<ZipEntry> = Symbol.asyncIterator in entries ? (entries as AsyncIterable<ZipEntry>)[Symbol.asyncIterator]() : (entries as Iterable<ZipEntry>)[Symbol.iterator]();
   const central: Uint8Array[] = [];
   const used = new Set<string>();
   let offset = 0;
@@ -27,8 +28,8 @@ export function zipStream(entries: Iterable<ZipEntry>): ReadableStream<Uint8Arra
   const { time, date } = dosTime(new Date());
 
   return new ReadableStream<Uint8Array>({
-    pull(ctrl) {
-      const next = it.next();
+    async pull(ctrl) {
+      const next = await it.next();
       if (!next.done) {
         let name = next.value.name;
         for (let n = 2; used.has(name.toLowerCase()); n++) name = next.value.name.replace(/(\.[^./]+)?$/, ` (${n})$1`);
@@ -84,4 +85,54 @@ export function zipStream(entries: Iterable<ZipEntry>): ReadableStream<Uint8Arra
       ctrl.close();
     },
   });
+}
+
+// ---- Reading a ZIP ------------------------------------------------------------------------------------------------
+// For bringing a full export or a folder of DocuSign downloads in (importer.ts). Stored and deflated entries, no
+// ZIP64, no encryption. Every entry is unpacked with a limit, so a file that claims small sizes and unpacks to far
+// more is stopped, and `damaged` is thrown (words for a person) whenever the file cannot be read as a ZIP.
+// (convert.ts keeps its own reader for office files, with its own words and its own limits.)
+
+export type ZipFile = { name: string; data: Buffer };
+
+const r16 = (b: Uint8Array, o: number) => b[o] | (b[o + 1] << 8);
+const r32 = (b: Uint8Array, o: number) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16)) + b[o + 3] * 0x1000000;
+
+export const looksLikeZip = (b: Uint8Array) => b.length >= 22 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 3 && b[3] === 4;
+
+export function readZip(b: Uint8Array, o: { damaged: () => Error; maxUnpacked: number; maxFiles?: number }): ZipFile[] {
+  let end = -1;
+  for (let i = b.length - 22; i >= Math.max(0, b.length - 65_557); i--) if (b[i] === 0x50 && b[i + 1] === 0x4b && b[i + 2] === 5 && b[i + 3] === 6) { end = i; break; }
+  if (end < 0) throw o.damaged();
+  const count = r16(b, end + 10), size = r32(b, end + 12), at = r32(b, end + 16);
+  if (count === 0xffff || size === 0xffffffff || at === 0xffffffff || count > (o.maxFiles ?? ZIP_MAX_FILES) || at + size > end) throw o.damaged();
+  const out: ZipFile[] = [];
+  let p = at, total = 0;
+  for (let i = 0; i < count; i++) {
+    if (p + 46 > b.length || r32(b, p) !== 0x02014b50) throw o.damaged();
+    const n = r16(b, p + 28), x = r16(b, p + 30), k = r16(b, p + 32);
+    const flags = r16(b, p + 8), method = r16(b, p + 10), csize = r32(b, p + 20), usize = r32(b, p + 24), offset = r32(b, p + 42);
+    const raw = b.subarray(p + 46, p + 46 + n);
+    const name = flags & 0x800 ? Buffer.from(raw).toString('utf8') : Buffer.from(raw).toString('latin1');
+    p += 46 + n + x + k;
+    if (flags & 1 || (method !== 0 && method !== 8)) throw o.damaged();
+    if (offset + 30 > b.length || r32(b, offset) !== 0x04034b50) throw o.damaged();
+    const start = offset + 30 + r16(b, offset + 26) + r16(b, offset + 28);
+    if (start + csize > b.length) throw o.damaged();
+    const packed = b.subarray(start, start + csize);
+    if (name.endsWith('/')) continue;
+    let data: Buffer;
+    try {
+      data = method === 0 ? Buffer.from(packed) : zlib.inflateRawSync(packed, { maxOutputLength: Math.max(1, o.maxUnpacked - total) });
+    } catch {
+      throw o.damaged();
+    }
+    if (method === 0 && data.length !== usize) throw o.damaged();
+    total += data.length;
+    if (total > o.maxUnpacked) throw o.damaged();
+    // A CRC that does not match is a damaged entry, not one to bring in.
+    if ((zlib.crc32(data) >>> 0) !== r32(b, p - 46 - n - x - k + 16)) throw o.damaged();
+    out.push({ name, data });
+  }
+  return out;
 }

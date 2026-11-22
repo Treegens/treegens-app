@@ -336,7 +336,7 @@
   "ds-colleagues": {
     "lives": "Settings > Away and sharing (listed only on accounts with 2 or more members): share my documents with a colleague, given and received. Envelope page More: Move to a colleague. Editor step 3 More options: Send for <name>, only when someone shared sending with you. Documents filter 'Shared with me'. Settings > Team: move a member's documents.",
     "default": "Nothing shared.",
-    "first_sight": "A member opens Settings > Away and sharing and sees 'Share my documents with a colleague'.",
+    "first_sight": "A member opens Settings > Away and sharing and sees 'Documents I send: a colleague looks after them'.",
     "words": "Share with a colleague, Move to a colleague, Send for Ben Okoro; recipients read 'Ben Okoro (sent by Ana Silva)'. Avoid on behalf of, transfer ownership.",
     "never": "A sender picker on step 1, a sidebar entry.",
     "merged_into": null,

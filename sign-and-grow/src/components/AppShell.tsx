@@ -17,9 +17,11 @@ import { PasswordRequired } from './PasswordRequired';
 import { IdleWarning } from './IdleWarning';
 import { signedOutPath, QUIET_HEADER } from '@/lib/signinrules';
 
-type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; /** What the account switched on or off for itself (src/server/tenantpolicy.ts). */ policy?: { impact_display: 'on' | 'off'; ai_helper: 'on' | 'off'; white_label: boolean };outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; /** WhatsApp and calls with a code are set up (src/lib/channels.ts). */ whatsapp?: boolean; phone_calls?: boolean; whatsapp_daily?: number; /** This server turns Word files and the like into PDF on upload (src/server/convert.ts). */ converts?: boolean; admins: number; members: number; operator: boolean; /** An admin of an organisation above accounts (src/server/orgs.ts). */ org_admin?: boolean; support_email: string | null; reload: (quiet?: boolean) => void };
+type Me = { user: any; account: any; role: string; accounts: any[]; billing: any; /** What the account switched on or off for itself (src/server/tenantpolicy.ts). */ policy?: { impact_display: 'on' | 'off'; ai_helper: 'on' | 'off'; white_label: boolean };outbox: boolean; /** The operator of this server has switched text messages on. */ text_messages?: boolean; /** WhatsApp and calls with a code are set up (src/lib/channels.ts). */ whatsapp?: boolean; phone_calls?: boolean; whatsapp_daily?: number; /** This server turns Word files and the like into PDF on upload (src/server/convert.ts). */ converts?: boolean; admins: number; members: number; operator: boolean; /** Key dates is on for this account (src/server/airepo.ts). */ key_dates?: boolean; /** Delegates are allowed in this account (src/server/delegation.ts). */ delegation?: boolean; /** An admin of an organisation above accounts (src/server/orgs.ts). */ org_admin?: boolean; /** The role by name and what it can do (src/lib/perm.ts). */ my_role?: import('@/lib/perm').MyRole; support_email: string | null; /** This server runs under a government agreement: the line Settings, Plan shows (src/lib/billingmode.ts). */ agreement?: string; reload: (quiet?: boolean) => void };
 const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx)!;
+// For the sender screen inside a customer's app (app/embed/send), which has no menus and no AppShell around it.
+export const MeProvider = MeCtx.Provider;
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<any>(null);
@@ -136,7 +138,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <aside id="app-menu" className={`side${open ? ' open' : ''}`} aria-label="Menu">
           <Link href="/app" className="brand"><Logo height={24} tone="dark" /></Link>
           {/* Nine entries: the one start button, five pages, More, Settings and Help (src/lib/nav.ts). */}
-          <SideNav path={path} role={me.role} userId={me.user.id} onGo={() => setOpen(false)} />
+          <SideNav path={path} role={me.role} userId={me.user.id} on={{ keyDates: !!me.key_dates, counter: !!me.counter }} can={me.my_role?.custom ? me.my_role.can : null} onGo={() => setOpen(false)} />
           {/* Help, once: it opens the helper, and the help page is the link inside it (components/HelpChat.tsx). */}
           <HelpChatButton className="nav hc-open hc-nav">Help</HelpChatButton>
           {me.operator && <Link href="/app/operator" className={`nav${navOn('/app/operator', path) ? ' on' : ''}`}>Operator</Link>}
@@ -195,7 +197,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {children}
         </main>
       </div>
-      <TabBar path={path} menuOpen={open} onMenu={() => setOpen(!open)} />
+      <TabBar path={path} menuOpen={open} onMenu={() => setOpen(!open)} can={me.my_role?.custom ? me.my_role.can : null} />
     </MeCtx.Provider>
   );
 }

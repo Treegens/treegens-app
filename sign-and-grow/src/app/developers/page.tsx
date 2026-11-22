@@ -5,6 +5,7 @@ import { WEBHOOK_EVENTS, MAX_WEBHOOKS, KEEP_BODIES } from '@/server/webhooks';
 import { ROLES, FIELD_TYPES } from '@/server/envelopes';
 import { DEFAULT_REMINDER_DAYS, PNG_MAX_PIXELS, JPEG_MAX_PIXELS, PHOTO_MAX_SIDE } from '@/lib/policy';
 import { mailEventsOn, supportReachable } from '@/lib/policy';
+import { ANCHOR_FIELDS_MAX } from '@/lib/anchors';
 
 // Whether this server is told about bounces (MAIL_EVENTS_TOKEN) is a setting: read it when the page is asked for.
 export const dynamic = 'force-dynamic';
@@ -35,7 +36,9 @@ const GROUPS: [string, Endpoint[]][] = [
     ['POST', '/api/envelopes/:id/extend', 'Push the deadline out by a number of days, or reopen an envelope that expired.', true],
     ['POST', '/api/envelopes/:id/correct', 'Fix one recipient\'s name, email or access code. A name fix keeps their link. A new email address gets a new one, and counts as a new person towards the daily limit of an account that has not paid. An access code needs at least 4 characters, and a new one unfreezes a code that was frozen after 10 wrong tries. Also takes "verify", "phone" and "text_link": see Checking who signs.'],
     ['POST', '/api/envelopes/:id/void', 'Void with a reason. Recipients see the reason.'],
-    ['POST', '/api/envelopes/:id/recipient-view', 'Get one recipient\'s signing URL, for embedded signing.'],
+    ['POST', '/api/envelopes/:id/recipient-view', 'Get one recipient\'s signing URL, for embedded signing. With frame_origin, one only that website of yours may show inside its own pages.', true],
+    ['POST', '/api/envelopes/:id/sender-view', 'A link to the editor of one draft, for a frame in your app. It opens once, within 5 minutes, and goes back to your return_url when the draft is sent or closed.', true],
+    ['GET', '/api/account/embed-origins', 'The websites (up to 5, https) that may show your signing pages and the sender screen inside their own pages. POST adds one, DELETE ?origin= removes one. Admins.', true],
     ['GET', '/api/envelopes/:id/comments', 'Every question and comment thread, private ones included, with who waits for an answer. Comments are not printed on the document and are not part of what is signed.'],
     ['POST', '/api/envelopes/:id/comments', 'Answer in a thread ("thread_id"), or start one: "for" is "everyone" or the id of one person, and is never guessed. The person answered is emailed, at most once every 10 minutes. The comment.created webhook fires.'],
     ['POST', '/api/envelopes/:id/comments/:thread/settle', 'Mark a thread as settled, or open it again with {"settled": false}. Each person can change one thread 10 times an hour.'],
@@ -65,6 +68,10 @@ const GROUPS: [string, Endpoint[]][] = [
   ]],
   ['Your data', [
     ['GET', '/api/export', 'One ZIP file with signed PDFs, audit trails and a CSV index. Add ?ids= for some envelopes only.', true],
+    ['GET', '/api/export/full', 'Everything in the account (owners, admins, an admin key) as one ZIP in the published format: data.json, every file by its SHA-256, evidence packs and a manifest. A large account answers 202 and the export.ready webhook fires when it is ready.'],
+    ['GET', '/api/public/export-schema/v1', 'The JSON Schema (2020-12) of data.json in the full export. Also in the repository as docs/schema/growsigning-export-v1.schema.json.'],
+    ['POST', '/api/import/full', 'Bring in a full export from another GrowSigning server (owners, admins).'],
+    ['POST', '/api/import/docusign', 'Bring in DocuSign downloads: combined PDFs with certificate, the envelope report CSV, template JSON (owners, admins).'],
     ['GET', '/api/reports/summary', 'Counts, completion time and paper saved.'],
   ]],
   ['API keys', [
@@ -188,6 +195,7 @@ curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" 
           <p><b>Extend.</b> <C>POST /api/envelopes/:id/extend</C> with <C>{'{"days": 14}'}</C> pushes the deadline out. Days can be 1 to 365 and default to 30. On an expired envelope it reopens it: the same links work again, people who were waiting are told, and nobody who signed has to sign again.</p>
           <p><b>Remind one recipient.</b> <C>POST /api/envelopes/:id/remind</C> with <C>{'{"recipient_id": "rcp_..."}'}</C> reminds that person only. With no body it reminds everyone whose turn it is. The answer says how many were reminded. A recipient who switched reminders off is skipped and shows <C>muted: 1</C>.</p>
           <p><b>Export.</b> <C>GET /api/export</C> returns one ZIP file: <C>signed/</C> with every completed PDF and its certificate, <C>audit/</C> with each audit trail as JSON, and <C>envelopes.csv</C>. Add <C>?ids=env_a,env_b</C> to pick envelopes. It is free on every plan and keeps working after a paid plan ends.</p>
+          <p><b>Full export, and the live path.</b> <C>GET /api/export/full</C> gives everything as data in a published format: the schema is at <C>/api/public/export-schema/v1</C>, versioned, and a reader should ignore properties it does not know. The export is a copy at one moment. To keep another system up to date, use the API and webhooks instead: they are the live path, and the export is for leaving or for an archive.</p>
           <p><b>Batches.</b> A bulk send is one thing you can act on. <C>GET /api/bulk/:id</C> shows every envelope and recipient in it, <C>POST /api/bulk/:id/remind</C> nudges the people who have not finished, and <C>POST /api/bulk/:id/void</C> closes what is still open. Both work through the batch one envelope at a time. An envelope that someone finishes or declines while that is going on is left as it is, and the void answers with how many it <C>voided</C> and how many it <C>skipped</C> for that reason.</p>
           <p><b>A bulk send that is repeated.</b> <C>POST /api/bulk</C> answers when every row has been tried, which takes as long as the mail server needs for the whole list. Send it with an <C>Idempotency-Key</C>. If your call times out, repeat it with the same key and body: while the first call is still sending you get <C>202</C> with the same batch and what has gone out so far, and afterwards <C>200</C> with the full result. If our side stopped half way, the repeat sends the rows that had not gone out, and nobody gets a second copy. <C>GET /api/bulk/:id</C> lists every row as <C>sent</C>, <C>failed</C> (with the reason) or <C>pending</C>.</p>
         </div>
@@ -254,10 +262,70 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers
         </div>
 
         <div className="card" id="embedded">
-          <h2>Embedded signing</h2>
-          <p>Call <C>POST /api/envelopes/:id/recipient-view</C> with a <C>recipient_id</C> to get a signing URL, then send your user there in a new tab or with a redirect. The page cannot be shown inside a frame on another site. Any recipient can get a link, it stays the same while the envelope is open, and it survives a correction that leaves that person alone. Ask for it as often as you like: the audit trail on the certificate records that a link was issued at most once a day for each link.</p>
+          <h2>Signing links for your app</h2>
+          <p>Call <C>POST /api/envelopes/:id/recipient-view</C> with a <C>recipient_id</C> to get a signing URL, then send your user there in a new tab or with a redirect. To show the page inside your own website instead, see <a href="#embed">Signing inside your site</a> below. Any recipient can get a link, it stays the same while the envelope is open, and it survives a correction that leaves that person alone. Ask for it as often as you like: the audit trail on the certificate records that a link was issued at most once a day for each link.</p>
           <p className="muted small">Treat the URL like a password: whoever holds it can sign as that recipient.</p>
           <p>To deliver the link entirely yourself, give the recipient <C>&quot;link_by_sender&quot;: true</C> and no <C>email</C>. We then never email that person, not even reminders or the completed copy, and this URL is the only way in, also to the completed document afterwards. The certificate says &quot;Link shared by the sender&quot; for them. They count towards the daily limit on new people like anyone, and reminding everyone answers with them in <C>not_reminded</C>.</p>
+        </div>
+
+        <div className="card" id="anchors">
+          <h2>Place fields by the words in the document</h2>
+          <p>Instead of a page and a position, give a field an <C>anchor</C>: the text it belongs next to. The field&apos;s top left corner goes to the top left of that text, moved by <C>offset_x</C> and <C>offset_y</C> points (1/72 inch, right and down). Or send <C>&quot;auto_tags&quot;: true</C> and every tag written in the documents becomes a field: <C>{'{{signature}}'}</C>, <C>{'{{date}}'}</C>, <C>{'{{text:Order number}}'}</C> for the first person who signs, <C>{'{{signature2}}'}</C> for the second. These are the same tags the editor&apos;s Find fields reads.</p>
+          <Code label="Example: a signature next to its label, and every tag">{`curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \\
+  https://YOUR_HOST/api/envelopes -d '{
+    "subject": "Please sign: order 42",
+    "auto_tags": true,
+    "documents":  [{"id": "d1", "file_id": "fil_..."}],
+    "recipients": [{"id": "r1", "name": "Ada Lovelace", "email": "ada@example.com"}],
+    "fields": [{"recipient_id": "r1", "type": "initials",
+                "anchor": {"text": "Initial here", "occurrence": "all", "offset_x": 80, "units": "pt"}}]
+  }'
+# => {"envelope": {...}, "anchors": {"placed": [...], "not_found": [{"text": "...", "why": "..."}]}}`}</Code>
+          <ul className="muted small">
+            <li>Letter case and extra spaces do not matter. The words have to be on one line, and a scanned page has no words to find.</li>
+            <li><C>occurrence</C> is <C>&quot;all&quot;</C> (a field at every place) or a number, counted in reading order over the documents.</li>
+            <li>Text that is not found places nothing and is named in <C>anchors.not_found</C> with the reason. With <C>&quot;send&quot;: true</C> nothing is sent then, so nobody gets a document without the field you meant.</li>
+            <li>The tag text stays in the document under the field. Write tags in white or tiny type if they should not show.</li>
+            <li>It works when you make a template (<C>&quot;kind&quot;: &quot;template&quot;</C>), and for <C>PUT /api/envelopes/:id</C> on a draft, which looks in the documents already saved. It does not work together with <C>template_id</C>, because a copy of a template takes the template&apos;s own fields: that request is refused (400, <C>&quot;code&quot;: &quot;anchors_with_template&quot;</C>). Make the copy, place fields on it with <C>PUT</C>, then send it.</li>
+            <li>Up to {ANCHOR_FIELDS_MAX} fields with an <C>anchor</C> per request (400, <C>&quot;code&quot;: &quot;too_many_anchors&quot;</C> above that). One anchor with <C>&quot;occurrence&quot;: &quot;all&quot;</C> places a field at every place its text is found.</li>
+          </ul>
+        </div>
+
+        <div className="card" id="embed">
+          <h2>Signing inside your site, and the sender screen in your app</h2>
+          <p>An admin lists your websites under Settings, API and webhooks, <b>Signing inside your site</b> (up to 5, each starting with https://). Only those websites can show our pages inside theirs, and only for links your app asks for. Every other link stays a page of its own.</p>
+          <Code label="Example: a signing page inside your page">{`# Ask for the link with the website that shows it
+curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \\
+  https://YOUR_HOST/api/envelopes/env_.../recipient-view \\
+  -d '{"recipient_id": "rcp_...", "frame_origin": "https://portal.example.org"}'
+# => {"url": "https://YOUR_HOST/sign/...?embed=1&origin=https%3A%2F%2Fportal.example.org"}
+
+<!-- On https://portal.example.org -->
+<iframe src="THE_URL" title="Sign the document" style="width:100%;height:90vh;border:0"></iframe>
+<script>
+  window.addEventListener('message', (e) => {
+    if (e.origin !== 'https://YOUR_HOST' || e.data?.source !== 'growsigning') return;
+    // e.data.event is "signing_complete", "declined" or "saved"
+  });
+</script>`}</Code>
+          <ul className="muted small">
+            <li>The page tells only your website what happened, and only these three things. Check the envelope with the API or a webhook before you act on it: a message in the browser can be faked by whoever controls that browser.</li>
+            <li>The audit trail on the certificate says &quot;Signed inside a frame on https://portal.example.org&quot;.</li>
+            <li>It does not prove who the signer is: your website decides who it shows the page to.</li>
+            <li>A person with an access code or a one-time code by email or text gets no link for a frame (400, <C>&quot;code&quot;: &quot;frame_with_code&quot;</C>): inside a frame on another website the browser does not let the page remember the code. Ask for the link without <C>frame_origin</C> and open it in its own tab or window.</li>
+            <li>Removing a website stops every link handed out for it from showing there.</li>
+          </ul>
+          <Code label="Example: the sender screen for one draft">{`curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \\
+  https://YOUR_HOST/api/envelopes/env_.../sender-view \\
+  -d '{"return_url": "https://portal.example.org/orders/42/sent"}'
+# => {"url": "https://YOUR_HOST/embed/send/...", "expires_at": "..."}
+# Show the url in a frame on that website. When the draft is sent or closed the frame goes to
+# return_url?event=sent (or closed), and your page gets {source: "growsigning", event, envelope_id}.`}</Code>
+          <ul className="muted small">
+            <li>The link opens once, within 5 minutes. Ask for a new one each time you show the screen.</li>
+            <li>Once open, it works for an hour and reaches that one draft only: not the other documents, settings or keys of the account. It ends when the draft is sent from it or the screen is closed: after that its calls are refused.</li>
+            <li>It acts as the person the draft belongs to. &quot;Sign now&quot; is not offered there.</li>
+          </ul>
         </div>
 
         <div className="card" id="click-to-agree">

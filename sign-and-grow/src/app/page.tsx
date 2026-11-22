@@ -6,6 +6,8 @@ import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/
 import { PRICING, usd } from '@/lib/impact';
 import { TREES_PER_SIGNATURE } from '@/lib/impactwords';
 import { HomeSignature } from '@/components/HomeSignature';
+import { DeploymentHome } from '@/components/DeploymentHome';
+import { isDeploymentBilling } from '@/lib/billingmode';
 import { homeVideo, HOME_VIDEO_CAPTION, HOME_VIDEO_TEXT } from '@/lib/homevideo';
 
 // The home page says one thing: a signature that is paid for plants mangroves. One button, three short points, and
@@ -18,6 +20,8 @@ export const dynamic = 'force-dynamic';
 const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 
 export default function Landing() {
+  // A server under a government agreement: nobody pays per signature there, so none of the consumer pitch applies.
+  if (isDeploymentBilling()) return <DeploymentHome title="Sign documents on screen" />;
   const P = PRICING;
   // A file named under public/videos/ counts only when it is there, so a typing mistake gives no block instead of an empty player.
   const video = homeVideo(process.env, (sitePath) => fs.existsSync(path.join(process.cwd(), 'public', sitePath)));

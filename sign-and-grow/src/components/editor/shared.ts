@@ -69,6 +69,8 @@ export type Ed = {
   addFiles: (list: FileList | File[] | null) => void;
   dismissUpload: (key: string) => void;
   renameDoc: (id: string, name: string) => void;
+  /** To read, not sign (ToRead.tsx): null makes it a file to sign again. Fields on it are removed after asking. */
+  markToRead: (id: string, supplemental: { rule: 'none' | 'open' | 'acknowledge'; in_copy: boolean } | null) => void;
   removeDoc: (id: string) => void;
   replaceDoc: (id: string, file: File | null | undefined) => void;
   moveDoc: (index: number, by: number) => void;
@@ -77,6 +79,8 @@ export type Ed = {
   /** A document written in the app (WriteDoc.tsx): added, or put in the place of `replaceId`, with the fields its tags make. */
   addWritten: (file: any, found: { type: string; signer: number; label: string; required: boolean; page: number; x: number; y: number; w: number; h: number }[], replaceId?: string) => void;
   addRcp: (p?: any) => void;
+  /** "This looks like your template ... Use it?" (TemplateMatch.tsx): the template's people join, one per role name, and its fields go on the file. */
+  addFromTemplate?: (people: any[], fields: any[]) => void;
   /** "Add me": the sender as someone who signs. */
   addMe: () => void;
   /** An empty row nobody typed into: on screen in step 1, and neither saved, sent nor listed (Editor.tsx). */
@@ -101,4 +105,8 @@ export type Ed = {
   /** The field step 2 is asked to open on, until it has done so. */
   jump: string | null;
   clearJump: () => void;
+  /** Saves a draft or template now (never a correction), for "See what each person sees" (SeeWhatTheySee.tsx). */
+  flush?: () => Promise<unknown>;
+  /** The sender screen inside a customer's app (app/embed/send): nothing opens in a tab of ours there. */
+  embedded?: boolean;
 };

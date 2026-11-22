@@ -93,7 +93,8 @@ const visitorOf = (e: any, r: any) => !!e.powerform_id && e.form_recipient_id ==
 // what is for everyone: no private thread is with "away", and nothing is written there in that person's name
 // (handlive.ts). Without a request (the emails) the viewer is the person themselves.
 const AWAY = 'away';
-const viewerOf = (r: any, c?: Ctx): Viewer & { side: 'recipient' } => ({ side: 'recipient', rid: r.id, party: c && !holdsDevice(c, r) ? AWAY : partyOf(r) });
+// r.hidden_docs: the files this link does not show (limitForLink in visibility.ts).
+const viewerOf = (r: any, c?: Ctx): Viewer & { side: 'recipient' } => ({ side: 'recipient', rid: r.id, party: c && !holdsDevice(c, r) ? AWAY : partyOf(r), hidden: r.hidden_docs });
 const awayText = (e: any, r: any) => `This is the signing page of ${r.name}, and this device has been handed to someone else since. So ${r.name}'s private questions are not shown here, and nothing can be written here in their name. What is written for everyone is still shown. If you are ${r.name}, ask ${senderName(e)} to open your page for you again with "Host signing now".`;
 
 // Someone on the envelope reads comments while they can read the document: once it is their turn, while it is out and
@@ -223,7 +224,8 @@ function senderSide(c: Ctx, writing: boolean) {
 
 // The people the sender's side can write to privately now: whoever can read the document. A group that nobody has
 // taken on is no one person yet, so it is written to with a comment for everyone.
-const reachable = (e: any) => e.recipients.filter((r: any) => r.status !== 'pending' && !(r.group_name && !r.claimed_by));
+// Someone who was not asked (routing.ts) never had the document, so they are no one to write to either.
+const reachable = (e: any) => e.recipients.filter((r: any) => r.status !== 'pending' && r.status !== 'skipped' && !(r.group_name && !r.claimed_by));
 
 function senderView(e: any) {
   // Whether each person is emailed an answer, and why not, so the card never promises an email that does not go.

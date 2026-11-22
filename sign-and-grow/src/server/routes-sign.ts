@@ -26,6 +26,7 @@ import { signerLanguage, consentLine } from './locales.ts';
 // Refusals the page shows in the signer's language, and the language each person read the page in (signlang.ts).
 import { refuse, notePageLanguage } from './signlang.ts';
 import { labelOf } from '../lib/bysender.ts';
+import { shownSender } from './sentfor.ts';
 // A recipient that is a group: whose link this is, who has taken the document on, and what a member's link may do.
 import { memberOf, asMember, groupFacts, memberOpened, muteMember, takeOn, declineForGroup, memberReported, memberWrongCode } from './groups.ts';
 // What happens around the certificate: later visits and the first look at the completed copy (evidence.ts).
@@ -40,6 +41,20 @@ import { stampSeen } from './stamps.ts';
 import { ownTermsFor, ownAtConsent, paperFacts } from './disclosure.ts';
 import { clientPolicy, showsTrees } from './tenantpolicy.ts';
 import { awayMinutes } from './secpolicy.ts';
+// Paused by its sender: what the page says, and what a pause stops (timing.ts).
+import { pausedGate, pausedFacts } from './timing.ts';
+import { summaryOffered } from './aiassist.ts';
+// Signing at a service counter: the official's identity check first, and what Finish waits for (counter.ts).
+import { counterGate, counterBeforeFinish, counterFacts } from './counter.ts';
+import { toSign, isSupplement, supplementsFor, openedNow, OPENED_DETAIL } from './supplements.ts';
+import { OPENED_ACTION } from '../lib/supplements.ts';
+// Who changed the document after this person signed, and why someone who changes it waits again (agents.ts).
+import { changedBy, stepWait } from './agents.ts';
+// Someone who signs for a person while they are away: their own link, and the person's once they have it (delegation.ts).
+// "Each person sees only their files": the envelope a link works with, and the copy made for this person (visibility.ts).
+import { limitForLink, onShownDoc, scrubNames, copyFor } from './visibility.ts';
+import { finishPdf } from './finalpipe.ts';
+import { delegateLinkOf, delegateLook, delegateFacts, delegateAway, delegateTakeOn, delegateFinished, assertDelegateDecline } from './delegation.ts';
 
 // Everything here is authorised by the unguessable token in the signing link, plus the access code when one is set.
 
@@ -68,7 +83,9 @@ function checkedBody(c: Ctx): Promise<any> {
 export function look(c: Ctx, needUnlocked = true) {
   // The link of one member of a group is kept with the group's members and leads to the group's row (groups.ts).
   const member = memberOf(c.params.token);
-  const r = member ? get('SELECT * FROM recipients WHERE id=?', member.recipient_id) : get('SELECT * FROM recipients WHERE token=?', c.params.token);
+  // A delegate's link, or the person's own link once their delegate has it (delegation.ts).
+  const dlink = member ? null : delegateLinkOf(c.params.token);
+  const r = member ? get('SELECT * FROM recipients WHERE id=?', member.recipient_id) : dlink ? get('SELECT * FROM recipients WHERE id=?', dlink.recipient_id) : get('SELECT * FROM recipients WHERE token=?', c.params.token);
   if (!r) {
     // 410 tells the page this link was replaced, so it can offer to send the current one instead of a dead end.
     if (get('SELECT 1 x FROM retired_tokens WHERE token=?', c.params.token)) {
@@ -78,11 +95,19 @@ export function look(c: Ctx, needUnlocked = true) {
     }
     throw refuse('unknown_link', 404);
   }
-  const e = loadEnvelope(r.envelope_id);
+  // "Each person sees only their files": from here on the envelope holds only this person's files, so nothing this
+  // link answers can name, show or open another one (visibility.ts).
+  const e = limitForLink(loadEnvelope(r.envelope_id), r.id);
   // A purged envelope (src/server/records.ts) has nothing left to open: the link says the sender deleted it.
   if (e?.purged_at) throw new HttpError(410, PURGED_LINK, { code: 'purged', deleted_on: String(e.purged_at).slice(0, 10) });
+  // Paused by its sender: nothing that fills in, signs, finishes or declines goes through (pausedGate in timing.ts).
+  pausedGate(c, e);
+  // At a service counter, nothing opens until the official has recorded how they know who this is (counter.ts).
+  counterGate(e, r);
   const locked = !!r.access_code && !safeEqual(readCookie(c.req, `ts_ac_${r.id}`) || '', hmac(`ac:${r.id}:${r.access_code}`));
   if (locked && needUnlocked) throw refuse('access_code_first', 401);
+  // A delegate always types a one-time code of their own, and acts only as far as their link allows (delegateLook).
+  if (dlink) return delegateLook(c, e, e.recipients.find((x: any) => x.id === r.id), dlink, locked, needUnlocked);
   // The one-time code this browser still has to pass, when the sender asked for one (see signercode.ts). A device
   // that passed is remembered by a cookie, the same way a correct access code is.
   const gate = gateOf(c.req, r);
@@ -102,11 +127,16 @@ export function assertViewable(e: any, r: any) {
   if (r.status === 'pending') throw refuse('turn_not_yet', 403);
 }
 
-route('GET', '/sign/:token', (c) => {
-  const { e, r, locked, gate, actor } = find(c, false);
+route('GET', '/sign/:token', (c) => signView(c, find(c, false)), 'public');
+
+// What the signing page is given for one person. `quiet` is the sender's preview of it (preview.ts): the same view,
+// and nothing noted, marked or changed by it.
+export function signView(c: Ctx, found: any, quiet = false): any {
+  const { e, r, locked, gate, actor } = found;
   // In person: the host's device is about to be in the signer's hands, so the host's account locks in this browser.
-  handDevice(c, e, r);
-  const sender = get('SELECT name, email FROM users WHERE id=?', e.sender_id);
+  if (!quiet) handDevice(c, e, r);
+  // "Ben Okoro (sent by Ana Silva)" when a colleague sent it for Ben (sentfor.ts).
+  const sender = shownSender(e.id, get('SELECT name, email FROM users WHERE id=?', e.sender_id));
   const a = get('SELECT name, brand_color, brand_logo FROM accounts WHERE id=?', e.account_id);
   const base = {
     brand: a,
@@ -115,6 +145,8 @@ route('GET', '/sign/:token', (c) => {
     // Only in an account with "Sign out after N minutes": the page checks its link again after a break that long
     // (src/components/sign/away.ts). Absent everywhere else.
     ...(awayMinutes(e.account_id) ? { away_minutes: awayMinutes(e.account_id) } : {}),
+    // Only when the sender offers signers a plain summary and the account still lets the AI read (aiassist.ts).
+    ...(summaryOffered(e) ? { ai_summary: true } : {}),
     // impact: the paper this document saves, for the finished screen. Null when the account switched 'Trees on screens
     // and emails' off, so that screen says nothing about paper or trees (tenantpolicy.ts).
     envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: showsTrees(e.account_id) ? impactOf(e.sheets) : null,
@@ -123,7 +155,11 @@ route('GET', '/sign/:token', (c) => {
       // A public form's start that was cleared before the visitor finished: they start again (start_again is the
       // form's slug while it takes people), and nobody is asked for more time (formstart.ts). removed: the sender
       // took this expired envelope out of their lists, so it cannot be reopened and the page does not offer that.
-      form_cleared: closedFormStart(e, r), start_again: closedFormStart(e, r) ? startAgainSlug(e) : null, removed: e.status === 'expired' && !!e.hidden_at },
+      form_cleared: closedFormStart(e, r), start_again: closedFormStart(e, r) ? startAgainSlug(e) : null, removed: e.status === 'expired' && !!e.hidden_at,
+      // Paused by its sender: { by, at, text }, said in place of the document (timing.ts). Null otherwise.
+      paused: pausedFacts(e),
+      // On the person's own screen at a service counter: "Next person" on the done screen (counter.ts).
+      ...counterFacts(c, e, r) },
     // signed_before: when this person finished, if the sender changed the document after that and asked them to
     // sign again. A closed envelope says so too, because that person still has the right to a copy. earlier_copy:
     // whether the document as they signed it then was kept, so the page only offers that download when it exists.
@@ -131,13 +167,16 @@ route('GET', '/sign/:token', (c) => {
     // it. The page says so and offers the one way back, which only they have (POST /sign/:token/mail-again).
     // link_by_sender: we have no address for this person, so the page never promises an email (src/lib/bysender.ts).
     recipient: { id: r.id, name: r.name, email: r.email, link_by_sender: !!r.link_by_sender && !r.email, role: r.role, status: r.status, consented: !!r.consent_at, muted: !!r.muted, mail_stopped: !!(r.complained_at || r.reported_at), mail_stopped_why: r.complained_at ? 'complaint' : r.reported_at ? 'report' : null, signed_before: r.status === 'completed' ? null : String(r.signed_before || '').split('\n').filter(Boolean).pop() || null,
-      earlier_copy: r.status !== 'completed' && !!r.signed_before && !!get('SELECT 1 x FROM earlier_signatures WHERE envelope_id=? AND recipient_id=? AND copy_sha256 IS NOT NULL', e.id, r.id) },
+      earlier_copy: r.status !== 'completed' && !!r.signed_before && !!get('SELECT 1 x FROM earlier_signatures WHERE envelope_id=? AND recipient_id=? AND copy_sha256 IS NOT NULL', e.id, r.id),
+      // changed_by: the person who "Can change the document" whose change asked them to sign again (null: the sender).
+      // step_wait: for that person, while they wait again after their own change, who is asked first.
+      changed_by: r.signed_before ? changedBy(e.id, r.id) : null, step_wait: stepWait(e, r) },
     // The language this person's screens are in and its direction, with who chose it (signerLanguage in locales.ts).
     language: signerLanguage(r, c.req),
   };
   // Someone ran into the deadline. The sender is told before anything else is decided here, so an access code that
   // was not typed yet does not keep the news from them: the screen says "expired" before it asks for a code.
-  if (e.status === 'expired' && r.status !== 'completed') void noteDeadLink(e, r, `The deadline passed on ${momentText(e.expires_at)}. You can reopen the envelope with a new deadline, and nobody who already signed has to sign again.`).catch(() => {});
+  if (!quiet && e.status === 'expired' && r.status !== 'completed') void noteDeadLink(e, r, `The deadline passed on ${momentText(e.expires_at)}. You can reopen the envelope with a new deadline, and nobody who already signed has to sign again.`).catch(() => {});
   // A frozen code is said straight away, so nobody types the right code into a form that can no longer accept it.
   // Someone who has to type a one-time code is told less than this until they have: see lockedView.
   if (locked || gate) return lockedView({ ...base, locked: true, code_frozen: !!r.code_frozen_at }, r, locked, gate);
@@ -149,19 +188,22 @@ route('GET', '/sign/:token', (c) => {
   // A group's document: which group, what this member's link is to it, and who has taken it on (groupFacts in
   // groups.ts). Said only now, behind the access code, like everything else about the document.
   Object.assign(base.recipient, { group: groupFacts(e, r) });
+  // Someone signing for a person who is away, or the person while their delegate could still take it (delegation.ts).
+  Object.assign(base.recipient, { delegate: delegateFacts(e, r) });
   // To a signer with a witness: who and how far. To a witness: whose signature, and the statement they would tick.
   Object.assign(base.recipient, witnessFacts(e, r));
   Object.assign(base.recipient, paperFacts(r));
   if (['voided', 'expired', 'declined'].includes(e.status) || r.status === 'pending') return { ...base, locked: false };
   // A member whose colleague has the document, or who was taken out of the group, is told so and shown no more.
   if (r.member && (r.group_state === 'taken' || r.group_state === 'removed')) return { ...base, locked: false };
+  if (delegateAway(r)) return { ...base, locked: false };
   // A later visit, at most once a day for each person (noteVisit in evidence.ts). The first open is "Viewed" below.
-  noteVisit(e, r, actor);
-  if (e.status === 'sent' && r.status === 'sent') markViewed(e, r, actor);
-  if (r.member) memberOpened(e, r, actor);
+  if (!quiet) noteVisit(e, r, actor);
+  if (!quiet && e.status === 'sent' && r.status === 'sent') markViewed(e, r, actor);
+  if (!quiet && r.member) memberOpened(e, r, actor);
   // The server keeps which content version this screen was given. The screen sends the number back with every save
   // and with Finish, and one that comes from an older version is refused: see completeRecipient.
-  if (e.status === 'sent' && r.seen_version !== e.content_version) run('UPDATE recipients SET seen_version=? WHERE id=?', e.content_version, r.id);
+  if (!quiet && e.status === 'sent' && r.seen_version !== e.content_version) run('UPDATE recipients SET seen_version=? WHERE id=?', e.content_version, r.id);
   const byId = new Map<string, any>(e.recipients.map((x: any) => [x.id, x]));
   const signedBefore = String(r.signed_before || '').split('\n').filter(Boolean).pop() || null;
   const words = printedWords(e);
@@ -169,7 +211,7 @@ route('GET', '/sign/:token', (c) => {
   // Other people's fields that this person's formulas use, as they count right now (named, with a value only once
   // their owner has finished), and a key for them that Finish sends back (formulaInputs in logic.ts).
   const inputs = formulaInputs(e, r.id);
-  if (e.status === 'sent' && (r.seen_inputs ?? null) !== (inputs.key ?? '-')) run('UPDATE recipients SET seen_inputs=? WHERE id=?', inputs.key ?? '-', r.id);
+  if (!quiet && e.status === 'sent' && (r.seen_inputs ?? null) !== (inputs.key ?? '-')) run('UPDATE recipients SET seen_inputs=? WHERE id=?', inputs.key ?? '-', r.id);
   return {
     ...base,
     locked: false,
@@ -177,7 +219,7 @@ route('GET', '/sign/:token', (c) => {
     inputs: inputs.key,
     formula_inputs: inputs.fields,
     // What the sender's latest correction changed on the documents, in words, for a screen that has to say so.
-    changed: e.last_change || null,
+    changed: scrubNames(e, e.last_change) || null,
     message: e.message,
     note: r.note,
     // The account's own consent text for this person's language, when it has one (disclosure.ts).
@@ -185,14 +227,16 @@ route('GET', '/sign/:token', (c) => {
     recipient: { ...base.recipient, status: r.status === 'sent' ? 'viewed' : r.status, signature_png: r.signature_png, initials_png: r.initials_png, signed_before: r.status === 'completed' ? null : signedBefore },
     // sha256 is the fingerprint of the file behind each document. The screen loads the pages again whenever it
     // changes, and Finish waits until the new pages are on it, so nobody signs a file they were not shown.
-    documents: e.documents.map((d: any) => ({ id: d.id, name: d.name, pages: d.pages, sha256: d.sha256 })),
+    // Files given to read, not signed, are listed apart ("Also for you", supplements.ts), only when there are any.
+    documents: toSign(e.documents).map((d: any) => ({ id: d.id, name: d.name, pages: d.pages, sha256: d.sha256 })),
+    ...(e.documents.some(isSupplement) ? { supplements: supplementsFor(e, r) } : {}),
     fields: e.fields.filter((f: any) => f.recipient_id === r.id).map(({ envelope_id: _e, ...f }: any) => f),
     // What is on the pages besides this person's own fields, shown read-only so they see the document as it stands.
     // Everything the sender wrote is there from the first look, whoever it is assigned to: a note or a read-only
     // value, and the name or address that a full name or email field prints, also for someone who only gets a copy
     // ('sender'), and a value its owner may still change ('start'). What another person filled in ('signer')
     // appears once that person has finished.
-    others: e.fields.filter((f: any) => f.recipient_id !== r.id && !hideOthers.has(f.id)).map((f: any) => {
+    others: e.fields.filter((f: any) => f.recipient_id !== r.id && !hideOthers.has(f.id) && onShownDoc(e, f.document_id)).map((f: any) => {
       const o = f.recipient_id ? byId.get(f.recipient_id) : null;
       const done = !f.recipient_id || o?.status === 'completed';
       return {
@@ -212,7 +256,7 @@ route('GET', '/sign/:token', (c) => {
       // A strike-out has no words and no picture: it is the sender's line through what is printed, and everyone is shown it.
     }).filter((f: any) => f.value || f.image || f.type === 'strike'),
   };
-}, 'public');
+}
 
 // What the locked screen says once a code is frozen. The same words whether it just happened or happened earlier.
 const frozen = (e: any) => refuse('access_code_frozen', 423, { tries: ACCESS_CODE_TRIES, sender: sender(e).name });
@@ -287,7 +331,7 @@ route('POST', '/sign/:token/consent', async (c) => {
   // The account's own text, when it has one: the screen must have shown the version in use (ownAtConsent).
   const seen = look(c);
   const own = ownAtConsent(seen.e, seen.r, b, c.req);
-  const { e, r, actor } = takeOn(seen);
+  const { e, r, actor } = takeOn(delegateTakeOn(seen));
   noteZone(e, r, b?.tz, actor);
   // The language the page was in when they agreed, for the certificate (signlang.ts).
   notePageLanguage(r.id, b?.page_language);
@@ -302,10 +346,12 @@ route('POST', '/sign/:token/consent', async (c) => {
 }, 'public');
 
 route('GET', '/sign/:token/doc/:doc', (c) => {
-  const { e, r } = find(c);
+  const { e, r, actor } = find(c);
   assertViewable(e, r);
   const d = e.documents.find((x: any) => x.id === c.params.doc);
   if (!d) throw refuse('document_not_found', 404);
+  // A file given to read, fetched this way, counts as opened too (supplements.ts), so the record never under-counts.
+  if (openedNow(e, r, d)) audit(e.id, actor, OPENED_ACTION(d.name), OPENED_DETAIL);
   return pdfResponse(readBlob(d.sha256), d.name, true);
 }, 'public');
 
@@ -363,7 +409,10 @@ route('POST', '/sign/:token/complete', async (c) => {
   noteZone(e, r, body?.tz, actor, true);
   // A witness the signer names is named first, and a witness's statement is ticked first (witness.ts).
   beforeFinish(c, e, r);
+  counterBeforeFinish(e, r);
   await completeRecipient(e, r, body, actor);
+  // The person a delegate signed for is told (delegation.ts).
+  await delegateFinished(e, r.id, 'completed');
   const after = get('SELECT status, sheets FROM envelopes WHERE id=?', e.id);
   return { ok: true, envelope_status: after.status, impact: showsTrees(e.account_id) ? impactOf(after.sheets) : null };
 }, 'public');
@@ -373,7 +422,11 @@ route('POST', '/sign/:token/decline', async (c) => {
   const { e, r, actor } = look(c);
   // One member of a group declines for the whole group, on record as the person who did (declineForGroup in groups.ts).
   if (r.group_name) return void (await declineForGroup(e, r, str(body.reason, 500), actor));
-  await declineRecipient(e, r, str(body.reason, 500), actor);
+  // A delegate who has not taken it on yet takes it on first, so the record names them; the person is told.
+  assertDelegateDecline(r, str(body.reason, 500));
+  const x = delegateTakeOn({ e, r, actor }, ', in order to decline it');
+  await declineRecipient(x.e, x.r, str(body.reason, 500), x.actor);
+  await delegateFinished(x.e, x.r.id, 'declined');
 }, 'public');
 
 route('POST', '/sign/:token/reassign', async (c) => {
@@ -437,7 +490,10 @@ route('GET', '/sign/:token/download', async (c) => {
   const earlier = keeps || waits || c.q.get('earlier') === '1' ? await earlierCopy(e, r, keeps) : null;
   if (earlier) return pdfResponse(earlier, `${listName(e.subject) || 'document'} (as first signed)`, c.q.get('inline') === '1');
   if (!keeps) assertViewable(e, r);
-  const done = finalPdf(e);
+  // Someone shown only some of the files gets their own completed copy, never the full one (visibility.ts).
+  const own = e.status === 'completed' && e.final_sha256 ? await copyFor(e, r.id, finishPdf, (x) => buildPdf(x, true), () => finalPdf(e), loadEnvelope) : null;
+  if (own?.limited && !own.pdf) throw refuse('own_copy_not_ready', 503);
+  const done = own ? own.pdf : finalPdf(e);
   // The first time this person opens or downloads the completed copy goes in the record (evidence.ts).
   if (done) noteCopyOpened(e, r, actor, c.q.get('inline') === '1');
   // Until everyone has finished, the copy a recipient downloads is made for them: it shows what their screen shows.

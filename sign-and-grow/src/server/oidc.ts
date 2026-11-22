@@ -7,6 +7,14 @@ import { isEmail, safeEqual } from './util.ts';
 // about logins or the database: routes-signin.ts decides who the person is.
 
 export type Provider = { id: ProviderId; name: string; clientId: string; clientSecret: string; authorize: string; token: string; jwks: string; tenant?: string };
+/**
+ * An organisation's own sign-in service (src/server/orgsso.ts), any OpenID Connect provider. Its addresses come from
+ * its discovery document (discover below), found under the issuer an admin of the account typed, never from a token
+ * or a request. `issuer` is what the "iss" of every token must equal, letter for letter.
+ */
+export type OrgProvider = { id: `org:${string}`; name: string; clientId: string; clientSecret: string; authorize: string; token: string; jwks: string; issuer: string };
+export type AnyProvider = Provider | OrgProvider;
+const isOrg = (p: AnyProvider): p is OrgProvider => typeof p.id === 'string' && p.id.startsWith('org:');
 
 // A provider is on only when both of its values are set. Its addresses are fixed here and never taken from a token
 // or a request, so nothing a caller sends can point us at somebody else's server.
@@ -35,7 +43,7 @@ const refuse = (why: string) => new SignInRefused('failed', why);
 /** PKCE (S256): the provider is sent the hash, and only whoever holds the verifier can redeem the code. */
 export const pkceChallenge = (verifier: string) => crypto.createHash('sha256').update(verifier).digest('base64url');
 
-export function authorizeUrl(p: Provider, o: { state: string; nonce: string; verifier: string; redirectUri: string; loginHint?: string }): string {
+export function authorizeUrl(p: AnyProvider, o: { state: string; nonce: string; verifier: string; redirectUri: string; loginHint?: string }): string {
   const q = new URLSearchParams({
     client_id: p.clientId, response_type: 'code', response_mode: 'query', scope: 'openid email profile', redirect_uri: o.redirectUri,
     state: o.state, nonce: o.nonce, code_challenge: pkceChallenge(o.verifier), code_challenge_method: 'S256',
@@ -43,7 +51,85 @@ export function authorizeUrl(p: Provider, o: { state: string; nonce: string; ver
     prompt: 'select_account',
   });
   if (o.loginHint) q.set('login_hint', o.loginHint);
-  return `${p.authorize}?${q}`;
+  // An organisation's service may not know "select_account" (it is optional in the standard): it is left out there.
+  if (isOrg(p)) q.delete('prompt');
+  const u = new URL(p.authorize);
+  for (const [k, v] of q) u.searchParams.set(k, v);
+  return isOrg(p) ? u.toString() : `${p.authorize}?${q}`;
+}
+
+// ---- Discovery: the addresses of an organisation's sign-in service ------------------------------------------------
+
+/** Why an issuer cannot be used, for the admin who typed it. Never holds a secret. */
+export class DiscoveryProblem extends Error {
+  why: 'address' | 'unreachable' | 'not_openid' | 'issuer_differs' | 'insecure' | 'no_pkce' | 'no_alg' | 'host';
+  /** For 'host': the host that may not be reached, and what its lookup found (see vet in discover). */
+  host?: string;
+  check?: any;
+  constructor(why: DiscoveryProblem['why'], detail: string, more: { host?: string; check?: any } = {}) {
+    super(detail);
+    this.why = why;
+    Object.assign(this, more);
+  }
+}
+/**
+ * An issuer as an admin may give it: https, a host name, no user name or password, no query and no fragment. Answers
+ * it without a slash at the end (as most services write it in their tokens), or null.
+ */
+export function issuerUrl(raw: unknown): string | null {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  if (!s || s.length > 300) return null;
+  let u: URL;
+  try {
+    u = new URL(s);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash || !u.hostname.includes('.')) return null;
+  return s.replace(/\/+$/, '');
+}
+const httpsUrl = (v: unknown): boolean => {
+  try {
+    return typeof v === 'string' && new URL(v).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+export type Discovery = { issuer: string; authorize: string; token: string; jwks: string };
+const DISCOVERY_FOR_MS = 3600_000;
+const discoveryCache: Map<string, { at: number; doc: Discovery }> = (globalThis as any).__tsdiscovery ??= new Map();
+/** Forgets what was found for an issuer (a test, or an admin who changed it). */
+export const forgetDiscovery = (issuer?: string) => (issuer ? discoveryCache.delete(issuer) : discoveryCache.clear());
+
+/**
+ * Reads the issuer's /.well-known/openid-configuration, kept for an hour. Every address in it must be https, its
+ * "issuer" must be exactly the one asked for (else a document on one host could speak for another), it must offer
+ * PKCE with S256 when it says which methods it offers, and RS256 or ES256 for ID tokens when it says which it signs with.
+ */
+// `vet`: checks that a host may be reached (orgsso.ts: a public address), and throws DiscoveryProblem 'host' when not.
+// It is asked about the issuer's host before the document is fetched, and about the token and key-list hosts the
+// document names before it is kept, every time it is fetched again: a document may change its addresses.
+export async function discover(issuer: string, fresh = false, vet?: (host: string) => Promise<void>): Promise<Discovery> {
+  const have = discoveryCache.get(issuer);
+  if (!fresh && have && Date.now() - have.at < DISCOVERY_FOR_MS) return have.doc;
+  if (issuerUrl(issuer) !== issuer) throw new DiscoveryProblem('address', 'the issuer is not an https address');
+  if (vet) await vet(new URL(issuer).hostname);
+  let r: { status: number; data: any };
+  try {
+    r = await ask(`${issuer}/.well-known/openid-configuration`, { headers: { accept: 'application/json' } });
+  } catch (e: any) {
+    throw new DiscoveryProblem('unreachable', e?.message || 'no answer');
+  }
+  const d = r.data;
+  if (r.status !== 200 || !d || typeof d !== 'object') throw new DiscoveryProblem('not_openid', `the discovery document answered ${r.status}`);
+  if (d.issuer !== issuer) throw new DiscoveryProblem('issuer_differs', `the document names the issuer "${String(d.issuer).slice(0, 200)}"`);
+  if (![d.authorization_endpoint, d.token_endpoint, d.jwks_uri].every(httpsUrl)) throw new DiscoveryProblem('insecure', 'an address in the document is missing or is not https');
+  if (Array.isArray(d.code_challenge_methods_supported) && !d.code_challenge_methods_supported.includes('S256')) throw new DiscoveryProblem('no_pkce', 'the service does not offer PKCE with S256');
+  if (Array.isArray(d.id_token_signing_alg_values_supported) && !d.id_token_signing_alg_values_supported.some((a: any) => ALGS.includes(a))) throw new DiscoveryProblem('no_alg', 'the service signs ID tokens with neither RS256 nor ES256');
+  const doc = { issuer, authorize: d.authorization_endpoint, token: d.token_endpoint, jwks: d.jwks_uri };
+  if (vet) for (const u of [doc.token, doc.jwks]) await vet(new URL(u).hostname);
+  discoveryCache.set(issuer, { at: Date.now(), doc });
+  return doc;
 }
 
 const TIMEOUT_MS = 10_000;
@@ -58,7 +144,7 @@ async function ask(url: string, init: RequestInit = {}): Promise<{ status: numbe
 }
 
 /** Swaps the code from the callback for the ID token, proving who we are with the client secret and the PKCE verifier. */
-export async function exchangeCode(p: Provider, code: string, verifier: string, redirectUri: string): Promise<string> {
+export async function exchangeCode(p: AnyProvider, code: string, verifier: string, redirectUri: string): Promise<string> {
   const r = await ask(p.token, {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, client_id: p.clientId, client_secret: p.clientSecret, code_verifier: verifier }).toString(),
@@ -73,11 +159,16 @@ export async function exchangeCode(p: Provider, code: string, verifier: string, 
 const g = globalThis as any;
 const keyCache: Map<string, { at: number; keys: any[] }> = (g.__tsjwks ??= new Map());
 const KEYS_FOR_MS = 3600_000;
-async function signingKey(p: Provider, kid: string): Promise<any | null> {
-  const pick = (keys: any[]) => keys.find((k) => k && k.kid === kid && k.kty === 'RSA' && (k.use == null || k.use === 'sig') && (k.alg == null || k.alg === 'RS256')) || null;
+/** The two ways an ID token may be signed. Anything else ("none", HS256, RS512 ...) is refused before a key is read. */
+export const ALGS = ['RS256', 'ES256'];
+async function signingKey(p: AnyProvider, kid: string, alg = 'RS256'): Promise<any | null> {
+  const fits = (k: any) => (alg === 'ES256' ? k.kty === 'EC' && k.crv === 'P-256' : k.kty === 'RSA');
+  const pick = (keys: any[]) => keys.find((k) => k && k.kid === kid && fits(k) && (k.use == null || k.use === 'sig') && (k.alg == null || k.alg === alg)) || null;
   const have = keyCache.get(p.jwks);
   const known = have && Date.now() - have.at < KEYS_FOR_MS ? pick(have.keys) : null;
   if (known) return known;
+  // A key id we do not know: the list is fetched again (a key was rotated in). Each callback that gets here passed the
+  // sign-in limits of routes-signin.ts and orgsso.ts first, so made-up key ids cannot make us ask without end.
   const r = await ask(p.jwks, { headers: { accept: 'application/json' } });
   if (r.status !== 200 || !Array.isArray(r.data?.keys)) throw refuse(`the key list answered ${r.status}`);
   keyCache.set(p.jwks, { at: Date.now(), keys: r.data.keys });
@@ -94,7 +185,7 @@ const ORG = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
  * a key), the signature fits one of the provider's published keys, it was issued by this provider, for us, for this
  * sign-in (the nonce), and it has not run out.
  */
-export async function verifyIdToken(p: Provider, jwt: string, nonce: string): Promise<Record<string, any>> {
+export async function verifyIdToken(p: AnyProvider, jwt: string, nonce: string): Promise<Record<string, any>> {
   const part = typeof jwt === 'string' ? jwt.split('.') : [];
   if (part.length !== 3 || !part.every((x) => B64URL.test(x))) throw refuse('the ID token is not three signed parts');
   let header: any, claims: any;
@@ -105,9 +196,11 @@ export async function verifyIdToken(p: Provider, jwt: string, nonce: string): Pr
     throw refuse('the ID token could not be read');
   }
   if (!header || typeof header !== 'object' || !claims || typeof claims !== 'object' || Array.isArray(claims)) throw refuse('the ID token could not be read');
-  if (header.alg !== 'RS256') throw refuse(`the ID token says it is signed with "${String(header.alg).slice(0, 20)}", and only RS256 is accepted`);
+  // Google and Microsoft sign with RS256 only; an organisation's own service may also use ES256 (P-256).
+  const es = isOrg(p) && header.alg === 'ES256';
+  if (header.alg !== 'RS256' && !es) throw refuse(`the ID token says it is signed with "${String(header.alg).slice(0, 20)}", and only ${isOrg(p) ? 'RS256 or ES256 is' : 'RS256 is'} accepted`);
   if (typeof header.kid !== 'string' || !header.kid) throw refuse('the ID token names no key');
-  const jwk = await signingKey(p, header.kid);
+  const jwk = await signingKey(p, header.kid, header.alg);
   if (!jwk) throw refuse('the ID token is signed with a key the provider does not publish');
   let key: crypto.KeyObject;
   try {
@@ -115,13 +208,25 @@ export async function verifyIdToken(p: Provider, jwt: string, nonce: string): Pr
   } catch {
     throw refuse('the published key could not be read');
   }
-  if (key.asymmetricKeyType !== 'rsa' || (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) throw refuse('the published key is not an RSA key of at least 2048 bits');
-  if (!crypto.verify('RSA-SHA256', Buffer.from(`${part[0]}.${part[1]}`), key, Buffer.from(part[2], 'base64url'))) throw refuse('the signature on the ID token is not right');
+  const signed = Buffer.from(`${part[0]}.${part[1]}`), sig = Buffer.from(part[2], 'base64url');
+  if (es) {
+    if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') throw refuse('the published key is not a P-256 key');
+    // A JWT carries the two numbers of an ECDSA signature side by side (64 bytes), not in DER.
+    if (sig.length !== 64 || !crypto.verify('sha256', signed, { key, dsaEncoding: 'ieee-p1363' }, sig)) throw refuse('the signature on the ID token is not right');
+  } else {
+    if (key.asymmetricKeyType !== 'rsa' || (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) throw refuse('the published key is not an RSA key of at least 2048 bits');
+    if (!crypto.verify('RSA-SHA256', signed, key, sig)) throw refuse('the signature on the ID token is not right');
+  }
 
-  // Issued by this provider. Microsoft signs for every organization with the same keys, so there the issuer has to
-  // name the organization the token itself says the person belongs to (tid), and that organization has to be one
-  // this server lets in.
-  if (p.id === 'google') {
+  // Issued by this provider. An organisation's service: "iss" is exactly the issuer its admin set, and the token
+  // says when it was issued.
+  if (isOrg(p)) {
+    if (claims.iss !== p.issuer) throw refuse('the issuer is not the one this account set');
+    if (typeof claims.iat !== 'number') throw refuse('the token does not say when it was issued');
+  }
+  // Microsoft signs for every organization with the same keys, so there the issuer has to name the organization the
+  // token itself says the person belongs to (tid), and that organization has to be one this server lets in.
+  else if (p.id === 'google') {
     if (claims.iss !== 'https://accounts.google.com' && claims.iss !== 'accounts.google.com') throw refuse('the issuer is not Google');
   } else {
     if (typeof claims.tid !== 'string' || !ORG.test(claims.tid)) throw refuse('the token names no organization');

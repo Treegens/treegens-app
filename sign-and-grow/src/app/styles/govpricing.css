@@ -1,0 +1,15 @@
+/* /tco and /pricing/government (src/app/tco, src/app/pricing/government). */
+.tco-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.tco-box input, .tco .card > label input { min-height: 44px; width: 100%; box-sizing: border-box; }
+.tco-sizes .btn { min-height: 44px; }
+/* Every target on the calculator and the operator's table of tree commitments is at least 44 px tall. */
+.tco .btn, .tco summary, .gov-commit .btn, .gov-commit summary, .gov-commit input, .gov-commit select { min-height: 44px; box-sizing: border-box; }
+.tco summary, .gov-commit summary { padding-block: 10px; cursor: pointer; }
+.tco-sizes .btn[aria-pressed='true'] { background: var(--green-deep); border-color: var(--green-deep); color: #fff; }
+.tco .err { color: var(--red, #b42318); }
+.tco table.t th[scope='row'] { text-align: left; padding: 10px 16px; white-space: normal; color: var(--ink); font-size: 14px; }
+@media print {
+  body:has(main.tco) .pub-head, body:has(main.tco) .pub-foot, body:has(main.tco) .pub-skip, .tco .no-print { display: none !important; }
+  .tco details { display: block; }
+  .tco .card { break-inside: avoid; box-shadow: none; }
+}

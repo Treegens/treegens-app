@@ -1,4 +1,5 @@
 'use client';
+import { DraftMessage, SummaryChoice } from './DraftMessage';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Mark } from '../Brand';
@@ -7,9 +8,15 @@ import { savingLine, reviewSummary, dateExampleDay } from '@/lib/editorux';
 import { api } from '../ui';
 import { useMe } from '../AppShell';
 import { ReminderChoice } from './ReminderChoice';
+// Send now or Send later, only for a document that is going out (SendLater.tsx).
+import { SendLaterChoice } from './SendLater';
 import { PayLinkChoice } from './PayLinkChoice';
+import { OnlyNamed } from './OnlyNamed';
+import { SendFor } from './SendFor';
 import { ReviewPlus } from '../impact/SenderTrees';
 import { type Ed } from './shared';
+import { OwnDocsChoice } from './OwnDocsChoice';
+import { OWN_DOCS_LABEL } from '@/lib/owndocs';
 
 // The parts of step 3 that came over from step 1 (research/ux-charter.md, 2.3): the subject and the message stand
 // where the Send button is, and what changes from one send to the next (reminders, the deadline, how dates are
@@ -25,6 +32,8 @@ export function SendWords({ ed }: { ed: Ed }) {
     <div className="card ed-words">
       <label className="f" style={alone ? { marginBottom: 0 } : undefined}><span>{isTpl ? 'Template name and email subject' : alone ? 'Document title' : 'Email subject'}</span><input value={env.subject} maxLength={200} onChange={(e) => ed.patchEnv({ subject: e.target.value })} /></label>
       {!alone && <label className="f" style={{ marginBottom: 0 }}><span>Message <span className="hint">{wording ? '(from the template, locked)' : '(optional)'}</span></span><textarea value={env.message} maxLength={5000} readOnly={!!wording} onChange={(e) => ed.patchEnv({ message: e.target.value })} /></label>}
+      {/* 'Draft a message': only where a model answers for this account (DraftMessage.tsx). */}
+      {!alone && <DraftMessage ed={ed} />}
     </div>
   );
 }
@@ -63,9 +72,12 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
         <button type="button" className="btn ghost" data-more="screen" aria-expanded={open} aria-controls="ed-step3-more" onClick={() => setOpen(!open)}>More options</button>
         {/* What is set now, so nobody has to open it to find out. */}
         {!open && said && <span className="muted small">{said}</span>}
+        {/* Said while closed too, so nobody has to open More options to know some files are not shown to everyone. */}
+        {!open && !!env.own_docs && ed.docs.length > 1 && <span className="muted small" data-feature="ds-visibility">{OWN_DOCS_LABEL}.</span>}
       </div>
       {open && (
         <div id="ed-step3-more" className="stack" role="group" aria-label="More options for this document">
+          <SendLaterChoice ed={ed} />
           <ReminderChoice days={env.reminder_days} isTpl={isTpl} bySender={!isTpl && rcps.some((r) => r.link_by_sender)} onChange={(n) => ed.patchEnv({ reminder_days: n })} />
           <div className="card">
             {correcting
@@ -80,9 +92,17 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
               {anyLocked ? `That is fixed, because ${lockedNames} already finished.` : 'The date of signing is the day where each person is. The signing record has the exact time as well.'}
             </div>
           </div>
+          {/* "Each person sees only their files": only with two or more files (OwnDocsChoice.tsx). */}
+          <OwnDocsChoice ed={ed} />
           {/* A link to the sender's own payment page, shown to signers after Finish. Absent for an account that may not show one. */}
           {/* The payment link comes with a template's wording, so it is not offered where that wording is locked (tplroles.ts). */}
           {!ed.wording && <PayLinkChoice envelopeId={env.id} isTpl={isTpl} onChange={(p) => setPay((was) => (was ? { ...was, ...p } : was))} />}
+          {/* 'Plain summary for signers': only where the account lets the AI read document text (DraftMessage.tsx). */}
+          <SummaryChoice ed={ed} />
+          {/* 'Only the person named may sign': only when someone on it is away and named a person to sign for them (OnlyNamed.tsx). */}
+          <OnlyNamed ed={ed} />
+          {/* 'Send for <name>': only when a colleague shared sending with this person (SendFor.tsx). */}
+          <SendFor ed={ed} />
         </div>
       )}
     </div>

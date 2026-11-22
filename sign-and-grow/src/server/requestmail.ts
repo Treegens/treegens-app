@@ -12,7 +12,7 @@ import { momentOnScreen, stampText } from '../lib/dates.ts';
 import { SOURCE_LOCALE } from '../lib/i18n.ts';
 
 export type RequestFacts = {
-  kind: 'new' | 'reminder' | 'updated' | 'reopened' | 'expiring' | 'resent' | 'again';
+  kind: 'new' | 'reminder' | 'updated' | 'reopened' | 'expiring' | 'resent' | 'again' | 'resumed';
   role: string;
   name: string;
   sender: { name: string; email: string };
@@ -61,6 +61,7 @@ export function requestMail(L: string, f: RequestFacts) {
     reminder: mt(L, 'mail.request.subject.reminder', { subject: f.subject }),
     updated: mt(L, 'mail.request.subject.updated', { subject: f.subject }),
     reopened: mt(L, 'mail.request.subject.reopened', { subject: f.subject }),
+    resumed: mt(L, 'mail.request.subject.resumed', { subject: f.subject }),
     expiring: mt(L, 'mail.request.subject.expiring', { subject: f.subject }),
     again: mt(L, 'mail.request.subject.again', { subject: f.subject }),
   }[f.kind];
@@ -81,6 +82,7 @@ export function requestMail(L: string, f: RequestFacts) {
     ] : []),
     ...(f.kind === 'updated' ? [mt(L, 'mail.request.updated', { sender: s })] : []),
     ...(f.kind === 'reopened' ? [mt(L, 'mail.request.reopened', { sender: s })] : []),
+    ...(f.kind === 'resumed' ? [mt(L, 'mail.request.resumed', { sender: s })] : []),
     ...(f.kind === 'expiring' ? [mt(L, 'mail.request.expiring', { when: deadline, sender: s })] : []),
     ...(f.kind === 'resent' ? [mt(L, 'mail.request.resent')] : []),
     ...(f.done ? [f.complete

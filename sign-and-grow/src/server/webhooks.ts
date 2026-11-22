@@ -13,7 +13,8 @@ import { webhookCustom } from './customfields.ts';
 // carries "recipient_id" and "change". Read the envelope again to see how it stands.
 // security.event: a line of the account's security record (seclog.ts). Only for a webhook that lists it by name: "*"
 // never includes it, because it carries the team's internet addresses.
-export const WEBHOOK_EVENTS = ['envelope.sent', 'envelope.completed', 'envelope.declined', 'envelope.voided', 'envelope.expired', 'envelope.corrected', 'envelope.updated', 'recipient.viewed', 'recipient.completed', 'comment.created', 'security.event'];
+// export.ready: a full export made in the background is ready to download (exportfull.ts). It carries no envelope.
+export const WEBHOOK_EVENTS = ['envelope.sent', 'envelope.completed', 'envelope.declined', 'envelope.voided', 'envelope.expired', 'envelope.corrected', 'envelope.updated', 'recipient.viewed', 'recipient.completed', 'comment.created', 'security.event', 'envelope.paused', 'envelope.resumed', 'export.ready'];
 
 function isPrivate(ip: string): boolean {
   if (net.isIPv4(ip)) {

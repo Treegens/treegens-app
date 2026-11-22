@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { ROLE_LABEL, Status, fmtDate } from '../ui';
+import { chooserBefore, isOpenPlace } from '@/lib/recipienttypes';
 import { useMe } from '../AppShell';
 import { Lock } from './parts';
 import { PAPER_HINT, fmtSize } from './upload';
@@ -114,7 +115,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
                   {isTpl && <input placeholder="Role, e.g. Client" value={r.role_name || ''} aria-label="Role name" style={{ flex: '1 1 130px' }} onChange={(e) => ed.patchRcp(r.id, { role_name: e.target.value })} />}
                   {/* No name or address of the sender's for a witness the signer names (WitnessChoice.tsx, below). */}
                   {!signerNames(r) && <>
-                  <input placeholder="Full name" value={r.name} aria-label="Name" data-ed-name autoComplete="off" style={{ flex: '1 1 150px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
+                  {/* A role from a template ("Volunteer") names the box, so its person is put in the right place (TemplateMatch.tsx). */}
+                  <input placeholder={!isTpl && r.role_name ? `${r.role_name}: full name` : 'Full name'} value={r.name} aria-label="Name" data-ed-name autoComplete="off" style={{ flex: '1 1 150px' }} onChange={(e) => ed.patchRcp(r.id, { name: e.target.value })} />
                   {/* No address for someone whose link the sender sends themselves (SendMyself.tsx, in More). The box
                       is wide enough to show a whole address. */}
                   {!(r.link_by_sender && !isTpl) && <input placeholder="Email" type="email" list="contact-emails" value={r.email} aria-label="Email" autoComplete="off" className="ed-email" style={{ flex: '2 1 260px' }}
@@ -130,6 +132,8 @@ export function StepAdd({ ed }: { ed: Ed }) {
                 {more !== r.id && <PersonSummary r={r} />}
                 {more === r.id && <PersonMore ed={ed} r={r} />}
                 <WitnessChoice r={r} rcps={rcps} isTpl={isTpl} onChange={(p) => ed.patchRcp(r.id, p)} />
+                {/* Only after someone who chooses who comes next: this place may stay empty (src/lib/recipienttypes.ts). */}
+                {!isTpl && isOpenPlace(r, rcps, !!env.ordered) && <div className="muted small" data-feature="ds-recipient-types" style={{ marginTop: 6 }}>{chooserBefore(r, rcps, !!env.ordered)?.name || 'The person who chooses who comes next'} can fill this in. You can leave it empty.</div>}
                 {r.role === 'inperson' && <div className="muted small" style={{ marginTop: 6 }}>You host the signing on your own device. The link is emailed to you. While they hold the device your account is locked in that browser, and you type your password to come back.</div>}
                 {correcting && (
                   <div className="muted small" style={{ marginTop: 6 }}>

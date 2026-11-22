@@ -20,8 +20,10 @@ import { stampText } from '../lib/dates.ts';
 // of a group is that member, also once they have taken the document on (claimed_by) and act as the row.
 export const partyOf = (r: any): string => (r?.member ? `m:${r.member.id}` : r?.claimed_by ? `m:${r.claimed_by}` : `p:${Number(r?.person_gen) || 0}`);
 
-export type Viewer = { side: 'sender' } | { side: 'recipient'; rid: string; party: string };
-export const sees = (t: any, v: Viewer): boolean => v.side === 'sender' || !t.private || (t.recipient_id === v.rid && t.party === v.party);
+// `hidden`: files this person is not shown ("Each person sees only their files", visibility.ts). A thread pinned to one
+// of them is not theirs to read or answer, whoever it is for.
+export type Viewer = { side: 'sender' } | { side: 'recipient'; rid: string; party: string; hidden?: Set<string> };
+export const sees = (t: any, v: Viewer): boolean => v.side === 'sender' || (!(t.document_id && v.hidden?.has(t.document_id)) && (!t.private || (t.recipient_id === v.rid && t.party === v.party)));
 const isMine = (c: any, v: Viewer) => v.side === 'recipient' && !c.by_sender && c.recipient_id === v.rid && c.party === v.party;
 const at = (s: any) => stampText(s);
 

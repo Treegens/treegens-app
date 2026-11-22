@@ -5,6 +5,10 @@ import { useRouter } from 'next/navigation';
 import { api, useLoad, fmtDate, toast } from '@/components/ui';
 import { Dialog } from '@/components/sender/Dialog';
 import { MorePanel } from '@/components/sender/More';
+import { useMe } from '@/components/AppShell';
+// Working for a colleague: a template's More moves it to another member (src/server/shares.ts).
+import { MoveDialog as MoveToColleague } from '@/components/sender/Colleagues';
+import { MOVE_LABEL } from '@/lib/shares';
 import { ConfirmDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { explain, looksLikeEmail } from '@/components/sender/lib';
@@ -17,6 +21,7 @@ import { useTemplateDetails, draftNeedsDetails } from '@/components/sender/UseDe
 import { Starters, StartersInvite, StartersLink } from '@/components/templates/Starters';
 import { SOURCE_LOCALE, t as say } from '@/lib/i18n';
 import { WRITE_TEMPLATE_LINK } from '@/lib/writedoc';
+import { AddTemplate, withTemplate, withoutTemplate, useTitle, useBody } from '@/components/templates/AddTemplate';
 
 // With a waiver form for each state or client, one flat list stops working at about twenty. So the page has what
 // the envelope list has: a search (every word has to be found in the name, the folder, a role or the document), a
@@ -30,6 +35,10 @@ export default function Templates() {
   const [view, setView] = useState<View | null>(null);
   const [typed, setTyped] = useState('');
   const [moving, setMoving] = useState<any>(null);
+  const [handing, setHanding] = useState<any>(null);
+  const me = useMe();
+  // On a team only, for the person a template belongs to or an admin (the same rule as the server's).
+  const mayHand = (t: any) => Number(me?.members) >= 2 && (t.sender_id === me?.user?.id || me?.role === 'owner' || me?.role === 'admin');
   const [rules, setRules] = useState<any>(null);
   // Whose More is open: one row at a time, and closed every time the page opens.
   const [more, setMore] = useState('');
@@ -123,7 +132,7 @@ export default function Templates() {
       // Two steps on purpose. If sending is refused, the draft is still there, we know which one it is, and trying
       // again sends that same draft instead of quietly making another.
       if (!id) {
-        id = (await api('/envelopes', { body: { template_id: use.id, recipients: fill, custom_fields: cf.pairs() } })).envelope.id as string;
+        id = (await api('/envelopes', { body: { ...useBody(use), recipients: fill, custom_fields: cf.pairs() } })).envelope.id as string;
         setDraftId(id);
       }
       if (!send) {
@@ -221,7 +230,8 @@ export default function Templates() {
                         <div className="sn-rowmore" id={`tpl-more-${t.id}`} role="group" aria-label={`More for ${name}`}>
                           {fillable && <Link className="btn sm" href={`/app/bulk?template=${t.id}`} aria-label={`Send ${name} to many`}>Send to many</Link>}
                           {t.may_change !== false && <Link className="btn sm" href={`/app/templates/${t.id}/edit`} aria-label={`Edit ${name}`}>Edit</Link>}
-                          {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move</button>}
+                          {t.may_change !== false && <button className="btn sm ghost" onClick={() => setMoving(t)} aria-label={`Move ${name} to a folder`}>Move to folder</button>}
+                          {mayHand(t) && <button className="btn sm ghost" data-feature="ds-colleagues" onClick={() => setHanding(t)} aria-label={`Move ${name} to a colleague`}>{MOVE_LABEL}</button>}
                           <button className="btn sm ghost tr-tap" onClick={() => setRules(t)} aria-label={`Who can use ${name}`}>Who can use this</button>
                           {(t.access?.may_delete ?? t.may_change) !== false && <button className="btn sm ghost danger" onClick={() => setDeleting(t)} aria-label={`Delete ${name}`}>Delete</button>}
                         </div>
@@ -237,7 +247,7 @@ export default function Templates() {
       </div>
 
       {use && (
-        <Dialog title={`Use "${use.subject || 'template'}"`} onClose={() => setUse(null)}>
+        <Dialog title={`Use "${useTitle(use)}"`} onClose={() => setUse(null)}>
           <form onSubmit={(e) => (e.preventDefault(), create(true, !!dead))}>
             {/* Nobody to fill in: say who it goes to, so Send now is never a surprise (a template saved from a sent document keeps its people). */}
             {use.open.length === 0 && <p>This goes to <b>{joinNames(use.recipients.filter((r: any) => r.email).map((r: any) => `${r.name || r.role_name || 'someone'} (${r.email})`)) || 'the people set in this template'}</b>. Send it as it is, or review it first.</p>}
@@ -248,6 +258,9 @@ export default function Templates() {
                 <label className="f"><span>Email</span><input type="email" value={fill[r.id]?.email || ''} readOnly={!!draftId} onChange={(e) => (setProblem(''), setFill({ ...fill, [r.id]: { ...fill[r.id], email: e.target.value } }))} autoComplete="off" /></label>
               </fieldset>
             ))}
+            {/* Several templates in one document (AddTemplate.tsx): one quiet link, nothing until it is pressed. */}
+            {!draftId && <AddTemplate use={use} rows={rows} onAdd={(more) => { const next = withTemplate(use, more); setFill({ ...Object.fromEntries(next.open.map((r: any) => [r.id, { name: '', email: '' }])), ...fill }); setUse(next); }}
+              onRemove={(id) => { const next = withoutTemplate(use, id); setProblem(''); setFill(Object.fromEntries(next.open.map((r: any) => [r.id, fill[r.id] || { name: '', email: '' }]))); setUse(next); }} />}
             {cf.boxes}
             {problem && <div className="notice err" role="alert">{problem}</div>}
             {dead && <div className="notice warn" role="alert"><b>{sendAnywayAsk(dead).title}.</b> {sendAnywayAsk(dead).body} It is saved as a draft: to correct the address, choose Open the draft.</div>}
@@ -271,6 +284,7 @@ export default function Templates() {
         </ConfirmDialog>
       )}
 
+      {handing && <MoveToColleague envelope={handing} onClose={() => setHanding(null)} onDone={() => (setHanding(null), toast('Moved. It now belongs to them.'), reload())} />}
       {moving && <MoveTemplate template={moving} folders={data?.folders || []} onClose={() => setMoving(null)} onDone={() => (setMoving(null), reload())} />}
       {rules && <AccessDialog templateId={rules.id} name={rules.subject || 'Untitled template'} onClose={() => setRules(null)} onSaved={() => reload()} />}
     </div>

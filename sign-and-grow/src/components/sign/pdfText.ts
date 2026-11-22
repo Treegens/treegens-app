@@ -1,6 +1,9 @@
 // Reads the words out of a PDF so they can be shown as real text: for screen readers, for large type,
 // and for anyone who would rather read than pinch and zoom. pdf.js is loaded the same way PdfDoc loads it.
 
+import { reflowPage, type RPage, type RItem } from './reflow';
+import { hiddenRuns, type Pixels } from './visible';
+
 let lib: Promise<any> | null = null;
 function pdfjs(): Promise<any> {
   lib ??= (new Function('u', 'return import(u)') as (u: string) => Promise<any>)('/pdfjs/pdf.min.mjs').then((m) => {
@@ -11,8 +14,11 @@ function pdfjs(): Promise<any> {
 }
 
 export type Block = { kind: 'heading' | 'text'; text: string };
-/** One page: its text as blocks, and where each printed line sits (0 to 1 from the top left) so fields can be described by the words beside them. */
-export type PageText = { blocks: Block[]; lines: { x: number; y: number; text: string }[] };
+/**
+ * One page: its text as blocks, where each printed line sits (0 to 1 from the top left) so fields can be described by
+ * the words beside them, and the page put together again for Easy reading (src/components/sign/reflow.ts).
+ */
+export type PageText = { blocks: Block[]; lines: { x: number; y: number; text: string }[]; flow: RPage; hidden?: number };
 type Line = { y: number; h: number; x0: number; x1: number; text: string };
 
 function linesOf(items: any[]): Line[] {
@@ -102,6 +108,30 @@ export async function pageBoxes(pdf: any, index: number): Promise<{ x: number; y
   });
 }
 
+/**
+ * The page drawn once as a picture, small, to see which of its words really show (sign/visible.ts). Null when it
+ * cannot be drawn here: then every word is kept, as before.
+ */
+async function pictureOf(page: any): Promise<{ px: Pixels; scale: number } | null> {
+  try {
+    if (typeof document === 'undefined') return null;
+    const one = page.getViewport({ scale: 1 });
+    const scale = Math.min(1.25, 1600 / Math.max(one.width, one.height, 1));
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(vp.width);
+    canvas.height = Math.ceil(vp.height);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    canvas.width = canvas.height = 0;
+    return { px: { data: img.data, width: img.width, height: img.height }, scale };
+  } catch {
+    return null;
+  }
+}
+
 const cache = new Map<string, Promise<PageText[]>>();
 
 /** The text of every page, in reading order. A page with no text (a scan, say) has no blocks. */
@@ -117,9 +147,25 @@ export function pageTexts(url: string): Promise<PageText[]> {
         for (let i = 1; i <= doc.numPages; i++) {
           const page = await doc.getPage(i);
           const tc = await page.getTextContent();
-          const lines = linesOf(tc.items);
           const vp = page.getViewport({ scale: 1 });
+          // The runs of text in the page's picture coordinates, for Easy reading: x from the left, baseline from the top.
+          const all = tc.items.filter((it: any) => typeof it.str === 'string');
+          const runs = all.map((it: any) => {
+            const [x, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+            const t = it.transform;
+            return { it, x, y, w: it.width || 0, h: it.height || Math.abs(t[3]) || 10, flat: !t[1] && !t[2] && t[0] > 0 && t[3] > 0 && !vp.rotation };
+          });
+          // Words that do not show on the page (white, see-through, covered, off the page) are left out of what is
+          // read here, so this text says no more than the pages that are signed (sign/visible.ts).
+          const pic = all.some((it: any) => it.str.trim()) ? await pictureOf(page) : null;
+          const hide = pic ? hiddenRuns(runs, pic.px, pic.scale) : runs.map(() => false);
+          const kept = runs.filter((_: any, k: number) => !hide[k]);
+          const hidden = runs.filter((r: any, k: number) => hide[k] && r.it.str.trim()).length;
+          const lines = linesOf(kept.map((r: any) => r.it));
+          const items: RItem[] = kept.map((r: any) => ({ str: r.it.str, x: r.x, y: r.y, w: r.w, h: r.h, font: r.it.fontName, eol: r.it.hasEOL }));
           pages.push({
+            hidden,
+            flow: reflowPage(items, vp.width, vp.height),
             blocks: blocksOf(lines),
             lines: lines.map((l) => {
               const [x, y] = vp.convertToViewportPoint(l.x0, l.y);

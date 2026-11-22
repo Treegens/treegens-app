@@ -7,6 +7,7 @@ import { Logo, Mark } from './Brand';
 import { fmtNum, usd, TOTALS_FROM, totalWorthShowing } from '@/lib/impact';
 import { HelpChatButton } from './HelpChat';
 import { MONEY_LINE, MONEY_SHORT } from '@/lib/impactwords';
+import { useDeploymentBilling } from './BillingModePublic';
 
 // Shared frame of the public pages: the top navigation, the footer and the live impact numbers.
 
@@ -70,12 +71,14 @@ export function PublicNav() {
 export function PublicFooter() {
   // The address people can write to, printed on every public page when one is set (SUPPORT_EMAIL).
   const [support] = useLoad(() => api('/public/support'));
+  // Under a government agreement nobody pays by card here: no money line and no subscription to stop.
+  const gov = useDeploymentBilling();
   return (
     <footer className="foot pub-foot">
       <div className="wrap pub-foot-grid">
         <div className="pub-foot-brand">
           <Link href="/" className="logo"><Logo height={22} /></Link>
-          <p>{MONEY_SHORT}</p>
+          {!gov && <p>{MONEY_SHORT}</p>}
           {/* "A person replies" only where the server says a request reaches somebody (reply is null when neither
               SUPPORT_EMAIL nor OPERATOR_EMAILS is set: supportReachable in src/lib/policy.ts). */}
           {support?.reply
@@ -91,7 +94,8 @@ export function PublicFooter() {
         <nav aria-label="Product">
           <h2>Product</h2>
           <Link href="/pricing">Pricing</Link>
-          <Link href="/help#cancel">Stop a subscription</Link>
+          <Link href="/pricing/government">Government prices</Link>
+          {!gov && <Link href="/help#cancel">Stop a subscription</Link>}
           <Link href="/features">What it does</Link>
           <Link href="/impact">Trees planted</Link>
           <Link href="/developers">Developers</Link>

@@ -6,12 +6,15 @@ import { api } from '../ui';
 import { useMe } from '../AppShell';
 import { joinNames } from './lib';
 import { ownLink } from './OwnLink';
+import { sentForAfter } from '@/lib/shares';
 
 // Shown once, on the page a sender lands on right after sending (the editor sends them here with ?sent=1). Someone
 // waiting for a signature on their phone hears nothing until the end unless they found the setting, so the one
 // switch that matters is offered here, at the moment it matters. It sets the same preference as Settings,
 // Notifications ("Each time someone signs"), for all of this person's envelopes. Nothing here is a second setting.
-export function AfterSend({ envelope }: { envelope: any }) {
+// `sentFor`: the colleague this person just sent it for (src/server/shares.ts). The emails about it go to them, so this
+// card says so, and offers no switch of this person's own.
+export function AfterSend({ envelope, sentFor }: { envelope: any; sentFor?: string }) {
   const me = useMe();
   const [show, setShow] = useState(false);
   const [on, setOn] = useState(!!me.user.notify?.signed);
@@ -47,13 +50,15 @@ export function AfterSend({ envelope }: { envelope: any }) {
       {/* "Sent.", and the first time an account sends anything, the picture and its words (impact/SenderTrees.tsx). */}
       <SentHead envelopeId={envelope.id} id="sn-sent-h" />
       <p className="muted">
-        {me.user.notify?.completed !== false
+        {sentFor ? sentForAfter(sentFor, acting.length === 1 ? `${acting[0].name} has` : 'everyone has')
+          : me.user.notify?.completed !== false
           ? <>We email you at {me.user.email} when {acting.length === 1 ? `${acting[0].name} has` : 'everyone has'} finished.</>
           : <>You have switched off the email that tells you when everyone has finished. You can switch it back on under <Link href="/app/settings?tab=notifications">Settings, Profile</Link>.</>}
       </p>
       {/* People with no address, whose link the sender said they would send: nobody else will (OwnLink.tsx). */}
-      {own.length > 0 && <p className="sn-hint warn"><b>Now send {joinNames(own.map((r: any) => r.name))} the link yourself.</b> It is next to {own.length === 1 ? 'their name' : 'each of their names'} below. We do not write to them.</p>}
-      {acting.length > 1 && (
+      {own.length > 0 && sentFor && <p className="sn-hint warn"><b>Tell {sentFor} to send {joinNames(own.map((r: any) => r.name))} the link.</b> Only {sentFor} or an admin can. We do not write to them.</p>}
+      {own.length > 0 && !sentFor && <p className="sn-hint warn"><b>Now send {joinNames(own.map((r: any) => r.name))} the link yourself.</b> It is next to {own.length === 1 ? 'their name' : 'each of their names'} below. We do not write to them.</p>}
+      {acting.length > 1 && !sentFor && (
         <>
           <label className="setting-row sn-switch">
             <input type="checkbox" role="switch" checked={on} disabled={busy} onChange={flip} aria-describedby="sn-sent-hint" />

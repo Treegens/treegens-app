@@ -3,6 +3,8 @@ import { useState, type FormEvent } from 'react';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 import { Tickets } from './tickets';
 import { LeakCheckLine } from './leakcheck';
+import { TreeCommitments } from './commitments';
+import { useMe } from '@/components/AppShell';
 import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS, priceChangeDay } from '@/lib/policy';
 
 // The queue for the people who run the service: help requests, reports from recipients, and paused accounts.
@@ -93,6 +95,7 @@ function BillingTools() {
 }
 
 export default function Operator() {
+  const me = useMe();
   const [q, reload, error] = useLoad(() => api('/operator/queue'));
   if (error) return <div className="card center"><h2>Not available</h2><p className="muted">This page is for the team that runs GrowSigning.</p></div>;
   if (!q) return <div className="muted">Loading…</div>;
@@ -122,7 +125,8 @@ export default function Operator() {
 
       <LeakCheckLine />
 
-      <BillingTools />
+      {/* A server under a government agreement has no plan and its billing routes answer 404: no money tools there. */}
+      {!me?.agreement && <BillingTools />}
 
       {/* Help requests as tickets: the queue by due time, the thread, and every action an operator can take. */}
       <Tickets accountActions={(a) => trustButton(a.id, a.name, a.trusted_at)} />
@@ -164,6 +168,9 @@ export default function Operator() {
           </div>
         ))}
       </div>
+
+      {/* Not a person waiting: the table of contracts, folded, after everything that is. */}
+      <TreeCommitments />
     </div>
   );
 }

@@ -21,7 +21,7 @@ export const isCommonField = (type: string) => COMMON_FIELDS.includes(type);
  * under "How they sign", and is kept on the person as the role "inperson" as before.
  */
 export const ROLE_CHOICES = ['signer', 'approver', 'cc', 'viewer', 'witness'];
-export const ROLE_WORDS: Record<string, string> = { signer: 'Needs to sign', approver: 'Needs to approve', cc: 'Gets a copy', viewer: 'Must open it', witness: 'Is a witness', inperson: 'Needs to sign' };
+export const ROLE_WORDS: Record<string, string> = { signer: 'Needs to sign', approver: 'Needs to approve', cc: 'Gets a copy', viewer: 'Must open it', witness: 'Is a witness', inperson: 'Needs to sign', editor: 'Can change the document', agent: 'Chooses who comes next' };
 /** The most roles the list may ever offer, with everything set up. */
 export const ROLE_CAP = 8;
 /** The most lines inside one person's More: with nothing set up, and with everything set up. */
@@ -129,8 +129,10 @@ export function personLabel(r: any, index: number): string {
 export const personInSentence = (r: any): string => String(r?.name || '').trim() || String(r?.role_name || '').trim() || String(r?.email || '').trim() || 'this person';
 
 /** Under a person on step 3 who has no address. Only a template says it is filled in later. */
-export function noAddressWords(r: any, isTpl: boolean): string {
+export function noAddressWords(r: any, isTpl: boolean, chooser?: string | null): string {
   if (r?.link_by_sender) return 'No email from us. You send them the link yourself after sending.';
+  // A place left open for the person who chooses who comes next (src/lib/recipienttypes.ts): the same as step 1 says.
+  if (chooser != null && !isTpl) return `${chooser || 'The person who chooses who comes next'} names this person on their turn.`;
   return isTpl ? 'Filled in when the template is used' : 'No email address yet. Add it in step 1.';
 }
 

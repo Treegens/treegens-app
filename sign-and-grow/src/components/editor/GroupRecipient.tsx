@@ -4,6 +4,7 @@ import { api } from '../ui';
 import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS } from '@/lib/policy';
 import { groupDoes } from '@/lib/groups';
 import { MAX_RECIPIENTS, plural, type Ed } from './shared';
+import { RecipientRule } from './RecipientRule';
 
 // A recipient that is a signing group, in step 1 of the editor: any one of its members can act for it. On a draft
 // or template it only names the account's group and follows it. On an envelope that is out (a correction) its
@@ -105,6 +106,8 @@ export function GroupRow({ ed, r, groups, old }: { ed: Ed; r: any; groups: Group
           <label className="f" style={{ margin: 0 }}><span>Access code <span className="hint">(one for the whole group, at least 4 characters, give it to them yourself)</span></span><input value={r.access_code || ''} maxLength={50} onChange={(e) => ed.patchRcp(r.id, { access_code: e.target.value })} /></label>
           <label className="f" style={{ margin: 0 }}><span>Private note <span className="hint">(every member sees it)</span></span><input value={r.note || ''} maxLength={1000} onChange={(e) => ed.patchRcp(r.id, { note: e.target.value })} /></label>
           <p className="muted small" style={{ gridColumn: '1 / -1', margin: 0 }}>A one-time code by email or text message goes to one person, so it cannot be asked of a group.</p>
+          {/* "Only when...", as for a person (RecipientRule.tsx). */}
+          <div style={{ gridColumn: '1 / -1', minWidth: 0 }}><RecipientRule ed={ed} r={r} /></div>
         </div>
       )}
       {sent && <MembersEditor members={members} onChange={setMembers} done={old.status === 'completed' && old.role !== 'cc'} />}

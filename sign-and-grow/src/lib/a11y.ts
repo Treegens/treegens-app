@@ -23,7 +23,7 @@ export const WORKS: string[] = [
   'Signing a document with the keyboard alone: Tab, Enter and Space reach every step, from the consent tick to Finish, on a phone-sized screen and on a large one.',
   'Next moves the focus to the next field that needs you, and opens the signature or stamp box when that is what the field needs.',
   'Each field tells a screen reader its name, whether it is required or optional, and the page it is on.',
-  'The document can be read as text instead of as pictures of the pages: "Read the document as text instead" is the first thing the keyboard reaches on the document, and the view can also be changed under More. The text view holds every field as an ordinary form.',
+  'The document can be read as text instead of as pictures of the pages: "Read the document in Easy reading instead" is the first thing the keyboard reaches on the document, and the view can also be changed under More. Easy reading shows the words in one column, with headings, lists and tables, and every field as an ordinary form where it sits in the text.',
   'A signature can be typed instead of drawn, and a stamp can be chosen as a file instead of taking a photo.',
   'The pages work at 320 pixels wide, which is a large screen at 400 percent zoom, without scrolling sideways.',
   'The buttons of the signing page are at least 44 pixels tall. On a phone every field on the document takes a tap 44 pixels across, and on a large screen a small tick box or round button on the document still takes one 24 pixels across. The tick to agree before signing can be pressed anywhere on its sentence.',
@@ -33,7 +33,7 @@ export const WORKS: string[] = [
 /** What does not work yet, or was not checked. Said plainly, so nobody finds it out halfway through a document. */
 export const NOT_YET: string[] = [
   'A document is only as readable as the file the sender uploaded. A scan or a photo of a page has no text, so a screen reader has nothing to read there unless the people who run this server have set up text reading for scanned pages.',
-  'The signed PDF that everyone receives has no marked headings or reading order, so a screen reader reads it from top to bottom. While signing, use the text view.',
+  'The signed PDF that everyone receives has no marked headings or reading order, so a screen reader reads it from top to bottom. While signing, use Easy reading.',
   'Drawing a signature needs a mouse, a finger or a pen. Typing it is offered next to drawing.',
   'We could not try the pages with VoiceOver on an iPhone or with NVDA on Windows. We checked what a screen reader is told using the tools built into the Chrome browser. Some screen readers may say things in a different order.',
   'Screens for the people who run this server, and the emails, were not checked.',

@@ -9,6 +9,8 @@
 // owner of the account can always use and change everything, so nothing is ever locked away from the people who
 // are responsible for the account. A person who may change a template may always use it.
 // The routes are in routes-templates.ts. This file reads the database only, so envelopes.ts can call it.
+// What the person's role allows (perm.ts): 'edit_any_template' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import type { Ctx } from './router.ts';
 import { all, get, run } from './db.ts';
 import { bad, str } from './util.ts';
@@ -17,6 +19,8 @@ import { logicKey } from '../lib/logic.ts';
 // envelopes.ts imports this file too (carryRules). Only functions are used from it, and only when a request runs.
 import { audit } from './envelopes.ts';
 import { isCodeCheck } from '../lib/checks.ts';
+// A document made from several templates is locked part by part (tplcombine.ts imports this file too; functions only).
+import { partLockFrom, lockedPartsOnly, partsOf, combinedCloneOwner, carryParts, anyPartLocked } from './tplcombine.ts';
 
 export type Rule = { use: TplUse; change: TplChange; locked: boolean };
 export const ruleOf = (t: any): Rule => ({
@@ -24,13 +28,17 @@ export const ruleOf = (t: any): Rule => ({
   change: (TPL_CHANGES as readonly string[]).includes(t?.tpl_change) ? t.tpl_change : 'owner',
   locked: !!t?.tpl_locked,
 });
-const lineOf = (t: any, userId: string) => get('SELECT can_change FROM template_members WHERE template_id=? AND user_id=?', t.id, userId);
+// The chosen people of every template: those chosen by name (template_members) and everyone in a chosen group of
+// members (template_member_groups, routes-perm.ts). Columns template_id, user_id, can_change.
+const CHOSEN = `(SELECT template_id, user_id, can_change FROM template_members
+  UNION ALL SELECT tmg.template_id, gp.user_id, tmg.can_change FROM template_member_groups tmg JOIN member_group_people gp ON gp.group_id=tmg.group_id)`;
+const lineOf = (t: any, userId: string) => get(`SELECT can_change FROM ${CHOSEN} l WHERE template_id=? AND user_id=? ORDER BY can_change DESC LIMIT 1`, t.id, userId);
 export const ownerName = (t: any): string => get('SELECT name FROM users WHERE id=?', t?.sender_id)?.name || 'a colleague';
 /** Who to ask, for the end of a refusal: "Maya Lopez or an admin of your team". */
 export const askWho = (t: any) => (t ? `${ownerName(t)} or an admin of your team` : 'an admin of your team');
 
 /** The person it belongs to and admins: the only ones who set the rules, and who can delete it. */
-export const maySetRules = (c: Ctx, t: any) => c.admin || t.sender_id === c.user.id;
+export const maySetRules = (c: Ctx, t: any) => can(c, 'edit_any_template') || t.sender_id === c.user.id;
 
 /** A rule that holds something back from someone: the template is not for everyone, or its wording is locked. */
 const holdsBack = (t: any) => ruleOf(t).use !== 'team' || ruleOf(t).locked;
@@ -58,9 +66,9 @@ export function mayUse(c: Ctx, t: any): boolean {
  * template someone may not use is not listed, and neither is its folder: a folder name can say a lot by itself.
  */
 export function usableSql(c: Ctx): [string, any[]] {
-  if (c.admin) return ['', []];
+  if (can(c, 'edit_any_template')) return ['', []];
   return [`(e.sender_id=? OR COALESCE(e.tpl_use,'team') NOT IN ('admins','chosen') OR e.tpl_change='team'
-    OR EXISTS (SELECT 1 FROM template_members tm WHERE tm.template_id=e.id AND tm.user_id=? AND (e.tpl_use='chosen' OR (tm.can_change=1 AND e.tpl_change='chosen'))))`, [c.user.id, c.user.id]];
+    OR EXISTS (SELECT 1 FROM ${CHOSEN} tm WHERE tm.template_id=e.id AND tm.user_id=? AND (e.tpl_use='chosen' OR (tm.can_change=1 AND e.tpl_change='chosen'))))`, [c.user.id, c.user.id]];
 }
 
 /**
@@ -69,7 +77,7 @@ export function usableSql(c: Ctx): [string, any[]] {
  * before its rule changed, say), so the id of an HR letter, once seen, does not keep opening it.
  */
 export function fileHeldBack(c: Ctx, fileId: string): boolean {
-  if (c.admin) return false;
+  if (can(c, 'edit_any_template')) return false;
   return all("SELECT e.id, e.sender_id, e.tpl_use, e.tpl_change FROM documents d JOIN envelopes e ON e.id=d.envelope_id WHERE d.file_id=? AND e.kind='template' AND e.account_id=?", fileId, c.account.id)
     .some((t) => !mayUse(c, t));
 }
@@ -107,7 +115,7 @@ export function markList(c: Ctx, rows: any[]) {
   const ids = rows.map((e) => e.id);
   const marks = ids.map(() => '?').join(',');
   const rules = new Map(all(`SELECT id, sender_id, tpl_use, tpl_change, tpl_locked FROM envelopes WHERE id IN (${marks})`, ...ids).map((t) => [t.id, t]));
-  const lines = new Map(all(`SELECT template_id, can_change FROM template_members WHERE user_id=? AND template_id IN (${marks})`, c.user.id, ...ids).map((l) => [l.template_id, l]));
+  const lines = new Map(all(`SELECT template_id, can_change FROM ${CHOSEN} l WHERE user_id=? AND template_id IN (${marks}) ORDER BY can_change`, c.user.id, ...ids).map((l) => [l.template_id, l]));
   for (const e of rows) {
     const t = rules.get(e.id) || e;
     const r = ruleOf(t);
@@ -123,9 +131,12 @@ export function markList(c: Ctx, rows: any[]) {
 export function accessOf(c: Ctx, t: any) {
   const r = ruleOf(t);
   const lines = all('SELECT tm.user_id, tm.can_change, u.name FROM template_members tm JOIN users u ON u.id=tm.user_id WHERE tm.template_id=? ORDER BY u.name', t.id);
+  // Groups of members chosen for it (routes-perm.ts), named as "everyone in HR" in the sentence.
+  const groups = all('SELECT g.id, g.name, tmg.can_change FROM template_member_groups tmg JOIN member_groups g ON g.id=tmg.group_id WHERE tmg.template_id=? ORDER BY g.name', t.id);
+  const named = (l: any[], gl: any[]) => [...l.map((x) => x.name), ...gl.map((g) => `everyone in ${g.name}`)];
   const out: TplAccess & Record<string, any> = {
     ...r, owner: ownerName(t), owner_id: t.sender_id,
-    chosen_use: r.use === 'chosen' ? lines.map((l) => l.name) : [], chosen_change: r.change === 'chosen' ? lines.filter((l) => l.can_change).map((l) => l.name) : [],
+    chosen_use: r.use === 'chosen' ? named(lines, groups) : [], chosen_change: r.change === 'chosen' ? named(lines.filter((l) => l.can_change), groups.filter((g) => g.can_change)) : [],
     may_use: mayUse(c, t), may_change: mayChange(c, t), may_delete: maySetRules(c, t), may_set: maySetRules(c, t),
     // Whether a copy this person makes is theirs, or stays with the owner and keeps the rules (cloneOwner).
     copy_is_yours: copyIsTheirs(c, t),
@@ -135,7 +146,11 @@ export function accessOf(c: Ctx, t: any) {
   if (out.may_set) {
     const chosen = new Map(lines.map((l) => [l.user_id, l]));
     out.members = all('SELECT u.id, u.name, u.email, m.role FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? ORDER BY u.name', t.account_id)
-      .map((m) => ({ id: m.id, name: m.name, email: m.email, role: m.role, always: m.role !== 'member' || m.id === t.sender_id, chosen: chosen.has(m.id), can_change: !!chosen.get(m.id)?.can_change }));
+      .map((m) => ({ id: m.id, name: m.name, email: m.email, role: m.role, always: m.id === t.sender_id || can({ user: { id: m.id }, account: { id: t.account_id } }, 'edit_any_template'), chosen: chosen.has(m.id), can_change: !!chosen.get(m.id)?.can_change }));
+    // The groups of members of the team, so a group can be chosen as a whole.
+    const picked = new Map(groups.map((g) => [g.id, g]));
+    out.groups = all('SELECT id, name FROM member_groups WHERE account_id=? ORDER BY lower(name)', t.account_id)
+      .map((g) => ({ id: g.id, name: g.name, people: get('SELECT COUNT(*) n FROM member_group_people WHERE group_id=?', g.id).n, chosen: picked.has(g.id), can_change: !!picked.get(g.id)?.can_change }));
   }
   return out;
 }
@@ -195,12 +210,15 @@ export function carryRules(src: any, eid: string, kind: 'envelope' | 'template')
     const was = peopleOf(src);
     const people = Object.fromEntries((src.recipients || []).flatMap((r: any, i: number) => (was[r.id] && rids[i] ? [[rids[i], was[r.id]]] : [])));
     if (src.wording_from) mark(src.wording_from, fixedOf(src).map((fid) => twin.get(fid)!), people, src.wording_owner || null);
+    // Made from several templates: every part keeps its own lock (tplcombine.ts).
+    carryParts(src, eid);
     return;
   }
   const from = src.kind === 'template' ? src : src.template_id ? get("SELECT * FROM envelopes WHERE id=? AND kind='template'", src.template_id) : null;
   if (!from) return;
-  run('UPDATE envelopes SET tpl_use=?, tpl_change=?, tpl_locked=? WHERE id=?', from.tpl_use ?? null, from.tpl_change ?? null, from.tpl_locked ? 1 : 0, eid);
+  run('UPDATE envelopes SET tpl_use=?, tpl_change=?, tpl_locked=? WHERE id=?', from.tpl_use ?? null, from.tpl_change ?? null, from.tpl_locked || (src.kind === 'envelope' && anyPartLocked(src)) ? 1 : 0, eid);
   run('INSERT OR IGNORE INTO template_members (template_id, account_id, user_id, can_change) SELECT ?, account_id, user_id, can_change FROM template_members WHERE template_id=?', eid, from.id);
+  run('INSERT OR IGNORE INTO template_member_groups (template_id, group_id, can_change) SELECT ?, group_id, can_change FROM template_member_groups WHERE template_id=?', eid, from.id);
 }
 
 /**
@@ -214,6 +232,9 @@ export function carryRules(src: any, eid: string, kind: 'envelope' | 'template')
  * (except for admins), because that would end the lock.
  */
 export function cloneOwner(c: Ctx, e: any, kind: 'envelope' | 'template'): string {
+  // Made from several templates: each one's rules are looked at, not only the first one's (tplcombine.ts).
+  const parts = e.kind === 'envelope' ? partsOf(e) : null;
+  if (parts) return combinedCloneOwner(c, e, parts, kind);
   const from = e.kind === 'template' ? e : e.template_id ? get("SELECT * FROM envelopes WHERE id=? AND kind='template' AND account_id=?", e.template_id, e.account_id) : null;
   if (kind !== 'template') {
     // An envelope started before its template was locked is not locked. A copy of it made now would be a new
@@ -224,7 +245,7 @@ export function cloneOwner(c: Ctx, e: any, kind: 'envelope' | 'template'): strin
   }
   if (!from) {
     // The person the deleted template belonged to keeps the say over what was started from it (wording_owner).
-    if (e.wording_from && !c.admin && e.wording_owner !== c.user.id) throw bad(`This envelope was started from a template whose wording was locked, and that template has been deleted. A template made from it would no longer be locked, so it was not made. Ask ${askWho(null)}.`, 403, { code: 'wording_locked' });
+    if (e.wording_from && !can(c, 'edit_any_template') && e.wording_owner !== c.user.id) throw bad(`This envelope was started from a template whose wording was locked, and that template has been deleted. A template made from it would no longer be locked, so it was not made. Ask ${askWho(null)}.`, 403, { code: 'wording_locked' });
     return c.user.id;
   }
   if (e.kind !== 'template' && !mayUse(c, from))
@@ -247,7 +268,9 @@ export function noteCopy(c: Ctx, copyId: string, src: any) {
 
 /** Whether the wording of this envelope is locked for this person, and what the editor needs to say so. */
 export function wordingLock(c: Ctx, e: any): null | { template_id: string; template: string | null; ask: string; fixed: string[]; people: Record<string, Kept> } {
-  if (e?.kind !== 'envelope' || !e.wording_from || c.admin) return null;
+  // Made from several templates (tplcombine.ts): named after the first part that is locked for this person, if any.
+  if (e?.wording_parts) e = { ...e, wording_from: partLockFrom(c, e) };
+  if (e?.kind !== 'envelope' || !e.wording_from || can(c, 'edit_any_template')) return null;
   const t = get("SELECT id, subject, sender_id, tpl_use, tpl_change, tpl_locked FROM envelopes WHERE id=? AND kind='template'", e.wording_from);
   // Unlocking the template, or being given the right to change it, unlocks the envelopes already started from it.
   // A template that was deleted keeps its envelopes locked for everyone but admins and the person it belonged to
@@ -260,7 +283,7 @@ export function wordingLock(c: Ctx, e: any): null | { template_id: string; templ
 
 /** Before a template is deleted: who it belonged to goes on the envelopes whose wording it locked (wordingLock). */
 export function templateGoes(t: any) {
-  if (t?.kind === 'template') run('UPDATE envelopes SET wording_owner=? WHERE wording_from=? AND account_id=?', t.sender_id, t.id, t.account_id);
+  if (t?.kind === 'template') run('UPDATE envelopes SET wording_owner=? WHERE (wording_from=? OR wording_parts LIKE ?) AND account_id=?', t.sender_id, t.id, `%"t":"${t.id}"%`, t.account_id);
 }
 
 const near = (a: any, b: any) => Math.abs(Number(a) - Number(b)) < 1e-7;
@@ -277,6 +300,8 @@ const yes = (v: any, d: boolean) => (v == null || v === '' ? d : v === true || v
 export function assertWordingKept(c: Ctx, e: any, b: any) {
   const lock = wordingLock(c, e);
   if (!lock) return;
+  // Made from several templates: only the parts that are locked for this person are held to it (tplcombine.ts).
+  ({ e, b } = lockedPartsOnly(c, e, b));
   const no = (what: string) => {
     throw bad(`${what} ${lock.template ? `This envelope was started from the template "${lock.template}", whose wording is locked.` : 'This envelope was started from a template whose wording was locked.'} ${LOCK_MEANS} Nothing was saved. If it needs to change, ask ${lock.ask} ${lock.template ? 'to change the template' : 'to change this envelope for you'}.`, 403, { code: 'wording_locked', template_id: lock.template_id });
   };
@@ -374,7 +399,7 @@ export function assertCorrectionKept(c: Ctx, e: any, recipientId: string, patch:
  */
 export function asMember(accountId: string, userId: string): Ctx | null {
   const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', accountId, userId);
-  return m ? ({ admin: m.role === 'owner' || m.role === 'admin', user: { id: userId } } as any) : null;
+  return m ? ({ admin: m.role === 'owner' || m.role === 'admin', user: { id: userId }, account: { id: accountId } } as any) : null;
 }
 
 /**
@@ -406,6 +431,8 @@ export function forgetChosen(accountId: string, userId: string, actor: { name: s
   const touched = all("SELECT e.* FROM template_members tm JOIN envelopes e ON e.id=tm.template_id WHERE tm.account_id=? AND tm.user_id=? AND e.kind='template'", accountId, userId);
   const before = new Map(touched.map((t) => [t.id, accessSentence(accessOf(nobody, t))]));
   run('DELETE FROM template_members WHERE account_id=? AND user_id=?', accountId, userId);
+  // Nor in a group of members of the team: joining again later starts with no group (routes-perm.ts).
+  run('DELETE FROM member_group_people WHERE user_id=? AND group_id IN (SELECT id FROM member_groups WHERE account_id=?)', userId, accountId);
   for (const t of touched) {
     const after = accessSentence(accessOf(nobody, t));
     if (after !== before.get(t.id)) audit(t.id, actor as any, 'Who can use and change it', `${name?.name || name?.email || 'A member'} is no longer on the team, so they are no longer chosen. ${after} Before: ${before.get(t.id)}`);

@@ -1,3 +1,5 @@
+// What the person's role allows (perm.ts): 'groups' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { route } from './router.ts';
 import { get } from './db.ts';
 import { bad, rateLimit, rateWait } from './util.ts';
@@ -14,7 +16,7 @@ import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS } from '../lib/policy.ts';
 
 // may_change: what the caller can really do. An API key with the "send" scope gets 403 on every change, whoever made it.
 route('GET', '/groups', (c) => ({ groups: listGroups(c.account.id), min_members: GROUP_MIN_MEMBERS, max_members: GROUP_MAX_MEMBERS,
-  may_change: !!c.admin && !(c.auth?.via === 'api_key' && c.auth?.scope !== 'admin') }));
+  may_change: !!can(c, 'groups') && !(c.auth?.via === 'api_key' && c.auth?.scope !== 'admin') }));
 route('POST', '/groups', async (c) => ({ group: saveGroup(c.account.id, await c.body()) }), 'admin');
 route('PUT', '/groups/:id', async (c) => ({ group: saveGroup(c.account.id, await c.body(), c.params.id) }), 'admin');
 route('DELETE', '/groups/:id', (c) => void deleteGroup(c.account.id, c.params.id), 'admin');

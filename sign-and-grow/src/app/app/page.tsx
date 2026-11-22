@@ -5,11 +5,13 @@ import { api, useLoad, fmtDate, toast } from '@/components/ui';
 import { Mark } from '@/components/Brand';
 import { useMe } from '@/components/AppShell';
 import { NAV_START } from '@/lib/nav';
+import { mayDo } from '@/lib/perm';
 import { listName } from '@/lib/docname';
 import { AllowanceCard } from '@/components/sender/UsageMeter';
 import { useAllowance } from '@/components/sender/allowance';
 import { fail } from '@/components/sender/feedback';
 import { cap, howLong, neverOpened, waitingOn } from '@/components/sender/lib';
+import { scheduledHome } from '@/components/sender/Timing';
 
 const SHOWN = 5;
 // How many waiting documents Home asks for. With that many or more, "See all" gives no number: it would be too low.
@@ -27,6 +29,8 @@ export default function Home() {
 
   const todo = (inbox?.items || []).filter((i: any) => i.status === 'sent' && (i.my_status === 'sent' || i.my_status === 'viewed') && i.role !== 'cc');
   const s = rep?.byStatus || {};
+  const timed = { count: Number(rep?.scheduled?.count) || 0, next: rep?.scheduled?.next || null };
+  const loose = Math.max(0, (s.draft || 0) - timed.count);
 
   // Envelopes held up by somebody else, the longest wait first.
   const others = (out?.envelopes || [])
@@ -37,6 +41,8 @@ export default function Home() {
   const completed: any[] = done?.envelopes || [];
   // Every list has answered and all of them are empty: a new account.
   const nothingYet = !!rep && !!done && !!out && !!inbox && !completed.length && !todo.length && !others.length && !(s.draft > 0) && !(s.sent > 0);
+  // Only a role an admin made can leave sending out; with the built-in roles this is never true.
+  const noSending = !!me.my_role?.custom && !mayDo(me, 'send') && !mayDo(me, 'see_all');
 
   async function nudge(e: any) {
     setNudging(e.id);
@@ -106,7 +112,9 @@ export default function Home() {
       )}
 
       {/* A draft somebody started and left is theirs to finish: one line, only when there is one. */}
-      {s.draft > 0 && <p className="sn-drafts">You have {s.draft} {s.draft === 1 ? 'draft' : 'drafts'} that {s.draft === 1 ? 'was' : 'were'} not sent. <Link href="/app/envelopes?box=drafts">Open {s.draft === 1 ? 'it' : 'them'}</Link></p>}
+      {/* A draft with a time to go out by itself (Send later) is not a forgotten one: said apart (sender/Timing.tsx). */}
+      {loose > 0 && <p className="sn-drafts">You have {loose} {loose === 1 ? 'draft' : 'drafts'} that {loose === 1 ? 'was' : 'were'} not sent. <Link href="/app/envelopes?box=drafts">Open {loose === 1 ? 'it' : 'them'}</Link></p>}
+      {timed.count > 0 && <p className="sn-drafts">{scheduledHome(timed.count, timed.next)} <Link href="/app/envelopes?box=drafts">See {timed.count === 1 ? 'it' : 'them'}</Link></p>}
 
       <AllowanceCard allowance={allowance} canUpgrade={me.role === 'owner' || me.role === 'admin'} />
 
@@ -127,8 +135,17 @@ export default function Home() {
         </section>
       )}
 
+      {/* A role the team made without sending: Home says what this person can do here, instead of nothing. */}
+      {noSending && (
+        <div className="card empty">
+          <h2 style={{ fontSize: 18 }}>Your role on this team: {me.my_role?.name}</h2>
+          <p>It does not include sending documents. {todo.length ? 'What others sent you to sign is above.' : 'What others send you to sign shows up here and under To sign.'}{mayDo(me, 'use_templates') || mayDo(me, 'make_templates') ? ' You can work on templates under Templates.' : ''} If you need to send, ask an admin of your team.</p>
+          {(mayDo(me, 'use_templates') || mayDo(me, 'make_templates')) && <Link href="/app/templates" className="btn" style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center' }}>Open Templates</Link>}
+        </div>
+      )}
+
       {/* Nothing anywhere yet: one sentence that says where the one start button is. No second button here. */}
-      {nothingYet && (
+      {nothingYet && !noSending && (
         <div className="card empty">
           <Mark size={32} label="" />
           <h2 style={{ marginTop: 10, fontSize: 18 }}>Nothing sent yet</h2>

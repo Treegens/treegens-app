@@ -44,8 +44,8 @@ test('Next opens the field when a tap would only have opened a dialog: a signatu
   assert.match(page, /if \(open && opensOnNext\(f\)\) \{/);
   assert.match(page, /return f\.type === 'stamp' \? setStampFor\(f\.id\) : clickSig\(f\);/);
   assert.match(page, /goTo\(nextField, true\)\)\}>Next<\/button>/);
-  // Someone who cannot reach a field is told where Text view is now.
-  assert.equal(CANNOT_REACH, 'Cannot reach this field? Choose More, then Text view, where every field is listed as a form you can fill in.');
+  // Someone who cannot reach a field is told where Easy reading is now (the text view, renamed by reading-view).
+  assert.equal(CANNOT_REACH, 'Cannot reach this field? Choose More, then Easy reading, where every field is listed as a form you can fill in.');
 });
 
 test('the "Sign here" pointer never stands on a printed label, or right beside one on the same line', () => {
@@ -72,7 +72,7 @@ test('the view, the size of the pages and the download are behind one More of at
   assert.equal((dialog.match(/<button /g) || []).length, 2);
   assert.equal((dialog.match(/<ZoomControl /g) || []).length, 1);
   assert.equal((dialog.match(/<a /g) || []).length, 1);
-  assert.match(dialog, />Text view<\/button>/);
+  assert.match(dialog, />\{T\('sign\.read\.easy'\)\}<\/button>/);
   assert.match(dialog, /Download the document<\/a>/);
   // The row of six controls above the pages is gone, and so are its copies inside Other actions.
   assert.doesNotMatch(page, /className="sg-tools"|sg-menu-doc|docTools/);

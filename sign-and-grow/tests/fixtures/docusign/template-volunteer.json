@@ -1,0 +1,121 @@
+{
+  "envelopeTemplateId": "8a1b2c3d-1111-2222-3333-444455556666",
+  "name": "Volunteer agreement",
+  "emailSubject": "Please sign the volunteer agreement",
+  "emailBlurb": "Thank you for volunteering.",
+  "documents": [
+    {
+      "documentId": "1",
+      "name": "Volunteer agreement.pdf",
+      "documentBase64": "JVBERi0xLjcKJYGBgYEKCjYgMCBvYmoKPDwKL0ZpbHRlciAvRmxhdGVEZWNvZGUKL0xlbmd0aCAxNDkKPj4Kc3RyZWFtCnicjY69CsJAEIT7fYqtBfFuczt7ByL4k2BhI+wLiERRtIiIz68JNoKCzDTDDHzT0cIpcK/bkSbr9vJo76f9bmyh5JSD5cIxsx9IEvuG4jCNbPJyYL/SVIEGS1PUlqBQEwmIMJM+YYWhmbGfyUdUO22p+0UtlgRZFJmjfKUivKkVCgw1oiXTnlXNJWjznz7ePAHCgjoHCmVuZHN0cmVhbQplbmRvYmoKCjcgMCBvYmoKPDwKL0ZpbHRlciAvRmxhdGVEZWNvZGUKL1R5cGUgL09ialN0bQovTiA1Ci9GaXJzdCAyNgovTGVuZ3RoIDM3NQo+PgpzdHJlYW0KeJzVU01rwzAMvftX6Lgdhh0nsZNRCv1INhhlpR1sbOyQJqZkFHsk7uj+/aQkbelh7DyMsKX3JFnJcwACJEQRhKATiCAOJcSggghGI8afvj8N8GWxNS3jD3XVwhuiAlbwzvjM7a2HgI3H7MydFb7YuS3rkyAg8pGxbFy1L00DozzLcyG0EEJFaEoIOcd9hpaiSfQRkwme0XQ0GMZ0KEQ4QSzvTek+h/COGw/5Ge7IVcSZ99wo6f1TX+qV9TXkX/dJx4wvXDUvvIGr+a0UUgWBpBXH4es1fo7GFN793+G6+9fO/jrhxX/OnfWMr/cb37kUDBifFq0hBPi92X0ZX5cF45ktXVXbLfDn2k5sWx8DlxVJMCSbxpCqOt3wlWndvilRSMTrKtPhVPxGizTByXWSona7lDOW6kiqRMYqGTBsx18eNx+m7MqQmx383drTxH2AYgtT1cXUHVDrApcKJOhUkuIn1jpPb6BTv/V4U/LU8CIw+QeHdc0OCmVuZHN0cmVhbQplbmRvYmoKCjggMCBvYmoKPDwKL1NpemUgOQovUm9vdCAyIDAgUgovSW5mbyAzIDAgUgovRmlsdGVyIC9GbGF0ZURlY29kZQovVHlwZSAvWFJlZgovTGVuZ3RoIDQyCi9XIFsgMSAyIDIgXQovSW5kZXggWyAwIDkgXQo+PgpzdHJlYW0KeJxjYGD4/5+JgZ2BAUQwgggmEMEMIlgYGQQYGBgZ3gEJptMMDABjcwQECmVuZHN0cmVhbQplbmRvYmoKCnN0YXJ0eHJlZgo3MTUKJSVFT0Y="
+    }
+  ],
+  "recipients": {
+    "signers": [
+      {
+        "recipientId": "1",
+        "roleName": "Volunteer",
+        "routingOrder": "1",
+        "tabs": {
+          "signHereTabs": [
+            {
+              "documentId": "1",
+              "pageNumber": "1",
+              "xPosition": "150",
+              "yPosition": "180",
+              "tabLabel": "Sign"
+            }
+          ],
+          "dateSignedTabs": [
+            {
+              "documentId": "1",
+              "pageNumber": "1",
+              "xPosition": "400",
+              "yPosition": "180"
+            }
+          ],
+          "textTabs": [
+            {
+              "documentId": "1",
+              "pageNumber": "1",
+              "xPosition": "72",
+              "yPosition": "260",
+              "width": "200",
+              "height": "20",
+              "tabLabel": "Phone",
+              "required": "false",
+              "optional": "true"
+            }
+          ],
+          "checkboxTabs": [
+            {
+              "documentId": "1",
+              "pageNumber": "1",
+              "xPosition": "72",
+              "yPosition": "320",
+              "tabLabel": "Over 18",
+              "required": "true"
+            }
+          ],
+          "listTabs": [
+            {
+              "documentId": "1",
+              "pageNumber": "1",
+              "xPosition": "300",
+              "yPosition": "320",
+              "tabLabel": "Shirt size",
+              "listItems": [
+                {
+                  "text": "S",
+                  "value": "S"
+                },
+                {
+                  "text": "M",
+                  "value": "M"
+                },
+                {
+                  "text": "L",
+                  "value": "L"
+                }
+              ]
+            }
+          ],
+          "formulaTabs": [
+            {
+              "documentId": "1",
+              "pageNumber": "1",
+              "xPosition": "72",
+              "yPosition": "400",
+              "formula": "[a]*2",
+              "tabLabel": "Total"
+            }
+          ],
+          "approveTabs": [
+            {
+              "documentId": "1",
+              "pageNumber": "1",
+              "xPosition": "72",
+              "yPosition": "450"
+            }
+          ]
+        }
+      }
+    ],
+    "carbonCopies": [
+      {
+        "recipientId": "2",
+        "roleName": "Coordinator",
+        "routingOrder": "2",
+        "name": "Pat Coordinator",
+        "email": "pat@fixture.example"
+      }
+    ],
+    "editors": [
+      {
+        "recipientId": "3",
+        "roleName": "Editor",
+        "routingOrder": "1"
+      }
+    ]
+  }
+}

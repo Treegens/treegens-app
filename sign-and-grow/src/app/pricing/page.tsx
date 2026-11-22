@@ -4,6 +4,8 @@ import { expiryShortText } from '@/lib/policy';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { OpenOnHash } from '@/components/OpenOnHash';
+import { DeploymentHome } from '@/components/DeploymentHome';
+import { isDeploymentBilling } from '@/lib/billingmode';
 import { PLANS, PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
 import { BULK_COST_NOTE, NO_BAA_TITLE, NO_BAA_TEXT } from '@/lib/policy';
@@ -34,6 +36,8 @@ const COMPARE: [string, string, string][] = [
 const sigs = (n: number) => `${n} signature${n === 1 ? "" : "s"}`;
 
 export default function Pricing() {
+  // A server under a government agreement has no consumer plan: say what is paid there, and link the price list.
+  if (isDeploymentBilling()) return <DeploymentHome title="Pricing" />;
   const { refundDays, dormantStopDays } = publicFacts();
   const P = PRICING;
   // "Bulk send is on every plan" needs its price said with it. A worked example from the same numbers the server

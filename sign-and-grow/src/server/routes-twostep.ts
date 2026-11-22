@@ -13,6 +13,7 @@ import { linkProvider } from './routes-signin.ts';
 import { record, signInFailed } from './seclog.ts';
 import { deviceName } from '../lib/phone.ts';
 import { refuseLoosening, setByFor } from './orgs.ts';
+import { twoStepOffAllowed } from './orgsso.ts';
 import { TWO_STEP_SIGNIN_MINUTES, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_PAUSE_MINUTES, TWO_STEP_TRIES, TWO_STEP_LOST_PER_DAY, TWO_STEP_RESET_BLOCK_DAYS } from '../lib/policy.ts';
 import {
   twoStepOn, toBase32, otpauthUri, matchStep, newRecoveryCodes, recoveryLeft, needCode, useCode, logStep, clearTwoStep, pendingOf, endPending,
@@ -301,6 +302,8 @@ route('POST', '/me/two-step/off', async (c) => {
   if (!twoStepOn(c.user)) return { ok: true, already: true };
   const teams = requiredBy(c.user.id);
   if (teams.length) throw bad(`${names(teams)} ${teams.length === 1 ? 'asks' : 'ask'} everyone on the team to use two-step login, so it cannot be switched off while you are on ${teams.length === 1 ? 'that team' : 'those teams'}. To use another phone, choose "Move to another app" instead. Nothing was changed.`, 409, { code: 'required_by_team', teams });
+  // The owner's way back in while everyone at their domains signs in through their own service (orgsso.ts).
+  twoStepOffAllowed(c.user.id);
   await needCode(c, b.code, 'switch two-step login off');
   tx(() => {
     clearTwoStep(c.user.id);

@@ -6,6 +6,7 @@
 import { legalLocale, legalNote, languageWords, normalizeLocale, SOURCE_LOCALE } from './i18n.ts';
 // The prices and counts the expiry rule names (plain constants, no side effects).
 import { PRICING } from './impact.ts';
+import { isDeploymentBilling } from './billingmode.ts';
 
 /** Unused signatures from the latest payment are refunded on request within this many days. */
 export const refundDays = (): number => Number(process.env.REFUND_DAYS) || 30;
@@ -109,8 +110,11 @@ export const unpaidDailyRecipients = (): number => Number(process.env.UNPAID_DAI
  */
 export const PAID_TRUST_DAYS = 14;
 /** The rule above as one sentence, for the refusals and the pages that explain the limits. */
-export const paidTrustText = (days = PAID_TRUST_DAYS): string =>
-  `These checks stop applying once the account has a payment that is at least ${days} days old and was not refunded or disputed, or once a person on our team has cleared it.`;
+export const paidTrustText = (days = PAID_TRUST_DAYS, deployment = isDeploymentBilling()): string =>
+  deployment
+    // A server run under a government agreement takes no payments, so only a person can clear an account there.
+    ? 'These checks stop applying once a person who runs this server has cleared the account.'
+    : `These checks stop applying once the account has a payment that is at least ${days} days old and was not refunded or disputed, or once a person on our team has cleared it.`;
 
 /** How many people one account can invite to its team in 24 hours. A person on our team can lift it by marking the account as trusted. */
 export const TEAM_INVITES_PER_DAY = 20;

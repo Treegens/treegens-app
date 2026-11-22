@@ -4,13 +4,16 @@ import { sha256, token, now, HttpError } from './util.ts';
 import { SESSION_DAYS, SESSION_MAX_DAYS, SESSION_TOUCH_MINUTES } from '../lib/policy.ts';
 import { sessionRule, endedWhy, endedWords } from './secpolicy.ts';
 import { dayText } from '../lib/dates.ts';
+import { sessionCap } from './orgsso.ts';
+import { senderSession } from './embed.ts';
 
 export const SESSION_COOKIE = 'ts_session';
 const DAYS = SESSION_DAYS;
 // The latest a session can end, however much it is used: SESSION_MAX_DAYS after it signed in, so a copied cookie
 // that keeps being used still runs out. A session from before created_at was kept has no known start, so it never
 // moves forward again and ends where it stands (at most SESSION_DAYS after its last move, before this rule).
-export const sessionEnd = (s: any): number => Math.min(Date.parse(s.expires_at) || 0, s.created_at ? Date.parse(s.created_at) + SESSION_MAX_DAYS * 864e5 : Infinity);
+// ends_by: a sooner end set for people whose domain signs in through their organisation's service (orgsso.ts).
+export const sessionEnd = (s: any): number => Math.min(Date.parse(s.expires_at) || 0, s.created_at ? Date.parse(s.created_at) + SESSION_MAX_DAYS * 864e5 : Infinity, s.ends_by ? Date.parse(s.ends_by) || 0 : Infinity);
 
 export function hashPassword(pw: string): string {
   const salt = crypto.randomBytes(16);
@@ -65,7 +68,11 @@ export function createSession(userId: string, accountId: string, secure: boolean
   run('DELETE FROM sessions WHERE user_id=? AND (expires_at <= ? OR created_at <= ?)', userId, now(), new Date(Date.now() - SESSION_MAX_DAYS * 864e5).toISOString());
   const days = Math.min(DAYS, SESSION_MAX_DAYS);
   run('INSERT INTO sessions (id, user_id, account_id, expires_at, created_at) VALUES (?,?,?,?,?)', sha256(t), userId, accountId, new Date(Date.now() + days * 864e5).toISOString(), now());
-  return cookie(SESSION_COOKIE, t, days * 86400, secure);
+  // Someone whose email domain signs in through their organisation's own service stays in for at most
+  // SSO_SESSION_HOURS, then goes through that service again (orgsso.ts): that is what ends access for a leaver.
+  const endsBy = sessionCap(userId);
+  if (endsBy) run('UPDATE sessions SET ends_by=? WHERE id=?', endsBy, sha256(t));
+  return cookie(SESSION_COOKIE, t, endsBy ? Math.max(60, Math.floor((Date.parse(endsBy) - Date.now()) / 1000)) : days * 86400, secure);
 }
 
 // A browser that is used stays signed in. Each use moves the end of its session to SESSION_DAYS from now, so
@@ -96,7 +103,8 @@ export const renewedCookie = (req: Request, secure: boolean): string => {
 // decided in one place, router.ts.
 // slid: this request moved the end of the browser's session forward, so its cookie is to be sent again (see touch).
 // keyId: which key, for the security record (seclog.ts). Never the key itself.
-export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key'; sessionId?: string; scope?: 'send' | 'admin'; slid?: boolean; keyId?: string };
+// via 'embed': the sender screen inside a customer's app, for one draft alone (embed.ts): envelopeId says which.
+export type Auth = { user: any; account: any; role: string; via: 'session' | 'api_key' | 'embed'; sessionId?: string; scope?: 'send' | 'admin'; slid?: boolean; keyId?: string; envelopeId?: string; viewId?: string };
 
 const KEYS_PAGE = 'Settings, API and webhooks';
 
@@ -109,6 +117,15 @@ export function authenticate(req: Request, required = false): Auth | null {
     return null;
   };
   const header = (req.headers.get('authorization') || '').trim();
+  // The sender screen inside a customer's app sends the token its one-time link gave it (embed.ts).
+  const screen = /^Bearer\s+(tse_[A-Za-z0-9_-]+)$/i.exec(header)?.[1];
+  if (screen) {
+    try {
+      return { ...senderSession(screen), via: 'embed', scope: 'send' };
+    } catch (e: any) {
+      return refuse(e.status || 401, e.message, e.data);
+    }
+  }
   // The scheme name is not case sensitive in HTTP, and some clients send "bearer".
   const bearer = /^Bearer\s+(tsk_[A-Za-z0-9_-]+)$/i.exec(header)?.[1];
   if (bearer) {

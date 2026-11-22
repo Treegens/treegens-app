@@ -412,7 +412,7 @@ test('the group note is tied to Continue for a screen reader, and the witness sc
   const g = read('src/components/sign/GroupNotice.tsx');
   assert.match(g, /role="note" id=\{GROUP_NOTE_ID\}/);
   const page = read('src/app/sign/[token]/page.tsx');
-  assert.match(page, /className="btn primary lg sg-continue" disabled=\{busy\} aria-describedby=\{groupNoteId\(data\)\}/);
+  assert.match(page, /className="btn primary lg sg-continue" disabled=\{busy\} aria-describedby=\{groupNoteId\(data\)( \|\| delegateNoteId\(data\))?\}/);
 });
 
 // ---- 7. A deadline in the first invitation -------------------------------------------------------------------------

@@ -43,7 +43,7 @@ const texted = (r: any) => (!!r.text_link && r.role !== 'inperson') || r.verify 
 // another person takes the place at the same inbox. No code that swaps a person has to remember to clear it.
 // (person_gen 0 adds nothing, so records made before it was part of the stamp still count.)
 const gen = (r: any) => (Number(r.person_gen) > 0 ? `:p${Number(r.person_gen)}` : '');
-const linkStamp = (r: any) => sha256(`check:${r.id}:${r.token}${gen(r)}`);
+export const linkStamp = (r: any) => sha256(`check:${r.id}:${r.token}${gen(r)}`);
 
 /** The record of a code typed correctly by whoever holds this link now, or null: how it was sent, to where (masked), and when. */
 export const passedCheck = (r: any): { how: string; at: string } | null =>
@@ -83,7 +83,7 @@ function destOf(r: any): { to: string | null; masked: string; key: string } {
 // The newest code made for this recipient, if it still counts: made for the link and the check as they are now,
 // not used, not replaced, not run out.
 function liveCode(r: any): any {
-  const c = get('SELECT * FROM signer_codes WHERE recipient_id=? ORDER BY id DESC LIMIT 1', r.id);
+  const c = get('SELECT * FROM signer_codes WHERE recipient_id=? AND stamp=? ORDER BY id DESC LIMIT 1', r.id, deviceStamp(r));
   return c && !c.ended_at && c.expires_at > now() && c.stamp === deviceStamp(r) ? c : null;
 }
 
@@ -91,7 +91,10 @@ function liveCode(r: any): any {
 // and SIGNER_CODES_PER_HOUR an hour.
 function waitFor(r: any): { seconds: number; why: 'minute' | 'hour' | '' } {
   const t = Date.now();
-  const rows = all('SELECT at, stamp FROM signer_codes WHERE recipient_id=? AND at > ? ORDER BY id DESC', r.id, iso(t - 3600_000));
+  // Counted for this link and check as they are now: a delegate's link to the same request (delegation.ts) has
+  // limits of its own, so asking for codes there never makes the person wait. The limit for each mailbox or number
+  // a day (sendCode) holds whatever changed.
+  const rows = all('SELECT at, stamp FROM signer_codes WHERE recipient_id=? AND stamp=? AND at > ? ORDER BY id DESC', r.id, deviceStamp(r), iso(t - 3600_000));
   const last = rows.map((c) => Date.parse(c.at));
   const hour = last.length >= SIGNER_CODES_PER_HOUR ? Math.ceil((last[SIGNER_CODES_PER_HOUR - 1] + 3600_000 - t) / 1000) : 0;
   // The minute is counted from the last code for the check as it is now. When the sender has just corrected the
@@ -131,6 +134,9 @@ export function lockedView(view: any, r: any, accessLocked: boolean, gate: strin
       call: r.verify === 'sms_code' && !!voiceProvider(),
       // How the code that works now reached them, so the screen still says "from the call" after a reload.
       by: live?.channel === 'call_code' ? 'call' : 'text',
+      // A delegate's own link (delegation.ts): the check is there because the person named them, not because the
+      // sender asked for one, and the screen says so.
+      ...(r.delegate_link ? { delegate_for: r.delegate_link.for_name, delegate_verb: r.role === 'approver' ? 'approve' : 'sign' } : {}),
       // We have no address for this person: their link came from the sender, so the screen never mentions an email.
       shared: !!r.link_by_sender && !r.email,
     },
@@ -742,7 +748,9 @@ export async function requestCode(e: any, r: any, actor: Actor, by: 'text' | 'ca
   const at = iso(t), expires = iso(t + SIGNER_CODE_MINUTES * 60_000);
   // The newer code ends the older one in the same step that makes it, so there is never more than one that works.
   const id = tx(() => {
-    run("UPDATE signer_codes SET ended_at=?, ended_how='replaced' WHERE recipient_id=? AND ended_at IS NULL", at, r.id);
+    // Only a code for this same link: the delegate of a person who is away has a link of their own to the same request
+    // (delegation.ts), and asking for their code must never end the one the person is about to type.
+    run("UPDATE signer_codes SET ended_at=?, ended_how='replaced' WHERE recipient_id=? AND stamp=? AND ended_at IS NULL", at, r.id, stamp);
     return Number(run('INSERT INTO signer_codes (recipient_id, envelope_id, account_id, channel, dest, dest_hash, code_hash, stamp, ip, at, expires_at, bucket) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
       r.id, e.id, e.account_id, byCall ? 'call_code' : kind, d.masked, d.key, codeHash(r, stamp, code), stamp, actor.ip || null, at, expires, bucket).lastInsertRowid);
   });
@@ -795,7 +803,7 @@ export async function checkCode(e: any, r: any, typed: any, actor: Actor): Promi
   const d = destOf(r);
   const how = CHANNEL_WORDS[r.verify as 'email_code' | 'sms_code'];
   const out = tx((): { kind: 'none' | 'expired' | 'spent' | 'ok' | 'wrong'; left?: number; how?: string } => {
-    const c = get('SELECT * FROM signer_codes WHERE recipient_id=? ORDER BY id DESC LIMIT 1', r.id);
+    const c = get('SELECT * FROM signer_codes WHERE recipient_id=? AND stamp=? ORDER BY id DESC LIMIT 1', r.id, deviceStamp(r));
     if (!c || c.stamp !== deviceStamp(r) || (c.ended_at && c.ended_how !== 'tries')) return { kind: 'none' };
     if (c.ended_how === 'tries') return { kind: 'spent' };
     if (c.expires_at <= now()) return { kind: 'expired' };
@@ -806,7 +814,10 @@ export async function checkCode(e: any, r: any, typed: any, actor: Actor): Promi
       // who has finished keeps the record of the check they passed before they signed.
       // A code read out on a call says so (voice.ts): the certificate names the way it really travelled.
       const went = c.channel === 'call_code' ? 'phone call' : how;
-      if (r.status !== 'completed' || !passedCheck(r)) run('UPDATE recipients SET checked_at=?, checked_how=?, checked_for=? WHERE id=?', t, `One-time code sent by ${went} to ${d.masked}`, linkStamp(r), r.id);
+      // A delegate who has not taken the request on yet (delegation.ts): their check is kept on their own link, never
+      // over the person's, and goes onto the row only if they take it on.
+      if (r.delegate_link) run('UPDATE delegate_links SET checked_at=?, checked_how=? WHERE id=?', t, `One-time code sent by ${went} to ${d.masked}`, r.delegate_link.id);
+      else if (r.status !== 'completed' || !passedCheck(r)) run('UPDATE recipients SET checked_at=?, checked_how=?, checked_for=? WHERE id=?', t, `One-time code sent by ${went} to ${d.masked}`, linkStamp(r), r.id);
       return { kind: 'ok', how: went };
     }
     const fails = c.fails + 1, spent = fails >= SIGNER_CODE_TRIES;

@@ -693,7 +693,8 @@ test('"Where your data is" lists the help chat provider from the same settings, 
   const p = on.processors.find((x) => x.id === 'chat')!;
   assert.equal(p.name, 'OpenRouter');
   assert.equal(p.country, null);
-  assert.equal(p.data, prov.CHAT_SENT);
+  // With a model, AI help when sending and signing may read document text too, and says so after the chat's part (src/lib/aiassist.ts).
+  assert.ok(p.data.startsWith(prov.CHAT_SENT));
   assert.match(p.data, /Only what people type into the help chat/);
   assert.match(p.purpose, /moonshotai\/kimi-k3-20260715, reached at openrouter\.ai/);
   assert.deepEqual(p.missing, ['The operator of this server has not said in which country its help chat provider handles what people type. Ask them.']);
@@ -974,7 +975,7 @@ test('what someone who signs most often asks has a built-in answer that names th
     ['Where do I sign?', 'how-sign', /press Next.*Type, Draw or Upload.*Finish/],
     ['How do I draw my signature?', 'how-sign', /Type, Draw or Upload/],
     ['The Finish button does not work', 'finish-stuck', /Press Next.*Talk to a person/],
-    ['I cannot see the document', 'cannot-see', /choose More.*Text view.*Download the document/],
+    ['I cannot see the document', 'cannot-see', /choose More.*Easy reading.*Download the document/],
     ['I signed by mistake', 'signed-mistake', /neither you nor the helper can take a signature back.*Write to the sender/],
     ['Stop sending me reminders', 'stop-reminders', /Stop reminder emails/],
     ['What happens after I finish?', 'after-finish', /the sender is told/],
@@ -1061,7 +1062,7 @@ test('every control the helper names is on the screen it names it for, read from
   for (const label of [L.menu, L.report, L.textView, L.download, L.stopReminders, L.fixName, L.check]) assert.ok(sign.includes(label), label);
   assert.ok(sign.includes(`>${L.more}</button>`), 'More');
   // The view and the download are in More, not in Other actions, and the helper says so.
-  assert.match(kb.builtInAnswer('I cannot see the document', 'signing').reply, /^On this page, with the document open, choose More\. It has Text view/);
+  assert.match(kb.builtInAnswer('I cannot see the document', 'signing').reply, /^On this page, with the document open, choose More\. It has Easy reading/);
   assert.match(sign, /\{finis|>Finish</, 'Finish');
   assert.ok(/>Next<|'Next'|Next\b/.test(sign));
   for (const [k, v] of Object.entries(screens.APP_LABELS)) assert.ok(fs.readFileSync(v.where, 'utf8').includes(v.label), `${k}: "${v.label}" in ${v.where}`);

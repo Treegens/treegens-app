@@ -30,7 +30,7 @@
 /* Phones: a bar at the bottom with Home, Documents, Send, To sign and Menu. */
 .tabbar { display: none; }
 @media (max-width: 900px) {
-  .tabbar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 55; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -6px 18px rgba(23, 36, 28, 0.08); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
+  .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 55; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -6px 18px rgba(23, 36, 28, 0.08); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
   .tabbar a, .tabbar button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 52px; padding: 4px 2px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; text-decoration: none; border-radius: 10px; cursor: pointer; text-align: center; line-height: 1.15; }
   .tabbar a.on { color: var(--green); background: rgba(31, 111, 67, 0.08); }
   .tabbar svg { width: 22px; height: 22px; }

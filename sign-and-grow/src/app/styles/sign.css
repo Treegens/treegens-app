@@ -288,6 +288,9 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
 @media (max-width: 600px) {
   .sg-bar:has(.sg-lang) .sg-title .sg-logo-full { display: none; }
   .sg-bar:has(.sg-lang) .sg-title .sg-logo-small { display: block; }
+  /* The sender's preview label takes the room of the full logo on a phone (PreviewBand.tsx PreviewChip). */
+  .sg-bar:has(.sg-preview-chip) .sg-title .sg-logo-full { display: none; }
+  .sg-bar:has(.sg-preview-chip) .sg-title .sg-logo-small { display: block; }
   .sg-lang-pick { max-width: 10em; }
 }
 @media (max-width: 379px) {

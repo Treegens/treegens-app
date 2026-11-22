@@ -1,3 +1,5 @@
+// What the person's role allows (perm.ts): 'see_all' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { all, get } from './db.ts';
 import { bad } from './util.ts';
 import { customFilter } from './customfields.ts';
@@ -34,7 +36,7 @@ export function readFilters(q: URLSearchParams, c: Pick<Ctx, 'admin' | 'user'>, 
   if (status && !(REPORT_STATUSES as readonly string[]).includes(status)) throw bad(`"${status.slice(0, 40)}" is not a status a report knows. Use one of ${REPORT_STATUSES.join(', ')}, or leave it out for all of them.`);
   const sender = (q.get('sender') || '').trim();
   // A member sees their own sending only. Asking for a colleague is refused in words, never answered with zeros.
-  if (sender && !c.admin && sender !== c.user.id) throw bad('Only the admins of the account can see what other people sent. Leave out "sender" to see your own.', 403);
+  if (sender && !can(c, 'see_all') && sender !== c.user.id) throw bad('Only the admins of the account can see what other people sent. Leave out "sender" to see your own.', 403);
   return { from, to, status: status as ReportStatus | '', sender, template: (q.get('template') || '').trim(), folder: (q.get('folder') || '').trim(), field: (q.get('field') || '').trim(), value: (q.get('value') || '').trim() };
 }
 
@@ -42,7 +44,7 @@ export function readFilters(q: URLSearchParams, c: Pick<Ctx, 'admin' | 'user'>, 
 function scope(c: Pick<Ctx, 'admin' | 'user' | 'account'>, f: Filters, withStatus = true): [string, any[]] {
   const where = ["e.account_id=?", "e.kind='envelope'", 'e.sent_at IS NOT NULL', 'e.hidden_at IS NULL', 'e.sent_at >= ?', 'e.sent_at < ?'];
   const p: any[] = [c.account.id, `${f.from}T00:00:00.000Z`, new Date(Date.parse(`${f.to}T00:00:00Z`) + 86400_000).toISOString()];
-  if (!c.admin) (where.push('e.sender_id=?'), p.push(c.user.id));
+  if (!can(c, 'see_all')) (where.push('e.sender_id=?'), p.push(c.user.id));
   else if (f.sender) (where.push('e.sender_id=?'), p.push(f.sender));
   if (withStatus && f.status) (where.push('e.status=?'), p.push(f.status));
   if (f.template === 'none') where.push('e.template_id IS NULL');
@@ -73,24 +75,24 @@ export function buildReport(c: Pick<Ctx, 'admin' | 'user' | 'account'>, f: Filte
     FROM envelopes e LEFT JOIN envelopes t ON t.id=e.template_id AND t.account_id=e.account_id AND t.kind='template' LEFT JOIN users u ON u.id=e.sender_id WHERE ${where}`, ...p);
   const totals = rowOf('all', 'All documents', list);
   const templates = groupBy(list, (r) => r.template_id || 'none', (k, r) => (k === 'none' ? WITHOUT : r.template_found ? r.template_name || 'Untitled template' : GONE));
-  const senders = c.admin ? groupBy(list, (r) => r.sender_id, (_k, r) => r.sender_name || 'A person no longer on the team') : [];
+  const senders = can(c, 'see_all') ? groupBy(list, (r) => r.sender_id, (_k, r) => r.sender_name || 'A person no longer on the team') : [];
   const months = [...groupBy(list, (r) => r.sent_at.slice(0, 7), (k) => k)].sort((a, b) => a.key.localeCompare(b.key)).map((m) => ({ month: m.key, sent: m.sent, completed: m.completed }));
   const byStatus = Object.fromEntries(REPORT_STATUSES.map((s) => [s, list.filter((r) => r.status === s).length]));
   const sheets = list.filter((r) => r.status === 'completed').reduce((n, r) => n + (r.sheets || 0), 0);
-  return { from: f.from, to: f.to, filters: f, totals, templates, senders, months, byStatus, impact: impactOf(sheets), may_see_senders: !!c.admin, choices: choices(c, f) };
+  return { from: f.from, to: f.to, filters: f, totals, templates, senders, months, byStatus, impact: impactOf(sheets), may_see_senders: !!can(c, 'see_all'), choices: choices(c, f) };
 }
 
 // What the filters can be set to: the templates, folders and (for admins) senders of what the caller can see. Only
 // names of what the caller sent or may see, because a folder or template name can say something by itself.
 function choices(c: Pick<Ctx, 'admin' | 'user' | 'account'>, f: Filters) {
-  const own = c.admin ? '' : ' AND e.sender_id=?';
-  const p = c.admin ? [c.account.id] : [c.account.id, c.user.id];
+  const own = can(c, 'see_all') ? '' : ' AND e.sender_id=?';
+  const p = can(c, 'see_all') ? [c.account.id] : [c.account.id, c.user.id];
   const base = `FROM envelopes e WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL AND e.hidden_at IS NULL${own}`;
   const templates = all(`SELECT DISTINCT e.template_id id, t.subject name FROM envelopes e LEFT JOIN envelopes t ON t.id=e.template_id AND t.account_id=e.account_id AND t.kind='template'
     WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL AND e.hidden_at IS NULL AND e.template_id IS NOT NULL${own}`, ...p)
     .map((r) => ({ id: r.id, name: r.name ?? GONE })).sort((a, b) => a.name.localeCompare(b.name));
   const folders = all(`SELECT DISTINCT e.folder ${base} AND e.folder IS NOT NULL AND e.folder != '' ORDER BY e.folder`, ...p).map((r) => r.folder);
-  const senders = c.admin ? all(`SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL AND e.hidden_at IS NULL ORDER BY u.name`, c.account.id) : [];
+  const senders = can(c, 'see_all') ? all(`SELECT DISTINCT u.id, u.name FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.account_id=? AND e.kind='envelope' AND e.sent_at IS NOT NULL AND e.hidden_at IS NULL ORDER BY u.name`, c.account.id) : [];
   void f;
   return { templates, folders, senders, statuses: REPORT_STATUSES };
 }

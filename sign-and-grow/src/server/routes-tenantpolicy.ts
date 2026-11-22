@@ -10,6 +10,7 @@ import { record } from './seclog.ts';
 import { tenantPolicy, setTenantPolicy, clientPolicy, type OnOff } from './tenantpolicy.ts';
 import { chatModelOn, chatProvider } from '../lib/chatprovider.ts';
 import { isGovernment } from '../lib/deployment.ts';
+import { assistLimit } from '../lib/aiassist.ts';
 import { setByField } from './orgs.ts';
 
 function view(accountId: string) {
@@ -26,6 +27,9 @@ function view(accountId: string) {
     record_fixed: isGovernment(),
     ai_available: ai,
     ai_provider: ai ? chatProvider()!.name : null,
+    //   ai_assist: the same switch also gives AI help when sending (Draft a message, src/server/aiassist.ts). Only
+    //   where a model answers.
+    ...(ai ? { ai_assist: assistLimit() > 0 } : {}),
     // A switch an organisation above the account decided: "Set by Ministry of Health" (src/server/orgs.ts). Only
     // for an account in an organisation that set one.
     ...setByField(accountId),

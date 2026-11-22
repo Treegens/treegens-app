@@ -16,7 +16,7 @@ export const SIGNING_WEAK_SIGNAL = 'If the signal drops while you fill it in, yo
 /** The page sizes the signing page offers, as parts of the width of the screen. */
 export const ZOOMS = [1, 1.5, 2];
 /** What /help says about reading small print on a phone. */
-export const SIGNING_ZOOM = 'Choose More, then 150% or 200%. The pages are drawn again at that size, so the words stay sharp, and you slide them sideways with a finger while the buttons at the top and bottom stay where they are. Pinching to zoom works too. Text view shows the words in large type, but pictures, tables and layout are only in the document view, which is the page your signature goes on.';
+export const SIGNING_ZOOM = 'Choose More, then 150% or 200%. The pages are drawn again at that size, so the words stay sharp, and you slide them sideways with a finger while the buttons at the top and bottom stay where they are. Pinching to zoom works too. Easy reading shows the words in one column at the size of your phone, with your fields in place, but pictures and layout are only in the page view, which is what your signature goes on.';
 /** What was really tried, so the list above is not read as more than it is. */
 export const SIGNING_TESTED = 'We test the signing page in Chrome, at phone and computer sizes, by touch and with a keyboard. We have not tested it on every phone, and not yet on a real iPhone.';
 /** An iPhone that cannot be updated far enough. */

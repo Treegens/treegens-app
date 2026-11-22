@@ -37,7 +37,7 @@ export const SIGN_ACTIONS: Record<(typeof ACTION_ORDER)[number], { label: string
 /** The entry only a witness has (WITNESS_ACTIONS in the same file of the page). */
 export const WITNESS_LABELS = { absent: 'I was not there' } as const;
 /** Labels on the signing page that are not entries of Other actions. */
-export const SIGN_LABELS = { menu: 'Other actions', next: 'Next', finish: 'Finish', report: 'Report this request', more: 'More', textView: 'Text view', download: 'Download the document', stopReminders: 'Stop reminder emails', fixName: 'Fix my name', check: 'Check before you finish' } as const;
+export const SIGN_LABELS = { menu: 'Other actions', next: 'Next', finish: 'Finish', report: 'Report this request', more: 'More', textView: 'Easy reading', download: 'Download the document', stopReminders: 'Stop reminder emails', fixName: 'Fix my name', check: 'Check before you finish' } as const;
 /** Labels in the app, for people who send. `where` is the source file each one is read from in the tests. */
 export const APP_LABELS = {
   start: { label: 'Send a document', where: 'src/lib/nav.ts' },
@@ -123,8 +123,8 @@ export const SIGNER_FAQ: Faq[] = [
     answer: () => `Tick the box to agree, then press ${L.next}: it takes you to each field in turn. At a signature field, choose Type, Draw or Upload. When every field is done, ${L.next} turns into ${L.finish}. Nothing is signed until you press ${L.finish}.` },
   { id: 'finish-stuck', acts: ['ask'], words: ['finish button', 'cannot finish', "can't finish", 'can not finish', 'finish does not', "finish doesn't", 'will not let me', "won't let me", 'required field', 'greyed', 'grayed', 'nothing happens', 'stuck', 'button does not', "button doesn't", 'cannot fill', "can't fill", 'cannot type', "can't type"],
     answer: () => `${L.finish} works once every required field is filled in. Press ${L.next}: it goes to the next field that is still open. If a field cannot be filled in, tell the sender with ${S.ask!.label}. Still stuck? Load the page again (your answers are kept), or choose Talk to a person.` },
-  { id: 'cannot-see', words: ['cannot see the document', "can't see the document", 'cannot see', "can't see", 'does not load', "doesn't load", 'will not load', "won't load", 'not loading', 'blank page', 'does not open', "doesn't open", 'will not open', "won't open", 'cannot read', "can't read", 'too small', 'zoom', 'text view', 'bigger', 'screen reader'],
-    answer: (s) => `${signing(s) ? 'On this page' : 'On the signing page'}, with the document open, choose ${L.more}. It has ${L.textView}, which shows the same document as plain text, the size of the pages, and ${L.download}.` },
+  { id: 'cannot-see', words: ['cannot see the document', "can't see the document", 'cannot see', "can't see", 'does not load', "doesn't load", 'will not load', "won't load", 'not loading', 'blank page', 'does not open', "doesn't open", 'will not open', "won't open", 'cannot read', "can't read", 'too small', 'zoom', 'text view', 'easy reading', 'bigger', 'screen reader'],
+    answer: (s) => `${signing(s) ? 'On this page' : 'On the signing page'}, with the document open, choose ${L.more}. It has ${L.textView}, which shows the words in one column with your fields in place, the size of the pages, and ${L.download}.` },
   { id: 'signed-mistake', acts: ['ask'], words: ['signed by mistake', 'signed by accident', 'signed it by mistake', 'undo my signature', 'undo', 'take back', 'take it back', 'withdraw my', 'unsign', 'signed the wrong', 'already signed', 'regret', 'changed my mind'],
     answer: () => `Before you press ${L.finish}, nothing is signed: tap a field to change it. After ${L.finish}, neither you nor the helper can take a signature back. Write to the sender: they can cancel the document, or correct it and ask again. A person can help too.` },
   { id: 'stop-reminders', words: ['stop sending me', 'stop the reminders', 'stop reminders', 'stop reminding', 'stop emailing', 'stop these emails', 'too many emails', 'keep getting emails', 'keeps emailing'],
@@ -172,7 +172,7 @@ export function screenFacts(): string {
   return [
     `- The signing page (people who sign): the first screen shows who sent the document and a box to tick to agree. Then ${L.next} goes from field to field, and turns into ${L.finish} when every field is done. Nothing is signed before ${L.finish}.`,
     `- The signing page has one menu, "${L.menu}", on both screens. Its entries, in this order: ${acts.map((a) => `"${a.label}" (${a.when})`).join('; ')}. Under them: Help (this chat).`,
-    `- Once the document is open, the bar of the signing page also has "${L.more}": Pages or ${L.textView} (the same document as plain text), the size of the pages (100, 150 or 200 percent), and "${L.download}".`,
+    `- Once the document is open, the bar of the signing page also has "${L.more}": Page or ${L.textView} (the words in one column with the fields in place; what is signed is the pages), the size of the pages (100, 150 or 200 percent), and "${L.download}".`,
     `- "${S.later!.label}" saves what was filled in; the same link brings the person back. After it the page shows "${L.stopReminders}". "${L.report}" is on the signing page for a request that looks wrong.`,
     `- A witness has a shorter list: "${WITNESS_LABELS.absent}", "${S.ask!.label}" and Help. A witness who stops for now closes the page; the same link works again.`,
     `- There is no way to sign on paper in GrowSigning, and no button for it.`,

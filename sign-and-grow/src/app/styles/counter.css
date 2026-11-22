@@ -1,0 +1,49 @@
+/* Signing at a service counter (src/app/app/counter, src/app/counter/screen). Every class starts with "ct-". */
+.ct-page { max-width: 760px; }
+.ct-note { margin: 4px 0 0; }
+.ct-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--line); }
+.ct-row:first-of-type { border-top: 0; }
+.ct-row .btn { min-height: 44px; }
+.ct-who { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.ct-page .btn, .ct-page select, .ct-page input[type="text"], .ct-page input[type="email"], .ct-page input:not([type]) { min-height: 44px; }
+.ct-page label.check { min-height: 44px; align-items: center; }
+/* Folds ("Finished today", "2. Help with signing"): a 44 px target, the marker kept. */
+.ct-page details > summary { min-height: 44px; box-sizing: border-box; padding: 11px 0; cursor: pointer; }
+.ct-page label.check input { width: 20px; height: 20px; flex: none; }
+.ct-steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+.ct-done { color: var(--green, #1f6f43); font-weight: 600; }
+.ct-statement { background: #f7f5ef; border-radius: 8px; padding: 10px 12px; }
+.ct-code { font: 700 44px/1.1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; text-align: center; margin: 8px 0; }
+.ct-qr { max-width: 220px; margin: 0 auto; }
+.ct-progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 0; }
+.ct-progress div { background: #f7f5ef; border-radius: 8px; padding: 8px 10px; }
+.ct-progress dt { font-size: 13px; color: var(--muted, #666); }
+.ct-progress dd { margin: 0; font-weight: 600; }
+.ct-radio { display: grid; gap: 6px; border: 0; padding: 0; margin: 0 0 10px; }
+.ct-radio legend { font-weight: 600; margin-bottom: 6px; }
+.ct-radio label { display: flex; gap: 10px; align-items: center; min-height: 44px; }
+.ct-radio input { width: 20px; height: 20px; flex: none; }
+
+/* The person's own screen: big, calm, one thing at a time. */
+.ct-screen { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg, #faf8f3); }
+.ct-screen-card { width: 100%; max-width: 520px; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 28px 22px; text-align: center; }
+.ct-screen-card h1 { font-size: 26px; margin: 0 0 12px; }
+.ct-screen-card p { font-size: 18px; margin: 0 0 14px; }
+.ct-screen-card input { font: 700 30px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; letter-spacing: 0.1em; width: 100%; min-height: 56px; text-transform: uppercase; }
+.ct-screen-card .btn { min-height: 52px; width: 100%; margin-top: 12px; font-size: 18px; }
+.ct-error { color: #b3392f; font-size: 16px; }
+
+/* The receipt: 80 mm wide for a receipt printer, or an A4 sheet. On screen it is drawn at its paper width. */
+.ct-receipt { background: #fff; color: #000; border: 1px dashed #bbb; padding: 14px; margin: 12px auto 0; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.ct-receipt.r80 { width: 80mm; max-width: 100%; font-size: 12px; }
+.ct-receipt.ra4 { width: 100%; max-width: 180mm; font-size: 14px; }
+.ct-receipt h2 { font-size: 1.2em; margin: 0 0 6px; }
+.ct-receipt dl { margin: 8px 0; }
+.ct-receipt dt { font-weight: 700; margin-top: 6px; }
+.ct-receipt dd { margin: 0; }
+.ct-receipt .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; word-break: break-all; }
+@media print {
+  body.ct-printing * { visibility: hidden !important; }
+  body.ct-printing .ct-receipt, body.ct-printing .ct-receipt * { visibility: visible !important; }
+  body.ct-printing .ct-receipt { position: absolute; left: 0; top: 0; margin: 0; border: 0; padding: 0; }
+}

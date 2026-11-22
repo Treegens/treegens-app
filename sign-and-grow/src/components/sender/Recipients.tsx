@@ -11,10 +11,12 @@ import { ownLink, ownLinkFact, OwnLinkActions } from './OwnLink';
 import { WitnessFact, witnessWait } from './WitnessFacts';
 import { GroupMembers } from './GroupMembers';
 import { actingName } from '@/lib/groups';
+import { senderLine as delegationLine } from '@/lib/delegation';
 import { MorePanel } from './More';
 import { dayText } from '@/lib/dates';
 import { removedDay } from '@/lib/retention';
 import { askedPaper } from '@/lib/disclosure';
+import { pendingWhen } from '@/lib/timing';
 
 export const DONE: Record<string, string> = { signer: 'Signed', inperson: 'Signed', approver: 'Approved', viewer: 'Viewed', cc: 'Copy sent', witness: 'Witnessed' };
 const ASK: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view', witness: 'witness a signature on' };
@@ -31,10 +33,18 @@ export const lastEmailTo = (deliveries: Delivery[], email: string, recipientId?:
   (recipientId && deliveries.find((d) => d.recipient_id === recipientId)) || deliveries.find((d) => !d.recipient_id && d.to_email.toLowerCase() === (email || '').toLowerCase())
   || (!recipientId ? deliveries.find((d) => d.to_email.toLowerCase() === (email || '').toLowerCase()) : null) || null;
 
+// Someone whose "Only when..." was not met: what became of the email, as the server recorded it (routing.ts).
+const skippedFact = (r: any) => (r.skipped_was_asked === 1 ? 'They had been asked before your change, and we emailed them that they are no longer needed.'
+  : r.skipped_was_asked ? 'They had been asked before your change, and we could not email them that they are no longer needed. Tell them yourself.' : 'No email went to them.');
+// Not "Needs to sign" under a name nobody asks any more.
+const skippedRole = (role: string) => (role === 'approver' ? 'Was going to approve' : role === 'cc' ? 'Was going to get a copy' : role === 'viewer' ? 'Was going to look at it' : role === 'witness' ? 'Was going to witness' : 'Was going to sign');
+
 // The badge says what is true right now. "Sent" is only shown when an email really left for them.
 function badge(r: any, envelopeStatus: string, mail: Delivery | null): { s: string; label?: string } {
   const open = envelopeStatus === 'sent';
   if (r.status === 'completed') return { s: 'completed', label: DONE[r.role] };
+  // Their "Only when..." was not met: never asked, and never shown as having signed (src/server/routing.ts).
+  if (r.status === 'skipped') return { s: 'pending', label: r.skipped_was_asked ? 'No longer needed' : 'Not asked' };
   // "Sign on paper instead" (src/server/disclosure.ts): a request, not a refusal, so it is not called Declined.
   if (askedPaper(r)) return { s: 'declined', label: 'Asked for paper' };
   if (r.status === 'declined') return { s: 'declined', label: 'Declined' };
@@ -111,10 +121,15 @@ const ROLE_DONE: Record<string, string> = { signer: 'Signer', approver: 'Approve
 
 // `mainPersonId`: whose "Sign now" is the page's main button already, so their card does not repeat it.
 // `remindOne`: whether this person gets a Remind of their own in their More (src/lib/envelopepage.ts, personRemind).
-export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onChanged, onCorrect, paused, mainPersonId = '', remindOne, copyAsk, mainCopies = '' }: { envelope: any; deliveries: Delivery[]; texts?: TextDelivery[]; myEmail: string; onChanged: () => void; onCorrect: (r: any) => void; paused?: boolean; mainPersonId?: string; remindOne?: (r: any) => boolean;
+// `allows`: for a colleague who came through a share, which actions their level lets them do (shareAllows in
+// src/lib/shares.ts): 'remind', 'edit' (Change person, access code), 'links' (never given). Absent: everything.
+export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onChanged, onCorrect, paused, mainPersonId = '', remindOne, copyAsk, mainCopies = '', allows }: { envelope: any; deliveries: Delivery[]; texts?: TextDelivery[]; myEmail: string; onChanged: () => void; onCorrect: (r: any) => void; paused?: boolean; mainPersonId?: string; remindOne?: (r: any) => boolean; allows?: (k: string) => boolean;
   /** The page's main button asked to copy this person's link (n counts the presses). `mainCopies`: whose link that button copies, so their More does not offer the same. */
   copyAsk?: { id: string; n: number } | null; mainCopies?: string }) {
   const ids = useId();
+  // What this person may do here: everything, unless they came through a colleague's share.
+  const may = (k: string) => !allows || allows(k);
+  const theirs = 'Only the person this document belongs to, or an admin, can send them the link.';
   // Whose More is open. Closed for everyone each time the page opens.
   const [more, setMore] = useState('');
   const moreBtn = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -258,18 +273,20 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
         // A signing group nobody has taken on has no link of its own: each member's is on its card (GroupMembers.tsx).
         const openGroup = !!r.group_name && !r.claimed_by;
         const reachable = turn && !isMe && r.role !== 'inperson' && !own;
-        const before = e.ordered ? e.recipients.filter((x: any) => x.routing_order < r.routing_order && x.status !== 'completed' && x.role !== 'cc') : [];
+        const before = e.ordered ? e.recipients.filter((x: any) => x.routing_order < r.routing_order && x.status !== 'completed' && x.status !== 'skipped' && x.role !== 'cc') : [];
         const p = r.progress;
         const name = actingName(r) || r.role_name || `Person ${i + 1}`;
         const panelId = `${ids}-more-${i}`;
         const isOpen = more === r.id;
         // What became of the email to them, or why there was none. Said once on the card, and again in their More.
         const emailFact = r.status === 'pending'
-          ? (own ? ownLinkFact(r, out, before.map((x: any) => x.name)) : r.role === 'witness' ? witnessWait(r, e) : out ? <>Not sent yet. {before.length ? `It goes out once ${before.map((x: any) => x.name).join(' and ')} ${before.length === 1 ? 'has' : 'have'} finished.` : 'It goes out when their turn comes.'}</> : 'Never sent. The document closed before their turn.')
+          ? (own ? ownLinkFact(r, out, before.map((x: any) => x.name)) : r.role === 'witness' ? witnessWait(r, e) : out ? <>Not sent yet. {pendingWhen(e, r, before)}</> : 'Never sent. The document closed before their turn.')
           : own ? ownLinkFact(r, out, []) : <EmailFact d={mail} role={r.role} purged={e.purged_level === 'personal' ? e.purged_at : null} />;
         const openedFact = <>{r.viewed_at ? <>Opened on {dayTime(r.viewed_at)}.</> : r.status === 'completed' ? 'Opened.' : 'Not opened yet.'}{r.status === 'viewed' && p && p.fields > 0 ? ` ${p.filled} of ${p.fields} ${p.fields === 1 ? 'field' : 'fields'} filled in so far.` : ''}</>;
         // One status line: the latest thing that is true about this person. The rest is in their More.
         const line = e.status === 'draft' ? null
+          // "Only when..." was not met (src/server/routing.ts). Someone asked before a correction was told, or the sender is.
+          : r.status === 'skipped' ? <>{String(r.skipped_why || 'The rule for them was not met.').replace(/^.*?, because /, 'Because ')} {skippedFact(r)}</>
           : r.status === 'completed' && r.role !== 'cc' ? <>{DONE[r.role]} on {dayTime(r.completed_at)}.</>
           : askedPaper(r) ? <>Asked for this document on paper on {dayTime(r.paper_at)}.</>
           : r.status === 'declined' ? <>Declined on {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</>
@@ -297,8 +314,10 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                   <span className="sn-person-email">{own ? 'No email address. You send the link.' : openGroup ? 'A group: every member has their own email' : removedDay(r.email) ? '' : r.email}</span>
                 </div>
                 <div className="muted small">
-                  {r.status === 'completed' ? ROLE_DONE[r.role] || ROLE_LABEL[r.role] : ROLE_LABEL[r.role]}
+                  {r.status === 'skipped' ? skippedRole(r.role) : r.status === 'completed' ? ROLE_DONE[r.role] || ROLE_LABEL[r.role] : ROLE_LABEL[r.role]}
                   {r.reassigned_from ? ` · handed over by ${r.reassigned_from}` : ''}
+                  {/* Someone signing for a person who is away, or who still could (src/server/delegation.ts). */}
+                  {delegationLine(r.delegation, r.role)}
                   {r.access_code ? <> · Access code <b className="sn-code">{r.access_code}</b> (give it to them yourself, it is not in the email)</> : null}
                   {r.access_code && r.code_frozen_at ? <> · <b>This code is frozen</b> after too many wrong tries and opens nothing now. Choose Change person, in their More, and set a new one to let them in.</> : null}
                   {/* The check the sender asked for before the document opens, and whether it has been passed. */}
@@ -321,7 +340,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
             {!!r.group_name && <GroupMembers e={e} r={r} deliveries={deliveries} onChanged={onChanged} />}
             {stale && (
               <p className="sn-hint warn">
-                <b>Not opened in {howLong(r.sent_at)}.</b> It may be in their spam folder. {r.muted ? 'Send them the link yourself, from their More.' : 'Remind them, or send the link yourself, from their More.'}
+                <b>Not opened in {howLong(r.sent_at)}.</b> It may be in their spam folder. {!may('links') ? (may('remind') && !r.muted ? `Remind them from their More. ${theirs}` : theirs) : r.muted ? 'Send them the link yourself, from their More.' : 'Remind them, or send the link yourself, from their More.'}
               </p>
             )}
             {/* The case nobody sees from outside: all filled in, Finish not pressed. Said in the server's own count. */}
@@ -333,14 +352,15 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
             )}
             {!stale && undelivered && mail!.status === 'failed' && (
               <p className="sn-hint warn">
-                {mail!.status === 'failed' && mail!.next_try_at ? <>The email has not gone out yet. We keep trying. If the address is wrong, fix it with <b>Change person</b>, or send them the link yourself in the meantime. Both are in their More.</>
+                {!may('links') ? <>{mail!.next_try_at ? 'The email has not gone out yet. We keep trying.' : 'The email did not go out and we have stopped trying.'} {may('edit') ? <>If the address is wrong, fix it with <b>Change person</b>, in their More. </> : null}{theirs}</>
+                  : mail!.status === 'failed' && mail!.next_try_at ? <>The email has not gone out yet. We keep trying. If the address is wrong, fix it with <b>Change person</b>, or send them the link yourself in the meantime. Both are in their More.</>
                   : mail!.status === 'failed' ? <>The email did not go out and we have stopped trying. Check the address with <b>Change person</b>, or send them the link yourself. Both are in their More.</> : null}
               </p>
             )}
-            {reachable && r.muted && !stale ? <p className="sn-hint">They asked for no more reminder emails. You can still send them the link yourself, from their More.</p> : null}
-            {stopped && <MailStopHint r={r} />}
+            {reachable && may('links') && r.muted && !stale ? <p className="sn-hint">They asked for no more reminder emails. You can still send them the link yourself, from their More.</p> : null}
+            {stopped && (may('edit') ? <MailStopHint r={r} /> : <p className="sn-hint warn"><b>The email to them could not be delivered.</b> Only the person this document belongs to, or an admin, can fix the address or send them the link.</p>)}
             {/* Their link, the only way it reaches them: while it is their turn and for their copy afterwards. */}
-            {own && <OwnLinkActions r={r} envelopeStatus={e.status} busy={busy} link={shown === r.id ? links[r.id] || '' : ''}
+            {own && may('links') && <OwnLinkActions r={r} envelopeStatus={e.status} busy={busy} link={shown === r.id ? links[r.id] || '' : ''}
               onShow={() => linkFor(r).then(() => setShown(r.id)).catch(fail)} onCopy={() => copy(r)} onQr={(el) => showQr(r, el)} onShare={(how) => shareVia(r, how)} />}
             {/* A second person who signs here, or the sender's own turn when the page's main button is someone else's. */}
             {signHere && <div className="sn-person-actions"><button className="btn sm" disabled={!!busy} onClick={() => signNow(r)}>{r.role === 'inperson' ? 'Host signing now' : `${r.role === 'approver' ? 'Review' : r.role === 'viewer' ? 'View' : 'Sign'} now`}</button></div>}
@@ -361,19 +381,19 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
               {r.status === 'declined' && !askedPaper(r) && <div><dt>Declined</dt><dd>On {dayTime(r.completed_at)}.{r.decline_reason ? <> They wrote: &ldquo;{r.decline_reason}&rdquo;</> : null}</dd></div>}
             </dl>
 
-            {(turn || (out && r.status === 'pending')) && (
+            {(turn || (out && r.status === 'pending')) && (may('remind') || may('edit')) && (
               <div className="sn-person-actions">
-                {reachable && r.bounced_at && !r.complained_at && <TryAgainButton envelopeId={e.id} r={r} disabled={!!busy || paused} onDone={onChanged} />}
+                {reachable && may('remind') && r.bounced_at && !r.complained_at && <TryAgainButton envelopeId={e.id} r={r} disabled={!!busy || paused} onDone={onChanged} />}
                 {/* The page's main button reminds everyone who waits. One for this person only when it is worth a second control. */}
-                {reachable && !r.muted && !stopped && (!remindOne || remindOne(r)) && <button className="btn sm" disabled={!!busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out. You can still copy the link and send it yourself.' : undefined} onClick={() => nudge(r)}>{busy === `nudge:${r.id}` ? 'Sending…' : `Remind ${r.name}`}</button>}
+                {reachable && may('remind') && !r.muted && !stopped && (!remindOne || remindOne(r)) && <button className="btn sm" disabled={!!busy || paused} title={paused ? 'Sending is paused on this account, so no reminders go out. You can still copy the link and send it yourself.' : undefined} onClick={() => nudge(r)}>{busy === `nudge:${r.id}` ? 'Sending…' : `Remind ${r.name}`}</button>}
                 {/* A group has no single name or address to correct: only its access code (members: Edit, in the page's More). */}
-                {r.group_name ? <button className="btn sm sn-group-btn" disabled={!!busy} onClick={() => onCorrect({ ...r, code_only: true })} aria-label={`Change the access code of ${r.group_name}`}>Access code</button>
+                {!may('edit') ? null : r.group_name ? <button className="btn sm sn-group-btn" disabled={!!busy} onClick={() => onCorrect({ ...r, code_only: true })} aria-label={`Change the access code of ${r.group_name}`}>Access code</button>
                   : <button className="btn sm" disabled={!!busy} onClick={() => onCorrect(r)} aria-label={`Change the name or address of ${r.name}`}>Change person</button>}
               </div>
             )}
             {/* Their link, for the sender to pass on. "WhatsApp" and "Text" here open the sender's own app: we send nothing. */}
-            {reachable && !openGroup && <p className="sn-share-h" id={`${panelId}-share`}>Share the link yourself</p>}
-            {(turn || (out && r.status === 'pending')) && (
+            {reachable && may('links') && !openGroup && <p className="sn-share-h" id={`${panelId}-share`}>Share the link yourself</p>}
+            {(turn || (out && r.status === 'pending')) && may('links') && (
               <div className="sn-person-actions" role="group" aria-labelledby={reachable && !openGroup ? `${panelId}-share` : undefined}>
                 {/* A group nobody has taken on has no link of its own: each member's is on its card (GroupMembers.tsx). */}
                 {!openGroup && <>
@@ -386,7 +406,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
             )}
             {/* An access code can still be changed when nothing else can: for someone who has finished, and once the
                 envelope is finished or closed. It stands between them and their copy, and a frozen one locks them out. */}
-            {!(turn || (out && r.status === 'pending')) && e.status !== 'draft' && !!r.access_code && (
+            {!(turn || (out && r.status === 'pending')) && e.status !== 'draft' && !!r.access_code && may('edit') && (
               <div className="sn-person-actions">
                 <button className="btn sm" disabled={!!busy} onClick={() => onCorrect({ ...r, code_only: true })} aria-label={`Change the access code of ${r.name}`}>Change the access code</button>
               </div>
@@ -406,3 +426,4 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
     </ol>
   );
 }
+

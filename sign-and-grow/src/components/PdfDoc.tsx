@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { VIEW_FAILED, whyNotShown, serverSaid, type ViewFailure, type ServerSaid } from './viewFailure';
 import { DRAW_SCREENS, RELEASE_SCREENS, nearScreen, pixelRatio } from './pdfMemory';
+import { screenHeaders } from './screenToken';
 export type { ViewFailure } from './viewFailure';
 
 // pdf.js is served from /public so the bundler never has to process it.
@@ -137,7 +138,7 @@ export function PdfDoc({ url, maxWidth = 860, zoom = 1, overlay, ink, onPageClic
     pdfjs()
       .then((m) => {
         loaded = true;
-        task = m.getDocument({ url, cMapUrl: '/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: '/pdfjs/standard_fonts/', withCredentials: true });
+        task = m.getDocument({ url, cMapUrl: '/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: '/pdfjs/standard_fonts/', withCredentials: true, httpHeaders: screenHeaders() });
         return task.promise;
       })
       .then((d: any) => {

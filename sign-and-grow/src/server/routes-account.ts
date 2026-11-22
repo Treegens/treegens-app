@@ -1,4 +1,5 @@
 import { route, json, type Ctx } from './router.ts';
+import { counterMe } from './counter.ts';
 import { whatsappProvider, voiceProvider, waDailyPerAccount } from '../lib/channels.ts';
 import { adminOrgs, refuseOrgAdminRole, orgMe } from './orgs.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
@@ -16,7 +17,7 @@ import { smsProvider } from '../lib/checks.ts';
 import { sendMail } from './mail.ts';
 import { assertPublicUrl, WEBHOOK_EVENTS, redeliver, deliveryView, MAX_WEBHOOKS, KEEP_BODIES } from './webhooks.ts';
 import { webhookHostsRule } from '../lib/outside.ts';
-import { billingEnabled, verifyChain, notifyPrefs, closingText } from './envelopes.ts';
+import { billingEnabled, verifyChain, notifyPrefs, closingText, loadEnvelope } from './envelopes.ts';
 import { nameRefusal, hasNotPaid, inviteRefusal, noteInvited } from './envelopes.ts';
 import { grant, creditSummary, findFreeCode, sameEmail } from './credits.ts';
 import { tick } from './cron.ts';
@@ -25,8 +26,11 @@ import { emailProblem } from './bounces.ts';
 import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed } from './routes-trust.ts';
 import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
 import { clientPolicy } from './tenantpolicy.ts';
+import { keyDatesOn } from './airepo.ts';
+import { delegationOn } from './delegation.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
 import { forgottenFile, disputeFacts } from './evidence.ts';
+import { importedForVerify } from './importer.ts';
 import { sealForVerify } from './seal.ts';
 import { holdForSecondStep, holdWrongPassword, needCode, twoStepOn, twoStepMe, sessionMade, passwordChanged } from './twostep.ts';
 // The security record of each account: one line where something happens (seclog.ts).
@@ -34,8 +38,22 @@ import { record, signedIn, signedUp, signInFailed, settingsChanged } from './sec
 import { converterOn } from './convert.ts';
 import { newPasswordOk, notePassword, inviteAccount, rulesMe, endedWhy } from './secpolicy.ts';
 import { readCookie } from './auth.ts';
+import { passwordAllowed, afterPassword, signupAllowed, enforcedFor, handOverAllowed } from './orgsso.ts';
 import { newConfirmCode, confirmWithCode, codesOpen } from './confirmcode.ts';
 import { showCode, CONFIRM_CODE_HOURS } from '../lib/confirm.ts';
+import { envelopeOfCopy, subjectOfCopy } from './visibility.ts';
+import { can, myRole, roleIn, roleChoice, assertMayGive, assertMayManage, type RoleChoice } from './perm.ts';
+import { isDeploymentBilling, agreementLine, agreementOf } from '../lib/billingmode.ts';
+
+// The role an invitation or a change gives (perm.ts): "admin", a role the team made (its id), and anything else
+// "member", as it always was. Refused when it can do more than the person giving it.
+function givenRole(c: Ctx, value: unknown): RoleChoice {
+  // No role given: a Member, as always. Anything that is not a role of this team is refused (roleChoice), never
+  // quietly made a Member.
+  const choice = roleChoice(c.account.id, value);
+  assertMayGive(c, choice);
+  return choice;
+}
 
 // `c`: with an API key, two_step is left out, because no key reads anything of two-step login (twostep.ts).
 export const publicUser = (u: any, c?: Ctx) => ({ id: u.id, email: u.email, name: u.name, title: u.title, company: u.company, email_verified: !!u.email_verified, ...(u.email_verified ? {} : { confirm_by_code: codesOpen(u) }), has_password: hasPassword(u), ...(c?.auth?.via === 'api_key' ? {} : { two_step: twoStepOn(u) }), signature_png: u.signature_png, initials_png: u.initials_png, notify: notifyPrefs(u) });
@@ -79,7 +97,8 @@ function ownWorkspace(userId: string, name: string, t = now()): string {
   // was welcomed before (wasWelcomed in routes-trust.ts). Every way a login or a workspace is made comes through
   // here, with a password or with Google or Microsoft, so this is the one place that decides.
   const first = run('UPDATE users SET welcomed_at=? WHERE id=? AND welcomed_at IS NULL', t, userId).changes;
-  if (first && !wasWelcomed(get('SELECT email FROM users WHERE id=?', userId)?.email)) grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
+  // A server paid for under a contract (BILLING_MODE=deployment) counts nothing, so it gives nothing to count.
+  if (first && !isDeploymentBilling() && !wasWelcomed(get('SELECT email FROM users WHERE id=?', userId)?.email)) grant(accountId, PRICING.welcomeSignatures, 'welcome', accountId);
   return accountId;
 }
 
@@ -96,8 +115,10 @@ function openInvite(tokenText: string, email: string): any {
 function join(inv: any, userId: string, t = now(), c?: Ctx) {
   // An admin of an organisation above this account never joins it as an owner or admin (src/server/orgs.ts).
   refuseOrgAdminRole(inv.account_id, userId, inv.role);
-  if (run('INSERT OR IGNORE INTO memberships (account_id, user_id, role, created_at) VALUES (?,?,?,?)', inv.account_id, userId, inv.role, t).changes)
-    record('member.joined', { c, by: { type: 'user', id: userId }, accounts: inv.account_id, about: ['user', userId], details: { role: inv.role, invite: inv.id } });
+  // A role the team made travels with the invitation (perm.ts). One deleted since is refused at delete time.
+  const pid = inv.profile_id && get('SELECT id FROM perm_profiles WHERE id=? AND account_id=?', inv.profile_id, inv.account_id) ? inv.profile_id : null;
+  if (run('INSERT OR IGNORE INTO memberships (account_id, user_id, role, created_at, profile_id) VALUES (?,?,?,?,?)', inv.account_id, userId, inv.role, t, pid).changes)
+    record('member.joined', { c, by: { type: 'user', id: userId }, accounts: inv.account_id, about: ['user', userId], details: { role: inv.role, invite: inv.id, ...(pid ? { role_name: get('SELECT name FROM perm_profiles WHERE id=?', pid)?.name } : {}) } });
   run('UPDATE invites SET accepted_at=? WHERE id=?', t, inv.id);
   run('UPDATE users SET last_account_id=? WHERE id=?', inv.account_id, userId);
 }
@@ -117,6 +138,8 @@ route('POST', '/auth/signup', async (c) => {
   const password = str(b.password, 200);
   if (!name) throw bad('Tell us your name.');
   if (!isEmail(email)) throw bad('Enter a valid email address.');
+  // An organisation that signs everyone at its domain in through its own service: the login is made there (orgsso.ts).
+  signupAllowed(email);
   // Long enough for the team being joined, and not a password from a leak (secpolicy.ts, pwned.ts).
   await newPasswordOk(password, { accounts: [inviteAccount(b.invite)] });
   if (get('SELECT id FROM users WHERE email=?', email)) throw bad(b.invite ? 'You already have a GrowSigning login with this address. Sign in with it and the invitation is accepted.' : 'An account with this email already exists. Sign in instead.', 409);
@@ -164,6 +187,9 @@ route('POST', '/auth/login', async (c) => {
   const email = str(b.email, 254).trim().toLowerCase();
   rateLimit(`login:${c.ip}`, 30, 900_000);
   rateLimit(`login:${email}`, 10, 900_000);
+  // An address whose organisation signs everyone in through its own service gets no password sign-in, except the
+  // owner's way back in (orgsso.ts): asked for with way_back, and decided once the password is known to be right.
+  const sso = passwordAllowed(email, b.way_back === true);
   const u = get('SELECT * FROM users WHERE email=?', email);
   if (!u || !checkPassword(str(b.password, 200), u.password_hash)) {
     // A login with two-step login answers a wrong password as it answers the right one, with the second screen, so
@@ -177,6 +203,7 @@ route('POST', '/auth/login', async (c) => {
   }
   // The one moment we hold the password: whether it is shorter than a team of theirs asks is noted (secpolicy.ts).
   notePassword(u.id, str(b.password, 200), [inviteAccount(b.invite)]);
+  if (sso) afterPassword(c, u, sso);
   const r = await signInAs(c, u, b.invite);
   // Held for the second step: nothing about the login goes back yet, not even that the password was right.
   return 'two_step' in r ? r : { user: publicUser(u), ...r };
@@ -276,7 +303,12 @@ route('POST', '/auth/forgot', async (c) => {
   rateLimit(`forgot:${c.ip}`, 10, 3600_000);
   const email = str((await c.body()).email, 254).trim().toLowerCase();
   const u = get('SELECT * FROM users WHERE email=?', email);
-  if (u) await sendPasswordLink(u);
+  // A password would not open this login: its organisation signs it in through its own service. The email says so
+  // instead of sending a link that leads nowhere. The owner keeps the link: their password is the way back in.
+  const sso = u ? enforcedFor(email) : null;
+  if (u && sso && !get("SELECT 1 x FROM memberships WHERE account_id=? AND user_id=? AND role='owner'", sso.accountId, u.id))
+    await sendMail({ to: u.email, subject: `Sign in to GrowSigning with ${sso.name} sign-in`, heading: 'No password needed', lines: [`${sso.name} signs everyone at ${sso.domain} in to GrowSigning through its own sign-in service, so a password does not open your login.`, `Open the sign-in page, type ${u.email}, and press "Continue with ${sso.name} sign-in". If you did not ask for this, ignore this email.`], cta: { label: 'Open the sign-in page', url: `${baseUrl()}/login?email=${encodeURIComponent(u.email)}` } });
+  else if (u) await sendPasswordLink(u);
   return { ok: true }; // same answer either way, so emails cannot be probed
 }, 'public');
 
@@ -366,16 +398,28 @@ route('GET', '/me', (c) => {
   return {
     user: publicUser(c.user, c),
     role: c.role,
-    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || null, default_locale: defaultFor(a), subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
+    // The role by name and what it can do (perm.ts): Owner, Admin, Member, or a role the team made.
+    my_role: myRole(c),
+    account: { id: a.id, name: a.name, plan: a.plan, brand_color: a.brand_color, brand_logo: a.brand_logo, default_reminder_days: a.default_reminder_days, default_expire_days: a.default_expire_days, default_date_format: a.default_date_format || null, default_locale: defaultFor(a), own_docs_default: !!a.own_docs_default, subscription_status: a.subscription_status, paused: a.suspended_at ? a.suspended_reason || 'under review' : null, ends_at: a.promo_code ? null : a.cancel_at, free_with: a.promo_code || null },
     // What the account switched on or off for itself (tenantpolicy.ts): { impact_display, ai_helper, white_label }.
     policy: clientPolicy(a.id),
-    admins: get("SELECT COUNT(*) n FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id).n,
+    // Key dates is on for this account (airepo.ts): the sidebar's More then lists it. Absent otherwise.
+    ...(keyDatesOn(a.id) ? { key_dates: true } : {}),
+    // Delegates are allowed in this account (delegation.ts): Settings then lists Away and sharing. Absent otherwise.
+    ...(delegationOn(a.id) ? { delegation: true } : {}),
+    // People who can look after the account: the owner, the admins, and a role an admin made only when it keeps both
+    // the team and the settings (perm.ts). An "Office manager" without the settings does not count.
+    admins: all("SELECT user_id FROM memberships WHERE account_id=? AND role IN ('owner','admin')", a.id)
+      .filter((m) => { const t = roleIn(a.id, m.user_id).things; return t.has('team') && t.has('settings'); }).length,
     members: get('SELECT COUNT(*) n FROM memberships WHERE account_id=?', a.id).n,
     ...trustInfo(c),
     // Oldest membership first: the order leaving a team goes by (POST /account/leave), so the Leave dialog can name
     // the workspace the person lands in.
     accounts: all('SELECT a.id, a.name, m.role FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=? ORDER BY m.created_at', c.user.id),
     billing: { enabled: billingEnabled(), signatures: billingEnabled() ? creditSummary(a.id) : null },
+    // This server runs under a government agreement (BILLING_MODE=deployment, src/lib/billingmode.ts): the one line
+    // Settings, Plan shows in place of the plan. Absent otherwise, so the plan draws at once without a second request.
+    ...(isDeploymentBilling() ? { agreement: agreementLine(agreementOf()) } : {}),
     outbox: devOutbox(),
     // Whether the operator of this server has switched text messages on. When not, nothing offers them.
     text_messages: !!smsProvider(),
@@ -396,6 +440,8 @@ route('GET', '/me', (c) => {
     ...rulesMe(c),
     // An admin of an organisation above accounts sees Settings, Organisation (src/server/orgs.ts). Absent otherwise.
     ...(c.auth.via === 'session' && adminOrgs(c.user.id).length ? { org_admin: true } : {}),
+    // Counter: only for a person an admin gave the counter permission (counter.ts). Absent otherwise.
+    ...counterMe(c),
     // The organisation above this account, if any: who set the two-step rule, and sending switched off from above.
     ...orgMe(a),
   };
@@ -493,24 +539,33 @@ route('PATCH', '/account', async (c) => {
     throw bad(`The date format "${str(b.default_date_format, 40)}" does not exist. Use one of: ${DATE_FORMATS.join(', ')}. Nothing was changed.`);
   // The language new recipients start in (locales.ts): checked before anything is written, like the date format.
   const locale = b.default_locale === undefined ? undefined : chosenLocale(b.default_locale, 'The default language ("default_locale")', 'Nothing was changed.');
+  if (b.own_docs_default !== undefined && typeof b.own_docs_default !== 'boolean') throw bad('"own_docs_default" is true or false. Nothing was changed.');
   if (b.default_date_format !== undefined) run('UPDATE accounts SET default_date_format=? WHERE id=?', b.default_date_format || null, a.id);
   if (locale !== undefined) run('UPDATE accounts SET default_locale=? WHERE id=?', locale, a.id);
+  // "Each person sees only their files" for new envelopes and templates (visibility.ts). A yes or a no, nothing else.
+  if (b.own_docs_default !== undefined) run('UPDATE accounts SET own_docs_default=? WHERE id=?', b.own_docs_default ? 1 : 0, a.id);
   run('UPDATE accounts SET name=?, brand_color=?, brand_logo=?, default_reminder_days=?, default_expire_days=? WHERE id=?',
     str(b.name ?? a.name, 120).trim() || a.name, b.brand_color === undefined ? a.brand_color : b.brand_color || null,
     b.brand_logo === undefined ? a.brand_logo : b.brand_logo || null, days(b.default_reminder_days, 0, 60, a.default_reminder_days), days(b.default_expire_days, 1, 365, a.default_expire_days), a.id);
-  settingsChanged({ c }, a, get('SELECT * FROM accounts WHERE id=?', a.id), { name: 'value', brand_color: 'value', brand_logo: 'changed', default_reminder_days: 'value', default_expire_days: 'value', default_date_format: 'value', default_locale: 'value' });
+  settingsChanged({ c }, a, get('SELECT * FROM accounts WHERE id=?', a.id), { name: 'value', brand_color: 'value', brand_logo: 'changed', default_reminder_days: 'value', default_expire_days: 'value', default_date_format: 'value', default_locale: 'value', own_docs_default: 'value' });
   return { ok: true };
 }, 'admin');
 
 route('GET', '/account/members', (c) => ({
-  members: all('SELECT u.id, u.name, u.email, m.role, m.created_at FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? ORDER BY m.created_at', c.account.id),
-  invites: c.admin ? all('SELECT id, email, role, created_at FROM invites WHERE account_id=? AND accepted_at IS NULL', c.account.id) : [],
+  // role_id and role_name: a role the team made (perm.ts), on top of the built-in role it started from.
+  // can: what each one's role can do, so the Team page offers only the changes the server allows and counts who
+  // can really look after the account.
+  members: all('SELECT u.id, u.name, u.email, m.role, m.created_at, p.id role_id, p.name role_name FROM memberships m JOIN users u ON u.id=m.user_id LEFT JOIN perm_profiles p ON p.id=m.profile_id AND p.account_id=m.account_id WHERE m.account_id=? ORDER BY m.created_at', c.account.id)
+    .map((m) => ({ ...m, can: [...roleIn(c.account.id, m.id).things] })),
+  invites: can(c, 'team') ? all('SELECT i.id, i.email, i.role, i.created_at, p.id role_id, p.name role_name FROM invites i LEFT JOIN perm_profiles p ON p.id=i.profile_id AND p.account_id=i.account_id WHERE i.account_id=? AND i.accepted_at IS NULL', c.account.id) : [],
 }));
 
 route('POST', '/account/invites', async (c) => {
   const b = await c.body();
   const email = str(b.email, 254).trim().toLowerCase();
-  const role = b.role === 'admin' ? 'admin' : 'member';
+  // "admin", "member", or a role the team made (its id, perm.ts). Nobody invites with more than their own role allows.
+  const given = givenRole(c, b.role);
+  const role = given.role;
   if (!isEmail(email)) throw bad('Enter a valid email address.');
   // Nobody is invited into an account that is about to be deleted.
   if (c.account.closing_at) throw bad(closingText(c.account, 'Nobody can be invited to it now'), 403);
@@ -526,8 +581,8 @@ route('POST', '/account/invites', async (c) => {
   run('DELETE FROM invites WHERE account_id=? AND email=? AND accepted_at IS NULL', c.account.id, email);
   const t = token();
   const inviteId = id('inv');
-  run('INSERT INTO invites (id, token, account_id, email, role, created_at) VALUES (?,?,?,?,?,?)', inviteId, t, c.account.id, email, role, now());
-  record('member.invited', { c, about: ['invite', inviteId], details: { role } });
+  run('INSERT INTO invites (id, token, account_id, email, role, created_at, profile_id) VALUES (?,?,?,?,?,?,?)', inviteId, t, c.account.id, email, role, now(), given.profile_id);
+  record('member.invited', { c, about: ['invite', inviteId], details: { role, ...(given.profile_id ? { role_name: given.name } : {}) } });
   noteInvited(c.account.id, email);
   // Someone who already has a login joins by signing in. Everyone else makes a login first. The email goes to the
   // invited address only, so it tells the person inviting nothing about who has an account.
@@ -554,19 +609,25 @@ route('DELETE', '/account/invites/:id', (c) => {
 }, 'admin');
 
 route('PATCH', '/account/members/:id', async (c) => {
-  const role = (await c.body()).role === 'admin' ? 'admin' : 'member';
-  const m = get('SELECT role FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
+  const given = givenRole(c, (await c.body()).role);
+  const role = given.role;
+  const m = get('SELECT role, profile_id FROM memberships WHERE account_id=? AND user_id=?', c.account.id, c.params.id);
   if (!m) throw bad('Member not found.', 404);
   if (m.role === 'owner') throw bad('The owner role cannot be changed.');
+  // Nobody changes the role of someone whose role can do more than their own (perm.ts).
+  assertMayManage(c, c.params.id, 'changed');
   refuseOrgAdminRole(c.account.id, c.params.id, role);
-  run('UPDATE memberships SET role=? WHERE account_id=? AND user_id=?', role, c.account.id, c.params.id);
-  if (m.role !== role) record('member.role_changed', { c, about: ['user', c.params.id], details: { from: m.role, to: role } });
+  const was = roleIn(c.account.id, c.params.id).name;
+  run('UPDATE memberships SET role=?, profile_id=? WHERE account_id=? AND user_id=?', role, given.profile_id, c.account.id, c.params.id);
+  if (m.role !== role || (m.profile_id || null) !== given.profile_id)
+    record('member.role_changed', { c, about: ['user', c.params.id], details: { from: m.role, to: role, ...(m.profile_id || given.profile_id ? { from_name: was, to_name: given.name } : {}) } });
 }, 'admin');
 
 route('DELETE', '/account/members/:id', async (c) => {
   const m = get('SELECT m.role, u.name, u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.user_id=?', c.account.id, c.params.id);
   if (!m) throw bad('Member not found.', 404);
   if (m.role === 'owner') throw bad('The owner cannot be removed. Make someone else the owner first.');
+  assertMayManage(c, c.params.id, 'removed');
   // Nobody removes themselves: whoever leaves must not be the one who keeps their envelopes, and with them the
   // signed copies that arrive later. Another admin does it, and chooses who takes over.
   if (c.params.id === c.user.id) throw bad(`You cannot remove yourself from ${c.account.name} this way. To leave, use "Leave this team" on the Team tab (POST /account/leave): you choose who takes over your envelopes, templates and bulk sends, and nothing you sent is lost. To give up your whole login instead, use Settings, Records and data.`);
@@ -672,6 +733,9 @@ route('POST', '/account/transfer-owner', async (c) => {
     if (!get('SELECT 1 x FROM memberships WHERE account_id=? AND user_id=?', c.account.id, to)) throw bad('Choose another member of this team. The person you chose is not on the team now, so nothing was changed.');
     // Someone who is closing their own login cannot be handed a team: it would be left without an owner when they go.
     refuseOrgAdminRole(c.account.id, to, 'owner');
+    // While everyone at the domains signs in through the account's service, the owner's way back in is their password
+    // with two-step login, so the new owner needs it on (orgsso.ts).
+    handOverAllowed(c.account.id, to);
     if (get('SELECT closing_at FROM users WHERE id=?', to)?.closing_at) throw bad('That person is closing their login, so the account cannot be handed to them. Choose someone else, or ask them to sign in again first (that keeps their login).');
     run("UPDATE memberships SET role='admin' WHERE account_id=? AND user_id=?", c.account.id, c.user.id);
     run("UPDATE memberships SET role='owner' WHERE account_id=? AND user_id=?", c.account.id, to);
@@ -684,7 +748,7 @@ route('POST', '/account/transfer-owner', async (c) => {
 // The address book is one list for the account, and admins see all of it. A member is shown, and can change or
 // delete, only the people they added themselves (contact_users) or sent to themselves: who a colleague sends to is
 // that colleague's business, like their envelopes and their folders.
-const ownContacts = (c: Ctx): [string, any[]] => (c.admin ? ['', []]
+const ownContacts = (c: Ctx): [string, any[]] => (can(c, 'see_all') ? ['', []]
   : [` AND (id IN (SELECT contact_id FROM contact_users WHERE user_id=?) OR EXISTS (SELECT 1 FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE e.account_id=contacts.account_id AND e.sender_id=? AND r.email=contacts.email))`, [c.user.id, c.user.id]]);
 const keepContact = (c: Ctx, contactId: string) => run('INSERT OR IGNORE INTO contact_users (contact_id, user_id) VALUES (?,?)', contactId, c.user.id);
 
@@ -723,7 +787,7 @@ route('DELETE', '/contacts/:id', (c) => {
 route('GET', '/api-keys', (c) => ({
   keys: all(`SELECT k.id, k.name, k.prefix, k.scope, k.created_at, k.last_used_at, k.stopped_at, k.user_id, COALESCE(u.name, k.owner_was) owner_name, u.email owner_email,
       CASE WHEN k.stopped_at IS NULL THEN u.closing_at END closing
-    FROM api_keys k LEFT JOIN users u ON u.id=k.user_id WHERE k.account_id=?${c.admin ? '' : ' AND k.user_id=?'} ORDER BY k.created_at`, ...(c.admin ? [c.account.id] : [c.account.id, c.user.id]))
+    FROM api_keys k LEFT JOIN users u ON u.id=k.user_id WHERE k.account_id=?${can(c, 'webhooks') ? '' : ' AND k.user_id=?'} ORDER BY k.created_at`, ...(can(c, 'webhooks') ? [c.account.id] : [c.account.id, c.user.id]))
     .map((k) => ({ ...k, mine: k.user_id === c.user.id })),
 }));
 // A new key gets the "send" scope: everyday work, no account settings. "admin" has to be asked for by name, and
@@ -735,7 +799,7 @@ route('POST', '/api-keys', async (c) => {
   // the login may be a stranger's made in somebody else's name (the same rule as for a webhook, below).
   if (!c.user.email_verified) throw bad('Confirm your email address before you create a key. Type the 6-digit code from our email at the top of the app, or press the button in that email. "Send a new code" there emails a new one.', 403);
   const scope = b.scope === 'admin' ? 'admin' : 'send';
-  if (scope === 'admin' && !c.admin) throw bad('Only account admins can create a key with the "admin" scope. Leave the scope out for a "send" key.', 403);
+  if (scope === 'admin' && !can(c, 'webhooks')) throw bad('Only account admins can create a key with the "admin" scope. Leave the scope out for a "send" key.', 403);
   const key = `tsk_${token(30)}`;
   const keyId = id('key');
   run('INSERT INTO api_keys (id, account_id, user_id, name, prefix, key_hash, created_at, scope) VALUES (?,?,?,?,?,?,?,?)', keyId, c.account.id, c.user.id, str(b.name, 80) || 'API key', key.slice(0, 10), sha256(key), now(), scope);
@@ -745,7 +809,7 @@ route('POST', '/api-keys', async (c) => {
 // Revoke your own key, or as an admin any key in the account.
 route('DELETE', '/api-keys/:id', (c) => {
   const k = get('SELECT name, scope, user_id, stopped_at FROM api_keys WHERE id=? AND account_id=?', c.params.id, c.account.id);
-  if (run(`DELETE FROM api_keys WHERE id=? AND account_id=?${c.admin ? '' : ' AND user_id=?'}`, ...(c.admin ? [c.params.id, c.account.id] : [c.params.id, c.account.id, c.user.id])).changes)
+  if (run(`DELETE FROM api_keys WHERE id=? AND account_id=?${can(c, 'webhooks') ? '' : ' AND user_id=?'}`, ...(can(c, 'webhooks') ? [c.params.id, c.account.id] : [c.params.id, c.account.id, c.user.id])).changes)
     record('api_key.revoked', { c, about: ['api_key', c.params.id], details: { name: k?.name, scope: k?.scope, made_by: k?.user_id, was_stopped: !!k?.stopped_at } });
 });
 
@@ -841,15 +905,19 @@ route('POST', '/public/verify', async (c) => {
   const hash = sha256(bytes);
   // The digital seal inside the file, when it carries one (src/server/seal.ts): said beside the byte-for-byte answer.
   const seal = await sealForVerify(bytes);
-  const e = get("SELECT e.id, e.subject, e.completed_at, e.sheets, e.disputed_at, u.name sender FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE e.final_sha256=? AND e.status='completed'", hash);
+  // A person shown only some of the files has a completed copy of their own, which is just as much this envelope's (visibility.ts).
+  const ownOf = envelopeOfCopy(hash);
+  const e = get(`SELECT e.id, e.subject, e.completed_at, e.sheets, e.disputed_at, u.name sender FROM envelopes e JOIN users u ON u.id=e.sender_id WHERE ${ownOf ? 'e.id' : 'e.final_sha256'}=? AND e.status='completed'`, ownOf || hash);
   // A file of a completed document whose sender deleted it with their account: we kept its fingerprint, its id and
   // its day, nothing else (keepFingerprint in evidence.ts). "match" stays for a document we still hold.
-  if (!e) return { match: false, hash, deleted: forgottenFile({ sha256: hash }), seal };
+  // A file an account brought in from elsewhere (importer.ts) is said as such: signed there, never "completed here".
+  if (!e) return { match: false, hash, deleted: forgottenFile({ sha256: hash }), imported: importedForVerify(hash), seal };
   const chain = verifyChain(e.id);
   const mask = (email: string) => email.replace(/^(.).*(@.*)$/, '$1***$2');
   return {
     // disputed_at: when a person named on it first said they did not sign it, or that it was not them (evidence.ts).
-    match: true, hash, envelope: { id: e.id, subject: e.subject, completed_at: e.completed_at, sender: e.sender, disputed_at: e.disputed_at || null, ...(e.disputed_at ? disputeFacts(e.id) : {}) }, chain,
+    // own_copy: the file is the completed copy made for one person, holding only their files and the certificate.
+    match: true, hash, ...(ownOf ? { own_copy: true } : {}), envelope: { id: e.id, subject: ownOf ? subjectOfCopy(hash, loadEnvelope) : e.subject, completed_at: e.completed_at, sender: e.sender, disputed_at: e.disputed_at || null, ...(e.disputed_at ? disputeFacts(e.id) : {}) }, chain,
     signers: all("SELECT name, email, role, completed_at FROM recipients WHERE envelope_id=? AND role != 'cc' ORDER BY routing_order, position", e.id).map((r) => ({ ...r, email: mask(r.email) })),
     seal,
   };

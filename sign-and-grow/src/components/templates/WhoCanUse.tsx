@@ -25,7 +25,9 @@ export function AccessMarks({ access }: { access?: { use: TplUse; locked: boolea
 }
 
 type Member = { id: string; name: string; email: string; role: string; always: boolean; chosen: boolean; can_change: boolean };
-type Draft = { use: TplUse; change: TplChange; locked: boolean; picks: Record<string, { chosen: boolean; can_change: boolean }> };
+type Draft = { use: TplUse; change: TplChange; locked: boolean; picks: Record<string, { chosen: boolean; can_change: boolean }>; groups: Record<string, { chosen: boolean; can_change: boolean }> };
+// A group of members of the team (Settings, Team, More options), chosen as a whole. Listed only when the team has one.
+type Group = { id: string; name: string; people: number; chosen: boolean; can_change: boolean };
 
 /** The rule of one template: read by everyone who may use it, changed by the person it belongs to and admins. */
 export function AccessDialog({ templateId, name, onClose, onSaved }: { templateId: string; name: string; onClose: () => void; onSaved?: (access: any) => void }) {
@@ -39,7 +41,7 @@ export function AccessDialog({ templateId, name, onClose, onSaved }: { templateI
     api(`/envelopes/${templateId}/access`).then(({ access }) => {
       if (!live) return;
       setA(access);
-      setD({ use: access.use, change: access.change, locked: access.locked, picks: Object.fromEntries((access.members || []).map((m: Member) => [m.id, { chosen: m.chosen, can_change: m.can_change }])) });
+      setD({ use: access.use, change: access.change, locked: access.locked, picks: Object.fromEntries((access.members || []).map((m: Member) => [m.id, { chosen: m.chosen, can_change: m.can_change }])), groups: Object.fromEntries((access.groups || []).map((g: Group) => [g.id, { chosen: g.chosen, can_change: g.can_change }])) });
     }).catch((e) => (fail(e), onClose()));
     return () => {
       live = false;
@@ -56,8 +58,11 @@ export function AccessDialog({ templateId, name, onClose, onSaved }: { templateI
   const members: Member[] = a.members || [];
   const pickable = members.filter((m) => !m.always);
   const names = (pred: (p: { chosen: boolean; can_change: boolean }) => boolean) => pickable.filter((m) => d.picks[m.id] && pred(d.picks[m.id])).map((m) => m.name);
-  const preview = accessSentence({ ...d, owner: a.owner, chosen_use: d.use === 'chosen' ? names((p) => p.chosen || p.can_change) : [], chosen_change: d.change === 'chosen' ? names((p) => p.can_change) : [] });
+  const teamGroups: Group[] = a.groups || [];
+  const groupNames = (pred: (p: { chosen: boolean; can_change: boolean }) => boolean) => teamGroups.filter((g) => d.groups[g.id] && pred(d.groups[g.id])).map((g) => `everyone in ${g.name}`);
+  const preview = accessSentence({ ...d, owner: a.owner, chosen_use: d.use === 'chosen' ? [...names((p) => p.chosen || p.can_change), ...groupNames((p) => p.chosen || p.can_change)] : [], chosen_change: d.change === 'chosen' ? [...names((p) => p.can_change), ...groupNames((p) => p.can_change)] : [] });
   const pick = (id: string, p: Partial<{ chosen: boolean; can_change: boolean }>) => setD({ ...d, picks: { ...d.picks, [id]: { ...{ chosen: false, can_change: false }, ...d.picks[id], ...p } } });
+  const pickGroup = (id: string, p: Partial<{ chosen: boolean; can_change: boolean }>) => setD({ ...d, groups: { ...d.groups, [id]: { ...{ chosen: false, can_change: false }, ...d.groups[id], ...p } } });
   // Everyone may change it only if everyone may use it. Choosing otherwise moves "change" back, and says so.
   const setUse = (use: TplUse) => {
     if (use !== 'team' && d.change === 'team') (setD({ ...d, use, change: 'owner' }), setNote(`Changed to "${CHANGE_LABEL.owner}", because only people who can use a template can change it.`));
@@ -69,7 +74,8 @@ export function AccessDialog({ templateId, name, onClose, onSaved }: { templateI
     setBusy(true);
     try {
       const members = Object.entries(d.picks).filter(([, p]) => p.chosen || p.can_change).map(([id, p]) => ({ id, can_change: p.can_change }));
-      const r = await api(`/envelopes/${templateId}/access`, { method: 'PUT', body: { use: d.use, change: d.change, locked: d.locked, members } });
+      const groups = Object.entries(d.groups).filter(([, p]) => p.chosen || p.can_change).map(([id, p]) => ({ id, can_change: p.can_change }));
+      const r = await api(`/envelopes/${templateId}/access`, { method: 'PUT', body: { use: d.use, change: d.change, locked: d.locked, members, ...(teamGroups.length ? { groups } : {}) } });
       toast('Saved. The rule is written in the template\'s history.');
       onSaved?.(r.access);
       onClose();
@@ -115,6 +121,20 @@ export function AccessDialog({ templateId, name, onClose, onSaved }: { templateI
         {(d.use === 'chosen' || d.change === 'chosen') && (
           <fieldset className="tr-set">
             <legend>Chosen members</legend>
+            {teamGroups.length > 0 && (
+              <ul className="tr-people" aria-label="Groups of members">
+                {teamGroups.map((g) => {
+                  const p = d.groups[g.id] || { chosen: false, can_change: false };
+                  return (
+                    <li key={g.id}>
+                      <span className="tr-who"><b>{g.name}</b> <span className="muted small">group of {g.people === 1 ? '1 person' : `${g.people} people`}</span></span>
+                      {d.use === 'chosen' && <label className="check tr-tap"><input type="checkbox" checked={p.chosen || p.can_change} disabled={p.can_change} onChange={(e) => pickGroup(g.id, { chosen: e.target.checked })} aria-label={`${g.name} can use it`} /> Can use</label>}
+                      {d.change === 'chosen' && <label className="check tr-tap"><input type="checkbox" checked={p.can_change} onChange={(e) => pickGroup(g.id, { can_change: e.target.checked, ...(e.target.checked ? { chosen: true } : {}) })} aria-label={`${g.name} can change it`} /> Can change</label>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
             {pickable.length === 0 && <p className="muted small">Everyone on your team is an admin or owns this template, so they can already use and change it.</p>}
             <ul className="tr-people">
               {pickable.map((m) => {

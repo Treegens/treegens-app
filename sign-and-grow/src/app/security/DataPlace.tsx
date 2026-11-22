@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { dataPlace, notSaid, type DataPlace, type Processor } from '@/lib/dataplace';
+import { readPossible, READ_ALSO } from '@/lib/aiassist';
 
 // "Where your data is", for /security and for the data processing summary. Every line comes from dataPlace(), which
 // reads the settings the server runs on (src/lib/dataplace.ts). Nothing is typed in here that a deployment could
@@ -47,7 +48,7 @@ export function WhereYourDataIs() {
         <li><b>Who runs this server.</b><span><Stated value={d.operator} what="who they are" /> They are the ones who hold your data, and the ones to ask about it.</span></li>
         <li><b>Where the server and its files are.</b><span><Stated value={d.region} what="where it is hosted" /> {d.host ? <>It runs on machines of {d.host}.</> : <Unstated>{notSaid('which company hosts it')}</Unstated>} The database and every uploaded and signed file are on one disk in that one place. There is one region. You cannot choose another.</span></li>
         <li><b>Backups.</b><span><Stated value={d.backups} what="whether and where backups are kept" /></span></li>
-        <li><b>What leaves the server.</b><span>Only what the table below lists, for the reason it gives{d.processors.length > 1 ? '' : ': on this server that is the hosting alone'}. A webhook you set up yourself sends the events you chose to the address you gave. There is no analytics service and no advertising behind these pages{d.processors.some((p) => p.id === 'chat') ? <>. The one AI service is the help chat&apos;s, in the table, and it gets only what people type into the chat</> : ', and no AI service'}.</span></li>
+        <li><b>What leaves the server.</b><span>Only what the table below lists, for the reason it gives{d.processors.length > 1 ? '' : ': on this server that is the hosting alone'}. A webhook you set up yourself sends the events you chose to the address you gave. There is no analytics service and no advertising behind these pages{d.processors.some((p) => p.id === 'chat') ? <>. The one AI service is the help chat&apos;s, in the table, and it gets only what people type into the chat{readPossible() ? READ_ALSO : ''}</> : ', and no AI service'}.</span></li>
       </ul>
       <ProcessorTable d={d} />
       {d.off.length > 0 && <p className="muted small" style={{ margin: '12px 0 0' }}><b>Not in use on this server:</b> {d.off.join(' ')}</p>}

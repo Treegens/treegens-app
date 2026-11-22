@@ -1,3 +1,5 @@
+// What the person's role allows (perm.ts): 'see_all' here, where this file once asked for an admin.
+import { can } from './perm.ts';
 import { route, json, type Ctx } from './router.ts';
 import { all, get, run, tx } from './db.ts';
 import { randomInt } from 'node:crypto';
@@ -414,7 +416,7 @@ route('POST', '/mail/events', async (c) => {
 
 function mine(c: Ctx, envelopeId: string) {
   const e = loadEnvelope(envelopeId);
-  if (!e || e.account_id !== c.account.id || e.kind !== 'envelope' || e.hidden_at || (!c.admin && e.sender_id !== c.user.id)) throw bad('Envelope not found.', 404);
+  if (!e || e.account_id !== c.account.id || e.kind !== 'envelope' || e.hidden_at || (!can(c, 'see_all') && e.sender_id !== c.user.id)) throw bad('Envelope not found.', 404);
   return e;
 }
 

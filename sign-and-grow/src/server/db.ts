@@ -720,6 +720,248 @@ CREATE TABLE IF NOT EXISTS written_docs (
   title TEXT NOT NULL, source TEXT, source_sealed TEXT, source_key TEXT, paper TEXT NOT NULL DEFAULT 'a4', ai INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
+-- A full export made in the background (src/server/exportfull.ts): the ZIP is on the disk under exports/ until
+-- expires_at, and only an owner or admin of the account downloads it, signed in. error says why one failed.
+CREATE TABLE IF NOT EXISTS full_exports (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, user_id TEXT NOT NULL,
+  status TEXT NOT NULL, created_at TEXT NOT NULL, ready_at TEXT, expires_at TEXT, bytes INTEGER, envelopes INTEGER, error TEXT, downloaded_at TEXT
+);
+-- Documents brought in from another server's export or from DocuSign (src/server/importer.ts). They are archived
+-- records, never envelopes: nothing here is counted, sent, signed or shown on /verify as completed here. source_id
+-- is the id it had where it came from, so the same record is never brought in twice. data is what came with it.
+CREATE TABLE IF NOT EXISTS imported_records (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, source TEXT NOT NULL,
+  source_deployment TEXT, source_id TEXT, imported_at TEXT NOT NULL, imported_by TEXT NOT NULL, subject TEXT NOT NULL,
+  status TEXT, sent_at TEXT, completed_at TEXT, chain_ok INTEGER, banner TEXT NOT NULL, data TEXT NOT NULL,
+  UNIQUE(account_id, source, source_deployment, source_id)
+);
+CREATE TABLE IF NOT EXISTS imported_files (
+  record_id TEXT NOT NULL REFERENCES imported_records(id) ON DELETE CASCADE, sha256 TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,
+  PRIMARY KEY (record_id, sha256)
+);
+CREATE INDEX IF NOT EXISTS imported_files_sha ON imported_files(sha256);
+-- Every stored file an import wrote. It outlives its record on purpose: once no record names a file any more (the
+-- record or its account was deleted), the timer takes the file off the disk unless something else uses it.
+CREATE TABLE IF NOT EXISTS imported_shas (sha256 TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- What an import made here (a template, a contact, a group) and what it was where it came from: the id map, and
+-- the mark "imported from ... on ..." that stays with it.
+CREATE TABLE IF NOT EXISTS import_marks (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, kind TEXT NOT NULL, local_id TEXT NOT NULL,
+  source TEXT NOT NULL, source_deployment TEXT, source_id TEXT NOT NULL, at TEXT NOT NULL, note TEXT NOT NULL,
+  PRIMARY KEY (account_id, kind, source, source_deployment, source_id)
+);
+-- A plain summary for signers (src/server/aiassist.ts), written once per file (one version of a document) and kept
+-- with it: in the clear only without FILE_ENCRYPTION_KEY, sealed in text_sealed with it. Deleted with its file.
+CREATE TABLE IF NOT EXISTS ai_summaries (
+  file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  text TEXT, text_sealed TEXT, text_key TEXT, created_at TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS ai_summaries_with_file AFTER DELETE ON files BEGIN DELETE FROM ai_summaries WHERE file_id=OLD.id; END;
+-- Who was shown a summary of which version (the file ids of the envelope's documents), so the record says it once.
+CREATE TABLE IF NOT EXISTS ai_summary_seen (
+  recipient_id TEXT NOT NULL REFERENCES recipients(id) ON DELETE CASCADE, version TEXT NOT NULL, at TEXT NOT NULL,
+  PRIMARY KEY (recipient_id, version)
+);
+-- Email domains an account claims for single sign-on (src/server/orgsso.ts). value is the random text of the TXT
+-- record at _growsigning.<domain> that proves it. verified_at: when the record was first found; from then the domain
+-- is this account's, and no other account can claim it (org_domains_held) unless the record goes and theirs is found.
+-- lost_at: the daily check did not find the record any more; single sign-on is paused for the domain until it is back.
+-- use_sso: people at this domain go to the account's sign-in service.
+CREATE TABLE IF NOT EXISTS org_domains (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, domain TEXT NOT NULL COLLATE NOCASE,
+  value TEXT NOT NULL, use_sso INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, verified_at TEXT, checked_at TEXT, lost_at TEXT,
+  UNIQUE (account_id, domain)
+);
+CREATE INDEX IF NOT EXISTS org_domains_domain ON org_domains(domain);
+CREATE UNIQUE INDEX IF NOT EXISTS org_domains_held ON org_domains(domain) WHERE verified_at IS NOT NULL;
+-- The account's own sign-in service (OpenID Connect). The client secret is only ever kept encrypted with
+-- FILE_ENCRYPTION_KEY (secret_sealed, with the key id in secret_key). tested_at: an admin signed in through it with
+-- success since its issuer or client id last changed; nothing on the sign-in page uses it before then. enforce:
+-- everyone at its domains signs in through it. join_new: people at its domains become members on their first sign-in.
+CREATE TABLE IF NOT EXISTS org_idps (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL, issuer TEXT NOT NULL, client_id TEXT NOT NULL,
+  secret_sealed TEXT NOT NULL, secret_key TEXT NOT NULL, enforce INTEGER NOT NULL DEFAULT 0, join_new INTEGER NOT NULL DEFAULT 0,
+  tested_at TEXT, tested_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+-- Signing inside a customer's website (src/server/embed.ts). embed_origins: the https websites an account lets show
+-- its signing pages and its sender screen inside a frame, up to 5. embed_views: which of them a signing link was
+-- handed out for (POST /envelopes/{id}/recipient-view with "frame_origin"); only that website may frame the link.
+CREATE TABLE IF NOT EXISTS embed_origins (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, origin TEXT NOT NULL, added_by TEXT, added_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, origin)
+);
+CREATE TABLE IF NOT EXISTS embed_views (
+  recipient_id TEXT NOT NULL REFERENCES recipients(id) ON DELETE CASCADE, origin TEXT NOT NULL, at TEXT NOT NULL,
+  PRIMARY KEY (recipient_id, origin)
+);
+-- The sender's screen inside an app (POST /envelopes/{id}/sender-view). id is the SHA-256 of the link's secret; it
+-- opens once, within expires_at. Opening it starts a session for that one draft (session_hash, the SHA-256 of the
+-- token the page then sends) that ends at session_expires_at, or when the draft is sent or the screen is closed.
+CREATE TABLE IF NOT EXISTS sender_views (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, user_id TEXT NOT NULL,
+  envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, origin TEXT NOT NULL, return_url TEXT NOT NULL,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, session_hash TEXT UNIQUE, session_expires_at TEXT, ended_at TEXT
+);
+-- The files a sender screen uploaded itself: the only files besides its draft's own that it may read back.
+CREATE TABLE IF NOT EXISTS sender_view_files (
+  view_id TEXT NOT NULL REFERENCES sender_views(id) ON DELETE CASCADE, file_id TEXT NOT NULL, PRIMARY KEY (view_id, file_id)
+);
+-- Each time someone opened, or ticked "I have been given" for, a file given to read with a document
+-- (src/server/supplements.ts). kind: 'opened' or 'acknowledged'; never "read". By the file it was at the time
+-- (file_id), so a replaced file is opened afresh, and counted only after the person's own agreement (consent_at), so
+-- whoever takes the place of someone else starts again. The audit trail says who it was.
+CREATE TABLE IF NOT EXISTS supplement_marks (
+  envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, document_id TEXT NOT NULL, file_id TEXT NOT NULL,
+  recipient_id TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS supplement_marks_env ON supplement_marks(envelope_id);
+-- A rule changed by a correction while the document was out (src/server/supplements.ts): from what, to what, when.
+-- The certificate says when someone finished before the rule they are listed under was set.
+CREATE TABLE IF NOT EXISTS supplement_rules (
+  envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, document_id TEXT NOT NULL,
+  from_rule TEXT NOT NULL, rule TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS supplement_rules_env ON supplement_rules(envelope_id);
+-- Signing at a service counter (src/server/counter.ts). counter_staff: who has the counter permission.
+-- counter_templates: the templates used at the counter; show_values lets officials see what the person types.
+-- counter_settings: the agency's contact for the receipt, whether an official may also be the witness, and
+-- whether a picture of an ID document is kept (only with stored files encrypted).
+CREATE TABLE IF NOT EXISTS counter_staff (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  added_by TEXT, at TEXT NOT NULL, PRIMARY KEY (account_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS counter_templates (
+  template_id TEXT PRIMARY KEY REFERENCES envelopes(id) ON DELETE CASCADE, account_id TEXT NOT NULL,
+  show_values INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS counter_settings (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, contact TEXT,
+  official_may_witness INTEGER NOT NULL DEFAULT 0, id_scans INTEGER NOT NULL DEFAULT 0, updated_at TEXT
+);
+-- One person at the counter with one official: what the official recorded before the document opened.
+CREATE TABLE IF NOT EXISTS counter_visits (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE,
+  recipient_id TEXT NOT NULL, official_id TEXT NOT NULL, official_name TEXT NOT NULL, created_at TEXT NOT NULL,
+  id_method TEXT, id_doc_type TEXT, id_last4 TEXT, id_country TEXT, id_at TEXT, id_scan BLOB, id_scan_type TEXT, closed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS counter_visits_rcp ON counter_visits(recipient_id);
+CREATE TABLE IF NOT EXISTS counter_helps (
+  id TEXT PRIMARY KEY, visit_id TEXT NOT NULL REFERENCES counter_visits(id) ON DELETE CASCADE, kind TEXT NOT NULL,
+  language TEXT, interpreter TEXT, by_id TEXT NOT NULL, by_name TEXT NOT NULL, at TEXT NOT NULL,
+  second_id TEXT, second_name TEXT, second_at TEXT, withdrawn_at TEXT
+);
+-- A short code that connects the person's own screen (one use, ten minutes), and the screens it connected.
+CREATE TABLE IF NOT EXISTS counter_codes (
+  code_hash TEXT PRIMARY KEY, visit_id TEXT NOT NULL REFERENCES counter_visits(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT
+);
+CREATE TABLE IF NOT EXISTS counter_screens (
+  token_hash TEXT PRIMARY KEY, visit_id TEXT NOT NULL REFERENCES counter_visits(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL, ended_at TEXT
+);
+-- Key dates (src/server/airepo.ts): the dates and amounts of a completed agreement. kind: parties, start, end,
+-- renewal, notice or amount. The value and the words it came from are document text: kept sealed in data_sealed with
+-- FILE_ENCRYPTION_KEY (in data, as JSON {value, quote}, only without one). day: the date as 2027-03-03, for the
+-- filter, the calendar and reminders, and only once confirmed (a proposal's day is in its data). status: 'proposed'
+-- (found by the AI, nobody checked it) or 'confirmed' (the sender confirmed or corrected it; then it is also a detail
+-- of the envelope in custom_values). by_ai: 1 when the AI found it, 0 when the sender typed it.
+CREATE TABLE IF NOT EXISTS key_terms (
+  id TEXT PRIMARY KEY, envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, account_id TEXT NOT NULL,
+  kind TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0, page INTEGER, document TEXT, data TEXT, data_sealed TEXT, data_key TEXT,
+  day TEXT, status TEXT NOT NULL DEFAULT 'proposed', by_ai INTEGER NOT NULL DEFAULT 1, corrected INTEGER NOT NULL DEFAULT 0,
+  custom_name TEXT, confirmed_by TEXT, confirmed_at TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS key_terms_env ON key_terms(envelope_id);
+CREATE INDEX IF NOT EXISTS key_terms_day ON key_terms(account_id, status, kind, day);
+-- When the AI last read an envelope for key dates, and what came of it: 'found', 'none' (nothing found) or 'failed'.
+CREATE TABLE IF NOT EXISTS key_scans (
+  envelope_id TEXT PRIMARY KEY REFERENCES envelopes(id) ON DELETE CASCADE, state TEXT NOT NULL, at TEXT NOT NULL, tries INTEGER NOT NULL DEFAULT 1
+);
+-- "Remind me": the person who asked is emailed this many days before each confirmed end, notice and renewal date of
+-- the envelope. key_reminders_sent: each email once, by the date it was about (a corrected date is a new email).
+CREATE TABLE IF NOT EXISTS key_reminders (
+  envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  days INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (envelope_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS key_reminders_sent (
+  envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, user_id TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
+  sent_at TEXT NOT NULL, PRIMARY KEY (envelope_id, user_id, kind, day)
+);
+-- Roles an admin made (src/server/perm.ts, src/lib/perm.ts): a copy of Admin or Member (base) less what it leaves
+-- out (left_out, a JSON list of things). memberships.profile_id and invites.profile_id name one.
+CREATE TABLE IF NOT EXISTS perm_profiles (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL,
+  base TEXT NOT NULL, left_out TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT
+);
+CREATE INDEX IF NOT EXISTS perm_profiles_account ON perm_profiles(account_id);
+-- Groups of members (Settings, Team): named sets of people on the team. A template's "Who can use this" can name a
+-- group (template_member_groups), and a group can give its people a role (profile_id; NULL gives none).
+CREATE TABLE IF NOT EXISTS member_groups (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL,
+  profile_id TEXT, created_at TEXT NOT NULL, created_by TEXT
+);
+CREATE INDEX IF NOT EXISTS member_groups_account ON member_groups(account_id);
+CREATE TABLE IF NOT EXISTS member_group_people (
+  group_id TEXT NOT NULL REFERENCES member_groups(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  added_at TEXT NOT NULL, PRIMARY KEY (group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS member_group_people_user ON member_group_people(user_id);
+CREATE TABLE IF NOT EXISTS template_member_groups (
+  template_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, group_id TEXT NOT NULL REFERENCES member_groups(id) ON DELETE CASCADE,
+  can_change INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (template_id, group_id)
+);
+-- Someone who signs for a person while they are away (src/server/delegation.ts). A person with a login names one
+-- delegate for dates, in an account whose admins allowed it. starts_on and ends_on are days (YYYY-MM-DD), both
+-- included. ended_at is set when the person stops it early or replaces it.
+CREATE TABLE IF NOT EXISTS delegations (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, email TEXT NOT NULL, starts_on TEXT NOT NULL, ends_on TEXT NOT NULL, created_at TEXT NOT NULL, ended_at TEXT
+);
+CREATE INDEX IF NOT EXISTS delegations_user ON delegations(user_id, account_id);
+-- The delegate's own link to one recipient's request, made when the request reached the person during their dates.
+-- for_token is the person's own link. Whoever agrees first takes the request on; recipients.delegate_link_id says
+-- the delegate did. removed_at: the sender said only the person named may sign, or the person was replaced.
+CREATE TABLE IF NOT EXISTS delegate_links (
+  id TEXT PRIMARY KEY, recipient_id TEXT NOT NULL REFERENCES recipients(id) ON DELETE CASCADE, envelope_id TEXT NOT NULL,
+  delegation_id TEXT NOT NULL, for_name TEXT NOT NULL, for_email TEXT NOT NULL, for_token TEXT, person_gen INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL, email TEXT NOT NULL, token TEXT NOT NULL UNIQUE, check_code TEXT, set_on TEXT NOT NULL, starts_on TEXT NOT NULL, ends_on TEXT NOT NULL,
+  created_at TEXT NOT NULL, sent_at TEXT, viewed_at TEXT, checked_at TEXT, checked_how TEXT, removed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS delegate_links_recipient ON delegate_links(recipient_id);
+CREATE INDEX IF NOT EXISTS delegate_links_for ON delegate_links(for_token);
+CREATE INDEX IF NOT EXISTS delegate_links_envelope ON delegate_links(envelope_id);
+-- Working for a colleague (src/server/shares.ts): owner_id shares the documents they send with grantee_id, in the
+-- same account, at a level ('see', 'manage', 'send') from starts_on to ends_on (days, YYYY-MM-DD, both included;
+-- ends_on NULL: until someone ends it). ended_at and ended_by when it was ended early or replaced.
+CREATE TABLE IF NOT EXISTS shares (
+  id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, grantee_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  level TEXT NOT NULL, starts_on TEXT NOT NULL, ends_on TEXT, created_at TEXT NOT NULL, created_by TEXT, ended_at TEXT, ended_by TEXT
+);
+CREATE INDEX IF NOT EXISTS shares_owner ON shares(account_id, owner_id);
+CREATE INDEX IF NOT EXISTS shares_grantee ON shares(account_id, grantee_id);
+-- The completed copy made for one person whose view was limited ("Each person sees only their files",
+-- src/server/visibility.ts): their files and the certificate. sha256 is the stored file, so /verify knows it too.
+-- A group has one copy for the group's row.
+CREATE TABLE IF NOT EXISTS final_copies (
+  envelope_id TEXT NOT NULL REFERENCES envelopes(id) ON DELETE CASCADE, recipient_id TEXT NOT NULL,
+  sha256 TEXT NOT NULL, size INTEGER NOT NULL, docs TEXT NOT NULL, made_at TEXT NOT NULL, PRIMARY KEY (envelope_id, recipient_id)
+);
+CREATE INDEX IF NOT EXISTS final_copies_sha ON final_copies(sha256);
+-- Tree commitments of government contracts (src/server/commitments.ts), filled in by the operator. Per contract,
+-- never per signature: share_pct of the fee funds trees_per_year mangroves. Only status 'signed' is ever shown.
+CREATE TABLE IF NOT EXISTS tree_commitments (
+  id TEXT PRIMARY KEY, holder TEXT NOT NULL, agreement_ref TEXT NOT NULL, band TEXT NOT NULL, share_pct REAL NOT NULL,
+  trees_per_year INTEGER NOT NULL, starts_on TEXT NOT NULL, ends_on TEXT, status TEXT NOT NULL DEFAULT 'draft',
+  signed_on TEXT, created_at TEXT NOT NULL, created_by TEXT, updated_at TEXT
+);
+-- The yearly planting statement of a commitment: where, when, which species, how many, and the evidence Treegens
+-- provides (links, one per line). One per commitment and year.
+CREATE TABLE IF NOT EXISTS tree_statements (
+  id TEXT PRIMARY KEY, commitment_id TEXT NOT NULL REFERENCES tree_commitments(id) ON DELETE CASCADE, year INTEGER NOT NULL,
+  sites TEXT NOT NULL, planted_from TEXT NOT NULL, planted_to TEXT NOT NULL, species TEXT NOT NULL, trees INTEGER NOT NULL,
+  evidence TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT, UNIQUE (commitment_id, year)
+);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1352,6 +1594,96 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // With 'not': why as a code (font, cmyk, media, attached, failed, convert, slow, checker_down, busy), which picks
   // the next step the page shows under the reason (nextStep in pdfa.ts).
   ['envelopes', 'pdfa_code', 'TEXT'],
+  // "Only when..." (src/server/routing.ts): the rule that decides, when this person's step is reached, whether they
+  // are asked at all, as JSON ({"field","is","value"} or {"otherwise": recipient id}); NULL for everyone else. A
+  // person whose rule was not met gets status 'skipped' ("Not asked"), and skipped_why says why in plain words.
+  ['recipients', 'only_when', 'TEXT'],
+  ['recipients', 'skipped_why', 'TEXT'],
+  // The same for a person whose rule was met and who was asked, written once so the record says it once.
+  ['recipients', 'asked_why', 'TEXT'],
+  // A person "Not asked" who HAD been asked before a correction put someone earlier in the order back (routing.ts):
+  // 1 when we emailed them that they are no longer needed, 2 when no email could go (no address, spam mark, paused).
+  ['recipients', 'skipped_was_asked', 'INTEGER'],
+  // AI help when sending and signing (src/server/aiassist.ts): the account's "Let the AI read document text", 'on'
+  // or NULL (off, the default); and per envelope whether its sender offers signers a plain summary.
+  ['accounts', 'ai_read_text', 'TEXT'],
+  ['envelopes', 'ai_summary', 'INTEGER NOT NULL DEFAULT 0'],
+  // Send later, pause and a wait before a person (timing.ts). send_at: when a draft goes out by itself. send_tried_at:
+  // when the timer took it up; with send_error, why it did not go out. paused_at, paused_by: who paused an envelope
+  // that is out, and when; paused_ms: how long it was paused in all, which the deadline moved on by.
+  ['envelopes', 'send_at', 'TEXT'],
+  ['envelopes', 'send_tried_at', 'TEXT'],
+  ['envelopes', 'send_error', 'TEXT'],
+  ['envelopes', 'paused_at', 'TEXT'],
+  ['envelopes', 'paused_by', 'TEXT'],
+  ['envelopes', 'paused_ms', 'INTEGER NOT NULL DEFAULT 0'],
+  // Hours to wait after the step before this person finished, before they are asked (signing order only). wait_noted_at:
+  // when the record said they wait, so it says it once.
+  ['recipients', 'wait_hours', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'wait_noted_at', 'TEXT'],
+  // The latest this browser stays signed in, however much it is used: set for people whose email domain signs in
+  // through their organisation's own service (src/server/orgsso.ts), so leaving the organisation ends their access.
+  ['sessions', 'ends_by', 'TEXT'],
+  // A file that is given to read, not signed (src/server/supplements.ts): NULL is a file to sign; 'none', 'open' or
+  // 'acknowledge' is the rule before Finish. supplemental_copy: 1 puts it after the signed pages of the completed copy.
+  ['documents', 'supplemental', 'TEXT'],
+  ['documents', 'supplemental_copy', 'INTEGER NOT NULL DEFAULT 1'],
+  // Key dates (src/server/airepo.ts): the account's switch, 'on' or NULL (off, the default); when it was switched on
+  // (the timer reads only documents completed after that); and 1 once an admin pressed "Look through older documents".
+  ['accounts', 'ai_key_dates', 'TEXT'],
+  ['accounts', 'ai_key_dates_at', 'TEXT'],
+  ['accounts', 'ai_key_dates_older', 'INTEGER NOT NULL DEFAULT 0'],
+  // People who change the envelope on their turn (src/server/agents.ts, rules in src/lib/recipienttypes.ts).
+  // place_open: 1 while this place waits for the person before them who "Chooses who comes next" to name someone.
+  // chosen_by: the name of whoever named or changed the person now in this place, and chosen_at when.
+  ['recipients', 'place_open', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'chosen_by', 'TEXT'],
+  ['recipients', 'chosen_at', 'TEXT'],
+  // A file uploaded through the signing link of someone who "Can change the document": that recipient's id. Only such
+  // a file, or one already on the envelope, can go into the envelope through their link (src/server/agents.ts).
+  ['files', 'step_upload_by', 'TEXT'],
+  // The name of the person who "Can change the document" whose change set this signature aside, or NULL when the
+  // sender did: what the person asked to sign again is told (who changed it), in emails and on their pages.
+  ['earlier_signatures', 'changed_by', 'TEXT'],
+  // A role an admin made (perm_profiles, src/server/perm.ts). NULL: the built-in role in memberships.role.
+  ['memberships', 'profile_id', 'TEXT'],
+  ['invites', 'profile_id', 'TEXT'],
+  // Someone who signs for a person while they are away (src/server/delegation.ts). accounts.delegation: 1 when an
+  // admin allowed it (off by default). envelopes.delegate_off: 1 when the sender said only the person named may
+  // sign. On a recipient the delegate took on: which link (delegate_link_id), the person's name and address
+  // (delegate_for, delegate_for_email) and when (delegate_at).
+  ['accounts', 'delegation', 'INTEGER NOT NULL DEFAULT 0'],
+  ['envelopes', 'delegate_off', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'delegate_link_id', 'TEXT'],
+  ['recipients', 'delegate_for', 'TEXT'],
+  ['recipients', 'delegate_for_email', 'TEXT'],
+  ['recipients', 'delegate_at', 'TEXT'],
+  // The check the sender chose for the person, kept while the delegate's one-time code stands in for it, so a
+  // correction back to the person (or to anyone else) gives them the sender's choice again (delegateCorrected).
+  ['recipients', 'delegate_verify_was', 'TEXT'],
+  // Working for a colleague (src/server/shares.ts). sent_by_id: who pressed Send (or made the draft) for the person
+  // the envelope belongs to, NULL when that person did it themselves. original_sender_id: who it belonged to before
+  // it was first moved to another member, so the certificate keeps the first sender. NULL when it never moved.
+  ['envelopes', 'sent_by_id', 'TEXT'],
+  ['envelopes', 'original_sender_id', 'TEXT'],
+  // made_for_by: the colleague who made a draft and handed it to its owner with "Send for" (shares.ts). Only they may
+  // take it back, and it goes back to them when the share ends. Pressing Send on someone else's draft never sets it.
+  ['envelopes', 'made_for_by', 'TEXT'],
+  // "Each person sees only their files" (src/server/visibility.ts, rule in src/lib/owndocs.ts). envelopes.own_docs:
+  // 1 when on. recipients.own_docs_extra: the files the sender ticked for that person beside those with their fields,
+  // as a JSON list of document ids. accounts.own_docs_default: new envelopes and templates start with it on.
+  ['envelopes', 'own_docs', 'INTEGER NOT NULL DEFAULT 0'],
+  ['recipients', 'own_docs_extra', 'TEXT'],
+  ['accounts', 'own_docs_default', 'INTEGER NOT NULL DEFAULT 0'],
+  // Several templates in one envelope (src/server/tplcombine.ts). envelopes.wording_parts: JSON list of the parts,
+  // [{ "t": template id, "docs": [document ids], "people": [recipient ids], "l": 1 when locked }], written for every
+  // combined envelope, so each lock and rule holds for its own part. accounts.tpl_match_percent: how alike an upload has to be to one of
+  // the account's templates before the editor offers it (src/server/tplmatch.ts): 80, 90 or 95; NULL is 80.
+  ['envelopes', 'wording_parts', 'TEXT'],
+  ['accounts', 'tpl_match_percent', 'INTEGER'],
+  // recipients.views_used: which ways of showing the document this person used while signing, "page", "easy" or
+  // "page,easy" (src/lib/readview.ts). The first use of each is in the audit trail; the certificate says which.
+  ['recipients', 'views_used', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

@@ -24,6 +24,10 @@ import { HelpChatButton } from './HelpChat';
 import { detailsRefused, wantsDetails } from './sender/DetailBoxes';
 import { STEP_NAMES, isBlankPerson, onlyMe, personLabel } from '@/lib/editorux';
 import { moveFields } from '@/lib/pages';
+import { usableRule } from '@/lib/routing';
+import { atWords, sendAtProblem } from '@/lib/timing';
+import { isOpenPlace, stepRoleProblem } from '@/lib/recipienttypes';
+import { roleKey } from '@/lib/tplcombine';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validEmail = (v: any) => typeof v === 'string' && v.length < 255 && EMAIL.test(v.trim());
@@ -31,7 +35,9 @@ const listNames = (names: string[]) => (names.length < 2 ? names.join('') : `${n
 // api() turns a dropped connection into "Failed to fetch". Say something a person can act on instead.
 const friendly = (e: any) => (e?.status ? e.message : 'We could not reach the server. Check your connection and try again.');
 
-export function Editor({ id }: { id: string }) {
+// `embedded`: the sender screen inside a customer's app (app/embed/send). Leaving goes back to that app instead of
+// another page of ours, and "Sign now" is not offered there, because that page cannot be shown in its frame.
+export function Editor({ id, embedded }: { id: string; embedded?: { onDone: (event: 'sent' | 'closed') => void; onProblem?: (message: string) => void } }) {
   const router = useRouter();
   const me = useMe();
   const [env, setEnv] = useState<any>(null);
@@ -79,7 +85,9 @@ export function Editor({ id }: { id: string }) {
     api(`/envelopes/${id}`).then(({ envelope: e }) => {
       if (!on) return;
       if (e.status !== 'draft' && !(e.kind === 'envelope' && e.status === 'sent')) {
-        toast(`This document is ${e.status}, so it can no longer be changed. Copy it to send a new version.`);
+        const said = `This document is ${e.status}, so it can no longer be changed. Copy it to send a new version.`;
+        if (embedded?.onProblem) return embedded.onProblem(said);
+        toast(said);
         return router.replace(`/app/envelopes/${id}`);
       }
       // A template can be changed by the person it belongs to, by admins and by whoever its rule lets change it (the
@@ -88,8 +96,10 @@ export function Editor({ id }: { id: string }) {
       // offers to use it or to make a copy of their own.
       if (e.kind === 'template' && (e.access ? e.access.may_change === false : me.role === 'member' && e.sender_id !== me.user.id)) {
         // A copy of a locked template is locked too (tplroles.ts), so a copy is not offered as a way to change it.
-        toast(e.access?.locked ? `This template belongs to ${e.access.owner}, and its wording is locked. You can use it as it is. To change it, ask ${e.access.owner} or an admin of your team.`
-          : 'This template belongs to a colleague, so only they or an admin of your team can change it. You can use it as it is, or make your own copy and change that.');
+        const said = e.access?.locked ? `This template belongs to ${e.access.owner}, and its wording is locked. You can use it as it is. To change it, ask ${e.access.owner} or an admin of your team.`
+          : 'This template belongs to a colleague, so only they or an admin of your team can change it. You can use it as it is, or make your own copy and change that.';
+        if (embedded?.onProblem) return embedded.onProblem(said);
+        toast(said);
         return router.replace(`/app/envelopes/${id}`);
       }
       loaded.current = e.edit_version ?? null;
@@ -106,7 +116,10 @@ export function Editor({ id }: { id: string }) {
       if (wantsDetails() && e.documents.length && e.status === 'draft') setStep(3);
     }).catch((e) => {
       if (!on) return;
-      toast(e?.status === 404 ? 'We could not find that document. It may have been deleted.' : friendly(e), true);
+      const said = e?.status === 404 ? 'We could not find that document. It may have been deleted.' : friendly(e);
+      // Inside a customer's app the screen says it in place: the app's own pages are not ours to go to (app/embed/send).
+      if (embedded?.onProblem) return embedded.onProblem(said);
+      toast(said, true);
       router.replace('/app/envelopes');
     });
     api('/contacts').then((d) => on && setContacts(d.contacts)).catch(() => {});
@@ -124,13 +137,22 @@ export function Editor({ id }: { id: string }) {
   const isIdle = (r: any, flds: any[] = fields.value) => !correcting && isBlankPerson(r) && r.role === 'signer' && !r.role_name && !r.access_code && !r.note && !(r.verify && r.verify !== 'none') && !r.phone && !flds.some((f) => f.recipient_id === r.id);
   const body = (list: any[] = rcps, flds: any[] = fields.value) => ({
     subject: env.subject, message: env.message, ordered: env.ordered, reminder_days: env.reminder_days, expire_days: env.expire_days,
+    // "Each person sees only their files" (editor/OwnDocsChoice.tsx), sent only once it was ever set, so older screens change nothing.
+    ...(env.own_docs != null ? { own_docs: !!env.own_docs } : {}),
     ...(env.date_format ? { date_format: env.date_format } : {}),
-    documents: docs.map((d) => ({ id: d.id, file_id: d.file_id, name: d.name })),
+    // supplemental: null for a file to sign, or its rule for a file to read (editor/ToRead.tsx).
+    documents: docs.map((d) => ({ id: d.id, file_id: d.file_id, name: d.name, supplemental: d.supplemental ?? null })),
     // A draft is saved while people are still typing. A half-typed email would make the server turn the whole
     // save down, so it is left out until it is complete and everything else is kept safe meanwhile.
     recipients: list.filter((r) => !isIdle(r, flds)).map((r) => ({ id: r.id, role: r.role, role_name: r.role_name, name: r.name, email: correcting || !r.email || validEmail(r.email) ? r.email : '', routing_order: r.routing_order, access_code: r.access_code, note: r.note,
       // The language of our screens for this person, or null for their browser (editor/RecipientLanguage.tsx).
       locale: r.locale || null,
+      // The files ticked for this person beside those with their fields (editor/OwnDocsChoice.tsx).
+      ...(r.also_sees !== undefined ? { also_sees: r.also_sees } : {}),
+      // "Only when..." (editor/RecipientRule.tsx), only while it still works; one that stopped working is said under the person.
+      only_when: usableRule(r, list, flds, !!env.ordered),
+      // The wait after the step before them, in hours (editor/WaitChoice.tsx). The server ignores it without an order.
+      wait_hours: Number(r.wait_hours) || 0,
       // The check before the document opens, and the signing link by text message (see sender/CheckFields.tsx).
       verify: r.verify || 'none', phone: r.phone || '', text_link: !!r.text_link,
       // The link also by WhatsApp, and the sender's tick that they agreed, for the number it was ticked for (editor/WaLink.tsx).
@@ -270,6 +292,13 @@ export function Editor({ id }: { id: string }) {
     }
   }
   const renameDoc = (did: string, name: string) => (setDocs((l) => l.map((x) => (x.id === did ? { ...x, name } : x))), dirty());
+  // To read, not sign (editor/ToRead.tsx): a file to read has no fields, so marking one that has some asks first.
+  const markToRead = (did: string, sup: any) => {
+    const n = sup ? fields.current().filter((f) => f.document_id === did).length : 0;
+    const go = () => (setDocs((l) => l.map((x) => (x.id === did ? { ...x, supplemental: sup } : x))), n && fields.set((l) => l.filter((f) => f.document_id !== did), { record: false }), dirty());
+    if (n) confirm({ title: 'Mark this file to read, not sign?', body: `It has ${plural(n, 'field')} on it. A file to read has no fields, so ${n === 1 ? 'it is' : 'they are'} removed.`, yes: 'Mark and remove fields', no: 'Keep it to sign', onYes: go });
+    else go();
+  };
   const moveDoc = (i: number, by: number) => (setDocs((d) => {
     const n = [...d];
     const [x] = n.splice(i, 1);
@@ -344,6 +373,20 @@ export function Editor({ id }: { id: string }) {
     });
     dirty();
   }
+  // "This looks like your template ... Use it?" (editor/TemplateMatch.tsx): the sender said yes. The template's people
+  // join (one already here with the same role name is that person), the empty row makes way, and its fields go on the file.
+  function addFromTemplate(people: any[], flds: any[]) {
+    const same = new Map<string, string>();
+    let list = live.current.rcps.filter((x) => !isIdle(x));
+    for (const p of people) {
+      const twin = roleKey(p.role_name) && list.find((x) => roleKey(x.role_name) === roleKey(p.role_name));
+      if (twin) same.set(p.id, twin.id);
+      else list = [...list, { ...newRcp(list, isTpl), ...p }];
+    }
+    setRcps(list);
+    fields.set((l) => [...l, ...flds.map((f) => ({ ...f, recipient_id: f.recipient_id ? same.get(f.recipient_id) || f.recipient_id : null }))]);
+    dirty();
+  }
   // "Add me": the person who is sending, as someone who signs.
   const addMe = () => addRcp({ name: me.user.name, email: me.user.email });
   const dropFieldsOf = (rid: string) => fields.set((l) => l.filter((f) => f.recipient_id !== rid), { record: false });
@@ -383,6 +426,7 @@ export function Editor({ id }: { id: string }) {
     const p: string[] = [];
     const people = rcps.filter((r) => !isIdle(r));
     if (!docs.length) p.push('Add at least one file.');
+    else if (docs.every((d) => d.supplemental)) p.push('Every file is marked to read, not sign. Mark at least one file to sign in step 1.');
     if (!people.length) p.push(isTpl ? 'Add at least one role.' : 'Add at least one person: a name and an email address in step 1.');
     for (const r of people) {
       const name = personLabel(r, rcps.indexOf(r));
@@ -396,6 +440,8 @@ export function Editor({ id }: { id: string }) {
         if (no) p.push(no);
       } else if (r.role === 'witness' && r.named_by_signer) {
         // A witness the signer names has no name or address of the sender's (editor/WitnessChoice.tsx).
+      } else if (isOpenPlace(r, rcps, !!env?.ordered)) {
+        // Left open for the person before them who chooses who comes next (src/lib/recipienttypes.ts).
       } else if (!isTpl && (!r.name.trim() || !validEmail(r.email))) p.push(!r.name.trim() && !String(r.email || '').trim() ? `${name} has no name or email yet. Add them in step 1.` : !r.name.trim() ? `${name} needs a name. Add it in step 1.` : `${name} needs a valid email address. ${String(r.email || '').trim() ? 'Check it' : 'Add it'} in step 1.`);
       // Whose signature a witness witnesses, and what cannot work: one rule with the server (src/lib/witness.ts).
       const wit = witnessProblem(r, { recipients: rcps, fields: fields.value });
@@ -412,14 +458,17 @@ export function Editor({ id }: { id: string }) {
       const check = checkTrouble(r, !!me.text_messages, name, isTpl && !r.email);
       if (check) p.push(check);
     }
+    // Can change the document, Chooses who comes next: a signing order, people after them, no fields of their own.
+    const step = stepRoleProblem(people, fields.value, !!env?.ordered);
+    if (step) p.push(step);
     if (!isTpl && people.length > 0 && !people.some((r) => r.role !== 'cc')) p.push('Add at least one person who signs, approves or must open it. A copy alone cannot be sent.');
     // Two fields of one person on top of each other: on a phone only the top one can be tapped. The server refuses it too.
     p.push(...stackedFields(fields.value, rcps, docs));
     return [...new Set(p)];
-  }, [docs, rcps, fields.value, isTpl, correcting, base, me.text_messages]);
+  }, [docs, rcps, fields.value, isTpl, correcting, base, me.text_messages, env?.ordered]);
 
   // The only person on a new document is the sender: the main button reads "Sign now" (editorux.ts).
-  const signNow = !!env && !isTpl && !correcting && !!onlyMe(rcps.filter((r) => !isIdle(r)), me.user.email);
+  const signNow = !embedded && !!env && !isTpl && !correcting && !!onlyMe(rcps.filter((r) => !isIdle(r)), me.user.email);
   const mine = { ordered: env?.ordered, date_format: env?.date_format, documents: docs, recipients: rcps, fields: fields.value };
   const changed = useMemo(() => !!base && correcting && fingerprint(env, mine) !== fingerprint(base, base), [base, correcting, env, docs, rcps, fields.value]); // eslint-disable-line react-hooks/exhaustive-deps
   const result = useMemo(() => (correcting && step === 3 ? outcomes(base, mine) : null), [correcting, step, base, env, docs, rcps, fields.value]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -439,6 +488,7 @@ export function Editor({ id }: { id: string }) {
 
   const leave = (to: string) => {
     leaving.current = true;
+    if (embedded) return embedded.onDone(to.includes('sent=1') ? 'sent' : 'closed');
     router.push(to);
   };
   const home = correcting ? `/app/envelopes/${id}` : isTpl ? '/app/templates' : '/app/envelopes';
@@ -502,7 +552,16 @@ export function Editor({ id }: { id: string }) {
       try {
         // "Sign now": the only person on it is the sender. The server then writes no invitation email and answers
         // with the signing page, which opens in this tab (src/lib/editorux.ts onlyMe, src/server/signnow.ts).
-        const r = await api(`/envelopes/${id}/send`, { method: 'POST', body: { send_anyway: anyway === true, ...(signNow ? { sign_now: true } : {}) } });
+        // Send later (SendLater.tsx): a time still ahead goes with the request, and it stays a draft until then.
+        // Chosen and no longer usable (passed, too soon): said here, and never sent at once instead.
+        const later = !signNow && env.send_at ? env.send_at : '';
+        const tooSoon = later ? sendAtProblem(later) : null;
+        if (tooSoon) return setError(`${tooSoon} Nothing was sent.`);
+        const r = await api(`/envelopes/${id}/send`, { method: 'POST', body: { send_anyway: anyway === true, ...(signNow ? { sign_now: true } : {}), ...(later ? { send_at: later } : {}) } });
+        if (later) {
+          toast(`It goes out soon after ${atWords(r?.send_at || later)}. Nothing has been sent yet.`);
+          return leave(`/app/envelopes/${id}`);
+        }
         if (signNow && r?.sign_url) {
           leaving.current = true;
           window.location.assign(r.sign_url);
@@ -616,9 +675,10 @@ export function Editor({ id }: { id: string }) {
 
   const ed: Ed = {
     env, base, isTpl, correcting, lockedIds, lockedNames, anyLocked, isLockedField, wording, docs, rcps, fields, contacts, uploads, color,
-    patchEnv, isIdle, addMe, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, removeDoc, replaceDoc, moveDoc, pagesChanged, addWritten, addRcp, patchRcp, removeRcp, removed, undoRemove,
+    patchEnv, isIdle, addMe, addFromTemplate, signNow, nudge, addFiles, dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)), renameDoc, markToRead, removeDoc, replaceDoc, moveDoc, pagesChanged, addWritten, addRcp, patchRcp, removeRcp, removed, undoRemove,
     setFields, undo, redo, modalOpen: !!ask || !!photoAsk, go,
     showField: (fid) => (setJump(fid), void go(2)), jump, clearJump: () => setJump(null),
+    flush: () => (correcting ? Promise.resolve() : save()), embedded: !!embedded,
   };
   // Closing the question about pictures hands focus back to the upload box it came from.
   const closePhotoAsk = () => {

@@ -1,7 +1,7 @@
 // A link to the sender's own payment page, shown to a signer after they press Finish ("Pay the deposit"). For a
 // deposit, a retainer or a fee that is due when a document is signed, without a second tool and without GrowSigning
 // taking any part in the money. The server keeps it in src/server/routes-paylink.ts. Plain constants and functions
-// with no environment in them, so the editor, the envelope page, the signing page and the server all quote them.
+// with no environment in them (but payNotYet, which asks BILLING_MODE where it can read it), so the editor, the envelope page, the signing page and the server all quote them.
 //
 // Why it is guarded the way it is: a Pay button from somebody nobody knows is what scammers want. So it is offered
 // only to an account that has earned trust (a payment that is old enough, or a person's word: hasNotPaid in
@@ -9,6 +9,7 @@
 // names the person whose payment page it is and the full address it opens, and the address is never put in an email,
 // a certificate, an export or a webhook: the audit trail names it by a fingerprint (payPrint in src/server/paydrop.ts).
 // It belongs to the person who set it, so it goes when they leave the team. Nobody on the sender's own team is asked.
+import { isDeploymentBilling } from './billingmode.ts';
 
 /** What the button says. A fixed short list: wording a sender types could imitate a bank or a bill. */
 export const PAY_KINDS: Record<string, string> = { deposit: 'Pay the deposit', retainer: 'Pay the retainer', fee: 'Pay the fee', payment: 'Make the payment' };
@@ -99,5 +100,7 @@ export const payNotUs = (sender: string): string =>
 /** What a sender reads where they set it. */
 export const PAY_FOR_SENDER = 'For a deposit, a retainer or a fee that is due when the document is signed. After they press Finish, each person who signs sees a button to this address, with your name and the full address on it. Nobody on your own team is asked to pay. The address is never put in our emails, certificates or exports. The button opens exactly this address, and GrowSigning does not check where that page sends people next, so give the address of the payment page itself, not a short link. The link is yours: if you leave the team, it is taken off. GrowSigning takes no part in the payment and cannot tell you whether anyone paid: your payment provider can.';
 /** Why an account is not offered it yet. */
-export const payNotYet = (trustDays: number): string =>
-  `A link to your own payment page can be shown to signers once your account has a payment for the plan or a top-up that is at least ${trustDays} days old and was not refunded or disputed, or once a person on the GrowSigning team has cleared it. That is because a Pay button from an account nobody knows yet is what scammers want.`;
+export const payNotYet = (trustDays: number, deployment = isDeploymentBilling()): string => deployment
+  // A server run under a government agreement takes no payments, so only a person can clear an account there.
+  ? 'A link to your own payment page can be shown to signers once a person who runs this server has cleared your account. That is because a Pay button from an account nobody knows yet is what scammers want.'
+  : `A link to your own payment page can be shown to signers once your account has a payment for the plan or a top-up that is at least ${trustDays} days old and was not refunded or disputed, or once a person on the GrowSigning team has cleared it. That is because a Pay button from an account nobody knows yet is what scammers want.`;

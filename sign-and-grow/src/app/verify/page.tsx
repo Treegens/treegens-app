@@ -1,9 +1,11 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { verifyImportedWords } from '@/lib/exportfull';
 import { api, fmtDate } from '@/components/ui';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { MATCH_MEANS, NO_MATCH_CAUSES } from '@/lib/evidence';
+import { OWN_COPY_VERIFY } from '@/lib/owndocs';
 import { ById } from './ById';
 import { SealResult } from './SealResult';
 import { screenLocale } from '@/lib/dates';
@@ -62,6 +64,7 @@ export default function Verify() {
             <h2>{res.envelope.subject}</h2>
             <div className="muted">Sent by {res.envelope.sender}. Completed {fmtDate(res.envelope.completed_at, true)}.</div>
             <p className="small" style={{ margin: '10px 0 0' }}>{MATCH_MEANS}</p>
+            {res.own_copy && <p className="small" style={{ margin: '10px 0 0' }} data-feature="ds-visibility">{OWN_COPY_VERIFY}</p>}
             <SealResult seal={res.seal} />
             {res.envelope.disputed_at && <div className="notice warn" style={{ marginTop: 12 }}><b>Disputed.</b> On {fmtDate(res.envelope.disputed_at, true)}, a person named on this document told us they did not sign it, or that it was not them. Nothing was changed or deleted because of that, and this page cannot tell you who is right. Ask the sender.{res.envelope.dispute_in_error_on ? ` On ${longDay(res.envelope.dispute_in_error_on)} a person at GrowSigning looked into it and found that it was filed in error.` : ''}</div>}
             <table className="t" style={{ marginTop: 12 }}>
@@ -101,9 +104,14 @@ export default function Verify() {
             <span className="badge declined">No match</span>
             {/* What the seal inside the file shows comes first: it can name the document the file was made from. */}
             <SealResult seal={res.seal} />
+            {/* A file an account brought in from elsewhere: said as such, never as completed here (src/server/importer.ts). */}
+            {res.imported && <div className="notice" style={{ margin: '10px 0 0' }}><b>{verifyImportedWords(res.imported).title}.</b> {verifyImportedWords(res.imported).text}</div>}
+            {/* For a file an account uploaded, the notice above is the whole answer: the causes below would contradict it. */}
+            {!res.imported && <>
             <p style={{ margin: '10px 0 6px' }}><b>{res.name}</b> does not match any completed document we hold. That can have several causes:</p>
             <ul className="pub-list small">{NO_MATCH_CAUSES.map((x) => <li key={x}>{x}</li>)}</ul>
             <p className="muted small">What to do: ask the sender or a signer for the file exactly as it was downloaded or emailed, and choose that one. A printed or scanned copy cannot be checked this way: look it up by its envelope ID below instead.</p>
+            </>}
             <div className="mono muted" style={{ marginTop: 8 }}>SHA-256 {res.hash}</div>
           </div>
         )}

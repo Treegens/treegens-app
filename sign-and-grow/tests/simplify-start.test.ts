@@ -273,7 +273,8 @@ test('3. the sidebar has nine entries in the charter\'s order and words, and Mor
   assert.equal((shell.match(/<HelpChatButton/g) || []).length, 1);
   assert.match(shell, /<SideNav [^\n]*\/>\s*\{\/\*[^*]*\*\/\}\s*<HelpChatButton className="nav hc-open hc-nav">Help<\/HelpChatButton>/);
   // The phone's bar is drawn with the shell, and its Send is the same start as the sidebar's.
-  assert.match(shell, /<TabBar path=\{path\} menuOpen=\{open\} onMenu=\{\(\) => setOpen\(!open\)\} \/>/);
+  // (can: a role the team made without sending has no Send in the bar, src/lib/perm.ts; built-in roles: as before.)
+  assert.match(shell, /<TabBar path=\{path\} menuOpen=\{open\} onMenu=\{\(\) => setOpen\(!open\)\}( can=\{me\.my_role\?\.custom \? me\.my_role\.can : null\})? \/>/);
   assert.equal((shell.match(/>Menu</g) || []).length, 0, 'one Menu on a phone: the one in the bar at the bottom');
   const nav = read('src/components/AppNav.tsx');
   assert.match(nav, /<nav className="tabbar" aria-label="Main">/);

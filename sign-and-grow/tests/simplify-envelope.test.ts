@@ -168,10 +168,12 @@ test('the page draws one More, one filled button, and no row of header buttons',
   assert.equal(page.match(/<MoreMenu kind="screen"/g)?.length, 1);
   assert.match(read('src/components/sender/More.tsx'), /data-more=\{kind\} aria-expanded=\{open\} aria-controls=\{open \? id : undefined\}/);
   // The main button comes from the rule, and each state's card draws that one and no other.
-  assert.match(page, /const main = mainButton\(\{ status: e\.status, isTemplate: isTpl, removed: !!removed, purged: !!e\.purged_at, people \}\);/);
+  // Send later and Pause add "scheduled" and "paused" to what the rule is told (src/components/sender/Timing.tsx).
+  assert.match(page, /const main = mainButton\(\{ status: e\.status, isTemplate: isTpl, removed: !!removed, purged: !!e\.purged_at, people(, scheduled: !!later, paused: out && !!e\.paused_at)? \}\);/);
   const filled = noComments(page).match(/className="btn primary"/g)?.length || 0;
-  // In the source: the eight shapes of the one main button, and the three of a template's card. Never two at once.
-  assert.equal(filled, 11);
+  // In the source: the ten shapes of the one main button (Send now and Resume among them), and the three of a
+  // template's card. Never two at once.
+  assert.equal(filled, 13);
   assert.doesNotMatch(page, /sn-edit|Edit envelope<\/Link>|Give more time<\/button>|Send reminder/);
   // Everything the header had is reachable: the lines of More are wired to the same calls as before.
   for (const call of ['/download?inline=1`', '/evidence`', "setDialog('extend')", "clone('envelope')", "clone('template')", "setDialog('void')", "setDialog('delete')", '/restore`'])

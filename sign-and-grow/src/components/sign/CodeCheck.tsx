@@ -21,6 +21,8 @@ export type CodeState = {
   shared?: boolean; // the sender passed this link on themselves: we never emailed this person
   call?: boolean; // this server can call the number and read the code out instead (src/server/voice.ts)
   by?: 'text' | 'call'; // how the code that works now reached them
+  delegate_for?: string; // a delegate's own link: the person who named them (src/server/delegation.ts)
+  delegate_verb?: 'sign' | 'approve';
 };
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -164,7 +166,7 @@ export function CodeCheck({ base, check, env, brand, onOpen }: { base: string; c
           ? <p>We are calling <b className="sg-code-to">{check.to}</b> now. The call reads the {check.digits}-digit code out twice. It works for {check.minutes} minutes.</p>
           : <p>We sent a {check.digits}-digit code by {what} to <b className="sg-code-to">{check.to}</b>. It works for {check.minutes} minutes.</p>
       ) : (
-        <p>{sender.name} asked us to check who opens this document. We send a {check.digits}-digit code by {what} to <b className="sg-code-to">{check.to}</b>, and you type it in here.</p>
+        <p>{check.delegate_for ? `${check.delegate_for} named you to ${check.delegate_verb || 'sign'} for them, so we check it is you first.` : `${sender.name} asked us to check who opens this document.`} We send a {check.digits}-digit code by {what} to <b className="sg-code-to">{check.to}</b>, and you type it in here.</p>
       )}
 
       {sent && (

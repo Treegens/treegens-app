@@ -7,6 +7,7 @@ import { Logo } from './Brand';
 import { safeNext, signInErrorText, signInNotice, removedText } from '@/lib/signin';
 // Why a sign-in rule of the team signed this browser out: only its two known reasons are ever said.
 import { signedOutNotice } from '@/lib/signinrules';
+import { useSso, SsoChoice } from './SsoSignIn';
 
 type Mode = 'login' | 'signup' | 'forgot' | 'reset';
 type Provider = { id: string; name: string };
@@ -30,10 +31,17 @@ export function AuthForm({ mode }: { mode: Mode }) {
   // would make that person a second login (the server refuses it and sends them to Settings), so the page says where
   // connecting is done instead.
   const [signedInAs, setSignedInAs] = useState('');
+  // Single sign-on of an organisation (src/server/orgsso.ts): looked up as the person leaves the email box. With it,
+  // the password box gives way in place to "Continue with <name> sign-in" (research/ux-notes.json, ds-sso-oidc).
+  const sso = useSso(mode, f.email);
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     setQ(p);
-    if (p.get('email')) setF((s) => ({ ...s, email: p.get('email')! }));
+    if (p.get('email')) {
+      setF((s) => ({ ...s, email: p.get('email')! }));
+      if (mode === 'login' || mode === 'signup') sso.look(p.get('email')!);
+    }
+    if (p.get('sso_error')) sso.setError(p.get('sso_error')!);
     if (p.get('code')) setF((s) => ({ ...s, code: p.get('code')! }));
     if (p.get('signin_error')) setCameBack(signInErrorText(p.get('signin_error'), p.get('provider')));
     if (mode === 'login' || mode === 'signup') {
@@ -58,12 +66,15 @@ export function AuthForm({ mode }: { mode: Mode }) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // The organisation signs this address in: Enter in the email box goes there too.
+    if ((mode === 'login' || mode === 'signup') && sso.active) return window.location.assign(sso.startUrl(q));
     setBusy(true);
     setError('');
     setCameBack('');
+    sso.clearError();
     try {
       if (mode === 'login' || mode === 'signup') {
-        const r = await api(`/auth/${mode}`, { body: { ...f, invite: q?.get('invite') || undefined } });
+        const r = await api(`/auth/${mode}`, { body: { ...f, invite: q?.get('invite') || undefined, ...(mode === 'login' && sso.wayBack ? { way_back: true } : {}) } });
         // Two-step login: no session yet. The second screen asks for the code (src/server/twostep.ts), and whatever
         // the sign-in carries (an invitation, a closing login) is done after it.
         if (r.two_step) return window.location.assign(`/login/two-step${q?.get('next') ? `?next=${encodeURIComponent(q.get('next')!)}` : ''}`);
@@ -111,15 +122,17 @@ export function AuthForm({ mode }: { mode: Mode }) {
         {mode === 'forgot' && q?.get('invite') && <p className="muted small">Your invitation stays valid while you do this. After you have chosen a new password, open the invitation email again and sign in from its button.</p>}
         {mode === 'login' && q?.get('closing') && <div className="notice" style={{ marginTop: 10 }}>Your account is closed and will be deleted in 30 days. Any subscription has been stopped. Changed your mind? Sign in and it comes straight back.</div>}
         {cameBack && <div className="notice err" style={{ marginTop: 10 }} role="alert">{cameBack}</div>}
+        {sso.errorText && !cameBack && <div className="notice err" style={{ marginTop: 10 }} role="alert">{sso.errorText}</div>}
         {out && <div className="notice" style={{ marginTop: 10 }} role="status">{out}</div>}
         {done ? <div className="notice" style={{ margin: '12px 0' }}>{done} <Link href="/login">Sign in</Link></div> : (
           <div style={{ marginTop: 14 }}>
             {mode === 'signup' && <label className="f"><span>Your name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>}
-            {mode !== 'reset' && <label className="f"><span>Email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoComplete="email" readOnly={mode === 'signup' && !!q?.get('invite')} /></label>}
-            {mode !== 'forgot' && <label className="f"><span>{mode === 'reset' ? 'New password' : 'Password'} {mode !== 'login' && <span className="hint">(at least 8 characters)</span>}</span><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={mode === 'login' ? 1 : 8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>}
-            {mode === 'signup' && !q?.get('invite') && <label className="f"><span>Plan code <span className="hint">(optional, only if we gave you one)</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
+            {mode !== 'reset' && <label className="f"><span>Email</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} onBlur={(e) => (mode === 'login' || mode === 'signup') && sso.look(e.target.value)} required autoComplete="email" readOnly={mode === 'signup' && !!q?.get('invite')} /></label>}
+            {(mode === 'login' || mode === 'signup') && sso.found && <SsoChoice sso={sso} mode={mode} q={q} />}
+            {mode !== 'forgot' && !sso.active && <label className="f"><span>{mode === 'reset' ? 'New password' : 'Password'} {mode !== 'login' && <span className="hint">(at least 8 characters)</span>}</span><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={mode === 'login' ? 1 : 8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>}
+            {mode === 'signup' && !q?.get('invite') && !sso.active && <label className="f"><span>Plan code <span className="hint">(optional, only if we gave you one)</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
             {error && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{error}</div>}
-            <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Save password'}</button>
+            {!sso.active && <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Save password'}</button>}
             {(mode === 'login' || mode === 'signup') && providers.length > 0 && signedInAs && !q?.get('invite') && (
               <div className="auth-alt" role="group" aria-label="You are signed in already">
                 <p className="auth-or" aria-hidden="true"><span>or</span></p>
@@ -128,7 +141,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
                 <button type="button" className="btn" onClick={signOut}>Sign out</button>
               </div>
             )}
-            {(mode === 'login' || mode === 'signup') && providers.length > 0 && (!signedInAs || !!q?.get('invite')) && (
+            {(mode === 'login' || mode === 'signup') && providers.length > 0 && (!signedInAs || !!q?.get('invite')) && sso.found?.password !== 'owner_only' && (
               <div className="auth-alt" role="group" aria-label={mode === 'login' ? 'Other ways to sign in' : 'Other ways to create your account'}>
                 <p className="auth-or" aria-hidden="true"><span>or</span></p>
                 {/* The providers' names in plain text. Real links, so they work by keyboard and without scripts. */}

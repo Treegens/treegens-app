@@ -14,10 +14,13 @@ function timeZone(): string {
   }
 }
 
+// The sender screen inside a customer's app has no cookie, only the token its link gave it (screenToken.ts).
+import { screenHeaders } from './screenToken';
+
 export async function api<T = any>(path: string, opts: { method?: string; body?: any; form?: FormData; headers?: Record<string, string> } = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method: opts.method || (opts.body || opts.form ? 'POST' : 'GET'),
-    headers: { ...(opts.body ? { 'content-type': 'application/json' } : {}), ...(path === '/me' && !opts.method ? { 'x-tz': timeZone() } : {}), ...(opts.headers || {}) },
+    headers: { ...(opts.body ? { 'content-type': 'application/json' } : {}), ...screenHeaders(), ...(path === '/me' && !opts.method ? { 'x-tz': timeZone() } : {}), ...(opts.headers || {}) },
     body: opts.form || (opts.body ? JSON.stringify(opts.body) : undefined),
     credentials: 'same-origin',
   });
@@ -27,6 +30,9 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   if (res.status === 401 && data.code === 'signed_out' && (data.why === 'idle' || data.why === 'elsewhere') && window.location.pathname.startsWith('/app')) window.location.assign(signedOutPath(data.why, `${window.location.pathname}${window.location.search}`));
   // Some refusals carry a code a screen can act on (a stale copy, a change that needs a signer to sign again), next
   // to the sentence for the person. Both travel with the error.
+  // A signing link whose document was paused while the page was open (src/server/timing.ts): the page reloads into
+  // its paused card instead of showing the refusal as an error.
+  if (res.status === 409 && data.code === 'paused' && path.startsWith('/sign/')) window.dispatchEvent(new Event('sg:paused'));
   if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong.'), { status: res.status, code: data.code as string | undefined, data });
   return data;
 }
@@ -103,10 +109,10 @@ export const Leaf = ({ size = 20, color = 'currentColor' }: { size?: number; col
   <Mark size={size} tone="mono" label="" style={{ color }} />
 );
 
-const STATUS: Record<string, string> = { draft: 'Draft', sent: 'Waiting for others', completed: 'Completed', declined: 'Declined', voided: 'Cancelled', expired: 'Expired', pending: 'Not yet sent', viewed: 'Viewed' };
+const STATUS: Record<string, string> = { draft: 'Draft', sent: 'Waiting for others', completed: 'Completed', declined: 'Declined', voided: 'Cancelled', expired: 'Expired', pending: 'Not yet sent', viewed: 'Viewed', skipped: 'Not asked' };
 export const Status = ({ s, label }: { s: string; label?: string }) => <span className={`badge ${s}`}>{label || STATUS[s] || s}</span>;
 
-export const ROLE_LABEL: Record<string, string> = { signer: 'Needs to sign', approver: 'Needs to approve', cc: 'Gets a copy', viewer: 'Must open it', inperson: 'Signs in person', witness: 'Is a witness' };
+export const ROLE_LABEL: Record<string, string> = { signer: 'Needs to sign', approver: 'Needs to approve', cc: 'Gets a copy', viewer: 'Must open it', inperson: 'Signs in person', witness: 'Is a witness', editor: 'Can change the document', agent: 'Chooses who comes next' };
 export const COLORS = ['#1f6f43', '#2f5f9e', '#b3392f', '#8a4fb0', '#b97712', '#0f7f86', '#a8457a', '#5b6b1e'];
 
 export function fmtDate(s?: string | null, time = false) {

@@ -20,6 +20,7 @@ import { SigningOnPhone } from './phone';
 import { NotMeAnswer } from './NotMe';
 import { PAY_FOR_SENDER, payNotYet } from '@/lib/paylink';
 import { PAID_TRUST_DAYS } from '@/lib/policy';
+import { isDeploymentBilling, GOV_HELP } from '@/lib/billingmode';
 import { GROUP_MIN_MEMBERS, GROUP_MAX_MEMBERS, GROUP_RULE } from '@/lib/policy';
 import { TWO_STEP_LOST, TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES } from '@/lib/policy';
 import { chatModelOn } from '@/lib/chatprovider';
@@ -50,6 +51,8 @@ export default function Help() {
   const smsDaily = smsDailyPerAccount();
   const P = PRICING;
   const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
+  // A server under a government agreement (BILLING_MODE=deployment): no questions about paying, one answer instead.
+  const gov = isDeploymentBilling();
 
   return (
     <div className="pub">
@@ -63,7 +66,7 @@ export default function Help() {
 
         <nav className="pub-jump" aria-label="On this page">
           <a href="#signing"><b>I need to sign something</b><span>Lost links, checking an email is real, deadlines, getting your copy.</span></a>
-          <a href="#sending"><b>I send documents</b><span>Cancelling, refunds, how signatures work, fixing a sent document.</span></a>
+          <a href="#sending"><b>I send documents</b><span>{gov ? 'Fixing a sent document, reminders, checking who signs.' : 'Cancelling, refunds, how signatures work, fixing a sent document.'}</span></a>
           {support.promised && <a href="#contact"><b>Write to a person</b><span>Works without logging in. You get a reference and the time by which a person will have answered.</span></a>}
         </nav>
 
@@ -154,6 +157,10 @@ export default function Help() {
             <p className="muted">The plan is month to month. There is no contract and no notice period, and nothing is charged unless you choose it.</p>
           </div>
 
+          {/* A server under a government agreement takes no payments: no plan to cancel, refund or count (src/lib/billingmode.ts). */}
+          {gov ? <QA id="paying" q="Does anyone pay here?">
+            <p>No. {GOV_HELP}</p>
+          </QA> : <>
           <QA id="cancel" q="How do I cancel?">
             <p>There are three ways. Use whichever you can reach.</p>
             <ol className="pub-list">
@@ -210,8 +217,9 @@ export default function Help() {
           <QA id="after-cancel" q="What happens to my documents when I cancel?">
             <p>Nothing. Cancelling or a failed payment deletes nothing and locks nothing.</p>
             <p>Every document, audit trail and receipt stays in the account. Documents that are already out can still be signed, and the signatures you have left can be used until their own dates (the Plan page shows each one).</p>
-            <p>You can take everything with you as one ZIP file at any time, on any plan: Settings, then Records and data, then <b>Export everything</b>. It is free and it keeps working after you cancel.</p>
+            <p>You can take everything with you at any time, on any plan: Settings, then Records and data, then <b>Export everything</b> gives owners and admins one ZIP file with every signed PDF and its full record for disputes, every document and the full history of each, templates, contacts, groups and settings, in an open, published format. It is free and it keeps working after you cancel. Only the signed PDFs and a spreadsheet? Anyone can press <b>Download signed PDFs (ZIP)</b> on Documents.</p>
           </QA>
+          </>}
 
           <QA id="close" q="How do I close my account?">
             <p>Closing is separate from cancelling. If you only want to stop paying, cancel the plan and keep your documents.</p>
@@ -323,13 +331,13 @@ export default function Help() {
           <QA id="cannot-send" q="Why can I not send?">
             <ul className="pub-list">
               <li><b>Your email address is not confirmed yet.</b> We sent a 6-digit code when you signed up. Type it in the box at the top of the app, which can also send a new one.</li>
-              <li><b>The account has reached its daily limit.</b> An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone you newly email counts, also people added or changed on a document that is already out and every row of a bulk send. A public form has the same limit of its own for the people who start it, counted for that form alone, and a team can invite {abuse.invitesPerDay} people a day. The limit looks at the last 24 hours, and the message says when there is room again. Paying does not lift it at once: it goes when a payment is {abuse.paidTrustDays} days old and was not refunded or disputed, and the message then gives the date. A person can lift it sooner: <a href="#contact" data-topic="sending">write to us</a>.</li>
-              <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account cannot send those, or invite under such a name, until it has a payment that is {abuse.paidTrustDays} days old and was not refunded or disputed. We read what the emails print: the subject, the message, notes to people, document names, what you wrote on the pages, the reason for cancelling, your name and the account name, and the name of a public form, which its page shows to anyone with the link. The message says which words set it off, so you can see whether it is a misreading. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a>{support.promised ? ' and a person will clear your account' : ''}.</li>
+              {!gov && <li><b>The account has reached its daily limit.</b> An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone you newly email counts, also people added or changed on a document that is already out and every row of a bulk send. A public form has the same limit of its own for the people who start it, counted for that form alone, and a team can invite {abuse.invitesPerDay} people a day. The limit looks at the last 24 hours, and the message says when there is room again. Paying does not lift it at once: it goes when a payment is {abuse.paidTrustDays} days old and was not refunded or disputed, and the message then gives the date. A person can lift it sooner: <a href="#contact" data-topic="sending">write to us</a>.</li>}
+              <li><b>The document reads like a payment notice from a well-known brand with a phone number to call, or the name you send under reads like such a brand.</b> That is how scams look, so an account cannot send those, or invite under such a name, {gov ? 'until a person who runs this server has cleared it' : `until it has a payment that is ${abuse.paidTrustDays} days old and was not refunded or disputed`}. We read what the emails print: the subject, the message, notes to people, document names, what you wrote on the pages, the reason for cancelling, your name and the account name, and the name of a public form, which its page shows to anyone with the link. The message says which words set it off, so you can see whether it is a misreading. If yours is genuine, <a href="#contact" data-topic="sending">write to us</a>{support.promised ? ' and a person will clear your account' : ''}.</li>
               <li><b>Sending is paused.</b> This happens when {abuse.reportsToPause} different people report documents from one account, or when our team pauses it. The message and the banner in the app give the reason. A person reviews every pause. Until then nothing you start is emailed to anyone: no new documents, no new or changed recipients, no reminders, no reopening, no team invitations and no email about a change you make, and people who are waiting further down a signing order are asked only once the pause is lifted. You can still open, download and export everything, give a document that is out more time, and cancel one (the people on it are told, without your reason). People who already have a document can still sign it. If it is a mistake, <a href="#contact" data-topic="sending">write to us</a>.</li>
               <li><b>An access code is too short.</b> A code you set needs at least {abuse.codeMin} characters.</li>
               <li><b>A required detail is empty.</b> Fill it in under Details on the last step of the editor. See <a href="#details">Details</a>.</li>
               {textsOn && <li><b>A mobile number is missing or not complete.</b> Someone you check by text message, or text the link to, needs a number with its country code, like +44 7700 900123. Or the account has used its {smsDaily} text message parts for the day: the message says when there is room again, and a code by email always works. See <a href="#checking-signers">checking who signs</a>.</li>}
-              <li><b>You are out of signatures.</b> See <a href="#signatures">how signatures work</a>.</li>
+              {!gov && <li><b>You are out of signatures.</b> See <a href="#signatures">how signatures work</a>.</li>}
             </ul>
           </QA>
 
@@ -341,15 +349,15 @@ export default function Help() {
             <p><b>Lost the phone with your authenticator app?</b> Type one of your recovery codes in place of the code. Each works once. Without them:</p>
             <ul>{TWO_STEP_LOST.map((l) => <li key={l}>{l}</li>)}</ul>
             <p>After {TWO_STEP_TRIES} wrong codes in a row, wait {TWO_STEP_PAUSE_MINUTES} minutes before the next one, and check that the time on your phone is set automatically: the codes depend on it.</p>
-            <p><b>No longer have that mailbox?</b> You can still <a href="#stop-by-card">stop the billing with your card</a>. Then <a href="#contact" data-topic="cannot-log-in">write to us</a>{support.promised ? ' and a person will help with the account' : ''}.</p>
+            <p><b>No longer have that mailbox?</b> {!gov && <>You can still <a href="#stop-by-card">stop the billing with your card</a>. Then </>}<a href="#contact" data-topic="cannot-log-in">{gov ? 'Write to us' : 'write to us'}</a>{support.promised ? ' and a person will help with the account' : ''}.</p>
             <p><b>On a team?</b> An owner or admin can remove someone who has left. What that person sent (documents, drafts, templates and batches of Send to many) passes to a member the admin chooses, and each document&apos;s audit trail says so. The owner can hand the whole account to someone else under Settings, then Team.</p>
             <p><b>Were you removed from a team?</b> Your login still works, and we email you when it happens. Sign in and you are in another team you belong to, or else in an empty workspace of your own, with your inbox of documents sent to you. A team can invite you again at any time: sign in from the invitation and you are on it.</p>
           </QA>
 
-          <QA id="unknown-charge" q="I see a charge I do not recognise">
+          {!gov && <QA id="unknown-charge" q="I see a charge I do not recognise">
             <p>Use <a href="#find-subscription">Find my subscription</a> with each email address you might have used. The email lists every paid plan tied to that address, with a link that stops it.</p>
             <p>If nothing turns up, <a href="#contact" data-topic="billing">write to us</a> with the date and the amount.{support.promised ? ' A person will trace it.' : ''}</p>
-          </QA>
+          </QA>}
         </section>
 
         {/* ---- A person ---- */}

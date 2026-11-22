@@ -8,6 +8,7 @@ import { CANNOT_PRINT_HEAD, CANNOT_PRINT_THEN, shownChars } from '@/lib/scripts'
 import { formatDateValue } from '@/lib/dates';
 import { NUMBER_HINT } from '@/lib/numbers';
 import { DISPUTE_DOES, disputeSenderSees } from '@/lib/evidence';
+import { PREVIEW_NOTHING } from '@/lib/preview';
 
 // Runs one request and keeps its error next to the form, where the person is looking.
 function useSend() {
@@ -20,7 +21,9 @@ function useSend() {
       await fn();
       return true;
     } catch (e: any) {
-      setError(`${e?.message || 'Something went wrong on our side.'}${whatNext ? ` ${whatNext}` : ''}`);
+      // A preview refuses everything, as it should: said alone, with no "try again" that could never work.
+      if (e?.code === 'preview') setError(PREVIEW_NOTHING);
+      else setError(`${e?.message || 'Something went wrong on our side.'}${whatNext ? ` ${whatNext}` : ''}`);
       return false;
     } finally {
       setBusy(false);
@@ -29,7 +32,8 @@ function useSend() {
   return { busy, error, setError, send };
 }
 
-const Problem = ({ children }: { children: ReactNode }) => (children ? <div className="notice err sg-problem" role="alert">{children}</div> : null);
+// The preview's answer is what was expected, not a failure: a calm note instead of a red error.
+const Problem = ({ children }: { children: ReactNode }) => (!children ? null : children === PREVIEW_NOTHING ? <div className="notice sg-problem" role="status">{children}</div> : <div className="notice err sg-problem" role="alert">{children}</div>);
 
 // Shown in place of a form once it has been sent. Takes focus so the confirmation is the next thing read out.
 function Confirmed({ children, onClose, label = 'Close' }: { children: ReactNode; onClose: () => void; label?: string }) {

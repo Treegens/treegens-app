@@ -31,7 +31,7 @@ export async function tellStackedForm(p: any, ownerId: string) {
     await sendMail({
       to: owner.email, subject: `Two fields on your form "${p.name}" cover each other`, heading: 'One field on your form is hard to reach',
       lines: [`Someone just started your form "${p.name}". ${st.join(' ')}`,
-        'They can still fill it in: the covered field can be reached in Text view on the signing page, and the page points them there when they get stuck. On a phone it is easy to miss. Open the template, move one of the two fields, and save it.'],
+        'They can still fill it in: the covered field can be reached in Easy reading on the signing page, and the page points them there when they get stuck. On a phone it is easy to miss. Open the template, move one of the two fields, and save it.'],
       cta: { label: 'Open your templates', url: `${baseUrl()}/app/templates` },
     });
 }

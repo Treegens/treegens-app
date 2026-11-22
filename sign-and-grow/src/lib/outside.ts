@@ -23,12 +23,14 @@ import { signInProviders } from './signin.ts';
 import { smsProvider } from './checks.ts';
 import { whatsappProvider } from './channels.ts';
 import { chatProvider, chatModelOn } from './chatprovider.ts';
+import { READ_OUTSIDE } from './aiassist.ts';
 import { pwnedUrl } from './signinrules.ts';
+import { ssoOffered } from './orgsso.ts';
 
 type Env = Record<string, string | undefined>;
 
 export type OutsideMode = 'all' | 'listed' | 'none';
-export type ServiceId = 'mail' | 'payments' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks' | 'ocr' | 'whatsapp';
+export type ServiceId = 'mail' | 'payments' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks' | 'ocr' | 'whatsapp' | 'orgsso';
 
 export type OutsideService = {
   id: ServiceId;
@@ -139,7 +141,7 @@ export function outsideServices(env: Env = process.env): OutsideService[] {
   out.push({ id: 'tsa', name: 'Time-stamp service', purpose: 'Adds a time stamp from that service to the digital seal of a signed PDF, and one over the last value of each record when everyone has finished. Without it the seal carries the server\'s own time only. It is sent fingerprints, never the document. With it, the server also asks the places named inside the seal\'s and the service\'s certificates (their OCSP services and revocation lists) whether those certificates are still good, sending a certificate\'s serial number: those addresses come from the certificates and are not listed here.', settings: ['TSA_URL', 'TSA_URLS'], on: tsa.length > 0, hosts: tsa });
   const chat = chatProvider(env);
   const chatOn = !!chat && chatModelOn(env);
-  out.push({ id: 'chat', name: 'AI model for the help chat', purpose: 'Writes the help chat\'s answers from what a person types into the chat. Never a document.', settings: [chat?.keyVar || 'SUPPORT_CHAT_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY'].filter((v, i, a) => a.indexOf(v) === i),
+  out.push({ id: 'chat', name: 'AI model for the help chat', purpose: `Writes the help chat's answers from what a person types into the chat. ${READ_OUTSIDE}`, settings: [chat?.keyVar || 'SUPPORT_CHAT_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY'].filter((v, i, a) => a.indexOf(v) === i),
     on: chatOn, hosts: chatOn && chat ? [hostOfUrl(chat.baseUrl)].filter(Boolean) : [] });
   const conv = converterHost(env);
   out.push({ id: 'converter', name: 'Document converter (Gotenberg)', purpose: 'Turns Word, Excel, PowerPoint and similar files into PDF. LibreOffice on this machine (CONVERTER=soffice) needs no network and is not listed.', settings: ['CONVERTER_URL'], on: !!conv, hosts: conv ? [conv] : [] });
@@ -155,6 +157,11 @@ export function outsideServices(env: Env = process.env): OutsideService[] {
   const mode = outsideMode(env).mode;
   out.push({ id: 'webhooks', name: 'Webhooks', purpose: 'Tells a system of an account\'s own about its envelopes. The address is chosen by the account\'s admins.', settings: ['WEBHOOK_ALLOW_HOSTS'],
     on: mode === 'all' || hooks.length > 0, hosts: mode === 'all' ? [] : hooks, hostWords: mode === 'all' ? 'any public https address an account admin enters' : undefined });
+  // Single sign-on for an organisation (src/server/orgsso.ts): only with FILE_ENCRYPTION_KEY. The host is the issuer an
+  // account admin enters, so it is not known here; with OUTSIDE_CALLS listed or none it must be in OUTBOUND_ALLOW.
+  const sso = ssoOffered(env);
+  out.push({ id: 'orgsso', name: 'Organisations\' own sign-in services (single sign-on)', purpose: 'When an admin of an account sets up single sign-on, this server reads that service\'s public settings and key list, and swaps the code of each sign-in for a token, sending the client secret the admin entered. It also asks the DNS for one TXT record of each email domain an account claims, when it is added and once a day. Nothing is sent until an admin sets it up.', settings: ['FILE_ENCRYPTION_KEY'],
+    on: sso, hosts: [], hostWords: sso ? (mode === 'all' ? 'the public https address of the sign-in service an account admin enters' : 'the sign-in service an account admin enters, only when its hosts are in OUTBOUND_ALLOW') : undefined });
   return out;
 }
 

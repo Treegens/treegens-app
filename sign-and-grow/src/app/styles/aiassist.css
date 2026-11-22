@@ -1,0 +1,9 @@
+/* AI help when sending (src/components/editor/SuggestFields.tsx): a suggested field drawn on the page before it is
+   added, so the sender can check where it goes. Dashed, never filled like a real field, with its own Add. */
+.ed-sugg { position: absolute; border: 2px dashed #8a5a00; border-radius: 4px; background: rgba(255, 200, 80, 0.12); pointer-events: auto; z-index: 2; box-sizing: border-box; }
+.ed-sugg.lit { border-color: #1f4fb8; background: rgba(80, 140, 255, 0.16); }
+/* The tag and Add sit under the box, never over the words above it that the sender needs to read. */
+.ed-sugg-under { position: absolute; left: -2px; top: calc(100% + 2px); display: flex; gap: 4px; align-items: center; white-space: nowrap; }
+.ed-sugg-tag { background: #8a5a00; color: #fff; font-size: 11px; line-height: 1.3; padding: 2px 6px; border-radius: 3px; }
+.ed-sugg.lit .ed-sugg-tag { background: #1f4fb8; }
+.ed-sugg-add { min-height: 44px; min-width: 44px; padding: 2px 12px; }

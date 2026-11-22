@@ -102,7 +102,8 @@ export function record(kind: SecurityKind, o: SecurityOpts = {}): number {
     const line = {
       at: now(), actor_type: who.type, actor_id: who.id || null, kind, outcome: o.failed ? 'failure' : 'success',
       about_type: o.about?.[1] ? o.about[0] : null, about_id: o.about?.[1] || null,
-      details: JSON.stringify(clean(o.details || {})), ip: ip && ip !== 'unknown' ? ip : null, ua,
+      // Done through a colleague's share, or in their name: whose it was ("for": the colleague), from shares.ts.
+      details: JSON.stringify(clean({ ...(o.details || {}), ...((o.c as any)?.actingFor ? { for: (o.c as any).actingFor } : {}) })), ip: ip && ip !== 'unknown' ? ip : null, ua,
     };
     const seqs: number[] = [];
     for (const accountId of ids) {

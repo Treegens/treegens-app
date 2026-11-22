@@ -34,7 +34,7 @@ export function safeNext(next: any, fallback = '/app'): string {
 }
 
 /** Every way a sign-in at a provider can end without signing anyone in. The pages get the code, never free text. */
-export const SIGNIN_ERRORS = ['cancelled', 'expired', 'failed', 'exists', 'no_email', 'invite', 'code', 'taken', 'session', 'signed_in', 'busy'] as const;
+export const SIGNIN_ERRORS = ['cancelled', 'expired', 'failed', 'exists', 'no_email', 'invite', 'code', 'taken', 'session', 'signed_in', 'busy', 'org_sso'] as const;
 export type SignInError = (typeof SIGNIN_ERRORS)[number];
 
 /** What happened and what to do next, in words. `provider` is only ever one of the names above. */
@@ -66,6 +66,9 @@ function errorWords(code: any, provider?: any): string {
       return `You are already signed in to GrowSigning in this browser, so no new login was made. To sign in with ${p} from now on, press Connect next to ${p} here. To make a separate login with it instead, sign out first and then use "Continue with ${p}" on the sign-in page.`;
     case 'busy':
       return 'Too many attempts. Please wait a bit and try again.';
+    case 'org_sso':
+      // The address is at a domain whose organisation signs everyone in through its own service (src/server/orgsso.ts).
+      return `Your organisation signs you in to GrowSigning through its own sign-in service, so ${p} is not used for this address. Type your work email on this page and press the button with your organisation's name.`;
     default:
       return `${p} did not confirm who you are, so you are not signed in. Nothing was changed. Try again in a minute. If it keeps happening, use your email and password, or get help below.`;
   }
@@ -86,6 +89,7 @@ export type SignInNote = {
   reclaimed?: 'password' | 'login'; // that login had never been confirmed, and what was cut off (see cutEarlierAccess)
   removed?: Removed; // and what had been set up in it, which went too (reclaim.ts)
   code_unused?: boolean; // a code was carried along but the person already had a login
+  sso_made?: string; // a new login was made by the organisation's own sign-in, with this name (orgsso.ts)
 };
 
 /**
@@ -97,6 +101,7 @@ export const SIGNIN_NOTE_COOKIE = 'sg_signin_note';
 export function signInNotice(r: SignInNote): string {
   const said: string[] = [];
   if (r.created) said.push(`Welcome. Your GrowSigning login was made with ${r.created}, so use "Continue with ${r.created}" to sign in from now on. It has no password. You can set one under Settings, Security.${r.confirm ? ' We emailed you a link to confirm your address. Open it in this browser while you are signed in, and you can send documents.' : ''}`);
+  if (r.sso_made) said.push(`Welcome. A new GrowSigning login was made for this address, because ${r.sso_made} confirmed it is yours. If you used GrowSigning before under another address, that login and its documents are still there: ask the people who run ${r.sso_made} to sign you in with that address instead, or write to us from Help.`);
   if (r.reclaimed) said.push(`${r.linked} confirmed that this address is yours. A GrowSigning login had been started with it earlier, but the address was never confirmed, so we could not know who started it. To be safe${r.reclaimed === 'password' ? ' the password that was set before no longer works and' : ''} every other browser was signed out. From now on you sign in with ${r.linked}${r.reclaimed === 'password' ? ', and you can choose a new password under Settings, Security' : ''}. ${removedText(r.removed) ? `${removedText(r.removed)} We emailed you the same list.` : 'Nothing else had been set up in it.'}`);
   else if (r.linked) said.push(`${r.linked} is now connected to your login, because it confirmed your address to us. You can sign in with ${r.linked} or with your password. We emailed you a note about it.`);
   if (r.invite_error) said.push(`You are signed in, but you did not join the team. ${r.invite_error}`);

@@ -414,10 +414,10 @@ test('two fields of the same person that cover each other are named; anything a 
   // The editor lists it with the other problems of the review step, which keeps Send switched off.
   const editor = read('src/components/Editor.tsx');
   assert.match(editor, /p\.push\(\.\.\.stackedFields\(fields\.value, rcps, docs\)\);\s+return \[\.\.\.new Set\(p\)\];/);
-  // Next coming back to the same empty field points to Text view, from the second time.
+  // Next coming back to the same empty field points to Easy reading, from the second time.
   const again = sameFieldAgain();
   assert.deepEqual([again('a'), again('a'), again('a'), again('b'), again('a')], [false, true, true, false, false]);
-  assert.match(CANNOT_REACH, /Choose More, then Text view/);
+  assert.match(CANNOT_REACH, /Choose More, then Easy reading/);
   // (simplify-signing: not for a field Next opens by itself, a signature or a stamp still to be made.)
   assert.match(signPage(), /nextAgain\(nextField\.id\) && view === 'doc' && !opensOnNext\(nextField\) && toast\(CANNOT_REACH\)/);
 });

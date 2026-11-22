@@ -1,5 +1,6 @@
 // The language part of /api/openapi.json (src/server/locales.ts), kept apart so the main description stays readable.
 // openapi.ts puts `localeProp` on a recipient and spreads `localePaths()` into its paths.
+import { OWN_DOCS_DEFAULT_PROP } from './openapi-visibility.ts';
 import { shippedLocales } from '../lib/i18n.ts';
 
 const s = { type: 'string' };
@@ -25,7 +26,7 @@ export function localePaths() {
       patch: {
         summary: 'Change the account settings: here, the language new recipients start in',
         description: `For admins. This describes "default_locale"; the other settings of this call are the ones under Settings, Account, and a setting left out stays as it is. "default_locale" is the language the editor and this API give each new recipient that names none. ${AVAILABLE()} null or "" lets each person's browser decide, then English. A language that is not available answers 400 and changes nothing. GET /me returns it under "account".`,
-        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { default_locale: { ...s, nullable: true } } } } } },
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { default_locale: { ...s, nullable: true }, own_docs_default: OWN_DOCS_DEFAULT_PROP } } } } },
         responses: { 200: { description: 'OK', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' } } } } } }, default: err },
       },
     },

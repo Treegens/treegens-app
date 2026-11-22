@@ -271,10 +271,12 @@ test('"Sign now" is offered only when the one person on the document is the send
   assert.equal(onlyMe(null as any, me), null);
   // The screens: the button's words, and where it goes.
   const editor = read('src/components/Editor.tsx');
-  assert.match(editor, /const signNow = !!env && !isTpl && !correcting && !!onlyMe\(rcps\.filter\(\(r\) => !isIdle\(r\)\), me\.user\.email\);/);
-  assert.match(editor, /body: \{ send_anyway: anyway === true, \.\.\.\(signNow \? \{ sign_now: true \} : \{\}\) \}/);
+  // The sender screen inside an app never offers it (embedded, app/embed/send).
+  assert.match(editor, /const signNow = (?:!embedded && )?!!env && !isTpl && !correcting && !!onlyMe\(rcps\.filter\(\(r\) => !isIdle\(r\)\), me\.user\.email\);/);
+  // Send later adds "send_at" after these, and never with Sign now (src/components/editor/SendLater.tsx).
+  assert.match(editor, /body: \{ send_anyway: anyway === true, \.\.\.\(signNow \? \{ sign_now: true \} : \{\}\)(, \.\.\.\(later \? \{ send_at: later \} : \{\}\))? \}/);
   assert.match(editor, /if \(signNow && r\?\.sign_url\) \{\s*leaving\.current = true;\s*window\.location\.assign\(r\.sign_url\);/);
-  assert.match(read('src/components/editor/StepReview.tsx'), /ed\.signNow \? 'Sign now' : 'Send'/);
+  assert.match(read('src/components/editor/StepReview.tsx'), /ed\.signNow \? 'Sign now' : (sendLaterLabel\(ed\) \|\| )?'Send'/);
   // Home still starts it with the sender on the document (the path flow h measures).
   assert.match(read('src/app/app/envelopes/new/page.tsx'), /q\.get\('self'\)/);
 });
@@ -418,7 +420,8 @@ test('nobody is ever called "Unnamed", and only a template says an address is fi
   assert.match(noAddressWords({ link_by_sender: true }, false), /^No email from us\. You send them the link yourself/);
   const review = read('src/components/editor/StepReview.tsx'), fieldsStep = read('src/components/editor/StepFields.tsx'), add = read('src/components/editor/StepAdd.tsx');
   assert.match(review, /<b className="ed-break">\{personLabel\(r, ed\.rcps\.indexOf\(r\)\)\}<\/b>/);
-  assert.match(review, /r\.email \|\| noAddressWords\(r, isTpl\)\}/);
+  // The third argument: who names a place left open for the person who chooses who comes next (recipienttypes.ts).
+  assert.match(review, /r\.email \|\| noAddressWords\(r, isTpl(, [^)]*\)[^}]*)?\)\}/);
   for (const f of [review, fieldsStep, add]) assert.doesNotMatch(f, /'Unnamed'|Filled in when the template is used/);
   // Step 2 offers nobody an empty row: a row nobody typed into is not a person to place fields for.
   assert.match(fieldsStep, /const l = rcps\.filter\(\(r\) => SIGNS\(r\) && r\.role !== 'witness' && !ed\.isIdle\(r\)\);/);

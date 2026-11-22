@@ -6,7 +6,7 @@ const err = { description: 'Error', content: { 'application/json': { schema: { $
 const str = { type: 'string' };
 
 /** What `ocr` on a File or Document means. Absent when this server does not read text from pictures. */
-export const OCR_PROP = { type: 'string', enum: ['queued', 'running', 'done', 'failed'], description: 'Only on a file with pages that have no text, on a server that reads text from pictures (OCR_CMD or OCRMYPDF_URL): where reading the text of those pages stands. When done, the words can be found by search (GET /envelopes?q=) and are shown to signers in the text view. The file itself is never changed. failed: tried 3 times; the pages stay without text.' };
+export const OCR_PROP = { type: 'string', enum: ['queued', 'running', 'done', 'failed'], description: 'Only on a file with pages that have no text, on a server that reads text from pictures (OCR_CMD or OCRMYPDF_URL): where reading the text of those pages stands. When done, the words can be found by search (GET /envelopes?q=) and are shown to signers in Easy reading. The file itself is never changed. failed: tried 3 times; the pages stay without text.' };
 
 export function ocrPaths() {
   return {

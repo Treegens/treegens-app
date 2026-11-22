@@ -12,6 +12,7 @@
 import { signInProviders } from './signin.ts';
 import { smsProvider } from './checks.ts';
 import { chatProvider, chatModelOn, CHAT_SENT, CHAT_WHO } from './chatprovider.ts';
+import { readPossible, READ_SENT, READ_WHO } from './aiassist.ts';
 
 type Env = Record<string, string | undefined>;
 const val = (v: string | undefined): string | null => (v || '').replace(/\s+/g, ' ').trim().slice(0, 200) || null;
@@ -132,8 +133,9 @@ export function dataPlace(env: Env = process.env): DataPlace {
     processors.push({
       id: 'chat', name: chat.name, country: chat.country,
       purpose: `Writes the answers of the help chat (the AI model ${chat.model}, reached at ${chat.host}). What it keeps of a question, and for how long, is set by its own terms.`,
-      data: CHAT_SENT,
-      who: CHAT_WHO,
+      // AI help when sending and signing uses the same model (src/server/aiassist.ts): said here where it can happen.
+      data: readPossible(env) ? `${CHAT_SENT} For AI help when sending and signing: ${READ_SENT}` : CHAT_SENT,
+      who: readPossible(env) ? READ_WHO : CHAT_WHO,
       missing: need(chat.country, 'in which country its help chat provider handles what people type'),
     });
   }

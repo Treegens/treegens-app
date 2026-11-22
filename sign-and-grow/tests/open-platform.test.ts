@@ -47,7 +47,7 @@ test('chat: Help on the signing page is one button in the top bar, with no secon
   assert.match(read('src/app/styles/simplesign.css'), /\.sg-bar \.btn\.sm\.sg-other \{ min-height: 44px; \}/);
   const page = read('src/app/sign/[token]/page.tsx');
   assert.match(page, /const headHelp = me\.role === 'witness' \? undefined : go\('help'\);/);
-  assert.equal(page.match(/onHelp=\{headHelp\}/g)?.length, 2, 'the consent screen and the document');
+  assert.equal(page.match(/onHelp=\{headHelp\}/g)?.length, 3, 'the consent screen, the document, and the screen of someone who changes it or chooses who comes next');
   // Other actions has no Help button of its own any more, and its list never had one for a signer.
   const dialogs = read('src/components/sign/dialogs.tsx');
   const menu = dialogs.slice(dialogs.indexOf('export function MenuDialog'), dialogs.indexOf('export function', dialogs.indexOf('export function MenuDialog') + 10));

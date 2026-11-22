@@ -24,10 +24,11 @@ export type PagePerson = {
   noMail?: boolean;
 };
 
-export type MainKind = 'restore' | 'continue' | 'sign' | 'host' | 'remind' | 'download' | 'reopen' | 'copy_fix' | 'copy' | 'copy_link';
+export type MainKind = 'restore' | 'send_now' | 'resume' | 'continue' | 'sign' | 'host' | 'remind' | 'download' | 'reopen' | 'copy_fix' | 'copy' | 'copy_link';
 export type MainButton = { kind: MainKind; label: string; personId?: string };
 
-const VERB: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view', witness: 'witness' };
+// agent, editor: people who change the envelope on their turn and do not sign (src/lib/recipienttypes.ts).
+const VERB: Record<string, string> = { signer: 'sign', inperson: 'sign', approver: 'approve', viewer: 'view', cc: 'view', witness: 'witness', agent: 'choose who comes next', editor: 'check the document' };
 const NOW: Record<string, string> = { signer: 'Sign now', approver: 'Review now', viewer: 'View now', witness: 'Sign now' };
 
 export const joinNames = (l: string[]) => (l.length < 2 ? l.join('') : `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`);
@@ -43,10 +44,14 @@ export function remindLabel(names: string[]): string {
  * The one main button of the page, by state. Null when there is nothing most people would do next (a template has
  * its own card, and a document that waits only for people who cannot be reminded offers their link instead).
  */
-export function mainButton(o: { status: string; isTemplate?: boolean; removed?: boolean; purged?: boolean; people: PagePerson[] }): MainButton | null {
+export function mainButton(o: { status: string; isTemplate?: boolean; removed?: boolean; purged?: boolean; people: PagePerson[]; scheduled?: boolean; paused?: boolean }): MainButton | null {
   if (o.removed) return { kind: 'restore', label: 'Put it back' };
   if (o.isTemplate) return null;
+  // Send later (src/lib/timing.ts): a draft with a time, or one that did not go out at its time, is sent from here.
+  if (o.status === 'draft' && o.scheduled) return { kind: 'send_now', label: 'Send now' };
   if (o.status === 'draft') return { kind: 'continue', label: 'Continue' };
+  // Paused by its sender: nobody can sign or be reminded, so the one thing to do next is Resume.
+  if (o.status === 'sent' && o.paused) return { kind: 'resume', label: 'Resume' };
   if (o.status === 'sent') {
     const mine = o.people.find((p) => p.turn && p.me && p.role !== 'inperson');
     if (mine) return { kind: 'sign', label: NOW[mine.role] || 'Sign now', personId: mine.id };
@@ -77,15 +82,19 @@ export function personRemind(people: PagePerson[], main: MainButton | null, p: P
 }
 
 /** "Waiting for Ana Silva to sign." One sentence, whoever is waited for. */
-export function waitingSentence(people: PagePerson[]): string {
+export function waitingSentence(people: PagePerson[], o: { paused?: boolean; wait?: { name: string; when: string } | null } = {}): string {
+  // Paused by its sender (src/lib/timing.ts): nobody can sign, so nobody is being waited for.
+  if (o.paused) return 'Paused. Nobody can sign it until you resume it.';
   const turn = people.filter((p) => p.turn);
+  // A wait the sender chose before the next person is what holds it up: said, with when it ends.
+  if (!turn.length && o.wait) return `${o.wait.name} is asked ${o.wait.when}, after the wait you chose.`;
   if (!turn.length) return 'Sent. Nobody is holding it up right now.';
   const names = [...(turn.some((p) => p.me && p.role !== 'inperson') ? ['you'] : []), ...turn.filter((p) => !(p.me && p.role !== 'inperson')).map((p) => p.name)];
   const verbs = [...new Set(turn.map((p) => VERB[p.role] || 'sign'))];
   return `Waiting for ${joinNames(names)}${verbs.length === 1 ? ` to ${verbs[0]}` : ''}.`;
 }
 
-export type MoreKey = 'open_pdf' | 'full_record' | 'edit' | 'more_time' | 'copy' | 'save_template' | 'cancel' | 'keep' | 'hold' | 'lift_hold' | 'remove_files' | 'delete';
+export type MoreKey = 'open_pdf' | 'full_record' | 'edit' | 'more_time' | 'pause' | 'change_time' | 'keep_draft' | 'copy' | 'save_template' | 'cancel' | 'keep' | 'hold' | 'lift_hold' | 'remove_files' | 'delete';
 export type MoreLine = { key: MoreKey; label: string; danger?: boolean };
 
 /**
@@ -98,6 +107,10 @@ export function pageMore(o: {
   main?: MainKind | null; schedule?: boolean; mayKeep?: boolean; mayHold?: boolean; held?: boolean; heldHere?: boolean;
   /** May start removing the files for good (the server's may_purge, nothing asked yet, no dispute open). */
   mayPurge?: boolean;
+  /** A draft with a time to go out (Send later): Edit, Change the time and Keep it as a draft are listed. */
+  scheduled?: boolean;
+  /** An envelope that is out and not paused may be paused. While paused, Resume is the main button instead. */
+  pausable?: boolean;
 }): MoreLine[] {
   const out: MoreLine[] = [];
   const sent = o.status === 'sent';
@@ -106,8 +119,11 @@ export function pageMore(o: {
   // One its sender removed has "Put it back" as its main button instead, so the file is offered here.
   if (o.hasFiles && !(o.status === 'completed' && !o.purged && !o.removed)) add('open_pdf', 'Open the PDF');
   if (!o.isTemplate && o.status !== 'draft' && !o.purged) add('full_record', 'Full record for disputes');
-  if (!o.removed && o.mayChange && sent) add('edit', 'Edit');
+  const later = !o.removed && !o.isTemplate && o.status === 'draft' && !!o.scheduled;
+  if (!o.removed && o.mayChange && (sent || later)) add('edit', 'Edit');
+  if (later) (add('change_time', 'Change the time'), add('keep_draft', 'Do not send at that time'));
   if (!o.removed && sent) add('more_time', 'Give more time');
+  if (!o.removed && sent && o.pausable) add('pause', 'Pause');
   if (!o.removed && !o.purged && o.main !== 'copy' && o.main !== 'copy_fix') add('copy', o.isTemplate ? 'Use' : 'Copy');
   if (!o.removed && !o.purged && !o.isTemplate) add('save_template', 'Save as template');
   if (!o.removed && sent) add('cancel', 'Cancel the request', true);
