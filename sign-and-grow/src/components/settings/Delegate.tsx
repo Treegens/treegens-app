@@ -10,12 +10,10 @@ import { useState } from 'react';
 import { api, useLoad, oops } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { Card, useSaved } from '@/components/settings/Frame';
-import { datesProblem, datesShort } from '@/lib/delegation';
-import { useST, senderRich } from '@/components/senderLang';
+import { SWITCH_TITLE, SWITCH_HINT, CARD_TITLE, CARD_HINT, datesProblem, datesShort } from '@/lib/delegation';
 
 export function DelegationSwitch() {
   const me = useMe();
-  const T = useST();
   const [d, reload] = useLoad<any>(() => api('/account/delegation').catch(() => null), []);
   const [said, saved] = useSaved();
   const [busy, setBusy] = useState(false);
@@ -37,8 +35,8 @@ export function DelegationSwitch() {
       <label className="setting-row" style={{ margin: 0, minHeight: 44 }}>
         <input type="checkbox" role="switch" checked={!!d.on} disabled={busy} aria-labelledby="dlg-switch-title" aria-describedby="dlg-switch-hint" onChange={(e) => void flip(e.target.checked)} />
         <span>
-          <b id="dlg-switch-title">{T('delegation.switch_title')}</b> {said}
-          <span className="muted small" id="dlg-switch-hint" style={{ display: 'block' }}>{T('delegation.switch_hint')}</span>
+          <b id="dlg-switch-title">{SWITCH_TITLE}</b> {said}
+          <span className="muted small" id="dlg-switch-hint" style={{ display: 'block' }}>{SWITCH_HINT}</span>
         </span>
       </label>
     </div></Card>
@@ -47,7 +45,6 @@ export function DelegationSwitch() {
 
 export function Delegate() {
   const me = useMe();
-  const T = useST();
   const [d, reload] = useLoad<any>(() => api('/me/delegate'), []);
   const [f, setF] = useState({ name: '', email: '', starts_on: '', ends_on: '' });
   const [problem, setProblem] = useState('');
@@ -57,7 +54,7 @@ export function Delegate() {
   const has = d.delegate;
   const save = async () => {
     const p = datesProblem(f.starts_on, f.ends_on, d.today);
-    if (!f.name.trim() || !f.email.trim()) return setProblem(T('settings.delegate.need_name'));
+    if (!f.name.trim() || !f.email.trim()) return setProblem('Type the name and the email address of the person who signs for you.');
     if (p) return setProblem(p);
     setProblem('');
     setBusy(true);
@@ -67,7 +64,7 @@ export function Delegate() {
       setF({ name: '', email: '', starts_on: '', ends_on: '' });
       reload();
     } catch (e: any) {
-      setProblem(e?.code || e?.message ? T.error(e) : T('settings.not_saved'));
+      setProblem(e?.message || 'That was not saved. Try again in a moment.');
     }
     setBusy(false);
   };
@@ -84,31 +81,31 @@ export function Delegate() {
   };
   return (
     <Card><div className="card" data-feature="ds-delegate">
-      <h2 style={{ marginBottom: 4 }}>{T('delegation.card_title')}</h2>
-      <p className="muted small">{T('delegation.card_hint', { account: me.account?.name || T('delegation.this_account') })}</p>
-      {!d.allowed ? <p className="notice">{T('settings.delegate.off')}</p>
-        : !d.confirmed ? <p className="notice">{T('settings.delegate.confirm_first')}</p>
+      <h2 style={{ marginBottom: 4 }}>{CARD_TITLE}</h2>
+      <p className="muted small">{CARD_HINT(me.account?.name || 'this account')}</p>
+      {!d.allowed ? <p className="notice">The admins of this account turned this off. Anything you set before has stopped.</p>
+        : !d.confirmed ? <p className="notice">Confirm your email address first: type the 6-digit code from our email in the box at the top.</p>
         : has ? (
           <div className="stack">
-            <p role="status">{senderRich(T.lang, d.active ? (has.starts_on === d.today ? 'settings.delegate.signs_today' : 'settings.delegate.signs_started') : 'settings.delegate.signs', { name: <b>{has.name}</b> }, { email: has.email, when: datesShort(has.starts_on, has.ends_on) })}</p>
+            <p role="status"><b>{has.name}</b> ({has.email}) signs for you {datesShort(has.starts_on, has.ends_on)}{d.active ? (has.starts_on === d.today ? ', starting today' : ', and that has started') : ''}.</p>
             <div className="row wrap">
-              <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={() => void stop()}>{T(d.active ? 'settings.delegate.back' : 'settings.delegate.stop')}</button>
+              <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={() => void stop()}>{d.active ? 'I am back: stop it now' : 'Stop it'}</button>
               {said}
             </div>
-            <p className="muted small">{T('settings.delegate.after', { name: has.name })}</p>
+            <p className="muted small">Documents {has.name} has already taken on stay with them. Any they have not taken on yet come back to you only.</p>
           </div>
         ) : (
           <form className="stack" onSubmit={(e) => { e.preventDefault(); void save(); }} noValidate>
             <div className="grid g2">
-              <label className="f"><span>{T('settings.delegate.their_name')}</span><input value={f.name} autoComplete="off" onChange={(e) => setF({ ...f, name: e.target.value })} style={{ minHeight: 44 }} /></label>
-              <label className="f"><span>{T('settings.delegate.their_email')}</span><input type="email" value={f.email} autoComplete="off" onChange={(e) => setF({ ...f, email: e.target.value })} style={{ minHeight: 44 }} /></label>
-              <label className="f"><span>{T('settings.delegate.first_day')}</span><input type="date" value={f.starts_on} min={d.today} onChange={(e) => setF({ ...f, starts_on: e.target.value })} style={{ minHeight: 44 }} /></label>
-              <label className="f"><span>{T('settings.delegate.last_day')}</span><input type="date" value={f.ends_on} min={f.starts_on || d.today} aria-describedby="dlg-both-days" onChange={(e) => setF({ ...f, ends_on: e.target.value })} style={{ minHeight: 44 }} />
-                <span className="muted small" id="dlg-both-days">{T('settings.delegate.both_days')}</span></label>
+              <label className="f"><span>Their name</span><input value={f.name} autoComplete="off" onChange={(e) => setF({ ...f, name: e.target.value })} style={{ minHeight: 44 }} /></label>
+              <label className="f"><span>Their email address</span><input type="email" value={f.email} autoComplete="off" onChange={(e) => setF({ ...f, email: e.target.value })} style={{ minHeight: 44 }} /></label>
+              <label className="f"><span>First day</span><input type="date" value={f.starts_on} min={d.today} onChange={(e) => setF({ ...f, starts_on: e.target.value })} style={{ minHeight: 44 }} /></label>
+              <label className="f"><span>Last day</span><input type="date" value={f.ends_on} min={f.starts_on || d.today} aria-describedby="dlg-both-days" onChange={(e) => setF({ ...f, ends_on: e.target.value })} style={{ minHeight: 44 }} />
+                <span className="muted small" id="dlg-both-days">Both days are included.</span></label>
             </div>
             {problem && <div className="notice err" role="alert">{problem}</div>}
-            <div className="row wrap"><button className="btn primary" style={{ minHeight: 44 }} disabled={busy}>{T('settings.save')}</button>{said}</div>
-            <p className="muted small">{T('settings.delegate.we_email')}</p>
+            <div className="row wrap"><button className="btn primary" style={{ minHeight: 44 }} disabled={busy}>Save</button>{said}</div>
+            <p className="muted small">We email them now to say you named them.</p>
           </form>
         )}
     </div></Card>

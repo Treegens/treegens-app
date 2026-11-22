@@ -881,7 +881,7 @@ test('the screens offer the choice, hand the sender the link, and never promise 
 
   // Signing page: what comes by email is nothing, and the link is the way back.
   const page = src('app/sign/[token]/page.tsx');
-  assert.match(page, /\{me\.link_by_sender \? <NoEmailDone sender=\{sender\.name\} allDone=\{allDone\} \/> : <p>/);
+  assert.match(page, /\{me\.link_by_sender \? <NoEmailDone sender=\{sender\.name\} allDone=\{allDone\} \/> : <p[^>]*>/);
   assert.match(page, /[{:] ?me\.link_by_sender \? <NoEmailWait sender=\{sender\.name\} \/> : <p>Others need to finish first\./);
   // A question is a comment now (src/components/sign/Comments.tsx): where an answer is emailed comes from the server
   // (answers_to, null for someone without an address), and with none the page promises no email.

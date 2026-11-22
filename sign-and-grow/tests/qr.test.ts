@@ -752,7 +752,7 @@ test('each place a link is handed over in person offers a code, with its warning
 
   // The PowerForms page: a sheet for each form.
   const forms = read('src/app/app/powerforms/page.tsx');
-  assert.match(forms, /<Link className="btn sm qr-tap" href=\{`\/app\/powerforms\/\$\{p\.id\}\/qr`\} aria-label=\{`QR code for \$\{p\.name\}, on a sheet to print`\}>QR code<\/Link>/);
+  assert.match(forms, /<Link className="btn sm qr-tap"(?: style=\{\{ minHeight: 44 \}\})? href=\{`\/app\/powerforms\/\$\{p\.id\}\/qr`\} aria-label=\{`QR code for \$\{p\.name\}, on a sheet to print`\}>QR code<\/Link>/);
   assert.match(forms, /writeText\(p\.url \|\| link\(p\.slug\)\)/, 'the copied link is the public address too');
   const sheet = read('src/app/app/powerforms/[id]/qr/page.tsx');
   assert.match(sheet, /<section className="qr-sheet"[^>]*>\s*<p className="qr-sheet-from">\{me\.account\.name\}<\/p>\s*<h2 className="serif qr-sheet-name">\{p\.name\}<\/h2>\s*<QrCode [^\n]*\/>\s*<p className="qr-sheet-scan">\{FORM_SCAN_LINE\}<\/p>\s*<p className="qr-sheet-small">\{FORM_LINK_LINE\}<\/p>\s*<p className="qr-sheet-link">\{made\.link\}<\/p>\s*<\/section>/,

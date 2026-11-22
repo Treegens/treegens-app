@@ -4,16 +4,14 @@
 // line comes with /me (`agreement`), so there is no second request and no wait before the plan.
 import type { ReactNode } from 'react';
 import { useMe } from '@/components/AppShell';
-import { useST } from '@/components/senderLang';
 
 export function AgreementPlan({ plan }: { plan: ReactNode }) {
   const me = useMe();
-  const T = useST();
   if (!me?.agreement) return <>{plan}</>;
   // Headed like the tab it sits under, so the place has one name.
   return (
     <div className="card" id="agreement">
-      <h2>{T('settings.plan.title')}</h2>
+      <h2>Plan</h2>
       <p style={{ margin: 0 }}>{me.agreement}</p>
     </div>
   );

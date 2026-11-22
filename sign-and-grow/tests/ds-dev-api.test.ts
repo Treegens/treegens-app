@@ -557,7 +557,8 @@ test('Settings reads a typed website kindly, and a website on this computer only
 
   // The card: focus stays on the list after Remove, what happened is said aloud, a second add says nothing changed.
   const fs = await import('node:fs');
-  const card = fs.readFileSync(new URL('../src/components/settings/EmbedSites.tsx', import.meta.url), 'utf8');
+  // The card's words live in the sender's language file since ds-lang-sender, so both are read.
+  const card = fs.readFileSync(new URL('../src/components/settings/EmbedSites.tsx', import.meta.url), 'utf8') + fs.readFileSync(new URL('../src/locales/en.json', import.meta.url), 'utf8');
   assert.match(card, /role="status" aria-live="polite"/);
   assert.match(card, /is already listed\. Nothing changed\./);
   assert.match(card, /\(next \|\| box\.current\)\?\.focus\(\)/);

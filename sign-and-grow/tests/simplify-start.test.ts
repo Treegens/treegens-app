@@ -619,7 +619,9 @@ test('repair: the pages inside More and Documents use the names the menu uses', 
   assert.ok(!/>[^<{]*click-to-agree/i.test(read('src/app/app/agreements/page.tsx')));
   const docs = read('src/app/app/envelopes/page.tsx');
   assert.match(docs, /\['waiting', 'Waiting'\], \['completed', 'Completed'\], \['closed', 'Stopped'\]/);
-  assert.match(docs, /document\$\{rows\.length === 1 \? '' : 's'\}/);
+  // The count line moved to src/lib/simplicity.ts countLine (open-r6), still 'document' or 'documents'.
+  assert.match(docs, /countLine\(rows\.length/);
+  assert.match(read('src/lib/simplicity.ts'), /document\$\{rows === 1 \? '' : 's'\}/);
   assert.match(docs, /<span className="sn-where-phone"> \(Send, in the bar at the bottom\)<\/span>/);
   assert.match(read('src/app/verify-email/page.tsx'), /now show up under To sign\./);
   assert.doesNotMatch(read('src/app/app/settings/TwoStep.tsx'), /open the link we sent/);

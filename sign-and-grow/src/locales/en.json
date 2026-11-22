@@ -1322,7 +1322,7 @@
   "settings.import.title": "Bring in documents",
   "settings.import.where": "Where do they come from?",
   "settings.import.from_export": "A GrowSigning export (the ZIP file from Export everything)",
-  "settings.import.from_docusign": "DocuSign (the “combined documents with certificate” PDFs, the envelope report CSV and template files, or a ZIP of them)",
+  "settings.import.from_docusign": "DocuSign (the “combined documents with certificate” PDFs, the report of sent documents as a CSV file, and template files, or a ZIP of them)",
   "settings.import.export_note": "Templates, drafts, contacts, groups and a few plain settings come in ready to use. Finished documents come in as archived records, each marked with where the export says it came from and whether its history and files agree. Documents still out for signature stay where they were sent: they finish there.",
   "settings.import.docusign_note": "Finished documents come in as archived records, kept exactly as you downloaded them. A PDF that shows nothing of DocuSign (no envelope ID and no certificate) is left out. Nothing here checks how they were signed, and every record says so. Templates come in with the fields we have; what we have no match for is listed.",
   "settings.import.zip_label": "The export ZIP file",

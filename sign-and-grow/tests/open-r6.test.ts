@@ -384,7 +384,7 @@ test('12. a localhost website listed before the rule never shows, counts or fram
   // The listed https website still works. The hidden row is shown apart, as doing nothing here, so it can be removed.
   ok(await c.post(`/envelopes/${e.id}/recipient-view`, { recipient_id: e.recipients[0].id, frame_origin: 'https://shop.example.com' }), 'https');
   assert.deepEqual(ok(await c.get('/account/embed-origins')).not_used, ['http://localhost:3000']);
-  const src = read('src/components/settings/EmbedSites.tsx');
+  const src = read('src/components/settings/EmbedSites.tsx') + read('src/locales/en.json'); // words moved to the language file
   assert.match(src, /setUnused\(r\.not_used \|\| \[\]\)/);
   assert.match(src, /does nothing on this server, because it is on your own computer\./);
   const after = ok(await c.call('DELETE', `/account/embed-origins?origin=${encodeURIComponent('http://localhost:3000')}`));
