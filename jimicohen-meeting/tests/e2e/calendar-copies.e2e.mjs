@@ -246,6 +246,9 @@ export default defineSuite('calendar-copies', { mockCreds: true }, async (t) => 
       const notice = page.getByRole('note').filter({ hasText: 'Your Google Calendar needs to be reconnected' });
       await notice.getByText('Google ended it on Monday, November 23, 2026, as it said it would when you connected.', { exact: false }).waitFor();
       await notice.getByText('Reconnecting without publishing only lasts another 7 days.', { exact: false }).waitFor();
+      // The Google card itself says the same where its Reconnect button is.
+      const cardNotice = page.getByRole('region', { name: 'Google Calendar', exact: true }).getByRole('note').filter({ hasText: 'Google asked us to sign in again' });
+      await cardNotice.getByText('Google ended it on Monday, November 23, 2026, as it said it would when you connected.', { exact: false }).waitFor();
       const { warnings } = await s.apiOk('GET', '/admin/overview');
       s.expect(warnings.find((w) => w.key === 'google_reconnect_host_owner')?.message, 'Home').toContain('That usually means your Google Cloud app is still in Testing');
       await s.screenshot(page, '1280 integrations after Testing ended');
