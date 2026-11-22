@@ -153,18 +153,17 @@ const plural = (n: number, one: string, many: string, digits = 0) => `${n.toLoca
 
 /**
  * "Signed without paper", in words that are true for one sheet too: "About 1 sheet of paper and 10 litres of water
- * were not used." A figure that rounds to nothing is left out (never "0 kg of CO2e"), and the share of a tree is
+ * were not used." A figure that rounds to nothing is left out (never "0 litres of water"), and the share of a tree is
  * said only from a hundredth of a tree up.
  */
-export function savedLine(impact: { sheets: number; litresWater?: number; kgCo2?: number; trees?: number }): { sheets: string; rest: string; verb: string; trees: boolean } {
+export function savedLine(impact: { sheets: number; litresWater?: number; trees?: number }): { sheets: string; rest: string; verb: string; trees: boolean } {
   const water = Math.round(Number(impact.litresWater) || 0);
-  const co2 = Math.round((Number(impact.kgCo2) || 0) * 100) / 100;
-  const more = [water > 0 ? plural(water, 'litre of water', 'litres of water') : '', co2 > 0 ? `${co2.toLocaleString('en', { maximumFractionDigits: 2 })} kg of CO2e` : ''].filter(Boolean);
+  const more = water > 0 ? plural(water, 'litre of water', 'litres of water') : '';
   const sheets = Math.round(Number(impact.sheets) || 0);
   return {
     sheets: plural(sheets, 'sheet of paper', 'sheets of paper'),
-    rest: more.length === 2 ? `, ${more[0]} and ${more[1]}` : more.length ? ` and ${more[0]}` : '',
-    verb: sheets === 1 && !more.length ? 'was' : 'were',
+    rest: more ? ` and ${more}` : '',
+    verb: sheets === 1 && !more ? 'was' : 'were',
     trees: (Number(impact.trees) || 0) >= 0.01,
   };
 }

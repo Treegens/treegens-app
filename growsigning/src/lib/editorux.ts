@@ -100,18 +100,17 @@ export const STEP3_MORE_CAP = 7;
 
 /**
  * The saving of this one document, in the owner's words: the pages of the document times the people who would each
- * have had a paper copy. No fraction of a tree. Water and CO2e stand behind "How we work this out", as estimates.
+ * have had a paper copy. No fraction of a tree. Water stands behind "How we work this out", as an estimate.
  */
 export function savingLine(pages: number, people: number): { sheets: number; line: string; how: string } {
   const sheets = sheetsSaved(pages, people);
   const n = sheets.toLocaleString('en');
   const copies = Math.max(1, Math.round(people));
   const water = (sheets * IMPACT.litresWaterPerSheet).toLocaleString('en', { maximumFractionDigits: 0 });
-  const co2 = ((sheets * IMPACT.gramsCo2PerSheet) / 1000).toLocaleString('en', { maximumFractionDigits: 2 });
   return {
     sheets,
     line: `This saves ${n} ${sheets === 1 ? 'page' : 'pages'} of paper from a tree.`,
-    how: `An estimate: ${Math.max(0, Math.round(pages)).toLocaleString('en')} ${Math.round(pages) === 1 ? 'page' : 'pages'} for ${copies === 1 ? '1 person' : `each of ${copies} people`}, one paper copy each. Making that paper would take about ${water} litres of water and ${co2} kg of CO2e. Printing, couriers and filing are not counted.`,
+    how: `An estimate: ${Math.max(0, Math.round(pages)).toLocaleString('en')} ${Math.round(pages) === 1 ? 'page' : 'pages'} for ${copies === 1 ? '1 person' : `each of ${copies} people`}, one paper copy each. Making that paper would take about ${water} litres of water. Printing, couriers and filing are not counted.`,
   };
 }
 

@@ -6,8 +6,6 @@ export const IMPACT = {
   sheetsPerTree: 8333,
   // Paper making is water hungry. About 10 litres per A4 sheet is the commonly cited figure.
   litresWaterPerSheet: 10,
-  // Lifecycle emissions of office paper, roughly 4.5 g CO2e per sheet (about 0.9 kg CO2e per kg of paper, 5 g per sheet).
-  gramsCo2PerSheet: 4.5,
   // Wood needed per sheet, in grams (about 2x to 3x the weight of the 5 g sheet it becomes).
   gramsWoodPerSheet: 15,
 };
@@ -23,7 +21,6 @@ export function impactOf(sheets: number) {
     sheets,
     trees: sheets / IMPACT.sheetsPerTree,
     litresWater: sheets * IMPACT.litresWaterPerSheet,
-    kgCo2: (sheets * IMPACT.gramsCo2PerSheet) / 1000,
     kgWood: (sheets * IMPACT.gramsWoodPerSheet) / 1000,
   };
 }

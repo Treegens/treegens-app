@@ -1,6 +1,7 @@
 /* The home page (src/app/page.tsx). One deep green stage, inset from the edges of the page, that holds the message,
-   the one button and the video of the trees being counted. A signature writes itself under the headline and the leaf
-   of the logo grows out of its last stroke. Everything else on the page stays on paper.
+   the one button and the video of the trees being counted, playing by itself. A sheet of paper leans on the corner of
+   the video: its signature writes itself, the leaf of the logo grows out of the last stroke, and the trees in the
+   headline get underlined as it lands. Everything else on the page stays on paper.
    Tokens are local to the stage so nothing here leaks into the rest of the product. */
 
 .home-stage {
@@ -21,7 +22,7 @@
   isolation: isolate;
   overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: center;
   gap: clamp(32px, 4.5vw, 72px);
   margin: 0;
@@ -75,7 +76,7 @@
   margin: 0;
   font-family: var(--serif);
   font-weight: 500;
-  font-size: clamp(40px, 5.4vw, 76px);
+  font-size: clamp(40px, 4.9vw, 72px);
   line-height: 1.02;
   letter-spacing: -0.028em;
   color: var(--st-fg);
@@ -87,39 +88,69 @@
   white-space: nowrap;
 }
 
-/* The signature. Its stroke is drawn once, then the leaf rises from where the pen lifted. */
+/* The sheet: paper leaning on the corner of the video, a few grey lines of text and a signature line. The stroke is
+   drawn once, then the leaf rises from where the pen lifted. With no video it sits under the headline instead. */
 .home-sig {
+  --paper: #f7f2e6;
+  --paper-ink: #12301f;
   position: relative;
-  width: min(400px, 82%);
-  margin: 26px 0 22px;
+  width: clamp(220px, 44%, 300px);
+  padding: 18px 20px 16px;
+  border-radius: 14px;
+  background: var(--paper);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 28px 60px rgba(0, 0, 0, 0.38), 0 6px 16px rgba(0, 0, 0, 0.2);
+  transform: rotate(-4deg);
+}
+.home-sig-lines { display: grid; gap: 8px; margin-bottom: 18px; }
+.home-sig-lines i { display: block; height: 6px; border-radius: 3px; background: rgba(18, 48, 31, 0.12); }
+.home-sig-lines i:nth-child(1) { width: 46%; background: rgba(18, 48, 31, 0.22); }
+.home-sig-lines i:nth-child(2) { width: 92%; }
+.home-sig-lines i:nth-child(3) { width: 84%; }
+.home-sig-lines i:nth-child(4) { width: 60%; }
+.home-sig-field {
+  position: relative;
+  display: block;
+  padding: 0 26px 4px 0;
+  border-bottom: 1.5px solid rgba(18, 48, 31, 0.32);
 }
 .home-sig-ink { display: block; width: 100%; height: auto; overflow: visible; }
 .home-sig-ink path {
   fill: none;
-  stroke: var(--st-fg);
-  stroke-width: 2.6;
+  stroke: var(--paper-ink);
+  stroke-width: 3.2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.9;
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  animation: home-write 1.7s 0.55s var(--st-ease) forwards;
+  animation: home-write 1.6s 1.15s cubic-bezier(0.45, 0.05, 0.35, 1) forwards;
 }
 .home-sig-sprout {
   position: absolute;
-  right: -14px;
-  top: -24px;
+  right: -10px;
+  top: -26px;
   display: block;
   transform-origin: 30% 100%;
   transform: scale(0) rotate(-18deg);
-  animation: home-sprout 0.9s 2.05s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation: home-sprout 0.9s 2.65s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
+.home-sig-sprout svg { display: block; }
 @keyframes home-write { to { stroke-dashoffset: 0; } }
 @keyframes home-sprout { to { transform: scale(1) rotate(0deg); } }
 
+/* No video: the sheet sits under the headline, upright and a little smaller. */
+.home-copy > .home-sig { width: min(320px, 86%); margin: 28px 0 26px; transform: rotate(-2deg); }
+
+/* The trees in the headline get a leaf-green underline the moment the leaf has grown. */
+.home-stage .home-hero h1 em {
+  padding-bottom: 0.1em;
+  background: linear-gradient(var(--st-leaf), var(--st-leaf)) no-repeat 0 100% / 0% 3px;
+  animation: home-underline 0.8s 3s var(--st-ease) forwards;
+}
+@keyframes home-underline { to { background-size: 100% 3px; } }
+
 .home-stage .home-hero .lead {
   max-width: 32rem;
-  margin: 0 0 30px;
+  margin: 32px 0 30px;
   font-size: clamp(16px, 1.25vw, 18px);
   line-height: 1.6;
   color: var(--st-fg-2);
@@ -160,22 +191,90 @@
   color: var(--st-fg-3);
 }
 
-/* The video sits in its own frame, tilted forward a little, like a screen held up to show you. */
+/* The video: its own frame, settling in from slightly larger as the page opens, with a round pause button in its
+   corner and the sheet leaning on its other corner. */
 .home-stage .home-video { margin: 0; position: relative; }
-.home-stage .home-video video {
+.home-video-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
+  background: #081a10;
+  box-shadow: 0 0 0 1px var(--st-line), 0 40px 90px rgba(0, 0, 0, 0.5);
+  isolation: isolate;
+}
+.home-video-frame video {
   display: block;
   width: 100%;
   height: auto;
   aspect-ratio: 16 / 9;
-  border-radius: 22px;
-  background: #081a10;
-  box-shadow: 0 0 0 1px var(--st-line), 0 30px 80px rgba(0, 0, 0, 0.45);
+  object-fit: cover;
+  /* The file carries a counting panel burned into its top left corner (green and red numbers from the counting
+     tool). Scaled up a little from its lower edge, that strip falls outside the frame, poster included. */
+  transform: scale(1.11);
+  transform-origin: 70% 100%;
+  animation: home-settle 1.8s 0.3s var(--st-ease) both;
+}
+/* A soft fall-off at the bottom so the button and the sheet sit on calm ground. */
+.home-video-frame::after {
+  content: '';
+  position: absolute;
+  inset: 55% 0 0;
+  background: linear-gradient(to top, rgba(8, 26, 16, 0.55), rgba(8, 26, 16, 0));
+  pointer-events: none;
+}
+@keyframes home-settle { from { transform: scale(1.18); } }
+
+.home-video-toggle {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(243, 238, 225, 0.35);
+  background: rgba(8, 26, 16, 0.62);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: var(--st-fg);
+  cursor: pointer;
+  transition: background 0.2s, transform 0.2s var(--st-ease);
+}
+.home-video-toggle:hover { background: rgba(8, 26, 16, 0.82); transform: scale(1.05); }
+.home-video-toggle:active { transform: scale(0.95); }
+.home-video-toggle:focus-visible { outline: 3px solid var(--st-leaf); outline-offset: 3px; }
+.home-video-open {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 1;
+  color: var(--st-fg);
+}
+
+.home-video > .home-sig {
+  position: absolute;
+  left: -9%;
+  bottom: 22px;
+  z-index: 2;
+}
+/* The sheet is only a drawing: clicks and hovers go through it. */
+.home-sig { pointer-events: none; }
+/* Beside the sheet, the caption keeps to the space right of it, so no word of it is ever under the paper. The sheet
+   ends at 35% of the figure (left -9%, width 44%), or at 220px less that 9% where its smallest width wins, plus a
+   little for its tilt. */
+@media (min-width: 901px) {
+  .home-stage .home-video figcaption { padding-left: max(calc(35% + 28px), calc(248px - 9%)); }
 }
 .home-stage .home-video figcaption {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: flex-end;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 16px;
+  line-height: 1.45;
   font-size: 13.5px;
   color: var(--st-fg-3);
 }
@@ -186,25 +285,44 @@
   height: 8px;
   border-radius: 50%;
   background: var(--st-leaf);
+  margin-top: 0.4em;
   box-shadow: 0 0 0 4px rgba(184, 220, 156, 0.16);
 }
 
-/* Entrance: kicker, headline, words, button, then the video. Each piece is visible at rest if the animation never runs. */
+/* Entrance: kicker, headline, words, button, then the video and the sheet. Each piece rises out of a soft blur and is
+   visible at rest if the animation never runs. */
 .home-stage .home-kicker,
 .home-stage .home-hero h1,
 .home-stage .home-hero .lead,
 .home-stage .home-hero .btn.primary.lg,
 .home-stage .home-note,
 .home-stage .home-video {
-  animation: home-rise 0.9s var(--st-ease) both;
+  animation: home-rise 0.55s var(--st-ease) both;
 }
-.home-stage .home-kicker { animation-delay: 0.05s; }
-.home-stage .home-hero h1 { animation-delay: 0.15s; }
-.home-stage .home-hero .lead { animation-delay: 0.9s; }
-.home-stage .home-hero .btn.primary.lg { animation-delay: 1.02s; }
-.home-stage .home-note { animation-delay: 1.12s; }
-.home-stage .home-video { animation-delay: 0.45s; animation-duration: 1.2s; }
-@keyframes home-rise { from { opacity: 0; transform: translateY(22px); } }
+/* The one button is what a busy person needs, so it is readable within half a second, not last in line. */
+.home-stage .home-kicker { animation-delay: 0s; }
+.home-stage .home-hero h1 { animation-delay: 0.06s; }
+.home-stage .home-hero .lead { animation-delay: 0.12s; }
+.home-stage .home-hero .btn.primary.lg { animation-delay: 0.12s; }
+.home-stage .home-note { animation-delay: 0.2s; }
+.home-stage .home-video { animation-delay: 0.3s; animation-duration: 1.2s; }
+.home-video > .home-sig { animation: home-lean 1s 0.75s cubic-bezier(0.34, 1.3, 0.64, 1) both; }
+@keyframes home-rise { from { opacity: 0; transform: translateY(16px); filter: blur(6px); } }
+@keyframes home-lean { from { opacity: 0; transform: translate(-16px, 36px) rotate(-11deg); } }
+
+/* On the home page the hero button is the only filled button on the first screen. The top bar keeps its four entries
+   (research/ux-charter.md, 2.7), but there Start free is drawn as an outline and Help and Sign in as plain words, so
+   a busy visitor sees one thing to press. */
+.pub:has(.home-stage) .pub-head .btn.primary {
+  background: transparent;
+  border-color: var(--green);
+  color: var(--green-deep);
+}
+.pub:has(.home-stage) .pub-head .btn.primary:hover { background: rgba(23, 36, 28, 0.06); }
+.pub:has(.home-stage) .pub-head .btn.hc-open,
+.pub:has(.home-stage) .pub-head .btn.pub-signin { border-color: transparent; background: transparent; }
+.pub:has(.home-stage) .pub-head .btn.hc-open:hover,
+.pub:has(.home-stage) .pub-head .btn.pub-signin:hover { background: rgba(23, 36, 28, 0.06); }
 
 /* How it works: three editorial rows on paper, numbered in the heading face. */
 .pub .home-how { padding-top: clamp(64px, 9vw, 120px); padding-bottom: clamp(48px, 7vw, 96px); }
@@ -241,6 +359,9 @@
 }
 .pub .home-how .home-points b { font-size: 19px; letter-spacing: -0.01em; margin-bottom: 8px; }
 .pub .home-how .home-points span { line-height: 1.6; color: #3d4a42; }
+/* A link inside a sentence stays on its line: the padding widens where it can be pressed without making the line
+   taller than the others. */
+.pub .home-how .home-points span a { display: inline; min-height: 0; padding: 12px 0; }
 .pub .home-how .home-more { margin-top: 28px; }
 
 @media (max-width: 900px) {
@@ -248,29 +369,50 @@
   .pub .home-stage .hero.home-hero {
     grid-template-columns: 1fr;
     min-height: 0;
-    gap: 36px;
+    gap: 40px;
     padding: 36px 22px 26px;
     border-radius: 26px;
   }
-  .home-stage .home-hero h1 { font-size: clamp(36px, 10vw, 52px); }
+  .home-stage .home-hero h1 { font-size: clamp(30px, 9.4vw, 52px); }
+  .home-stage .home-hero .lead { margin-top: 18px; }
   .home-stage .home-hero h1 em { white-space: normal; }
-  .home-sig { width: min(300px, 86%); margin: 6px 0 18px; }
-  .home-sig-sprout svg { width: 28px; height: 28px; }
   .home-stage .home-hero .btn.primary.lg { width: 100%; justify-content: space-between; }
+  .home-video-frame { border-radius: 18px; }
+  /* On a phone the sheet overlaps only the last 34px of the video and hangs below it, instead of covering half of it. */
+  .home-video > .home-sig {
+    position: relative;
+    left: 10px;
+    bottom: auto;
+    width: min(250px, 72%);
+    margin: -34px 0 0;
+    padding: 14px 16px 12px;
+  }
+  .home-sig-lines { gap: 6px; margin-bottom: 12px; }
+  .home-sig-lines i { height: 5px; }
+  .home-sig-sprout svg { width: 28px; height: 28px; }
+  .home-stage .home-video figcaption { justify-content: flex-start; margin-top: 18px; }
   .pub .home-how .home-points { grid-template-columns: 1fr; }
   .pub .home-how .home-points li, .pub .home-how .home-points li + li { padding: 24px 0 18px; border-left: 0; border-top: 1px solid var(--line); }
   .pub .home-how .home-points li:first-child { border-top: 0; }
+}
+@media (max-width: 360px) {
+  .home-stage .home-kicker { letter-spacing: 0.1em; font-size: 11px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .home-stage .home-kicker,
   .home-stage .home-hero h1,
+  .home-stage .home-hero h1 em,
   .home-stage .home-hero .lead,
   .home-stage .home-hero .btn.primary.lg,
   .home-stage .home-note,
   .home-stage .home-video,
+  .home-video-frame video,
+  .home-video > .home-sig,
   .home-sig-ink path,
   .home-sig-sprout { animation: none; }
   .home-sig-ink path { stroke-dashoffset: 0; }
   .home-sig-sprout { transform: none; }
+  .home-stage .home-hero h1 em { background-size: 100% 3px; }
+  .home-video-toggle, .home-stage .home-hero .btn.primary.lg, .home-stage .home-hero .btn.primary.lg::after { transition: none; }
 }

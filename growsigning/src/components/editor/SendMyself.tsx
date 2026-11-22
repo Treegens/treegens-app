@@ -2,7 +2,7 @@
 import { BY_SENDER_TICK, BY_SENDER_HOW, bySenderProblem } from '@/lib/bysender';
 import { canSendMyself } from '@/lib/editorux';
 
-// "I will send the link myself": a person with a name and no email address, whom the sender reaches on WhatsApp, by
+// "I will send the link myself": a person with a name and no email address, whom the sender reaches by
 // text message or in any chat. We email them nothing at all. What that means is said under the tick, before anyone
 // relies on it, and the rule for what cannot work without an address is the server's own (src/lib/bysender.ts).
 // Offered for one person who signs, approves or views on an envelope: not on a template, not for a group, not for

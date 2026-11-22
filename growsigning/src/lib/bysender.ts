@@ -1,4 +1,4 @@
-// A recipient the sender reaches themselves: "I will send the link myself". Many people live in WhatsApp or text
+// A recipient the sender reaches themselves: "I will send the link myself". Many people live in chat apps or text
 // messages and have no email address they read, so the sender may give a person a name and no address. We send that
 // person nothing, ever: no invitation, no reminder, no copy. The sender copies their link from the envelope page and
 // passes it on, and the same link opens the completed document later. The record says "Link shared by the sender",
@@ -13,7 +13,7 @@ export const BY_SENDER_TICK = 'I will send the link myself';
 
 /** Under the tick: what it does, what it costs and what it takes away, before anyone relies on it. */
 export const BY_SENDER_HOW =
-  'We send this person no email at all: no invitation, no reminders, no copy at the end. After sending, copy their link from the document page and send it by WhatsApp, text message or any chat, or show it as a QR code. Their link also opens the completed document, and it is the only way they get their copy: without an address, "Find my documents" on our help page cannot find it. If they sign, it uses one of your signatures, also when the person is you.';
+  'We send this person no email at all: no invitation, no reminders, no copy at the end. After sending, copy their link from the document page and send it by text message or in any chat, or show it as a QR code. Their link also opens the completed document, and it is the only way they get their copy: without an address, "Find my documents" on our help page cannot find it. If they sign, it uses one of your signatures, also when the person is you.';
 
 /**
  * A person as the record names them: name and address, or name and how their link reached them. An address that is

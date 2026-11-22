@@ -15,7 +15,7 @@ export type HomeVideo = { src: string; type: 'video/mp4' | 'video/webm'; poster:
 /** What the video shows, in one line. It is the caption, and the start of the text alternative. */
 export const HOME_VIDEO_CAPTION = "Treegens' AI counting freshly planted mangroves in a planter's video.";
 /** For people who cannot see the video: what happens in it, as text. It has no sound. */
-export const HOME_VIDEO_TEXT = 'What the video shows: a planted plot filmed by the planter walking through it. Every seedling gets a box drawn around it and is followed as the camera moves, and a counter climbs with each one. The video has no sound.';
+export const HOME_VIDEO_TEXT = 'What the video shows: a planted plot filmed by the planter walking through it. Every seedling gets a box drawn around it and is followed as the camera moves, so each one is counted once. The video has no sound.';
 
 const SHIPPED: HomeVideo = { src: '/videos/tree-count.mp4', type: 'video/mp4', poster: '/videos/tree-count.webp', preload: 'none' };
 
@@ -56,6 +56,7 @@ export function homeVideo(env: Record<string, string | undefined> = process.env,
   const type = kindOf(new URL(src, 'http://x').pathname);
   if (!type) return null;
   const poster = place(String(env.HOME_VIDEO_POSTER || ''), /\.(webp|jpe?g|png|avif)$/i, plainHttp, there);
-  // With a poster nothing of the video is fetched until someone presses play. Without one, only its first frame.
+  // preload is what the markup starts with. The home page starts the video itself once it is on screen (HomeVideo.tsx),
+  // except for reduced motion, save-data and slow connections: there nothing of it is fetched until someone presses play.
   return { src, type, poster, preload: poster ? 'none' : 'metadata' };
 }

@@ -30,14 +30,14 @@ export function TreeLine({ base, show }: { base: string; show: boolean }) {
 
 const num = (v: number, d = 0) => v.toLocaleString('en', { maximumFractionDigits: d });
 
-// Water and CO2e stand behind "How we work this out", as estimates, with the link to where the numbers come from.
+// Water stands behind "How we work this out", as estimates, with the link to where the numbers come from.
 // It opens in a new tab: someone who has just signed is not carried off to a page with buttons to sign up.
 function How({ sheets }: { sheets: number }) {
   const [open, setOpen] = useState(false);
   return (
     <details data-fold className="imp-how small" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
       <summary>How we work this out</summary>
-      {open && <p>An estimate: one paper copy of every page for each person on the document. Making that paper would take about {num(sheets * IMPACT.litresWaterPerSheet)} litres of water and {num((sheets * IMPACT.gramsCo2PerSheet) / 1000, 2)} kg of CO2e. <a href="/impact" target="_blank" rel="noreferrer">Where these numbers come from<span className="sg-vh"> (opens in a new tab)</span></a></p>}
+      {open && <p>An estimate: one paper copy of every page for each person on the document. Making that paper would take about {num(sheets * IMPACT.litresWaterPerSheet)} litres of water. <a href="/impact" target="_blank" rel="noreferrer">Where these numbers come from<span className="sg-vh"> (opens in a new tab)</span></a></p>}
     </details>
   );
 }

@@ -443,10 +443,11 @@ test('a security code never spells a rude word, also across its dashes or with d
 
 test('the Done screen says "1 sheet", and leaves out a figure that rounds to nothing', () => {
   const say = (i: any) => { const s = savedLine(i); return `About ${s.sheets}${s.rest} ${s.verb} not used.${s.trees ? ' tree' : ''}`; };
-  assert.equal(say({ sheets: 1, litresWater: 10, kgCo2: 0.004, trees: 0.0001 }), 'About 1 sheet of paper and 10 litres of water were not used.');
-  assert.equal(say({ sheets: 1, litresWater: 0, kgCo2: 0, trees: 0 }), 'About 1 sheet of paper was not used.');
-  assert.equal(say({ sheets: 240, litresWater: 2400, kgCo2: 1.2, trees: 0.03 }), 'About 240 sheets of paper, 2,400 litres of water and 1.2 kg of CO2e were not used. tree');
-  assert.equal(say({ sheets: 3, litresWater: 1, kgCo2: 0, trees: 0 }), 'About 3 sheets of paper and 1 litre of water were not used.');
+  assert.equal(say({ sheets: 1, litresWater: 10, trees: 0.0001 }), 'About 1 sheet of paper and 10 litres of water were not used.');
+  assert.equal(say({ sheets: 1, litresWater: 0, trees: 0 }), 'About 1 sheet of paper was not used.');
+  // The owner dropped the CO2 figure: an old server answer that still carries kgCo2 says nothing about it.
+  assert.equal(say({ sheets: 240, litresWater: 2400, kgCo2: 1.2, trees: 0.03 }), 'About 240 sheets of paper and 2,400 litres of water were not used. tree');
+  assert.equal(say({ sheets: 3, litresWater: 1, trees: 0 }), 'About 3 sheets of paper and 1 litre of water were not used.');
   assert.doesNotMatch(read('src/components/sign/parts.tsx'), /sheets of paper<\/b>, \{fmtNum/);
 });
 

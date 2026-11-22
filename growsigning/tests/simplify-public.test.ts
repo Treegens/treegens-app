@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, Client, signUp, simple } from './helpers.ts';
 import { homeVideo, HOME_VIDEO_CAPTION, HOME_VIDEO_TEXT } from '../src/lib/homevideo.ts';
+import { holdStill } from '../src/components/home/holdstill.ts';
 import { sectionsFor, landingFor, SETTINGS_MAX, daysIn, refusedDays, nextTab, closingCount, sessionShort, MEMBER_READS, KEYS_AND_TWO_STEP } from '../src/lib/settingsnav.ts';
 import { DEFAULT_DATE_FORMAT, DATE_FORMATS, DATE_FORMAT_CHOICES, dayText, formatDate, fmtDateTag } from '../src/lib/dates.ts';
 import { TOTALS_FROM, totalWorthShowing } from '../src/lib/impact.ts';
@@ -32,7 +33,9 @@ test('the home page says one thing: one button, three points, and nothing of the
   // The words are in the catalogue since lang-sender-rest: the same sentence, with the number of trees in <em>.
   assert.match(fs.readFileSync('src/app/page.tsx', 'utf8'), /T\.rich\('public\.home\.h1', \{ trees: <em>\{T\('public\.home\.h1_trees', \{ count: String\(TREES_PER_SIGNATURE\) \}\)\}<\/em> \}\)/);
   assert.match(fs.readFileSync('src/locales/en.json', 'utf8'), /"public\.home\.h1": "Every signature you pay for plants \{trees\}",\n  "public\.home\.h1_trees": "\{count\} mangroves\."/);
-  assert.match(home, /<Mark size=\{28\}(?: tone="dark")? label="" \/> Planted with Treegens/);
+  // The kicker says what the product is before anything else (review of the landing, 2026-11-22): it used to say
+  // "Planted with Treegens", which a first-time visitor read as a partner badge before knowing who Treegens are.
+  assert.match(home, /<Mark size=\{28\}(?: tone="dark")? label="" \/> Sign documents online/);
   assert.match(home, /Free signatures plant no trees\./);
   // Green claims: what happens is said as what happens. No generic word and nothing about carbon.
   assert.doesNotMatch(home, /eco-friendly|\bgreen\b(?!-)|sustainab|planet|carbon|CO2|offset|climate|neutral/i);
@@ -74,7 +77,7 @@ test('the video of the home page: the one that ships by default, none on request
   const shipped = homeVideo({});
   assert.deepEqual(shipped, { src: '/videos/tree-count.mp4', type: 'video/mp4', poster: '/videos/tree-count.webp', preload: 'none' });
   assert.ok(fs.existsSync('public/videos/tree-count.mp4') && fs.existsSync('public/videos/tree-count.webp'), 'both files ship');
-  assert.ok(fs.statSync('public/videos/tree-count.mp4').size < 6_000_000, 'small enough for a phone, and still not fetched before play');
+  assert.ok(fs.statSync('public/videos/tree-count.mp4').size < 6_000_000, 'small enough for a phone; with less motion, data saving or a slow connection it is not fetched before play');
   for (const none of ['none', 'NONE', ' none ']) assert.equal(homeVideo({ HOME_VIDEO_URL: none }), null);
   assert.deepEqual(homeVideo({ HOME_VIDEO_URL: 'https://cdn.example.org/v/count.webm' }), { src: 'https://cdn.example.org/v/count.webm', type: 'video/webm', poster: null, preload: 'metadata' });
   assert.deepEqual(homeVideo({ HOME_VIDEO_URL: '/videos/new-cut.mp4', HOME_VIDEO_POSTER: '/videos/new-cut.jpg' }), { src: '/videos/new-cut.mp4', type: 'video/mp4', poster: '/videos/new-cut.jpg', preload: 'none' });
@@ -85,15 +88,34 @@ test('the video of the home page: the one that ships by default, none on request
   assert.equal(homeVideo({ HOME_VIDEO_URL: '/videos/a.mp4', HOME_VIDEO_POSTER: 'javascript:alert(1)' })!.poster, null);
 });
 
-test('the video block: controls, muted, never playing by itself, a caption and a text alternative; absent without a video', () => {
+// The owner's decision of 22 November 2026 replaced "controls, muted, never playing by itself": the video now plays by
+// itself, muted and in a loop, with a pause button on it (WCAG 2.2.2), and stays on its poster, with nothing fetched,
+// for less motion, data saving or a slow connection.
+test('the video block: plays by itself muted and looped, a pause button, still for less motion or slow data, a caption and a text alternative; absent without a video', () => {
   const home = read('src/app/page.tsx');
   assert.match(home, /\{video && \(\s*<figure className="home-video">/, 'no video, no block');
-  assert.match(home, /<video controls muted playsInline preload=\{video\.preload\} poster=\{video\.poster \|\| undefined\} width=\{960\} height=\{540\} aria-label=\{HOME_VIDEO_CAPTION\}/);
-  assert.doesNotMatch(home, /autoPlay|autoplay|\bloop\b/);
+  assert.match(home, /<HomeVideo src=\{video\.src\} type=\{video\.type\} poster=\{video\.poster\} label=\{HOME_VIDEO_CAPTION\} describedBy=\{video\.poster === '\/videos\/tree-count\.webp' \? 'home-video-text' : undefined\} pauseLabel="Pause the video" playLabel="Play the video" openLabel="Open the video" \/>/);
+  const player = fs.readFileSync('src/components/home/HomeVideo.tsx', 'utf8');
+  // Muted, looped and inline; nothing fetched before the script decides it may play (preload none, no autoPlay attribute).
+  assert.match(player, /<video ref=\{ref\} muted loop playsInline preload="none" poster=\{poster \|\| undefined\} width=\{960\} height=\{540\} aria-label=\{label\} aria-describedby=\{describedBy\}>/);
+  assert.doesNotMatch(player, /autoPlay|\bcontrols\b/);
+  assert.match(player, /holdStill\(reduce\.matches, connection\)/, 'less motion, data saving and slow connections wait for a press');
+  assert.match(player, /new IntersectionObserver\(\(\[e\]\) => \(e\.isIntersecting \? start\(\) : v\.pause\(\)\)/, 'it stops out of sight');
+  assert.match(player, /<button type="button" className="home-video-toggle" onClick=\{toggle\} aria-label=\{playing \? pauseLabel : playLabel\}/, 'a real button that pauses it');
+  assert.match(player, /chose\.current === 'pause'/, 'paused by a person stays paused when it scrolls back');
+  assert.equal(holdStill(true, undefined), true, 'less motion');
+  assert.equal(holdStill(false, { saveData: true, effectiveType: '4g' }), true, 'data saving');
+  for (const slow of ['slow-2g', '2g', '3g']) assert.equal(holdStill(false, { effectiveType: slow }), true, slow);
+  assert.equal(holdStill(false, { saveData: false, effectiveType: '4g' }), false);
+  assert.equal(holdStill(false, undefined), false, 'a browser that does not say plays');
+  const css = fs.readFileSync('src/app/styles/home.css', 'utf8');
+  assert.match(css, /\.home-video-toggle \{[^}]*width: 44px;[^}]*height: 44px;/, 'the button is a full-size target');
+  assert.match(css, /\.home-video-toggle:focus-visible \{ outline:/);
   assert.match(home, /<figcaption>\{HOME_VIDEO_CAPTION\}<\/figcaption>/);
   assert.match(home, /<p id="home-video-text" className="pub-vh">\{HOME_VIDEO_TEXT\}<\/p>/);
   assert.equal(HOME_VIDEO_CAPTION, "Treegens' AI counting freshly planted mangroves in a planter's video.");
-  assert.match(HOME_VIDEO_TEXT, /Every seedling gets a box drawn around it .* a counter climbs/);
+  // The counting tool's own counter is cropped out of the frame on the page (home.css), so the text no longer promises one.
+  assert.match(HOME_VIDEO_TEXT, /Every seedling gets a box drawn around it .* each one is counted once\./);
   assert.match(HOME_VIDEO_TEXT, /no sound/);
   assert.ok(HOME_VIDEO_CAPTION.split(/\s+/).length <= 12, 'one line');
   // The setting is documented where settings are.

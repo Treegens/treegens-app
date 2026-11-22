@@ -7,7 +7,7 @@ import { WHO_CAN_SEE, WHO_CARRIES, WHO_CARRIES_TEXTS, NO_BAA_TITLE, NO_BAA_TEXT,
 import { signInProviders, PROVIDER_NAMES } from '@/lib/signin';
 import { ssoOffered, ssoHours } from '@/lib/orgsso';
 import { CHECK_PROVES, CHECK_LIMITS, smsProvider } from '@/lib/checks';
-import { CALL_PROVES, voiceProvider, whatsappProvider } from '@/lib/channels';
+import { CALL_PROVES, voiceProvider } from '@/lib/channels';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODES_PER_HOUR } from '@/lib/policy';
 import { SESSION_DAYS, SESSION_MAX_DAYS, sessionWords, HAND_OVER_TRIES } from '@/lib/policy';
 import { TWO_STEP_TRIES, TWO_STEP_PAUSE_MINUTES, TWO_STEP_REMEMBER_DAYS, TWO_STEP_RECOVERY_CODES, TWO_STEP_EMAIL_RESET_DAYS, TWO_STEP_API_KEYS, TWO_STEP_EMAIL_RESET_RISK } from '@/lib/policy';
@@ -104,9 +104,8 @@ export default function Security() {
             {!!voiceProvider() && <span className="pub-proof"><b>A one-time code by phone call.</b> {CALL_PROVES} </span>}
             <span className="pub-proof">{CHECK_LIMITS}</span>
           </Point>
-          {!!whatsappProvider() && <Point title="The link by WhatsApp, only when the person agreed.">A sender can have us send the signing link by WhatsApp as well as by email, only after ticking that the person agreed to it, which is written to the audit trail. The message names the sender and says how to stop: a reply STOP ends WhatsApp messages to that number from the account whose message it answers, and not from anyone else. The sender sees &ldquo;Sent&rdquo; when WhatsApp took the message and &ldquo;Delivered to the phone&rdquo; when WhatsApp says so. We never show that a message was read, because that proves nothing about who read it. The finished document is never sent by WhatsApp: only a link to it.</Point>}
           {/* A person with no address, whose link the sender passed on (src/lib/bysender.ts): the record says so. */}
-          <Point title="A link the sender passed on themselves.">A sender can put someone on a document with a name and no email address, and send them the link by WhatsApp, text message or chat. We never write to that person. The certificate says &quot;{BY_SENDER_LINE}&quot; for them, which shows less than our email does: not how the link travelled, and not who opened it.</Point>
+          <Point title="A link the sender passed on themselves.">A sender can put someone on a document with a name and no email address, and send them the link by text message or in a chat. We never write to that person. The certificate says &quot;{BY_SENDER_LINE}&quot; for them, which shows less than our email does: not how the link travelled, and not who opened it.</Point>
         </Block>
 
         <Block id="scams" title="Keeping scams out" lead="E-signature services get abused to send fake invoices. These checks are made where a sender starts something that emails a person (a first send, a correction to a document that is out, a reminder, reopening, a bulk send, a public form, a team invitation) and again where the email to the next person in a signing order is written.">

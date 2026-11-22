@@ -560,7 +560,8 @@ test('outside: every place the server calls out is on the list', () => {
   const KNOWN: Record<string, string[]> = {
     'mail.ts': ['mail'], 'routes-billing.ts': ['payments'], 'oidc.ts': ['google', 'microsoft'], 'sms.ts': ['sms'], 'tsa.ts': ['tsa'], 'ltv.ts': ['tsa'],
     'chat.ts': ['chat'], 'convert.ts': ['converter'], 'routes-bounces.ts': ['sns'], 'webhooks.ts': ['webhooks'], 'pwned.ts': ['pwned'], 'ocr.ts': ['ocr'],
-    'whatsapp.ts': ['whatsapp'], 'voice.ts': ['sms'], 'collect.ts': ['collect'],
+    // whatsapp.ts is asleep (WHATSAPP_OFFERED is false): it is not on the list, because it is never called.
+    'whatsapp.ts': [], 'voice.ts': ['sms'], 'collect.ts': ['collect'],
   };
   const CALLS = /\bfetch\(|createTransport\(|\bhttps?\.request\(|\bnet\.(connect|createConnection)\(|\btls\.connect\(/;
   const dir = path.join(ROOT, 'src/server');
@@ -573,7 +574,9 @@ test('outside: every place the server calls out is on the list', () => {
   // Nothing in src/lib calls out at all.
   for (const f of fs.readdirSync(path.join(ROOT, 'src/lib')).filter((x) => x.endsWith('.ts'))) assert.ok(!CALLS.test(read(`src/lib/${f}`).replace(/\/\/.*$/gm, '')), f);
   // What is not built is said, and none of it is half there.
-  assert.ok(NOT_BUILT.length >= 3);
+  // WhatsApp was the third line; the owner decided no account gets WhatsApp, so it is no longer named at all.
+  assert.ok(NOT_BUILT.length >= 2);
+  assert.ok(!ids.has('whatsapp' as any) && !NOT_BUILT.some((x) => /whatsapp/i.test(x)));
   // The leaked-password check exists now (src/server/pwned.ts): it is on the list, and no longer said to be missing.
   assert.ok(ids.has('pwned' as any) && !NOT_BUILT.some((x) => /leaked passwords/.test(x)));
 });

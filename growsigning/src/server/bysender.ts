@@ -6,7 +6,7 @@ import { labelOf, bySenderProblem } from '../lib/bysender.ts';
 import { tellSender, st, namesIn } from './senderlocale.ts';
 
 // "I will send the link myself" (recipients.link_by_sender): a person with a name and no email address, whom the
-// sender reaches themselves, often on WhatsApp or by text message. The words are in src/lib/bysender.ts.
+// sender reaches themselves, often by text message or in a chat. The words are in src/lib/bysender.ts.
 //
 // What it means everywhere: nothing is ever emailed to that person (notifyRecipient asks bySenderNotice instead), the
 // sender is told whatever the person would have been told and only the sender can pass on (their turn came, a

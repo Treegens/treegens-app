@@ -113,8 +113,8 @@ export function ReviewMore({ ed, closed }: { ed: Ed; closed: boolean }) {
 }
 
 /**
- * What sending this one document on screen saves, in the owner's words. No fraction of a tree; water and CO2e are
- * estimates and stand behind "How we work this out", with the link to where the numbers come from.
+ * What sending this one document on screen saves, in the owner's words. No fraction of a tree; water is an
+ * estimate and stands behind "How we work this out", with the link to where the numbers come from.
  */
 export function SavingBox({ pages, people, envelopeId }: { pages: number; people: number; envelopeId?: string }) {
   const s = savingLine(pages, people);

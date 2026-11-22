@@ -113,12 +113,12 @@ export function senderWords(f: SenderFacts): { title: string; promise: string; s
 export const reviewPlus = (allPaid: boolean): string => (allPaid ? `Plus: ${mangroves(TREES_PER_SIGNATURE)} are planted for each person who signs.` : '');
 
 /**
- * The lines of the box "Signed without paper" on the signing record (the certificate of completion). Paper, water
- * and CO2e are estimates and are called that, with where the working is shown. No fraction of a tree.
+ * The lines of the box "Signed without paper" on the signing record (the certificate of completion). Paper and water
+ * are estimates and are called that, with where the working is shown. No fraction of a tree.
  */
-export function recordLines(f: { sheets: number; litresWater: number; kgCo2: number; trees: number; site: string; plans?: boolean }): string[] {
+export function recordLines(f: { sheets: number; litresWater: number; trees: number; site: string; plans?: boolean }): string[] {
   const num = (v: number, d = 0) => v.toLocaleString('en', { maximumFractionDigits: d });
-  const paper = `An estimate: about ${num(f.sheets)} ${f.sheets === 1 ? 'sheet' : 'sheets'} of paper, ${num(f.litresWater)} litres of water and ${num(f.kgCo2, 2)} kg of CO2e were not used.`;
+  const paper = `An estimate: about ${num(f.sheets)} ${f.sheets === 1 ? 'sheet' : 'sheets'} of paper and ${num(f.litresWater)} litres of water were not used.`;
   const trees = f.trees >= 1
     ? `The signatures paid for on this document fund ${mangroves(f.trees)}, planted by Treegens. How we count: ${f.site}/impact`
     : `${f.plans === false ? '' : `${SOFT_LINE} `}How we count: ${f.site}/impact`;

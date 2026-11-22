@@ -85,7 +85,7 @@ export default function Help() {
               <FindDocuments />
             </div>
             <p className="muted small">If the sender corrected the document, your old link was replaced. The page it opens offers to send you the new one.</p>
-            <p className="muted small">Did the sender send you the link themselves, by WhatsApp, text message or chat, and not by email from us? Then we have no address for you and this cannot find it. Ask the sender: the document's page shows your link to them, also after everyone has signed.</p>
+            <p className="muted small">Did the sender send you the link themselves, by text message or in a chat, and not by email from us? Then we have no address for you and this cannot find it. Ask the sender: the document's page shows your link to them, also after everyone has signed.</p>
           </QA>
 
           <QA id="real" q="Is this email really from GrowSigning?">

@@ -1,7 +1,7 @@
 import { route, json, type Ctx } from './router.ts';
 import { counterMe } from './counter.ts';
 import { paperOn } from './paper.ts';
-import { whatsappProvider, voiceProvider, waDailyPerAccount } from '../lib/channels.ts';
+import { WHATSAPP_OFFERED, whatsappProvider, voiceProvider, waDailyPerAccount } from '../lib/channels.ts';
 import { adminOrgs, refuseOrgAdminRole, orgMe } from './orgs.ts';
 import { DATE_FORMATS } from '../lib/dates.ts';
 import { chosenLocale, defaultFor } from './locales.ts';
@@ -434,11 +434,10 @@ route('GET', '/me', (c) => {
     text_messages: !!smsProvider(),
     // Whether the account's admins switched on "People may sign on paper" (paper.ts). When not, nothing offers it.
     paper_signing: paperOn(a.id),
-    // Whether this server sends the signing link by WhatsApp, and can call a number to read a code (src/lib/channels.ts).
-    whatsapp: !!whatsappProvider(),
+    // Whether this server can call a number to read a code (src/lib/channels.ts). WhatsApp is said only while
+    // WHATSAPP_OFFERED is true; it is false, so no account is told about WhatsApp at all.
+    ...(WHATSAPP_OFFERED ? { whatsapp: !!whatsappProvider(), whatsapp_daily: waDailyPerAccount() } : {}),
     phone_calls: !!voiceProvider(),
-    // How many WhatsApp messages one account can cause in 24 hours, for the admin's line in Settings. Only when on.
-    ...(whatsappProvider() ? { whatsapp_daily: waDailyPerAccount() } : {}),
     // Whether this server turns Word, Excel and other files into a PDF on upload. When not, nothing offers them.
     converts: converterOn(),
     // Set when an email to this login came back for good ({ address, since, reason }), so every page can say so
@@ -968,6 +967,6 @@ route('GET', '/dev/outbox', (c) => {
   // delivered_at, bounced_at (with its kind and reason) and complained_at: what the mail provider said afterwards.
   return json({ emails: all('SELECT id, to_email, subject, link, status, at, delivered_at, bounced_at, bounce_kind, bounce_reason, bounce_said, complained_at FROM emails ORDER BY id DESC LIMIT 100'), texts: [...all('SELECT id, to_masked "to", kind, body, status, at FROM texts ORDER BY id DESC LIMIT 100'),
     // WhatsApp messages and calls with a code on a machine without a provider (whatsapp.ts, voice.ts), in the same list.
-    ...all("SELECT 'wa' || id id, to_masked \"to\", CASE kind WHEN 'invite' THEN 'link' WHEN 'remind' THEN 'reminder' ELSE kind END kind, 'WhatsApp: ' || body body, status, at FROM wa_messages ORDER BY id DESC LIMIT 50"),
+    ...(!WHATSAPP_OFFERED ? [] : all("SELECT 'wa' || id id, to_masked \"to\", CASE kind WHEN 'invite' THEN 'link' WHEN 'remind' THEN 'reminder' ELSE kind END kind, 'WhatsApp: ' || body body, status, at FROM wa_messages ORDER BY id DESC LIMIT 50")),
     ...all("SELECT 'call' || id id, to_masked \"to\", 'code' kind, 'Phone call: ' || COALESCE(said, '(not kept)') body, status, at FROM voice_calls ORDER BY id DESC LIMIT 50")].sort((x: any, y: any) => (x.at < y.at ? 1 : -1)) });
 }, 'public');

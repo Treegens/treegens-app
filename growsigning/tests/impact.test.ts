@@ -122,14 +122,14 @@ test('the words: 10 mangroves only for a paid signature, the soft line for a fre
   assert.equal(reviewPlus(true), 'Plus: 10 mangroves are planted for each person who signs.');
   assert.equal(reviewPlus(false), '');
 
-  const paidRecord = recordLines({ sheets: 15, litresWater: 150, kgCo2: 0.0675, trees: 20, site: 'https://sign.example' });
-  assert.deepEqual(paidRecord, ['An estimate: about 15 sheets of paper, 150 litres of water and 0.07 kg of CO2e were not used.', 'The signatures paid for on this document fund 20 mangroves, planted by Treegens. How we count: https://sign.example/impact']);
-  assert.equal(recordLines({ sheets: 1, litresWater: 10, kgCo2: 0.0045, trees: 0, plans: true, site: 'https://sign.example' })[1], `${SOFT_LINE} How we count: https://sign.example/impact`);
-  assert.equal(recordLines({ sheets: 1, litresWater: 10, kgCo2: 0.0045, trees: 0, plans: false, site: 'https://sign.example' })[1], 'How we count: https://sign.example/impact', 'no plans on this server: nothing is earned, so nothing is said to be given');
+  const paidRecord = recordLines({ sheets: 15, litresWater: 150, trees: 20, site: 'https://sign.example' });
+  assert.deepEqual(paidRecord, ['An estimate: about 15 sheets of paper and 150 litres of water were not used.', 'The signatures paid for on this document fund 20 mangroves, planted by Treegens. How we count: https://sign.example/impact']);
+  assert.equal(recordLines({ sheets: 1, litresWater: 10, trees: 0, plans: true, site: 'https://sign.example' })[1], `${SOFT_LINE} How we count: https://sign.example/impact`);
+  assert.equal(recordLines({ sheets: 1, litresWater: 10, trees: 0, plans: false, site: 'https://sign.example' })[1], 'How we count: https://sign.example/impact', 'no plans on this server: nothing is earned, so nothing is said to be given');
 
   // Every sentence above: no em dash, no generic claim, no carbon claim, no share of a tree, no money word.
   const all = [finishLine(10), mailLine(10), SOFT_LINE, reviewPlus(true), ...paidRecord, ...Object.values(first), ...Object.values(later), ...Object.values(free), ...Object.values(trial)].join(' ');
-  assert.doesNotMatch(all, /\u2014|eco.?friendly|\bgreen\b|sustainab|planet|carbon neutral|climate|offset|\d of a tree|0\.\d+ tree/i);
+  assert.doesNotMatch(all, /\u2014|eco.?friendly|\bgreen\b|sustainab|planet|carbon|CO2|climate|offset|\d of a tree|0\.\d+ tree/i);
   assert.doesNotMatch([finishLine(10), ...Object.values(first), ...Object.values(later), ...Object.values(free)].join(' '), /\$|dollar|pays?\b|paid|price|plan\b/i, 'no money words where a signer reads');
 });
 
@@ -149,7 +149,7 @@ test('a free signature (the trial): nobody is told a tree is planted, the first 
   // The signing record says the soft line and claims no tree for this document.
   const rec = await record(p, eid);
   assert.match(rec, /Signed without paper/);
-  assert.match(rec, /An estimate: about 1 sheet of paper, 10 litres of water and 0 kg of CO2e were not used\./);
+  assert.match(rec, /An estimate: about 1 sheet of paper and 10 litres of water were not used\./);
   assert.ok(rec.includes(SOFT_LINE));
   assert.doesNotMatch(rec, /fund \d+ mangroves|of a tree|Every dollar/);
 });
@@ -257,7 +257,11 @@ test('a paid signature: the line by Finish and in the email for the signer only,
   assert.deepEqual([s.paid, s.signers, s.planted, s.sheets], [1, 1, 10, 12]);
   const rec = await record(p, eid);
   assert.match(rec, /The signatures paid for on this document fund 10 mangroves, planted by Treegens\. How we count: http:\/\/test\.local\/impact/);
-  assert.match(rec, /An estimate: about 12 sheets of paper, 120 litres of water and 0\.05 kg of CO2e were not used\./);
+  assert.match(rec, /An estimate: about 12 sheets of paper and 120 litres of water were not used\./);
+  // The owner dropped the CO2 figure: no answer of the API carries one, for the account, the public counter or the signer.
+  for (const path of ['/impact', '/reports/summary']) assert.doesNotMatch(JSON.stringify((await p.c.get(path)).data), /co2|carbon/i, path);
+  assert.doesNotMatch(JSON.stringify((await new Client().get('/public/impact')).data), /co2|carbon/i, '/public/impact');
+  assert.doesNotMatch(JSON.stringify((await new Client().get(`/sign/${tokenFor(eid, 'ada@signers.example')}`)).data), /co2|carbon/i, 'the signing page answer');
   assert.doesNotMatch(rec, /of a tree|Every dollar/);
   // The completion email calls its figures an estimate and says where the working is.
   const doneMail = textOf(mailTo('ada@signers.example').at(-1)!.html);
@@ -439,7 +443,7 @@ test('totals are hidden until they mean something, and no share of a tree is sho
     assert.doesNotMatch(read(f), /fmtTrees|\} of a tree|Trees left standing|'…'/, f);
 });
 
-test('green claims: nothing generic, no carbon claim for the mangroves, estimates called estimates, the consent screen left alone', () => {
+test('green claims: nothing generic, no carbon figure or claim anywhere, estimates called estimates, the consent screen left alone', () => {
   const mine = ['src/lib/impactwords.ts', 'src/components/impact/SignerTrees.tsx', 'src/components/impact/SenderTrees.tsx', 'src/components/impact/Mangroves.tsx', 'src/components/settings/TreesOnRecord.tsx',
     'src/server/impact.ts', 'src/server/routes-impact.ts', 'src/app/styles/impact.css'];
   for (const f of mine) assert.doesNotMatch(read(f), /\u2014/, `${f}: no em dash`);
@@ -451,11 +455,13 @@ test('green claims: nothing generic, no carbon claim for the mangroves, estimate
   const [, rest] = view.split('What we do not claim');
   assert.ok(rest, 'the page says what is not claimed');
   assert.doesNotMatch(view.split('What we do not claim')[0], GENERIC);
-  assert.match(rest, /We do not say that signing here takes CO2 out of the air, offsets anything, or makes a document or a company carbon neutral/);
+  assert.match(rest, /We do not say that signing here offsets anything/);
+  // The owner dropped the CO2 figure: no CO2 or carbon word anywhere on /impact, not even to deny it.
+  assert.doesNotMatch(view, /CO2|carbon/i);
+  assert.doesNotMatch(read('src/lib/impact.ts'), /co2|carbon/i, 'no CO2 constant or field left');
   // Estimates are called estimates where a figure about paper stands, with a source or the link to the working.
   assert.match(view, /Sheets of paper not used, estimated/);
   assert.match(view, /Water not used, estimated/);
-  assert.match(view, /CO2e not emitted, estimated/);
   assert.match(view, /Van Oel and Hoekstra/);
   assert.match(view, /conservatree\.org/);
   assert.match(view, /href=\{TREEGENS_URL\}/);
@@ -627,7 +633,8 @@ test('the setting says itself in one line, and /impact says what a reader cannot
   assert.doesNotMatch(view, /on video|checked before they count/);
   assert.match(view, /we have not checked plantings ourselves/);
   assert.match(view, /we do not publish receipts for the money sent to Treegens/);
-  assert.match(view, /That figure is a working assumption of ours, not taken from one study\./);
+  // That line was about the CO2 figure, which the owner dropped: it goes with it.
+  assert.doesNotMatch(view, /working assumption of ours/);
   assert.match(view, /toward the upper end of published figures/);
 });
 

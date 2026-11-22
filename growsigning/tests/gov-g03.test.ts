@@ -347,7 +347,8 @@ test('repair: nothing on /security says revocation checks are not built while lt
   const { NOT_BUILT } = await import('../src/lib/outside.ts');
   assert.match(read('src/server/ltv.ts'), /application\/ocsp-request/);
   assert.ok(!NOT_BUILT.some((x) => /OCSP|revocation/i.test(x)));
-  assert.ok(NOT_BUILT.length >= 3);
+  // Two since the WhatsApp line went: the owner decided no account gets WhatsApp, so it is not named at all.
+  assert.ok(NOT_BUILT.length >= 2);
 });
 
 test('repair: the documents say what the code does about the router, the browser hash, closing an account and what leaves', () => {

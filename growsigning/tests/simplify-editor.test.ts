@@ -192,10 +192,11 @@ test('the saving of this one document, in the owner\'s words: pages from a tree,
   for (const s of [savingLine(5, 3), savingLine(1, 1), savingLine(2000, 50)]) {
     assert.doesNotMatch(s.line, /\d\.\d|of a tree|water|CO2|sheets/, 'no fraction of a tree and no other figure in the line');
     assert.match(s.how, /^An estimate: /);
-    assert.match(s.how, /litres of water and [\d.,]+ kg of CO2e/);
+    assert.match(s.how, /about [\d,]+ litres of water\./);
+    assert.doesNotMatch(s.how, /CO2|carbon|kg/i, 'the owner dropped the CO2 figure');
     assert.doesNotMatch(s.how, /of a tree|\u2014/);
   }
-  assert.equal(savingLine(5, 3).how, 'An estimate: 5 pages for each of 3 people, one paper copy each. Making that paper would take about 150 litres of water and 0.07 kg of CO2e. Printing, couriers and filing are not counted.');
+  assert.equal(savingLine(5, 3).how, 'An estimate: 5 pages for each of 3 people, one paper copy each. Making that paper would take about 150 litres of water. Printing, couriers and filing are not counted.');
   const parts = read('src/components/editor/ReviewParts.tsx');
   assert.match(parts, /if \(s\.sheets < 1\) return null;/);
   assert.match(parts, /<details data-fold className="ed-fold small">\s*<summary>How we work this out<\/summary>/);

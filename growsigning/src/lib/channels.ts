@@ -1,5 +1,6 @@
 // WhatsApp and codes by phone call: the words the pages, the certificate and the server share, and (from the
-// settings section down) whether this server's operator has set either of them up. Plain constants and functions
+// settings section down) whether this server's operator has set either of them up. WhatsApp is switched off for
+// every account by WHATSAPP_OFFERED below, whatever is set: the owner's decision. Its code is kept, asleep. Plain constants and functions
 // down to the settings section, safe in a 'use client' file. The settings functions read the environment: server
 // code and server components only. The sending itself is in src/server/whatsapp.ts and src/server/voice.ts.
 
@@ -53,13 +54,27 @@ type Env = Record<string, string | undefined>;
 const set = (v: string | undefined) => !!(v || '').trim();
 
 /**
- * How this server sends WhatsApp messages, or null when its operator has not set it up. Then WhatsApp does not
- * exist in the product: nothing offers it and the API refuses it.
+ * The one switch for WhatsApp. The owner decided: no WhatsApp on any account, free or paid. While this is false,
+ * whatsappProvider() is null whatever WHATSAPP_* or TWILIO_WHATSAPP_* settings an operator puts on the server, so
+ * nothing offers WhatsApp, the API refuses it, nothing is ever sent and the webhook answers 404. Setting env on
+ * Render cannot bring it back: only a change to this line, in code, can.
+ */
+export const WHATSAPP_OFFERED: boolean = false;
+
+/** The WhatsApp settings found on this server. While WHATSAPP_OFFERED is false they are all ignored. */
+export const WHATSAPP_SETTINGS = ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_TEMPLATE_INVITE', 'WHATSAPP_TEMPLATE_REMIND', 'WHATSAPP_TEMPLATE_DONE',
+  'WHATSAPP_TEMPLATE_DEADLINE', 'WHATSAPP_TEMPLATE_LANGUAGE', 'WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'WHATSAPP_DAILY_PER_ACCOUNT', 'WHATSAPP_DEV_OUTBOX', 'TWILIO_WHATSAPP_FROM'] as const;
+export const whatsappSettingsFound = (env: Env = process.env): string[] => WHATSAPP_SETTINGS.filter((k) => set(env[k]));
+
+/**
+ * How this server sends WhatsApp messages, or null. Always null while WHATSAPP_OFFERED is false. Then WhatsApp does
+ * not exist in the product: nothing offers it and the API refuses it.
  *   'meta'    WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TEMPLATE_INVITE (the Meta WhatsApp Business Platform)
  *   'twilio'  TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM (a Twilio WhatsApp sender)
  *   'outbox'  WHATSAPP_DEV_OUTBOX=1 on a machine that is not production: messages are only written to the outbox
  */
 export function whatsappProvider(env: Env = process.env): 'meta' | 'twilio' | 'outbox' | null {
+  if (!WHATSAPP_OFFERED) return null;
   if (set(env.WHATSAPP_TOKEN) && set(env.WHATSAPP_PHONE_NUMBER_ID) && set(env.WHATSAPP_TEMPLATE_INVITE)) return 'meta';
   if (set(env.TWILIO_ACCOUNT_SID) && set(env.TWILIO_AUTH_TOKEN) && set(env.TWILIO_WHATSAPP_FROM)) return 'twilio';
   if (env.WHATSAPP_DEV_OUTBOX === '1' && (env.NODE_ENV !== 'production' || env.DEV_OUTBOX === '1')) return 'outbox';
@@ -85,11 +100,13 @@ export function voiceProvider(env: Env = process.env): 'twilio' | 'outbox' | nul
   return null;
 }
 
-/** Said once when a server starts with WhatsApp or calls half set up, or null. */
+/** Said once when a server starts with WhatsApp settings (they are ignored) or calls half set up, or null. */
 export function channelsWarning(env: Env = process.env): string | null {
   const out: string[] = [];
+  const found = whatsappSettingsFound(env);
+  if (!WHATSAPP_OFFERED && found.length) out.push(`[config] WHATSAPP SETTINGS ARE IGNORED (found: ${found.join(', ')}). GrowSigning offers WhatsApp to no account, free or paid, and nothing is sent by WhatsApp whatever is set. You can remove these settings.`);
   const meta = ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_TEMPLATE_INVITE'].filter((k) => set(env[k]));
-  if (meta.length && meta.length < 3 && whatsappProvider(env) !== 'twilio') out.push(`[config] WHATSAPP IS SWITCHED OFF, because the Meta settings are incomplete (found: ${meta.join(', ')}). It needs WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TEMPLATE_INVITE.`);
+  if (WHATSAPP_OFFERED && meta.length && meta.length < 3 && whatsappProvider(env) !== 'twilio') out.push(`[config] WHATSAPP IS SWITCHED OFF, because the Meta settings are incomplete (found: ${meta.join(', ')}). It needs WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TEMPLATE_INVITE.`);
   if (whatsappProvider(env) === 'meta' && !set(env.WHATSAPP_APP_SECRET)) out.push('[config] WHATSAPP_APP_SECRET is not set, so replies (STOP) and delivery reports from WhatsApp cannot be checked and are refused. Set it, or nobody can stop the messages by replying.');
   if (env.VOICE_ENABLED === '1' && !voiceProvider(env)) out.push('[config] VOICE_ENABLED=1 IS IGNORED, because calls need TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM (a number that can make calls).');
   return out.length ? `\n${out.join('\n')}\n` : null;

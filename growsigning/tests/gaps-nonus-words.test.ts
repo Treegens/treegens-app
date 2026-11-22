@@ -865,7 +865,8 @@ test('the screens offer the choice, hand the sender the link, and never promise 
   assert.match(card, /\{qr === r\.id && links\[r\.id\] && \(turn \|\| own\) && <QrDialog/);
   assert.match(src('app/styles/abroad.css'), /\.sn-myself \.btn \{ min-height: 44px; \}/);
   const own = src('components/sender/OwnLink.tsx');
-  for (const b of ['Copy link', 'QR code', 'Share on WhatsApp', 'Text']) assert.ok(own.includes(`>${b}</button>`), b);
+  for (const b of ['Copy link', 'QR code', 'Text']) assert.ok(own.includes(`>${b}</button>`), b);
+  assert.ok(!own.includes('WhatsApp'), 'no Share on WhatsApp: the owner decided no account gets WhatsApp');
   assert.match(own, /const done = r\.status === 'completed' && \(envelopeStatus === 'sent' \|\| envelopeStatus === 'completed'\);/);
   assert.doesNotMatch(own, /Nudge/);
   assert.match(src('components/sender/AfterSend.tsx'), /const own = acting\.filter\(\(r: any\) => ownLink\(r\) && r\.status === 'sent'\);/);
@@ -906,7 +907,7 @@ test('the screens offer the choice, hand the sender the link, and never promise 
   assert.deepEqual(spec.components.schemas.Recipient.required, ['name']);
   assert.match(JSON.stringify(spec.paths['/envelopes/{id}/remind']), /link_by_sender/);
   assert.match(read('README.md'), /"I will send the link myself": a recipient with a name and no email address/);
-  assert.match(read('README.md'), /\| My signers live in WhatsApp, not email, and a recipient cannot exist without an address\. \|/);
+  assert.match(read('README.md'), /\| My signers live in chat apps, not email, and a recipient cannot exist without an address\. \|/);
   // No em dash in anything written for this.
   for (const f of ['lib/bysender.ts', 'server/bysender.ts', 'components/editor/SendMyself.tsx', 'components/sender/OwnLink.tsx', 'components/sign/NoEmail.tsx']) assert.ok(!src(f).includes(String.fromCharCode(0x2014)), f);
 });

@@ -271,7 +271,7 @@ test('each person is one item with one line and one More; sharing the link is on
   assert.match(people, /\{line && <p className="sn-person-line">\{line\}<\/p>\}/);
   // What happened to their email, and the things to do, are inside the More and nowhere else.
   const panel = people.slice(people.indexOf('{isOpen && ('), people.indexOf('{qr === r.id'));
-  for (const inside of ['<dl className="sn-facts">', 'Change person</button>', '>Copy link</button>', '>QR code</button>', '>Share on WhatsApp</button>', '>Text</button>', 'Share the link yourself</p>', '<TryAgainButton'])
+  for (const inside of ['<dl className="sn-facts">', 'Change person</button>', '>Copy link</button>', '>QR code</button>', '>Text</button>', 'Share the link yourself</p>', '<TryAgainButton'])
     assert.ok(panel.includes(inside) && !people.replace(panel, '').includes(inside), inside);
   // With zero setup a waiting person's More has at most six lines: Remind (two or more waiting), four ways to share, Change person.
   const zeroSetup = (panel.match(/<button className="btn sm[^\n]*/g) || []).filter((b) => !/TryAgain|code_only/.test(b));
@@ -555,7 +555,7 @@ test('the words on the page point at places that exist: Documents, not Envelopes
   assert.doesNotMatch(noComments(own), /The envelope closed/);
   // Someone whose link you send yourself: four ways to pass it on (the link shows under them once copied), and
   // the card says it once.
-  assert.deepEqual([...own.matchAll(/>([^<>{}]+)<\/button>/g)].map((m) => m[1]), ['Copy link', 'QR code', 'Share on WhatsApp', 'Text']);
+  assert.deepEqual([...own.matchAll(/>([^<>{}]+)<\/button>/g)].map((m) => m[1]), ['Copy link', 'QR code', 'Text'], 'no Share on WhatsApp: the owner decided no account gets WhatsApp');
   const people = read(PEOPLE);
   assert.match(people, /: own && \(turn \|\| \(r\.status === 'completed' && \(e\.status === 'sent' \|\| e\.status === 'completed'\)\)\) \? null/);
   assert.match(people, /emailFact\.replace\(\/\^None\\\. \/, ''\)/);

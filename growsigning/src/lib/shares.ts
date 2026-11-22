@@ -86,7 +86,7 @@ export function levelRefusal(owner: string, level: ShareLevel, need: ShareLevel)
 const PAGE_ALLOWS: Record<ShareLevel, readonly string[]> = {
   see: [],
   // 'comment': write, answer and settle questions and comments. Nothing gives a colleague a person's signing link
-  // (Copy link, QR code, WhatsApp, Text): that stays with the owner and the admins.
+  // (Copy link, QR code, Text): that stays with the owner and the admins.
   manage: ['remind', 'download', 'reopen', 'open_pdf', 'full_record', 'edit', 'more_time', 'pause', 'resume', 'cancel', 'comment'],
   send: ['remind', 'download', 'reopen', 'open_pdf', 'full_record', 'edit', 'more_time', 'pause', 'resume', 'cancel', 'comment', 'continue', 'send_now', 'change_time', 'keep_draft'],
 };

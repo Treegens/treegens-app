@@ -21,7 +21,7 @@
 // It reads the environment: server code and server components only.
 import { signInProviders } from './signin.ts';
 import { smsProvider } from './checks.ts';
-import { whatsappProvider } from './channels.ts';
+import { WHATSAPP_OFFERED, whatsappProvider } from './channels.ts';
 import { chatProvider, chatModelOn } from './chatprovider.ts';
 import { READ_OUTSIDE } from './aiassist.ts';
 import { pwnedUrl } from './signinrules.ts';
@@ -54,7 +54,6 @@ export const OUTSIDE_SETTINGS = ['OUTSIDE_CALLS', 'OUTBOUND_ALLOW', 'WEBHOOK_ALL
 
 /** Services the software does not have, so nothing calls them. Said on /security so a reader does not have to guess. */
 export const NOT_BUILT = [
-  'WhatsApp (a sender can share a signing link there themselves; the server sends nothing to WhatsApp)',
   'storage of files at an outside company: documents and signed files are kept on this server\'s own disk',
   'analytics, advertising, error reporting or any service that "phones home" to the makers of the software',
 ];
@@ -136,10 +135,11 @@ export function outsideServices(env: Env = process.env): OutsideService[] {
   const sms = smsProvider(env);
   out.push({ id: 'sms', name: 'Text message provider', purpose: 'Sends one-time codes and signing links by text message, when a sender asks for that.', settings: sms === 'hook' ? ['SMS_WEBHOOK_URL', 'SMS_WEBHOOK_TOKEN'] : ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SMS_WEBHOOK_URL'],
     on: sms === 'twilio' || sms === 'hook', hosts: sms === 'twilio' ? ['api.twilio.com'] : sms === 'hook' ? [hostOfUrl(clean(env.SMS_WEBHOOK_URL))].filter(Boolean) : [] });
-  // The signing link by WhatsApp (src/server/whatsapp.ts). A call with a code (voice.ts, VOICE_ENABLED) goes to the
+  // The signing link by WhatsApp (src/server/whatsapp.ts): not listed at all while WHATSAPP_OFFERED is false, since
+  // no account gets WhatsApp and the server never calls it. A call with a code (voice.ts, VOICE_ENABLED) goes to the
   // same Twilio host as the text messages above, and only when those are switched on through Twilio.
   const wa = whatsappProvider(env);
-  out.push({ id: 'whatsapp', name: 'WhatsApp provider', purpose: 'Sends the signing link by WhatsApp to someone the sender says agreed to it: the number, the sender\'s name, the document\'s title and the link. Never the document.', settings: wa === 'twilio' ? ['TWILIO_WHATSAPP_FROM'] : ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'TWILIO_WHATSAPP_FROM'],
+  if (WHATSAPP_OFFERED) out.push({ id: 'whatsapp', name: 'WhatsApp provider', purpose: 'Sends the signing link by WhatsApp to someone the sender says agreed to it: the number, the sender\'s name, the document\'s title and the link. Never the document.', settings: wa === 'twilio' ? ['TWILIO_WHATSAPP_FROM'] : ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'TWILIO_WHATSAPP_FROM'],
     on: wa === 'meta' || wa === 'twilio', hosts: wa === 'meta' ? ['graph.facebook.com'] : wa === 'twilio' ? ['api.twilio.com'] : [] });
   const tsa = tsaHosts(env);
   out.push({ id: 'tsa', name: 'Time-stamp service', purpose: 'Adds a time stamp from that service to the digital seal of a signed PDF, and one over the last value of each record when everyone has finished. Without it the seal carries the server\'s own time only. It is sent fingerprints, never the document. With it, the server also asks the places named inside the seal\'s and the service\'s certificates (their OCSP services and revocation lists) whether those certificates are still good, sending a certificate\'s serial number: those addresses come from the certificates and are not listed here.', settings: ['TSA_URL', 'TSA_URLS'], on: tsa.length > 0, hosts: tsa });

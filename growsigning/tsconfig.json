@@ -108,7 +108,15 @@
     ".next-repair-ds-pay-collect/types/**/*.ts",
     ".next-repair-ds-pay-collect/dev/types/**/*.ts",
     ".next-ux-g20/types/**/*.ts",
-    ".next-ux-g20/dev/types/**/*.ts"
+    ".next-ux-g20/dev/types/**/*.ts",
+    ".next-landing/types/**/*.ts",
+    ".next-landing/dev/types/**/*.ts",
+    ".next-skeptic-landing/types/**/*.ts",
+    ".next-skeptic-landing/dev/types/**/*.ts",
+    ".next-simprev/types/**/*.ts",
+    ".next-simprev/dev/types/**/*.ts",
+    ".next-landfix/types/**/*.ts",
+    ".next-landfix/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

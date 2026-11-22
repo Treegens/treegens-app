@@ -6,13 +6,15 @@ import { PublicNav, PublicFooter, ImpactBand, ClosedNotice } from '@/components/
 import { PRICING, usd } from '@/lib/impact';
 import { TREES_PER_SIGNATURE } from '@/lib/impactwords';
 import { HomeSignature } from '@/components/HomeSignature';
+import { HomeVideo } from '@/components/home/HomeVideo';
 import { DeploymentHome } from '@/components/DeploymentHome';
 import { isDeploymentBilling } from '@/lib/billingmode';
 import { homeVideo, HOME_VIDEO_CAPTION, HOME_VIDEO_TEXT } from '@/lib/homevideo';
 import { requestT } from '@/components/requestLang';
 
 // The home page says one thing: a signature that is paid for plants mangroves. One button, three short points, and
-// the video of the trees being counted. Prices and their rules are on /pricing, what the product does on /features,
+// the video of the trees being counted, playing by itself with a pause button on it, beside a sheet whose signature
+// writes itself and grows the leaf. Prices and their rules are on /pricing, what the product does on /features,
 // and how the trees and the paper are counted on /impact.
 //
 // The video is a setting (HOME_VIDEO_URL, src/lib/homevideo.ts), read when the page is asked for.
@@ -35,18 +37,15 @@ export default async function Landing() {
             <div className="home-copy">
               <p className="home-kicker"><Mark size={28} tone="dark" label="" /> {T('public.home.kicker')}</p>
               <h1>{T.rich('public.home.h1', { trees: <em>{T('public.home.h1_trees', { count: String(TREES_PER_SIGNATURE) })}</em> })}</h1>
-              <HomeSignature />
+              {!video && <HomeSignature />}
               <p className="lead">{T('public.home.lead', { trees: String(P.treesPerUsd) })}</p>
               <Link href="/signup" className="btn primary lg">{T('public.home.start')}</Link>
               <p className="muted small home-note">{T('public.home.note', { count: P.welcomeSignatures })}</p>
             </div>
             {video && (
               <figure className="home-video">
-                {/* Never plays by itself. With a poster, nothing of the file is fetched until someone presses play. */}
-                <video controls muted playsInline preload={video.preload} poster={video.poster || undefined} width={960} height={540} aria-label={HOME_VIDEO_CAPTION} aria-describedby={video.poster === '/videos/tree-count.webp' ? 'home-video-text' : undefined}>
-                  <source src={video.src} type={video.type} />
-                  <a href={video.src}>{T('public.home.open_video')}</a>
-                </video>
+                <HomeVideo src={video.src} type={video.type} poster={video.poster} label={HOME_VIDEO_CAPTION} describedBy={video.poster === '/videos/tree-count.webp' ? 'home-video-text' : undefined} pauseLabel={T('public.home.pause_video')} playLabel={T('public.home.play_video')} openLabel={T('public.home.open_video')} />
+                <HomeSignature />
                 <figcaption>{HOME_VIDEO_CAPTION}</figcaption>
                 {/* The longer description belongs to the video that ships with the product, so it is said only for that one. */}
                 {video.poster === '/videos/tree-count.webp' && <p id="home-video-text" className="pub-vh">{HOME_VIDEO_TEXT}</p>}
