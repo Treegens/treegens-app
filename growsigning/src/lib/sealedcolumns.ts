@@ -20,5 +20,5 @@ export const CLEAR_WORDS = [
   'subjects and messages of envelopes, names of documents and folders, and who each email went to with its subject',
   'ids and fingerprints of files',
   'audit trails, with the IP addresses and browsers they record and what they repeat, such as a decline reason',
-  'copies of text messages, click-to-agree terms and who accepted them, custom fields, contacts, signing groups, plans and payments',
+  'copies of text and WhatsApp messages, click-to-agree terms and who accepted them, custom fields, contacts, signing groups, plans and payments',
 ];

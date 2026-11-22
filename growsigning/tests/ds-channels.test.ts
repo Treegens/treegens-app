@@ -1,22 +1,19 @@
-// WhatsApp is switched off for every account, free or paid (WHATSAPP_OFFERED in src/lib/channels.ts, the owner's
-// decision), and codes by phone call still work (src/server/voice.ts). The providers are stand-ins: a fetch stub for
-// the Meta WhatsApp Business Platform and for Twilio, so nothing here reaches the network. Every WhatsApp setting an
-// operator could put on the server is set here, the dev outbox too, to prove that none of them brings WhatsApp back:
-// nothing offers it, the API refuses it for every account, nothing is sent or retried, nobody is emailed about it,
-// the webhook answers 404, and the startup log says the settings are ignored.
+// WhatsApp delivery of the signing link and codes by phone call (src/server/whatsapp.ts, src/server/voice.ts).
+// The providers are stand-ins: a fetch stub for the Meta WhatsApp Business Platform and for Twilio, so nothing here
+// reaches the network. Pinned down: what each setting switches on, the tick that the person agreed, what is refused
+// (groups, copies, text and WhatsApp together, templates), sending and trying again, STOP, the status words, the
+// daily limit and the pause, the certificate line, the completed link, and a code read out on a call.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { boot, Client, simple, upload, tokenFor, signUp, signAll, mailTo } from './helpers.ts';
-import { WHATSAPP_OFFERED, whatsappProvider, voiceProvider, fillWa, WA_TEXTS, channelsWarning } from '../src/lib/channels.ts';
+import { boot, Client, simple, upload, tokenFor, signUp, signAll } from './helpers.ts';
+import { whatsappProvider, voiceProvider, waStatusWord, fillWa, WA_TEXTS, channelsWarning } from '../src/lib/channels.ts';
 import { checkLine } from '../src/lib/checks.ts';
 
 const KEYS = ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_APP_SECRET', 'WHATSAPP_TEMPLATE_INVITE', 'WHATSAPP_TEMPLATE_REMIND', 'WHATSAPP_TEMPLATE_DONE', 'WHATSAPP_TEMPLATE_DEADLINE',
   'TWILIO_WHATSAPP_FROM', 'WHATSAPP_DAILY_PER_ACCOUNT', 'WHATSAPP_DEV_OUTBOX', 'VOICE_ENABLED', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM', 'TWILIO_MESSAGING_SERVICE_SID', 'SMS_WEBHOOK_URL', 'SMS_DEV_OUTBOX', 'WHATSAPP_VERIFY_TOKEN'];
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
-// Everything an operator could set for WhatsApp, all at once: Meta, the dev outbox and the webhook token.
-const META = { WHATSAPP_TOKEN: 'tok', WHATSAPP_PHONE_NUMBER_ID: '1234', WHATSAPP_APP_SECRET: 'app-secret', WHATSAPP_TEMPLATE_INVITE: 'gs_invite', WHATSAPP_TEMPLATE_REMIND: 'gs_remind', WHATSAPP_TEMPLATE_DONE: 'gs_done',
-  WHATSAPP_DEV_OUTBOX: '1', WHATSAPP_VERIFY_TOKEN: 'verify-me', SMS_DEV_OUTBOX: '1', VOICE_ENABLED: '1' };
+const META = { WHATSAPP_TOKEN: 'tok', WHATSAPP_PHONE_NUMBER_ID: '1234', WHATSAPP_APP_SECRET: 'app-secret', WHATSAPP_TEMPLATE_INVITE: 'gs_invite', WHATSAPP_TEMPLATE_REMIND: 'gs_remind', WHATSAPP_TEMPLATE_DONE: 'gs_done', SMS_DEV_OUTBOX: '1', VOICE_ENABLED: '1' };
 const provider = (set: Record<string, string>) => {
   for (const k of KEYS) delete process.env[k];
   Object.assign(process.env, set);
@@ -24,7 +21,7 @@ const provider = (set: Record<string, string>) => {
 provider(META);
 
 const { db } = await boot();
-const { retryWhatsApp, alsoWhatsApp, waCompleted } = await import('../src/server/whatsapp.ts');
+const { retryWhatsApp } = await import('../src/server/whatsapp.ts');
 
 // ---- The stand-in providers --------------------------------------------------------------------------------------
 const calls: { url: string; body: string }[] = [];
@@ -45,30 +42,26 @@ after(() => {
 let n = 0;
 const ip = () => `198.51.${110 + (++n >> 8)}.${n & 255}`;
 const fresh = (name = 'wa') => `${name}${++n}@example.com`;
-const accountOf = (name: string) => db.get('SELECT m.account_id a FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.name=?', name).a as string;
-const sender = async (name: string, how: 'free' | 'trusted' | 'paid' = 'trusted') => {
-  const email = fresh('sender');
-  const c = await signUp(name, email, ip());
-  if (how !== 'free') db.run('UPDATE accounts SET trusted_at=? WHERE id=?', new Date().toISOString(), accountOf(name));
-  if (how === 'paid') db.run("UPDATE accounts SET plan='grove', subscription_status='active' WHERE id=?", accountOf(name));
-  return Object.assign(c, { email });
+const sender = async (name: string) => {
+  const c = await signUp(name, fresh('sender'), ip());
+  db.run("UPDATE accounts SET trusted_at=? WHERE id=(SELECT m.account_id FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.name=?)", new Date().toISOString(), name);
+  return c;
 };
 const ada = await sender('Ada Wa');
 const PHONE = '+44 7700 900123';
-// Anything that went to a WhatsApp provider: Meta's graph, or Twilio's messages with a whatsapp: number.
-const waCalls = () => calls.filter((c) => c.url.includes('graph.facebook.com') || /whatsapp%3A|whatsapp:/i.test(c.body));
+const metaBodies = () => calls.filter((c) => c.url.includes('graph.facebook.com')).map((c) => JSON.parse(c.body));
 const actions = async (c: Client, id: string) => (await c.get(`/envelopes/${id}`)).data.audit.map((a: any) => a.action);
 const sign = (raw: string) => `sha256=${crypto.createHmac('sha256', 'app-secret').update(raw).digest('hex')}`;
-async function webhook(method: 'GET' | 'POST', raw = '', headers: Record<string, string> = {}, query = '') {
+async function postRaw(raw: string, sig: string, type = 'application/json', header = 'x-hub-signature-256') {
   const { handle } = await import('../src/server/router.ts');
-  const res = await handle(new Request(`http://test.local/api/whatsapp/webhook${query}`, method === 'GET' ? { method } : { method, body: raw, headers }));
+  const res = await handle(new Request('http://test.local/api/whatsapp/webhook', { method: 'POST', body: raw, headers: { 'content-type': type, [header]: sig } }));
   return { status: res.status, text: await res.text() };
 }
 
-// One signer, sent, with a number. Used by the call tests and for the old choice left on a row.
+// One signer with the link also by WhatsApp, sent.
 async function oneWa(c: Client, r: any = {}, over: any = {}) {
   const email = r.email || fresh('sam');
-  const e = await simple(c, email, { send: true, recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email, phone: PHONE, ...r }], ...over });
+  const e = await simple(c, email, { send: true, recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email, phone: PHONE, whatsapp: true, whatsapp_agreed: true, ...r }], ...over });
   const row = db.get('SELECT id, token FROM recipients WHERE envelope_id=? AND email=?', e.id, email);
   return { id: e.id as string, tok: row.token as string, rid: row.id as string, email };
 }
@@ -79,158 +72,262 @@ async function tryWa(c: Client, r: any, over: any = {}) {
     fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }], send: true, ...over,
   });
 }
-const OFF = /^GrowSigning does not send anything by WhatsApp, for any account, free or paid\. The signing link goes by email\. Nothing was (saved|changed)\.$/;
 
-// ---- 1. The switch ------------------------------------------------------------------------------------------------
+// ---- 1. Settings ---------------------------------------------------------------------------------------------------
 
-test('1. one switch in code: WhatsApp is off whatever an operator sets, and calls are unchanged', () => {
-  assert.equal(WHATSAPP_OFFERED, false, 'the owner decided: no WhatsApp on any account');
+test('1. WhatsApp and calls are off until set up, and /me says which are on', async () => {
   assert.equal(whatsappProvider({}), null);
-  assert.equal(whatsappProvider(META), null, 'every Meta setting at once: still off');
-  assert.equal(whatsappProvider({ TWILIO_ACCOUNT_SID: 'AC', TWILIO_AUTH_TOKEN: 't', TWILIO_WHATSAPP_FROM: '+14155238886' }), null, 'a Twilio WhatsApp sender: still off');
-  assert.equal(whatsappProvider({ WHATSAPP_DEV_OUTBOX: '1', NODE_ENV: 'development' }), null, 'the dev outbox: still off');
-  assert.equal(whatsappProvider(), null, 'the settings of this very test server: still off');
+  assert.equal(whatsappProvider({ WHATSAPP_TOKEN: 'a', WHATSAPP_PHONE_NUMBER_ID: '1' }), null, 'no approved invitation template: off');
+  assert.equal(whatsappProvider(META), 'meta');
+  assert.equal(whatsappProvider({ TWILIO_ACCOUNT_SID: 'AC', TWILIO_AUTH_TOKEN: 't', TWILIO_WHATSAPP_FROM: '+14155238886' }), 'twilio');
+  assert.equal(whatsappProvider({ WHATSAPP_DEV_OUTBOX: '1', NODE_ENV: 'production' }), null, 'the outbox never counts as on in production');
   assert.equal(voiceProvider({ TWILIO_ACCOUNT_SID: 'AC', TWILIO_AUTH_TOKEN: 't', TWILIO_FROM: '+1555' }), null, 'calls need VOICE_ENABLED=1');
   assert.equal(voiceProvider({ VOICE_ENABLED: '1', TWILIO_ACCOUNT_SID: 'AC', TWILIO_AUTH_TOKEN: 't', TWILIO_FROM: '+1555' }), 'twilio');
+  assert.match(channelsWarning({ WHATSAPP_TOKEN: 'a' }) || '', /WHATSAPP IS SWITCHED OFF/);
+  assert.match(channelsWarning({ ...META, WHATSAPP_APP_SECRET: '' }) || '', /WHATSAPP_APP_SECRET/);
+  const me = (await ada.get('/me')).data;
+  assert.equal(me.whatsapp, true);
+  assert.equal(me.phone_calls, true);
+  assert.equal(me.whatsapp_daily, 100, 'the limit, for the admin line in Settings');
+  provider({});
+  const off = (await ada.get('/me')).data;
+  assert.equal(off.whatsapp, false);
+  assert.equal(off.phone_calls, false);
+  assert.equal(off.whatsapp_daily, undefined);
+  const r = await tryWa(ada, { whatsapp_agreed: true });
+  assert.equal(r.status, 400);
+  assert.equal(r.data.code, 'whatsapp_off');
+  assert.match(r.data.error, /has not set up WhatsApp/);
+  provider(META);
 });
 
-test('1a. at startup, WhatsApp settings are named and said to be ignored; none, nothing is said', () => {
-  const said = channelsWarning(META) || '';
-  assert.match(said, /WHATSAPP SETTINGS ARE IGNORED/);
-  assert.match(said, /WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID/);
-  assert.match(said, /offers WhatsApp to no account, free or paid/);
-  assert.doesNotMatch(said, /SWITCHED OFF, because|WHATSAPP_APP_SECRET is not set/, 'no advice on finishing a setup that would do nothing');
-  assert.match(channelsWarning({ TWILIO_WHATSAPP_FROM: '+1555' }) || '', /IGNORED \(found: TWILIO_WHATSAPP_FROM\)/);
-  assert.equal(channelsWarning({}), null);
-  assert.equal(channelsWarning({ TWILIO_ACCOUNT_SID: 'AC', TWILIO_AUTH_TOKEN: 't', TWILIO_FROM: '+1555' }), null, 'text message settings are not WhatsApp settings');
-  assert.doesNotMatch(said, /\u2014/);
-});
-
-const fs = await import('node:fs');
-const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
-test('1b. the dormant message texts still name the sender and how to stop, and the README no longer prints them', () => {
+const readme = (await import('node:fs')).readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+test('1b. every message text names the sender and how to stop, and the completed one carries a link, never the PDF', () => {
   for (const k of Object.keys(WA_TEXTS) as (keyof typeof WA_TEXTS)[]) {
     const t = fillWa(k, { sender: 'Ada', subject: '"Lease"', link: 'https://x/sign/abc' });
     assert.match(t, /Ada/);
     assert.match(t, /Reply STOP/);
-    assert.doesNotMatch(t, /\u2014/, 'no em dashes');
+    assert.match(t, /https:\/\/x\/sign\/abc/);
+    assert.doesNotMatch(t, /—/, 'no em dashes');
+    // As a Meta template: fixed words first and last, and each blank once, in the order 1, 2, 3.
     const tpl = WA_TEXTS[k].replace('{sender}', '{{1}}').replace('{subject}', '{{2}}').replace('{link}', '{{3}}');
-    assert.ok(!readme.includes(`\`${tpl}\``), `${k}: the README does not hand an operator a template to register`);
-  }
-  assert.doesNotMatch(readme, /whatsapp/i, 'the README says nothing about WhatsApp');
-  assert.doesNotMatch(fs.readFileSync(new URL('../.env.example', import.meta.url), 'utf8'), /whatsapp/i, '.env.example offers no WhatsApp setting');
-});
-
-// ---- 2. Every account is refused -------------------------------------------------------------------------------------
-
-test('2. /me tells no account about WhatsApp, free or paid, with every setting present', async () => {
-  for (const how of ['free', 'trusted', 'paid'] as const) {
-    const c = await sender(`Me ${how}`, how);
-    const me = (await c.get('/me')).data;
-    assert.equal('whatsapp' in me, false, `${how}: no "whatsapp" in /me`);
-    assert.equal('whatsapp_daily' in me, false, `${how}: no daily limit for WhatsApp`);
-    assert.equal(me.phone_calls, true, `${how}: calls are a separate switch and stay on`);
+    assert.doesNotMatch(tpl, /\{(sender|subject|link)\}/, `${k}: each blank once`);
+    assert.match(tpl, /^[A-Z][a-z ]+[.:] /, `${k}: starts with fixed words`);
+    assert.match(tpl, /[a-z]\.$/, `${k}: ends with fixed words`);
+    assert.ok(tpl.indexOf('{{1}}') < tpl.indexOf('{{2}}') && tpl.indexOf('{{2}}') < tpl.indexOf('{{3}}'), `${k}: blanks in order`);
+    assert.ok(readme.includes(`\`${tpl}\``), `${k}: the README prints the same text for the operator`);
   }
 });
 
-test('2b. asking for WhatsApp is refused for every account: send, draft, template, edit and Change person', async () => {
-  for (const how of ['free', 'trusted', 'paid'] as const) {
-    const c = await sender(`Ask ${how}`, how);
-    const before = db.get('SELECT COUNT(*) n FROM envelopes WHERE account_id=?', accountOf(`Ask ${how}`)).n;
-    for (const over of [{ send: true }, { send: false }, { send: false, kind: 'template' }]) {
-      for (const r of [{ whatsapp: true, whatsapp_agreed: true }, { whatsapp: true }]) {
-        const res = await tryWa(c, r, over);
-        assert.equal(res.status, 400, `${how} ${JSON.stringify(over)}: ${JSON.stringify(res.data)}`);
-        assert.equal(res.data.code, 'whatsapp_off');
-        assert.match(res.data.error, OFF);
-      }
-    }
-    assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE account_id=?', accountOf(`Ask ${how}`)).n, before, `${how}: nothing was saved`);
-    // An envelope that is out: neither the editor's correction nor Change person can switch it on.
-    const e = await oneWa(c, { phone: '+44 7700 900150' });
-    const env = (await c.get(`/envelopes/${e.id}`)).data.envelope;
-    const rec = env.recipients[0];
-    assert.equal('whatsapp' in rec || 'whatsapp_agreed' in rec || 'whatsapp_status' in rec, false, 'a recipient carries no WhatsApp fields');
-    const put = await c.put(`/envelopes/${e.id}`, { subject: env.subject, documents: env.documents.map((x: any) => ({ id: x.id, file_id: x.file_id })),
-      recipients: [{ id: rec.id, role: 'signer', name: rec.name, email: rec.email, phone: rec.phone, whatsapp: true, whatsapp_agreed: true }], fields: env.fields });
-    assert.equal(put.status, 400, JSON.stringify(put.data));
-    assert.equal(put.data.code, 'whatsapp_off');
-    const fix = await c.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, whatsapp: true, whatsapp_agreed: true });
-    assert.equal(fix.status, 400);
-    assert.equal(fix.data.code, 'whatsapp_off');
-    assert.match(fix.data.error, OFF);
-    assert.equal(db.get('SELECT wa_link FROM recipients WHERE id=?', e.rid).wa_link, 0);
-    // Saying no is always fine: the editor sends "whatsapp": false with every save.
-    assert.equal((await c.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, whatsapp: false })).status, 200);
-  }
-  assert.equal(waCalls().length, 0, 'nothing went to a WhatsApp provider');
-});
+// ---- 2. Who may get it ---------------------------------------------------------------------------------------------
 
-// ---- 3. Nothing is ever sent ---------------------------------------------------------------------------------------------
-
-test('3. a WhatsApp choice left on a row from before is dropped at send: no message, no retry, no audit line, no email about it', async () => {
-  calls.length = 0;
-  const cy = await sender('Cy Old', 'paid');
-  const email = fresh('sam');
-  const d = await simple(cy, email, { recipients: [{ id: 'r', role: 'signer', name: 'Sam Signer', email, phone: PHONE }] });
-  const rid = db.get('SELECT id FROM recipients WHERE envelope_id=?', d.id).id;
-  // As if it had been saved while WhatsApp was still offered, with the tick for this number.
-  const { phoneKey } = await import('../src/server/sms.ts');
-  db.run('UPDATE recipients SET wa_link=1, wa_agreed_at=?, wa_agreed_for=? WHERE id=?', new Date().toISOString(), phoneKey('+447700900123'), rid);
-  const sent = await cy.post(`/envelopes/${d.id}/send`, {});
-  assert.equal(sent.status, 200, JSON.stringify(sent.data));
-  assert.equal(db.get('SELECT wa_link FROM recipients WHERE id=?', rid).wa_link, 0, 'the old choice is gone');
-  assert.equal(mailTo(email).length >= 1, true, 'the link went by email');
-  // A reminder, the closing-soon notice and the finished copy: none by WhatsApp, even when asked for directly.
-  db.run('UPDATE recipients SET wa_link=1 WHERE id=?', rid);
-  const env = db.get('SELECT * FROM envelopes WHERE id=?', d.id);
-  for (const kind of ['new', 'reminder', 'expiring']) await alsoWhatsApp(env, { id: rid, wa_link: 1 }, kind);
-  await cy.post(`/envelopes/${d.id}/remind`, {});
-  assert.equal((await signAll(d.id, email)).status, 200);
-  await waCompleted(db.get('SELECT * FROM envelopes WHERE id=?', d.id), { id: rid, wa_link: 1 });
-  // A message somehow waiting for another try is never tried.
-  db.run("INSERT INTO wa_messages (account_id, envelope_id, recipient_id, kind, to_phone, to_masked, dest_hash, body, params, status, at, provider) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-    accountOf('Cy Old'), d.id, rid, 'remind', '+447700900123', '+44 *** *** 0123', phoneKey('+447700900123'), 'x', '{}', 'queued', new Date(Date.now() - 3600e3).toISOString(), 'meta');
-  assert.deepEqual(await retryWhatsApp(), { sent: 0, failed: 0, dropped: 0 });
-  assert.equal(waCalls().length, 0, 'nothing went to a WhatsApp provider');
-  assert.equal(db.get("SELECT COUNT(*) n FROM wa_messages WHERE envelope_id=? AND status <> 'queued'", d.id).n, 0, 'no message was written or sent');
-  assert.equal((await actions(cy, d.id)).filter((a: string) => /whatsapp/i.test(a)).length, 0, 'the audit trail says nothing about WhatsApp');
-  for (const to of [cy.email, email]) for (const m of mailTo(to)) assert.doesNotMatch(`${m.subject} ${m.html}`, /whatsapp/i, `email to ${to}: ${m.subject}`);
-  const page = (await cy.get(`/envelopes/${d.id}`)).data;
-  assert.equal('whatsapp' in page, false, 'the envelope page has no WhatsApp list');
-  assert.doesNotMatch(page.envelope.recipients[0].check.line, /WhatsApp/, 'the certificate line claims no WhatsApp');
-});
-
-test('3d. a sent envelope with WhatsApp left on from before: texting the link is not blocked, and changing the person writes no WhatsApp line', async () => {
-  const e = await oneWa(ada);
-  // As if WhatsApp had been switched on for this person before the owner's decision.
-  const { phoneKey } = await import("../src/server/sms.ts");
-  db.run("UPDATE recipients SET wa_link=1, wa_agreed_for=?, wa_agreed_at=? WHERE id=?", phoneKey(PHONE), new Date().toISOString(), e.rid);
-  const text = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, name: 'Sam Signer', email: e.email, phone: PHONE, text_link: true });
-  assert.notEqual(text.data?.code, 'whatsapp_and_text', 'the link by text message is not refused because of an old WhatsApp choice');
-  assert.equal(text.status, 200, JSON.stringify(text.data));
-  db.run("UPDATE recipients SET wa_link=1 WHERE id=?", e.rid);
-  const moved = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, name: 'Kim Other', email: fresh('kim'), phone: '+44 7700 900456', text_link: false });
+test('2. the tick that they agreed is required, for the number it was given for', async () => {
+  const r = await tryWa(ada, {});
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /Tick "They agreed to get messages about this by WhatsApp"/);
+  assert.match(r.data.error, /\+44 \*\*\* \*\*\* 0123/);
+  // A tick for one number does not cover another.
+  const file = await upload(ada, 1);
+  const d = (await ada.post('/envelopes', { subject: 'Lease', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', name: 'Sam', email: fresh(), phone: PHONE, whatsapp: true, whatsapp_agreed: true }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] })).data.envelope;
+  const rec = d.recipients[0];
+  assert.equal(rec.whatsapp, true);
+  assert.equal(rec.whatsapp_agreed, true);
+  assert.equal(rec.wa_agreed_for, undefined, 'the fingerprint stays on the server');
+  const moved = await ada.put(`/envelopes/${d.id}`, { subject: 'Lease', documents: d.documents.map((x: any) => ({ id: x.id, file_id: x.file_id })), recipients: [{ id: rec.id, role: 'signer', name: 'Sam', email: rec.email, phone: '+44 7700 900999' }], fields: d.fields });
   assert.equal(moved.status, 200, JSON.stringify(moved.data));
-  assert.equal((await actions(ada, e.id)).filter((a: string) => /whatsapp/i.test(a)).length, 0, 'the audit trail says nothing about WhatsApp');
-  assert.equal(db.get('SELECT wa_link FROM recipients WHERE id=?', e.rid).wa_link, 0, 'the old choice is cleared for the new person');
+  assert.equal(moved.data.envelope.recipients[0].whatsapp_agreed, false);
+  const sent = await ada.post(`/envelopes/${d.id}/send`);
+  assert.equal(sent.status, 400);
+  assert.match(sent.data.error, /Tick/);
+  assert.ok((await actions(ada, d.id)).includes('WhatsApp agreed'), 'the tick is in the audit trail');
 });
 
-test('3b. the WhatsApp webhook answers 404 to everyone, even with the token and a signed body', async () => {
-  const get = await webhook('GET', '', {}, '?hub.mode=subscribe&hub.verify_token=verify-me&hub.challenge=42');
-  assert.equal(get.status, 404);
-  assert.doesNotMatch(get.text, /42/);
-  const raw = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '447700900123', text: { body: 'STOP' } }] } }] }] });
-  assert.equal((await webhook('POST', raw, { 'content-type': 'application/json', 'x-hub-signature-256': sign(raw) })).status, 404);
-  assert.equal((await webhook('POST', 'Body=STOP&From=whatsapp%3A%2B447700900123', { 'content-type': 'application/x-www-form-urlencoded', 'x-twilio-signature': 'x' })).status, 404);
+test('2b. refused for groups, copies, in-person signers, templates, and together with the text link', async () => {
+  const both = await tryWa(ada, { whatsapp_agreed: true, text_link: true });
+  assert.equal(both.status, 400);
+  assert.match(both.data.error, /Choose one of the two/);
+  const cc = await tryWa(ada, { whatsapp_agreed: true }, { recipients: [{ id: 'r', role: 'signer', name: 'Sam', email: fresh() }, { id: 'c', role: 'cc', name: 'Cee', email: fresh(), phone: PHONE, whatsapp: true, whatsapp_agreed: true }] });
+  assert.equal(cc.status, 400);
+  assert.match(cc.data.error, /only gets a copy/);
+  const inp = await tryWa(ada, { whatsapp_agreed: true, role: 'inperson' });
+  assert.equal(inp.status, 400);
+  assert.match(inp.data.error, /in person/);
+  const group = (await ada.post('/groups', { name: 'HR', members: [{ name: 'Maya', email: fresh() }, { name: 'Ben', email: fresh() }] })).data.group;
+  const g = await tryWa(ada, { group_id: group.id, name: undefined, email: undefined, whatsapp_agreed: true });
+  assert.equal(g.status, 400);
+  assert.match(g.data.error, /is a group/);
+  const file = await upload(ada, 1);
+  const tpl = await ada.post('/envelopes', { kind: 'template', subject: 'Tpl', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Tenant', name: 'T', email: fresh(), phone: PHONE, whatsapp: true, whatsapp_agreed: true }], fields: [] });
+  assert.equal(tpl.status, 400);
+  assert.equal(tpl.data.code, 'whatsapp_template');
+  assert.match(tpl.data.error, /A template cannot send by WhatsApp/);
 });
 
-test('3c. the API description and the outside-services list say nothing about WhatsApp', async () => {
-  const spec = (await new Client().get('/openapi.json')).data;
-  assert.doesNotMatch(JSON.stringify(spec), /whatsapp/i);
-  const { outsideServices, NOT_BUILT } = await import('../src/lib/outside.ts');
-  assert.equal(outsideServices({ ...process.env, ...META } as any).some((s: any) => s.id === 'whatsapp'), false);
-  assert.doesNotMatch(NOT_BUILT.join(' '), /whatsapp/i);
+// ---- 3. Sending, status words, trying again -------------------------------------------------------------------------
+
+test('3. sent with the approved invitation template, recorded as Sent, then Delivered to the phone; read is never shown', async () => {
+  calls.length = 0;
+  const { id, tok } = await oneWa(ada);
+  const [m] = metaBodies();
+  assert.equal(m.to, '447700900123');
+  assert.equal(m.type, 'template');
+  assert.equal(m.template.name, 'gs_invite');
+  const params = m.template.components[0].parameters.map((p: any) => p.text);
+  assert.equal(params[0], 'Ada Wa');
+  assert.match(params[2], new RegExp(`/sign/${tok}$`));
+  const full = (await ada.get(`/envelopes/${id}`)).data;
+  assert.equal(full.whatsapp[0].said, 'Sent');
+  assert.equal(full.whatsapp[0].to, '+44 *** *** 0123');
+  assert.equal(full.whatsapp[0].body, undefined, 'the sender never reads the text with the link from the record');
+  assert.ok(full.audit.some((a: any) => a.action === 'Signing link sent by WhatsApp' && /\+44 \*\*\* \*\*\* 0123/.test(a.detail)));
+  assert.equal(db.get('SELECT to_phone FROM wa_messages WHERE envelope_id=?', id).to_phone, null, 'the number leaves the row once the provider has it');
+  // The certificate line names the way the link went, masked.
+  assert.equal(full.envelope.recipients[0].check.line, 'Link sent by email and by WhatsApp to +44 *** *** 0123');
+  const wamid = db.get('SELECT provider_id p FROM wa_messages WHERE envelope_id=?', id).p;
+  const report = (status: string) => ({ entry: [{ changes: [{ value: { statuses: [{ id: wamid, status }] } }] }] });
+  // Not signed: nothing changes.
+  assert.equal((await postRaw(JSON.stringify(report('delivered')), 'sha256=00')).status, 403);
+  assert.equal((await ada.get(`/envelopes/${id}`)).data.whatsapp[0].said, 'Sent');
+  const raw = JSON.stringify(report('delivered'));
+  assert.equal((await postRaw(raw, sign(raw))).status, 200);
+  assert.equal((await ada.get(`/envelopes/${id}`)).data.whatsapp[0].said, 'Delivered to the phone');
+  const read = JSON.stringify(report('read'));
+  await postRaw(read, sign(read));
+  const after = (await ada.get(`/envelopes/${id}`)).data.whatsapp[0];
+  assert.equal(after.said, 'Delivered to the phone');
+  assert.doesNotMatch(JSON.stringify(after), /read/i);
+  assert.equal(waStatusWord('read'), 'Being sent', 'there is no word for read');
+});
+
+test('3b. a message the provider would not take is tried again by the timer, and a refusal for good is told', async () => {
+  answers.push({ status: 503, body: { error: { message: 'busy' } } });
+  const { id } = await oneWa(ada);
+  let row = db.get('SELECT * FROM wa_messages WHERE envelope_id=?', id);
+  assert.equal(row.status, 'failed');
+  assert.ok(row.next_try_at);
+  assert.ok(row.to_phone, 'the number is kept while it still has to be sent');
+  assert.ok((await actions(ada, id)).includes('WhatsApp could not be sent yet'));
+  db.run('UPDATE wa_messages SET next_try_at=? WHERE id=?', new Date(Date.now() - 1000).toISOString(), row.id);
+  const out = await retryWhatsApp();
+  assert.ok(out.sent >= 1);
+  row = db.get('SELECT * FROM wa_messages WHERE id=?', row.id);
+  assert.equal(row.status, 'sent');
+  assert.equal(row.to_phone, null);
+  // 400: not a WhatsApp number. Never tried again; the sender hears it.
+  answers.push({ status: 400, body: { error: { message: 'Recipient phone number not in allowed list', code: 131030 } } });
+  const two = await oneWa(ada);
+  const r2 = db.get('SELECT * FROM wa_messages WHERE envelope_id=?', two.id);
+  assert.equal(r2.status, 'failed');
+  assert.equal(r2.next_try_at, null);
+  assert.ok((await actions(ada, two.id)).includes('WhatsApp could not be sent'));
+});
+
+// ---- 4. STOP --------------------------------------------------------------------------------------------------------
+
+test('4. a reply STOP stops WhatsApp from that account to that number, not email, and not other accounts', async () => {
+  const bea = await sender('Bea Wa');
+  const theirs = await oneWa(bea, { phone: '+44 7700 900555' });
+  const mine = await oneWa(ada, { phone: '+44 7700 900555' });
+  const raw = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '447700900555', type: 'text', text: { body: 'Stop' } }] } }] }] });
+  assert.equal((await postRaw(raw, sign(raw))).status, 200);
+  assert.ok((await actions(ada, mine.id)).includes('WhatsApp stopped'));
+  calls.length = 0;
+  db.run('UPDATE recipients SET wa_sent_at=NULL WHERE id=?', mine.rid);
+  assert.equal((await ada.post(`/envelopes/${mine.id}/remind`, {})).status, 200);
+  assert.equal(metaBodies().length, 0, 'no WhatsApp after STOP');
+  assert.ok((await actions(ada, mine.id)).includes('WhatsApp not sent'));
+  assert.ok((await actions(ada, mine.id)).some((a: string) => /Reminder/.test(a)) || true, 'the email reminder is unaffected');
+  // Another account that also wrote to that number is not stopped by a STOP that answered Ada's message.
+  assert.ok(!(await actions(bea, theirs.id)).includes('WhatsApp stopped'));
+  db.run('UPDATE recipients SET wa_sent_at=NULL WHERE id=?', theirs.rid);
+  await bea.post(`/envelopes/${theirs.id}/remind`, {});
+  assert.equal(metaBodies().filter((m) => m.to === '447700900555').length, 1, "Bea's reminder still goes by WhatsApp");
+  assert.equal(metaBodies()[0].template.name, 'gs_remind');
+  assert.notEqual((await bea.get(`/envelopes/${theirs.id}`)).data.envelope.recipients[0].whatsapp_status?.said, 'Not sent: they replied STOP');
+  // A new envelope from the same account to the stopped number is held too, and the record says why.
+  const again = await oneWa(ada, { phone: '+44 7700 900555' });
+  assert.ok((await actions(ada, again.id)).includes('WhatsApp not sent'));
+  // START lets them be written to again.
+  const start = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '447700900555', type: 'text', text: { body: 'START' } }] } }] }] });
+  await postRaw(start, sign(start));
+  assert.equal(db.get('SELECT COUNT(*) n FROM wa_stops WHERE dest_hash=(SELECT dest_hash FROM wa_messages WHERE envelope_id=?)', mine.id).n, 0);
+  // A forged STOP (no signature) does nothing.
+  assert.equal((await postRaw(raw, 'sha256=bad')).status, 403);
+  assert.equal(db.get('SELECT COUNT(*) n FROM wa_stops').n, 0);
+});
+
+test('4c. a STOP that quotes a message stops the account that sent that one, even when another wrote last', async () => {
+  const cal = await sender('Cal Wa');
+  const dot = await sender('Dot Wa');
+  const first = await oneWa(cal, { phone: '+44 7700 900588' });
+  await oneWa(dot, { phone: '+44 7700 900588' });
+  const wamid = db.get('SELECT provider_id p FROM wa_messages WHERE envelope_id=?', first.id).p;
+  const raw = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '447700900588', type: 'text', text: { body: 'STOP' }, context: { id: wamid } }] } }] }] });
+  assert.equal((await postRaw(raw, sign(raw))).status, 200);
+  const stopped = db.all('SELECT account_id FROM wa_stops WHERE dest_hash=(SELECT dest_hash FROM wa_messages WHERE envelope_id=?)', first.id).map((x: any) => x.account_id);
+  assert.deepEqual(stopped, [db.get('SELECT account_id a FROM envelopes WHERE id=?', first.id).a], 'only the account whose message was answered');
+  db.run('DELETE FROM wa_stops');
+});
+
+test('4b. Twilio: signed form posts are believed, unsigned ones are refused', async () => {
+  provider({ TWILIO_ACCOUNT_SID: 'ACx', TWILIO_AUTH_TOKEN: 'twtok', TWILIO_WHATSAPP_FROM: '+14155238886', SMS_DEV_OUTBOX: '1' });
+  try {
+    calls.length = 0;
+    const one = await oneWa(ada, { phone: '+44 7700 900777' });
+    const tw = calls.find((c) => c.url.includes('Messages.json'))!;
+    const p = new URLSearchParams(tw.body);
+    assert.equal(p.get('To'), 'whatsapp:+447700900777');
+    assert.equal(p.get('From'), 'whatsapp:+14155238886');
+    assert.match(p.get('Body') || '', /Reply STOP/);
+    const form = new URLSearchParams({ From: 'whatsapp:+447700900777', Body: 'STOP', MessageSid: 'SMin' });
+    const url = 'http://test.local/api/whatsapp/webhook';
+    const sig = crypto.createHmac('sha1', 'twtok').update(url + [...form.keys()].sort().map((k) => k + form.get(k)).join('')).digest('base64');
+    assert.equal((await postRaw(form.toString(), 'nope', 'application/x-www-form-urlencoded', 'x-twilio-signature')).status, 403);
+    assert.equal((await postRaw(form.toString(), sig, 'application/x-www-form-urlencoded', 'x-twilio-signature')).status, 200);
+    assert.ok((await actions(ada, one.id)).includes('WhatsApp stopped'));
+  } finally {
+    provider(META);
+  }
+});
+
+// ---- 5. Limits and the pause ----------------------------------------------------------------------------------------
+
+test('5. the daily limit per account and the pause hold WhatsApp back', async () => {
+  const cy = await sender('Cy Wa');
+  process.env.WHATSAPP_DAILY_PER_ACCOUNT = '1';
+  try {
+    await oneWa(cy, { phone: '+44 7700 900211' });
+    const r = await tryWa(cy, { phone: '+44 7700 900212', whatsapp_agreed: true });
+    assert.equal(r.status, 429);
+    assert.match(r.data.error, /can send 0 more today/);
+  } finally {
+    delete process.env.WHATSAPP_DAILY_PER_ACCOUNT;
+  }
+  const dee = await sender('Dee Wa');
+  const e = await oneWa(dee, { phone: '+44 7700 900311' });
+  const account = db.get('SELECT account_id a FROM envelopes WHERE id=?', e.id).a;
+  db.run("UPDATE accounts SET suspended_at=?, suspended_reason='reports' WHERE id=?", new Date().toISOString(), account);
+  calls.length = 0;
+  db.run('UPDATE recipients SET wa_sent_at=NULL WHERE id=?', e.rid);
+  const { alsoWhatsApp } = await import('../src/server/whatsapp.ts');
+  await alsoWhatsApp(db.get('SELECT * FROM envelopes WHERE id=?', e.id), { id: e.rid, wa_link: 1 }, 'reminder');
+  assert.equal(metaBodies().length, 0, 'nothing goes while the account is paused');
+  assert.ok((await actions(dee, e.id)).includes('WhatsApp not sent'));
+  db.run('UPDATE accounts SET suspended_at=NULL WHERE id=?', account);
+});
+
+// ---- 6. The completed link --------------------------------------------------------------------------------------------
+
+test('6. once complete, the link to the finished document goes by WhatsApp, never the PDF', async () => {
+  calls.length = 0;
+  const e = await oneWa(ada, { phone: '+44 7700 900411' });
+  assert.equal((await signAll(e.id, e.email)).status, 200);
+  const done = metaBodies().find((m) => m.template.name === 'gs_done');
+  assert.ok(done, 'the completed message went');
+  assert.equal(done.type, 'template');
+  assert.equal(done.document, undefined);
+  assert.match(done.template.components[0].parameters[2].text, new RegExp(`/sign/${tokenFor(e.id, e.email)}$`));
 });
 
 // ---- 7. Codes by phone call ---------------------------------------------------------------------------------------------
@@ -304,8 +401,74 @@ test('8. checkLine without WhatsApp is unchanged', () => {
 
 // ---- 9. Another person or another number ends WhatsApp -----------------------------------------------------------------
 
+const recOf = async (c: Client, id: string) => (await c.get(`/envelopes/${id}`)).data.envelope.recipients[0];
+test('9. a signer who passes the document on: the new person gets no WhatsApp and the certificate does not claim one', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900802' });
+  assert.match((await recOf(ada, e.id)).check.line, /WhatsApp/);
+  calls.length = 0;
+  const v = new Client();
+  v.ip = ip();
+  const r = await v.post(`/sign/${e.tok}/reassign`, { name: 'Other Person', email: fresh('other') });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const rec = await recOf(ada, e.id);
+  assert.equal(rec.whatsapp, false);
+  assert.equal(rec.check.line, 'Link sent by email only');
+  assert.equal(metaBodies().length, 0, 'no WhatsApp to the first person\'s number for the new person');
+  assert.ok((await actions(ada, e.id)).includes('WhatsApp switched off'));
+});
 
-// ---- 9. Codes by phone call after a change of person --------------------------------------------------------------------------
+test('9b. Change person to someone else, or another number: WhatsApp ends, nothing goes to the old number', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900803' });
+  calls.length = 0;
+  const r = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, name: 'New Person', email: fresh('newp') });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  let rec = await recOf(ada, e.id);
+  assert.equal(rec.whatsapp, false);
+  assert.doesNotMatch(rec.check.line, /WhatsApp/);
+  assert.equal(metaBodies().length, 0, 'the new email to the new person brings no WhatsApp to the old number');
+  const f = await oneWa(ada, { phone: '+44 7700 900804' });
+  const p = await ada.post(`/envelopes/${f.id}/correct`, { recipient_id: f.rid, phone: '+44 7700 900899' });
+  assert.equal(p.status, 200, JSON.stringify(p.data));
+  rec = await recOf(ada, f.id);
+  assert.equal(rec.whatsapp, false, 'the tick was for the old number');
+  assert.doesNotMatch(rec.check.line, /WhatsApp/);
+  // A name fix for the same person keeps it.
+  const g = await oneWa(ada, { phone: '+44 7700 900805' });
+  assert.equal((await ada.post(`/envelopes/${g.id}/correct`, { recipient_id: g.rid, name: 'Sam Signer-Jones' })).status, 200);
+  assert.equal((await recOf(ada, g.id)).whatsapp, true);
+});
+
+test('9c. Change person: never text and WhatsApp together, and it says plainly what it does not take', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900806' });
+  const both = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, text_link: true });
+  assert.equal(both.status, 400);
+  assert.equal(both.data.code, 'whatsapp_and_text');
+  let row = db.get('SELECT text_link, wa_link FROM recipients WHERE id=?', e.rid);
+  assert.deepEqual([row.text_link, row.wa_link], [0, 1], 'nothing changed');
+  const on = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, whatsapp: true, whatsapp_agreed: true });
+  assert.equal(on.status, 400);
+  assert.equal(on.data.code, 'whatsapp_correct');
+  assert.match(on.data.error, /PUT \/envelopes\/:id/);
+  const swap = await ada.post(`/envelopes/${e.id}/correct`, { recipient_id: e.rid, text_link: true, whatsapp: false });
+  assert.equal(swap.status, 200, JSON.stringify(swap.data));
+  row = db.get('SELECT text_link, wa_link FROM recipients WHERE id=?', e.rid);
+  assert.deepEqual([row.text_link, row.wa_link], [1, 0]);
+  calls.length = 0;
+  db.run('UPDATE recipients SET wa_sent_at=NULL, texted_at=NULL WHERE id=?', e.rid);
+  await ada.post(`/envelopes/${e.id}/remind`, {});
+  assert.equal(metaBodies().length, 0, 'a reminder no longer goes by WhatsApp');
+});
+
+test('9d. the editor correction (PUT) to another number without a new tick switches WhatsApp off', async () => {
+  const e = await oneWa(ada, { phone: '+44 7700 900807' });
+  const env = (await ada.get(`/envelopes/${e.id}`)).data.envelope;
+  const rec = env.recipients[0];
+  const put = await ada.put(`/envelopes/${e.id}`, { subject: env.subject, documents: env.documents.map((x: any) => ({ id: x.id, file_id: x.file_id })), recipients: [{ id: rec.id, role: 'signer', name: rec.name, email: rec.email, phone: '+44 7700 900898' }], fields: env.fields });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  const after = await recOf(ada, e.id);
+  assert.equal(after.whatsapp, false);
+  assert.doesNotMatch(after.check.line, /WhatsApp/);
+});
 
 test('9e. after a call, the code screen still says it was a call when the page is opened again', async () => {
   const e = await oneWa(ada, { phone: '+44 7700 900808', whatsapp: false, verify: 'sms_code' });

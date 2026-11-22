@@ -49,8 +49,7 @@ export async function register() {
   const { smsWarning } = await import('./lib/checks');
   const sms = smsWarning();
   if (sms) console.error(sms);
-  // And when WhatsApp settings are present (they are ignored: no account gets WhatsApp) or calls with a code were
-  // half set up (src/lib/channels.ts).
+  // And when WhatsApp or calls with a code were half set up (src/lib/channels.ts).
   const { channelsWarning } = await import('./lib/channels');
   const channels = channelsWarning();
   if (channels) console.error(channels);

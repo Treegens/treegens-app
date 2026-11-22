@@ -206,14 +206,18 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
     }
   }
 
-  // The sender's own text message app, with the link filled in. No WhatsApp button: no account gets WhatsApp.
-  async function shareVia(r: any, how: 'sms') {
+  async function shareVia(r: any, how: 'whatsapp' | 'sms') {
+    // A new tab has to be opened during the click itself, or browsers block it. It is pointed at WhatsApp once the link is ready.
+    const tab = how === 'whatsapp' && !links[r.id] ? window.open('', '_blank') : null;
     setBusy(`${how}:${r.id}`);
     try {
       const text = encodeURIComponent(shareText(r, await linkFor(r)));
       setShown(r.id);
-      window.location.href = `sms:?&body=${text}`;
+      if (how === 'sms') window.location.href = `sms:?&body=${text}`;
+      else if (tab) ((tab.opener = null), (tab.location.href = `https://wa.me/?text=${text}`));
+      else window.open(`https://wa.me/?text=${text}`, '_blank', 'noopener');
     } catch (err) {
+      tab?.close();
       fail(err);
     } finally {
       setBusy('');
@@ -400,7 +404,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
             )}
             {/* Signing in person where there is no signal: the copy is got ready here, on this device (OfflineReady.tsx). */}
             {turn && r.role === 'inperson' && may('links') && <OfflineReadyButton envelopeId={e.id} r={r} />}
-            {/* Their link, for the sender to pass on. "Text" here opens the sender's own app: we send nothing. */}
+            {/* Their link, for the sender to pass on. "WhatsApp" and "Text" here open the sender's own app: we send nothing. */}
             {reachable && may('links') && !openGroup && <p className="sn-share-h" id={`${panelId}-share`}>Share the link yourself</p>}
             {(turn || (out && r.status === 'pending')) && may('links') && (
               <div className="sn-person-actions" role="group" aria-labelledby={reachable && !openGroup ? `${panelId}-share` : undefined}>
@@ -408,6 +412,7 @@ export function Recipients({ envelope: e, deliveries, texts = [], myEmail, onCha
                 {!openGroup && <>
                 {reachable && <button className="btn sm" disabled={!!busy} style={mainCopies === r.id ? { display: 'none' } : undefined} onClick={() => copy(r)} aria-label={`Copy signing link for ${r.name}`}>Copy link</button>}
                 {reachable && <button className="btn sm qr-tap" disabled={!!busy} onClick={(ev) => showQr(r, ev.currentTarget)} aria-haspopup="dialog" aria-label={`Show a QR code with the signing link for ${r.name}`}>QR code</button>}
+                {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'whatsapp')} aria-label={`Share link with ${r.name} on WhatsApp`}>Share on WhatsApp</button>}
                 {reachable && <button className="btn sm" disabled={!!busy} onClick={() => shareVia(r, 'sms')} aria-label={`Share link with ${r.name} by text message`}>Text</button>}
                 </>}
               </div>

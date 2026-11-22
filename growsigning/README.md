@@ -186,7 +186,8 @@ the payment provider, Google and Microsoft sign-in, the text message provider, t
 of the help chat, the document converter, the list of leaked passwords, Amazon SNS confirmations and webhooks, each
 on or off from the settings this server runs on, with the hosts. The server logs the same list when it starts. The
 list is in one file, `src/lib/outside.ts`, and a test fails when code in `src/server` opens a connection that is not
-on it. Calls with a code (Twilio) are on that list and are only called where the operator set them up. Certificate revocation checks and any kind of analytics are not in the software, so nothing
+on it. WhatsApp (Meta or Twilio) and calls with a code (Twilio) are on that list and are only called where the
+operator set them up. Certificate revocation checks and any kind of analytics are not in the software, so nothing
 calls them.
 
 **`OUTSIDE_CALLS`** holds the server to that list from the inside:
@@ -333,7 +334,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | The price said $9 and I could not tell in which dollars. | Every price on a public page is written as US$, with one line: prices and payments are in US dollars, and a bank may add a fee for converting. |
 | I cannot find out where my documents are stored or who else handles them. | `/security` has a block "Where your data is", filled from settings (`OPERATOR_NAME`, `DATA_REGION`, `DATA_HOST`, `DATA_BACKUPS` and the provider settings): where the server is, who else handles data, in which country and what for. A provider is listed only when its switch is on, and whatever the operator has not stated is printed as "has not said ... Ask them." instead of being left out. `/security/processing` is a plain data processing summary to save as a PDF, and says that a signed agreement is between the customer and whoever runs the server. |
 | My signer cannot open the page where they are, and nobody says what to do. | Every email that asks someone to sign ends with one line: reply and ask the sender for the document as a PDF. `/help` tells the sender what to do then, and that a signature collected that way is outside the certificate. No claim is made about any country, because none was tested. |
-| My signers live in chat apps, not email, and a recipient cannot exist without an address. | Tick "I will send the link myself": a name and no address. We never write to that person, the envelope page hands the sender the link and the ways to share it, the sender gets the turn, the reminders and the copy in their place, and the certificate says "Link shared by the sender" instead of claiming an email went out. They count towards the limits like anyone. Their own page never promises them an email: asking for more time says the sender will reach them the way they sent the link, and the sender's email says there is no address to reply to. |
+| My signers live in WhatsApp, not email, and a recipient cannot exist without an address. | Tick "I will send the link myself": a name and no address. We never write to that person, the envelope page hands the sender the link and the ways to share it, the sender gets the turn, the reminders and the copy in their place, and the certificate says "Link shared by the sender" instead of claiming an email went out. They count towards the limits like anyone. Their own page never promises them an email: asking for more time says the sender will reach them the way they sent the link, and the sender's email says there is no address to reply to. |
 | My signers do not read English and nobody told me. | `/features`, `/help`, `/security` and this file say it in one sentence (`LANGUAGE_NOTE`): the signing screen and the emails are in English for now, and the document can be in any language. `/help` prints the consent text so a sender can translate it. The foundation for other languages is built (catalogues, a language per recipient, legal texts in English until a person has checked a translation, the language each person agreed in on the audit line), and no screen is translated yet. The signing page is being moved into the catalogue: it sets its language and direction, mirrors for right-to-left languages without turning the document around, gets a language menu once a second language is switched on, and the certificate names the language of each person's page and consent. The request, its reminders, the one-time code and the texts can follow the same language, with the sender's own words untouched and set apart as theirs, and a text in another script is counted in the parts a provider bills. Recipients' emails switch language only once every one of them, and the pages they link to, is translated (`mail: true`), which none is yet, so a signer never gets the request in one language and the completed copy in another. A sender's own Home, menu and the emails we send them (declined, completed, comments and the like) follow the language they choose under Settings, Profile, once a second language ships, and so do most of Settings' cards, the stamp screens, Templates, Send to many, Forms, Contacts, Reports and To sign; the sign-in forms, the home page and `/impact` follow the visitor's browser. The editor, the document page and the Settings page itself are not translated yet. |
 | A name in Chinese, Thai or Hindi comes out as empty boxes on the signed document. | The signed PDF and its certificate print Latin (with accents), Greek, Cyrillic, Arabic, Hebrew, Armenian, Georgian, Chinese, Japanese, Korean, Thai, Devanagari (Hindi, Marathi, Nepali) and Khmer, with the letters joined and stacked as the script needs, and only the font files a document uses are embedded in it. For any other script (Tamil or Bengali, say) nothing is printed as an empty box: the sender is told on the envelope page and before sending, the signer in the check before finishing, each such character is printed as the mark �, and the certificate lists them by Unicode number. A font file that is missing after a broken install counts the same way instead of failing the PDF. A typed signature shows four handwriting styles only when the handwriting fonts can write the name, and one plain style otherwise. |
 | Hebrew or Arabic typed into a field is reversed, and house number 42 becomes 24. | Right-to-left text is put in reading order on the signed PDF and the certificate, with digits and Latin words inside it left to right, and it starts at the right edge of its box. The fields on the signing page take their direction from what is typed. The words as typed are also written into the PDF next to the glyphs, for programs that copy or search. |
@@ -397,7 +398,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 | "Plants a tree with every signature" turned out to mean nothing I could check, and the same line was shown for documents nobody paid for. | "10 mangroves" is said only where a signature was paid for: next to Finish, in the email that asks someone to sign, on the finished screen and on the signing record. A person who signs with a free signature is told nothing about planting; the signing record then says only that GrowSigning gives what it earns from its plans to planting mangroves with Treegens, and a server that takes no payments does not say even that. Nothing says trees are planted already: a signature "plants", mangroves "are being planted". Paper and water are called estimates, with their sources and the working on `/impact`, which also says that no receipts for the money sent to Treegens are published yet, and what is not claimed: no offset. Totals are hidden until they mean something, and no share of a tree is shown. |
 | Our security team asked where the data goes, what the server talks to, how we back it up and who to report a hole to, and the vendor sent a brochure. | You can run it yourself: one container, one volume, in your own country. `/security` lists every outside service with the hosts, from the settings the server runs on, and `OUTSIDE_CALLS=none` switches all but your mail relay off. `/api/health` for your monitor, a backup and restore pair that checks every file and every audit chain and never holds a key, `/.well-known/security.txt` from your own contact, a bill of materials at `/security/sbom.json`, and two documents for the security team that say "a self-assessment by the authors, not audited, not certified" at the top. For procurement, `/procurement` has a dated whitepaper, data processing terms as a template for a lawyer with the code behind each clause, an exit plan and an incident response document, each saying first what it is not, and `/security/subprocessors` lists only the providers this server has switched on. |
 | Years later the PDF reader says the signature on our contract cannot be checked, because its certificate expired. | On a server with a time-stamp service, the signed PDF also carries, from the moment it is completed, what a reader needs to check the server's seal after its certificate has expired: the answers of the places each certificate names to check it, and a time stamp over the whole file. When one of those places does not answer within 20 seconds, the file goes out without them, and the page of the document says so. The record's last value at completion is time-stamped too, so a rewrite of the history up to completion shows against a value the service signed, not us, when that time stamp is checked with OpenSSL against the service's own root (the page's own check can be fooled by whoever runs the database unless `TSA_TRUST` is set). Not yet tried in Acrobat or the EU DSS validator (`src/server/ltv.ts`, `src/server/auditstamp.ts`). We do not call either qualified. |
-| My grandmother cannot read a text with a code. | "Call me with the code" reads a code by text message out on a call instead, slowly and twice, with the same tries and limits (`tests/ds-channels.test.ts`). |
+| My clients live in WhatsApp and never open email, and my grandmother cannot read a text with a code. | Where the operator set it up, a sender can also send the link by WhatsApp, only after ticking that the person agreed (in the audit trail), never together with the text link and never for a group, a copy or a public form. Every message names the sender and says to reply STOP, and STOP stops WhatsApp to that number from the account whose message it answers, not from anyone else. Another person or another number ends WhatsApp, also when a signer passes the document on, so the certificate never names a message that went to someone else. Where it is set up, "How they get it" is one list: Email, Email and a text message, Email and WhatsApp, I will send the link myself. The sender reads "Sent" and "Delivered to the phone", never "read". The finished document goes as a link, never as a file. "Call me with the code" reads a code by text message out on a call instead, slowly and twice, with the same tries and limits (`tests/ds-channels.test.ts`). |
 | Embedded signing broke in ways nobody could diagnose: the frame stayed over our app after Agree, and the event that says signing ended never fired. | The page tells the website around it `signing_complete`, `declined` or `saved` the moment it happens, with `postMessage` to that website alone, and the sender screen goes back to your `return_url` when it is sent or closed. A signing link is shown inside another website only when an admin listed that website and the link was asked for it; every other page can only be shown by our own pages, never by any site. The record names the website the page was signed on. An anchor or tag that is not found is named in the answer with the reason, and a document with one missing is never sent (`tests/ds-dev-api.test.ts`). |
 | I could not see what my signer would see before sending, so I sent it, then had them screenshot it, or voided and resent after they found a field in the wrong place. | Step 3 of the editor has one link, "See what each person sees": the signing page as that person gets it, in a new tab, with a band to switch person and to say that nothing there is recorded or sent. Nothing is: no audit line, no view, no consent, no email, and not one row of the database changes (`tests/ds-preview.test.ts`). The link lasts 15 minutes and opens only in the browser that made it (a link made with an API key: in any browser of the key's maker). |
 | A volunteer on a phone has to pinch and zoom to find twenty little boxes on a form, and a half-filled form vanished when the page reloaded. | A form whose signer fills in fields asks them as questions, one at a time, with the checks and conditions the sender set, keeps the answers for that browser for a day, then shows the whole document with exactly the answers that will be signed in it before anything is made or any signature used; a field with no label is never turned into a meaningless question (`tests/ds-web-forms.test.ts`). |
@@ -471,7 +472,8 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   file: when the subject is empty or names one (also the automatic "Please sign: <first file>"), their link, emails
   and file names say "Please sign: <the first file they are shown>", and step 3 shows that subject under them. A
   correction to a file they are not shown is not emailed to them and not in their "what changed". The sender's
-  envelope page says, in its folded Files, who sees only which files ("Hugo Payroll sees only: Salary sheet"). When everyone has finished, each
+  envelope page says, in its folded Files, who sees only which files ("Hugo Payroll sees only: Salary sheet"). A
+  WhatsApp message (when that channel is set up) uses their own subject too. When everyone has finished, each
   such person gets a completed copy of their own, made through the same finishing steps as the sender's (archive
   format, seal): their files and the certificate, which lists each other file as "One other document you were not
   shown" with its SHA-256 and no name, and a trail that calls it "a document you were not shown" where one of our
@@ -498,7 +500,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   and fix (declined), Copy (cancelled). Everything else is in one More: Open the PDF, Full record for disputes,
   Edit, Give more time, Copy, Save as template, Cancel the request, Delete, and Keep it and Hold only when a
   deletion schedule applies to the document. Each person has one line and a More of their own with what became of
-  their email, Change person and "Share the link yourself" (Copy link, QR code, Text: these open your own
+  their email, Change person and "Share the link yourself" (Copy link, QR code, Share on WhatsApp, Text: these open your own
   apps, we send nothing). A Remind for one person appears there only when two or more people wait at once.
   Questions and comments, History (the emails about the document are lines of it), Files, Details and Checks on
   the file are folded and closed each time the page opens. The page shows no internet addresses or fingerprints;
@@ -629,7 +631,7 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   signature they saw, each is compared with the signer's browser, and the certificate lists both under the signer.
   Where the signer names them, they name both on the review screen, each in its own box. The two cannot be one person
   (the same email address, or the same name also in another spelling), and never more than two.
-- "I will send the link myself": a recipient with a name and no email address, for someone who lives in chat apps or
+- "I will send the link myself": a recipient with a name and no email address, for someone who lives in WhatsApp or
   text messages. We never email that person (no invitation, reminder or copy). The envelope page shows their link
   with copy, QR code and share buttons, also after they finished, because the same link opens the completed
   document. The sender is told when it becomes their turn, gets the reminders in their place and hears when the
@@ -2186,8 +2188,9 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   that have not run out and who checked, and only the owner may mark one so; the day after it expires it reads
   as not held again. A test fails when a page, an email, the PDF text or the docs name one of them in a sentence
   nobody reviewed.
-- **Codes by phone call** (off until the operator sets them up; `src/server/voice.ts`, `src/lib/channels.ts`):
-  "Call me with the code" on the code screen. See "Codes by phone call" under Configuration.
+- **WhatsApp and codes by phone call** (off until the operator sets them up; `src/server/whatsapp.ts`,
+  `src/server/voice.ts`, `src/lib/channels.ts`): the signing link also by WhatsApp for one person who agreed, and
+  "Call me with the code" on the code screen. See "WhatsApp and codes by phone call" under Configuration.
 
 - **Easy reading on the signing page:** View, "How to read the document": Page (the default) or Easy reading. Easy
   reading puts the words of each page in one column at phone size (`src/components/sign/reflow.ts`): paragraphs are
@@ -2386,8 +2389,8 @@ e-signature product, not all of it. Not built:
   A person who was not asked cannot be asked after all from the document's page: add them again with Edit. One
   rule per person, no "and" or "or" between rules, and a rule on a witness is refused.
 - **Sending on a repeating schedule.** Send later sends one draft once, at one time. There is no "every month", no
-  send window and no pause that ends by itself. Resuming sends an email only: no text message, also for someone who got their
-  link that way. A wait before a person is counted from when the step before finished; it cannot wait for
+  send window and no pause that ends by itself. Resuming sends an email only: no text message and no WhatsApp
+  message, also for someone who got their link that way. A wait before a person is counted from when the step before finished; it cannot wait for
   a date, and the deadline keeps running during it.
 - **Reports you design yourself, or that arrive on a schedule you choose.** Reports has fixed tables (by template, by
   sender), the filters and a CSV; the only email is the monthly one. No new charts were added, and none are on Home.
@@ -2482,7 +2485,12 @@ e-signature product, not all of it. Not built:
   someone is on call), the accessibility report is a draft the authors wrote about their own screens (`docs/acr.md`, not audited), and the NIST SP 800-53 controls are not mapped. The software's own hold on
   outside connections (`OUTSIDE_CALLS`) is not a firewall. A closed network still needs a mail relay inside it,
   because a new login confirms its address by email.
-- **Calls tried again.** A call with a code is never tried again, and not offered for a check by email.
+- **Chatting with signers, files by WhatsApp, WhatsApp instead of email.** WhatsApp carries only the four
+  messages below, each with a link; replies other than STOP and START are not read, documents are never sent as
+  attachments, and a person still needs an email address (or the sender sends the link themselves). WhatsApp is
+  not offered on templates, bulk sends or public forms, and Change person can only switch it off (the editor's
+  correction switches it on, with the tick). There is no price or extra limit for accounts that have not paid: each
+  account can send up to `WHATSAPP_DAILY_PER_ACCOUNT` messages a day at the operator's cost. A call with a code is never tried again, and not offered for a check by email.
 - **More than two witnesses, and witnesses compared with each other.** A person who signs has one or two witnesses,
   never three. Each witness is compared with the signer's browser and address, not with the other witness. Nothing
   says which documents need two: the sender decides.
@@ -2582,7 +2590,7 @@ e-signature product, not all of it. Not built:
   app encrypts the stored files, the text read from uploaded PDFs, and signatures, typed answers, comments, stored
   emails, form drafts, decline reasons and help messages in the database (see "Encrypting stored files"), never names, addresses,
   subjects or the audit trail, so encrypt the disk as well. `/security` says so plainly and lists both. The copies of
-  text messages are not encrypted yet either.
+  text and WhatsApp messages are not encrypted yet either.
 - Staffed support. The software gives everyone a way to reach a person, gives those people a queue, publishes a
   response time and says so when it is missed. Someone still has to read the queue and answer in time.
 - Replying to a support email. Answers are written and read on the request's own page (the link in every email),
@@ -2743,6 +2751,12 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SMS_DAILY_PER_ACCOUNT` | The most text message parts one account can cause in 24 hours: one-time codes, signing links and reminders, every new one counted, also a code that is asked for again. A text longer than one part, or with one character outside the GSM alphabet (then 70 characters a part), counts once for each part, as a provider bills it. A text goes only when all of its parts fit in what is left, and a send to several people adds up the parts of every text it would send, so the number is never passed. Curly quotes, long dashes and "..." as one sign are sent as plain ones, so they do not turn a text into UCS-2. A hard stop, because a text costs the operator money and customers are not charged for it. The refusal counts in parts and says when there is room again. `0` lets none through. | `200` |
 | `SMS_DEV_OUTBOX=1` | Development only: text messages are switched on without a provider and are only written to `/dev/outbox`. Ignored on a production server unless `DEV_OUTBOX=1` is set too, because nobody receives anything. | off |
 | `VOICE_ENABLED=1` | "Call me with the code" on the code screen of a check by text message: Twilio calls the number and reads the code out slowly, twice (`src/server/voice.ts`). Needs `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM` (a number that can make calls); with `SMS_DEV_OUTBOX=1` on a development machine it only writes to the outbox. A call counts as one text against `SMS_DAILY_PER_ACCOUNT`. | off |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_TEMPLATE_INVITE` | Switches the signing link by WhatsApp on, through the Meta WhatsApp Business Platform (`src/server/whatsapp.ts`): an approved template (named here) with three blanks, sender, document and link. Off until all three are set: then nothing offers WhatsApp and the API refuses it. | off |
+| `WHATSAPP_TEMPLATE_REMIND`, `WHATSAPP_TEMPLATE_DONE`, `WHATSAPP_TEMPLATE_DEADLINE`, `WHATSAPP_TEMPLATE_LANGUAGE` | The approved templates for a reminder, the link to the completed document and "closes soon" (falls back to the reminder), and their language code. A kind with no template is not sent, and the record says so. | none, `en` |
+| `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` | Meta signs replies and delivery reports to `APP_URL/api/whatsapp/webhook` with the app secret; without it they are refused, so nobody could stop messages by replying STOP. The verify token answers Meta's one-time check of the address. | none |
+| `TWILIO_WHATSAPP_FROM` | With the Twilio settings, switches WhatsApp on through a Twilio WhatsApp sender with this number. Replies and status reports come to the same address, signed with `TWILIO_AUTH_TOKEN`. | off |
+| `WHATSAPP_DAILY_PER_ACCOUNT` | The most WhatsApp messages one account can cause in 24 hours. Each costs the operator money and customers are not charged for it, so this caps the cost until the owner sets a price. `0` lets none through. | `100` |
+| `WHATSAPP_DEV_OUTBOX=1` | Development only: WhatsApp is switched on without a provider and messages are only written to the outbox. Ignored in production unless `DEV_OUTBOX=1`. | off |
 | `ALLOW_PRIVATE_WEBHOOKS=1` | Accepts webhook addresses that are not public https. Local development only. | off |
 | `DEV_OUTBOX=1` | Shows the outbox in a production build. Never set this on a public server: it exposes every signing link. | off |
 | `CONVERTER` | `soffice`: Word, Excel, PowerPoint, OpenDocument, RTF, text, HTML and TIFF uploads are turned into PDF by LibreOffice on this machine (`soffice` on the `PATH`; Debian and Ubuntu: `apt install libreoffice-writer libreoffice-calc libreoffice-impress`). `gotenberg` (or leave it empty and set `CONVERTER_URL`): by a Gotenberg service. Anything else, or nothing: those files are refused, saying that a converter is needed, and nothing offers them. Read "Turning office files into PDF" first: the converter must have no network. (`stub` is for the tests and is ignored on a production server.) | off |
@@ -2889,7 +2903,33 @@ operator's cost to any number they like.
 Not tried against a live provider: Twilio and the hook were only tested against a stand-in
 (`tests/signercode.test.ts`). Send one real text in the provider's test mode before relying on it.
 
-### Codes by phone call
+### WhatsApp and codes by phone call
+
+**WhatsApp.** With the Meta settings or a Twilio WhatsApp sender, a person's More in step 1 has "Also send the
+link by WhatsApp" under "How they get it", with a mobile number and the tick "They agreed to get messages about
+this by WhatsApp". The tick holds for the number it was given for and is written to the audit trail. The email
+still goes; WhatsApp carries the invitation, a reminder (at most one a day), "closes soon", and once complete the
+link to the finished document. The API takes `"whatsapp": true` and `"whatsapp_agreed": true` on a recipient.
+Refused for templates (so bulk sends and public forms), groups, copies, in-person signers, someone whose link
+the sender sends, and together with the text link. The pause, the fake-notice filter, a report, the daily limit
+(`WHATSAPP_DAILY_PER_ACCOUNT`) and four messages per number a day hold every message, also one the timer tries
+again. The envelope page says "Sent" when the provider took it and "Delivered to the phone" when it says so;
+"read" is never shown, because it proves nothing. The certificate says "Link sent by email and by WhatsApp to
++44 *** *** 0123" once a provider has taken one. A reply STOP (signed webhook) stops WhatsApp to that number from the
+account whose message it answers (or, when the reply quotes none, the account that wrote to it last), and from
+no other account; START undoes it. When the person or the number changes (Change person, the editor's correction,
+or a signer passing it on), WhatsApp is switched off for them and the certificate line goes with it; Change person
+takes only `"whatsapp": false`, and refuses the link by text while WhatsApp stays on.
+
+The texts to have approved as templates, with `{{1}}` the sender, `{{2}}` the document and `{{3}}` the link. Each
+starts and ends with fixed words and uses each blank once, in order, which is how Meta's template rules want it;
+paste them into Meta's template editor and check that it accepts them before you rely on them (this was not tried
+against Meta):
+
+- Invitation: `Hello. {{1}} asked you to sign {{2}} with GrowSigning. Open it here: {{3}} Reply STOP to get no more of these WhatsApp messages.`
+- Reminder: `Reminder: {{1}} is waiting for you to sign {{2}}. Open it here: {{3}} Reply STOP to get no more of these WhatsApp messages.`
+- Closes soon: `Closing soon: {{1}} asked you to sign {{2}}, and it closes soon. Open it here: {{3}} Reply STOP to get no more of these WhatsApp messages.`
+- Completed: `Complete: {{1}} sent you {{2}}, and it is now complete. Your copy is here: {{3}} Reply STOP to get no more of these WhatsApp messages.`
 
 **Call me with the code.** With `VOICE_ENABLED=1` and Twilio, the code screen of a check by text message has
 "Call me with the code" under the code box, and before any code is sent "I have a landline: call me with the
@@ -3212,8 +3252,8 @@ the app itself (`src/server/filecrypt.ts` for the format, `src/server/filestore.
   to the current one at the same start.
 - **What is not protected.** The rest of the database (`DATA_DIR/sign.db`) is not encrypted by the app. It holds the
   names, email addresses and phone numbers of everyone on a document, the subjects and messages of envelopes and the
-  names of documents and folders, the address and subject of each stored email, the stored copies of text
-  messages, click-to-agree terms written as text, custom fields, contacts, payments and every audit trail.
+  names of documents and folders, the address and subject of each stored email, the stored copies of text and
+  WhatsApp messages, click-to-agree terms written as text, custom fields, contacts, payments and every audit trail.
   Someone with the disk or a backup reads all of that unless the disk itself is encrypted. Files stored before the
   key was set stay readable in backups made before then, and can stay in the free space of the disk after the script
   has encrypted them. And the key is in the server's settings, so this protects a

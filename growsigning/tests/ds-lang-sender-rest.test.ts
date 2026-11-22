@@ -162,8 +162,7 @@ test('English with zero setup: the words the screens said before', () => {
   assert.equal(senderT('en', 'settings.keydates.older_waiting', { count: 1 }), 'Saved. 1 document will be read over the next hours.');
   assert.equal(senderT('en', 'settings.keydates.older_waiting', { count: 3 }), 'Saved. 3 documents will be read over the next hours.');
   assert.equal(senderT('en', 'imported.link', { count: '4' }), 'Documents brought in (4)');
-  // The owner decided no account gets WhatsApp: the Settings line about it is gone, and no English word names it.
-  assert.doesNotMatch(fs.readFileSync(path.join(root, 'src/locales/en.json'), 'utf8'), /whatsapp/i);
+  assert.equal(senderT('en', 'settings.channels.whatsapp', { what: 'WhatsApp:', count: 100 }), 'WhatsApp: senders can have us send the signing link by WhatsApp to people who agreed to it, chosen under “How they get it”. Up to 100 messages a day for this account.');
 });
 
 // ---- lang-sender-rest, second pass: the stamps, Team's roles, Keep and delete, Organisation, templates, Send to many,

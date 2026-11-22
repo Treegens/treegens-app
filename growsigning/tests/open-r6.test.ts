@@ -174,10 +174,8 @@ test('4. the "updated" and "again" emails name the editor who changed it, in our
   assert.doesNotMatch(last.html, /Rosa Sender changed this document after sending it/);
 });
 
-test('5. the sender sees who was shown which files; no WhatsApp message goes, even with the dev outbox set', async () => {
-  // This used to check that a WhatsApp message never names a file the person was not shown. The owner decided no
-  // account gets WhatsApp, so it now checks that none is sent at all, with WHATSAPP_DEV_OUTBOX=1 set.
-  const saved = { a: process.env.WHATSAPP_DEV_OUTBOX };
+test('5. the sender sees who was shown which files; WhatsApp messages never name a file the person was not shown', async () => {
+  const saved = { a: process.env.WHATSAPP_DEV_OUTBOX, b: process.env.WHATSAPP_TEMPLATE_INVITE };
   process.env.WHATSAPP_DEV_OUTBOX = '1';
   try {
     const c = await person('Vera Vis', 'vera.vis@r6.example');
@@ -185,25 +183,25 @@ test('5. the sender sees who was shown which files; no WhatsApp message goes, ev
     const contract = await upload(c, 1);
     const salary = await upload(c, 1);
     const sig = (doc: string, rid: string) => ({ document_id: doc, recipient_id: rid, type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 });
-    const body = (wa: boolean) => ({
+    const e = ok(await c.post('/envelopes', {
       subject: 'Salary sheet 2027', own_docs: true,
       documents: [{ id: 'dc', file_id: contract.id, name: 'Employment contract' }, { id: 'ds', file_id: salary.id, name: 'Salary sheet 2027' }],
       recipients: [
-        { id: 'emma', role: 'signer', name: 'Emma Worker', email: 'emma.vis@r6.example', phone: '+44 7700 900124', ...(wa ? { whatsapp: true, whatsapp_agreed: true } : {}) },
+        { id: 'emma', role: 'signer', name: 'Emma Worker', email: 'emma.vis@r6.example', phone: '+44 7700 900124', whatsapp: true, whatsapp_agreed: true },
         { id: 'hugo', role: 'signer', name: 'Hugo Payroll', email: 'hugo.vis@r6.example' },
       ],
       fields: [sig('dc', 'emma'), sig('ds', 'hugo')],
-    });
-    const refused = await c.post('/envelopes', body(true));
-    assert.equal(refused.status, 400);
-    assert.equal(refused.data.code, 'whatsapp_off');
-    const e = ok(await c.post('/envelopes', body(false)), 'draft').envelope;
+    }), 'draft').envelope;
     ok(await c.post(`/envelopes/${e.id}/send`), 'send');
     const g = ok(await c.get(`/envelopes/${e.id}`)).envelope;
     assert.deepEqual(g.limited_people.map((p: any) => `${p.name}: ${p.sees.join(', ')}`).sort(), ['Emma Worker: Employment contract', 'Hugo Payroll: Salary sheet 2027']);
+    const wa = () => srv.db.all('SELECT kind, params FROM wa_messages WHERE envelope_id=? ORDER BY id', e.id);
+    assert.ok(wa().length >= 1, 'Emma got the invitation by WhatsApp');
     ok(await signAll(e.id, 'emma.vis@r6.example'));
     ok(await signAll(e.id, 'hugo.vis@r6.example'));
-    assert.equal(srv.db.get('SELECT COUNT(*) n FROM wa_messages WHERE envelope_id=?', e.id).n, 0, 'no WhatsApp message was written');
+    const all = wa();
+    assert.ok(all.some((m: any) => m.kind === 'done'), JSON.stringify(all));
+    for (const m of all) assert.doesNotMatch(String(m.params), /Salary sheet/, `${m.kind} names a file Emma was not shown`);
     // Without own_docs there is nobody to list.
     const plain = await simple(c, 'pat.vis@r6.example');
     assert.deepEqual(ok(await c.get(`/envelopes/${plain.id}`)).envelope.limited_people, []);

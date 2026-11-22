@@ -11,7 +11,7 @@ import { audit, emailRefusal, hasNotPaid, dailyCap, signUrl, notifySender, sende
 import { reporterKey } from './bysender.ts';
 import { callCode } from './voice.ts';
 import { lastWa, waEnds } from './whatsapp.ts';
-import { WHATSAPP_OFFERED, voiceProvider } from '../lib/channels.ts';
+import { voiceProvider } from '../lib/channels.ts';
 import { CHECKS, isCodeCheck, CHANNEL_WORDS, normalPhone, PHONE_HOW, maskPhone, maskEmail, checkLine, plainTime, SMS_OFF } from '../lib/checks.ts';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODE_WAIT_SECONDS, SIGNER_CODES_PER_HOUR, SIGNER_CODES_PER_CALLER_HOUR, SIGNER_CODES_PER_DESTINATION_DAY, LINK_TEXTS_PER_NUMBER_DAY, SIGNER_PASS_HOURS, smsDailyPerAccount } from '../lib/policy.ts';
 
@@ -156,9 +156,8 @@ export function publicCheck(r: any, token: string | null): any {
   const { wa_agreed_for, ...kept } = rest;
   const waPhone = normalPhone(r.phone);
   return { ...kept, verify: isCodeCheck(r.verify) ? r.verify : 'none', phone: r.phone || null, text_link: !!r.text_link,
-    // The link also by WhatsApp (whatsapp.ts), and whether the sender's tick holds for the number on file now. Left
-    // out altogether while WHATSAPP_OFFERED is false (src/lib/channels.ts): no account gets WhatsApp.
-    ...(WHATSAPP_OFFERED ? { whatsapp: !!r.wa_link, whatsapp_agreed: !!waPhone && !!wa_agreed_for && wa_agreed_for === phoneKey(waPhone), whatsapp_status: r.wa_link && r.id ? lastWa(r.id) : null } : {}),
+    // The link also by WhatsApp (whatsapp.ts), and whether the sender's tick holds for the number on file now.
+    whatsapp: !!r.wa_link, whatsapp_agreed: !!waPhone && !!wa_agreed_for && wa_agreed_for === phoneKey(waPhone), whatsapp_status: r.wa_link && r.id ? lastWa(r.id) : null,
     check: { line: checkLine(r, passed), passed_at: passed?.at || null, stopped: (r.verify === 'sms_code' || !!r.text_link) && stoppedFor({ ...r, check_stop }) } };
 }
 

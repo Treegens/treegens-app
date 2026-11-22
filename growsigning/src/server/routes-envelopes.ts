@@ -19,7 +19,6 @@ import { hmac, safeEqual } from './util.ts';
 import { bouncedBefore, bouncedRefusal, bouncedLine, mailStop, mailStopText } from './bounces.ts';
 import { correctWithCheck, assertBulkChecks, bulkChecksRefusal, assertFormChecks, textsOf } from './signercode.ts';
 import { waOf, correctWithWa } from './whatsapp.ts';
-import { WHATSAPP_OFFERED } from '../lib/channels.ts';
 // A recipient that is a group of people, any one of whom can act (src/server/groups.ts).
 import { memberLink, memberInbox, groupReach, assertNoGroupCheck, membersNotReminded, assertTemplateGroups } from './groups.ts';
 import { assertBySenderCorrection } from './bysender.ts';
@@ -411,7 +410,7 @@ route('GET', '/envelopes/:id', (c) => {
   // kept_on_delete: whether deleting it now would only take it out of the lists (deleting.ts), for the delete dialog.
   // retention: how long it is kept, a purge asked for or announced, holds, and what a purge left (records.ts).
   // shared, sent_by_name, first_sender_name: whose it is when it came through a share, who sent it for whom (shares.ts).
-  return { ...shareFacts(c, e), envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), ...(WHATSAPP_OFFERED ? { whatsapp: waOf(e.id) } : {}), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e), seal: sealFacts(e), archive_format: pdfaFacts(e), record_stamp: chainStampFacts(e.id, verifyChain(e.id).ok) };
+  return { ...shareFacts(c, e), envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), whatsapp: waOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e), seal: sealFacts(e), archive_format: pdfaFacts(e), record_stamp: chainStampFacts(e.id, verifyChain(e.id).ok) };
 });
 
 // The same check for text that is not saved yet: the editor asks before sending, with what stands on screen.

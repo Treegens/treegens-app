@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { run, get, all } from './db.ts';
 import { now, bad, str, safeEqual, baseUrl } from './util.ts';
 import { normalPhone, maskPhone, PHONE_HOW } from '../lib/checks.ts';
-import { WHATSAPP_OFFERED, whatsappProvider, waDailyPerAccount, fillWa, WA_AGREE, isStopWord, isStartWord, waStatusWord } from '../lib/channels.ts';
+import { whatsappProvider, waDailyPerAccount, fillWa, WA_AGREE, isStopWord, isStartWord, waStatusWord } from '../lib/channels.ts';
 import { LINK_TEXTS_PER_NUMBER_DAY } from '../lib/policy.ts';
 import { phoneKey, TEXT_RETRY_MINUTES } from './sms.ts';
 import { audit, emailRefusal, signUrl, senderOf, notifySender, loadEnvelope, type Actor } from './envelopes.ts';
@@ -17,10 +17,6 @@ import { reporterKey } from './bysender.ts';
 // never for a group, a public form, a copy, someone who signs in person, or together with the link by text message.
 // A reply STOP (POST /whatsapp/webhook, routes-whatsapp.ts) stops WhatsApp from that account to that number.
 // Nothing in here calls into envelopes.ts while this module is being loaded.
-//
-// Asleep: WHATSAPP_OFFERED (src/lib/channels.ts) is false, the owner's decision that no account gets WhatsApp. While
-// it is, nothing here sends, retries, writes to the audit trail or emails a sender about WhatsApp, and every request
-// that asks for it is refused with "code": "whatsapp_off". The code stays so the decision can be undone in one line.
 
 export type WaKind = 'invite' | 'remind' | 'deadline' | 'done';
 const SYSTEM: Actor = { name: 'System' };
@@ -32,8 +28,8 @@ const iso = (ms: number) => new Date(ms).toISOString();
 /** How WhatsApp messages leave this server, or null when its operator has not set it up. */
 export const waMode = () => whatsappProvider();
 
-/** Said by the API wherever WhatsApp is asked for. */
-export const WA_OFF = 'GrowSigning does not send anything by WhatsApp, for any account, free or paid. The signing link goes by email.';
+/** Said by the API wherever WhatsApp is asked for on a server that cannot send it. */
+export const WA_OFF = 'The operator of this server has not set up WhatsApp, so nothing can be sent by WhatsApp from here.';
 const WHAT: Record<WaKind, string> = { invite: 'the signing link by WhatsApp', remind: 'a reminder by WhatsApp', deadline: 'a closing-soon message by WhatsApp', done: 'the link to the completed document by WhatsApp' };
 
 // ---- Handing a message to the provider ------------------------------------------------------------------
@@ -156,7 +152,6 @@ const MAX_AGE_MS = 2 * 864e5;
 /** Called by the timer (cron.ts), like retryTexts(). Each message is decided again by what applies now. */
 export async function retryWhatsApp(): Promise<{ sent: number; failed: number; dropped: number }> {
   const out = { sent: 0, failed: 0, dropped: 0 };
-  if (!WHATSAPP_OFFERED) return out;
   const t = now(), stuck = iso(Date.now() - 15 * 60_000);
   const isDue = "((status='failed' AND next_try_at IS NOT NULL AND next_try_at <= ?) OR (status='queued' AND COALESCE(tried_at, at) < ?))";
   for (const { id } of all(`SELECT id FROM wa_messages WHERE ${isDue} ORDER BY id LIMIT 200`, t, stuck)) {
@@ -214,7 +209,6 @@ async function waHeld(e: any, r: any, kind: WaKind, why: string) {
 }
 
 async function waFor(e: any, rid: string, kind: WaKind): Promise<void> {
-  if (!WHATSAPP_OFFERED) return;
   const cur = get('SELECT * FROM recipients WHERE id=?', rid);
   const phone = normalPhone(cur?.phone);
   if (!cur || !cur.wa_link || !phone || !cur.token || cur.status === 'declined' || cur.role === 'inperson' || cur.role === 'cc' || cur.group_id) return;
@@ -289,7 +283,7 @@ export function waEnds(e: any, rid: string, why: string, actor: Actor = SYSTEM) 
   const row = get('SELECT id, name, wa_link, wa_agreed_for, wa_sent_to FROM recipients WHERE id=?', rid);
   if (!row || (!row.wa_link && !row.wa_agreed_for && !row.wa_sent_to)) return;
   run('UPDATE recipients SET wa_link=0, wa_agreed_at=NULL, wa_agreed_for=NULL, wa_sent_to=NULL WHERE id=?', rid);
-  if (row.wa_link && WHATSAPP_OFFERED) audit(e.id, actor, 'WhatsApp switched off', `${row.name}: the signing link is no longer sent by WhatsApp, because ${why}. Email is not affected.`);
+  if (row.wa_link) audit(e.id, actor, 'WhatsApp switched off', `${row.name}: the signing link is no longer sent by WhatsApp, because ${why}. Email is not affected.`);
 }
 
 /**
@@ -301,12 +295,11 @@ export function assertWaCorrection(e: any, rid: string, b: any) {
   const r = e?.recipients?.find((x: any) => x.id === rid);
   if (!r) return;
   const on = b?.whatsapp === true || b?.whatsapp === 1 || b?.whatsapp === 'true';
-  if (!WHATSAPP_OFFERED && (on || b?.whatsapp_agreed === true)) throw bad(`${WA_OFF} Nothing was changed.`, 400, { code: 'whatsapp_off' });
   if (on || b?.whatsapp_agreed !== undefined)
     throw bad(`WhatsApp is switched on with the tick that ${r.name || 'the person'} agreed, for their number, and Change person does not take that. Nothing was changed. Use the envelope's correction instead (PUT /envelopes/:id with "whatsapp" and "whatsapp_agreed"). Here, only "whatsapp": false is taken.`, 400, { code: 'whatsapp_correct' });
   const off = b?.whatsapp === false || b?.whatsapp === 0 || b?.whatsapp === 'false';
   const textOn = b?.text_link === true || b?.text_link === 1 || b?.text_link === 'true';
-  if (WHATSAPP_OFFERED && r.wa_link && textOn && !off)
+  if (r.wa_link && textOn && !off)
     throw bad(`${r.name || 'This person'} gets the link by WhatsApp, and the link by text message and by WhatsApp are never on together. Nothing was changed. Send "whatsapp": false in the same call to text it instead.`, 400, { code: 'whatsapp_and_text' });
 }
 
@@ -358,10 +351,9 @@ export function saveWhatsApp(e: any, asked: { rid: string; r: any; i: number }[]
     const on = r.whatsapp === undefined ? !!row.wa_link : r.whatsapp === true || r.whatsapp === 1 || r.whatsapp === 'true';
     if (!on) {
       run('UPDATE recipients SET wa_link=0, wa_agreed_at=NULL, wa_agreed_for=NULL WHERE id=?', rid);
-      if (WHATSAPP_OFFERED && old?.wa_link && e.status !== 'draft') audit(e.id, SYSTEM, 'WhatsApp switched off', `${row.name}: the signing link is no longer sent by WhatsApp.`);
+      if (old?.wa_link && e.status !== 'draft') audit(e.id, SYSTEM, 'WhatsApp switched off', `${row.name}: the signing link is no longer sent by WhatsApp.`);
       continue;
     }
-    if (!WHATSAPP_OFFERED) throw bad(`${WA_OFF} Nothing was saved.`, 400, { code: 'whatsapp_off' });
     if (e.kind === 'template') throw bad(`${waProblem(row, e, false)} Nothing was saved.`, 400, { code: 'whatsapp_template' });
     const phone = normalPhone(row.phone);
     if (!old?.wa_link && !whatsappProvider()) throw bad(`${WA_OFF} For ${row.name || 'this person'}, leave WhatsApp off. Nothing was saved.`, 400, { code: 'whatsapp_off' });
@@ -385,11 +377,6 @@ export function saveWhatsApp(e: any, asked: { rid: string; r: any; i: number }[]
 export function assertWhatsApp(e: any) {
   const will = (e.recipients || []).filter((r: any) => r.wa_link);
   if (!will.length) return;
-  // A choice saved before WhatsApp was switched off for every account is dropped quietly: the link goes by email.
-  if (!WHATSAPP_OFFERED) {
-    for (const r of will) (run('UPDATE recipients SET wa_link=0, wa_agreed_at=NULL, wa_agreed_for=NULL WHERE id=?', r.id), (r.wa_link = 0));
-    return;
-  }
   for (const r of will) {
     const problem = waProblem(r, e, true);
     if (problem) throw bad(problem, 400);
