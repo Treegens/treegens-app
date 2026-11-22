@@ -147,8 +147,10 @@ export default defineSuite('smoke', { mockCreds: true }, async (t) => {
       s.expect(confirmation.text, 'confirmation text').toContain('9:00 AM to 9:15 AM (Eastern Standard Time)');
       const manage = (action) => `${s.url(`/booking/${booking.id}/${action}`)}?t=${booking.manageToken}`;
       for (const link of [booking.google.meetUrl, manage('reschedule'), manage('cancel')]) s.expect(confirmation.links, 'links in the confirmation').toContain(link);
-      s.expect(confirmation.hasIcs, 'confirmation carries a calendar file').toBe(true);
-      s.expect(confirmation.ics.content, 'calendar file').toContain('DTSTART:20261118T140000Z');
+      // Google invites her (the event above has her on it): the email says so and adds no second copy of its own.
+      s.expect(confirmation.hasIcs, 'no calendar file beside Google\'s invitation').toBe(false);
+      s.expect(confirmation.text, 'says Google is adding it').toContain(`This meeting is being added to your calendar with a Google Calendar invitation from Jimi Cohen, sent to ${INVITEE.email}.`);
+      s.expect(confirmation.links, 'the backup calendar file').toContain(`${s.url(`/api/public/bookings/${booking.id}/ics`)}?t=${booking.manageToken}`);
       await s.screenshotEmail(confirmation, 'confirmation email');
 
       const [notice] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });

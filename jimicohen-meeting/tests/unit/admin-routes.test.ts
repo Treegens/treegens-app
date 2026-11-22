@@ -2109,10 +2109,23 @@ describe('GET /admin/overview', () => {
     expect(done(o)).toEqual({ google: false, availability: true, event: true, email: false, sms: false, assistant: false, design: false });
     expect(keys(o)).toEqual(['google_not_connected', 'no_email', 'owner_no_email', 'bookings_reach_nobody', 'twilio_missing']);
     expect(o.warnings.find((w) => w.key === 'twilio_missing')!.message).toMatch(/"Intro call" and "Meeting" have reminders by text or phone call/);
-    // Without email and without a calendar, a booking reaches nobody.
-    expect(o.warnings.find((w) => w.key === 'bookings_reach_nobody')!.message).toBe(
-      'People can book "Intro call" and "Meeting", but nobody hears about it: no email is sent, and no Google Calendar is connected to put the booking on. Set up email or connect Google Calendar.',
-    );
+    // Without Google nothing reaches any calendar, the owner's or the booker's: said first, in red, one click from the setup.
+    expect(o.warnings[0]).toEqual({
+      key: 'google_not_connected',
+      tone: 'danger',
+      title: "Bookings are not reaching anyone's calendar",
+      message:
+        'Until you connect Google Calendar, bookings are not added to your calendar and the people who book get no calendar invitation. Your busy times are not checked either. "Intro call" and "Meeting" are Google Meet calls, so nobody gets a meeting link either.',
+      href: '/admin/integrations#google',
+      actionLabel: 'Connect Google Calendar',
+    });
+    // Without email and without a calendar, a booking reaches nobody. Google is the fix that puts it in calendars.
+    expect(o.warnings.find((w) => w.key === 'bookings_reach_nobody')).toEqual({
+      key: 'bookings_reach_nobody',
+      message:
+        'People can book "Intro call" and "Meeting", but nobody hears about it: no email is sent, and no Google Calendar is connected to put the booking on anyone\'s calendar. Connect Google Calendar, so bookings go on your calendar and the people who book get an invitation, and set up email for confirmations and reminders.',
+      href: '/admin/integrations#google',
+    });
     // Links are routes inside the dashboard, for its own router.
     for (const link of [...o.checklist.map((c) => c.href), ...o.warnings.map((w) => w.href)]) {
       if (link !== undefined) expect(link).toMatch(/^\/admin(\/[a-z-]+)?(#[a-z]+)?$/);
@@ -2241,6 +2254,62 @@ describe('GET /admin/overview', () => {
     await ok(call(s, 'PUT', `/admin/hosts/${host.id}`, { addIcsFeed: { label: 'Work', url: 'https://calendar.example.com/alex.ics' } }));
     o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
     expect(keys(o).filter((k) => k.startsWith('cohost_calendar'))).toEqual([]);
+  });
+
+  it('a calendar feed alone puts no booking on any calendar, and Home says so in red', async () => {
+    const s = await signIn();
+    await ok(call(s, 'PUT', '/admin/hosts/host_owner', { addIcsFeed: { label: 'iCloud', url: 'https://calendar.example.com/jimi.ics' } }));
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    const none = o.warnings.find((w) => w.key === 'google_not_connected')!;
+    expect(none.tone).toBe('danger');
+    expect(none.message).toMatch(/^Your calendar feed only shows when you are busy\. Bookings are not added to any calendar, and the people who book get no calendar invitation, until you connect Google Calendar\./);
+  });
+
+  it('says when a joint meeting reaches a co-host without a calendar by Google invitation, and when a round robin booking reaches no calendar', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { google: { clientId: ['4242', 'test.apps.googleusercontent.com'].join('-'), clientSecret: ['test', 'client', 'secret'].join('-') } });
+    await connectGoogle(s.ctx);
+    const { host } = await addCoHost(s);
+    const { eventType: together } = await ok<{ eventType: EventType }>(call(s, 'POST', '/admin/event-types', { title: 'Together', kind: 'collective', hostIds: ['host_owner', host.id], reminders: [] }), 201);
+    const { eventType: either } = await ok<{ eventType: EventType }>(call(s, 'POST', '/admin/event-types', { title: 'Either of us', kind: 'round_robin', hostIds: ['host_owner', host.id], reminders: [] }), 201);
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(o.warnings.find((w) => w.key === `cohost_calendar_${together.id}`)!.message).toBe(
+      `"Together" books Alex too, but Alex has not connected a calendar yet. Only their weekly hours are checked until they do. Meanwhile Google Calendar sends Alex an invitation at ${host.email} for each booking.`,
+    );
+    expect(o.warnings.find((w) => w.key === `cohost_calendar_${either.id}`)).toEqual({
+      key: `cohost_calendar_${either.id}`,
+      message: '"Either of us" can be booked with Alex, but Alex has not connected Google Calendar, so those bookings are not added to any calendar and the person booking gets no calendar invitation. Only their weekly hours are checked until they do.',
+      href: '/admin/team',
+    });
+    // Once Alex can take meetings in Google, neither is said.
+    await connectGoogle(s.ctx, host.id, { email: 'alex.calendar@example.com' });
+    const after = keys(await ok<AdminOverview>(call(s, 'GET', '/admin/overview')));
+    expect(after.filter((k) => k.startsWith('cohost_calendar'))).toEqual([]);
+  });
+
+  it('a Meet call whose hosts have no Google Calendar is named, also when the owner is connected', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { google: { clientId: ['4242', 'test.apps.googleusercontent.com'].join('-'), clientSecret: ['test', 'client', 'secret'].join('-') } });
+    await connectGoogle(s.ctx);
+    const { host } = await addCoHost(s);
+    await ok(call(s, 'POST', '/admin/event-types', { title: 'With Alex', kind: 'solo', hostIds: [host.id], locations: [{ type: 'google_meet' }], reminders: [] }), 201);
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    expect(o.warnings.find((w) => w.key === 'meet_without_google')).toMatchObject({
+      message: '"With Alex" is a Google Meet call, so nobody gets a meeting link. Their hosts have no Google Calendar connected, and Google makes the link with the calendar event.',
+    });
+  });
+
+  it('a connection Google ended on its day says why, so a reconnect is not undone in 7 days', async () => {
+    const s = await signIn();
+    await repo.saveSecrets(s.ctx, { google: { clientId: ['4242', 'test.apps.googleusercontent.com'].join('-'), clientSecret: ['test', 'client', 'secret'].join('-') } });
+    await connectGoogle(s.ctx, 'host_owner', { status: 'needs_reconnect', refreshExpiresAt: '2026-11-15T09:00:00.000Z' });
+    const o = await ok<AdminOverview>(call(s, 'GET', '/admin/overview'));
+    const mine = o.warnings.find((w) => w.key === 'google_reconnect_host_owner')!;
+    expect(mine.message).toMatch(/Google ended it on [^.]+, as it said it would when you connected\. That usually means your Google Cloud app is still in Testing, where a connection lasts 7 days: publish it \(Audience, then Publish app, so it reads In production\), then reconnect\. Reconnecting without publishing only lasts another 7 days\.$/);
+    // Ended for another reason (no end date): the plain reconnect.
+    await connectGoogle(s.ctx, 'host_owner', { status: 'needs_reconnect' });
+    const plain = (await ok<AdminOverview>(call(s, 'GET', '/admin/overview'))).warnings.find((w) => w.key === 'google_reconnect_host_owner')!;
+    expect(plain.message).not.toContain('Testing');
   });
 
   it('only nags about email and Twilio when something actually depends on them', async () => {

@@ -387,7 +387,7 @@ function HostPanel({ id, token, data, onHost, onCalendars }: PanelProps) {
               : extrasOnly
                 ? `People can book time with you and ${owner} only when you are both free. But none of your Google accounts takes new meetings, so meetings booked with you are not added to your calendar${host.email ? `. Their invitations go to ${host.email} instead` : ''}. Choose an account for new meetings below.`
               : feedOnly
-                ? `People can book time with you and ${owner} only when you are both free. But a calendar feed can only be read, so meetings booked with you are not added to your calendar. Connect Google Calendar below to have them added.`
+                ? `People can book time with you and ${owner} only when you are both free. But a calendar feed can only be read, so meetings booked with you are not added to your calendar${host.email ? `. Their invitations go to ${host.email} instead` : ''}. Connect Google Calendar below to have them added.`
                 : `${owner} added you as a co-host. Connect your calendar and people will only be offered times when you are really free.`}
         </p>
         <ol className="hp-track" aria-label="Setup">

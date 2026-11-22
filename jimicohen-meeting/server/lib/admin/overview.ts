@@ -5,10 +5,11 @@
  * Links are routes inside the app ("/admin/integrations#google"): the dashboard router adds
  * the mount path itself.
  */
+import { endedOnItsDay, testingEndedAdvice } from '../../../shared/calendar';
 import { DEFAULT_THEME } from '../../../shared/defaults';
 import type { AdminOverview, EventType, Host, IntegrationsStatus, SharedHoursCheck, SiteSettings } from '../../../shared/types';
 import type { Ctx } from '../ctx';
-import { accountsOf } from '../googleAccounts';
+import { accountsOf, mainOf } from '../googleAccounts';
 import { getBookingIndex, getBookings, getSite, listEventTypes, listHosts } from '../repo';
 import { computeSlots } from '../slots';
 import { firstName, joinNames } from '../templates';
@@ -189,6 +190,23 @@ function hasCalendar(host: Host): boolean {
   return accountsOf(host).length > 0 || (host.icsFeeds ?? []).length > 0;
 }
 
+/**
+ * Whether bookings of this host can be written to Google Calendar: a main account that works (the one new
+ * meetings go to, booking.ts usable). Other accounts and calendar feeds are only read for busy times.
+ */
+function writesToGoogle(host: Host | null | undefined): boolean {
+  return mainOf(host)?.account.status === 'ok';
+}
+
+/** Whether a booking of this event gets a Google event: an assigned host who can write one (each of them for a round robin). */
+function eventReachesGoogle(event: EventType, byId: Map<string, Host>, keysMissing: boolean): boolean {
+  if (keysMissing) return false;
+  const assigned = event.hostIds.map((id) => byId.get(id)).filter((h): h is Host => !!h);
+  if (assigned.length === 0) return false;
+  return event.kind === 'round_robin' ? assigned.every(writesToGoogle) : assigned.some(writesToGoogle);
+}
+
+
 /** "a@x", "a@x and b@x" */
 function addresses(list: string[]): string {
   return joinNames(list);
@@ -251,8 +269,34 @@ export function buildWarnings(
     });
   }
 
-  if (owner && !hasCalendar(owner)) {
-    warnings.push({ key: 'google_not_connected', message: 'Your calendar is not connected yet, so your busy times are not checked and bookings are not added to it.', href: LINK.google });
+  // Every Google connection needs the keys it was made with (said by its own warning below).
+  const keysMissing = !integrations.google.configured;
+  const byHostId = hostMap(hosts);
+  // Meetings held on Google Meet whose hosts cannot write to Google: Google makes the Meet link with the event.
+  const meetless = active.filter((e) => (e.locations ?? []).some((l) => l?.type === 'google_meet') && !eventReachesGoogle(e, byHostId, keysMissing));
+  const meetWords = (list: EventType[]): string =>
+    list.length === 0 ? '' : ` ${quoted(list.map((e) => e.title))} ${list.length === 1 ? 'is a Google Meet call' : 'are Google Meet calls'}, so nobody gets a meeting link either.`;
+
+  // The owner has no Google account that takes new meetings: nothing a booking does reaches any calendar.
+  // A main account that needs a reconnect, or keys that were removed, have warnings of their own below.
+  if (owner && !mainOf(owner)) {
+    const extrasOnly = accountsOf(owner).length > 0;
+    const feedOnly = !extrasOnly && (owner.icsFeeds ?? []).length > 0;
+    const lead = extrasOnly
+      ? 'None of your Google accounts takes new meetings, so bookings are not added to your calendar and the people who book get no calendar invitation. Your other accounts only keep your busy times off the booking page. Choose the account for new meetings under Integrations.'
+      : feedOnly
+        ? 'Your calendar feed only shows when you are busy. Bookings are not added to any calendar, and the people who book get no calendar invitation, until you connect Google Calendar.'
+        : 'Until you connect Google Calendar, bookings are not added to your calendar and the people who book get no calendar invitation. Your busy times are not checked either.';
+    warnings.push({
+      key: 'google_not_connected',
+      tone: 'danger',
+      title: "Bookings are not reaching anyone's calendar",
+      message: `${lead}${meetWords(meetless)}`,
+      href: LINK.google,
+      actionLabel: extrasOnly ? 'Choose an account' : 'Connect Google Calendar',
+    });
+  } else if (meetless.length > 0) {
+    warnings.push({ key: 'meet_without_google', message: `${meetWords(meetless).trim().replace(/ either\.$/, '.')} Their hosts have no Google Calendar connected, and Google makes the link with the calendar event.`, href: LINK.team });
   }
 
   // Gmail sends through the owner's Google connection: when that is down, so is email.
@@ -261,7 +305,6 @@ export function buildWarnings(
 
   // Every Google connection needs the keys it was made with. Without them no calendar can be
   // read, and a calendar that cannot be read closes the times of everyone it belongs to.
-  const keysMissing = !integrations.google.configured;
   const cutOff = keysMissing ? hosts.filter((h) => accountsOf(h).length > 0) : [];
   if (cutOff.length > 0) {
     const ownerHost = cutOff.find((h) => h.id === owner?.id);
@@ -299,16 +342,21 @@ export function buildWarnings(
       const several = broken.length > 1;
       const list = addresses(broken.map((a) => a.account.email));
       const what = `Google ${several ? 'accounts' : 'account'} ${list} ${several ? 'need' : 'needs'} to be reconnected`;
+      // Google ended it on the day it named when it was connected: the usual cause is an app still in Testing.
+      const ended = broken.find((a) => endedOnItsDay(a.account, ctx.now().getTime()));
+      const day = ended ? formatInZone(Date.parse(ended.account.refreshExpiresAt!), owner?.timezone ?? host.timezone, 'date') : '';
       warnings.push(
         mine
           ? {
               key: `google_reconnect_${host.id}`,
-              message: `Your ${what}. Until then, no times are offered for meetings with you${mainBroken ? ' and new bookings cannot reach your calendar' : ''}.${mainBroken && gmailProblem === 'needs_reconnect' ? noGmail : ''}`,
+              message: `Your ${what}. Until then, no times are offered for meetings with you${mainBroken ? ' and new bookings cannot reach your calendar' : ''}.${mainBroken && gmailProblem === 'needs_reconnect' ? noGmail : ''}${ended ? ` ${testingEndedAdvice(day)}` : ''}`,
               href: LINK.google,
             }
           : {
               key: `google_reconnect_${host.id}`,
-              message: `${first}'s ${what}. Until then, times that include ${first} are not offered. Ask ${first} to open their private link and reconnect ${several ? 'them' : 'it'}.`,
+              message: ended
+                ? `${first}'s ${what}. Until then, times that include ${first} are not offered. ${testingEndedAdvice(day, { first })}`
+                : `${first}'s ${what}. Until then, times that include ${first} are not offered. Ask ${first} to open their private link and reconnect ${several ? 'them' : 'it'}.`,
               href: LINK.team,
             },
       );
@@ -398,8 +446,8 @@ export function buildWarnings(
     if (unheard.length > 0) {
       warnings.push({
         key: 'bookings_reach_nobody',
-        message: `People can book ${quoted(unheard.map((e) => e.title))}, but nobody hears about it: no email is sent, and no Google Calendar is connected to put the booking on. Set up email or connect Google Calendar.`,
-        href: LINK.email,
+        message: `People can book ${quoted(unheard.map((e) => e.title))}, but nobody hears about it: no email is sent, and no Google Calendar is connected to put the booking on anyone's calendar. Connect Google Calendar, so bookings go on your calendar and the people who book get an invitation, and set up email for confirmations and reminders.`,
+        href: LINK.google,
       });
     }
   }
@@ -426,7 +474,21 @@ export function buildWarnings(
   }
 
   const byId = hostMap(hosts);
+  const organizerWrites = (event: EventType) => event.hostIds.some((id) => writesToGoogle(byId.get(id))) && !keysMissing;
   for (const event of active) {
+    if (event.kind === 'round_robin') {
+      // A booking goes to one host and only to their calendar: one without a Google account for new meetings
+      // gets bookings that reach no calendar, and the person booking gets no invitation. (Said for the owner above.)
+      const unwritten = event.hostIds.map((id) => byId.get(id)).filter((h): h is Host => !!h && h.id !== owner?.id && !writesToGoogle(h));
+      if (unwritten.length === 0 || !bookable(event)) continue;
+      const names = joinNames(unwritten.map((h) => firstName(h.name) || h.name));
+      warnings.push({
+        key: `cohost_calendar_${event.id}`,
+        message: `"${event.title}" can be booked with ${names}, but ${names} ${unwritten.length === 1 ? 'has' : 'have'} not connected Google Calendar, so those bookings are not added to any calendar and the person booking gets no calendar invitation.${unwritten.some((h) => !hasCalendar(h)) ? ' Only their weekly hours are checked until they do.' : ''}`,
+        href: LINK.team,
+      });
+      continue;
+    }
     if (event.kind !== 'collective') continue;
     // Hours that never line up close the page for good, whatever the calendars say.
     const hours = sharedHours.get(event.id) ?? checkSharedHours({ eventType: event, hosts, owner, nowMs });
@@ -436,9 +498,13 @@ export function buildWarnings(
       .filter((h): h is Host => !!h && h.id !== owner?.id && !hasCalendar(h));
     if (waiting.length === 0) continue;
     const names = joinNames(waiting.map((h) => firstName(h.name) || h.name));
+    // The host who organises the event invites the others from Google, at the address they gave.
+    const invited = organizerWrites(event) ? waiting.filter((h) => isEmail(h.email)) : [];
+    const meanwhile =
+      invited.length > 0 ? ` Meanwhile Google Calendar sends ${joinNames(invited.map((h) => `${firstName(h.name) || h.name} an invitation at ${h.email}`))} for each booking.` : '';
     warnings.push({
       key: `cohost_calendar_${event.id}`,
-      message: `"${event.title}" books ${names} too, but ${names} ${waiting.length === 1 ? 'has' : 'have'} not connected a calendar yet. Only their weekly hours are checked until they do.`,
+      message: `"${event.title}" books ${names} too, but ${names} ${waiting.length === 1 ? 'has' : 'have'} not connected a calendar yet. Only their weekly hours are checked until they do.${meanwhile}`,
       href: LINK.team,
     });
   }

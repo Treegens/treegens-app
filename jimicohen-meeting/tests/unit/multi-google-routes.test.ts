@@ -397,11 +397,14 @@ describe('every account counts on Home, on Team and when a co-host goes', () => 
     expect((await repo.getHost(w.ctx, OWNER))!.googleExtra).toEqual([]);
   });
 
-  it('Home: other accounts alone are a calendar, and an end date on one of them is named', async () => {
+  it('Home: other accounts alone take no meetings (said in red), and an end date on one of them is named', async () => {
     const w = await world();
     await addExtra(w.ctx, OWNER, { email: B });
     let o = await ok<AdminOverview>(call(w, 'GET', '/admin/overview'));
-    expect(o.warnings.map((x) => x.key)).not.toContain('google_not_connected');
+    // Their busy times count, but no booking reaches any calendar: nothing is written to an account that is not the main one.
+    const none = o.warnings.find((x) => x.key === 'google_not_connected')!;
+    expect(none).toMatchObject({ tone: 'danger', title: "Bookings are not reaching anyone's calendar", actionLabel: 'Choose an account', href: '/admin/integrations#google' });
+    expect(none.message).toMatch(/^None of your Google accounts takes new meetings, so bookings are not added to your calendar and the people who book get no calendar invitation\./);
     await setMain(w.ctx, OWNER, { email: A });
     await addExtra(w.ctx, OWNER, { email: 'jimi@testing.example', refreshExpiresAt: '2026-11-20T09:00:00.000Z' });
     o = await ok<AdminOverview>(call(w, 'GET', '/admin/overview'));
@@ -464,6 +467,24 @@ describe('grants and warnings across the accounts of one host (verify round)', (
     await repo.updateHost(w.ctx, OWNER, (h) => ({ ...h, googleExtra: (h.googleExtra ?? []).map((a) => (a.id === accountsOf(host)[0].account.id ? { ...a, status: 'ok' as const } : a)) }));
     o = await ok<AdminOverview>(call(w, 'GET', '/admin/overview'));
     expect(o.warnings.map((x) => x.key)).toContain('bookings_reach_nobody');
+  });
+});
+
+describe('connecting the account that takes new meetings', () => {
+  it('queues the calendar events of meetings booked before it, at once', async () => {
+    const w = await world();
+    fakeGoogle(w.ctx);
+    const { createBooking } = await import('../../server/lib/booking');
+    const { booking } = await createBooking(w.ctx, { slug: 'intro', start: '2026-11-18T12:00:00.000Z', durationMin: 15, name: 'Ada Lovelace', email: 'ada@example.com', timezone: 'Europe/London', elapsedMs: 5200 });
+    await w.ctx.settle();
+    expect((await repo.getBooking(w.ctx, booking.id))?.google).toBeNull();
+    const before = (await repo.listJobs(w.ctx)).filter((j) => j.type === 'gcal_sync');
+    expect(before).toEqual([]);
+    const back = await finish(w, await begin(w, {}), A);
+    expect(back.searchParams.get('google')).toBe('connected');
+    const queued = (await repo.listJobs(w.ctx)).filter((j) => j.type === 'gcal_sync');
+    expect(queued.map((j) => (j as { bookingId?: string }).bookingId)).toEqual([booking.id]);
+    expect(Date.parse(queued[0].dueAt)).toBeLessThanOrEqual(w.ctx.now().getTime());
   });
 });
 

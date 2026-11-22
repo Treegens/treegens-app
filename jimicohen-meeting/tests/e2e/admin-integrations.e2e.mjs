@@ -72,6 +72,12 @@ export default defineSuite('admin-integrations', { mockCreds: false }, async (t)
       s.expect(await card('Texts and reminder calls').getByRole('button', { name: 'Call me' }).isDisabled(), 'test call before Twilio is saved').toBe(true);
       await open('Voice assistant');
       s.expect(await card('Voice assistant').getByRole('button', { name: 'Send test' }).isDisabled(), 'assistant test before a key is saved').toBe(true);
+      // Nothing reaches any calendar yet, and the page says so before anything else.
+      const notice = page.getByRole('alert').filter({ hasText: "Bookings are not reaching anyone's calendar" });
+      await notice.getByText('Until you connect Google Calendar, bookings are not added to your calendar and the people who book get no calendar invitation.', { exact: false }).waitFor();
+      // The setup steps say to publish, and what Google's "not verified" screen means.
+      await card('Google Calendar').getByText('While the app is in "Testing", Google ends the connection after 7 days.', { exact: false }).waitFor();
+      await card('Google Calendar').getByText('it is your own app, made in your own Google Cloud project', { exact: false }).waitFor();
       await s.screenshot(page, 'integrations with nothing configured');
 
       // The same on Home: the checklist still has every connection open.

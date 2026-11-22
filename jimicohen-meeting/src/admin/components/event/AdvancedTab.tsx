@@ -77,17 +77,20 @@ export function AdvancedTab({ draft, update, errors, isNew, onDelete }: TabProps
         <Switch labelSide="start" checked={draft.active} onChange={(active) => update({ active })} label="Accept bookings" description={draft.active ? 'People can book this event.' : 'Paused. The link shows that this event is not available right now.'} />
       </Section>
 
-      <Section title="Google Calendar" description="Every booking is written to the hosts' calendars automatically.">
+      <Section
+        title="Google Calendar"
+        description={ownerHost.google ? "Every booking is written to the hosts' Google Calendars automatically." : "Once Google Calendar is connected, every booking is written to the hosts' calendars automatically."}
+      >
         {!ownerHost.google ? (
           <Notice
             tone="warning"
             action={
-              <Link className="adm-textlink" to="/admin/integrations">
+              <Link className="adm-textlink" to="/admin/integrations#google">
                 Connect Google
               </Link>
             }
           >
-            Your Google Calendar is not connected yet, so bookings are not added to it.
+            Your Google Calendar is not connected yet, so bookings are not added to it and the people who book get no calendar invitation.
           </Notice>
         ) : null}
         <Switch
@@ -95,7 +98,7 @@ export function AdvancedTab({ draft, update, errors, isNew, onDelete }: TabProps
           checked={draft.googleInvite}
           onChange={(googleInvite) => update({ googleInvite })}
           label="Invite the invitee on the calendar event"
-          description="Google adds them and their guests as attendees and emails the invitation. Turn this off to keep the event on host calendars only."
+          description="Google adds them and their guests as attendees and emails the invitation, which puts the meeting in their calendar. Turn this off to keep the event on host calendars only: the confirmation email then carries the invitation. A change applies to new bookings."
         />
       </Section>
 

@@ -56,14 +56,16 @@ export default function Home() {
 
       {load.status === 'ready' && load.overview.warnings.length ? (
         <div className="adm-stack adm-home__warnings">
-          {load.overview.warnings.map((w) => (
+          {/* What stops bookings reaching anyone comes first, in red. */}
+          {[...load.overview.warnings.filter((w) => w.tone === 'danger'), ...load.overview.warnings.filter((w) => w.tone !== 'danger')].map((w) => (
             <Notice
               key={w.key}
-              tone="warning"
+              tone={w.tone === 'danger' ? 'danger' : 'warning'}
+              title={w.title}
               action={
                 w.href ? (
-                  <ButtonLink variant="link" to={w.href} iconRight={<ChevronRight size={15} />}>
-                    Fix this
+                  <ButtonLink variant={w.tone === 'danger' ? 'primary' : 'link'} size={w.tone === 'danger' ? 'sm' : undefined} to={w.href} iconRight={<ChevronRight size={15} />}>
+                    {w.actionLabel || 'Fix this'}
                   </ButtonLink>
                 ) : undefined
               }
@@ -107,7 +109,7 @@ export default function Home() {
           {load.status === 'loading' ? (
             <UpcomingSkeleton />
           ) : load.status === 'ready' ? (
-            <Upcoming bookings={load.overview.upcoming} zone={zone} now={now} publicUrl={publicUrl} />
+            <Upcoming bookings={load.overview.upcoming} zone={zone} now={now} publicUrl={publicUrl} calendar={ownerHost.google?.status === 'ok'} />
           ) : (
             <p className="adm-panel__desc">Meetings will show here once the overview loads.</p>
           )}
@@ -144,14 +146,14 @@ function Stats({ overview }: { overview: AdminOverview | null }) {
   );
 }
 
-function Upcoming({ bookings, zone, now, publicUrl }: { bookings: AdminBooking[]; zone: string; now: number; publicUrl: string }) {
+function Upcoming({ bookings, zone, now, publicUrl, calendar }: { bookings: AdminBooking[]; zone: string; now: number; publicUrl: string; calendar: boolean }) {
   if (!bookings.length) {
     return (
       <EmptyState
         compact
         icon={<CalendarClock />}
         title="Nothing booked yet"
-        description="When someone picks a time it shows up here, and in your Google Calendar."
+        description={calendar ? 'When someone picks a time it shows up here, and in your Google Calendar.' : 'When someone picks a time it shows up here. Connect Google Calendar to have it go into your calendar too.'}
         action={<CopyButton value={publicUrl} label="Copy your booking link" variant="secondary" />}
       />
     );

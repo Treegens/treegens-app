@@ -994,7 +994,7 @@ export async function googleCreateEvent(
   ref: AccountRef,
   input: CalendarEventInput,
   opts?: { calendarId?: string },
-): Promise<{ eventId: string; calendarId: string; htmlLink?: string; meetUrl?: string }> {
+): Promise<{ eventId: string; calendarId: string; htmlLink?: string; meetUrl?: string; adopted?: boolean }> {
   const google = requireAccount(ref);
   const calendarId = opts?.calendarId || google.writeCalendarId || 'primary';
   const eventId = eventIdForBooking(input.bookingId);
@@ -1013,9 +1013,12 @@ export async function googleCreateEvent(
     allow: [409],
   });
   let event = created.status === 409 ? null : created.data;
+  // An earlier attempt's event, taken over as it is (it may still hold that attempt's time).
+  let adopted = false;
   if (created.status === 409) {
     // An earlier attempt for this booking already went through: adopt its event.
     event = (await googleApi<GoogleEvent>(ctx, ref, { method: 'GET', url: eventsUrl(calendarId, eventId) })).data;
+    adopted = event?.status !== 'cancelled';
     if (event?.status === 'cancelled') {
       event = (
         await googleApi<GoogleEvent>(ctx, ref, {
@@ -1045,9 +1048,10 @@ export async function googleCreateEvent(
       break;
     }
   }
-  const result: { eventId: string; calendarId: string; htmlLink?: string; meetUrl?: string } = { eventId: event.id, calendarId };
+  const result: { eventId: string; calendarId: string; htmlLink?: string; meetUrl?: string; adopted?: boolean } = { eventId: event.id, calendarId };
   if (typeof event.htmlLink === 'string' && event.htmlLink.startsWith('https://')) result.htmlLink = event.htmlLink;
   if (meetUrl) result.meetUrl = meetUrl;
+  if (adopted) result.adopted = true;
   return result;
 }
 

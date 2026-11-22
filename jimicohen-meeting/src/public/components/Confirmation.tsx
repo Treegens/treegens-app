@@ -7,7 +7,7 @@ import { AppLink } from '../../lib/links';
 import { useTheme } from '../../lib/theme';
 import { formatDateLong, formatDuration, formatRange, zoneLabel } from '../../lib/tz';
 import { withEmbed } from '../lib/embed';
-import { deliveryLine, deliveryOf, fillTemplate, firstName, hostFirstName, hostNames, hostnameOf, isHttpsUrl, paragraphs } from '../lib/text';
+import { calendarBlock, calendarHint, deliveryLine, deliveryOf, fillTemplate, firstName, hostFirstName, hostNames, hostnameOf, isHttpsUrl, paragraphs } from '../lib/text';
 import { BookingFacts } from './BookingFacts';
 import { CalendarButtons } from './CalendarButtons';
 import { Confetti } from './Confetti';
@@ -111,6 +111,8 @@ export function Confirmation({ site, booking, manageToken, zone, hour12, locale,
   // The owner's words, then what is really on its way: an email, an invitation from Google, both or neither.
   const body = variant === 'rescheduled' ? [] : paragraphs(fillTemplate(theme.texts.confirmationBody, vars));
   const delivery = deliveryLine(booking, variant === 'rescheduled');
+  const hint = calendarHint(booking);
+  const block = calendarBlock(booking);
   const emailed = deliveryOf(booking).email;
   const note = booking.confirmationMessage ? paragraphs(fillTemplate(booking.confirmationMessage, vars)) : [];
 
@@ -133,6 +135,7 @@ export function Confirmation({ site, booking, manageToken, zone, hour12, locale,
         </p>
       ))}
       <p className="bw-done__body bw-done__delivery">{delivery}</p>
+      {hint ? <p className="bw-done__body bw-done__hint">{hint}</p> : null}
 
       <div className="bw-done__card">
         <p className="bw-done__event">{booking.eventTitle}</p>
@@ -149,8 +152,8 @@ export function Confirmation({ site, booking, manageToken, zone, hour12, locale,
       ) : null}
 
       <div className="bw-done__section">
-        <p className="bw-done__label">Add to your calendar</p>
-        <CalendarButtons links={booking.calendarLinks} inert={preview} />
+        <p className="bw-done__label">{block.label}</p>
+        <CalendarButtons links={booking.calendarLinks} inert={preview} fileOnly={block.fileOnly} />
       </div>
 
       <p className="bw-done__manage">

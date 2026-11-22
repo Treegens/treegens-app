@@ -23,6 +23,7 @@ import { CopyField, Ext, SecretField, Step, Steps, TestResult } from '../compone
 import { firstName } from '../format';
 import { announceGoogleReturn, findScreenAccount } from '../googleReturn';
 import { formatDateLong } from '../../lib/tz';
+import { endedOnItsDay, testingEndedAdvice } from '../../../shared/calendar';
 import { useAdmin } from '../state';
 import '../../styles/adminx.css';
 
@@ -171,7 +172,12 @@ function GoogleCard({ open, onToggle }: CardProps) {
   const [confirmRemoveKeys, setConfirmRemoveKeys] = useState(false);
   const [test, runTest] = useIntegrationTest();
 
-  const status: IntegrationStatus = connected && brokenAccounts.length === 0
+  // An end date Google named when the connection was made (an app still in Testing): the badge says so, not "Connected".
+  const endsMs = Date.parse(hostGoogle?.refreshExpiresAt ?? '');
+  const endsSoon = connected && Number.isFinite(endsMs) && endsMs > Date.now();
+  const status: IntegrationStatus = connected && brokenAccounts.length === 0 && endsSoon
+    ? { tone: 'warning', label: `Ends ${new Date(endsMs).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: ownerHost.timezone || 'UTC' })}` }
+    : connected && brokenAccounts.length === 0
     ? { tone: 'success', label: 'Connected' }
     : connected
       ? { tone: 'warning', label: brokenAccounts.length === 1 ? '1 account needs reconnecting' : `${brokenAccounts.length} accounts need reconnecting` }
@@ -353,7 +359,7 @@ function GoogleCard({ open, onToggle }: CardProps) {
       id="google"
       icon={<CalendarCheck size={20} />}
       title="Google Calendar"
-      description="Checks when you are busy and puts every booking on your calendar, with a Meet link."
+      description="Checks when you are busy, puts each booking on your calendar with a Meet link, and invites the person who booked."
       status={status}
       open={open}
       onToggle={onToggle}
@@ -462,8 +468,10 @@ function GoogleCard({ open, onToggle }: CardProps) {
         </Notice>
       ) : needsReconnect ? (
         <Notice tone="warning" title="Google asked us to sign in again" action={<Button size="sm" variant="primary" onClick={() => connect()}>Reconnect</Button>}>
-          Until you do, no times are offered for meetings with you and new bookings cannot reach your calendar{hostGoogle?.gmailSend ? '. No emails go out from your Gmail either' : ''}. Reconnecting takes a
-          few seconds. If this keeps happening, check step 3 below: the app must be published.
+          Until you do, no times are offered for meetings with you and new bookings cannot reach your calendar{hostGoogle?.gmailSend ? '. No emails go out from your Gmail either' : ''}.{' '}
+          {endedOnItsDay(hostGoogle, Date.now())
+            ? testingEndedAdvice(formatDateLong(Date.parse(hostGoogle!.refreshExpiresAt!), ownerHost.timezone || 'UTC'))
+            : 'Reconnecting takes a few seconds. If this keeps happening, check step 3 below: the app must be published.'}
         </Notice>
       ) : null}
 
@@ -492,9 +500,12 @@ function GoogleCard({ open, onToggle }: CardProps) {
                 <strong>Publish app</strong>, so the status reads "In production".
               </p>
               <Notice tone="warning" title="Do not skip publishing">
-                While the app is in "Testing", Google ends the connection after 7 days and bookings stop reaching your calendar.
+                While the app is in "Testing", Google ends the connection after 7 days. Bookings then stop reaching your calendar, and the people who book stop getting an invitation.
               </Notice>
-              <p>When you connect, Google may say the app is not verified. That is normal for an app only you use: choose Advanced, then continue.</p>
+              <p>
+                When you (or a co-host such as Ian) connect, Google may show a screen that says "Google hasn't verified this app". That is normal: it is your own app, made in your own Google Cloud project, so
+                Google has not reviewed it. Choose <strong>Advanced</strong>, then <strong>Go to</strong> your app's name, and continue.
+              </p>
             </Step>
             <Step title="Create the sign-in client" done={g.configured}>
               <p>
@@ -1207,7 +1218,10 @@ export default function IntegrationsPage() {
     const hash = window.location.hash.replace('#', '') as CardId;
     if (CARD_IDS.includes(hash)) return new Set([hash]);
     const first = CARD_IDS.find((id) => !done[id]);
-    return new Set(first ? [first] : []);
+    const opened = new Set<CardId>(first ? [first] : []);
+    // A connection Google said will end: its notice is inside the card, so the card starts open.
+    if (ownerHost.google?.refreshExpiresAt) opened.add('google');
+    return opened;
   });
 
   const toggle = (id: CardId) =>
@@ -1265,13 +1279,30 @@ export default function IntegrationsPage() {
         ]}
       />
 
-      {keysGone ? (
+      {!ownerHost.google ? (
+        <Notice
+          tone="danger"
+          title="Bookings are not reaching anyone's calendar"
+          action={
+            <Button size="sm" variant="primary" onClick={() => { setOpen((prev) => new Set(prev).add('google')); window.requestAnimationFrame(() => document.getElementById('google')?.scrollIntoView({ block: 'start', behavior: 'smooth' })); }}>
+              {allAccounts(ownerHost).length > 0 ? 'Choose an account' : 'Set up Google Calendar'}
+            </Button>
+          }
+        >
+          {allAccounts(ownerHost).length > 0
+            ? 'None of your Google accounts takes new meetings, so bookings are not added to your calendar and the people who book get no calendar invitation. Choose the account for new meetings in the Google Calendar card.'
+            : 'Until you connect Google Calendar, bookings are not added to your calendar and the people who book get no calendar invitation. The Google Calendar card below walks you through it.'}
+        </Notice>
+      ) : keysGone ? (
         <Notice tone="danger" title="The Google keys are missing">
           Your calendar is still connected, but it cannot be used without the keys, so no times are offered for meetings with you. Open the Google Calendar card and paste the same keys again.
         </Notice>
       ) : reconnect ? (
         <Notice tone="warning" title="Your Google Calendar needs to be reconnected">
-          Until then, no times are offered for meetings with you and new bookings cannot reach your calendar. Open the Google Calendar card and press Reconnect.
+          Until then, no times are offered for meetings with you and new bookings cannot reach your calendar.{' '}
+          {endedOnItsDay(ownerHost.google, Date.now())
+            ? testingEndedAdvice(formatDateLong(Date.parse(ownerHost.google!.refreshExpiresAt!), ownerHost.timezone || 'UTC'))
+            : 'Open the Google Calendar card and press Reconnect.'}
         </Notice>
       ) : null}
 

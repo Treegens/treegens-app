@@ -60,7 +60,10 @@ export default defineSuite('public-resilience', { mockCreds: true }, async (t) =
       const done = page.locator('.bw-done');
       await done.getByText('No confirmation email is sent for this booking, so please add it to your calendar with the buttons below.').waitFor();
       s.expect(await done.getByText(/is on its way|are on their way/).count(), 'something promised to be on its way').toBe(0);
-      s.expect((await done.locator('.bk-facts').innerText()).replace(/\s+/g, ' '), 'where').toContain('Google Meet The meeting link is not ready yet.');
+      s.expect((await done.locator('.bk-facts').innerText()).replace(/\s+/g, ' '), 'where').toContain('Google Meet The meeting link will be on your booking page once it is ready.');
+      // Nothing reaches her calendar by itself here: the buttons are the way, under their plain label.
+      await done.getByText('Add to your calendar', { exact: true }).waitFor();
+      await done.getByRole('link', { name: 'Google', exact: true }).waitFor();
       await done.getByText(/These links are not emailed to you, so keep one of them to find your booking again\./).waitFor();
       s.expect(await s.outbox({ kind: 'email' }), 'emails').toEqual([]);
       await s.screenshot(page, 'a confirmation that promises only what goes out');
@@ -69,6 +72,8 @@ export default defineSuite('public-resilience', { mockCreds: true }, async (t) =
     await s.step('and Home tells the owner that a booking reaches nobody', async () => {
       const { warnings } = await s.apiOk('GET', '/admin/overview');
       s.expect(warnings.find((w) => w.key === 'bookings_reach_nobody')?.message, 'the warning').toMatch(/^People can book "Intro call" and "Meeting", but nobody hears about it/);
+      s.expect(warnings.find((w) => w.key === 'bookings_reach_nobody')?.href, 'its fix').toBe('/admin/integrations#google');
+      s.expect(warnings[0], 'the calendar notice, first and in red').toMatchObject({ key: 'google_not_connected', tone: 'danger', title: "Bookings are not reaching anyone's calendar" });
     });
   });
 
@@ -169,12 +174,13 @@ export default defineSuite('public-resilience', { mockCreds: true }, async (t) =
     await s.step('the invitee still got a confirmation, with a calendar file that works on its own', async () => {
       const [mail] = await s.outbox({ kind: 'email', to: ADA.email });
       s.expect(mail.subject, 'subject').toBe('Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM EST');
-      // Google sends the real invitation once the repair job creates the event, so this file only adds
-      // the event and must not be a second invitation (two entries with different ids on her calendar).
-      s.expect(mail.ics, 'calendar file').toMatchObject({ method: 'PUBLISH' });
-      s.expect(mail.ics.content, 'no attendees to answer for').not.toContain('ATTENDEE');
+      // Google sends the real invitation once the repair job creates the event, so this email carries no file
+      // that could become a second entry on her calendar (or the host's, who gets the event from Google too).
+      s.expect(mail.hasIcs, 'calendar file').toBe(false);
+      s.expect(mail.text, 'says Google is adding it').toContain('Google Calendar invitation from Jimi Cohen');
       const [notice] = await s.outbox({ kind: 'email', to: OWNER_GOOGLE });
       s.expect(notice.subject, 'host notice').toMatch(/^New booking: Ada Lovelace/);
+      s.expect(notice.hasIcs, 'host calendar file').toBe(false);
     });
 
     await s.step('two minutes later Google works again: the job creates the event with its Meet link', async () => {
@@ -220,11 +226,11 @@ export default defineSuite('public-resilience', { mockCreds: true }, async (t) =
       const [stored] = await s.bookings();
       s.expect(stored, 'booking').toMatchObject({ status: 'confirmed', google: { hostId: 'host_owner', eventId: '', error: /Google/ } });
       s.expect(await s.outbox({ kind: 'calendar_insert', status: 200 }), 'events created so far').toEqual([]);
-      // The confirmation went out after the attempt, without a link it does not have, and with a plain calendar
+      // The confirmation went out after the attempt, without a link it does not have, and without a calendar
       // file: the invitation itself comes from Google once the job creates the event.
       const [mail] = await s.outbox({ kind: 'email', to: ADA.email });
       s.expect(mail.subject, 'confirmation').toBe('Confirmed: Intro call with Jimi Cohen, Wed, Nov 18, 11:00 AM EST');
-      s.expect(mail.ics, 'calendar file').toMatchObject({ method: 'PUBLISH' });
+      s.expect(mail.hasIcs, 'calendar file').toBe(false);
       s.expect(mail.text, 'no meeting link invented').not.toContain('meet.google.com');
       s.expect(await s.outbox({ kind: 'email', to: OWNER_GOOGLE }), 'host notice').toHaveLength(1);
     });

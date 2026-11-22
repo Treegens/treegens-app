@@ -20,15 +20,26 @@ function calendarStatus(host: AdminHost): { label: string; tone: BadgeTone } {
   return { label: 'No calendar connected', tone: 'warning' };
 }
 
-/** What invitees will see, in one or two sentences. */
-export function hostsSummary(kind: EventKind, names: string[]): string {
+/**
+ * What invitees will see, in one or two sentences. `writes`, per name: whether that host has Google Calendar
+ * connected for new meetings. A meeting only goes on a calendar through Google, so the summary says so.
+ */
+export function hostsSummary(kind: EventKind, names: string[], writes: boolean[] = names.map(() => true)): string {
   const list = namesList(names);
   if (!names.length) return 'Choose who hosts this meeting.';
-  if (kind === 'solo' || names.length === 1) return `People book ${list}. The meeting goes on ${names[0]}'s calendar.`;
-  if (kind === 'collective') {
-    return `People only see times when ${list} are ${names.length === 2 ? 'both' : 'all'} free. One booking puts the meeting on ${names.length === 2 ? 'both calendars' : `all ${names.length} calendars`}.`;
+  if (kind === 'solo' || names.length === 1) {
+    return writes[0] ? `People book ${list}. The meeting goes on ${names[0]}'s calendar.` : `People book ${list}. Until ${names[0]} connects Google Calendar, the meeting goes on no calendar.`;
   }
-  return `People see every time when ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]} is free. Each booking goes to one of them, and bookings are shared out evenly.`;
+  if (kind === 'collective') {
+    const seen = `People only see times when ${list} are ${names.length === 2 ? 'both' : 'all'} free.`;
+    return writes.some(Boolean)
+      ? `${seen} One booking puts the meeting on ${names.length === 2 ? 'both calendars' : `all ${names.length} calendars`}.`
+      : `${seen} Until one of them connects Google Calendar, bookings go on no calendar.`;
+  }
+  const missing = names.filter((_, i) => !writes[i]);
+  return `People see every time when ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]} is free. Each booking goes to one of them, and bookings are shared out evenly.${
+    missing.length ? ` Until ${namesList(missing)} ${missing.length === 1 ? 'connects' : 'connect'} Google Calendar, their bookings go on no calendar.` : ''
+  }`;
 }
 
 type Seg = [number, number];
@@ -201,7 +212,11 @@ export function HostsTab({ draft, update, errors }: TabProps) {
         </fieldset>
 
         <p className="adm-summary" aria-live="polite">
-          {hostsSummary(draft.kind, names)}
+          {hostsSummary(
+            draft.kind,
+            names,
+            selected.map((id) => hosts.find((x) => x.id === id)?.google?.status === 'ok'),
+          )}
         </p>
 
         <SharedHoursNotice answer={hours} />

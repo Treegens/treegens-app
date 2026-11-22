@@ -92,6 +92,7 @@ Everything a visitor and an invitee can do, `node tests/e2e/run.mjs public`:
 | `public-look` | every public screen on desktop and phone in three presets: screenshots to read, plus overflow, cut-off text and contrast checked by program |
 | `public-short-links` | `/meet` (Jimi alone, in his look) and `/pod` (Jimi and Ian, only shared free times, everything in Eco Champions: page, emails, text, Google event, call, manage page) on desktop and at 390 px; link previews read without scripts, the headers, no forest while `/pod` loads, closed and moved links |
 | `public-no-brand-leak` | with Eco Champions set up and edited, Jimi's own pages and messages show none of it |
+| `calendar-copies` | one copy in each calendar: Google invites the booker (page, booking page and email say so, with the "I know the sender" tap, and offer only the calendar file as a backup); a booking made before Google was connected reaches the host's calendar once it is, without a second invitation; Home and Integrations in red without Google; Team, the event editor and Share say so too; Testing mode's end date, before and after; at 390 and 1280 |
 
 `public-helpers.mjs` holds what they share: `prepare(s)` (fresh site, owner signed in, Google
 connected), `addCoHost`, `openEvent`, `pickDay`, `pickSlot`, `fillDetails`, `confirmBooking`,

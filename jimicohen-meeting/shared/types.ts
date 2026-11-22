@@ -306,6 +306,13 @@ export interface Booking {
     syncedEnd?: ISODateTime;
     error?: string;
   } | null;
+  /**
+   * How the invitee's calendar gets the meeting, decided once and never changed (server/lib/invite.ts).
+   * google: Google Calendar invites them (they are on the Google event). file: our own emails carry the
+   * invitation, and the Google event holds the hosts only. Absent: made before this was kept, or nothing
+   * has reached the invitee yet.
+   */
+  inviteVia?: 'google' | 'file';
   attendance: { confirmedAt?: ISODateTime; confirmedVia?: 'call' | 'sms' | 'link'; noShow?: boolean };
   cancellation?: {
     at: ISODateTime;
@@ -869,7 +876,11 @@ export interface AdminOverview {
   upcoming: AdminBooking[]; // next 8
   stats: { upcomingCount: number; last30Count: number; cancelledLast30: number; confirmedByAssistant: number };
   checklist: { key: string; label: string; done: boolean; href: string }[];
-  warnings: { key: string; message: string; href?: string }[];
+  /**
+   * tone: 'danger' for what stops bookings reaching anyone (shown first, in red); warnings otherwise.
+   * title: a headline above the message. actionLabel: the words on the link to `href` (default "Fix this").
+   */
+  warnings: { key: string; message: string; href?: string; tone?: 'danger' | 'warning'; title?: string; actionLabel?: string }[];
   publicUrl: string;
 }
 

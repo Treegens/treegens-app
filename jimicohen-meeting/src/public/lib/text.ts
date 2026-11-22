@@ -1,6 +1,7 @@
 /**
  * Small text helpers shared by the public screens.
  */
+import { UNKNOWN_SENDER_HINT } from '../../../shared/calendar';
 import type { PublicBooking, PublicEventType, PublicHost } from '../../../shared/types';
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -98,19 +99,50 @@ export function deliveryOf(booking: PublicBooking): { email: boolean; calendarIn
   return booking.delivery ?? { email: true, calendarInvite: true };
 }
 
-/** One sentence on what is on its way to the invitee, from what really goes out. */
+/**
+ * What is on its way to the invitee, from what really goes out: how the meeting gets into their calendar
+ * (Google's invitation, or the one in our email), and the confirmation email.
+ */
 export function deliveryLine(booking: PublicBooking, moved: boolean): string {
   const { email, calendarInvite } = deliveryOf(booking);
   const to = booking.invitee.email;
   if (moved) {
-    if (calendarInvite) return `An updated invitation is on its way to ${to}.`;
-    if (email) return `An email with the new time is on its way to ${to}.`;
+    if (calendarInvite) return `Google Calendar is sending an updated invitation to ${to}, which moves the meeting in your calendar.`;
+    if (email) return `An email with the new time and an updated calendar invitation is on its way to ${to}.`;
     return 'No email is sent about this change, so please update your calendar with the buttons below.';
   }
-  if (email && calendarInvite) return `A confirmation email and a calendar invitation are on their way to ${to}.`;
-  if (email) return `A confirmation email is on its way to ${to}.`;
-  if (calendarInvite) return `A calendar invitation is on its way to ${to}.`;
+  if (calendarInvite) {
+    const line = `This meeting is being added to your calendar with a Google Calendar invitation sent to ${to}.`;
+    return email ? `${line} Your confirmation email is on its way there too.` : line;
+  }
+  if (email) return `A confirmation email with a calendar invitation is on its way to ${to}. Open the invitation to add the meeting to your calendar.`;
   return 'No confirmation email is sent for this booking, so please add it to your calendar with the buttons below.';
+}
+
+/** The one tap Google may ask for, shown only while Google is the one inviting them. */
+export function calendarHint(booking: PublicBooking): string | null {
+  return deliveryOf(booking).calendarInvite ? UNKNOWN_SENDER_HINT : null;
+}
+
+/**
+ * The "add to calendar" buttons, and what they are for. While Google invites them, only the calendar file
+ * (it has Google's UID, so it merges with the invitation) for people who do not use Google Calendar: "Add to
+ * Google" or an Outlook link would make a second copy that never moves or goes away with the meeting. While
+ * our email carries the invitation, the buttons are a second way. With neither, they are the way.
+ */
+export function calendarBlock(booking: PublicBooking): { label: string; fileOnly: boolean } {
+  const { email, calendarInvite } = deliveryOf(booking);
+  if (calendarInvite) return { label: 'Not using Google Calendar?', fileOnly: true };
+  return { label: email ? 'Or add it yourself' : 'Add to your calendar', fileOnly: false };
+}
+
+/** On the booking page later: where the invitation went, when one did. */
+export function calendarNote(booking: PublicBooking): string | null {
+  const { email, calendarInvite } = deliveryOf(booking);
+  const to = booking.invitee.email;
+  if (calendarInvite) return `Google Calendar sent the invitation for this meeting to ${to}.`;
+  if (email) return `The calendar invitation is in your confirmation email to ${to}.`;
+  return null;
 }
 
 /** Stable 32 bit hash for deterministic preview data. */

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CALENDAR_PENDING } from '../../shared/calendar';
 import { DEFAULT_CONSENT_TEXT, DEFAULT_SMS_CONSENT_TEXT, defaultOwnerHost, newEventType, starterEventTypes } from '../../shared/defaults';
 import type { Booking, BookingIndexEntry, CreateBookingRequest, EventType, Host, HostGoogle, Job } from '../../shared/types';
 // The job module first, on purpose: booking.ts is then loaded from inside the import cycle
@@ -1438,7 +1439,8 @@ describe('Google Calendar sync', () => {
     expect(body.description).toContain('Phone: +14155552671');
     expect(body.description).not.toContain('Trees');
     expect(body.description).toContain(`Reschedule or cancel: https://jimicohen.com/meeting/booking/${booking.id}?t=${manageToken(ctx, booking.id)}`);
-    expect(body.description).toContain(`Booking details in the dashboard: https://jimicohen.com/meeting/admin/bookings?b=${booking.id}`);
+    // Google mails the description to the invitee too: the dashboard link only the owner can open stays out.
+    expect(body.description).not.toContain('dashboard');
 
     // The owner is preferred as organiser even though Alex is listed first. The event records the account it is in.
     expect(booking.google).toEqual({
@@ -1488,8 +1490,8 @@ describe('Google Calendar sync', () => {
       { email: 'ada@example.com', responseStatus: 'accepted' },
       ...guests.map((email) => ({ email })),
     ]);
-    // Facts the owner wrote, and the way from the calendar to the answers for the host.
-    expect(body.description).toBe(['Joint call with Alex Kim and Jimi Cohen', '', `Booking details in the dashboard: https://jimicohen.com/meeting/admin/bookings?b=${booking.id}`].join('\n'));
+    // Facts the owner wrote, and nothing else: the dashboard link (only the owner can open it) stays out of what the guests get.
+    expect(body.description).toBe('Joint call with Alex Kim and Jimi Cohen');
     const sent = JSON.stringify(body);
     for (const visitorText of ['Acme', 'invoice', 'evil.example', '+14155552671', manageToken(ctx, booking.id)]) expect(sent).not.toContain(visitorText);
     // The hosts still have everything, in the booking itself.
@@ -1793,13 +1795,53 @@ describe('Google Calendar sync', () => {
     const deletes = eventCalls(calls, 'DELETE');
     expect(deletes).toHaveLength(1);
     expect(deletes[0].url).toBe(`${EVENTS_URL}/${calendarEventIdFor(booking.id)}?sendUpdates=all`);
-    expect(cancelled.google?.error).toBeUndefined();
+    // The creation is still on its way and may make the event after this delete: the booking keeps its mark
+    // (so the retry job and housekeeping still find it if this instance stops) and the delete is tried again.
+    expect(cancelled.google?.error).toBe(CALENDAR_PENDING);
+    expect(cancelled.google?.eventId).toBe('');
 
-    // The retry that was queued for the creation finds a cancelled booking with nothing left to do.
-    ctx.clock.advance(61_000);
+    ctx.clock.advance(2 * 60_000 + 1000);
     await runDueJobs(ctx, { jobTimeoutMs: 3000 });
+    expect(eventCalls(calls, 'DELETE').length).toBeGreaterThanOrEqual(2);
+    expect(eventCalls(calls, 'DELETE').every((c) => c.url === `${EVENTS_URL}/${calendarEventIdFor(booking.id)}?sendUpdates=all`)).toBe(true);
+    expect((await getBooking(ctx, booking.id))?.google?.error).toBe(CALENDAR_PENDING);
+
+    // Once that write is surely over, the mark comes off and nothing more is queued. One line on the timeline.
+    for (let i = 0; i < 4; i++) {
+      ctx.clock.advance(5 * 60_000);
+      await runDueJobs(ctx, { jobTimeoutMs: 3000 });
+    }
+    const after = (await getBooking(ctx, booking.id))!;
+    expect(after.google?.error).toBeUndefined();
     expect(await jobsOf(ctx, (j) => j.type === 'gcal_sync')).toEqual([]);
+    expect(after.timeline.filter((t) => t.type === 'calendar_event_removed')).toHaveLength(1);
+  });
+
+  it('removes the event a first write made after the cancellation, also when the instance stopped in between', async () => {
+    const ctx = await setup({ env: GOOGLE_ENV });
+    await connectGoogle(ctx, OWNER);
+    // The first write reaches Google but its answer never comes back: the instance that made it stopped.
+    let made = false;
+    const calls = net(ctx, (call) => {
+      if (call.url.startsWith(EVENTS_URL) && call.method === 'POST') {
+        made = true;
+        return new Promise<Response>(() => undefined);
+      }
+      if (call.url.startsWith(EVENTS_URL) && call.method === 'DELETE') {
+        // Google has the event only from the moment the stopped write landed (after the first delete).
+        const second = eventCalls(calls, 'DELETE').length > 1;
+        return second && made ? new Response(null, { status: 204 }) : jsonResponse({ error: { code: 404 } }, 404);
+      }
+      return undefined;
+    });
+    const { booking } = await createBooking(ctx, request(), { calendarBudgetMs: 20 });
+    await cancelBooking(ctx, booking.id, { by: 'invitee' });
     expect(eventCalls(calls, 'DELETE')).toHaveLength(1);
+
+    // Housekeeping on another instance: the mark is what makes it look again, and the late event goes.
+    ctx.clock.advance(2 * 60_000 + 1000);
+    await runDueJobs(ctx, { jobTimeoutMs: 3000 });
+    expect(eventCalls(calls, 'DELETE').length).toBeGreaterThanOrEqual(2);
   });
 
   it('stops retrying while the host has to reconnect, and leaves the note in place', async () => {

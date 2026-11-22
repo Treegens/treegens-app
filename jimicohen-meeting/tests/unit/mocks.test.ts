@@ -341,7 +341,7 @@ describe('mock Google: events', () => {
     await connect(ctx, OWNER, 'mock:jimi@example.com:UTC');
     const first = await googleCreateEvent(ctx, main(await owner(ctx)), eventInput());
     const again = await googleCreateEvent(ctx, main(await owner(ctx)), eventInput());
-    expect(again).toEqual(first);
+    expect(again).toEqual({ ...first, adopted: true });
     expect((await outbox(ctx, 'calendar_insert')).map((e) => e.status)).toEqual([200, 409]);
     expect(await outbox(ctx, 'calendar_get')).toMatchObject([{ status: 200, eventId: first.eventId }]);
   });
@@ -643,7 +643,9 @@ describe('a booking through every mock', () => {
     const toHost = emails.find((e) => e.to.includes(JIMI))!;
     expect(toInvitee.subject).toContain('Intro call');
     expect(toInvitee.text).toContain(insert.meetUrl);
-    expect(toInvitee.hasIcs).toBe(true);
+    // Google invited her: its invitation is the one copy, so our email carries no calendar file.
+    expect(toInvitee.hasIcs).toBe(false);
+    expect(toInvitee.text).toContain('Google Calendar invitation from');
     expect(toHost.subject).toContain('Ada Lovelace');
 
     // The time is now taken on the mock calendar as well.

@@ -45,7 +45,11 @@ interface CalendarState {
   connected: boolean;
 }
 
-function calendarState(host: AdminHost, self: boolean): CalendarState {
+/**
+ * `invitedBy`: the owner organises joint meetings from Google, so a co-host without Google is still invited
+ * to each one at their address on file. Said where they have no calendar of their own.
+ */
+function calendarState(host: AdminHost, self: boolean, invitedBy = false): CalendarState {
   const who = self ? 'your' : `${firstName(host.name)}'s`;
   // Every Google account of the host counts: one that cannot be read closes their times.
   const accounts = allAccounts(host);
@@ -77,7 +81,8 @@ function calendarState(host: AdminHost, self: boolean): CalendarState {
       connected: true,
     };
   }
-  return { tone: 'neutral', label: 'No calendar yet', detail: self ? 'Only your weekly hours are used.' : `Only ${who} weekly hours are used until a calendar is connected.`, connected: false };
+  const invitations = !self && invitedBy && host.email ? ` Joint meetings still reach ${firstName(host.name)} by a Google Calendar invitation to ${host.email}.` : '';
+  return { tone: 'neutral', label: 'No calendar yet', detail: self ? 'Only your weekly hours are used.' : `Only ${who} weekly hours are used until a calendar is connected.${invitations}`, connected: false };
 }
 
 const ZONE_MODE: Record<AdminHost['timezoneMode'], string> = {
@@ -534,7 +539,7 @@ export default function TeamPage() {
   const renderHost = (host: AdminHost) => {
     const self = host.id === ownerHost.id;
     const first = firstName(host.name);
-    const cal = calendarState(host, self);
+    const cal = calendarState(host, self, ownerHost.google?.status === 'ok');
     const joint = self ? [] : jointOf(host);
     const link = links[host.id];
     const waiting = !self && !cal.connected;

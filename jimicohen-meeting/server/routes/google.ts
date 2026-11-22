@@ -36,7 +36,7 @@ import { hostFromToken, isAdmin, rateLimit } from '../lib/auth';
 import { syncHostTimezone } from '../lib/busy';
 import { safeEqual } from '../lib/crypto';
 import { BASE_PATH, type Ctx } from '../lib/ctx';
-import { detachEventsOfAccount } from '../lib/booking';
+import { detachEventsOfAccount, queueCalendarBackfill } from '../lib/booking';
 import { buildGoogleAuthUrl, completeGoogleAuth, linkMark, readGoogleState, type GoogleAuthResult } from '../lib/google';
 import { findAccount, mainOf, type ConnectIntent, type ConnectOutcome } from '../lib/googleAccounts';
 import { noticeGoogleConnection } from '../lib/googleNotices';
@@ -254,6 +254,15 @@ async function afterConnection(ctx: Ctx, result: GoogleAuthResult, viaLink: bool
   }
   if (result.outcome && result.accountId && result.email) {
     await noticeGoogleConnection(ctx, { hostId, accountId: result.accountId, email: result.email, outcome: result.outcome, viaLink, ...(result.dropped ? { replacedEmail: result.dropped.email } : {}) });
+  }
+  // A main account that takes new meetings now: meetings booked before, which no calendar has yet, are written
+  // to it right away (housekeeping would within half an hour). See booking.ts waitsForCalendar.
+  if (result.outcome && result.outcome !== 'added') {
+    try {
+      await queueCalendarBackfill(ctx, hostId);
+    } catch (err) {
+      ctx.log('warn', 'google: could not queue the calendar events of earlier bookings', { hostId, error: err instanceof Error ? err.name : 'unknown' });
+    }
   }
   return zone;
 }

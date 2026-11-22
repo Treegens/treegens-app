@@ -53,7 +53,7 @@ export function BookingFacts({ booking, zone, hour12, locale, struck = false, cl
           </a>
         ) : null}
         {location.type === 'google_meet' && !join && !struck ? (
-          <p className="bk-fact__sub">{deliveryOf(booking).calendarInvite ? 'The link is in your calendar invitation.' : 'The meeting link is not ready yet.'}</p>
+          <p className="bk-fact__sub">{deliveryOf(booking).calendarInvite ? 'The link is in your calendar invitation.' : 'The meeting link will be on your booking page once it is ready.'}</p>
         ) : null}
       </Fact>
       {booking.hosts.length ? (

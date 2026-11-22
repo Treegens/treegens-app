@@ -21,7 +21,7 @@ import { SuccessMark } from './components/SuccessMark';
 import { TimezoneBar } from './components/TimezoneBar';
 import { isEmbedSearch, postToParent, withEmbed } from './lib/embed';
 import { useVisitorPrefs } from './lib/prefs';
-import { deliveryLine, firstName, hostFirstName, hostNames, hostsFirstNames } from './lib/text';
+import { calendarBlock, calendarHint, calendarNote, deliveryLine, firstName, hostFirstName, hostNames, hostsFirstNames } from './lib/text';
 
 export interface BookingManageProps {
   view?: 'details' | 'reschedule' | 'cancel';
@@ -394,8 +394,15 @@ function ManageViews({ data, token, asHost, embed, view, onUpdated }: ViewProps)
               </div>
             )}
             <div className="bm__section">
-              <p className="bm__label">Add to your calendar</p>
-              <CalendarButtons links={booking.calendarLinks} />
+              {/* Where the invitation went, for the invitee. A host on a host's link sees only the buttons. */}
+              {!asHost && calendarNote(booking) ? (
+                <p className="bm__hint bm__calnote">
+                  {calendarNote(booking)}
+                  {calendarHint(booking) ? ` ${calendarHint(booking)}` : ''}
+                </p>
+              ) : null}
+              <p className="bm__label">{calendarBlock(booking).label}</p>
+              <CalendarButtons links={booking.calendarLinks} fileOnly={calendarBlock(booking).fileOnly} />
             </div>
             {booking.canReschedule || booking.canCancel ? (
               <div className="bm__section">

@@ -2362,6 +2362,12 @@ a.pf__credit:hover {
   margin-top: var(--m-gap-lg);
 }
 
+/* The one tap Google may ask for, under the line that says Google is sending the invitation. */
+.bw-done__hint {
+  margin-top: 6px;
+  font-size: var(--m-text-sm);
+}
+
 .bw-done__label,
 .bm__label {
   margin-bottom: 10px;
@@ -2677,6 +2683,12 @@ a.bw-done__link:focus-visible {
 .bm__hint {
   color: var(--m-muted);
   font-size: var(--m-text-sm);
+}
+
+.bm__calnote {
+  margin-bottom: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .bm__hint a {

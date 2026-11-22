@@ -178,7 +178,7 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       s.expect(await bar.locator('.bw-confirmbar__value').textContent(), 'confirm bar value').toBe('Thu, Nov 19, 9:30 AM');
       await bar.getByRole('button', { name: 'Confirm new time' }).click();
       await page.getByText('Your meeting has moved').waitFor();
-      await page.getByText(`An updated invitation is on its way to ${ADA.email}.`).waitFor();
+      await page.getByText(`Google Calendar is sending an updated invitation to ${ADA.email}, which moves the meeting in your calendar.`).waitFor();
       await s.settle();
       s.expect(new URL(page.url()).pathname, 'back on the booking page').toBe(`/meeting/booking/${booking.id}`);
       const shown = await page.locator('.bm__facts').innerText();
@@ -227,10 +227,10 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       const [mail] = await s.outbox({ kind: 'email', to: ADA.email });
       s.expect(mail.text, 'invitee text').toContain('9:30 AM to 9:45 AM (Eastern Standard Time)');
       s.expect(mail.text, 'invitee text, previously').toContain('Wednesday, November 18, 2026');
-      s.expect(mail.ics, 'calendar file').toMatchObject({ method: 'PUBLISH' });
-      s.expect(mail.ics.content, 'calendar file').toContain('DTSTART:20261119T143000Z');
-      s.expect(mail.ics.content, 'calendar file sequence').toContain('SEQUENCE:1');
-      // She moved it herself a moment ago: the email carries the new calendar file, a text on top is not needed.
+      // Google moves its own invitation in her calendar (the patch above notified her): no file of ours beside it.
+      s.expect(mail.hasIcs, 'calendar file').toBe(false);
+      s.expect(mail.text, 'says Google moves it').toContain('Google Calendar is sending you an updated invitation from Jimi Cohen, which moves the meeting in your calendar.');
+      // She moved it herself a moment ago: the email and Google's update say it all, a text on top is not needed.
       s.expect(await s.outbox({ kind: 'sms' }), 'texts').toEqual([]);
       await s.screenshotEmail(mail, 'rescheduled email');
     });
@@ -657,7 +657,7 @@ export default defineSuite('public-manage', { mockCreds: true }, async (t) => {
       await s.linger(page);
       await page.getByRole('button', { name: 'Confirm new time' }).click();
       await page.getByText('Your meeting has moved').waitFor();
-      await page.getByText(`An updated invitation is on its way to ${ADA.email}.`).waitFor();
+      await page.getByText(`Google Calendar is sending an updated invitation to ${ADA.email}, which moves the meeting in your calendar.`).waitFor();
       await s.settle();
       s.expect((await s.bookings({ id: booking.id }))[0], 'the booking').toMatchObject({ start: '2026-11-18T10:00:00.000Z', rescheduleCount: 1 });
     });

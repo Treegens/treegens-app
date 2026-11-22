@@ -49,7 +49,8 @@ import type { Ctx } from '../lib/ctx';
 import { HttpError, json, readJson, route, type Route } from '../lib/http';
 import { builtinAsset } from '../lib/builtinAssets';
 import { buildBookingIcs } from '../lib/ics';
-import { getAsset, getBooking, getSite, isStorageId, listHosts } from '../lib/repo';
+import { invitedByGoogle, googleUidFor } from '../lib/invite';
+import { getAsset, getBooking, getEventType, getSite, isStorageId, listHosts } from '../lib/repo';
 import { FieldErrors, isIsoInstant } from '../lib/validate';
 
 // Bookings queue calendar repairs; the job runner must know how to run them in every API process.
@@ -257,11 +258,14 @@ export const routes: Route[] = [
     if (!booking) throw bookingNotFound();
 
     const site = await getSite(ctx);
-    const everyone = await listHosts(ctx);
+    const [everyone, eventType] = await Promise.all([listHosts(ctx), getEventType(ctx, booking.eventTypeId)]);
     const assigned = booking.hostIds.map((id) => everyone.find((h) => h.id === id)).filter((h): h is NonNullable<typeof h> => !!h);
     const base = ctx.env.publicBaseUrl.replace(/\/+$/, '');
     // A plain event file to add (no invitation to answer); for a cancelled meeting, the file that takes it out again.
     const method = booking.status === 'cancelled' ? 'CANCEL' : 'PUBLISH';
+    // Google invites this invitee: the file is the same meeting as Google's invitation (its UID), so a calendar
+    // that gets both keeps one. Otherwise it is the same meeting as our own invitation.
+    const google = invitedByGoogle(booking, eventType) && !!booking.google && !booking.google.detached;
     const content = buildBookingIcs({
       booking,
       hosts: assigned,
@@ -270,6 +274,7 @@ export const routes: Route[] = [
       baseUrl: base,
       manageUrl: `${base}/booking/${encodeURIComponent(booking.id)}?t=${manageToken(ctx, booking.id)}`,
       brandLine: brandLineFor(ctx, site, booking),
+      ...(google ? { uid: googleUidFor(booking.id) } : {}),
     });
     const brand = brandOf(site, booking);
     return new Response(content, {

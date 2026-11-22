@@ -120,7 +120,9 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       await s.settle();
       const done = page.locator('.bw-done');
       await done.getByText('Thanks, Ada. Here are the details of your meeting.').waitFor();
-      await done.getByText(`A confirmation email and a calendar invitation are on their way to ${ADA.email}.`).waitFor();
+      // Google is the one putting it in her calendar, and the page says so, with the one tap Google may ask for.
+      await done.getByText(`This meeting is being added to your calendar with a Google Calendar invitation sent to ${ADA.email}. Your confirmation email is on its way there too.`).waitFor();
+      await done.getByText('Don\'t see it in your calendar? If the invitation says it is from an unknown sender, tap "I know the sender", then Yes.').waitFor();
       await done.getByText(/any time before the meeting\. The same links are in your email\./).waitFor();
       const facts = (await done.locator('.bk-facts').innerText()).replace(/\s+/g, ' ');
       s.expect(facts, 'when').toContain(`${longDate(START, NEW_YORK)} 11:00 – 11:15 AM Eastern Time (New York)`);
@@ -162,16 +164,12 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       const manage = (action) => `/meeting/booking/${booking.id}/${action}?t=${booking.manageToken}`;
       s.expect(await done.getByRole('link', { name: 'Reschedule' }).getAttribute('href'), 'reschedule link').toBe(manage('reschedule'));
       s.expect(await done.getByRole('link', { name: 'cancel', exact: true }).getAttribute('href'), 'cancel link').toBe(manage('cancel'));
-      const google = new URL(await done.getByRole('link', { name: 'Google' }).getAttribute('href'));
-      s.expect(google.origin + google.pathname, 'Google calendar link').toBe('https://calendar.google.com/calendar/render');
-      s.expect(google.searchParams.get('dates'), 'Google calendar dates').toBe('20261118T160000Z/20261118T161500Z');
-      const outlook = new URL(await done.getByRole('link', { name: 'Outlook.com' }).getAttribute('href'));
-      s.expect(outlook.searchParams.get('startdt'), 'Outlook start').toBe('2026-11-18T16:00:00Z');
-      // Work and school Microsoft 365 calendars have their own button with the same event.
-      const office = new URL(await done.getByRole('link', { name: 'Office 365' }).getAttribute('href'));
-      s.expect(office.origin + office.pathname, 'Office 365 link').toBe('https://outlook.office.com/calendar/0/action/compose');
-      s.expect(office.searchParams.get('startdt'), 'Office 365 start').toBe('2026-11-18T16:00:00Z');
-      const icsHref = await done.getByRole('link', { name: 'Apple or other' }).getAttribute('href');
+      // Google invites her: nothing here may make a second copy. Only the calendar file stays, for people who do
+      // not use Google Calendar, and it has Google's UID, so a calendar that also takes the invitation keeps one.
+      await done.getByText('Not using Google Calendar?').waitFor();
+      for (const name of ['Google', 'Outlook.com', 'Office 365', 'Apple or other']) s.expect(await done.getByRole('link', { name, exact: true }).count(), `${name} button`).toBe(0);
+      s.expect(await done.locator('a[href*="calendar.google.com"], a[href*="outlook."]').count(), 'add-to-calendar template links').toBe(0);
+      const icsHref = await done.getByRole('link', { name: 'Download the calendar file' }).getAttribute('href');
       s.expect(icsHref, 'calendar file link').toBe(`${s.url(`/api/public/bookings/${booking.id}/ics`)}?t=${booking.manageToken}`);
       const file = await s.visitor().request('GET', `/public/bookings/${booking.id}/ics`, { query: { t: booking.manageToken } });
       s.expect(file.status, 'calendar file status').toBe(200);
@@ -179,6 +177,8 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       s.expect(file.text, 'calendar file').toContain('DTSTART:20261118T160000Z');
       s.expect(file.text, 'calendar file').toContain('DTEND:20261118T161500Z');
       s.expect(file.text, 'calendar file').toContain('SUMMARY:Intro call');
+      s.expect(file.text, 'calendar file has Google\'s UID').toContain(`UID:${booking.google.eventId}@google.com`);
+      s.expect(booking.inviteVia, 'how she is invited, recorded').toBe('google');
     });
 
     await s.step('the manage API shows the same booking', async () => {
@@ -231,10 +231,9 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       s.expect(event.hangoutLink, 'Meet link').toBe(booking.location.joinUrl);
       s.expect(event.extendedProperties, 'booking id on the event').toEqual({ private: { meetingBookingId: booking.id } });
       s.expect(event.guestsCanModify, 'guests can modify').toBe(false);
-      // The description: the meeting and its host, and the way to the booking in the dashboard. No name, phone,
-      // answers or manage link: those stay in the host email and the dashboard.
-      const base = booking.manageUrl.replace(/\/booking\/.*$/, '');
-      s.expect(event.description.split('\n'), 'description').toEqual(['Intro call with Jimi Cohen', '', `Booking details in the dashboard: ${base}/admin/bookings?b=${booking.id}`]);
+      // The description: the meeting and its host. No name, phone, answers or manage link: those stay in the host
+      // email and the dashboard. Google mails it to her too, so the owner-only dashboard link stays out as well.
+      s.expect(event.description.split('\n'), 'description').toEqual(['Intro call with Jimi Cohen']);
       s.expect(JSON.stringify(event), 'visitor text on the event').not.toContain(ADA.name);
       s.expect(JSON.stringify(event), 'phone on the event').not.toContain(PHONE);
       s.expect(await s.googleEvents(OWNER_GOOGLE), 'events on the mock calendar').toMatchObject([{ account: OWNER_GOOGLE, event: { id: booking.google.eventId, status: 'confirmed' } }]);
@@ -256,12 +255,14 @@ export default defineSuite('public-booking', { mockCreds: true }, async (t) => {
       s.expect(mail.html, 'html body').toContain('11:00 AM to 11:15 AM (Eastern Standard Time)');
       const manage = (action) => `${s.url(`/booking/${booking.id}/${action}`)}?t=${booking.manageToken}`;
       for (const link of [booking.location.joinUrl, manage('reschedule'), manage('cancel')]) s.expect(mail.links, 'links in the confirmation').toContain(link);
-      s.expect(mail.links.some((l) => l.startsWith('https://calendar.google.com/calendar/render')), 'Google calendar link').toBe(true);
+      // Google sent the real invitation: nothing in this email can add a second copy. No attachment, no "Add to
+      // Google" or Outlook links, only the calendar file (Google's UID) for people who do not use Google Calendar.
+      s.expect(mail.links.some((l) => l.startsWith('https://calendar.google.com/calendar/render') || l.includes('outlook.')), 'template links').toBe(false);
       s.expect(mail.links, 'calendar file link').toContain(`${s.url(`/api/public/bookings/${booking.id}/ics`)}?t=${booking.manageToken}`);
-      // Google already sent the real invitation, so the attached file must not create a second event to answer.
-      s.expect(mail.hasIcs, 'has a calendar file').toBe(true);
-      s.expect(mail.ics, 'calendar file').toMatchObject({ filename: 'invite.ics', method: 'PUBLISH' });
-      for (const line of ['BEGIN:VCALENDAR', 'METHOD:PUBLISH', 'DTSTART:20261118T160000Z', 'DTEND:20261118T161500Z', `UID:${booking.id}@localhost`]) s.expect(mail.ics.content, 'calendar file').toContain(line);
+      s.expect(mail.hasIcs, 'has a calendar file').toBe(false);
+      s.expect(mail.text, 'says Google is adding it').toContain(`This meeting is being added to your calendar with a Google Calendar invitation from Jimi Cohen, sent to ${ADA.email}.`);
+      s.expect(mail.text, 'the one tap').toContain('If the invitation says it is from an unknown sender, tap "I know the sender", then Yes.');
+      s.expect(mail.text, 'the backup').toContain('Not using Google Calendar?');
       s.expect(mail.html, 'no em dash in the email').not.toContain('—');
       await s.screenshotEmail(mail, 'confirmation email');
     });

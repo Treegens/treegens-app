@@ -93,8 +93,24 @@ All of this is done in the dashboard under **Integrations**, which has step-by-s
 
 - **Google Calendar**: create an OAuth client (type "Web application") in Google Cloud, enable the Calendar API
   (and the Gmail API if emails should be sent from Gmail), add the redirect URI
-  `https://jimicohen.com/meeting/api/google/callback`, and publish the consent screen to **In production**.
-  While it is in "Testing", Google ends the connection after 7 days.
+  `https://jimicohen.com/meeting/api/google/callback`, and publish the consent screen to **In production**
+  (Google Auth Platform, Audience, Publish app). While it is in "Testing", Google ends the connection after 7 days:
+  bookings then stop reaching your calendar and the people who book stop getting an invitation. The app emails you
+  two days and one day before a connection Google said would end, and Home says why once it has.
+  When you or a co-host (Ian) connect, Google may show **"Google hasn't verified this app"**. That is expected: it is
+  your own app in your own Google Cloud project, so Google has not reviewed it. Choose **Advanced**, then **Go to**
+  the app's name, and continue.
+- **What reaches whose calendar**: with Google connected, every booking is written into the organising host's
+  Google Calendar (the owner first) with a Meet link. Google then invites the other hosts and the person who booked,
+  and moves or cancels the meeting for them. Whether an invitation shows in a Google user's calendar by itself is
+  their own "Add invitations to my calendar" setting: a first invitation from someone they do not know may wait for
+  "I know the sender" and Yes, which the confirmation page and email tell them. No scheduler can write into the
+  booker's own calendar without them signing in to Google. Each booking records once how the booker is invited
+  (`inviteVia` on the booking): `google`, or `file` when our own email carried the invitation because Google was not
+  connected yet. A `file` booking keeps getting our own updates and its Google event holds the hosts only, so nobody
+  ever has two copies. Bookings made before Google was connected are written to the hosts' calendars by housekeeping
+  (within about two minutes of connecting); a booker nothing reached yet then gets Google's invitation. Without
+  Google nothing reaches any calendar, and Home says so in red.
   Press **Connect** on the public address, `https://jimicohen.com/meeting/admin` (a co-host's private link already
   uses it). The connection is checked with a cookie set on that address, and Google always sends you back there, so a
   Connect pressed on the `jimicohen-meeting.netlify.app` address is turned away with a note asking you to press it

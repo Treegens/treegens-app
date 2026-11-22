@@ -17,6 +17,7 @@
  */
 import { DateTime, IANAZone } from 'luxon';
 import { bookUrlFor, brandLine, brandOfView, eventColorFor, isSiteView, viewFor } from '../../shared/brands';
+import { UNKNOWN_SENDER_HINT } from '../../shared/calendar';
 import { DEFAULT_ASSISTANT } from '../../shared/defaults';
 import type {
   AssistantSettings,
@@ -33,8 +34,10 @@ import type {
 } from '../../shared/types';
 import { hmacHex, randomId, sha256Hex } from './crypto';
 import type { Ctx } from './ctx';
-import { renderEmailHtml, renderEmailText, sendEmail, urlsIn, type EmailMessage } from './email';
+import { emailCanGoOut, renderEmailHtml, renderEmailText, sendEmail, urlsIn, type EmailMessage } from './email';
 import { buildBookingIcs, calendarLinks } from './ics';
+import { mainOf } from './googleAccounts';
+import { invitedByGoogle, settleInvite } from './invite';
 import { reserveOutbound } from './outbound';
 import { noConsentReason } from './twilio';
 import {
@@ -1081,19 +1084,30 @@ function assignedTo(booking: Booking, hosts: Host[]): Host[] {
 }
 
 /**
- * True when Google Calendar sends the invitee the real invitation for this booking: it already did,
- * or it is about to (`booking.google` is set as soon as a host with working Google organises the
- * event, also while a failed or slow write is still being retried). Our own email must then not
- * carry a second invitation with a different UID, which would leave the invitee with two entries.
+ * True when Google Calendar sends the invitee the real invitation for this booking and keeps it up to date:
+ * the booking is one Google invites them to (invite.ts, recorded on the booking) and its event is not in an
+ * account that is gone. Our own email then carries no calendar file at all: Google's invitation is the one
+ * copy, and a file next to it (with another UID) would leave the invitee with two entries.
  */
 function googleSendsInvite(booking: Booking, eventType: EventType | null): boolean {
   // A detached booking's event is in an account that is gone: Google will not tell the invitee about changes.
-  return eventType?.googleInvite !== false && !!booking.google && !booking.google.detached;
+  // A booking recorded for Google whose event is not written yet (the write was cut off) still gets Google's
+  // invitation, once housekeeping writes it: our own would be a second one.
+  return invitedByGoogle(booking, eventType) && !booking.google?.detached;
 }
 
 /** The invitee got a Google invitation earlier that can no longer be changed (the booking is detached). */
 function staleGoogleInvite(booking: Booking, eventType: EventType | null): boolean {
-  return eventType?.googleInvite !== false && !!booking.google?.detached && !!booking.google.eventId;
+  return invitedByGoogle(booking, eventType) && !!booking.google?.detached && !!booking.google.eventId;
+}
+
+/** Kinds of email that carry a calendar file, or say why they do not. */
+const CALENDAR_KINDS = new Set<MessageKind>(['confirmation', 'host_new', 'rescheduled', 'cancelled']);
+
+/** Who Google's invitation comes from: the host whose account organises the event. */
+function organizerName(booking: Booking, hosts: Host[], site: SiteSettings): string {
+  const organizer = hosts.find((h) => h.id === booking.google?.hostId) ?? assignedTo(booking, hosts)[0];
+  return organizer?.name.trim() || site.profile.name;
 }
 
 const STALE_INVITE_MOVED =
@@ -1187,7 +1201,32 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
     ...(ownPlace ? urlsIn(`${booking.location.label ?? ''} ${booking.location.value ?? ''}`) : []),
   ].filter(Boolean);
   const paragraphs = body.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
-  // Said after the body, whatever the owner's own wording: the earlier Google invitation will not change by itself.
+  const assigned = assignedTo(booking, p.hosts);
+  const invited = googleSendsInvite(booking, eventType);
+  // How the meeting gets into the invitee's calendar, said after the body whatever the owner's own wording.
+  if (audience === 'invitee' && (kind === 'confirmation' || kind === 'host_new')) {
+    if (invited) {
+      paragraphs.push(`This meeting is being added to your calendar with a Google Calendar invitation from ${organizerName(booking, p.hosts, site)}, sent to ${booking.invitee.email}.`, UNKNOWN_SENDER_HINT);
+    } else {
+      paragraphs.push('A calendar invitation is attached to this email. Open it to add the meeting to your calendar.');
+    }
+  } else if (audience === 'invitee' && kind === 'rescheduled') {
+    paragraphs.push(
+      invited
+        ? `Google Calendar is sending you an updated invitation from ${organizerName(booking, p.hosts, site)}, which moves the meeting in your calendar.`
+        : 'An updated calendar invitation is attached. Open it to move the meeting in your calendar.',
+    );
+  }
+  // The hosts' calendars get the meeting through Google. Without Google nothing puts it there, so the email says so.
+  const noGoogle = !booking.google && !assigned.some((h) => mainOf(h)?.account.status === 'ok');
+  if (audience === 'host' && noGoogle && (kind === 'confirmation' || kind === 'host_new' || kind === 'rescheduled')) {
+    paragraphs.push(
+      p.recipientHost && p.recipientHost.id !== site.ownerHostId
+        ? 'This meeting is not in your Google Calendar, because no Google Calendar is connected for it. Connect yours on your private page, and this meeting and every new one go into it by themselves.'
+        : 'This meeting is not in your Google Calendar, because Google Calendar is not connected. Connect it under Integrations in your dashboard, and this meeting and every new one go into it by themselves.',
+    );
+  }
+  // The earlier Google invitation will not change by itself.
   if (audience === 'invitee' && staleGoogleInvite(booking, eventType)) {
     if (kind === 'rescheduled') paragraphs.push(STALE_INVITE_MOVED);
     else if (kind === 'cancelled') paragraphs.push(STALE_INVITE_CANCELLED);
@@ -1196,19 +1235,16 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
   const details = emailDetails(p, vars);
   const actions = emailActions(p, vars);
   const token = manageTokenFor(ctx, booking.id);
-  const assigned = assignedTo(booking, p.hosts);
 
   let links: { label: string; url: string }[] = [];
   let linksLabel = '';
   if (audience === 'invitee' && (kind === 'confirmation' || kind === 'host_new' || kind === 'rescheduled')) {
+    // Only the calendar file: it has the same UID as the invitation (Google's, or the one attached here), so a
+    // calendar that takes both keeps one meeting. "Add to Google" and the Outlook links would make a second,
+    // unlinked copy that never moves or goes away with the meeting.
     const cal = calendarLinks({ booking, hosts: assigned, baseUrl: base, manageToken: token, brandLine: brandLine(site, bookUrlFor(base, site, booking)) });
-    linksLabel = 'Add to your calendar:';
-    links = [
-      { label: 'Google', url: cal.google },
-      { label: 'Outlook.com', url: cal.outlook },
-      { label: 'Office 365', url: cal.office365 },
-      { label: 'Apple or other', url: cal.ics },
-    ];
+    linksLabel = invited ? 'Not using Google Calendar?' : 'Add to your calendar:';
+    links = [{ label: 'Calendar file', url: cal.ics }];
   } else if (audience === 'invitee' && kind === 'reminder' && vars.join_url && !booking.attendance?.confirmedAt) {
     // Everyone who joins the meeting hears it ("Let Jimi and Ian know"); host_names gives first names for more than one.
     links = [{ label: `Let ${assigned.length > 1 ? vars.host_names : vars.host_first_name} know you're coming`, url: vars.confirm_url }];
@@ -1219,8 +1255,6 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
       ? `You are getting this email because a meeting was booked with ${site.profile.name} using this address.`
       : `Sent by the ${site.profile.name} booking page.`;
   const content = { heading, paragraphs, details, actions, links, linksLabel, footer, linkUrls };
-  // Plain text keeps to the one short calendar link: the Google and Outlook ones are a wall of characters there.
-  const textLinks = linksLabel ? links.filter((l) => l.label === 'Apple or other').map((l) => ({ label: 'Calendar file', url: l.url })) : links;
   // A brand shows its logo (the upload, else the built-in one, served by the asset route) in a rounded square,
   // never the owner's photo, and its own green on the buttons whatever colour the event has.
   const brand = brandOfView(site);
@@ -1234,19 +1268,21 @@ export function composeBookingEmail(ctx: Ctx, p: MessageParts & { to: string; to
     accentColor: eventColorFor(eventType, brand) || null,
   });
 
-  const message: EmailMessage = { to: p.to, toName: p.toName, subject, text: renderEmailText({ ...content, links: textLinks }), html };
+  const message: EmailMessage = { to: p.to, toName: p.toName, subject, text: renderEmailText(content), html };
   // The brand's sender name; the address and the reply-to stay the site's (sendEmail reads those itself).
   if (brand) message.fromName = site.email.fromName;
   // Hosts can answer the notification to reach the invitee directly.
   if (audience === 'host' && isEmail(booking.invitee.email)) message.replyTo = booking.invitee.email;
 
-  const withCalendarFile = kind === 'confirmation' || kind === 'host_new' || kind === 'rescheduled' || kind === 'cancelled';
-  if (withCalendarFile) {
-    const invited = googleSendsInvite(booking, eventType);
+  if (CALENDAR_KINDS.has(kind)) {
     let method: 'REQUEST' | 'CANCEL' | 'PUBLISH' | null;
-    if (audience === 'invitee') method = kind === 'cancelled' ? (invited ? null : 'CANCEL') : invited ? 'PUBLISH' : 'REQUEST';
-    // Hosts with Google already have the event, unless it is in an account that is gone (detached).
-    else method = booking.google?.eventId && !booking.google.detached ? null : kind === 'cancelled' ? 'CANCEL' : 'PUBLISH';
+    // Google invited them: its invitation is the one copy, and Google moves and cancels it.
+    if (audience === 'invitee') method = invited ? null : kind === 'cancelled' ? 'CANCEL' : 'REQUEST';
+    // Hosts get the meeting from Google, also while a slow or failing write is still being retried. Only the
+    // event of an account that is gone (detached) has a file in its place. Without Google there is none
+    // either: once Google is connected the meeting goes into their calendar by itself (booking.ts
+    // reconcileBookings), and a file added by hand before that would be a second copy.
+    else method = booking.google?.detached ? (kind === 'cancelled' ? 'CANCEL' : 'PUBLISH') : null;
     if (method) {
       message.ics = {
         filename: method === 'CANCEL' ? 'cancelled.ics' : 'invite.ics',
@@ -1471,7 +1507,15 @@ export async function deliverMessage(ctx: Ctx, job: Job, extra?: JobRunExtra): P
     let address: string;
     if (channel === 'email') {
       address = recipient.email;
-      const message = composeBookingEmail(ctx, { ...parts(recipient), to: recipient.email, toName: recipient.name });
+      // The invitee's first email that could carry a calendar file settles who invites them, just before it is
+      // written: Google, when the booking has or is getting a Google event with them on it, else this email.
+      // From then on the calendar write and every later email go by that record (invite.ts). An email that
+      // cannot go out at all settles nothing, so Google can still invite them once it is connected.
+      let current = booking;
+      if (!recipient.host && CALENDAR_KINDS.has(kind) && !booking.inviteVia && (await emailCanGoOut(ctx))) {
+        current = (await settleInvite(ctx, booking.id, (b) => (invitedByGoogle(b, eventType) ? 'google' : 'file'))) ?? booking;
+      }
+      const message = composeBookingEmail(ctx, { ...parts(recipient), booking: current, to: recipient.email, toName: recipient.name });
       result = await sendEmail(ctx, { ...message, idempotencyKey: `${stored.id}-${recipient.key}` });
     } else if (channel === 'sms') {
       address = recipient.phone;

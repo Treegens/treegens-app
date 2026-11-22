@@ -544,9 +544,10 @@ export default defineSuite('admin-settings', { mockCreds: true, env: { EMBED_BAS
       s.expect(await stat('Confirmed by your assistant'), 'confirmed by the assistant on Home').toBe('0');
       const coming = page.getByRole('region', { name: 'Coming up' });
       s.expect(await coming.locator('.adm-agenda__who > span:first-child').allTextContents(), 'coming up').toEqual(['Alan Turing', 'Katherine Johnson']);
-      // The calendar is not connected in this scenario, and Home says so with a way to fix it.
-      const warning = page.getByRole('note').filter({ hasText: 'Your calendar is not connected yet' });
-      s.expect(await warning.getByRole('link', { name: 'Fix this' }).getAttribute('href'), 'where "Fix this" leads').toBe('/meeting/admin/integrations#google');
+      // The calendar is not connected in this scenario, and Home says so first, in red, one click from the setup.
+      const warning = page.getByRole('alert').filter({ hasText: "Bookings are not reaching anyone's calendar" });
+      await warning.getByText('the people who book get no calendar invitation', { exact: false }).waitFor();
+      s.expect(await warning.getByRole('link', { name: 'Connect Google Calendar' }).getAttribute('href'), 'where the button leads').toBe('/meeting/admin/integrations#google');
       // Nor has the owner said where booking notices go, so nobody tells them about these bookings.
       s.expect(overview.warnings.map((w) => w.key), 'warnings').toEqual(['google_not_connected', 'owner_no_email']);
       s.expect(overview.warnings.find((w) => w.key === 'owner_no_email').href, 'where that is fixed').toBe('/admin/settings#notices');

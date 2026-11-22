@@ -13,7 +13,7 @@ import { KIND_LABEL, eventMeta, trimUrl } from '../format';
 import { useAdmin } from '../state';
 
 const KIND_CHOICES: { kind: EventKind; icon: typeof User; title: string; text: string }[] = [
-  { kind: 'solo', icon: User, title: 'Just me', text: 'People book time with you alone. The meeting goes on your calendar.' },
+  { kind: 'solo', icon: User, title: 'Just me', text: 'People book time with you alone.' },
   { kind: 'collective', icon: Users, title: 'Together', text: 'Book into two or more calendars at once. Only times when everyone is free are offered.' },
   { kind: 'round_robin', icon: Shuffle, title: 'Round robin', text: 'Whoever is free takes the meeting. Bookings are shared out evenly between hosts.' },
 ];

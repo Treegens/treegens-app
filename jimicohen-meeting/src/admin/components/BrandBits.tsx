@@ -100,7 +100,7 @@ function ShortRow({ row }: { row: ShortLinkRow }) {
 
 /** Home's "Your links": the short links and the main link, with what each opens. */
 export function YourLinksCard() {
-  const { data } = useAdmin();
+  const { data, ownerHost } = useAdmin();
   const rows = shortLinkRows(data);
   const main = trimUrl(data.publicUrl);
   const listed = data.eventTypes.filter((e) => e.active).slice(0, 4);
@@ -111,7 +111,9 @@ export function YourLinksCard() {
           <h2 className="adm-panel__title" id="home-share">
             Your links
           </h2>
-          <p className="adm-panel__desc">Send one of these and people book straight into your calendar.</p>
+          <p className="adm-panel__desc">
+            {ownerHost.google?.status === 'ok' ? 'Send one of these and people book straight into your calendar.' : 'Send one of these and people can book a time. Connect Google Calendar to have bookings go into your calendar.'}
+          </p>
         </div>
       </div>
       <ul className="ab-links" role="list">

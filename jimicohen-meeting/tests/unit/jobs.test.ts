@@ -501,18 +501,25 @@ describe('runDueJobs: delivery', () => {
     expect(email.text).toContain(`Reschedule: ${TEST_BASE_URL}/booking/bkg_test1/reschedule?t=${token}`);
     expect(email.text).toContain(`Cancel: ${TEST_BASE_URL}/booking/bkg_test1/cancel?t=${token}`);
     expect(email.text).toContain(`Add to your calendar:\nCalendar file: ${TEST_BASE_URL}/api/public/bookings/bkg_test1/ics?t=${token}`);
-    expect(email.text).not.toContain('calendar.google.com'); // the long links stay in the HTML version
+    // The invitation is attached and says so. Next to it only the calendar file (same UID): "Add to Google" or
+    // an Outlook link would make a second copy that never moves or goes away with the meeting.
+    expect(email.text).toContain('A calendar invitation is attached to this email. Open it to add the meeting to your calendar.');
+    expect(email.text).not.toContain('calendar.google.com');
+    expect(email.html).not.toContain('calendar.google.com/calendar/render');
+    expect(email.html).not.toContain('outlook.');
+    expect(email.text).not.toContain('unknown sender');
     expect(email.html).toContain('>Join the meeting</a>');
     expect(email.html).toContain(`href="${TEST_BASE_URL}/booking/bkg_test1/reschedule?t=${token}"`);
     expect(email.html).toContain('>Reschedule</a>');
     expect(email.html).toContain('>Cancel</a>');
-    expect(email.html).toContain('calendar.google.com/calendar/render');
     expect(`${email.subject}${email.text}${email.html}`).not.toMatch(/[\u2012-\u2015]/);
     expect(email.attachments).toHaveLength(1);
     expect(email.attachments![0].filename).toBe('invite.ics');
     expect(email.attachments![0].content_type).toContain('method=REQUEST');
     expect(icsOf(email)).toContain('METHOD:REQUEST');
     expect(icsOf(email)).toContain('UID:bkg_test1@jimicohen.com');
+    // Our email invited them, and the booking says so for good: a Google event written later holds the hosts only.
+    expect((await getBooking(world.ctx, 'bkg_test1'))?.inviteVia).toBe('file');
   });
 
   it("writes the host notice in the host's zone with the invitee's details and answers, escaped", async () => {
@@ -534,8 +541,10 @@ describe('runDueJobs: delivery', () => {
     expect(email.html).not.toContain('<i>Rivera</i>');
     expect(email.html).not.toContain('<b>bees</b>');
     expect(email.html).toContain('>View or change booking</a>');
-    // no Google event yet: the host gets a plain calendar file
-    expect(icsOf(email)).toContain('METHOD:PUBLISH');
+    // No Google: no calendar file either. Once Google is connected the meeting goes into the host's calendar
+    // by itself, and a file added by hand before that would be a second copy. The email says how to get it there.
+    expect(email.attachments).toBeUndefined();
+    expect(email.text).toContain('This meeting is not in your Google Calendar, because Google Calendar is not connected. Connect it under Integrations in your dashboard, and this meeting and every new one go into it by themselves.');
   });
 
   it('sends a text with the facts first, then the link to change plans, inside the limit', async () => {
@@ -607,16 +616,66 @@ describe('runDueJobs: delivery', () => {
     expect(world.emails[0].text).not.toContain('never shown');
   });
 
-  it('attaches a plain calendar file once Google has sent the real invitation', async () => {
+  it('attaches no calendar file once Google has sent the real invitation, and says what to do if it does not show', async () => {
     const world = await makeWorld();
     await book(world, { google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'evt_g1', meetUrl: MEET } });
     await runDueJobs(world.ctx);
     const invitee = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
-    expect(invitee.attachments![0].content_type).toContain('method=PUBLISH');
-    expect(icsOf(invitee)).toContain('METHOD:PUBLISH');
-    expect(icsOf(invitee)).not.toContain('ATTENDEE');
+    const token = hmacHex(world.ctx, 'manage', 'bkg_test1');
+    // Google's invitation is the one copy: nothing in this email can add a second one.
+    expect(invitee.attachments).toBeUndefined();
+    expect(invitee.text).toContain('This meeting is being added to your calendar with a Google Calendar invitation from Jimi Cohen, sent to sam@example.com.');
+    expect(invitee.text).toContain('Don\'t see it in your calendar? If the invitation says it is from an unknown sender, tap "I know the sender", then Yes.');
+    expect(invitee.html).toContain('tap &quot;I know the sender&quot;, then Yes.');
+    // Only the calendar file stays, as the way for people who do not use Google Calendar (it has Google's UID, see the route).
+    expect(invitee.text).toContain(`Not using Google Calendar?\nCalendar file: ${TEST_BASE_URL}/api/public/bookings/bkg_test1/ics?t=${token}`);
+    expect(invitee.html).not.toContain('calendar.google.com/calendar/render');
+    expect(invitee.html).not.toContain('outlook.');
+    expect(`${invitee.text}${invitee.html}`).not.toMatch(/[\u2012-\u2015]/);
+    expect((await getBooking(world.ctx, 'bkg_test1'))?.inviteVia).toBe('google');
     const host = world.emails.find((e) => e.to[0].includes('jimi@example.com'))!;
     expect(host.attachments).toBeUndefined(); // the event is already on the host's Google Calendar
+    expect(host.text).not.toContain('not in your Google Calendar');
+  });
+
+  it('goes by what the booking recorded, not by the event type as it is now', async () => {
+    // Booked while the event type had Google invite them; the owner has switched that off since.
+    const world = await makeWorld({ googleInvite: false });
+    await book(world, { inviteVia: 'google', google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'evt_g1' }, rescheduledFromStart: '2026-11-18T13:00:00.000Z', rescheduleCount: 1 }, 'rescheduled');
+    await runDueJobs(world.ctx);
+    const moved = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
+    expect(moved.attachments).toBeUndefined();
+    expect(moved.text).toContain('Google Calendar is sending you an updated invitation from Jimi Cohen, which moves the meeting in your calendar.');
+
+    // And the other way round: our own invitation went out, the event type has Google invite people now.
+    const other = await makeWorld();
+    await book(other, { inviteVia: 'file', google: { hostId: 'host_owner', calendarId: 'primary', eventId: 'evt_g1' }, rescheduledFromStart: '2026-11-18T13:00:00.000Z', rescheduleCount: 1 }, 'rescheduled');
+    await runDueJobs(other.ctx);
+    const ours = other.emails.find((e) => e.to[0].includes('sam@example.com'))!;
+    expect(icsOf(ours)).toContain('METHOD:REQUEST');
+    expect(icsOf(ours)).toContain('SEQUENCE:1');
+    expect(icsOf(ours)).toContain('UID:bkg_test1@jimicohen.com');
+    expect(ours.text).toContain('An updated calendar invitation is attached. Open it to move the meeting in your calendar.');
+  });
+
+  it('sends no invitation of its own for a booking recorded for Google whose event is not written yet', async () => {
+    // The calendar write decided "Google invites her" and was cut off before it reached Google. Housekeeping
+    // writes the event with her on it later: our own invitation now would be a second copy.
+    const world = await makeWorld();
+    await book(world, { inviteVia: 'google', google: null });
+    await runDueJobs(world.ctx);
+    const invitee = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
+    expect(invitee.attachments).toBeUndefined();
+    expect(invitee.text).toContain('Google Calendar invitation from Jimi Cohen');
+  });
+
+  it('settles nothing while email cannot go out, so Google can still invite them once it is connected', async () => {
+    const world = await makeWorld();
+    await saveSecrets(world.ctx, {});
+    await book(world);
+    await runDueJobs(world.ctx);
+    expect(world.emails).toHaveLength(0);
+    expect((await getBooking(world.ctx, 'bkg_test1'))?.inviteVia).toBeUndefined();
   });
 
   it('sends a real invitation when the event type does not add invitees to the Google event', async () => {
@@ -2079,25 +2138,24 @@ describe('composeBookingEmail: what the invitee receives', () => {
     const booking = await book(world, { google });
     await runDueJobs(world.ctx);
     const invitee = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
-    expect(invitee.attachments![0].content_type).toContain('method=PUBLISH');
-    expect(icsOf(invitee)).not.toContain('ATTENDEE');
+    expect(invitee.attachments).toBeUndefined();
+    expect((await getBooking(world.ctx, booking.id))?.inviteVia).toBe('google');
 
-    await saveBooking(world.ctx, { ...booking, status: 'cancelled', google });
+    await saveBooking(world.ctx, { ...booking, status: 'cancelled', google, inviteVia: 'google' });
     await enqueueJob(world.ctx, { type: 'message', bookingId: booking.id, dueAt: TEST_NOW, channel: 'email', audience: 'invitee', kind: 'cancelled' });
     await runDueJobs(world.ctx);
     expect(world.emails.at(-1)!.subject.startsWith('Cancelled:')).toBe(true);
     expect(world.emails.at(-1)!.attachments).toBeUndefined();
   });
 
-  it('offers Outlook.com and Office 365 separately', async () => {
+  it('offers no Outlook.com or Office 365 link next to an invitation (each would be a second copy)', async () => {
     const world = await makeWorld();
     await book(world);
     await runDueJobs(world.ctx);
     const invitee = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
-    expect(invitee.html).toContain('>Outlook.com</a>');
-    expect(invitee.html).toContain('>Office 365</a>');
-    expect(invitee.html).toContain('href="https://outlook.office.com/calendar/0/action/compose?');
-    expect(invitee.html).toContain('href="https://outlook.live.com/calendar/0/action/compose?');
+    expect(invitee.html).not.toContain('>Outlook.com</a>');
+    expect(invitee.html).not.toContain('>Office 365</a>');
+    expect(invitee.html).toContain('>Calendar file</a>');
   });
 
   it('never turns a web address someone typed into a link, while our own links keep working', async () => {
@@ -2247,7 +2305,8 @@ describe('a detached booking: its Google invitation can no longer be changed', (
     await book(world, { google, rescheduledFromStart: '2026-11-18T13:00:00.000Z', rescheduleCount: 1 }, 'rescheduled');
     await runDueJobs(world.ctx);
     const moved = world.emails.find((e) => e.to[0].includes('sam@example.com'))!;
-    expect(moved.attachments![0].content_type).toContain('method=PUBLISH');
+    // Google moves its own invitation: no file beside it.
+    expect(moved.attachments).toBeUndefined();
     expect(moved.text).not.toContain('earlier Google Calendar invitation');
     const host = world.emails.find((e) => e.to[0].includes('jimi@example.com'))!;
     expect(host.attachments).toBeUndefined();

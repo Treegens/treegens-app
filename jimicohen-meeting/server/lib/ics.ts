@@ -132,6 +132,12 @@ export function buildBookingIcs(p: {
   manageUrl?: string | null;
   /** the brand line of a booking made under a brand (booking.ts brandLineFor), written last in the description */
   brandLine?: string | null;
+  /**
+   * The event's UID. Default `<booking id>@<site host>`, the UID of our own invitations. A booking Google
+   * invites the invitee to is written with Google's UID instead (invite.ts googleUidFor), so a calendar that
+   * gets both the file and Google's invitation keeps one meeting.
+   */
+  uid?: string;
 }): string {
   const { booking, site } = p;
   const hosts = assigned(booking, p.hosts ?? []);
@@ -159,7 +165,7 @@ export function buildBookingIcs(p: {
     'CALSCALE:GREGORIAN',
     `METHOD:${method}`,
     'BEGIN:VEVENT',
-    `UID:${escapeIcsText(booking.id)}@${escapeIcsText(domain)}`,
+    `UID:${p.uid ? escapeIcsText(p.uid) : `${escapeIcsText(booking.id)}@${escapeIcsText(domain)}`}`,
     `DTSTAMP:${utcStamp(Number.isFinite(Date.parse(stampedAt)) ? stampedAt : booking.start)}`,
     `DTSTART:${utcStamp(booking.start)}`,
     `DTEND:${utcStamp(booking.end)}`,

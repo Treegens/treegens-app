@@ -71,6 +71,16 @@ export async function resolveEmailProvider(ctx: Ctx): Promise<EmailProvider> {
   return (await loadEmailSetup(ctx)).provider;
 }
 
+/**
+ * Whether sendEmail would hand a message to anyone at all: a provider is set up, or (development and the
+ * browser tests) the mock outbox takes it. Email switched off on purpose never goes out.
+ */
+export async function emailCanGoOut(ctx: Ctx): Promise<boolean> {
+  const setup = await loadEmailSetup(ctx);
+  if (setup.site.email?.provider === 'none') return false;
+  return setup.provider !== 'none' || ctx.env.mockProviders;
+}
+
 // ───────────────────────── header hygiene ─────────────────────────
 
 /** One line of plain text: no CR/LF, no control characters, collapsed spaces. Stops header injection. */

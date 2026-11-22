@@ -433,6 +433,8 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       // Not "You are all set": with only a feed, booked meetings are not added to their calendar, and the page says so.
       await alex.getByRole('heading', { name: 'Your busy times are checked, Alex.', level: 1 }).waitFor();
       await alex.getByText(/a calendar feed can only be read, so meetings booked with you are not added to your calendar/).waitFor();
+      // Joint meetings still reach them, by Google's invitation to the address on file: the page says where.
+      await alex.getByText(/Their invitations go to [^\s]+@example\.com instead\./).waitFor();
       await alex.getByRole('region', { name: 'Your calendar' }).getByText(/meetings booked with you are not added to your calendar\. Connect Google Calendar to have them added\./).waitFor();
       const google = await s.connectGoogle(alex, CO_HOST.email, 'Africa/Nairobi');
       await alex.getByRole('button', { name: 'Connect Google Calendar' }).click();

@@ -825,6 +825,8 @@ describe('googleCreateEvent', () => {
       calendarId: 'primary',
       htmlLink: 'https://www.google.com/calendar/event?eid=1',
       meetUrl: 'https://meet.google.com/aaa-bbbb-ccc',
+      // Said, so the caller only moves an event it took over (a new one has the right time already).
+      adopted: true,
     });
     const api = calls.filter((c) => c.url !== TOKEN_URL);
     const sentId = (JSON.parse(api[0].body) as { id: string }).id;

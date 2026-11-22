@@ -97,7 +97,10 @@ export function SharePanel({ url, title, shortUrl }: SharePanelProps) {
 
       {mode === 'link' ? (
         <div className="sp__pane">
-          <p className="sp__lead">Send this link in an email, a message or your bio. People pick a time and it lands on your calendar.</p>
+          <p className="sp__lead">
+            Send this link in an email, a message or your bio.{' '}
+            {admin && admin.ownerHost?.google?.status !== 'ok' ? 'People pick a time. Connect Google Calendar to have it land on your calendar.' : 'People pick a time and it lands on your calendar.'}
+          </p>
           <div className="sp__link">
             <a className="sp__url" href={shortUrl ?? url} target="_blank" rel="noopener noreferrer" title={shortUrl ?? url}>
               {displayUrl(shortUrl ?? url)}

@@ -8,6 +8,7 @@ import type { CallRecord, Host } from '../shared/types';
 import { alertCalendarTrouble, reconcileBookings, registerBookingJobHandlers } from './lib/booking';
 import { getHostBusy, syncHostTimezone, type BusyProblem } from './lib/busy';
 import { accountsOf } from './lib/googleAccounts';
+import { remindEndingConnections } from './lib/googleExpiry';
 import type { Ctx } from './lib/ctx';
 import { runDueJobs } from './lib/jobs';
 import { KEYS, PRUNE_BUDGET_MS, PRUNE_LIMIT_PER_PREFIX, cacheGet, cacheSet, listHosts, pruneEphemeral } from './lib/repo';
@@ -163,6 +164,8 @@ async function housekeeping(ctx: Ctx, waitMs: { network: number; reconcile: numb
   ]);
   out.timezones = timezones;
   out.calendars = calendars;
+  // Connections Google said would end soon (an app still in Testing): the owner hears two days and one day before.
+  out.ending = await step(ctx, 'the Google end date reminders', () => remindEndingConnections(ctx, hosts));
   // The repair comes before the cleanup: it gives back times held by interrupted bookings and re-queues
   // failed calendar writes, and a backlog of old keys must never keep it from running.
   out.bookings = await networkStep(ctx, 'the booking check', waitMs.reconcile, () => reconcileBookings(ctx));
