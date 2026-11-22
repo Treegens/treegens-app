@@ -122,7 +122,7 @@ export function openVisit(c: Ctx, envelopeId: string, recipientId?: string) {
   return tx(() => {
     const open = get('SELECT * FROM counter_visits WHERE recipient_id=? AND closed_at IS NULL ORDER BY created_at DESC LIMIT 1', r.id);
     if (open && open.official_id === c.user.id) return open.id as string;
-    // Another official had them: this one takes over, and what that one recorded does not carry over.
+    // Another official had them: this one takes over, and what that one recorded is not kept for this one.
     if (open) {
       run('UPDATE counter_visits SET closed_at=? WHERE id=?', now(), open.id);
       run('UPDATE counter_screens SET ended_at=? WHERE visit_id=? AND ended_at IS NULL', now(), open.id);
