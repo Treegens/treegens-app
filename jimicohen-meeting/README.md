@@ -109,8 +109,9 @@ All of this is done in the dashboard under **Integrations**, which has step-by-s
   (`inviteVia` on the booking): `google`, or `file` when our own email carried the invitation because Google was not
   connected yet. A `file` booking keeps getting our own updates and its Google event holds the hosts only, so nobody
   ever has two copies. Bookings made before Google was connected are written to the hosts' calendars by housekeeping
-  (within about two minutes of connecting); a booker nothing reached yet then gets Google's invitation. Without
-  Google nothing reaches any calendar, and Home says so in red.
+  (within about two minutes of connecting); a booker nothing reached yet then gets Google's invitation, which says
+  that a copy they added by hand from the booking page can be deleted (with no email and no Google, the booking page
+  told them to add it that way). Without Google nothing reaches any calendar, and Home says so in red.
   Press **Connect** on the public address, `https://jimicohen.com/meeting/admin` (a co-host's private link already
   uses it). The connection is checked with a cookie set on that address, and Google always sends you back there, so a
   Connect pressed on the `jimicohen-meeting.netlify.app` address is turned away with a note asking you to press it
