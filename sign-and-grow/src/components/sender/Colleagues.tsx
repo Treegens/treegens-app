@@ -35,16 +35,17 @@ export function MoveDialog({ envelope, ids, onClose, onDone }: { envelope?: any;
   const [d] = useLoad<any>(() => api('/me/shares').catch(() => null), []);
   const [to, setTo] = useState('');
   const people = (d?.colleagues || []).filter((p: any) => !envelope || p.id !== envelope.sender_id);
-  const many = !envelope && (ids?.length || 0) > 0;
+  const many = !envelope && (ids?.length || 0) > 1;
+  const one = !envelope && ids?.length === 1;
   return (
-    <ConfirmDialog title={many ? `Move ${ids!.length} ${ids!.length === 1 ? 'document' : 'documents'} to a colleague` : MOVE_LABEL} confirmLabel={many ? 'Move them' : 'Move it'} keepLabel="Cancel" danger={false} unchanged="Nothing was moved." onClose={onClose}
+    <ConfirmDialog title={many ? `Move ${ids!.length} documents to a colleague` : MOVE_LABEL} confirmLabel={many ? 'Move them' : 'Move it'} keepLabel="Cancel" danger={false} unchanged="Nothing was moved." onClose={onClose}
       onConfirm={async () => {
         if (!to) throw new Error(`Choose the colleague to move ${many ? 'them' : 'it'} to. Nothing was moved.`);
-        if (many) await api('/envelopes/move', { body: { ids, to } });
+        if (many || one) await api('/envelopes/move', { body: { ids, to } });
         else await api(`/envelopes/${envelope.id}/move`, { body: { to } });
         onDone();
       }}>
-      <p>{MOVE_HINT}</p>
+      <p>{many ? 'They become the person these documents belong to. Each record keeps who sent it first and says who moved it.' : MOVE_HINT}</p>
       <label className="f">
         <span>Move to</span>
         <select value={to} onChange={(ev) => setTo(ev.target.value)} style={{ minHeight: 44 }} aria-label={`Colleague to move ${many ? 'them' : 'it'} to`}>
