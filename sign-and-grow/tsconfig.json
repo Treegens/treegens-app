@@ -107,12 +107,12 @@
     ".next-uxdsdbenc/dev/types/**/*.ts",
     ".next-repair-ds-pay-collect/types/**/*.ts",
     ".next-repair-ds-pay-collect/dev/types/**/*.ts",
-    ".next-repair-ds-switches/types/**/*.ts",
-    ".next-repair-ds-switches/dev/types/**/*.ts",
     ".next-uxpaper/types/**/*.ts",
     ".next-uxpaper/dev/types/**/*.ts",
     ".next-verify-ds-paper/types/**/*.ts",
-    ".next-verify-ds-paper/dev/types/**/*.ts"
+    ".next-verify-ds-paper/dev/types/**/*.ts",
+    ".next-verify-collab/types/**/*.ts",
+    ".next-verify-collab/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
