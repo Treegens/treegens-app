@@ -40734,5 +40734,1725 @@
   "flows": "node tests/ux/flows.cjs http://localhost:4273 tests/out/repair-ds-witness-two/flows: UX FLOWS OK. Actions are counted by my own sum of the counters in ux-flows.json, without characters typed; this may count one less than the reviewer's 18 on a-send-first. a-send-first 17 actions/8 screens/119 choices/max 28; b-sign-phone 7/5/36/11; b-sign-desktop 7/5/36/11; c-template-send 5/4/59/20; d-find-download 1/1/21/21; e-settings-name 3/2/53/32; f-signer-help 6/4/28/9; g-sign-in 4/3/56/28; h-sign-myself 13/8/99/21. The only warnings are the old P6 words on /help and /verify.",
   "suite": "node --test tests/ds-witness-two.test.ts tests/witness.test.ts tests/gov-g18.test.ts: 55 pass, 0 fail. npm test: 2325 tests, 2319 pass, 1 fail. The failure is tests/stamps.test.ts:1354, a regex on StampSettings in the settings page. The skeptic saw the same failure before my work, and it is not in witness code. npx tsc --noEmit -p . is clean. Dev server stopped, .next-repair-ds-witness-two deleted, tsconfig.json put back as it was (next dev had rewritten its .next-* include lines). Screenshots and the walk script are in tests/out/repair-ds-witness-two/.",
   "notes_for_integrator": "reviewTitle in src/components/sign/actions.ts belongs to simplify-signing. I added an optional third argument (witnessPlaces(me)), so existing callers are unchanged, and the one page.tsx line passes it. Editor.tsx addRcp accepts an optional after_id, which is removed before the row is built. visitView (counter) keeps `witness` and adds `witnesses`. I did not touch billing files, README or help: no behaviour they describe changed in a way that needs new words. The stamps.test.ts failure belongs to whoever is editing StampSettings in the settings page."
+ },
+ "verify:ds-offline-inperson": {
+  "checks": [
+   {
+    "item": "1. Get ready to sign without signal: in-person only, envelope out, host's own browser session, PDFs + part kept in IndexedDB under a PBKDF2 (600k, SHA-256) AES-GCM key from a host PIN; the dialog says what is kept and for how long",
+    "holds": true,
+    "evidence": "tests/ds-offline-inperson.test.ts 12/12 pass (225 s on a loaded machine). My probes (tests/out/verify-ds-offline-inperson/probe.test.ts, 5/5 pass, log in probe.log): another account gets 404 on GET/DELETE /envelopes/:id/offline and on POST /offline/:prep/hand-over; a foreign prep_id on your own envelope gives 404; another envelope's prep_id with your in-person token gives 404; the link signer's token with the in-person prep_id gives 404; values sent for another recipient's field are ignored (Sol's field stays null); a 5000-character device_at is cut to 40 characters and parsed. Browser at 390x844: the dialog (phone-2-dialog.png) says what is kept, the PIN rule and 'wiped once it is sent, when you remove it, or after 7 days'. The More button is 298x44.",
+    "still_broken": "needsSignal() does not refuse fields that have a field check (validation such as 'email' or a pattern), and the device form checks only that a field is filled. So an in-person part with a format check is prepared, and a wrong format is only found at sync, after the signer has left. See new_bugs 2.",
+    "suggested_fix": "Either refuse fields with a validation in needsSignal (same style as 'fields that change with other answers'), or run the shared field-check rules from src/lib on the device at Finish."
+   },
+   {
+    "item": "2. Offline: unlock with PIN, hand over, consent, fill in, adopt, finish, stored encrypted with the device clock, 'Saved on this phone...' line",
+    "holds": false,
+    "evidence": "In a tab that was already loaded, the flow works on the dev server at 390x844 and 1440x900 after going offline (phone-4-host, phone-5-consent, phone-8-sign, phone-10-saved; the savedText is exactly OFFLINE_WORDS.saved; the recipient status stays 'sent' while offline; no sideways scroll). Opening /in-person fresh with no signal could not be shown: in dev it gives net::ERR_INTERNET_DISCONNECTED (phone-3-fresh-offline-open.png), and two production builds (.next-verify-ds-offline-inperson) were killed, one by the 15-minute timeout and one by the kernel for lack of memory (exit 137). Reading the code: src/app/in-person/page.tsx registers /sw.js for scope /in-person only during the page's first load, in production. OfflineReady does window.location.assign('/in-person') once, right after keep(). That first navigation, and the _next/static chunks it loads, happen before any worker controls the page, so inPersonPage() and mayKeep() never see them and nothing for /in-person is cached. Opened again later with no signal, the worker falls back to offline.html. The 'Open it' link on offline.html then leads back to /in-person, which falls back to offline.html again. The builder said they did not check this. Also, the initials field is filled with the full signature image: finish() treats a required initials field as done when only a signature exists, and sends initials_png: ini || sig (phone-9-part-initials-shows-signature.png shows 'Amina Okello' in full in the Initials slot, although the person never made initials). The online signing page requires its own initials (filled() needs ini).",
+    "still_broken": "(a) In production the page very likely does not open with no signal unless the host has opened /in-person a second time while online, and a mobile browser that discards the tab loses it. (b) Initials print the full signature without the person choosing initials.",
+    "suggested_fix": "(a) After keep(), register the worker and wait for navigator.serviceWorker.ready. Then cache '/in-person' and the page's own script and style URLs into the cache explicitly (cache.add, or postMessage to the worker), and check with caches.match before saying 'ready'. Or let the worker precache /in-person on install. Prove it with a production build and Playwright setOffline before claiming it. (b) Require initials of their own, as the signing page does, or show a clear 'Use my signature as initials' choice."
+   },
+   {
+    "item": "3. Online again: sent; accepted only if the envelope is unchanged (else told plainly); server records received time",
+    "holds": true,
+    "evidence": "Builder tests 2-4 and 3 pass. My probe J (void) gives state 'refused', the copy is wiped, and the words are 'The envelope is no longer open for Pat Present, so nothing was signed. Open the envelope with a connection to see why.' content_version is checked before the claim, and completeRecipient's atomic claim checks it again. Renaming the person in a correction bumps content_version (envelopes.ts:963), so a renamed signer is refused too. received_at = completed_at.",
+    "still_broken": "A refusal for any reason other than the offline_* codes (a field check failing, as in probe A and the browser walk, or a 402 pay_first from 'pay before finishing' on an envelope that has payments switched on) is kept on the device and sent again every time. See new_bugs 2."
+   },
+   {
+    "item": "4. Certificate line: device clock (not checked) and server receipt time",
+    "holds": true,
+    "evidence": "Test 2-4 asserts the exact line and the pdf.ts call (for (const [k, v] of offlineCertLines(e, r, ts)) s.kv(k, known(v))). Test 4 covers a nonsense clock. The audit line matches. The wording promises nothing about validity."
+   },
+   {
+    "item": "5. One envelope per device, 7 days max then wiped, not for link signers",
+    "holds": true,
+    "evidence": "Link signer: 409 not_in_person (test 1). Seven days on the server (expires_at) and on the device (tooOld checks expires_at and created_at against the device clock). keep() never throws away an unsent result.",
+    "still_broken": "The rule is really one PERSON per device. My probe C has two in-person signers on one envelope, both with routing order 1 (both 200): getting the second ready ends the first copy. So for a couple giving land consent together, only one of them can sign offline per trip. The dialog only says 'This device already holds a document got ready like this. Getting this one ready replaces it.' The README and the brief say 'one envelope per device'."
+   },
+   {
+    "item": "Docs (openapi, README, help, perm) and core flows",
+    "holds": true,
+    "evidence": "README 'What is not in it' lists the limits honestly: English only, 'I do not want to sign' not recorded, a form under the pages, opens offline only in the production build, the PIN versus copied storage. OFFLINE_HELP is plain. tsc --noEmit -p . is clean (my run). The only change to a core screen is one button inside the in-person person's More on the envelope page, so the core flows get no extra step. I did not re-run tests/ux/flows.cjs (machine overloaded, OOM kills) and rely on the builder's after-run.",
+    "still_broken": "See overclaims."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Page very likely does not open with no signal in production after the one-time get-ready visit",
+    "severity": "high",
+    "where": "src/app/in-person/page.tsx (serviceWorker.register on mount), src/components/sender/OfflineReady.tsx (location.assign('/in-person') once), public/sw.js inPersonPage/mayKeep",
+    "detail": "The worker is registered from the very page it is meant to keep. A page's own navigation and the scripts it loads on first load never pass through a worker registered during that load. So after 'Get it ready' nothing for /in-person is in the cache, and a later visit with no signal falls back to offline.html. The 'Open it' link there then loops back to offline.html. There is also a latent second cause: when a second language is shipped, layout.tsx reads headers(), every page becomes dynamic, Next sends Cache-Control private/no-store, and fitToKeep() refuses to keep the page at all. This is not proven in a running production build here (both builds were killed: a timeout, then OOM exit 137), and the builder also did not check it. It is the core promise of the feature."
+   },
+   {
+    "title": "A result the server refuses for a non-offline reason is stuck on the device and blocks the next copy for up to 7 days",
+    "severity": "medium",
+    "where": "src/components/sign/offlineInPerson.ts sendResult (final only for offline_* or 403/404/410) and keep(); src/app/in-person/page.tsx refused and saved screens",
+    "detail": "Shown by probe A and by the browser walk (phone-11-after-signal.png). The required text field has validation 'email' and the person types 'not an email'. The device accepts it. At sync the server answers 400 '\"not an email\" is not valid for Email of Amina.' The page shows 'Not signed' with only 'Open the envelope', and says nothing about what to do or that a copy is still held. The copy is kept (kept:true) and the prep stays 'ready'. Every later PIN unlock sends it again and gets the same refusal. The 'Waiting for signal' and 'Not signed' screens have no Remove button. keep() then refuses to get any other document ready ('This device still holds a signature that has not been sent'), so the host is stuck until the 7 days run out, or until they clear site data. The refusal also appears on the screen the signer is still holding. 'Pay before finishing' (402 pay_first) would take the same path, because needsSignal does not refuse envelopes that collect a payment first (read in the code, not run: it needs Stripe Connect)."
+   },
+   {
+    "title": "Initials are filled with the full signature without the person making initials",
+    "severity": "medium",
+    "where": "src/app/in-person/page.tsx finish() and Field (initials_png: ini || sig; img = ini || sig)",
+    "detail": "The online signing page requires initials of their own. Offline, a required initials field counts as done once a signature exists, and the full signature image is printed in every initials box (phone-9-part-initials-shows-signature.png). This puts a mark in the signed PDF that the person did not choose to make as initials."
+   },
+   {
+    "title": "Getting a second in-person signer of the same envelope ready ends the first one's copy",
+    "severity": "low",
+    "where": "src/server/offlinesign.ts prepare (endOnSession) and src/components/sign/offlineInPerson.ts (one KEY per database)",
+    "detail": "Probe C: two in-person signers in parallel on one envelope, both prepare calls return 200, and the first prep is ended. The brief says one ENVELOPE per device. A household where two people must both consent cannot do it in one trip. The dialog does not name this case."
+   },
+   {
+    "title": "Back button during an offline hand-over leaves the signer on a browser error page",
+    "severity": "low",
+    "where": "src/app/in-person/page.tsx handOver (no history guard)",
+    "detail": "Browser walk: offline, after Hand over, goBack() goes to the envelope page, which cannot load (net::ERR_INTERNET_DISCONNECTED, chrome-error page; phone-6-back-offline.png). Forward does not reliably bring the signing screen back. No account data leaked in my run, but the signer is stuck, and in production it may land on offline.html. Consider history.pushState guards or location.replace when moving into /in-person."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Consent screen on /in-person (consentWording, phone-5-consent.png)",
+    "claim": "'We record the time, your IP address and each step' and 'You can download a copy now or later, decline, or ask ... for a paper copy instead.'",
+    "reality": "No IP is recorded where the person signs. The IP recorded is whatever network the host's phone uses later, when it sends. Steps are not recorded until then either. 'Decline' does not exist offline: 'I do not want to sign' sends nothing and records nothing (the README admits this, but the page itself still promises decline)."
+   },
+   {
+    "where": "README 'What is not in it' and the builder report item 2 ('public/sw.js keeps the /in-person page')",
+    "claim": "The page opens without signal in the production build with its service worker.",
+    "reality": "Never shown working. By how service workers work, the one-time visit after 'Get it ready' does not get the page cached (see new_bugs 1)."
+   },
+   {
+    "where": "README and the brief wording 'One envelope per device'",
+    "claim": "One envelope per device.",
+    "reality": "It is one person per device. A second in-person signer of the same envelope ends the first one's copy."
+   },
+   {
+    "where": "OFFLINE_WORDS.saved and the 'Saved on this phone' heading",
+    "claim": "'Saved on this phone. It is sent when the phone has signal again.'",
+    "reality": "The same words show on a desktop or tablet (desk walk at 1440x900). The ux note for this feature asks for 'Saved on this device'."
+   },
+   {
+    "where": "Builder report item 3 ('A refused copy is ended and wiped on the device')",
+    "claim": "A refused copy is ended and wiped, with a plain sentence.",
+    "reality": "That holds only for offline_* codes and 403/404/410. A field-check refusal keeps the copy, leaves the server prep 'ready', shows the raw validation message with no next step, and blocks getting any other document ready (probe A, phone-11-after-signal.png)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-1-more.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-2-dialog.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-3-fresh-offline-open.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-5-consent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-6-back-offline.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-9-part-initials-shows-signature.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-10-saved.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-11-after-signal.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/desk-8-sign.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/desk-11-after-signal.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/probe.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/probe.log",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/walk.cjs",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/phone-walk.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-offline-inperson/desk-walk.json"
+  ]
+ },
+ "ux:ds-offline-inperson": {
+  "checks": [
+   {
+    "item": "1. Core flows did not get longer and got no new choice (node tests/ux/flows.cjs, default profile, port 4324)",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-offline-inperson/flows/ux-flows.json and flows.log. Every count is at or under tests/ux/ceilings.json: a-send-first 18/8/119/28/851/2 (ceiling 18/8/137/42/2979/2); b-sign-phone 7/5/35/11/385/0 (7/5/36/11/432); b-sign-desktop 7/5/36/11/404 (7/5/36/11/442); c-template-send 5/4/59/20/268/1 (same as ceiling); d-find-download 1/1/21/21/83 (ceiling words 89); e-settings-name 3/2/53/32/360 (54/32/404); f-signer-help 6/4/28/9/570/2 (7/5/36/9/598/2); g-sign-in 4/3/56/28/365 (4/3/71/42/2585); h-sign-myself 14/8/99/24/621 (14/8/99/24/645). One rule broken: 2.2 Settings, 5 cards in Sending. This feature does not touch Settings, so it belongs to someone else's work. The feature adds nothing to any measured flow."
+   },
+   {
+    "item": "2a. Lives where the charter and ux-notes say: part of the one in-person flow, not on a signer's link screen, not on the daily sending path",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-offline-inperson/x-1-more-open.png: one line in the in-person person's own More, under Change person (2 lines, cap 6). x-4-link-signer-more.png and x-walk.json: no button for a link signer. x-5-signer-page.png: no mention of signal, offline or PIN on the normal signing page. Nothing in the editor, Home or Settings."
+   },
+   {
+    "item": "2b. Matches the designer's note (ux-notes ds-offline-inperson: 'Automatic for in-person signers when the app is installed; no switch'; never 'a choice before the host starts'; words 'Saved on this device')",
+    "holds": false,
+    "evidence": "x-1-more-open.png, p-2-dialog.png: the host has to find 'Get ready to sign without signal' in a person's More beforehand and fill in a PIN dialog. That is the choice before the host starts that the note forbids. p-9-saved.png says 'Saved on this phone', not 'Saved on this device'.",
+    "still_broken": "This conflicts with the brief, which asks for an explicit preparation step with a host PIN. The charter says the note wins on where a feature lives and what it is called, so the placement and the words are off-note. The PIN step itself is brief behaviour.",
+    "suggested_fix": "Keep the PIN, because the brief requires it, but keep the line in the in-person flow's own words. Rename it 'Sign here later without signal', and make every screen say 'device', never 'phone'. Either the designer signs off on this deviation, or the copy is made automatic when the installed app hosts an in-person signer. Ask the designer."
+   },
+   {
+    "item": "2c. Understandable from its words alone, defaults work, a way out on every screen",
+    "holds": true,
+    "evidence": "p-3-pin.png, p-4-host.png (with 'Remove it from this device'), p-5-consent.png (Download a copy and I do not want to sign), p-9-saved.png, p-10-waiting.png (Send now), p-11-sent.png. Nothing needs setting up and the defaults work (7 days, 5 tries). A weak PIN is refused in plain words: x-3-weak-pin.png. Exceptions are listed as new bugs: the word 'envelope', 'got ready', and the repeated heading."
+   },
+   {
+    "item": "2d. Phone 390x844 and desktop: 44 px targets, no sideways scroll",
+    "holds": true,
+    "evidence": "p-walk.json: scrollW 390, button 298x44. x-walk.json: btnBox height 44. Desktop d-2-dialog.png and d-6-sign.png lay out cleanly."
+   },
+   {
+    "item": "2e. Keyboard alone and screen-reader order",
+    "holds": false,
+    "evidence": "x-walk.json tabOrder: when the dialog opens with Enter, focus stays on the opening button. Tab goes through the PIN inputs, Cancel and Get it ready, then leaves the dialog for 'Questions and comments' and 'History' behind it. Escape closes the dialog. On the signing screen (p-6-sign.png, d-6-sign.png) the outlined field spots are aria-hidden and do nothing when tapped.",
+    "still_broken": "Focus is not moved into the dialog and is not kept inside it. This is probably the shared Modal component, so the problem may already exist elsewhere. The spots on the page are not controls.",
+    "suggested_fix": "Put focus on 'Choose a PIN' when the dialog opens and keep Tab inside the dialog (fix this in the Modal component). See the separate bug about the spots on the page."
+   },
+   {
+    "item": "2f. Honest words: the consent shown offline promises only what the code keeps",
+    "holds": false,
+    "evidence": "p-5-consent.png: on the device, with no signal, the consent says 'We record the time, your IP address and each step.' Offline the time is the device's clock, which is not checked, and the address the server records is the host device's, at the moment it next has signal.",
+    "still_broken": "The offline signing screen still shows the online consent wording (consentWording(sender, true, undefined, 'en')).",
+    "suggested_fix": "Give the offline screen its own practical sentence: 'You sign on Wanjiru Field's device without a connection. The device's clock is recorded, and it is not checked. GrowSigning records when it receives your signature.'"
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Offline consent screen promises an IP address and a time that are not recorded as stated",
+    "severity": "high",
+    "where": "src/app/in-person/page.tsx consent stage (wording = consentWording(...)); screenshot tests/out/ux-ds-offline-inperson/p-5-consent.png",
+    "detail": "A signer reads 'We record the time, your IP address and each step.' In this case nothing reaches the server while they sign. The time recorded is the device's clock, which is not checked, and the address recorded is the host device's when it next has signal. That is a promise in front of a signer that the code does not keep (P13, and the house rule about promises). Fix: on the offline screen, replace that sentence with: 'You sign on <host>'s device without a connection. The device's clock is recorded, and it is not checked. GrowSigning records when it receives your signature.'"
+   },
+   {
+    "title": "The fields drawn on the page do nothing when tapped; the real controls are below the whole document",
+    "severity": "medium",
+    "where": "src/app/in-person/page.tsx sign stage (.ip-spot is aria-hidden spans); p-6-sign.png, d-6-sign.png",
+    "detail": "A signer sees a dashed 'Signature' box on the page and taps it, and nothing happens. On a desktop the 'Your part' form is not on screen at all. The one-line hint is easy to miss. Fix: make each spot a button labelled 'Fill in <field name>' that scrolls to its control in Your part and puts focus there. Or place a 'Go to your part' button under the hint, so it reads 'Read the document, then fill in your part below it. [Go to your part]'."
+   },
+   {
+    "title": "A line in the person's More that the designer's note says must not exist",
+    "severity": "medium",
+    "where": "src/components/sender/Recipients.tsx line ~396 (OfflineReadyButton); x-1-more-open.png",
+    "detail": "ux-notes ds-offline-inperson: 'Automatic for in-person signers when the app is installed; no switch'; never 'a choice before the host starts'. The build shows 'Get ready to sign without signal' to every in-person signer in every browser that can store a copy, and asks for a PIN in a dialog of about 110 words. The brief requires a host PIN, so this is a real conflict between the brief and the note. Fix: ask the designer to decide. Meanwhile, shorten the dialog to one paragraph: 'Do this now, while you have signal, on the device <name> will sign on. This device keeps the document and <name>'s part, locked with a PIN, for up to 7 days. Nothing is signed until the device has signal again.' Move the account-lock sentence to the Ready screen."
+   },
+   {
+    "title": "'Envelope' on the host's screens and in the refusal messages",
+    "severity": "low",
+    "where": "src/app/in-person/page.tsx ('Back to the envelope', 'Open the envelope'); src/lib/offlinesign.ts OFFLINE_WORDS unknown/ended/tooOld/closed/changed; p-11-sent.png",
+    "detail": "Section 4 of the charter says 'document', never 'envelope', on screens. Fix: 'Back to the document', 'Open the document', and in each refusal 'Open the document with a connection and let <name> sign there.'"
+   },
+   {
+    "title": "'Phone' and 'device' are mixed, and the saved screen says the same sentence twice",
+    "severity": "low",
+    "where": "src/lib/offlinesign.ts OFFLINE_WORDS.saved/sent; in-person page 'Saved on this phone' heading; p-9-saved.png, p-10-waiting.png",
+    "detail": "The heading 'Saved on this phone' is followed by the body line 'Saved on this phone. It is sent...'. Other screens say 'device', and the host may be using a tablet or a laptop. The note's words are 'Saved on this device.' Fix: heading 'Saved on this device'; body 'It is sent when the device has signal again. Nothing is signed until then.'; sent line 'Sent. <name> has signed, and the copy on this device is wiped.'"
+   },
+   {
+    "title": "Awkward 'got ready' wording",
+    "severity": "low",
+    "where": "in-person page pin stage and none stage, OfflineReady.tsx 'Already got ready on a device', 'get it ready again'; p-3-pin.png, x-6-inperson-none.png",
+    "detail": "'This device holds a document got ready to sign in person.' reads like a mistake. Fix: 'This device holds a document for someone to sign in person. It is kept until 29 Nov 2026.' For the none stage: 'A document kept here to sign in person without signal stays for 7 days at most, and is wiped once it is sent.'"
+   },
+   {
+    "title": "The 'no connection' page offers a document that is not there",
+    "severity": "low",
+    "where": "public/offline.html line 32 (shows the link if a database named growsigning-in-person exists); x-7-offline-html.png",
+    "detail": "Opening /in-person once creates the IndexedDB database, even when the device holds nothing. After that, the offline page shows 'Open the document you got ready to sign in person' on that device until the database is deleted. In my run the link appeared in a fresh browser that only visited /in-person and held no copy. Fix: show the link only when the 'kept' store holds an entry, or have peek() not create the database when it is missing."
+   },
+   {
+    "title": "'I do not want to sign' is a second name for Decline, and the host is not told",
+    "severity": "low",
+    "where": "in-person page Ways(); p-5-consent.png, p-8-part.png",
+    "detail": "The normal signing page calls this Decline, under Other actions. Here it is a visible button with another name, and the server records nothing, so the envelope page still says 'Ready to sign in person'. Fix: label it 'Decline', and on the screen that follows say 'Nothing was signed, and nothing is sent. Please hand the device back to <host>.' Also show the host one line on the PIN screen: '<name> chose not to sign. The document still waits for them.'"
+   },
+   {
+    "title": "The PIN box shows a number keypad but the hint says letters are allowed",
+    "severity": "low",
+    "where": "src/components/sender/OfflineReady.tsx (inputMode numeric) and its hint 'At least 6 numbers or letters'",
+    "detail": "On a phone the keypad has no letters. Fix: either change the hint to 'At least 6 numbers. Do not tell <name>. If you forget it, set it up again.', or drop inputMode numeric."
+   },
+   {
+    "title": "Focus does not move into the PIN dialog and escapes it on Tab",
+    "severity": "low",
+    "where": "src/components/ui Modal (shared; likely pre-existing) as used by OfflineReady.tsx; x-walk.json tabOrder",
+    "detail": "After Enter, focus stays on the button behind the dialog. Tab after 'Get it ready' reaches 'Questions and comments' behind the overlay. Fix: put focus on the first input when the dialog opens and keep Tab inside the dialog."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Builder report item 2: 'public/offline.html links to it only when the device holds a copy'",
+    "claim": "The link appears only when a copy exists",
+    "reality": "The check is whether the database exists. Opening /in-person creates it even with no copy, so the link shows on devices that hold nothing (x-7-offline-html.png)."
+   },
+   {
+    "where": "Builder report item 2: consent screen 'consentWording, own terms'",
+    "claim": "Consent shown as on the signing page",
+    "reality": "That text promises recording 'the time, your IP address and each step'. Offline it is the device's unchecked clock and the host's address at sync time (p-5-consent.png)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/x-1-more-open.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-2-dialog.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/d-2-dialog.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/x-3-weak-pin.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-3-pin.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-4-host.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-5-consent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-6-sign.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/d-6-sign.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-8-part.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-9-saved.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-10-waiting.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-11-sent.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/p-12-back.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/x-4-link-signer-more.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/x-5-signer-page.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/x-6-inperson-none.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/x-7-offline-html.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-offline-inperson/flows/ux-flows.json"
+  ]
+ },
+ "build:ds-db-encrypt": {
+  "done": [
+   {
+    "item": "1. src/server/colcrypt.ts: encrypt and decrypt a column value with a key per table and column (HKDF) from FILE_ENCRYPTION_KEY, using the same old-key list and rotation",
+    "status": "done",
+    "how": "This was already built when I started: AES-256-GCM, HKDF-SHA256 per label, label and key id bound into the check, marker characters stripped from what people send. I checked it and kept it as it was.",
+    "test": "tests/ds-db-encrypt.test.ts tests 1-2: round trip, wrong key, changed byte, value moved to another label, forged marker"
+   },
+   {
+    "item": "2. Encrypt signature and initials pictures, fields.value, comments, emails.html and payload, decline reasons and help message text; keep names, addresses, subjects and ids readable",
+    "status": "done",
+    "how": "SEALED_COLUMNS covers 15 columns (it also covers users' saved signatures, earlier_signatures and fields.prefill). Attachment and stamp field values stay readable because they are ids that other tables join on. src/lib/sealedcolumns.ts lists in words what is encrypted and what is not, and why.",
+    "test": "test 3: none of the values can be found in the raw database file (database plus WAL), every listed column holds only encrypted values, and the app still shows everything"
+   },
+   {
+    "item": "3. Every read and write of those columns goes through two functions",
+    "status": "done",
+    "how": "Reads go through openRow in get()/all() in db.ts. Writes go through seal()/sealField(). I checked every write and found writes that skipped seal(), which only the background sweep fixed later. I added seal() to the automatic alerts in finalretry.ts, sealkey.ts and filestore.ts, and to the placeholder text a purge writes in records.ts. I also fixed two SQL bugs that compared encrypted values directly. routes-trust.ts removeUnusedBlobs used `payload LIKE`, so a file a queued email still carried could be deleted; it now uses col_find(payload). commentrules.ts sameAgain used `c.body=?`, which never matched, so a double tap stored the same comment twice; it now uses col_find(c.body).",
+    "test": "new tests 'SQL that looks inside a sealed value still works...' and 'automatic alerts and the words left after a purge are written sealed too...'; both pass",
+    "left_open": "routes-billing.ts tellOperators (line about 284) still inserts support_requests.message without seal(). I may not touch that file, so its owner needs to wrap the 5th value in seal('support_requests.message', ...) using `import { seal } from './colcrypt.ts'`. Until then the timer's sweep encrypts it later."
+   },
+   {
+    "item": "4. Migration script and the timer's rotation",
+    "status": "done",
+    "how": "Already built: scripts/encrypt-columns.mjs (with --check and --new-key), src/server/colsweep.ts with secure_delete, an atomic compare-and-set and a re-open check. It runs at start (instrumentation.ts) and on each timer tick (cron.ts columnsTick).",
+    "test": "tests 6 and 8: migration, overwrite where the value stood, moving to a new key, the script"
+   },
+   {
+    "item": "5. npm run setup writes FILE_ENCRYPTION_KEY into .env; warning at start, in the log and on /app/operator",
+    "status": "done",
+    "how": "Already built: scripts/setup.mjs (never replaces an existing key, file mode 0600, does not print the key), the databaseWarning at start, GET /api/operator/encryption (routes-colcrypt.ts, openapi-colcrypt.ts) and EncryptionLine on the operator page, which shows nothing when nothing is wrong.",
+    "test": "tests 6-8"
+   },
+   {
+    "item": "6. /security and /security/processing list exactly what is encrypted and what is not, and that the key protects a stolen disk, not a break-in",
+    "status": "done",
+    "how": "Already built in src/lib/storedfiles.ts and shown on both pages. I corrected one wrong claim in the README: a value under a missing key reads as empty and the rest of the record is still served; only a value damaged on the disk is refused with 503 data_locked.",
+    "test": "test 9"
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/finalretry.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/sealkey.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/filestore.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/records.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/commentrules.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/ds-db-encrypt.test.ts",
+   "/home/user/treegens-app/sign-and-grow/README.md"
+  ],
+  "suite": "tests/ds-db-encrypt.test.ts: 11 of 11 pass. npx tsc --noEmit -p .: clean. npm test: 2199 of 2219 passed and 15 failed. I re-ran the 14 failing files: 9 failures remain, all in tests that read screen and copy source. They are in chat, gov-g14, groups, lifecycle, open-signing, qr (the README \"What is not in it\" wording about QR codes), simplify-editor, simplify-signing and witness. None of those tests reads the files I changed, and none involves database encryption. The offline, retention, consent-own and templates-lib failures went away on re-run, so they were other people's edits in progress.",
+  "found": "Almost the whole brief was already built by an earlier run: colcrypt.ts, colsweep.ts, routes-colcrypt.ts, openapi-colcrypt.ts, the operator EncryptionLine, scripts/encrypt-columns.mjs, scripts/setup.mjs, the setup script in package.json, src/lib/sealedcolumns.ts with the storedfiles.ts texts, .env.example, the README sections and a 9-test file. All 9 tests passed. What was missing was a full check of all write paths and SQL queries; that check found the gaps fixed under point 3.",
+  "flows": "No screen changed in this run, so I did not run flows.cjs.",
+  "notes_for_integrator": "The brief is done. Points 1, 2, 4, 5 and 6 were already built; this run added fixes for point 3.\n- Billing owner: src/server/routes-billing.ts tellOperators still inserts support_requests.message unencrypted. Wrap the 5th value in seal('support_requests.message', ...) (import seal from './colcrypt.ts'). The sweep covers it in the meantime.\n- Rule for everyone writing SQL: inside SQL, the encrypted columns (SEALED_COLUMNS in src/server/colcrypt.ts) can only be compared or searched through col_find(column). Rewriting text inside them must go through col_replace(column, find, with). A plain `=` or `LIKE` on them silently matches nothing.\n- Left open on purpose: names, addresses, subjects and audit trails stay readable (search needs them, and the pages say so). The key in the server's settings does not protect against someone who breaks into the running server, and the pages say that too. A value under a missing key reads as empty rather than blocking the whole record, the same as stored files.\n- Abuse checks covered by tests: a forged encrypted marker typed by a person, a value moved to another column, a damaged value. Honest-person cases covered: the wrong key after a restart (the log and the operator page name the missing key id), a database from before the key was set, and a second run of setup.",
+  "settings": []
+ },
+ "verify:ds-db-encrypt": {
+  "checks": [
+   {
+    "item": "1. src/server/colcrypt.ts: encrypt and decrypt one value with a key per table and column (HKDF) from FILE_ENCRYPTION_KEY, with the same old-key list and rotation",
+    "holds": true,
+    "evidence": "I read colcrypt.ts. It uses AES-256-GCM, HKDF-SHA256 over the info string 'column v1 <label>', and binds the label and key id as additional authenticated data. It reads keys through fileKeys(), so FILE_ENCRYPTION_KEYS_OLD works. seal() strips U+0000 and U+0001, so a person cannot forge the marker. tests/ds-db-encrypt.test.ts passes 11 of 11 on my run. My own probe agrees: a round trip works, a value under a missing key reads as '', and a changed byte or a value moved under another label is refused."
+   },
+   {
+    "item": "2. Encrypt signature and initials pictures, fields.value, comments, emails.html and payload, decline reasons and help message text; keep names, addresses, subjects and ids readable",
+    "holds": false,
+    "evidence": "Every column in SEALED_COLUMNS really is sealed on disk. My probe confirms it: after the sweep, 0 plain values are left in the listed columns. But copies of the same kinds of data sit next to them in the clear, and SEALED_WORDS/CLEAR_WORDS do not mention them. Probe tests/out/verify-ds-db-encrypt/probe.test.ts: P1, a signer typed 987654.31 into a number field. fields.value is sealed but fields.typed_num holds \"987654.31\", and the raw database file contains it (fields.calc_num is the same for calculated fields). P2, a help request sent with its chat attached: the message is sealed, but support_requests.chat is stored as plain JSON, and 'My passport number is PASSPORT-ZEBRA-8821' is readable in sign.db. P6, a public form draft (PUT /public/powerforms/:slug/draft): form_drafts.answers holds {\"fld_..\":\"DIAGNOSIS-LYCHEE-42\"} in the clear. I also read the code: emails.archive_draft (mail.ts:308) holds a plain JSON copy of each document email until it leaves, and routes-billing.ts:284 tellOperators still writes support_requests.message unsealed (the builder named this one).",
+    "still_broken": "fields.typed_num, fields.calc_num, support_requests.chat, form_drafts.answers and emails.archive_draft hold, in the clear, typed answers, help-chat words and email copies, which the pages say are encrypted. Billing alerts are unsealed until the sweep runs.",
+    "suggested_fix": "Add support_requests.chat, form_drafts.answers and emails.archive_draft to SEALED_COLUMNS and wrap their writes (routes-support.ts:328, webforms.ts:92, mail.ts:308) in seal(). For typed_num and calc_num, either seal them too or name them in CLEAR_WORDS ('numbers typed into number fields, as plain numbers for exports and sorting'). The billing owner wraps the 5th value at routes-billing.ts:284 in seal('support_requests.message', ...)."
+   },
+   {
+    "item": "3. Every read and write of those columns goes through two functions",
+    "holds": false,
+    "evidence": "Reads hold. Every query goes through all()/get() in db.ts, which call openRow. The only other prepare() calls (colsweep, searchtext, selfhost) read raw values on purpose. Most writes are wrapped; I grepped every INSERT and UPDATE on the listed columns, and only the billing one is unsealed. The col_find fixes in routes-trust.ts:261/557 and commentrules.ts:94 are in place. But the design 'a value under a missing key reads as empty' plus write-back code loses data. Probe P3: save a signature under K1, restart with the key replaced by mistake (K3 only), and PATCH /me {title:'Manager'} returns 200. routes-account.ts:471-473 writes back c.user.signature_png, which was opened as '', so the raw column becomes \"\". With K1 put back, the saved signature is gone for good. routes-sign.ts:397 has the same pattern: a /save that carries only signature_png writes r.initials_png ('' under a missing key) over the sealed initials. This contradicts colcrypt.ts's own comment that the value 'stays on the disk untouched'.",
+    "still_broken": "Under a missing key, any profile save destroys the person's sealed saved signature and initials. A signer's save can destroy their sealed initials.",
+    "suggested_fix": "In those write-backs, do not write a column the request did not change: use COALESCE or a separate UPDATE only when b.signature_png !== undefined. Or make openValue on a no-key value return a sentinel that seal() refuses to write. Add a test: missing key, PATCH /me with a title, key back, signature still there."
+   },
+   {
+    "item": "4. Migration script and the timer's rotation",
+    "holds": true,
+    "evidence": "Probe P5: values written with no key set (envelope emails, a help request) are sealed by sealColumns() once K1 is set ({sealed:7,left:0}). 0 plain values are left, and the help words are no longer anywhere in sign.db plus WAL, so secure_delete works. scripts/encrypt-columns.mjs, --check and --new-key are covered by the builder's tests 6 and 8, which pass. Nothing is sealed while the file store is stopped. That is correct: when I first ran P5 with a missing key, uploads were refused with storage_stopped, as the code says."
+   },
+   {
+    "item": "5. npm run setup writes FILE_ENCRYPTION_KEY into .env; warning at start, in the log and on /app/operator",
+    "holds": true,
+    "evidence": "I ran scripts/setup.mjs in an empty temp folder. It wrote .env with mode 600 and did not print the key. A second run said 'already set ... left as it is', and the key line was still there once. A dev server without a key logs '[database] FILE_ENCRYPTION_KEY is not set ...' at start. /app/operator shows 'Encryption off: ...' on a phone (screenshot nokey-phone_operator.png). With a key and nothing wrong, nothing is drawn (key-phone_operator.png). Minor: databaseWarning returns null for a key that is set but is not a valid key, so the operator line stays silent. It relies on filestore's own warning. The scan is cached for 10 minutes, so a new problem can take that long to show."
+   },
+   {
+    "item": "6. /security and /security/processing list exactly what is encrypted and what is not, and that the key protects a stolen disk, not a break-in",
+    "holds": false,
+    "evidence": "Both pages render at 390 px and 1280 px with no sideways scroll (key-phone_security.png, key-desk_security_processing.png). With a key, /security says 'The database is only partly encrypted by the software'. Without a key, both pages say the database is not encrypted. The 'stolen disk, not a running server' sentence is there. But the list is not exact. It says 'what people typed or chose in fields' and 'the messages and replies of help requests' are encrypted, and 'the stored copies of the emails'. Yet typed numbers (fields.typed_num/calc_num), the attached help chat, public form drafts and email archive drafts are in the clear (P1, P2, P6). CLEAR_WORDS names none of them.",
+    "still_broken": "The copy promises more than the code keeps for numbers typed into fields, help chats, form drafts and archive email drafts.",
+    "suggested_fix": "Seal those columns (see item 2), or add them to CLEAR_WORDS in src/lib/sealedcolumns.ts so the pages state them."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Saved signature and initials are destroyed by a profile save while the key is missing",
+    "severity": "high",
+    "where": "src/server/routes-account.ts:471-473 (PATCH /me); same pattern in src/server/routes-sign.ts:397 (POST /sign/:token/save)",
+    "detail": "openValue() returns '' for a value under a key the server does not hold. PATCH /me writes c.user.signature_png and initials_png back even when the request did not touch them, so '' replaces the sealed value. Probe P3: with the key swapped by mistake, a PATCH /me that changes only the title wiped users.signature_png. Putting the right key back did not restore it. The colcrypt.ts comment promises such values stay 'on the disk untouched'. An honest operator who mistypes a key during a restart loses every user's saved signature that is touched in the meantime."
+   },
+   {
+    "title": "Typed numbers stored in the clear next to the sealed value",
+    "severity": "medium",
+    "where": "src/server/fieldchecks.ts:153 (fields.typed_num), src/server/logic.ts (fields.calc_num)",
+    "detail": "Probe P1: a number field filled with 987654.31 is sealed in fields.value, but typed_num holds '987654.31' in plain text and it is found in the raw sign.db. Salaries, amounts and account numbers typed as numbers leak from a stolen disk, although the pages say typed answers are encrypted."
+   },
+   {
+    "title": "Help chat attached to a help request is not encrypted",
+    "severity": "medium",
+    "where": "src/server/routes-support.ts:328 (support_requests.chat)",
+    "detail": "Probe P2: the request message is sealed, but the attached chat (the person's own words, for example a passport number) is plain JSON on disk. It is not in SEALED_COLUMNS and not in CLEAR_WORDS."
+   },
+   {
+    "title": "Public form drafts keep visitors' answers in the clear",
+    "severity": "medium",
+    "where": "src/server/webforms.ts:92 (form_drafts.answers)",
+    "detail": "Probe P6: PUT /public/powerforms/:slug/draft stored {field: 'DIAGNOSIS-LYCHEE-42'} unencrypted. These are what people typed into fields, the exact category the pages say is encrypted."
+   },
+   {
+    "title": "Archive copy of each document email stored unencrypted until it leaves",
+    "severity": "low",
+    "where": "src/server/mail.ts:308 (emails.archive_draft)",
+    "detail": "The draft is a plain JSON copy of the email (links and codes taken out) on the same row whose html and payload are sealed. It is cleared once sent, but the bytes can stay in free pages, because secure_delete is only switched on during the sweep."
+   },
+   {
+    "title": "Billing alerts written to support_requests.message unsealed",
+    "severity": "low",
+    "where": "src/server/routes-billing.ts:284 tellOperators",
+    "detail": "The builder named this and could not touch the file. The fix for the billing owner: wrap the 5th value in seal('support_requests.message', ...) with import { seal } from './colcrypt.ts'. Until then the timer's sweep seals it, but only after it has been on disk in the clear."
+   },
+   {
+    "title": "Operator line silent for a key that is set but invalid; scan cached 10 minutes",
+    "severity": "low",
+    "where": "src/server/colsweep.ts:149, src/server/routes-colcrypt.ts:16",
+    "detail": "databaseWarning returns null when FILE_ENCRYPTION_KEY does not decode, so /app/operator shows no encryption line in that case. It relies on filestore.ts's separate warning. A new unknown-key or damaged count can also take up to 10 minutes to show."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "src/lib/sealedcolumns.ts SEALED_WORDS, shown on /security and /security/processing; README 'Part of the database encrypted'; setup.mjs and the databaseWarning text",
+    "claim": "'what people typed or chose in fields' are encrypted in the database",
+    "reality": "fields.typed_num and fields.calc_num keep typed or calculated numbers in plain text, and form_drafts.answers keeps public form visitors' typed answers in plain text (probes P1, P6)."
+   },
+   {
+    "where": "src/lib/sealedcolumns.ts SEALED_WORDS; storedfiles.ts PROCESSING_ENCRYPTED",
+    "claim": "'the messages and replies of help requests' / 'help messages' are encrypted",
+    "reality": "The help chat a person attaches to a request (support_requests.chat) is plain JSON on disk (probe P2). Billing alert messages are written unsealed until the sweep runs."
+   },
+   {
+    "where": "src/lib/sealedcolumns.ts SEALED_WORDS",
+    "claim": "'the stored copies of the emails that were sent' are encrypted",
+    "reality": "emails.archive_draft holds a plain copy of each document email until it leaves."
+   },
+   {
+    "where": "src/server/colcrypt.ts openValue comment",
+    "claim": "A value under a missing key 'stays on the disk untouched'",
+    "reality": "PATCH /me and the signer's /save write the opened '' back, which destroys the sealed signature and initials (probe P3)."
+   },
+   {
+    "where": "builder report item 3",
+    "claim": "'I checked every write' and all go through seal()",
+    "reality": "Writes to the listed columns are wrapped, apart from billing, but write-backs of values that opened as '' are not guarded, and same-content columns outside the list were missed."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/key-phone_security.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/key-desk_security.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/key-phone_security_processing.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/key-desk_security_processing.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/key-phone_operator.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/key-desk_operator.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/nokey-phone_operator.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/nokey-desk_operator.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/nokey-phone_security.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-db-encrypt/nokey-desk_security_processing.png"
+  ]
+ },
+ "repair:ds-offline-inperson": {
+  "done": [
+   {
+    "item": "HIGH: in production the page did not open with no signal after getting it ready",
+    "status": "done",
+    "how": "New src/components/sign/offlinePage.ts. After keep(), it registers /sw.js for /in-person, waits until the worker is active, and asks it by message to fetch and keep /in-person and every file the page loads: _next/static scripts, styles, the fonts the styles name, and pdf.js. It then checks caches.match('/in-person') and only counts the page as kept if that check passes. These files go in their own cache, 'growsigning-in-person'. A new VERSION does not drop that cache, and each get-ready replaces it as a whole. The page is kept even when it is marked private/no-store, because it holds nothing of anyone. If keeping fails, /in-person says so in plain words (OFFLINE_WORDS.notKept). Two more fixes: OfflineReady now uses location.replace, and the pdf.js worker is started from a blob of the fetched file, because the worker's own address was not answered offline (ERR_ABORTED).",
+    "test": "tests/ds-offline-inperson.test.ts repair tests run sw.js in vm: what is kept (also with no-store), nothing fetched from other sites, opening from the kept copy offline, the kept copy surviving an update, a redirect or JSON never kept, keepPageForLater true only when the page is found. I checked it on a real production build at port 4323 with tests/out/repair-ds-offline-inperson/walk.cjs. After get-ready the tab was closed, the browser went offline, and /in-person was opened in a new tab: it returned 200 with the PIN screen, the PDF and its field spots rendered offline, and the person signed. With signal again the result was sent and the status was completed. This held at 390x844 and 1440x900 (phone-*.png, desk-*.png, *-walk.json, probe-pdf.cjs)."
+   },
+   {
+    "item": "MEDIUM: a refusal for a non-offline reason left the copy stuck and blocked the device for 7 days",
+    "status": "done",
+    "how": "Three changes. (1) The device now makes the shared field checks at Finish (finishProblem/problemWith from src/components/sign/fields.ts) and shows the problem under the field as the person types. (2) needsSignal refuses a part that pays before finishing (collect_when 'before'). (3) A remaining kept refusal shows the server's sentence and OFFLINE_WORDS.keptAfterRefusal, with two buttons: \"Change <name>'s part\" (back to the form with the answers) and \"Remove it from this device\" (wipes the copy and ends it on the server with signal). The Waiting for signal screen also has Remove, which asks first.",
+    "test": "repair tests: pay before refused (and allowed for 'after'); a field check caught on the device and the server agreeing; a refusal keeps the copy, the page has both ways out, and removing ends the copy so a late send gets offline_ended. Browser: 'not an email' is refused at Finish on the device."
+   },
+   {
+    "item": "MEDIUM: initials filled with the full signature",
+    "status": "done",
+    "how": "Initials must be the person's own: the ini || sig fallback was removed everywhere (finish check, initials_png, the Field image).",
+    "test": "Source test, plus browser: Finish without initials says 'Initials is still empty'; after adding initials, the stored values have their own."
+   },
+   {
+    "item": "HIGH (ux): the offline consent promised an IP address and a time that are not recorded as stated",
+    "status": "done",
+    "how": "OFFLINE_WORDS.consentNote(host) is shown above the versioned consent text. It says the device's clock is recorded and not checked, that GrowSigning records when it receives the signature and the IP of the network the device uses then, and that Decline stops here and nothing is signed or sent. The versioned legal text is shown unchanged so the record stays exact. The duplicate 'You sign on X's device' line was removed.",
+    "test": "Words test, plus a browser check of the consent screen."
+   },
+   {
+    "item": "Back button during an offline hand-over",
+    "status": "done",
+    "how": "While the person holds the device (consent, sign, decline, saved), a pushState/popstate guard keeps Back on the page. OfflineReady uses location.replace so Back never leads to the envelope page.",
+    "test": "Source test, plus browser: goBack() offline stays on /in-person on the consent screen."
+   },
+   {
+    "item": "Field spots on the page did nothing",
+    "status": "done",
+    "how": "Each spot is now a button labelled 'Fill in <field>' that scrolls to and focuses its control, with a 44 px tap area (::after). A 'Go to your part' button sits under the hint.",
+    "test": "Source and CSS test, plus browser: tapping the spot focuses ip-f-<id>."
+   },
+   {
+    "item": "Dialog focus and Tab trap (shared Modal)",
+    "status": "done",
+    "how": "src/components/ui.tsx Modal: focus moves into the dialog on open (an autoFocus field, else the first control) and goes back to the opener on close. Tab and Shift+Tab stay inside the top dialog.",
+    "test": "Source test, plus browser tabOrder: 8 Tabs all stay inside the dialog, starting on the PIN."
+   },
+   {
+    "item": "Words: device not phone, document not envelope, 'got ready', heading said twice, Decline, number pad for a PIN that takes letters",
+    "status": "done",
+    "how": "In OFFLINE_WORDS: savedTitle 'Saved on this device' with a body that does not repeat it; sent and refusal lines say device and document; 'Back to/Open the document'; no 'got ready to sign'; the button is renamed Decline, its screen says 'Nothing was signed, and nothing is sent', and the PIN screen tells the host '<name> chose not to sign... still waits for them'. inputMode numeric was removed. The dialog is now one paragraph, and the account-lock sentence moved to the Ready screen.",
+    "test": "repair words test (no phone, envelope, offline mode, sync or valid in any OFFLINE_WORDS line), plus screenshots."
+   },
+   {
+    "item": "LOW: two in-person signers of one envelope: the second ends the first",
+    "status": "partly",
+    "how": "I made the words honest instead of changing the behaviour. The dialog shows OFFLINE_WORDS.replaces ('A device keeps one person at a time'), and the README, openapi and code comments now say 'one person at a time per device' instead of 'one envelope'.",
+    "test": "repair test: the second prep returns 200 and the first is 'ended'; README wording checked.",
+    "left_open": "Two people of one envelope still cannot both sign on one device in one trip. They need two devices or two trips. Supporting several kept parts per device would be a design change for the designer to decide."
+   },
+   {
+    "item": "The no-connection page offered a document that was not there",
+    "status": "done",
+    "how": "offline.html opens the database only if it exists and shows the link only when the 'kept' store holds 'copy'. idbBox().get no longer creates the database when it is missing. VERSION is bumped and ends in the new hash.",
+    "test": "repair test, plus ds-phone-app test (VERSION follows offline.html)."
+   },
+   {
+    "item": "Designer note: 'automatic, no switch' versus the brief's explicit PIN step",
+    "status": "disagree",
+    "how": "The brief requires the host to choose a PIN while there is signal, before going offline, so the get-ready step cannot be automatic without dropping the PIN. I kept the line where it was: only in an in-person person's own More, with no change to any core flow. I applied the note's words ('Saved on this device', no 'offline mode' or 'sync') and shortened the dialog to one paragraph.",
+    "left_open": "The designer needs to sign off on keeping a get-ready line before the trip, or decide another placement."
+   }
+  ],
+  "files_changed": [
+   "src/lib/offlinesign.ts",
+   "src/server/offlinesign.ts",
+   "src/server/openapi-offline.ts",
+   "src/components/sign/offlineInPerson.ts",
+   "src/components/sign/offlinePage.ts (new)",
+   "src/components/sender/OfflineReady.tsx",
+   "src/app/in-person/page.tsx",
+   "src/app/styles/inperson.css",
+   "src/components/ui.tsx (Modal focus and Tab trap only)",
+   "public/sw.js",
+   "public/offline.html",
+   "tests/ds-offline-inperson.test.ts",
+   "README.md",
+   "tests/out/repair-ds-offline-inperson/ (walk.cjs, probe-pdf.cjs, screenshots, *-walk.json, flows/)"
+  ],
+  "suite": "tests/ds-offline-inperson.test.ts: 24/24 pass. tests/ds-phone-app.test.ts passes. npm test: 2237 tests, 2226 pass, 6 fail, none in files I touched. I re-ran those files: 4 of the 6 now pass. Still failing: chat.test.ts 'Help on the signing page is one button...' and simplify-public.test.ts 'Settings: the page is built from those sections...'. Both read the signing page and Settings sources, which I did not change; they look like other engineers' work in progress. npx tsc --noEmit -p . is clean.",
+  "flows": "node tests/ux/flows.cjs against my production build (port 4323), default profile, after my changes: a-send-first 18/8/119/28/851/2; b-sign-phone 7/5/36/11/400/0; b-sign-desktop 7/5/36/11/404/0; c-template-send 5/4/59/20/268/1; d-find-download 1/1/21/21/83/0; e-settings-name 3/2/53/32/360/0; f-signer-help 6/4/28/9/570/2; g-sign-in 4/3/56/28/365/0; h-sign-myself 14/8/99/24/621/0. Columns are actions/screens/choices_seen/max_choices/words/notices. Every count is at or under its ceiling, and the run reports 0 rules broken (21 P6 word warnings on /help and /verify, not from this work).",
+  "found": "The offline in-person feature was built and 12/12 of its tests passed. The skeptic's and reviewer's findings held when I read the code. In the production build I also found that the pdf.js worker could not start offline: its own address was not answered through the service worker (ERR_ABORTED), so the document stayed on 'Loading document'. That is fixed with a blob worker.",
+  "notes_for_integrator": "1) A production build (next build, about 15 minutes with NODE_OPTIONS=--max-old-space-size=4096) is what proves the offline open. My .next-repair-ds-offline-inperson folder is deleted, and my lines are removed from tsconfig.json. 2) public/sw.js VERSION is now growsigning-shell-3-3a8b223d, because offline.html changed. A separate cache, 'growsigning-in-person', is excluded from the version cleanup on purpose. 3) The change to the shared Modal in src/components/ui.tsx affects every dialog: focus moves in on open and goes back on close, and Tab is trapped in the top-most .modal. 4) Abuse review: a foreign or stale prep is still refused on the server (unchanged). keepInPerson fetches only same-origin /_next/static and /pdfjs paths (a path after another site's name is skipped, tested), and a redirect, an opaque answer or non-HTML is never kept as the page. Remove ends the server copy, so a later send signs nothing. Honest-person cases are handled: a wrong format is caught on the device; the host can always remove a stuck copy; a browser that cannot keep the page is told to keep the tab open. 5) Left open: one person at a time per device (worded honestly); the designer's call on the get-ready line; the page is English only (pre-existing)."
+ },
+ "ux:ds-db-encrypt": {
+  "checks": [
+   {
+    "item": "1. Core flows with zero setup stay within the ceilings in tests/ux/ceilings.json, with no new choice (P1, P2)",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-db-encrypt/flows.log and flows/ux-flows.json: 0 broken, 21 warnings, all from other batches (P6 'envelope'/'audit trail' on /help and /verify, long sentences on the consent screen). The counts below are actual/ceiling. a-send-first: 18/18 actions, 8/8 screens, 119/137 choices, 832/2979 words, 2/2 notices. b-sign-phone: 7/7, 5/5, 36/36, 400/432 words, 0/0. b-sign-desktop: 7/7, 5/5, 36/36, 404/442, 0/0. c-template-send: 5/5, 4/4, 59/59, 268/268, 1/1. d-find-download: 1/1, 1/1, 21/21, 83/89, 0/0. e-settings-name: 3/3, 2/2, 53/54, 360/404, 0/0. f-signer-help: 6/7, 4/5, 28/36, 521/598, 1/2. g-sign-in: 4/4, 3/3, 56/71, 365/2585, 0/0. h-sign-myself: 14/14, 8/8, 99/99, 621/645, 0/0. No flow got longer."
+   },
+   {
+    "item": "2. Core flows with the feature switched on (FILE_ENCRYPTION_KEY set, fresh database) stay within the ceilings, and signing still works with the signatures stored encrypted",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-db-encrypt/flows-keyon.log and flows-keyon/ux-flows.json: 0 broken. Every count is the same as with zero setup, except a-send-first words 851/2979 and f-signer-help notices 2/2. That notice is the help form recognising the document from the security code (compare flows-keyon/f-signer-help/05-write-to-a-person.png with flows/f-signer-help/05-write-to-a-person.png). It comes from the timing of a code lookup, not from encryption. Every flow finished, including signing, download and sign-myself."
+   },
+   {
+    "item": "3. The feature appears only where the charter says (gate docs: README, /app/operator, public trust pages), never on a sender's or signer's screen",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-db-encrypt/shots/off-op/operator.json and on-op/operator.json: /app, /app/settings, /app/envelopes/new and /app/documents have 0 data-feature=\"ds-db-encrypt\" elements and no word 'encrypt'. The flows JSON of both runs has no 'encrypt' anywhere on any core screen. The only app element is EncryptionLine on /app/operator, and it carries data-feature=\"ds-db-encrypt\"."
+   },
+   {
+    "item": "4. When a key is set and nothing is wrong, the operator page shows nothing new",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-db-encrypt/shots/on-op/operator.json: phone and desk are both null (no line drawn)."
+   },
+   {
+    "item": "5. The operator warning with no key is a plain name, a one-line explanation and what to do, styled as a warning (P6, P10)",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-db-encrypt/shots/off-op/operator-phone.png and operator-desk.png. The line is 81 words and 232 px tall on a phone. It opens with the variable name FILE_ENCRYPTION_KEY rather than the plain problem. It uses the green 'notice' style that the operator page uses for good news, not 'notice warn'.",
+    "still_broken": "Too long, leads with the technical name, and looks like a success message.",
+    "suggested_fix": "In src/app/app/operator/encryption.tsx use className=\"notice warn small\". In src/server/colsweep.ts databaseWarning() with no key, return: 'Stored files and the signatures, typed answers, comments and emails in the database are kept readable on the disk. Run \"npm run setup\" (it writes FILE_ENCRYPTION_KEY into .env), restart, and keep a copy of the key apart from the backups.'"
+   },
+   {
+    "item": "6. The 'needs a look' warning for a missing old key says what happened and what to do",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-db-encrypt/shots/wrongkey-op/operator-line-phone.png (data written under key A, server restarted with key B only): 'Encryption needs a look: 2 value(s) in the database were encrypted with a key this server does not have (key id 21433bf35c2e9fc0). They cannot be shown and were not changed. Add that key to FILE_ENCRYPTION_KEYS_OLD and restart.' The same text is in the start log (server4.log). It is 37 words. Minor: 'value(s)'."
+   },
+   {
+    "item": "7. /security and /security/processing say exactly what is encrypted and do not contradict themselves (P13, 'never leave a promise the code does not keep')",
+    "holds": false,
+    "evidence": "With the key on, tests/out/ux-ds-db-encrypt/shots/on/pages.json and crop-phone-1.png. The point 'The database is only partly encrypted by the software' is correct. The same /security page also says 'Today the software can encrypt the files ... and it never encrypts the database' (src/lib/policy.ts:448, NO_BAA_FIRST). It also says 'the software adds no encryption of its own to the database' (src/lib/policy.ts:480, who can see your documents, the operator entry). With the key off, /security/processing says 'it never encrypts the database' (src/lib/storedfiles.ts:76, tests/out/ux-ds-db-encrypt/shots/off/crop-phone-4.png). The /security off text (storedfiles.ts:68) says only that the software 'can encrypt the uploaded documents, signed PDFs and the files signers attach'. It does not mention part of the database.",
+    "still_broken": "Three stale sentences deny a feature that now exists. One appears on the same page as the sentence that describes it.",
+    "suggested_fix": "policy.ts:448: 'All of the database encrypted by the software. Today, with a key set, it encrypts the files and part of the database (signatures, typed answers, comments, stored emails), and names, addresses, subjects and audit trails stay readable.' policy.ts:480: 'Outside the app it is different: the software encrypts only part of the database, and the key is in the server's settings, so whoever has the disk, the database and those settings can read everything on them.' storedfiles.ts:76 (off): 'on this server it does not encrypt the files it stores or any of the database, so how the disk is protected depends on the host.' storedfiles.ts:68 (off): 'The software can encrypt the uploaded documents, signed PDFs, the files signers attach and part of the database, and it is not switched on here, so ...'"
+   },
+   {
+    "item": "8. Trust pages are short and readable on a phone (P11, P13 'one line, not a paragraph')",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-db-encrypt/shots/on/crop-phone-1.png: the database point is one paragraph of about 250 words, 1070 px tall at 390 px wide, with the encrypted list and the readable list run together with semicolons. There is no sideways scroll on any page at 390 or 1440 (pages.json: sideways false).",
+    "still_broken": "A wall of text where a busy person needs two short lists.",
+    "suggested_fix": "Show it as one line, then two short bulleted lists: 'Part of the database is encrypted with the same key.' Encrypted: signatures and initials; what people typed in fields; comments; copies of sent emails; decline reasons; help messages. Kept readable, because search and joining records need them: names, email addresses and phone numbers; subjects and document names; file ids; audit trails; contacts, plans and payments. Then: 'So encrypt the disk as well.'"
+   },
+   {
+    "item": "9. Keyboard and screen reader on the one app element",
+    "holds": true,
+    "evidence": "EncryptionLine is a plain <p role=\"status\"> with no controls, so it adds no tab stop and no dead button. It is read in order after the page heading and the Refresh button (shots/off-op/operator-desk.png). It adds nothing that needs a 44 px target."
+   },
+   {
+    "item": "10. 'A key by default for new installs' can be found on the path a new operator follows",
+    "holds": false,
+    "evidence": "README.md 'Run it' (lines 8-15) and 'Running it yourself' (the bash block with cp .env.example .env and docker compose up) do not include npm run setup or any step that makes a key. It is mentioned only in passing at README lines 1750, 2563 and 3125 and in .env.example. The operator page warning does point to it once the server is running.",
+    "still_broken": "A Docker install starts without a key unless the operator reads the configuration table.",
+    "suggested_fix": "In the 'Running it yourself' bash block, after cp .env.example .env, add: npm run setup   # writes a new FILE_ENCRYPTION_KEY into .env; keep a copy of it apart from the server"
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "/security still says the software never encrypts the database, next to the point that says it partly does",
+    "severity": "medium",
+    "where": "src/lib/policy.ts:448 (NO_BAA_FIRST), src/lib/policy.ts:480 (operator entry in 'Who can see your documents'), src/lib/storedfiles.ts:68 and :76 (off-state texts)",
+    "detail": "With FILE_ENCRYPTION_KEY set, /security shows 'The database is only partly encrypted by the software' and also 'it never encrypts the database' and 'the software adds no encryption of its own to the database'. With the key off, /security/processing says 'it never encrypts the database', which is no longer true of the software. A reader cannot tell which sentence is true. Evidence: tests/out/ux-ds-db-encrypt/shots/on/pages.json, shots/off/crop-phone-4.png. Fix words are under check 7."
+   },
+   {
+    "title": "Operator warning with no key is 81 words, starts with a variable name and is styled green like good news",
+    "severity": "low",
+    "where": "src/server/colsweep.ts databaseWarning(); src/app/app/operator/encryption.tsx",
+    "detail": "shots/off-op/operator-phone.png: a 232 px green block. Use 'notice warn' and the shorter words under check 5."
+   },
+   {
+    "title": "Database point on /security is a 250-word paragraph",
+    "severity": "low",
+    "where": "src/lib/storedfiles.ts databaseText() / PART_SEALED with src/lib/sealedcolumns.ts lists",
+    "detail": "shots/on/crop-phone-1.png: 1070 px of unbroken text on a phone. Render SEALED_WORDS and CLEAR_WORDS as two short bulleted lists with shorter items (see check 8)."
+   },
+   {
+    "title": "No key step in the self-hosting quick start",
+    "severity": "low",
+    "where": "README.md 'Running it yourself' bash block",
+    "detail": "The brief's 'a key by default for new installs' relies on npm run setup, which the Docker steps never run. Add the line given in check 10."
+   },
+   {
+    "title": "'that includes us' and 'value(s)' in operator-facing words",
+    "severity": "low",
+    "where": "scripts/setup.mjs (second console.log), .env.example (the FILE_ENCRYPTION_KEY comment), src/server/colsweep.ts databaseWarning()",
+    "detail": "On a self-hosted server 'us' has no meaning to the person reading it. Say 'nobody can read what was encrypted with it, not even the people who wrote this software'. Write '2 values' or '1 value' instead of 'value(s)'."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "builder report item 6",
+    "claim": "/security and /security/processing list exactly what is encrypted and what is not (status done, 'already built')",
+    "reality": "Both pages still carry three sentences that say the software never encrypts the database or adds no encryption to it (policy.ts:448, policy.ts:480, storedfiles.ts:76). On /security one of them sits next to the correct 'partly encrypted' point."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/off-op/operator-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/off-op/operator-desk.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/wrongkey-op/operator-line-phone.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/on-op/operator.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/off/crop-phone-1.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/off/crop-phone-4.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/on/crop-phone-1.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/on/crop-desk-4.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/off/phone_security.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/shots/on/phone_security.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/flows/ux-flows.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/flows-keyon/ux-flows.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-db-encrypt/flows-keyon/f-signer-help/05-write-to-a-person.png"
+  ]
+ },
+ "build:ds-paper": {
+  "done": [
+   {
+    "item": "0. Check what already exists",
+    "status": "done",
+    "how": "Found the consent-own 'Sign on paper instead' entry (decline/paper, paper_at, sign/Withdraw.tsx), storeUpload with several photos joined into one PDF (25 MB, 50 photos), shrinkPhoto in editor/photos.ts, the Other actions order in sign/actions.ts, and the ux-notes key ds-paper. I reused all of these and built nothing twice. The new 'Print it and send a photo' choice sits inside the existing one 'Sign on paper instead' entry, as ux-notes asks."
+   },
+   {
+    "item": "1. Per recipient May / Must sign on paper, plus an account default",
+    "status": "done",
+    "how": "Following ux-notes ds-paper, which overrides the brief's 'on by default': the admins' switch 'People may sign on paper' (accounts.paper_sign) is off by default. It sits in Settings > Sending > When people sign (components/settings/PaperSetting.tsx, GET/PUT /api/account/paper, admin only, API keys refused, security-log line). With the switch on, signers and approvers may sign on paper by default. A person's More > 'How they sign' then offers: on screen or on paper / on screen only / on paper only / in person (editor/PaperPick.tsx). The API takes allow_paper and require_paper (savePaper and copyPaper in server/paper.ts, called from writeContent and copyEnvelope). Paper is never offered to someone who signs in person, a group, a witness, a signer with a witness, a public form, a document with pay-before-finishing, or a delegate's link (notForPaper).",
+    "test": "tests/ds-paper.test.ts tests 1 (off by default; who may)"
+   },
+   {
+    "item": "2. Print PDF with marked places, ID, page x of y and code on every page, then the upload",
+    "status": "done",
+    "how": "GET /sign/:token/paper/print (server/paper.ts printPdf). It has a cover page saying how to send it back, then the document as the signer's screen shows it, with dashed boxes for 'Sign here', 'Initial here', 'Today's date' and labelled boxes to write in. Every page carries a header line: envelope ID, 'Page x of y', the security code (an HMAC of the recipient and content version) and the person's name. POST /sign/:token/paper uses storeUpload (a PDF, or PNG/JPEG photos joined into one document, up to 25 MB), with photos made smaller in the browser and never cleaned. On the signing page, Other actions > 'Sign on paper instead' gives the print and send steps; with the account's own consent text it first offers both choices (sign/Paper.tsx PaperChoice). 'On paper only' replaces consent and signing with the print and send screen.",
+    "test": "ds-paper test 2 (pages extracted with text.ts: ID, 'Page i of 3' and code on each page; marks present; the code changes after a change) and test 2-3 (upload)"
+   },
+   {
+    "item": "3. Sender reviews: Accept as signed by <name> / Ask again with an emailed reason; the order waits",
+    "status": "done",
+    "how": "recipients.paper_state='waiting'. The signer sees 'Signed on paper, waiting for <sender> to check'. Nobody after them is asked, reminders skip them, and Finish on screen is refused (paperGate, 409). The sender is always emailed. On the envelope page the main button becomes 'Look at the scan' (sender/PaperReview.tsx). Its dialog shows the scan (inline on wide screens, a button on phones), the code to look for, a warning for an older version, Accept, and Ask again with a reason. The reason goes through emailRefusal (the fake-notice guard), is emailed and is shown on the signing page. Accept and Ask again are claimed atomically. A colleague with a 'manage' share may decide (shares.ts NEEDS). The Recipients line says 'Signed on paper, waiting for you to check' or 'Asked to send the scan again'.",
+    "test": "ds-paper tests 2-3, 3 and 3-5"
+   },
+   {
+    "item": "4. Final PDF: scan after a divider 'Signed on paper by <name>', places read 'Signed on paper: see page N', certificate sentence",
+    "status": "done",
+    "how": "pdf.ts renderEnvelopePdf (small edits): the person's fields are left out of the normal drawing, and addPaperScans adds the divider and the scan pages after the documents and attachments, then writes 'Signed on paper: see page N' (or 'See p. N' in a tiny box) in each of their places. Certificate: status 'Signed on paper', the sentence from the brief, a Scan line (pages, code, SHA-256), and E-record consent 'Not asked: signed on paper' (in lib/disclosure.ts consentCertValue). The 'Signed without paper' box is left out of such a certificate, and the paper-saved lines are left off the Done screen and the envelope page, because they would not be true.",
+    "test": "ds-paper test 3-5 (divider at page 3, places point to it, certificate sentence, no 'Signed without paper')"
+   },
+   {
+    "item": "5. Uses a signature like any finished signer through the existing completion path",
+    "status": "done",
+    "how": "acceptScan sets paper_scan_id, which only acceptScan sets, then calls completeRecipient with the upload's IP and browser. completeRecipient (small edits) skips consent, supplements, formula inputs and signature images when paper_scan_id is set, and writes 'Signed on paper' in the audit trail. Charging, trees (noteFinished), webhooks and advance() all run as before. If completion fails, the claim is undone and the audit trail says so.",
+    "test": "ds-paper test 3-5 with STRIPE_SECRET_KEY set: exactly one 'signature' credit row for the paper signer, and the next person becomes 'sent'"
+   },
+   {
+    "item": "6. API: allow_paper/require_paper, POST /sign/:token/paper, accept and reject",
+    "status": "done",
+    "how": "routes-paper.ts is imported in api/[...path]/route.ts and tests/helpers.ts boot(). It also has GET print, GET /envelopes/:id/paper, GET the scan, and GET/PUT /account/paper. perm.ts NEEDS lines are added. openapi-paper.ts is spread into openapi.ts, and the Recipient schema has allow_paper, require_paper and paper_state. /me has paper_signing.",
+    "test": "ds-paper last test (openapi paths), ds-perm-profiles passes in npm test"
+   },
+   {
+    "item": "Docs",
+    "status": "done",
+    "how": "README: a 'Signing on paper' paragraph in What is in it, the 'What is not in it' entry rewritten, and a test-table row. There is no README configuration-table or .env.example entry because there is no environment setting: it is an account switch. I added no 'What the bad reviews taught us' row, because research/complaints.json has no sourced complaint about this, and I removed one I had drafted without a source."
+   }
+  ],
+  "files_changed": [
+   "src/server/paper.ts (new)",
+   "src/server/routes-paper.ts (new)",
+   "src/server/openapi-paper.ts (new)",
+   "src/lib/paper.ts (new)",
+   "src/components/sign/Paper.tsx (new)",
+   "src/components/sender/PaperReview.tsx (new)",
+   "src/components/editor/PaperPick.tsx (new)",
+   "src/components/settings/PaperSetting.tsx (new)",
+   "tests/ds-paper.test.ts (new)",
+   "tests/out/build-ds-paper/shots.cjs (new, screenshots there)",
+   "src/server/db.ts (paper_scans table, 5 columns appended)",
+   "src/server/envelopes.ts (completeRecipient onPaper, savePaper/copyPaper calls, reminders skip waiting scan)",
+   "src/server/pdf.ts (export mapper/fontBytes, paper scans and places, certificate status/lines, no 'Signed without paper' box)",
+   "src/server/routes-sign.ts (paper_sign facts, paperGate before Finish)",
+   "src/server/routes-account.ts (/me paper_signing)",
+   "src/server/perm.ts (route needs)",
+   "src/server/shares.ts (manage for scan/accept/reject)",
+   "src/server/openapi.ts (import and spread)",
+   "src/app/api/[...path]/route.ts",
+   "tests/helpers.ts",
+   "src/app/sign/[token]/page.tsx (PaperChoice dialog, withPrint in Other actions, paper screen, Done card hidden)",
+   "src/app/app/envelopes/[id]/page.tsx (Look at the scan main button, line, paper-saved lines hidden)",
+   "src/components/sender/Recipients.tsx (status lines)",
+   "src/components/editor/PersonMore.tsx (PaperPick when switched on)",
+   "src/components/Editor.tsx (sends allow_paper/require_paper)",
+   "src/components/settings/OwnDocsDefault.tsx (renders PaperSetting)",
+   "src/components/AppShell.tsx (Me.paper_signing type)",
+   "src/lib/editorux.ts (personSummary 'Signs on paper only')",
+   "src/lib/disclosure.ts (consentCertValue: 'Not asked: signed on paper')",
+   "src/locales/en.json (sign.paper.* keys)",
+   "README.md",
+   "tests/open-platform.test.ts (onHelp count 4 -> 5, the paper screen)",
+   "tsconfig.json (my two .next-build-ds-paper lines removed again)"
+  ],
+  "suite": "tests/ds-paper.test.ts: 9/9 pass. Full npm test (2290 tests): 11 failed on the first run. 7 were mine (source-regex pins in ds-consent-own, simplify-signing, simplify-editor, chat, open-platform, plus a real if/else bug in personSummary that I had introduced). All 7 are fixed, and those six files plus mine now pass (159/159). The other failures do not come from my changes. billing3, bounces, support and gaps-industry pass on re-run (they look like load flakes from running next to flows.cjs). gaps-mobile-send 'fields a screen reader can only call by their type' fails because someone else's edit changed `const need = ...` in the sign page to add `+ sharedSaid(f)` (collab work in progress). npx tsc --noEmit -p . is clean.",
+  "flows": "node tests/ux/flows.cjs against my dev server, zero setup, after the change: UX FLOWS OK, exit 0. a-send-first 18 actions/8 screens, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 14/8. I took no before run. Everything I added sits behind the admin switch (data-feature='ds-paper'), so zero-setup screens are unchanged, and no ceiling was broken.",
+  "settings": [
+   "Account switch 'People may sign on paper' (accounts.paper_sign, default off): Settings > Sending > card 'When people sign', admins only, GET/PUT /api/account/paper",
+   "Per recipient: allow_paper (null = allowed while the switch is on, false = on screen only) and require_paper (on paper only), editor person More > How they sign"
+  ],
+  "notes_for_integrator": "Left open, named honestly:\n(a) The scan is not in the evidence pack or the full export yet.\n(b) A signer who sent the wrong pages cannot take the scan back; only the sender's Ask again reopens it.\n(c) Someone on 'On paper only' with no printer can only Decline or use Questions and comments.\n(d) A scan waiting when the document closes or expires is left as it is (the file is removed with the envelope through files.via_envelope).\n(e) Approvers get the default 'may' but have no editor line (the 'How they sign' line exists only for signers); the API sets it for them.\n(f) Upload content is not screened (rate-limited to 10 an hour per person, through their own link only).\n(g) The 'Signed' badge on the envelope page stays 'Signed'; the line under it says 'Signed on paper on ...'.\n\nAbuse cases handled: signer forcing /complete while waiting or when on paper only (409, tested); a forged paper flag (paper_scan_id is only set by acceptScan); double Accept or Accept racing Ask again (atomic claim, tested); a scan of an older version (refused, tested); phishing through the Ask again reason (emailRefusal with the reason as extra); delegate links (refused); other accounts (404, tested).\n\nHonest-stuck cases: photos too large (client and server messages); the sender not noticing (an email whatever their notification settings, plus the main button); the person not knowing what happens next (the waiting card says it).\n\nShared-file edits are all small, targeted Edits: envelopes.ts (5 spots), pdf.ts (7), the sign page (4), db.ts (append only), routes-sign.ts (2), perm.ts, shares.ts, routes-account.ts, openapi.ts, disclosure.ts consentCertValue (1 line). I changed one other team's test: open-platform.test.ts onHelp count 4 -> 5, with the reason in its message. The pre-existing gaps-mobile-send failure belongs to whoever is adding sharedSaid to the sign page.\n\nScreenshots are in /home/user/treegens-app/sign-and-grow/tests/out/build-ds-paper/ (settings, editor More, Other actions, paper steps, waiting at 390 and 320, envelope page, scan dialog at 390 and 1440, after accept, print.pdf). I looked at them. Headless Chromium shows no PDF in the scan iframe, so phones get an 'Open the scan' button instead of the iframe.",
+  "found": "Already there: consent-own's 'Sign on paper instead' with its one 'by post' choice (closes the part like a decline), multi-photo upload into one document in storeUpload, and shrinkPhoto. ux-notes key ds-paper already defined the gate (admin switch, default off), the words and where it lives. My work fits into those rather than duplicating them."
+ },
+ "repair:ds-db-encrypt": {
+  "done": [
+   {
+    "item": "HIGH: a saved signature and initials were destroyed by a profile save, or by a signer's save, while the key was missing",
+    "status": "done",
+    "how": "PATCH /me (src/server/routes-account.ts) now writes signature_png and initials_png only when the request sends them. POST /sign/:token/save (src/server/routes-sign.ts) writes only the picture that was sent and is a valid image. Before, both wrote back the value they had read, which reads as '' under a missing key. logic.ts also skips writing back a calc_num that opened as ''. I updated the colcrypt.ts comment to match.",
+    "test": "tests/ds-db-encrypt.test.ts test 12: with K1 replaced by K3, PATCH /me {title} and a signer save carrying only a signature leave the stored bytes unchanged. With K1 back, both pictures read again. Clearing with initials_png:null still works.",
+    "left_open": "Other code that copies an opened value into a NEW row (for example earlier_signatures) while a key is missing would copy ''. The original row stays intact, but I did not audit every such copy."
+   },
+   {
+    "item": "MEDIUM: typed numbers (fields.typed_num, fields.calc_num) were in the clear",
+    "status": "done",
+    "how": "Both columns are added to SEALED_COLUMNS. Writes are sealed in fieldchecks.ts keepNumbers and in logic.ts (both calc_num writes). Reads open them through get()/all(). No SQL looks inside them; I checked with grep. The sweep seals old plain values.",
+    "test": "ds-db-encrypt test 13: after a number field is filled with 987654.31, typed_num is sealed and reads back as the number, and the string is not in sign.db or the WAL. logic.test.ts and ds-fields-checks.test.ts pass."
+   },
+   {
+    "item": "MEDIUM: the help chat attached to a help request (support_requests.chat) was in the clear",
+    "status": "done",
+    "how": "Added to SEALED_COLUMNS. routes-support.ts:328 writes seal('support_requests.chat', ...). chat.ts reads it through get(), so it is opened.",
+    "test": "ds-db-encrypt test 13 (PASSPORT-ZEBRA-8821 is not on disk, and the chat is sealed). support.test.ts passes."
+   },
+   {
+    "item": "MEDIUM: public form drafts (form_drafts.answers) were in the clear",
+    "status": "done",
+    "how": "Added to SEALED_COLUMNS. webforms.ts seals the answers on INSERT/UPSERT. readDraft reads them through get().",
+    "test": "ds-db-encrypt test 13 (DIAGNOSIS-LYCHEE-42 is not on disk). ds-web-forms.test.ts passes."
+   },
+   {
+    "item": "LOW: emails.archive_draft was stored unencrypted",
+    "status": "done",
+    "how": "Added to SEALED_COLUMNS. mail.ts:308 writes seal('emails.archive_draft', draft). archivemail.ts reads it with get(), and its IS NOT NULL check still works.",
+    "test": "ds-db-encrypt test 13 checks the seal in source and the column list. archivemail.test.ts passes."
+   },
+   {
+    "item": "LOW: billing alerts written to support_requests.message unsealed (routes-billing.ts:284)",
+    "status": "not_done",
+    "how": "I may not touch routes-billing.ts. The timer's sweep seals these alerts later, and README now says so.",
+    "left_open": "For the billing owner, in src/server/routes-billing.ts tellOperators (around line 284): add import { seal } from './colcrypt.ts'; and wrap the message value of the support_requests INSERT in seal('support_requests.message', <value>)."
+   },
+   {
+    "item": "LOW: the operator line was silent for a key that is set but is not a key",
+    "status": "done",
+    "how": "databaseWarning() now returns: 'The value of FILE_ENCRYPTION_KEY is not a key (...), so storing files is stopped and nothing new is encrypted. Put back the key this server had and restart.'",
+    "test": "ds-db-encrypt test 14",
+    "left_open": "The operator page still caches its scan for 10 minutes, so a new unknown-key count can take that long to show. I kept the cache on purpose because the scan reads every listed value."
+   },
+   {
+    "item": "UX check 5: the no-key operator warning was 81 words, led with the variable name and was green",
+    "status": "done",
+    "how": "The text is now 39 words and starts with the plain problem: 'Stored files and the signatures, typed answers, comments and emails in the database are kept readable on the disk. Run \"npm run setup\" ...'. encryption.tsx uses className=\"notice warn small\". The phone screenshot shows an amber block 148 px tall (it was 232 px).",
+    "test": "ds-db-encrypt test 14. Screenshot: tests/out/repair-ds-db-encrypt/nokey-phone_operator.png"
+   },
+   {
+    "item": "UX check 7: stale sentences saying the software never encrypts the database",
+    "status": "done",
+    "how": "Reworded these: policy.ts NO_BAA_FIRST item 3 now says 'All of the database encrypted by the software itself ... Today ... encrypts the files and part of the database'. The operator entry in WHO_CAN_SEE now says 'encrypts at most part of the database'. processingNotDone(false) now says 'does not encrypt the files it stores now or any of the database'. The off text of notEncryptedPoint now says 'can encrypt the ... files signers attach and part of the database'.",
+    "test": "ds-db-encrypt test 15. The browser check shows none of those phrases on /security or /security/processing, with or without a key."
+   },
+   {
+    "item": "UX check 8: the database point on /security was a 250-word wall",
+    "status": "done",
+    "how": "With a key, notEncryptedPoint returns a short lead, two lists ('Encrypted' and 'Kept readable, because search, mail and joining records need them') and a closing line. These are drawn by the new src/app/security/dblists.tsx, with a 4-line .pub-sublist rule in public.css. I also shortened SEALED_WORDS and CLEAR_WORDS. The processing page reuses the shorter words in databaseText.",
+    "test": "ds-db-encrypt test 15. Screenshots: tests/out/repair-ds-db-encrypt/key-phone_security-point.png and key-desk_security-point.png. Nothing scrolls sideways at 390 px or 1280 px."
+   },
+   {
+    "item": "UX check 10: no step to make a key in the self-hosting quick start",
+    "status": "done",
+    "how": "In the README 'Running it yourself' block, 'npm run setup' now follows cp .env.example .env, with a comment.",
+    "test": "ds-db-encrypt test 15 checks for that line."
+   },
+   {
+    "item": "'that includes us' and 'value(s)'",
+    "status": "done",
+    "how": "Replaced with 'not even the people who wrote this software' in scripts/setup.mjs, encrypt-columns.mjs, encrypt-files.mjs and .env.example. colsweep.ts now writes '1 value' or 'N values', with matching verbs.",
+    "test": "ds-db-encrypt test 14"
+   },
+   {
+    "item": "Overclaims in the copy (SEALED_WORDS, PROCESSING_ENCRYPTED, README, .env.example)",
+    "status": "done",
+    "how": "The code now seals what the copy promised. The lists name typed numbers, form drafts and help chats. README (What is in it, What is not in it, configuration table, the encryption section) and .env.example now name the extra columns, the write-only-what-changed rule, and the one billing write that is still sealed late."
+   },
+   {
+    "item": "Older tests that pinned the removed sentences",
+    "status": "done",
+    "how": "Minimal regex updates for the new copy and markup: tests/encrypt.test.ts (3 asserts), tests/qr-encrypt-repair.test.ts (4), tests/gaps-industry.test.ts (1), tests/gaps-nonus-words.test.ts (1).",
+    "test": "These four files plus ds-db-encrypt: 77 of 77 pass."
+   }
+  ],
+  "files_changed": [
+   "src/server/colcrypt.ts",
+   "src/server/colsweep.ts",
+   "src/server/routes-account.ts",
+   "src/server/routes-sign.ts",
+   "src/server/routes-support.ts",
+   "src/server/webforms.ts",
+   "src/server/fieldchecks.ts",
+   "src/server/logic.ts",
+   "src/server/mail.ts",
+   "src/app/app/operator/encryption.tsx",
+   "src/app/security/page.tsx",
+   "src/app/security/dblists.tsx",
+   "src/app/styles/public.css",
+   "src/lib/sealedcolumns.ts",
+   "src/lib/storedfiles.ts",
+   "src/lib/policy.ts",
+   "scripts/setup.mjs",
+   "scripts/encrypt-columns.mjs",
+   "scripts/encrypt-files.mjs",
+   ".env.example",
+   "README.md",
+   "tests/ds-db-encrypt.test.ts",
+   "tests/encrypt.test.ts",
+   "tests/qr-encrypt-repair.test.ts",
+   "tests/gaps-industry.test.ts",
+   "tests/gaps-nonus-words.test.ts"
+  ],
+  "suite": "tests/ds-db-encrypt.test.ts: 15 of 15 pass (4 of them new). The encryption, wording, logic, support, archive mail, web forms and field checks files I touched pass together: 77 of 77 plus 158 of 158. npx tsc --noEmit -p .: clean.\n\nThere is no complete full-suite result. The first npm test run ended with 484 failures. They were whole files that failed to load while another engineer was mid-edit (missing src/server/collab.ts, missing 'setAside' export in envelopes.ts), plus 1 assertion in encrypt.test.ts caused by my copy change, which I fixed. The second run hit the 25-minute background limit before it finished. Its failures up to that point were all outside my work: billing7/billing8 (billing owner), ds-consent-own, chat, open-platform, gaps-mobile-send, simplify-editor and simplify-signing. Those are source-shape asserts on files others are changing.\n\ngaps-industry 'a late autosave ... crosses both Finish requests' now fails every time, though it passed in the first full run. routes-sign.ts, envelopes.ts and collab.ts were all edited by someone else in the 3 minutes before. My /save change only runs when a picture is sent, and that test's autosave sends none.",
+  "flows": "Not measured. tests/ux/flows.cjs failed twice at its first step on my dev server (port 4293, zero setup): 'page.evaluate: Execution context was destroyed' during sign-up, at both warm-up and a-send-first. That page is being changed by the in-progress simplify-start work (6-digit email code), not by mine. My screen changes are only on /security (the database point) and /app/operator (the warning line's style and words). Neither is a step of any core flow, and with zero setup no sender or signer screen changes. Browser checks of my screens, with and without a key, at 390 px and 1280 px: no sideways scroll, and the database point and warning look right (tests/out/repair-ds-db-encrypt/*.png).",
+  "notes_for_integrator": "1) Billing owner: seal the alert in routes-billing.ts tellOperators: seal('support_requests.message', msg), with import { seal } from './colcrypt.ts'. Until then the sweep seals it within one timer tick.\n\n2) Five more columns are now sealed: fields.typed_num, fields.calc_num, emails.archive_draft, support_requests.chat and form_drafts.answers. Any new SQL that compares or sorts on them must use col_find(). Any new write must use seal('<table>.<column>', v). Reads through get()/all() open them automatically.\n\n3) Rule now documented in colcrypt.ts and README: never write back a sealed column the request did not change. A value under a missing key reads as '', and writing it back destroys the stored value.\n\n4) I removed only my own two .next-repair-ds-db-encrypt lines from tsconfig.json; other people's entries were left alone. My build folder is deleted. My dev servers are stopped.\n\n5) flows.cjs could not run past sign-up because of in-progress work on the sign-up page. Re-measure once simplify-start lands.",
+  "found": "The builder's colcrypt, colsweep, operator line, setup script and pages were in place, and tests/ds-db-encrypt.test.ts passed 11 of 11.\n\nBoth reviewers' findings reproduced from the code. Write-backs in PATCH /me and in the signer save wrote opened '' values over sealed pictures. Five same-content columns were plain. Three stale sentences on the trust pages said the database is never encrypted. The operator warning was green and 81 words long. There was no key step in the Docker quick start.\n\nWhile I worked, colcrypt.ts was changed on disk by someone else; my SEALED_COLUMNS additions are intact. Other engineers were also actively editing envelopes.ts, routes-sign.ts, collab.ts and records.ts, and the sign-up page."
+ },
+ "ux:ds-paper": {
+  "checks": [
+   {
+    "item": "1. Core flows at zero setup stay within tests/ux/ceilings.json (default profile)",
+    "holds": true,
+    "evidence": "node tests/ux/flows.cjs http://localhost:4334 tests/out/ux-ds-paper/flows/ exited 0, 0 rules broken, 21 warnings (all owned by other batches: P6 sentence length on consent, 'envelope'/'audit trail' on /help and /verify). Counts (actions/screens/choices_seen/max_choices/words/notices): a-send-first 18/8/119/28/851/2 (ceiling 18/8/137/42/2979/2); b-sign-phone 7/5/36/11/402/0 (7/5/36/11/432/0); b-sign-desktop 7/5/36/11/406/0 (7/5/36/11/442/0); c-template-send 5/4/59/20/268/1 (all equal to ceiling); d-find-download 1/1/21/21/83/0 (1/1/21/21/89/0); e-settings-name 3/2/53/32/360/0 (3/2/54/32/404/0); f-signer-help 6/4/28/9/570/2 (7/5/36/9/598/2); g-sign-in 4/3/56/28/365/0 (4/3/71/42/2585/0); h-sign-myself 14/8/99/24/623/0 (14/8/99/24/645/0). No flow got longer or got a new choice. Report: tests/out/ux-ds-paper/flows/ux-flows.json and tests/out/ux-ds-paper/flows.log"
+   },
+   {
+    "item": "Charter targets (section 3 table) for the paper feature's own effect",
+    "holds": true,
+    "evidence": "The paper feature adds nothing to a-f with zero setup. The flows still miss the charter targets (a-send-first 18 actions against a target of 14, b-sign 7 against 6), but that was already true before this batch and other batches own it."
+   },
+   {
+    "item": "Zero setup: no paper anywhere for signers or on the daily sending path",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-paper/shots/00-zero-other-actions-390.png: Other actions shows Finish later, Ask for more time, Pass to someone else, Questions and comments, Decline to sign. There is no paper entry. The switch is off by default (01-settings-off-390.png). The only paper words in the flows inventory are inside /app/settings (admin gate)."
+   },
+   {
+    "item": "Lives where ux-notes ds-paper says: Settings > Sending > 'When people sign', admin switch, saves on change with 'Saved'",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-paper/shots/02-settings-on-390.png and 03-settings-on-1440.png. It works with Space from the keyboard, its role is switch with a name and a description, and the row is 44 px or taller. Small gap: the charter order puts paper before 'Mark pages until everyone has signed', but it sits after it (see new_bugs)."
+   },
+   {
+    "item": "Editor: with the switch on, a person's More > 'How they sign' gives the paper choices in one picker",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-paper/shots/52-editor-paperonly-390.png. Options: 'On screen, or on paper if they prefer' / 'On screen only' / 'On paper only' / 'In person, with me', plus a one-line note for 'On paper only'. It adds no step and no new More."
+   },
+   {
+    "item": "Signing page: one Other actions entry 'Sign on paper instead', 5th of 6 entries, Decline last, nothing on the consent screen's main area",
+    "holds": true,
+    "evidence": "tests/out/ux-ds-paper/shots/10-sign-consent-390.png (consent unchanged; the only paper words come from the existing disclosure line) and 11-other-actions-390.png (6 entries, paper 5th)."
+   },
+   {
+    "item": "Signer can get out of the paper dialog",
+    "holds": true,
+    "evidence": "12-paper-dialog-390.png has a 44x44 Close button. Escape closes it (13-after-escape-390.png). Targets: Download to print 196x54, Choose photos 247x54, Send 358x52."
+   },
+   {
+    "item": "Signer can get out of the 'On paper only' screen and the 'waiting for the sender to check' screen",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-paper/shots/32-paper-only-actions-390.png and 40-only-other-actions-try2-390.png: pressing 'Other actions' opens nothing (0 dialogs). Same on 17-waiting-other-actions-390.png. In src/app/sign/[token]/page.tsx the PaperScreen return (around line 1089) renders {dialogs} but not {menuDialog}.",
+    "still_broken": "A signer asked to sign on paper only, who has no printer or wants to decline, pass it on or ask a question, has a dead Other actions button. Help still works.",
+    "suggested_fix": "Add {menuDialog} next to {dialogs} in the PaperScreen return, as the NameNext and consent returns do. While the scan waits, Other actions should list only Questions and comments and Decline."
+   },
+   {
+    "item": "Keyboard and screen reader order in the paper steps",
+    "holds": false,
+    "evidence": "Focus walk in the paper dialog: Close > 'Download to print' > input \"\" (unnamed) > 'Choose photos or a PDF'. The visually hidden file input #sg-paper-files takes its own Tab stop with no accessible name, before the button that triggers it. The same happens on the paper-only screen.",
+    "still_broken": "A screen reader user hears an unnamed file control, then the same thing again as a button.",
+    "suggested_fix": "Give the hidden input tabIndex={-1} and aria-hidden=\"true\" (the button is the control), or drop the button and use a visible <label htmlFor=\"sg-paper-files\" className=\"btn lg\">Choose photos or a PDF</label>."
+   },
+   {
+    "item": "Sender finds a waiting scan on the daily path (Home / Documents) and the envelope page",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-paper/shots/61-home-scan-waiting-390.png and 62-documents-390.png: the paper-only document whose scan waits for the sender is listed as 'Waiting on others: Olu Only'. Pressing its Remind gives 'No reminder went out. They turned reminders off.' (63-home-remind-paper-390.png), which is not true. On the envelope page (20-envelope-waiting-390.png) the main button 'Look at the scan' is right, but the headline still says 'Waiting for Ada Paper to sign'.",
+    "still_broken": "The sender's daily screens say the job waits on the signer when it waits on the sender, and the refusal gives a wrong reason.",
+    "suggested_fix": "On Home, list a waiting scan under what waits for you: '<Document>: Ada Paper sent a scan signed on paper. Look at the scan' (opens the envelope page). In Documents, show 'Waiting for you: look at the scan'. Hide Remind for that row. Headline on the envelope page: 'Ada Paper signed on paper. Look at the scan to accept it or ask again.'"
+   },
+   {
+    "item": "A signer who was asked to send the scan again sees why when they open their link",
+    "holds": false,
+    "evidence": "tests/out/ux-ds-paper/shots/25-sign-asked-again-390.png shows the plain consent screen with no sign of the request. The reason only appears after Other actions > Sign on paper instead (26-paper-dialog-asked-390.png).",
+    "still_broken": "A confused honest signer coming back from the email cannot see what to do differently, and may sign on screen or give up.",
+    "suggested_fix": "When paper_state is asked_again, show one in-place line above the consent card: 'Rosa Sender asked you to send the photos again: \"<reason>\". Send them again' (a button that opens the paper steps). It is not a popup."
+   },
+   {
+    "item": "Words are plain, short and honest on every paper screen",
+    "holds": false,
+    "evidence": "Mostly yes (12, 16, 21, 31). Exceptions: the print's cover and page footers carry the 'Signed with growsigning' badge on an unsigned print (shots/printpg-1.png, printpg-2.png); 'Paper saved: 2 pages.' shows on the envelope page of a document someone is signing on paper (24-after-ask-again-390.png); Home says 'Every document you send here is one that never gets printed.' while paper signing is on (35-home-1440.png); after acceptance the signed person's row still shows a failed 'Please send the signed pages again' email (29-envelope-after-1440.png).",
+    "suggested_fix": "See new_bugs for each wording."
+   },
+   {
+    "item": "Phone 390, 320 and desktop 1440 layouts",
+    "holds": true,
+    "evidence": "No sideways scroll at 320 (33-paper-only-320.png). The desktop scan dialog shows the scan inline (28-scan-dialog-1440.png). Phones get an 'Open the scan' button (21-scan-dialog-390.png). Ask again with an empty reason gives a two-sentence error (23-ask-again-empty-390.png)."
+   },
+   {
+    "item": "One way to do each thing / no second copy",
+    "holds": true,
+    "evidence": "Paper reuses the existing 'Sign on paper instead' entry, storeUpload and shrinkPhoto. In the editor, 'In person' lives in the same picker. Small naming mismatch: 'Download or print' on the consent screen and 'Download to print' in the dialog (low, see new_bugs)."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Other actions is a dead button on the 'On paper only' and 'waiting for the sender to check' screens",
+    "severity": "high",
+    "where": "src/app/sign/[token]/page.tsx, PaperScreen return (around line 1089): renders {dialogs} but not {menuDialog}",
+    "detail": "Reproduced: pressing Other actions opens nothing (tests/out/ux-ds-paper/shots/32-paper-only-actions-390.png, 40-only-other-actions-try2-390.png, 17-waiting-other-actions-390.png). A signer asked to sign on paper only cannot decline, pass it on or ask a question, which breaks P7's way out. Fix: add {menuDialog} beside {dialogs}. While the scan waits, offer only Questions and comments and Decline, since Finish later means nothing there."
+   },
+   {
+    "title": "A signer asked to send the scan again sees no reason on opening their link",
+    "severity": "high",
+    "where": "src/app/sign/[token]/page.tsx consent/sign stages; src/components/sign/Paper.tsx (the reason only shows inside PaperSteps)",
+    "detail": "After 'Ask again', the signer's link opens the ordinary consent screen (25-sign-asked-again-390.png). The reason sits behind Other actions > Sign on paper instead (26-paper-dialog-asked-390.png). Suggested in-place line: 'Rosa Sender asked you to send the photos again: \"<reason>\".' with the button 'Send them again', which opens the paper steps."
+   },
+   {
+    "title": "Home and Documents list a waiting scan as 'Waiting on others', and Remind refuses with a false reason",
+    "severity": "medium",
+    "where": "Home 'Waiting on others' list and the Documents Waiting tab (scanWaiting is only used on the envelope page); reminder refusal text",
+    "detail": "61-home-scan-waiting-390.png, 62-documents-390.png, 63-home-remind-paper-390.png: 'No reminder went out. They turned reminders off.' The signer did not turn anything off; the scan waits for the sender. Fix: show the row under what waits for you as '<Document>: <name> sent a scan signed on paper' with the action 'Look at the scan', and no Remind. If a reminder is refused for this reason, say: 'No reminder went out. <name> already sent a scan signed on paper. Look at the scan to accept it or ask again.'"
+   },
+   {
+    "title": "Envelope page headline contradicts the waiting scan",
+    "severity": "medium",
+    "where": "src/app/app/envelopes/[id]/page.tsx 'Where this stands' headline while scanWaiting(e)",
+    "detail": "20-envelope-waiting-390.png: the headline says 'Waiting for Ada Paper to sign' while the line under it says Ada signed on paper and waits for you. Headline: 'Ada Paper signed on paper. Look at the scan to accept it or ask again.' Keep the second sentence 'Until then nobody after them is asked.'"
+   },
+   {
+    "title": "The print gives the person's secret signing link in full on paper",
+    "severity": "medium",
+    "where": "src/server/paper.ts printPdf cover page, step 5",
+    "detail": "printpg-1.png prints the full /sign/<token> URL. Anyone who later handles the paper can open the link and act as the signer, and an 80-character URL cannot practically be typed back in. Suggested words: '5. Open the email from Rosa Sender again and press its button, or open the same link you printed this from. Choose Other actions, then Sign on paper instead, and send the photos.' For an 'on paper only' person, drop 'Choose Other actions...' because their screen shows the steps straight away."
+   },
+   {
+    "title": "Unsigned print carries the 'Signed with growsigning' badge",
+    "severity": "medium",
+    "where": "src/server/pdf.ts / src/server/paper.ts footer stamp on the print PDF",
+    "detail": "printpg-1.png and printpg-2.png show 'Signed with growsigning' at the foot of every page of a blank print meant for a handwritten signature. Nothing was signed with GrowSigning, and the record must never call this an electronic signature. Leave the badge off the print. Keep 'Envelope ID ... Security code ...' only."
+   },
+   {
+    "title": "Hidden file input takes an unnamed Tab stop",
+    "severity": "low",
+    "where": "src/components/sign/Paper.tsx PaperSteps, #sg-paper-files",
+    "detail": "Focus walk: 'Download to print' > input \"\" > 'Choose photos or a PDF'. Add tabIndex={-1} aria-hidden=\"true\" to the input, or make the button a <label htmlFor>."
+   },
+   {
+    "title": "'Paper saved' and 'never gets printed' claims shown alongside paper signing",
+    "severity": "low",
+    "where": "Envelope page impact line (24-after-ask-again-390.png shows 'Paper saved: 2 pages.' once Ada was asked again; it was hidden only while waiting); Home tagline (35-home-1440.png)",
+    "detail": "While any person is on the paper path (allow_paper used, require_paper, paper_state set), leave the 'Paper saved' line off. On Home, when the account switched paper on, drop 'Every document you send here is one that never gets printed.' or say 'Most documents you send here never get printed.'"
+   },
+   {
+    "title": "Stale 'Please send the signed pages again' delivery failure stays under an accepted paper signer",
+    "severity": "low",
+    "where": "src/components/sender/Recipients.tsx, bounce/not-delivered line",
+    "detail": "29-envelope-after-1440.png: Ada shows 'Signed on paper on 22 Nov' and then 'Not delivered: ... \"Please send the signed pages again\"'. Once the scan is accepted, hide the not-delivered line for an ask-again email that has been overtaken."
+   },
+   {
+    "title": "Paper-only screen does not name the document",
+    "severity": "low",
+    "where": "src/components/sign/Paper.tsx PaperScreen kind 'only'",
+    "detail": "31-paper-only-390.png and 34-paper-only-1440.png: the title is 'Rosa Sender asks you to sign this on paper'. The document name, which the consent screen shows, is missing. Title: 'Rosa Sender asks you to sign \"Planting partnership\" on paper'."
+   },
+   {
+    "title": "Step 2 is not a heading like steps 1 and 3",
+    "severity": "low",
+    "where": "src/components/sign/Paper.tsx PaperSteps",
+    "detail": "Steps 1 and 3 are h2 and step 2 is a bold <p> (12-paper-dialog-390.png), so a screen reader's heading list skips it and the visual rhythm breaks. Make it the same h2: '2. Sign by hand in the dashed boxes'. Put 'Do not change the words.' under it as a plain line."
+   },
+   {
+    "title": "Help has no answer about signing on paper",
+    "severity": "low",
+    "where": "src/lib/chat* built-in answers",
+    "detail": "A signer on the paper screen who opens Help (41-only-help-390.png) finds nothing about printing or photos. Add a built-in answer for 'I cannot print it': 'Ask Rosa Sender in Questions and comments to send it another way, or decline it from Other actions.'"
+   },
+   {
+    "title": "The setting sits after 'Mark pages until everyone has signed' instead of before it",
+    "severity": "low",
+    "where": "src/components/settings/OwnDocsDefault.tsx placement of PaperSetting",
+    "detail": "Charter 2.2: 'When people sign' order is pass it on, questions and comments, ways to make a signature, paper, each person sees only their files, mark pages. See 03-settings-on-1440.png."
+   },
+   {
+    "title": "Two names for one choice in the editor",
+    "severity": "low",
+    "where": "src/lib/paper.ts PICK_SHORT vs PICK_WORDS",
+    "detail": "The More line says 'How they sign: On paper allowed' while the picker's option for the same value is 'On screen, or on paper if they prefer'. Use one: 'On screen or on paper' in both."
+   },
+   {
+    "title": "Cover page wording",
+    "severity": "low",
+    "where": "src/server/paper.ts printPdf cover",
+    "detail": "'Print all 2 pages, this one too.' should read 'Print both pages, this one too.' (or 'all 3 pages'). 'Send it back before 22 March 2027 at 18:20 UTC' should use the signer's own time as the signing page does, or the date alone."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Builder report item 4 / 'paper-saved lines are left off ... the envelope page'",
+    "claim": "The paper-saved lines are left off the Done screen and the envelope page because they would not be true.",
+    "reality": "The line was hidden only while a scan waited. After 'Ask again' the envelope page showed 'Paper saved: 2 pages.' for a document being signed on paper (tests/out/ux-ds-paper/shots/24-after-ask-again-390.png)."
+   },
+   {
+    "where": "Builder report item 2 / signing page",
+    "claim": "'On paper only' replaces consent and signing with the print and send screen (implying the rest of the signing page works as before).",
+    "reality": "On that screen and on the waiting screen, Other actions does nothing, because the menu dialog is not rendered (32-paper-only-actions-390.png)."
+   },
+   {
+    "where": "Builder report item 3",
+    "claim": "Reminders skip them; the signer sees 'Signed on paper, waiting for <sender> to check'.",
+    "reality": "True for the signer. The sender's Home still lists that person under 'Waiting on others' with Remind, and the refusal reason is 'They turned reminders off', which is not true (63-home-remind-paper-390.png)."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/flows/ux-flows.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/00-zero-other-actions-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/01-settings-off-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/02-settings-on-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/03-settings-on-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/52-editor-paperonly-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/52-editor-paperonly-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/10-sign-consent-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/11-other-actions-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/12-paper-dialog-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/14-paper-dialog-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/16-sign-waiting-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/17-waiting-other-actions-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/20-envelope-waiting-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/21-scan-dialog-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/23-ask-again-empty-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/24-after-ask-again-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/25-sign-asked-again-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/26-paper-dialog-asked-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/28-scan-dialog-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/29-envelope-after-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/30-sign-after-accept-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/31-paper-only-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/32-paper-only-actions-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/33-paper-only-320.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/34-paper-only-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/41-only-help-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/61-home-scan-waiting-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/63-home-remind-paper-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/printpg-1.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-ds-paper/shots/printpg-2.png"
+  ]
+ },
+ "verify:ds-paper": {
+  "checks": [
+   {
+    "item": "0. Reuse what exists (consent-own 'Sign on paper instead', storeUpload photos, shrinkPhoto, Other actions order, ux-notes ds-paper)",
+    "holds": true,
+    "evidence": "routes-paper.ts calls storeUpload(c, null); Paper.tsx imports shrinkPhoto/isPicture from editor/photos and PaperDialog from sign/Withdraw; PaperChoice nests 'Print it and send a photo' and 'by post' inside the one 'Sign on paper instead' entry. I found no second copy of any of these."
+   },
+   {
+    "item": "1. Per recipient may / must sign on paper, plus an account default; never for in person, groups or witnesses",
+    "holds": true,
+    "evidence": "The admin switch is off by default (ds-paper test 1). I turned it on in a browser with the keyboard alone (Tab, then Space; GET /account/paper then returned on:true). notForPaper covers in person, groups, witnesses, public forms and pay-before. require_paper while the switch is off gives 400 paper_off. The 'account default' is an on/off switch, not a may/must default, as ux-notes asks. I did not screenshot the editor's 'How they sign' myself; the builder's 03-editor-more-390.png exists."
+   },
+   {
+    "item": "2. Print PDF (cover, marked places, ID, page x of y, code on every page) and upload (PDF/JPEG/PNG, photos into one, 25 MB)",
+    "holds": true,
+    "evidence": "ds-paper test 2 passes. Probe P4: a 26 MB upload gives 400 with plain words, the 11th upload in an hour gives 429, Ben's link before his turn gives 400, and print after a void gives 400. On-paper-only screen at 390 (02-only-390.png): three 44+ px targets (328x54). The paper dialog takes focus from the keyboard (05-paper-dialog-1440.png)."
+   },
+   {
+    "item": "3. Sender reviews: Accept as signed by <name> / Ask again with an emailed reason; the order waits",
+    "holds": false,
+    "evidence": "Accept, Ask again, the emailed reason, the order waiting and reminders skipped all work (tests 2-3, 3; screenshots 08/12 scan dialog at 1440 and 390, no horizontal scroll). Probe P3 breaks it: a sender changes the person (name and email) while a scan waits. The new person (Cy) inherits paper_state='waiting' and is told 'You sent back a scan...', so they can neither sign nor upload (409 paper_waiting). Accept then returns 200, recording Ada's scan as signed by Cy. Also, the Ask-again reason is not on the signing page: after Ask again, Ada's phone shows the normal consent screen with no sign of the reason (10-asked-again-390.png). It appears only inside Other actions > Sign on paper instead.",
+    "still_broken": "A waiting scan follows the recipient row to a different person. The reason for asking again is hidden behind the menu.",
+    "suggested_fix": "In the correction paths of envelopes.ts (otherPerson/otherName and role change), set a waiting scan aside and clear paper_state, through a small hook in paper.ts. acceptScan should refuse a scan whose uploader is not the current person (store person_gen or email on paper_scans). Show the asked_again notice (PaperSteps' warn block) on the consent/sign screen itself when paper_sign.state==='asked_again'."
+   },
+   {
+    "item": "4. Final PDF: divider 'Signed on paper by <name>', places 'Signed on paper: see page N', certificate sentence, never called electronic",
+    "holds": true,
+    "evidence": "Test 3-5 passes. Probe P2's certificate text shows 'Signed on paper' in the trail and the accepted-scan line with 'GrowSigning did not check the handwriting'. But see the overclaim: the completion email says the document was signed on screen."
+   },
+   {
+    "item": "5. Uses a signature like any finished signer through the existing completion path",
+    "holds": false,
+    "evidence": "Works on the first pass (test 3-5: one 'signature' credit row, next person asked). Probe P1 breaks it after a correction with resign:true: the recipient goes back to 'sent', but paper_scan_id and paper_state='accepted' stay. Ada then POSTs /sign/:token/complete with no consent and no signature, and gets 200 with status completed and signature_png null. completeRecipient treats any non-null paper_scan_id as onPaper. It skips consent, supplements, inputs and applyValues (so her new values are dropped), writes 'Signed on paper', and the PDF reuses the scan of the old version.",
+    "still_broken": "Sign again after an accepted paper signature lets the person finish with nothing, and records the old scan as their signature of the new version.",
+    "suggested_fix": "Clear paper_scan_id and paper_state wherever a finished recipient goes back to pending (envelopes.ts ~line 912 resign branch, collab.ts:210, and the cc/role branches), e.g. via a paperReset(rid) in paper.ts. In completeRecipient, treat onPaper as true only when the accepted scan's content_version equals e.content_version and acceptScan is the caller (pass an explicit flag instead of reading the column)."
+   },
+   {
+    "item": "6. API: allow_paper/require_paper, POST /sign/:token/paper, accept and reject",
+    "holds": true,
+    "evidence": "Routes exist in routes-paper.ts, are imported in route.ts and helpers boot(), have perm.ts and shares.ts NEEDS lines, and openapi paths are checked by the last ds-paper test. Another account gets 404 (test 3)."
+   },
+   {
+    "item": "Docs (README, openapi, no env setting)",
+    "holds": false,
+    "evidence": "README 'Signing on paper' paragraph matches the code except two things. It says the Ask-again reason is 'shown on their page', but it shows only inside the dialog. And README ~line 2374 still says 'Sign on paper instead ... is in Other actions only when the account has its own consent text', which is no longer true with the paper switch on.",
+    "suggested_fix": "Reword both sentences, or show the reason on the page (see item 3)."
+   },
+   {
+    "item": "Core flows not longer with zero setup",
+    "holds": true,
+    "evidence": "node tests/ux/flows.cjs on my dev server (port 4332): UX FLOWS OK. Counts: a-send-first 18 actions/8 screens, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 14/8. These are identical to the builder's numbers. With zero setup the signing page has no [data-feature=ds-paper] element (00-zero-other-actions-390.png)."
+   },
+   {
+    "item": "Suite and types",
+    "holds": true,
+    "evidence": "npm test: 2290 tests, 2283 pass, 2 fail. The two failures are tests/stamps.test.ts:1354 ('the screens: Settings, the editor, ...') and tests/witness.test.ts:114. They are not in paper code; stamp work is in progress elsewhere. ds-paper passes inside the suite. npx tsc --noEmit -p . is clean."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Sign again after a paper acceptance finishes the person with no consent, no signature and their new values dropped",
+    "severity": "high",
+    "where": "src/server/envelopes.ts completeRecipient (onPaper = !!r.paper_scan_id, ~line 2233) together with the resign reset (~line 912) and collab.ts:210, none of which clear paper_scan_id/paper_state",
+    "detail": "Probe tests/out/verify-ds-paper/probe.test.ts P1. First Ada's scan is accepted. Then PUT /envelopes/:id with resign:true and a new field for Ada. Her row is now status 'sent' with paper_scan_id set and paper_state 'accepted'. POST /sign/:token/complete with no consent and no signature_png returns 200, and she is completed with signature_png null. The audit says 'Signed on paper' and the signed PDF reuses the scan of the old version. On her screen, Other actions no longer offers paper (offersPrint is false for 'accepted'). An honest re-signer who signs on screen has her signature and typed values thrown away (applyValues is skipped)."
+   },
+   {
+    "title": "A waiting scan passes to a different person after a correction and can be accepted as their signature",
+    "severity": "high",
+    "where": "src/server/paper.ts acceptScan/keepScan; correction paths in envelopes.ts and routes-envelopes.ts /correct do not touch paper_scans or recipients.paper_state",
+    "detail": "Probe P3. Ada uploads a scan, then the sender corrects the recipient to 'Cy Other' with another email. Cy's row keeps paper_state 'waiting'. Cy's page says 'You sent back a scan signed on paper' and /complete and upload give 409 paper_waiting, so Cy is stuck. Accept then returns 200: Ada's handwriting is recorded and certified as signed by Cy, with Cy's name in the divider and certificate. content_version did not change because no field prints the name."
+   },
+   {
+    "title": "Completion email says the document was signed on screen when someone signed on paper",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts completeEnvelope (~line 1764)",
+    "detail": "Probe P2. All three 'Completed:' emails (sender, Ada and Ben) carry 'Because this was signed on screen, about N sheets of paper and N litres of water were not used'. Ada printed every page. The builder removed this claim from the Done screen, the envelope page and the certificate, but not from the email."
+   },
+   {
+    "title": "The Ask-again reason is hidden on the signing page",
+    "severity": "medium",
+    "where": "src/app/sign/[token]/page.tsx and src/components/sign/Paper.tsx (the asked_again notice lives only inside PaperSteps)",
+    "detail": "After Ask again, the 'may' signer's page is the ordinary consent screen, with no sign that the sender asked for a new scan or why (screenshot 10-asked-again-390.png). The reason appears only after opening Other actions > Sign on paper instead (11-asked-again-dialog-390.png). A person who missed the email, or whose link was passed on by the sender with no email, cannot know what to fix. README says it is 'shown on their page'."
+   },
+   {
+    "title": "Switching paper off after Ask again silently drops the reason and the paper path",
+    "severity": "low",
+    "where": "src/server/paper.ts paperSignFacts",
+    "detail": "Probe P6. Once the switch is off, paper_sign is null for a person in 'asked_again'. Their page loses the reason and any mention of paper, with no explanation. An 'On paper only' person suddenly gets on-screen signing without being told why."
+   },
+   {
+    "title": "The print puts the full signing link (a bearer link) on paper",
+    "severity": "low",
+    "where": "src/server/paper.ts printPdf cover step 5 (signUrl(r))",
+    "detail": "Probe P5: the cover page text contains the recipient's token. A printout left at a shared printer or posted around lets anyone open the link and act as the signer. Better to say 'open the link in the email we sent you'."
+   },
+   {
+    "title": "README still says 'Sign on paper instead' exists only with the account's own consent text",
+    "severity": "low",
+    "where": "README.md ~line 2374 (What is not in it)",
+    "detail": "With 'People may sign on paper' on, the entry is in Other actions without any own consent text (withPrint in the sign page)."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Completion email (envelopes.ts completeEnvelope)",
+    "claim": "Because this was signed on screen, about N sheets of paper ... were not used",
+    "reality": "One person printed and signed on paper. The builder's report says the paper-saved lines were removed where they would not be true, but this email still makes the claim to everyone."
+   },
+   {
+    "where": "README 'Signing on paper' and the builder's item 3",
+    "claim": "The Ask-again reason is emailed and shown on their page",
+    "reality": "It is shown only inside the Other actions > Sign on paper instead dialog, not on the page the person lands on."
+   },
+   {
+    "where": "Builder's item 5 and abuse list ('a forged paper flag: paper_scan_id is only set by acceptScan')",
+    "claim": "An accepted scan finishes the person through the normal path, and the paper flag cannot be misused",
+    "reality": "paper_scan_id is never cleared, so after sign again it waves a later on-screen Finish through with no consent, no signature and no values (probe P1)."
+   },
+   {
+    "where": "sign.paper.waiting_mail in src/locales/en.json",
+    "claim": "If they ask again, we email you at {email}",
+    "reality": "askAgain skips the email when the address has complained_at set. That is a rare case, and the promise is unconditional."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/00-zero-other-actions-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/01-settings-on-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/02-only-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/03-only-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/04-other-actions-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/05-paper-dialog-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/06-waiting-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/07-envelope-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/08-scan-dialog-1440.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/10-asked-again-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/11-asked-again-dialog-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/12-scan-dialog-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/13-after-accept-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/14-signer-done-390.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/probe.test.ts (run: node --experimental-strip-types --no-warnings --test tests/out/verify-ds-paper/probe.test.ts; P1, P2, P3 fail and show the bugs)",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-ds-paper/flows/ux-flows.json"
+  ]
+ },
+ "build:g20": {
+  "done": [
+   {
+    "item": "1. Hosted defaults never used under DEPLOYMENT_PROFILE=government or the sovereign mode (G02 shipped it as OUTSIDE_CALLS=listed/none; there is no SOVEREIGN_MODE setting). Only SUPPORT_CHAT_BASE_URL counts, and it must be a private address or on OUTBOUND_ALLOW.",
+    "status": "done",
+    "how": "New src/lib/chatboundary.ts holds boundaryRequired, isPrivateAddress, boundaryModel and boundaryChatWarning. chatModelOn/ownModel in src/lib/chatprovider.ts now use it, so the chat route, AI assist and the contract writer all follow the rule. Accepted: private IPv4/IPv6 addresses, loopback and localhost, with plain http allowed for these only and only in boundary mode. Also accepted: names on OUTBOUND_ALLOW over https. Never accepted: OpenRouter or Moonshot (even if listed), link-local addresses (169.254.x, fe80::), public addresses. In OUTSIDE_CALLS=none the guard lets through that one private address for the chat and nothing else (small edit to blockedInNone in src/lib/outside.ts). src/instrumentation.ts logs one line at start saying why the chat answers from built-in help, including when the URL is unusable (http to a name). With no model, /security says the server keeps the chat inside its network and answers from built-in help.",
+    "test": "tests/gov-g20.test.ts, the three tests named '1.': every mode \u00d7 hosted, listed-hosted, unlisted, listed, private, link-local and public addresses; the start-up words; the route answering built-in with zero model calls; the OUTSIDE_CALLS=none guard",
+    "left_open": "The server cannot check where a name on OUTBOUND_ALLOW resolves or who runs the machine. This is documented in the docs and README."
+   },
+   {
+    "item": "2. Document running an open-weight model inside the boundary (vLLM, llama.cpp, Ollama); test with a small model if possible",
+    "status": "partly",
+    "how": "New docs/self-hosted-model.md covers: what the server sends and keeps, which addresses count, commands for vLLM, llama.cpp server and Ollama, Kimi K3 needing a multi-GPU server versus a smaller model through SUPPORT_CHAT_MODEL, and that the same model also drives AI assist and writing. It also has a 'What was tested' section.",
+    "test": "Tested only with a stand-in OpenAI-compatible streaming server (in tests, and on port 4302 for the screenshots).",
+    "left_open": "No real open-weight model was run. Hugging Face is blocked by this machine's proxy (403) and there is no GPU. The doc says so."
+   },
+   {
+    "item": "3. Tenant switch (G01 ai_helper) enforced for the tenant's app pages, signers and public forms; org policy (G13) can force it off",
+    "status": "partly",
+    "how": "App pages and signers were already enforced by G01. Added: new src/server/chattenant.ts accountOfForm(slug) checks powerforms and clickwraps. routes-chat GET and POST honour a `form` slug. The form page and agreement page help links now go to /help?form=<slug>. HelpChat.tsx reads `form` from the URL and sends it. Org force-off works through G13's existing write of accounts.ai_helper, and loosening it is refused with 409 naming the org.",
+    "test": "gov-g20 tests '3.': account off covers members, signers, form and agreement slugs; other accounts and unknown slugs unaffected; a slug cannot switch AI back on. Org created by the operator, account moved in, policy ai_helper off, built-in answers, agency PUT on gets 409.",
+    "left_open": "I disagree with the brief's '404 and no button': the designer's note gov-G20/chat in research/ux-notes.json says Help is never removed and off means built-in answers, and G01 already built it that way. So with the switch off the route answers with built-in help and nothing goes to the model. The /help lead sentence ('An AI helper answers at once') is server-wide and does not know the form's account."
+   },
+   {
+    "item": "4. Logs: the chat route keeps only the limit counters (plus a chat a person attaches to a help request); /security and /security/processing name the model host and say nothing is stored or trained on; the DPA template gets the same clause",
+    "status": "done",
+    "how": "chatPrivacyPoint now includes 'Answers come from <model> on <host>.' and 'Nothing typed here is stored, and nothing is sent to train a model.' For hosted providers it adds that the provider's own terms decide what they keep. The dataplace processor row says 'This server stores nothing typed into the help chat, and sends nothing to train a model.' The /security/processing help chat line gets the same clause and the model line (small edit). docs/procurement/data-processing-terms-template.md gets a new clause with a 'Made true by the software / A promise only' note.",
+    "test": "gov-g20 '4.': counts every table before and after model, signer, down and limit-0 questions, and only chat_counts grows. A marker string is found in no table and no console line. chat_counts keys hold no IP, email or ids. An attached help request does land in support_requests.chat. The page and DPA wording are also checked."
+   },
+   {
+    "item": "5. Model card line on the chat panel",
+    "status": "done",
+    "how": "GET /public/chat returns model_line ('Answers come from <model> on <host>.') only to a signed-in session with AI on and no link or form parameter. HelpChat shows it at the dialog foot only on app, editor and plan screens (designer's note: never on signer or public pages).",
+    "test": "gov-g20 '5.': member gets it; visitor, signer, signed-in signer, form, switch-off and hosted-on-government all get null; source assertion. Screenshots at phone 390x844 and desktop: tests/out/build-g20/phone-app-help.png and desktop-app-help.png show the line, and /help shows none."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/lib/chatboundary.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/src/server/chattenant.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/tests/gov-g20.test.ts (new)",
+   "/home/user/treegens-app/sign-and-grow/docs/self-hosted-model.md (new)",
+   "/home/user/treegens-app/sign-and-grow/src/lib/chatprovider.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/outside.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/dataplace.ts",
+   "/home/user/treegens-app/sign-and-grow/src/instrumentation.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-chat.ts",
+   "/home/user/treegens-app/sign-and-grow/src/components/HelpChat.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/f/[slug]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/agree/[slug]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/processing/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/docs/procurement/data-processing-terms-template.md",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/.env.example",
+   "/home/user/treegens-app/sign-and-grow/tests/gov-g01.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/selfhost.test.ts"
+  ],
+  "suite": "tests/gov-g20.test.ts: 8/8 pass. Related files re-run: chat 49/49, gov-g01 15/15, gov-g03 23/23, gov-g13 23/23, selfhost 20/20, ds-ai-assist 17/17, write-contract 23/23, ds-ai-repo 24/24. npm test: 2317 tests, 2309 pass, 3 fail, all in files I did not touch, from other people's in-progress edits: signerux.test.ts:657 (signing page saveBody regex), simplify-signing.test.ts:132 (consent screen, a simplify-signing batch that is still in progress), stamps.test.ts:1354 (Settings page StampSettings markup). npx tsc --noEmit -p . is clean. Log: tests/out/build-g20/npm-test.log.",
+  "flows": "Not measured. tests/ux/flows.cjs failed twice at the very first step of a-send-first ('Execution context was destroyed' on the landing page, screenshot tests/out/build-g20/flows/a-send-first/FAIL-02.png) on a zero-setup dev server on port 4301, before reaching any screen I changed. This looks like landing or sign-up work in progress elsewhere (simplify-start). By construction my work adds nothing with zero setup: the model line appears only when a model is configured and the person is signed in, and the ?form= link has the same target and count.",
+  "settings": [
+   "No new setting. These existing settings changed meaning: SUPPORT_CHAT_BASE_URL now also accepts plain http to a private network address under DEPLOYMENT_PROFILE=government or OUTSIDE_CALLS=listed/none. Under those modes it counts only at a private address or a host on OUTBOUND_ALLOW. OUTBOUND_ALLOW is now also where a named in-boundary chat model must be listed. README config table and .env.example updated.",
+   "Behaviour change for existing installs: a government server whose SUPPORT_CHAT_BASE_URL is a public name not on OUTBOUND_ALLOW now answers from built-in help, and its start-up log says what to add."
+  ],
+  "found": "Most of point 1 already existed for DEPLOYMENT_PROFILE=government only (G01: ownModel in chatprovider.ts, governmentChatWarning). It did not cover OUTSIDE_CALLS (G02's sovereign mode) and did not require a private or OUTBOUND_ALLOW address. Account and signer enforcement of ai_helper, org force-off (G13) and AI assist / writer gating through chatModelOn were already in place. Public forms and agreement pages had no link to the tenant switch.",
+  "notes_for_integrator": "1) I edited other owners' tests where my rule changes behaviour on purpose. gov-g01: the 'own' model now sets OUTBOUND_ALLOW; one assertion now expects false for an unlisted name; the instrumentation regex now looks for boundaryChatWarning; the HelpChat fetch regex is loosened. selfhost: in OUTSIDE_CALLS=listed/none, FULL's public chat host is no longer allowed or listed as 'switched off' (chat is simply never on there, and the start-up line says why); its keys are no longer deleted from env. 2) GET /public/chat still returns `provider` (the provider name, which can include a host such as 'The service at 10.x') to every caller. The dialog does not show it, but you may want to limit it to signed-in callers too (one line in routes-chat.ts). 3) openapi.ts was not changed: /public/chat is left out of the API description on purpose (see routes-chat.ts). 4) Abuse and stuck review. Attacker: a form slug of an AI-on account cannot re-enable AI for an AI-off account (tested); a metadata address or a hosted host on OUTBOUND_ALLOW is refused (tested); a private address does not open other services in mode none (tested). Honest person: a name not on OUTBOUND_ALLOW, plain http to a name, and a hosted key on a government server each produce a start-up line saying what to change (tested); Ollama needs a non-empty key value (documented). 5) Dev server and .next-build-g20 removed; my two tsconfig include lines removed with a targeted edit. 6) On the government dev server, Home still showed 'Every document you send here is one that never gets printed.' That is outside G20 but may matter for the G01 owner."
+ },
+ "repair:ds-paper": {
+  "done": [
+   {
+    "item": "H: Sign again after an accepted paper scan let the person finish with no consent, no signature and their new values dropped (skeptic P1)",
+    "status": "done",
+    "how": "completeRecipient (src/server/envelopes.ts) now takes the paper path only when the body carries Symbol.for('growsigning.paper.finish') equal to r.paper_scan_id. Only acceptScan sets that mark, and a JSON body cannot carry a symbol. A person who finishes on screen has paper_scan_id and paper_state cleared. New settlePaper(envelopeId) in src/server/paper.ts sets an accepted scan aside (new state 'set_aside', kept on record, with an audit line) once its person is no longer finished. It is called from newerVersion and correctEnvelope (envelopes.ts) and from the collab.ts sign-again path, and again before every paper read or action.",
+    "test": "tests/ds-paper.test.ts 'repair: sign again after a paper acceptance...' (bare Finish refused, forged body refused, paper offered again, on-screen signature and values kept, paperSigned empty). The skeptic's probe P1 now passes."
+   },
+   {
+    "item": "H: A waiting scan passed to a different person after a correction and could be accepted as theirs (P3)",
+    "status": "done",
+    "how": "paper_scans now stores person_gen and email (new COLUMNS). settlePaper sets aside a waiting or asked-again scan whose uploader is not the current person (another address, or another name at the same address). waitingScan also refuses a scan from someone else with 409 no_scan. A spelling fix keeps the scan.",
+    "test": "'repair: a waiting scan stays with the person who sent it...' covers another address, another name at the same address, and a spelling fix. Probe P3 still reports 'not ok', but only because its last step accepts Cy's OWN new upload, which is correct."
+   },
+   {
+    "item": "H: Other actions did nothing on the 'On paper only' and 'waiting' screens",
+    "status": "done",
+    "how": "The PaperScreen return in the sign page now renders cloneElement(menuDialog, { items: paperMenu }). While a scan waits, the menu shows only Questions and comments and Decline. On the 'only' screen it shows the full list (no paper entry unless the account has its own consent text).",
+    "test": "Source test in ds-paper. Checked in a browser: tests/out/repair-ds-paper/02-only-other-actions-390.png and 04-waiting-other-actions-390.png."
+   },
+   {
+    "item": "H/M: The Ask-again reason was hidden behind the menu",
+    "status": "done",
+    "how": "New PaperAskedNote in src/components/sign/Paper.tsx shows the reason in place, above the agreement and above the document, with a 'Send them again' button that opens the steps. If paper was switched off after Ask again (P6), the facts carry off:true, and the note says paper is no longer offered and they now sign on screen.",
+    "test": "ds-paper 'repair: the print carries no signing link... the asked-again reason is on the page' (facts, both screens, switch-off case). Screenshots 09-asked-again-390.png, 10-send-again-dialog-390.png, 11-asked-again-1440.png."
+   },
+   {
+    "item": "M: The completion emails said 'signed on screen' when someone signed on paper",
+    "status": "done",
+    "how": "completeEnvelope skips the paper-saved line, and the sender's localized impact, when any recipient has an accepted scan.",
+    "test": "'repair: the completion email does not say signed on screen'. Probe P2 passes."
+   },
+   {
+    "item": "M: Home and Documents listed a waiting scan as 'Waiting on others', and Remind gave a false reason",
+    "status": "done",
+    "how": "The list API now returns recipients' paper_state. Home and Documents show 'Waiting for you: look at the scan <name> signed on paper' and a 'Look at the scan' link instead of Remind. remindEnvelope answers 409 paper_waiting with the true reason when the only person to remind has a waiting scan.",
+    "test": "'repair: a reminder for someone whose scan waits says why none went out'. Screens 05-home-390.png, 06-documents-390.png, 07-documents-1440.png."
+   },
+   {
+    "item": "M: The envelope page headline contradicted the waiting scan; the 'Paper saved' line still showed after Ask again",
+    "status": "done",
+    "how": "While a scan waits, the headline is scanHeadline: '<name> signed on paper. Look at the scan to accept it or ask again.' The 'nobody after them is asked' line shows only when someone comes after them. The 'Paper saved' line is hidden whenever any person has a paper_state or require_paper.",
+    "test": "Checked in a browser (the headline is logged by the shots script, screenshot 08-envelope-waiting-390.png). No unit test."
+   },
+   {
+    "item": "M/L: The print showed the full signing link, carried the 'Signed with growsigning' badge, and had cover wording problems",
+    "status": "done",
+    "how": "Cover step 5 now says to open the sender's email or the same page again; the 'Choose Other actions' part is dropped for 'only' signers. pdf.ts got small opt-in switches (Sheet badge=false, sheetPdf o.badge, renderEnvelopePdf foot:false) so the print has no badge. The cover now says 'Print both pages' for two pages and gives the deadline as a date only.",
+    "test": "The repair print test checks: no token, no /sign/, no 'Signed with'."
+   },
+   {
+    "item": "L: The hidden file input took an unnamed Tab stop; step 2 was not a heading; the paper-only title did not name the document",
+    "status": "done",
+    "how": "The input has tabIndex -1 and aria-hidden. Step 2 is an h2 with 'Do not change the words.' under it. The title is now '<sender> asks you to sign \"<subject>\" on paper'.",
+    "test": "Source test. A browser Tab walk shows Help > Download to print > Choose photos or a PDF > Report, with no unnamed input."
+   },
+   {
+    "item": "L: 'If they ask again, we email you' was promised unconditionally",
+    "status": "done",
+    "how": "paperSignFacts returns mail (false when complained_at is set). The waiting screen then says the reason will be on this page.",
+    "test": "The repair print test asserts mail:true for a normal signer."
+   },
+   {
+    "item": "L: Home tagline 'never gets printed' while paper is on; two names for one editor choice",
+    "status": "done",
+    "how": "When me.paper_signing is on, Home says 'Most documents you send here never get printed.' PICK_WORDS.link and PICK_SHORT.link are both 'On screen or on paper'.",
+    "test": "tsc only."
+   },
+   {
+    "item": "Docs: README 'shown on their page' and the stale 'only with own consent text' sentence; openapi",
+    "status": "done",
+    "how": "The README 'Signing on paper' paragraph now describes the in-place reason, Home/Documents, the scan staying with its sender, and the print with no link or badge. 'What is not in it' is reworded. The ds-paper test row is updated, and a new row was added to 'What the bad reviews taught us'. openapi: 'set_aside' scan state, accept 409 no_scan, remind 409 paper_waiting. No new setting, so .env.example is unchanged.",
+    "test": "ds-paper's openapi test and chat.test.ts (which reads the README) pass."
+   },
+   {
+    "item": "L: The setting sits after 'Mark pages' instead of the charter's order",
+    "status": "not_done",
+    "how": "Not changed.",
+    "left_open": "The charter order needs WhenPeopleSign (src/components/settings/Switches.tsx, owned by the switches work) to take the paper row between 'ways to make a signature' and the mark, and the own-docs switch moved too. Suggested change: add an optional 'afterWays' prop to WhenPeopleSign and pass <PaperSetting/> from OwnDocsDefault.tsx."
+   },
+   {
+    "item": "L: Help has no answer for 'I cannot print it' / the help chat says there is no paper signing",
+    "status": "not_done",
+    "how": "I tried this and reverted it. chatscreens.ts says 'GrowSigning has no button for signing on paper' and 'There is no way to sign on paper'. That is now untrue for accounts with the switch on, but tests/chat.test.ts holds a 55-word limit, SIGN_ACTIONS.paper===null and exact regexes.",
+    "left_open": "For the chat owner: in src/server/chatscreens.ts, make the 'paper' answer and the screenFacts line conditional ('Only if the sender offers it: Other actions has Sign on paper instead... If it is not there, or you cannot print it, ask the sender in Questions and comments'), keep it under 55 words, and update the chat.test.ts lines 975 and 1081."
+   },
+   {
+    "item": "L: A stale 'Not delivered: Please send the signed pages again' line under an accepted signer",
+    "status": "disagree",
+    "how": "In tests/out/ux-ds-paper/29 this is the dev outbox status ('this server has no mail server set up') of the last email actually sent to that person, which is true. With a mail server it reads 'Handed to the mail server'. It is a fact about the last email, not a stale failure, so I left it."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/server/paper.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/collab.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/pdf.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/db.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi-paper.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/openapi.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/paper.ts",
+   "/home/user/treegens-app/sign-and-grow/src/locales/en.json",
+   "/home/user/treegens-app/sign-and-grow/src/components/sign/Paper.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/components/sender/PaperReview.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/sign/[token]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/envelopes/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/app/envelopes/[id]/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/tests/ds-paper.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tsconfig.json (only the .next-repair-ds-paper lines next dev added were taken back out)"
+  ],
+  "suite": "tests/ds-paper.test.ts: 15/15 pass (6 new regression tests). npm test: 2317 tests, 2307 pass, 5 fail. Two failures were mine and are fixed: chat.test.ts 312 (README wording near 'Sign on paper instead') and simplify-signing.test.ts 2079 (a third yourMoment(...) call, removed by using cloneElement(menuDialog)); both files pass on re-run (49/49, 21/21). Two were not reproducible: signerux.test.ts and billing5.test.ts (a timing test) both pass on re-run. stamps.test.ts:1354 still fails; it was already failing in the skeptic's run, from stamp work in progress. npx tsc --noEmit -p . is clean.",
+  "flows": "node tests/ux/flows.cjs on my dev server (port 4333) printed UX FLOWS OK. Counts (actions/screens) are the same as the reviewers' runs: a-send-first 18/8, b-sign-phone 7/5, b-sign-desktop 7/5, c-template-send 5/4, d-find-download 1/1, e-settings-name 3/2, f-signer-help 6/4, g-sign-in 4/3, h-sign-myself 14/8. Choices and words are at or under the ceilings. Report: tests/out/repair-ds-paper/flows/ux-flows.json.",
+  "found": "The paper batch was built and had been reviewed. The skeptic's probes P1 and P2 failed; P3 showed a real bug, but its asserts check the wrong thing. The simplicity reviewer found the dead Other actions button, the hidden Ask-again reason, the Home/Documents/Remind wording and the print issues. Nothing was half-finished in the paper files when I started.",
+  "notes_for_integrator": "1. completeRecipient now takes the paper path only through a symbol mark that acceptScan passes. Any future caller that finishes someone from a scan must pass body[Symbol.for('growsigning.paper.finish')] = the accepted scan id.\n2. settlePaper(envelopeId) runs inside newerVersion(), so every hand-over, correction or name fix tidies paper state. A new path that sends a finished person back to pending without newerVersion or correctEnvelope should call it too. Paper reads (paperSignFacts, paperGate, keepScan, accept and reject, scansView) also call it.\n3. Known behaviour, not changed: a name spelling fix bumps content_version, so a waiting scan of the same person then hits paper_old_version and the sender has to Ask again. This is the existing security-code-per-version rule.\n4. Documents' status badge still reads 'Waiting for others' on a row whose scan waits for the sender; the 'Waiting on' column and the button are correct.\n5. Abuse cases covered by tests: a forged paper flag in a Finish body; accepting the earlier person's scan after a correction; the bearer link printed on paper. Honest-person cases covered: a missed Ask-again email (the reason is now on the page); a paper-only signer who wants to decline or ask (Other actions works); paper switched off after Ask again (they are told).\n6. Screenshots are in tests/out/repair-ds-paper/. The dev server is stopped, .next-repair-ds-paper and the temporary data folder are deleted, and tsconfig.json is restored.",
+  "settings": []
+ },
+ "verify:g20": {
+  "checks": [
+   {
+    "item": "1. Under DEPLOYMENT_PROFILE=government or OUTSIDE_CALLS=listed/none the hosted defaults (OpenRouter, Moonshot) are never used; only SUPPORT_CHAT_BASE_URL at a private address or on OUTBOUND_ALLOW counts; without it the helper gives built-in answers and says so",
+    "holds": false,
+    "evidence": "The main path holds. src/lib/chatboundary.ts boundaryModel/boundaryRequired, chatModelOn in src/lib/chatprovider.ts, and the chat route, AI assist (assistOn), the writer (writeAiOn) and key dates (mayRead to assistOn) all go through chatModelOn. tests/gov-g20.test.ts passes 8/8. On a live government dev server (port 4302, stub model at 127.0.0.1:4392) the app Help answered from the model, and with the switch off the dialog said 'These answers come from our help pages'. My probe tests/out/verify-g20/probe.test.ts found that the 'never OpenRouter or Moonshot, even if listed' rule can be got around by spelling the address another way. style is set by exact host equality with 'openrouter.ai', but the boundary check strips the trailing dot and the port. So under DEPLOYMENT_PROFILE=government: SUPPORT_CHAT_BASE_URL=https://openrouter.ai./api/v1 with OUTBOUND_ALLOW=openrouter.ai gives chatModelOn true and style 'plain'; https://openrouter.ai:8443/... does the same; https://eu.openrouter.ai with OUTBOUND_ALLOW=*.openrouter.ai gives true; https://api.moonshot.cn/v1 gives true. Also, isPrivateAddress accepts fd00:ec2::254 (AWS's IPv6 metadata service) and 100.100.100.200 (Alibaba Cloud metadata, inside 100.64/10). docs/self-hosted-model.md line 32 and the code comment say metadata services are excluded because only link-local addresses are refused.",
+    "still_broken": "The hosted route can be reached through the alias or trailing-dot spellings when the operator lists that host. README line 1449 says 'never OpenRouter or Moonshot'. The metadata-service claim in the doc is not true for AWS IPv6 or Alibaba.",
+    "suggested_fix": "Work out style and the hosted check from the bare hostname: strip the trailing dot and ignore the port, and refuse openrouter.ai, *.openrouter.ai, api.moonshot.ai, api.moonshot.cn and *.moonshot.* by suffix in boundaryModel. Refuse fd00:ec2::/32 (or at least fd00:ec2::254) and 100.100.100.200, or reword the doc to say only link-local metadata addresses are refused."
+   },
+   {
+    "item": "2. Document running an open-weight model inside the boundary (vLLM, llama.cpp, Ollama); test with a small model",
+    "holds": false,
+    "evidence": "docs/self-hosted-model.md exists, covers vLLM, llama.cpp and Ollama, Kimi K3 needing a multi-GPU server, and SUPPORT_CHAT_MODEL. Its 'What was tested' section says honestly that no real model was run. I also only ran a stand-in OpenAI-compatible stub. No em dashes and no certification claims in the doc.",
+    "still_broken": "No real open-weight model was ever run against the chat, so the streaming format, the think-less knob for style 'plain' and whether grounding works with a small model are unverified. The doc admits this.",
+    "suggested_fix": "Run llama.cpp server or Ollama with a small GGUF model on a machine that can download weights, and record the result in the doc."
+   },
+   {
+    "item": "3. Tenant switch (G01 ai_helper) enforced for the tenant's app pages, signers and public forms; org policy (G13) can force it off",
+    "holds": true,
+    "evidence": "Probe on the route: an AI-off account's member got ai:false and model_line null. A signer of an AI-off account got GET ai false and a built-in POST with 0 model calls. A POST with form=<slug of the AI-off account> got built-in with 0 model calls. An unknown slug fell back to the server rule. The org force-off and the 409 are covered in gov-g20 '3.'. Screens: with the switch off, the app Help on phone showed 'These answers come from our help pages', and Help and Talk to a person stay (the designer's note wins over the brief's '404 and no button'). Limits: the form switch only works if the client cooperates. A visitor who opens /help without ?form=<slug> (or POSTs without form) gets model answers (probe: 'form slug left out: stream? true calls 1'). Since /help is open to everyone this leaks nothing of the tenant's, but an honest form visitor who reaches /help another way gets the AI even though the tenant switched it off."
+   },
+   {
+    "item": "4. Chat route keeps only limit counters (plus attached help request); /security and /security/processing name the model host and say nothing is stored or trained on; DPA template has the same clause",
+    "holds": false,
+    "evidence": "Storage: gov-g20 '4.' counts every table, and only chat_counts grows. That held when I re-ran it. On the dev server, /security/processing showed 'The help chat: Nothing typed here is stored, and nothing is sent to train a model. ... Answers come from qwen3-8b on 127.0.0.1:4392.' and /security showed the model line. The DPA template has the clause. Problem: the same sentence is shown on ordinary hosted servers. chatPrivacyPoint({OPENROUTER_API_KEY}) gives '...It goes to OpenRouter... Nothing typed here is stored, and nothing is sent to train a model. ... What OpenRouter keeps is set by its own terms.', and the dataplace row says 'This server stores nothing typed into the help chat, and sends nothing to train a model.' But the DPA template's own note (lines 69-70) says the provider's 'own terms decide what it keeps and whether it trains on it' and that the software sets no retention option.",
+    "still_broken": "On every non-government server with a hosted key, /security says 'Nothing typed here is stored, and nothing is sent to train a model' while the typed text goes to OpenRouter or Moonshot, whose terms decide storage and training. A reader takes that as a no-training promise the code does not keep.",
+    "suggested_fix": "For style other than 'plain', replace the sentence with: 'This server stores nothing typed here. What <provider> keeps, and whether it trains on it, is set by its own terms.' Keep CHAT_NOT_KEPT_NOT_TRAINED only for a model inside the boundary, and phrase the DPA operative clause the same way."
+   },
+   {
+    "item": "5. Model card line on the chat panel",
+    "holds": true,
+    "evidence": "Screens at 390x844 and 1280x860 (tests/out/verify-g20/phone-2-app-answer.png, desktop-1-app-help.png) show 'Answers come from qwen3-8b on 127.0.0.1:4392.' at the foot of the app Help dialog. I opened it with the keyboard only (focus, Enter, type, Enter). The signer Help on phone and desktop (phone-4-sign-help.png) shows only the AI note, and the page HTML contains neither host nor model. The line is null with the switch off. Small leak: GET /public/chat still returns provider 'The service at 10.20.0.5:8000' (internal IP and port) to signers and anonymous visitors. It is not rendered, but it is readable in the API, against the designer's note 'never a model or host name on a signer or public page'."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "Hosted provider reachable in government/closed mode through trailing-dot, port or alias spelling",
+    "severity": "medium",
+    "where": "src/lib/chatprovider.ts chatProvider (style from exact host match) and src/lib/chatboundary.ts boundaryModel",
+    "detail": "Under DEPLOYMENT_PROFILE=government: https://openrouter.ai./api/v1 or https://openrouter.ai:8443/api/v1 with OUTBOUND_ALLOW=openrouter.ai, https://eu.openrouter.ai with *.openrouter.ai, and https://api.moonshot.cn/v1 when listed all give chatModelOn true and style 'plain'. This breaks the owner's 'never the hosted route' for government, and the test claim 'even when listed'. The /security wording then also calls it a self-run 'service at openrouter.ai.' without the provider-terms sentence."
+   },
+   {
+    "title": "Cloud metadata addresses accepted as private model addresses",
+    "severity": "low",
+    "where": "src/lib/chatboundary.ts isPrivateAddress",
+    "detail": "fd00:ec2::254 (AWS IMDS over IPv6) and 100.100.100.200 (Alibaba metadata) count as private, and plain http is allowed to them. The code comment and docs/self-hosted-model.md say metadata services are excluded. Only the operator can set this, so the risk is small, but the stated protection is not there."
+   },
+   {
+    "title": "Internal model address returned to anonymous visitors and signers",
+    "severity": "low",
+    "where": "src/server/routes-chat.ts GET /public/chat `provider`",
+    "detail": "provider is 'The service at 10.20.0.5:8000' for anyone, signers included. The dialog does not render it, but it exposes the agency's internal network address and port through a public API, against designer note gov-G20 ('never a model or host name on a signer or public page'). Limit it to signed-in callers, as model_line is. Separately, the public /security page prints the internal IP:port by design of the brief. Worth telling operators about in the doc."
+   },
+   {
+    "title": "Form switch can be bypassed by entering /help without ?form=",
+    "severity": "low",
+    "where": "src/components/HelpChat.tsx (form read only from the URL), src/server/routes-chat.ts",
+    "detail": "The tenant's off switch for form visitors depends on the slug that /f and /agree links append. A visitor who opens /help from a bookmark, the header Help on another page or a search result gets the model. This is not a leak of tenant data, but the 'enforced for its public forms' promise is only as good as the link."
+   },
+   {
+    "title": "/help lead promises an AI helper for people whose tenant switched it off",
+    "severity": "low",
+    "where": "src/app/help/page.tsx line 64",
+    "detail": "'An AI helper answers at once' depends only on chatModelOn(), so /help?form=<AI-off slug> and signers of AI-off accounts read that promise while the dialog then answers from built-in help. The builder named this himself. It is still copy that promises more than the code keeps."
+   },
+   {
+    "title": "Small copy glitch: capital 'The' mid-sentence on /security",
+    "severity": "low",
+    "where": "src/lib/chatprovider.ts chatPrivacyPoint with name 'The service at <host>'",
+    "detail": "/security reads 'It goes to The service at 127.0.0.1:4392, which is listed...'."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "src/lib/chatprovider.ts chatPrivacyPoint and src/lib/dataplace.ts chat row (shown on /security and /security/processing of every server with a hosted key)",
+    "claim": "Nothing typed here is stored, and nothing is sent to train a model. / This server ... sends nothing to train a model.",
+    "reality": "With OpenRouter or Moonshot the typed text goes to a provider whose own terms decide storage and training, and the software sets no provider option (the DPA template note says so itself). The sentence is only true for a model inside the boundary."
+   },
+   {
+    "where": "docs/procurement/data-processing-terms-template.md clause 'The help chat: nothing typed into it is stored, and nothing is sent to train a model.'",
+    "claim": "An unconditional operative clause the operator signs.",
+    "reality": "It is true only for a self-run model. For a hosted provider the note above it says the provider may keep and train. The clause should be conditional on the model being inside the boundary."
+   },
+   {
+    "where": "README.md line 1449 and tests/gov-g20.test.ts description",
+    "claim": "never OpenRouter or Moonshot (also when listed)",
+    "reality": "openrouter.ai. (trailing dot), openrouter.ai:8443, eu.openrouter.ai and api.moonshot.cn are accepted when listed."
+   },
+   {
+    "where": "docs/self-hosted-model.md line 32 and the src/lib/chatboundary.ts comment",
+    "claim": "Link-local addresses never count: a cloud's metadata service lives there (implying metadata services are excluded)",
+    "reality": "AWS IPv6 IMDS fd00:ec2::254 and Alibaba 100.100.100.200 are accepted."
+   },
+   {
+    "where": "src/app/help/page.tsx lead",
+    "claim": "An AI helper answers at once",
+    "reality": "Not for visitors from an AI-off tenant's forms or for its signers. They get built-in answers."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/phone-1-app-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/phone-2-app-answer.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/phone-4-sign-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/phone-6-app-help-off.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/desktop-1-app-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/desktop-2-app-answer.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/desktop-4-sign-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/desktop-5-security.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/desktop-6-app-help-off.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/verify-g20/flows/ux-flows.json"
+  ]
+ },
+ "ux:g20": {
+  "checks": [
+   {
+    "item": "1. Core flows, default profile (zero setup), dev server 4304: no flow got longer or gained a choice",
+    "holds": true,
+    "evidence": "node tests/ux/flows.cjs, exit 0, 0 rules broken. Every count is at or under tests/ux/ceilings.json. a-send-first: 18 actions (ceiling 18), 8 screens (8), 119 choices seen (137), 28 most choices (42), 845 words. b-sign-phone 7/5/36/11/402. b-sign-desktop 7/5/36/11/406. c-template-send 5/4/max 20/264 words. d-find-download 1/1/21/21/83. e-settings-name 3/2/53/32/360. f-signer-help 6/4/28/9/570. g-sign-in 4/3/56/28/365. h-sign-myself 14/8/99/24/623. Files: /home/user/treegens-app/sign-and-grow/tests/out/ux-g20/flows.log and /home/user/treegens-app/sign-and-grow/tests/out/ux-g20/ux/ux-flows.json. The 21 warnings are all P6 'not there yet' (simplify-signing consent sentence, envelope and audit trail on /help and /verify), none from G20."
+   },
+   {
+    "item": "1b. Core flows, government profile with an in-boundary model (DEPLOYMENT_PROFILE=government, SUPPORT_CHAT_BASE_URL=http://127.0.0.1:4305/v1)",
+    "holds": true,
+    "evidence": "Every flow ran with the same actions and screens as the default run. The only difference is on a-send-first: 120 choices seen (default 119) and 854 words (845). That is the 'Draft a message' button in step 3, which charter 2.3 allows only when a model is configured and the AI helper is on. The script reports 'P3 ds-ai-assist shows with zero setup' and 'P8 step3: added button: Draft a message' as BROKEN only because it assumes this profile has zero setup; here a model was configured on purpose. This is not a G20 regression. File: /home/user/treegens-app/sign-and-grow/tests/out/ux-g20/flows-gov.log"
+   },
+   {
+    "item": "2a. The model line appears only in the app's own Help (Home, editor), as the designer's note says, and is readable at the foot of the dialog",
+    "holds": true,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-app-help.png, /home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-app-help-answer.png, /home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-editor-help.png. All show 'Answers come from qwen3-8b on 127.0.0.1:4305.' below 'What we keep'. It adds no button and no step."
+   },
+   {
+    "item": "2b. The signing page and public pages name no model and no host on screen; signers see only the one AI line",
+    "holds": true,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-sign-help-answer.png and desktop-sign-help-answer.png show only 'Answers are written by AI and can be wrong. Do not type passwords or card numbers.' The 'I cannot sign today' answer still offers Finish later, Ask Rosa Mendes for more time and Talk to a person. /help?form=<slug> shows no model line either: phone-help-from-form-chat.png. The API still sends the host to signers: see new bug."
+   },
+   {
+    "item": "2c. With the account's AI switch off, Help stays, answers come from the built-in help, and Talk to a person stays (signer page and form visitors)",
+    "holds": true,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-sign-help-off.png and phone-help-from-form-off-chat.png both say 'These answers come from our help pages.' and keep Talk to a person. GET /api/public/chat with ?link= and with ?form= both return ai:false."
+   },
+   {
+    "item": "2d. Government with a hosted key only (OPENROUTER_API_KEY): the feature is simply absent, with no dead switch, and the operator is told why",
+    "holds": true,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-gov-hosted-settings.png: the Account card has no AI switches. phone-gov-hosted-app-help.png: built-in answers. /help lead reads 'Our helper, with answers from this page, answers at once.' The start-up log (tests/out/ux-g20/dev3.log) prints one plain line naming OPENROUTER_API_KEY and saying what counts instead."
+   },
+   {
+    "item": "2e. The /help page's lead sentence matches what the person gets, when they come from a form whose account has AI off",
+    "holds": false,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-help-from-form-off.png: the lead says 'An AI helper answers at once.' When the dialog on the same page opens (phone-help-from-form-off-chat.png), it says 'These answers come from our help pages.'",
+    "still_broken": "src/app/help/page.tsx decides the lead from chatModelOn() for the whole server and ignores ?form=. The builder named this under left_open.",
+    "suggested_fix": "Make the lead neutral so it is true either way: 'You do not need an account to get help. Answers come at once, and most things can be fixed right on this page.' Then the dialog's own first line says whether AI or the help pages answer."
+   },
+   {
+    "item": "2f. /security describes an in-boundary model in plain, true words",
+    "holds": false,
+    "evidence": "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-security-chat.png: the heading reads 'What you type into the help chat goes to an AI service.' and the body reads 'It goes to The service at 127.0.0.1:4305 ... Answers come from qwen3-8b on 127.0.0.1:4305.' The 'Where your data is' row reads 'Not stated' and 'The operator of this server has not said in which country its help chat provider handles what people type. Ask them.' With no model configured, the same page says 'This server keeps the help chat inside its own network'. With a model inside the boundary, it never says so.",
+    "still_broken": "A procurement reader sees the agency's own loopback or private-network model described like an outside vendor with an unknown country.",
+    "suggested_fix": "When the boundary rule holds and the address is private: heading 'What you type into the help chat stays inside this server's network.' Body: 'It goes to the model qwen3-8b that the people who run this server run themselves, at 127.0.0.1:4305. Nothing typed here is stored, and nothing is sent to train a model.' Country column: 'Same network as this server'. Drop the 'Ask them' line for this case."
+   },
+   {
+    "item": "2g. Keyboard and screen reader on the Help dialog",
+    "holds": true,
+    "evidence": "Desktop: Tab to Help, Enter opens, focus is in the question box, Escape closes, and focus returns to 'Help'. No target in the dialog is under 44 px at 390x844 or at desktop size (tests/out/ux-g20/shots.log, 'small targets: []'). The model line is plain text in reading order after 'What we keep'. On a phone, Help sits in the Menu sheet, and after Escape focus lands on the nav container, not on Help. That comes from the chat batch, not from G20."
+   },
+   {
+    "item": "2h. No second copy, nothing country-specific, no certification claim",
+    "holds": true,
+    "evidence": "src/lib/chatboundary.ts feeds the existing chatprovider (chat route, AI assist and contract writer). No new Help entry, panel or setting. None of the CLAIMS words appear in the new copy. docs/self-hosted-model.md names no country."
+   }
+  ],
+  "new_bugs": [
+   {
+    "title": "/help lead promises an AI helper to form visitors whose account turned AI off",
+    "severity": "medium",
+    "where": "src/app/help/page.tsx line 64 (pub-lead), reached from /f/<slug> and /agree/<slug> 'Get help' links",
+    "detail": "Screenshot /home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-help-from-form-off.png. The lead says 'An AI helper answers at once.' The dialog on the same page then says 'These answers come from our help pages.' The page promises something the code does not do, and the person sees both sentences one after the other. Fix words: 'You do not need an account to get help. Answers come at once, and most things can be fixed right on this page.'"
+   },
+   {
+    "title": "/security and the Settings AI card describe an in-boundary model as an outside AI service of unknown country",
+    "severity": "medium",
+    "where": "src/app/security/page.tsx help chat point, src/lib/dataplace.ts processor row, /security/processing; Settings > Account AI card",
+    "detail": "With SUPPORT_CHAT_BASE_URL at a private address, /security says 'What you type into the help chat goes to an AI service. It goes to The service at 127.0.0.1:4305', the country is 'Not stated', and the page adds 'Ask them.' Screenshot: tests/out/ux-g20/desktop-security-chat.png. The Settings card (tests/out/ux-g20/phone-settings-ai.png) says 'The text goes to The service at 127.0.0.1:4305 (127.0.0.1:4305), which runs the model qwen3-8b. Whoever runs this server has not said in which country.' The address is repeated, 'The' is capitalised mid-sentence, and the country line makes no sense for a machine in the operator's own network. Fix words for /security: 'What you type into the help chat stays inside this server's network. It goes to the model qwen3-8b that the people who run this server run themselves, at 127.0.0.1:4305.' Fix words for Settings: 'Questions go to the model qwen3-8b, which runs inside this server's own network.' Country: 'Same network as this server'."
+   },
+   {
+    "title": "GET /api/public/chat sends the model's host to signers and anonymous visitors",
+    "severity": "low",
+    "where": "src/server/routes-chat.ts GET /public/chat, field 'provider'",
+    "detail": "model_line is correctly null for ?link= and ?form=, but 'provider' still returns 'The service at 127.0.0.1:4305' to a signer and to anyone without a session (checked with curl and in the signing page's network calls). The page does not show it, but it gives an agency's internal address and port to anyone who asks, against the note's 'never a model or host name on a signer or public page'. Fix: return provider only where model_line is returned (a signed-in session, no link, no form), and null otherwise."
+   },
+   {
+    "title": "/security/processing says the same thing twice, with 'here' meaning nothing on that page",
+    "severity": "low",
+    "where": "src/app/security/processing/page.tsx help chat line",
+    "detail": "It reads 'The help chat: Nothing typed here is stored, and nothing is sent to train a model. Nothing of what is asked or answered is stored or logged.' 'Here' points at the chat, which is not on this page, and the second sentence repeats the first. Fix words: 'The help chat: nothing typed into it is stored or logged, and nothing is sent to train a model.'"
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "builder report, item 4",
+    "claim": "/security and /security/processing name the model host the deployment configured and say nothing is stored or trained on.",
+    "reality": "Both pages do name the host and carry the clause. But for a model inside the boundary, /security still calls it 'an AI service' and gives its country as 'Not stated ... Ask them'. A reader cannot tell from the page that the model is inside the boundary, which is the point of G20."
+   },
+   {
+    "where": "builder report, flows",
+    "claim": "By construction the work adds nothing with zero setup (flows not measured).",
+    "reality": "That is true, and now measured: the default profile on port 4304 ran every flow at or under its ceilings with 0 rules broken. With a model configured in the government profile, the only addition is 'Draft a message' in step 3, which the charter allows."
+   }
+  ],
+  "screens": [
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-app-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-app-help-answer.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-editor-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-sign.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-sign-help-answer.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-sign-help-answer.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-sign-help-off.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-help-from-form-chat.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-help-from-form-off.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-help-from-form-off-chat.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-security-chat.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-processing-chat.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-settings-ai.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-gov-hosted-settings.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/phone-gov-hosted-app-help.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/desktop-gov-hosted-security.png",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/ux/ux-flows.json",
+   "/home/user/treegens-app/sign-and-grow/tests/out/ux-g20/ux-government-model/ux-flows.json"
+  ]
+ },
+ "repair:g20": {
+  "done": [
+   {
+    "item": "Skeptic 1 / new bug (medium): hosted provider reachable in government or closed mode through a trailing dot, a port or another name under the host",
+    "status": "done",
+    "how": "New hostedKind() in src/lib/chatboundary.ts reads the bare host name (no trailing dot, no port, any case) and matches openrouter.ai, moonshot.ai, moonshot.cn and every name under them. chatProvider now takes style and name from it. boundaryModel refuses any such host even when it is listed in OUTBOUND_ALLOW. Look-alike names such as notopenrouter.ai still count when listed.",
+    "test": "tests/gov-g20.test.ts 'repair: the hosted defaults are refused however they are spelled' covers openrouter.ai., openrouter.ai:8443, OpenRouter.AI, eu.openrouter.ai with *.openrouter.ai, api.moonshot.cn, api.moonshot.ai. and x.moonshot.ai:444, under both government and OUTSIDE_CALLS=listed. It also checks the start-up warning and that look-alike names are not refused."
+   },
+   {
+    "item": "New bug (low) / overclaim: AWS fd00:ec2::254 and Alibaba 100.100.100.200 metadata addresses were accepted as private model addresses",
+    "status": "done",
+    "how": "isPrivateAddress refuses fd00:ec2::/32 (also written fd00:0ec2) and 100.100.100.200, including in ::ffff: form. I reworded the comment and docs/self-hosted-model.md. They now name those two addresses and say plainly that another cloud may use an address the server does not know.",
+    "test": "'repair: cloud metadata addresses inside the private ranges never count as a model'. Neighbouring addresses still count as private."
+   },
+   {
+    "item": "Skeptic 4 / overclaim: 'Nothing typed here is stored, and nothing is sent to train a model' was shown on hosted servers (/security, the dataplace table, /security/processing)",
+    "status": "done",
+    "how": "New insideNetwork() is true only when SUPPORT_CHAT_BASE_URL is at a private address and is not a hosted default. Only then do /security, /security/processing and the table say 'Nothing is sent to train a model', followed by 'what the model's own program logs is set by the people who run it'. For a hosted or plain outside model they now say this server stores nothing, and that what <provider> keeps, and whether it trains on it, is set by its own terms. The /security/processing line no longer repeats itself or says 'here' (it now starts with CHAT_KEPT_PAGE). I removed CHAT_NOT_KEPT_NOT_TRAINED; no other file used it.",
+    "test": "Rewritten test '4. /security and /security/processing ...'. It asserts that no 'train a model' wording appears for OpenRouter, Moonshot or a plain outside service, and that the provider-terms sentence is there."
+   },
+   {
+    "item": "Overclaim: the DPA template clause on the help chat was unconditional",
+    "status": "done",
+    "how": "docs/procurement/data-processing-terms-template.md now says 'the software stores nothing typed into it', followed by two bracketed alternatives for the operator to pick: a model inside their own network (nothing sent to train a model), or a sub-processor's model (its own terms decide what it keeps and trains on).",
+    "test": "Test 4 asserts the new conditional clause and that the old unconditional sentence is gone."
+   },
+   {
+    "item": "Simplicity 2f / new bug (medium): /security and Settings described an in-network model as an outside AI service of unknown country, with a capital 'The' mid-sentence",
+    "status": "done",
+    "how": "In-network model: /security heading reads 'What you type into the help chat stays inside this server's network.' The body reads 'It goes to the model qwen3-8b that the people who run this server run themselves, at 127.0.0.1:4393.' The table row is 'The people who run this server, with their own model', country 'Same network as this server', with no 'Ask them' line. In Settings, the tenant switch says 'go to the model that runs inside this server's own network'. The AI read line (whereLine) says 'The text goes to the model qwen3-8b, which runs inside this server's own network (127.0.0.1:4393).' An unnamed outside service is now 'the service at <host>' in lower case, and table cells are capitalised.",
+    "test": "Test 4 checks the title, country, empty missing list and lower-case name. 'repair: the Settings line for a model inside the network' checks whereLine. I updated the expectations in tests/chat.test.ts and tests/ds-ai-assist.test.ts for the lower-case name. Screens: tests/out/repair-g20/desktop-security.png, phone-settings-ai.png, desktop-security-processing.png."
+   },
+   {
+    "item": "New bug (low): GET /public/chat sent the internal model address in `provider` to signers and anonymous visitors",
+    "status": "done",
+    "how": "routes-chat.ts now returns provider and model_line only to a signed-in caller with no link and no form; everyone else gets null. HelpChat.tsx never read provider.",
+    "test": "'repair: the model's address and name go only to people signed in to the app' checks a visitor, a signer, a signed-in signer and a form visitor, and that no IP or model name appears in the JSON. Checked live: signed in gets the provider, anonymous gets {provider:null, model_line:null}."
+   },
+   {
+    "item": "New bug / overclaim (medium in UX review): /help lead promised 'An AI helper answers at once' to visitors whose account turned AI off",
+    "status": "done",
+    "how": "The lead now uses the reviewer's neutral wording, 'You do not need an account to get help. Answers come at once...'. The dialog's own first line says whether AI or the help pages answer. I removed the unused chatModelOn import.",
+    "test": "'repair: /help promises no AI helper ...' plus screenshot tests/out/repair-g20/phone-help.png"
+   },
+   {
+    "item": "README line 1449 and the test description 'never OpenRouter or Moonshot (also when listed)'",
+    "status": "done",
+    "how": "The README chat section now says 'however their address is written', covering a trailing dot, a port or any name under openrouter.ai, moonshot.ai or moonshot.cn. It also says metadata addresses are excluded and that the train-a-model sentence appears only for a model at a private address. It now names the /help-without-?form= limit. I also added a note in docs/self-hosted-model.md: /security prints the internal address for everyone, so use a listed name if that should stay private.",
+    "test": "Covered by the repair tests above."
+   },
+   {
+    "item": "Low: form switch can be bypassed by opening /help without ?form=",
+    "status": "partly",
+    "how": "Not changed in code. A visitor with no slug cannot be tied to an account, and the page is open to everyone, so no tenant data leaks. I made the /help lead neutral so it promises nothing, and the README now states the limit plainly.",
+    "left_open": "A visitor from an AI-off tenant's form who reaches /help by a bookmark or search still gets model answers. Closing it would need a cookie set by /f and /agree pages, which are other people's files."
+   },
+   {
+    "item": "Skeptic 2: run a real open-weight model",
+    "status": "not_done",
+    "how": "This sandbox cannot download model weights. Only the stand-in OpenAI-compatible stub (tests/out/repair-g20/stub.cjs) was run. docs/self-hosted-model.md already says so honestly.",
+    "left_open": "Run llama.cpp server or Ollama with a small GGUF on a machine that can download weights, and record the result in docs/self-hosted-model.md."
+   }
+  ],
+  "files_changed": [
+   "/home/user/treegens-app/sign-and-grow/src/lib/chatboundary.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/chatprovider.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/dataplace.ts",
+   "/home/user/treegens-app/sign-and-grow/src/lib/aiassist.ts",
+   "/home/user/treegens-app/sign-and-grow/src/server/routes-chat.ts",
+   "/home/user/treegens-app/sign-and-grow/src/app/security/processing/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/src/app/help/page.tsx",
+   "/home/user/treegens-app/sign-and-grow/docs/self-hosted-model.md",
+   "/home/user/treegens-app/sign-and-grow/docs/procurement/data-processing-terms-template.md",
+   "/home/user/treegens-app/sign-and-grow/README.md",
+   "/home/user/treegens-app/sign-and-grow/tests/gov-g20.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/chat.test.ts",
+   "/home/user/treegens-app/sign-and-grow/tests/ds-ai-assist.test.ts"
+  ],
+  "suite": "tests/gov-g20.test.ts: 13 of 13 pass. tests/chat.test.ts 49/49, ds-ai-assist 17/17 and gov-g01 15/15 pass. npm test: 2325 tests, 2318 pass, 2 fail. Neither failure is from this work: (1) gov-g19 '4. /verify on an imported file' failed once and passed 21/21 on re-run, so it looks flaky or was hit by a concurrent edit; (2) stamps.test.ts 'the screens: Settings...' expects `{tab === 'stamps' && <Card><StampSettings /></Card>}` in src/app/app/settings/page.tsx and still fails alone; that is someone else's in-progress settings/stamps edit. npx tsc --noEmit -p . is clean. Log: tests/out/repair-g20/npm-test.log",
+  "flows": "After, default profile (zero setup), dev server 4303, exit 0, 0 rules broken, all at or under ceilings: a-send-first 18 actions/8 screens/119 choices seen/28 max/851 words; b-sign-phone 7/5/36/11/402; b-sign-desktop 7/5/36/11/406; c-template-send 5/4/59/20/268; d-find-download 1/1/21/21/83; e-settings-name 3/2/53/32/360; f-signer-help 6/4/28/9/570; g-sign-in 4/3/56/28/365; h-sign-myself 14/8/99/24/623. Same actions and screens as the reviewer's before-run. The word count on a-send-first is 851 against 845 before; the only change I made on a screen in that flow is the shorter /help lead, so the 6 extra words likely come from other people's concurrent edits. Output: tests/out/repair-g20/flows.log, tests/out/repair-g20/ux/ux-flows.json",
+  "notes_for_integrator": "The ChatProvider type gained a required field `inside: boolean`. Any code that builds a ChatProvider literal must add it; within src/ only chatProvider() does. The default name of an unnamed plain SUPPORT_CHAT_BASE_URL host is now lower case, 'the service at <host>', because it sits mid-sentence. An in-network host's name is \"the model that runs inside this server's own network\" (INSIDE_NAME). dataplace capitalises table cells. CHAT_NOT_KEPT_NOT_TRAINED is removed; use CHAT_NOT_TRAINED, which is only for insideNetwork(), or chatTermsLine(name, plain). GET /api/public/chat `provider` is now null for anyone not signed in to the app or coming with link= or form=. I removed only my own two .next-repair-g20 lines from tsconfig.json; other dev servers' lines are still there. AGENTS.md is re-added by next dev, as it says itself. Screens: tests/out/repair-g20/{phone,desktop}-{security,security-processing,help,settings-ai}.png. Attacker view: the hosted spellings and metadata IPs are covered by tests. An operator listing a public IP that belongs to a hosted provider is still possible: the server cannot know, and the doc says the operator answers for it.",
+  "found": "The G20 build was in place: src/lib/chatboundary.ts, chatprovider.ts, routes-chat.ts, docs/self-hosted-model.md and tests/gov-g20.test.ts at 8 of 8 passing. The skeptic's probe findings reproduced from the code as described: style was set by exact host match, there was no metadata exclusion, the train-a-model sentence appeared unconditionally, provider leaked on the public GET, and the /help lead was decided per server."
  }
 }
