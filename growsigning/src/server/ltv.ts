@@ -463,14 +463,14 @@ export async function writeDss(pdf: Uint8Array, g: Gathered): Promise<Buffer> {
 }
 
 /** One document time stamp over the whole file (ETSI EN 319 142-1 clause 5.5): a second, invisible field. */
-export async function addDocTimeStamp(pdf: Buffer, urls = tsaUrls(), until = Date.now() + TSA_TOTAL_MS): Promise<{ bytes: Buffer; host: string; time: string; tsaName: string }> {
+export async function addDocTimeStamp(pdf: Buffer, urls = tsaUrls(), until = Date.now() + TSA_TOTAL_MS): Promise<{ bytes: Buffer; host: string; time: string; tsaName: string; trusted: boolean }> {
   const prepared = await prepareSeal(pdf, new Date(), undefined, 'timestamp');
   const covered = coveredBytes(prepared.bytes, prepared.byteRange);
   // timeStamp asks for a time stamp over the SHA-256 of what it is given: here, every byte the time stamp covers.
   // It shares LTV_WAIT_MS with the answers before it, and never gets more than the 4 seconds of any time stamp.
   if (until - Date.now() < 500) throw new TsaError('it was not asked, because the time for long-term checking (LTV_WAIT_MS) was used up');
   const st = await timeStamp(covered, urls, Math.min(until, Date.now() + TSA_TOTAL_MS));
-  return { bytes: fillSeal(prepared, st.token), host: st.host, time: st.time.toISOString(), tsaName: st.tsaName };
+  return { bytes: fillSeal(prepared, st.token), host: st.host, time: st.time.toISOString(), tsaName: st.tsaName, trusted: st.trusted };
 }
 
 // ---- The step after the seal ---------------------------------------------------------------------------------

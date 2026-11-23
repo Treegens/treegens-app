@@ -16,6 +16,19 @@
   .sg-own-body { font-size: 14px; padding: 10px 12px; }
 }
 
+/* "How electronic signing works" on the consent screen (src/components/sign/ConsentDetails.tsx), and the same parts
+   printed on /help: our short headings with their sentences under them. */
+.sg-how { margin: 0 0 2px; }
+.sg-how-body { display: grid; gap: 10px; margin: 2px 0 10px; padding: 12px 14px; border-left: 4px solid var(--leaf); background: #fbfaf6; border-radius: 0 10px 10px 0; text-align: left; font-size: 15px; }
+.sg-how-part > b { display: block; font-size: 14.5px; }
+.sg-how-part > p { margin: 2px 0 0; overflow-wrap: anywhere; }
+/* On /help the parts stand inside the quote, which has its own edge. */
+.pub-quote .sg-how-body { margin: 0; padding: 0; border-left: 0; background: none; }
+.pub-quote .sg-how-part > p { margin: 2px 0 0; }
+@media (max-width: 640px) {
+  .sg-how-body { font-size: 14px; padding: 10px 12px; }
+}
+
 /* "Sign on paper instead": the one choice wraps rather than shrinking below a thumb. */
 .sg-paper-actions { flex-wrap: wrap; }
 .sg-paper-actions .btn { min-height: 48px; }

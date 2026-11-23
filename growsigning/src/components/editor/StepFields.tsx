@@ -372,6 +372,7 @@ export function StepFields({ ed }: { ed: Ed }) {
       const cur = fields.current();
       const fresh: any[] = [];
       const missing = new Set<number>();
+      const columns = new Map<number, string>(); // the heading over a table column that nobody on the document fits
       let taken = 0, lockedOut = 0;
       for (const f of all) {
         let rid = active;
@@ -379,6 +380,9 @@ export function StepFields({ ed }: { ed: Ed }) {
           const r = signers[f.signer - 1];
           if (!r) {
             missing.add(f.signer);
+            // "The Marc Diamond column" says more than "Signer 2", a number the sender never saw.
+            const head = f.set?.startsWith('t') && f.who?.[0] && f.who[0].length <= 40 ? f.who[0] : '';
+            columns.set(f.signer, columns.has(f.signer) && columns.get(f.signer) !== head ? '' : head);
             continue;
           }
           rid = r.id;
@@ -408,10 +412,16 @@ export function StepFields({ ed }: { ed: Ed }) {
       // "Added 5 fields: 2 for Ana Silva and 3 for Sam Lee." With one person it is "Added 4 fields for Ana Silva."
       const share = [...people].map((id) => `${fresh.filter((f) => f.recipient_id === id).length} for ${label(rcps.find((r) => r.id === id))}`);
       const forWhom = people.size === 1 ? ` for ${label(rcps.find((r) => r.id === [...people][0]))}` : people.size > 1 ? `: ${share.slice(0, -1).join(', ')} and ${share[share.length - 1]}` : '';
-      const parts = [`Found ${plural(all.length, 'place')}.`];
+      // "Found 6 places." is only said when not every place got a field, so the same number is not said twice.
+      const parts = fresh.length === all.length ? [] : [`Found ${plural(all.length, 'place')}.`];
       if (fresh.length) parts.push(`Added ${plural(fresh.length, 'field')}${forWhom}. Undo takes them away again.`);
+      // A signer who was left with nothing is easy to miss on a long document.
+      const bare = fresh.length ? signers.filter((r) => !lockedIds.has(r.id) && ![...cur, ...fresh].some((f) => f.recipient_id === r.id)) : [];
+      if (bare.length && signers.length > 1) parts.push(`${bare.map((r) => label(r)).join(' and ')} ${bare.length === 1 ? 'has' : 'have'} no field yet.`);
       if (taken) parts.push(fresh.length ? `${taken} already had a field.` : taken === all.length ? 'Each one already has a field, so nothing was added.' : `${taken} already had a field.`);
-      if (missing.size) parts.push(`${[...missing].sort((a, b) => a - b).map((n) => `Signer ${n}`).join(' and ')} ${missing.size === 1 ? 'is' : 'are'} not on this document yet. Add them in step 1, then look again.`);
+      const gone = [...missing].sort((a, b) => a - b);
+      if (gone.length && gone.every((n) => columns.get(n))) parts.push(`The ${gone.map((n) => columns.get(n)).join(' and ')} ${gone.length === 1 ? 'column has' : 'columns have'} nobody yet. Add ${gone.length === 1 ? 'that person' : 'them'} in step 1, then press this again.`);
+      else if (gone.length) parts.push(`${gone.map((n) => `Signer ${n}`).join(' and ')} ${gone.length === 1 ? 'is' : 'are'} not on this document yet. Add them in step 1, then look again.`);
       if (lockedOut) parts.push(active ? `${lockedOut} belong to someone who already finished, so they were left alone.` : 'Add a signer in step 1, then look again.');
       // Said once, in the line under the button (a status a screen reader hears too), not in a second message.
       setFound(parts.join(' '));

@@ -7,7 +7,7 @@ import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnv
 import { safeName, type ZipEntry } from './zip.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { ownTextEvidence } from './disclosure.ts';
-import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf, consentVersionOf, consentUnstated, consentHeading } from '../lib/policy.ts';
+import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf, consentVersionOf, consentUnstated, consentHeading, consentRecordLines } from '../lib/policy.ts';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '../lib/evidence.ts';
 import { FINGERPRINT_KEPT_DAYS } from '../lib/evidence.ts';
 import { deviceName } from '../lib/phone.ts';
@@ -409,7 +409,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
   // The consent wording each person agreed to, by the version their audit line names (src/lib/policy.ts).
   const agreed = events.filter((a: any) => a.action === 'Agreed to electronic records and signatures');
   add('consent.txt', [
-    `What each person agreed to before signing "${e.subject}" (envelope ${e.id}). Since November 2026 the audit line names the version of the wording their screen showed, and this is that wording. A line written before then names no version: see the note under it.`, '',
+    `What each person agreed to before signing "${e.subject}" (envelope ${e.id}). Since November 2026 the audit line names the version of the wording their screen showed, and this is that wording. Since the wording of 23 November 2026 the screen shows one sentence next to the box, and the rest is one tap away under a link on the same screen: both are printed here, each marked. A line written before then names no version: see the note under it.`, '',
     ...(agreed.length ? agreed.flatMap((a: any) => {
       // A line that names no version was written before versions were recorded, by the code that showed the
       // wording kept as UNVERSIONED_CONSENT. Today's words would put a sentence in front of that person they never saw.
@@ -421,7 +421,7 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
       const w = consentWordingAsRecorded(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version, consentLanguageOf(a.detail));
       const how = !named ? ' (their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line, which only the code before that change wrote, and not stated by their screen)'
         : consentUnstated(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
-      return [`${a.actor}, ${stampText(a.at)}${a.ip ? `, from ${a.ip}` : ''}. ${consentHeading(w)}${how}:`, '', w.legal, '', w.practical, '', `"${w.agree}"`, '', '----', ''];
+      return [`${a.actor}, ${stampText(a.at)}${a.ip ? `, from ${a.ip}` : ''}. ${consentHeading(w)}${how}:`, '', ...consentRecordLines(w), '', '----', ''];
     }) : ['Nobody has agreed yet.']),
   ].join('\r\n'));
 

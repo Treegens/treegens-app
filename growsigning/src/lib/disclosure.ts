@@ -1,5 +1,5 @@
-// The account's own consent text: the words an organisation adds to the consent screen, under our own sentence on
-// what kind of signature this is. Our sentence stays and cannot be removed (src/lib/policy.ts). Plain values and
+// The account's own consent text: the words an organisation adds to the consent screen, under our own sentence and
+// its link on how electronic signing works. Ours stay and cannot be removed (src/lib/policy.ts). Plain values and
 // functions with no environment in them, shared by the server (src/server/disclosure.ts), Settings
 // (src/components/settings/Disclosure.tsx) and the signing page (src/components/sign/OwnTerms.tsx).
 //
@@ -47,7 +47,7 @@ export const DEFAULT_NEEDS = 'A phone, tablet or computer with a current web bro
 /** The sentence Settings shows under the form. We never call our own text, or theirs, an ESIGN consumer disclosure. */
 export const ESIGN_NOTE = 'If you deal with consumers in the United States, the ESIGN Act section 101(c) lists what this text must say. Ask your lawyer.';
 /** What Settings says the text is and is not. */
-export const OWN_TEXT_IS = 'Signers can read this on the screen where they agree to sign on screen, under our own sentence on what kind of signature this is. Our sentence always stays. GrowSigning shows your words as you wrote them and does not check that they meet any law.';
+export const OWN_TEXT_IS = 'Signers can read this on the screen where they agree to sign on screen, under our own link on how electronic signing works. Our link always stays. GrowSigning shows your words as you wrote them and does not check that they meet any law.';
 
 /** How often the consent screen is shown: once for each document (the default), or every time the link is opened. */
 export const HOW_OFTEN = [['once', 'Once for each document'], ['each', 'Every time the link is opened']] as const;

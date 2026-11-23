@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { consentWording, adoptLine, LANGUAGE_NOTE, cannotOpenLine } from '@/lib/policy';
+import { consentWording, consentIsShort, CONSENT_HISTORY, adoptLine, LANGUAGE_NOTE, cannotOpenLine } from '@/lib/policy';
+import { ConsentDetailWords } from '@/components/sign/ConsentDetails';
 import { versionText } from '@/lib/wordingday';
 import { COUNTRY_NOTES, paperWordList } from '@/lib/paperwork';
 import { BY_SENDER_TICK, BY_SENDER_HOW, BY_SENDER_LINE } from '@/lib/bysender';
@@ -18,19 +19,49 @@ const QA = ({ id, q, children }: { id: string; q: string; children: ReactNode })
   </article>
 );
 
+/** One wording as its screen showed it: the paragraphs above the tick, or the one sentence with what its link opens. */
+function WordingQuote({ version }: { version?: string }) {
+  const w = consentWording('the sender', true, version);
+  return (
+    <blockquote className="pub-quote">
+      {consentIsShort(w) ? (
+        <>
+          <p><b>{w.agree}</b></p>
+          <p className="muted small">Under the link &quot;{w.more}&quot;, on the same screen:</p>
+          <ConsentDetailWords wording={w} />
+        </>
+      ) : (
+        <>
+          <p>{w.legal}</p>
+          <p>{w.practical}</p>
+          <p><b>{w.agree}</b></p>
+        </>
+      )}
+    </blockquote>
+  );
+}
+
 /** For people who sign: the exact words of the consent screen, with the version the audit trail names. */
 export function ConsentWords() {
   const w = consentWording('the sender', true);
+  const earlier = CONSENT_HISTORY.filter((h) => h.version !== w.version);
   return (
     <QA id="consent-wording" q="What do I agree to before I sign?">
-      <p>Before any field opens, the signing page shows you the words below and asks you to tick a box. You can decline instead, or ask the sender for a paper copy. The document's history records that you agreed, when, and which wording you were shown.</p>
-      <blockquote className="pub-quote">
-        <p>{w.legal}</p>
-        <p>{w.practical}</p>
-        <p><b>{w.agree}</b></p>
-      </blockquote>
-      <p className="muted small">This is the wording of {versionText(w.version)}, the one in use now, as shown to someone who signs. Where it says &quot;the sender&quot;, your screen names the person. Someone who approves or only reads is told the same without the sentences about signing. When you place your signature you also agree to this: &quot;{adoptLine('signature')}&quot;</p>
+      <p>Before any field opens, the signing page asks you to tick a box next to one sentence. A link right above it, &quot;{w.more}&quot;, opens the rest: what kind of signature this is, what is recorded, when this may not be enough, and how to get a copy, ask for paper or decline. Both are printed below, word for word. The document&apos;s history records that you agreed, when, and which wording your screen showed.</p>
+      <WordingQuote />
+      <p className="muted small">This is the wording of {versionText(w.version)}, the one in use now, as shown to someone who signs. Where it says &quot;the sender&quot;, your screen names the person. Someone who approves or only reads ticks &quot;{consentWording('the sender', false).agree}&quot; and is told the same without the sentences about signing. When you place your signature you also agree to this: &quot;{adoptLine('signature')}&quot;</p>
       <p className="muted small">{LANGUAGE_NOTE} If you cannot read what you are asked to agree to, do not tick the box: ask the sender to explain it or to send the document on paper.</p>
+      {/* A record names the wording its person was shown, and that may be an earlier one: each stays here to be read. */}
+      <details className="pub-fold">
+        <summary>Earlier wordings, for a record that names one</summary>
+        <p className="muted small">A history line or a certificate says &quot;Wording of&quot; and a day. If yours names one of these days, this is what that screen showed. The earlier wordings printed everything above the box.</p>
+        {earlier.map((h) => (
+          <div key={h.version} id={`wording-${h.version}`}>
+            <p><b>Wording of {versionText(h.version)}</b>, first shown on {h.from}.</p>
+            <WordingQuote version={h.version} />
+          </div>
+        ))}
+      </details>
     </QA>
   );
 }

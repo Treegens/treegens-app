@@ -2,6 +2,7 @@
 // description stays readable; openapi.ts spreads it into its paths.
 import { OWN_TEXT_KEYS, OWN_TEXT_MAX, OWN_TEXT_LABEL, DEFAULT_NEEDS, ESIGN_NOTE, WITHDREW_REASON, NEVER_AGREED_REASON } from '../lib/disclosure.ts';
 import { AGREED_AGAIN_MAX, SAVES_PER_HOUR } from './disclosure.ts';
+import { CONSENT_VERSION, consentWording } from '../lib/policy.ts';
 
 const err = { description: 'Error', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } };
 const ok = (schema: any) => ({ 200: { description: 'OK', content: { 'application/json': { schema } } }, default: err });
@@ -55,7 +56,7 @@ export const disclosurePaths = () => ({
     post: {
       tags: ['Signing'], security: [], parameters: [tok],
       summary: 'A signer agrees to electronic records and signatures',
-      description: `Written to the audit trail once for each person, with the wording of GrowSigning's own text the screen showed ("wording") and its language ("language"). ${CONSENT_OWN_NOTE}`,
+      description: `Written to the audit trail once for each person, with the wording of GrowSigning's own text the screen showed ("wording") and its language ("language"). A wording is named by the day it was first shown, and the one in use is "${CONSENT_VERSION}": one sentence next to the box ("${consentWording('the sender', true).agree}") and, behind the link "${consentWording('the sender', true).more}" on the same screen, what kind of signature this is, what is recorded, when it may not be enough, and how to get a copy, paper or decline. The name covers both. A call that names an earlier wording is recorded under that one, and a call that names none is recorded as not having said. Required before any field can be saved or the document finished. The answer's "wording" is the one in use now. ${CONSENT_OWN_NOTE}`,
       requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { wording: str, language: str, own: { ...str, description: 'The id of the account\'s own text the screen showed ("own_terms.id"), when there is one.' }, tz: { ...str, description: 'The time zone the device reports.' } } } } } },
       responses: ok({ type: 'object', properties: { ok: bool, version: { type: 'integer' }, wording: str } }),
     },

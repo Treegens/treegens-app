@@ -22,10 +22,15 @@ import { TSA_TOTAL_MS } from './tsa.ts';
 import { withLongTerm } from './ltv.ts';
 import { stampText } from '../lib/dates.ts';
 import { stampChainHead, saveChainStamp, type ChainStamp } from './auditstamp.ts';
+import { cscReady } from './sealcsc.ts';
+import { tsaUrls, TsaError } from './tsa.ts';
+import { addDocTimeStamp } from './ltv.ts';
 import { inArchiveFormat, archiveStored } from './pdfa.ts';
 
 type Render = (e: any) => Promise<Uint8Array>;
-type Outcome = { done?: SealDone; unsealed?: 'refused' | 'failed' };
+/** `stamped`: a file without a seal that got a document time stamp over the whole file; `stampFailed`: why it did not. */
+type Stamped = { host: string; time: string; tsaName: string; trusted: boolean };
+type Outcome = { done?: SealDone; unsealed?: 'refused' | 'failed'; stamped?: Stamped; stampFailed?: string };
 const outcomes = new WeakMap<Uint8Array, Outcome>();
 const chains = new WeakMap<Uint8Array, ChainStamp>();
 
@@ -44,10 +49,13 @@ export async function finishPdf(e: any, render: Render): Promise<Uint8Array> {
 }
 
 async function finishSealed(e: any, render: Render, until: number): Promise<Uint8Array> {
+  // A cloud seal (sealcsc.ts): its certificate chain is fetched first when it is not there or more than a day old.
+  await cscReady();
   const plan = sealPlan();
   if (plan) plan.until = until;
-  // A seal key that is set but refused (expired, for example): the file as before, and the record says so.
-  if (!plan) return sealConfigured() ? keep(await render(e), { unsealed: 'refused' }) : render(e);
+  // A seal key that is set but refused (expired, for example): the file as before, and the record says so. Without
+  // any seal settings, the file as before. With a time-stamp service, either one still gets a time stamp over it.
+  if (!plan) return sealConfigured() ? stampOnly(await render(e), { unsealed: 'refused' }) : stampOnly(await render(e), null);
   try {
     const r = await sealPdf(await render({ ...e, seal_plan: plan }), plan);
     return longTerm(r, plan);
@@ -71,7 +79,23 @@ async function finishSealed(e: any, render: Render, until: number): Promise<Uint
 async function unsealed(e: any, render: Render, err: any): Promise<Uint8Array> {
   const why = String(err?.message || err).slice(0, 300);
   tellOperators(`A completed PDF could not be sealed, so it was made without a seal (envelope ${e.id}): ${why}`);
-  return keep(await render(e), { unsealed: 'failed' });
+  return stampOnly(await render(e), { unsealed: 'failed' });
+}
+
+/**
+ * A file without a seal, with a time-stamp service set (TSA_URL): one PAdES document time stamp over the whole file
+ * (ltv.ts, addDocTimeStamp), so a PDF reader shows when the file existed in this form from the service's clock, not
+ * ours. With no service, the file exactly as it was. The file is never held back: when the service does not answer
+ * within its seconds, the file goes out without it and the record says why.
+ */
+async function stampOnly(pdf: Uint8Array, o: Outcome | null): Promise<Uint8Array> {
+  if (!tsaUrls().length) return o ? keep(pdf, o) : pdf;
+  try {
+    const d = await addDocTimeStamp(Buffer.from(pdf), tsaUrls());
+    return keep(d.bytes, { ...o, stamped: { host: d.host, time: d.time, tsaName: d.tsaName, trusted: d.trusted } });
+  } catch (err: any) {
+    return keep(pdf, { ...o, stampFailed: err instanceof TsaError ? err.message : String(err?.message || err).slice(0, 300) });
+  }
 }
 
 // After a seal with a time stamp: the data to check it for years (ltv.ts). The file is never held back for it.
@@ -128,6 +152,12 @@ function noteSeal(e: any, pdf: Uint8Array, o: Outcome) {
       : `The signed PDF carries a digital seal made with the certificate of ${d.name}, issued by ${d.issuer}. A PDF reader shows if the file changed after this. The time in the seal is this server's clock.${d.tsaFailed ? ` The time-stamp service could not give a time stamp: ${d.tsaFailed}.` : ''}`) + ltvSentence(d));
   } else if (o.unsealed) {
     audit(e.id, { name: 'System' }, 'Not sealed', `The signed PDF was made without a digital seal, because ${o.unsealed === 'refused' ? "this server's seal certificate cannot be used right now" : 'the seal could not be applied'}. Its certificate of completion says nothing about a seal. The people who run this server have been told.`);
+  }
+  if (o.stamped) {
+    const s = o.stamped;
+    audit(e.id, { name: 'System' }, 'Time-stamped', `A time stamp over the whole signed PDF was added by ${s.tsaName} (${s.host}) at ${stampText(s.time)}. A PDF reader shows it as a document time stamp, and shows if the file changed after it. ${s.trusted ? 'The certificate of that service leads to one this server was set up to trust.' : 'This server was not set up to check whose service that is, so nothing here calls the time stamp trusted.'} It is not a seal: it shows when the file existed in this form, not who made it.`);
+  } else if (o.stampFailed) {
+    audit(e.id, { name: 'System' }, 'Not time-stamped', `No time stamp could be added over the signed PDF, so the file carries none: ${o.stampFailed}.`);
   }
 }
 

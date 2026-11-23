@@ -9,7 +9,7 @@
 // covers are written here (TOPIC_NOTES); a topic without a note is still known by its question.
 import {
   refundDays, refundRuleText, priceRuleText, dormantStopDays, CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION,
-  WHO_CAN_SEE, NO_BAA_TITLE, NO_BAA_TEXT, LANGUAGE_NOTE, consentWording, newAccountDailyRecipients, unpaidDailyRecipients, PAID_TRUST_DAYS,
+  WHO_CAN_SEE, NO_BAA_TITLE, NO_BAA_TEXT, LANGUAGE_NOTE, consentWording, consentPlain, newAccountDailyRecipients, unpaidDailyRecipients, PAID_TRUST_DAYS,
   abuseSuspendAfter, TEAM_INVITES_PER_DAY, supportReachable, supportFirstReplyHours, supportUrgentReplyHours, SUPPORT_REOPEN_DAYS,
   SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, DEFAULT_REMINDER_DAYS, BULK_COST_NOTE, ACCESS_CODE_TRIES, GROUP_RULE, TWO_STEP_EMAIL_RESET_DAYS,
 } from '../lib/policy.ts';
@@ -102,7 +102,7 @@ export const FAQ: Faq[] = [
   { id: 'copy', words: ['copy', 'download', 'signed pdf', 'signed document', 'completed document', 'finished document', 'get my document', 'find my document', 'where is my document', 'keep a copy', 'certificate', 'audit trail'],
     answer: (s) => (sending(s) ? `If you sent it: open ${APP_LABELS.envelopes.label}, choose the completed document, then ${APP_LABELS.download.label}. If someone else sent it to you: the completion email links to it, and Find my documents sends that link again.` : `When everyone has finished, each person gets an email with a link to the signed document. Lost it? Find my documents on the help page sends the link again, also months later.${s === 'signing' ? ' This same link also lets you download what you signed.' : ''}`) },
   { id: 'agree', words: ['agree', 'agreeing', 'consent', 'what am i signing', 'electronic records'],
-    answer: () => 'The box you tick says you agree to use electronic records and signatures for this document, in place of paper. The signing page prints the exact words above the box, and the help page has them too. You can decline instead, or ask the sender for a paper copy.' },
+    answer: () => 'The box you tick says you agree to sign this document electronically, in place of paper. The link above the box, "How electronic signing works", opens the rest: what is recorded, when an electronic signature may not be enough, and how to get a copy or paper. The help page prints all of it too. You can decline instead, or ask the sender for a paper copy.' },
   { id: 'legal', words: ['legal', 'legally', 'is it valid', 'is this valid', 'is that valid', 'signature valid', 'valid signature', 'still valid', 'valid in', 'binding', 'enforceable', 'hold up', 'stand up', 'court', 'lawyer', 'law', 'should i sign', 'safe to sign', 'qualified', 'eidas'],
     answer: () => 'GrowSigning makes a simple electronic signature: your name or mark on the page, with a record of when and from where you signed. Whether that is enough depends on the country and the kind of document. The helper gives no legal advice: ask a lawyer, or see "Is this signature enough for my document?" on the help page.' },
   { id: 'locked', words: ['log in', 'login', 'sign in', 'password', 'locked out', 'two-step', '2fa', 'authenticator', 'reset', 'lost my phone', 'lost the phone', 'recovery code', 'cannot sign in', "can't sign in", 'cannot log in', "can't log in"],
@@ -289,7 +289,7 @@ ${lines(KEPT_AFTER_DELETION)}
 ${lines(WHO_CAN_SEE.map((w) => `${w.who} ${w.what}`))}
 
 === WHAT KIND OF SIGNATURE THIS IS ===
-- The words every signer agrees to before signing: "${consentWording('the sender', true).legal}"
+- The sentence every signer ticks before signing, followed by what the link above it ("How electronic signing works") opens: "${consentPlain(consentWording('the sender', true))}"
 - GrowSigning makes simple electronic signatures. It does not make advanced or qualified signatures, checks no identity documents, and has no notary step.
 
 === HEALTH INFORMATION ===

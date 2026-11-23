@@ -18,6 +18,10 @@ export async function register() {
   const { installOutsideGuard } = await import('./server/outside');
   installOutsideGuard();
   for (const line of outsideStartLines()) console.log(line);
+  // A cloud seal (SEAL_CSC_*, src/server/sealcsc.ts): a half set is said here, and the certificate chain is fetched.
+  const { cscStartLines, cscReady } = await import('./server/sealcsc');
+  for (const line of cscStartLines()) console.error(line);
+  void cscReady();
   const { securityContactWarning } = await import('./lib/selfhost');
   const contact = securityContactWarning();
   if (contact) console.error(contact);

@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { PdfDoc } from '@/components/PdfDoc';
 import { AdoptSignature } from '@/components/SignaturePad';
 import { OwnTermsBlock } from '@/components/sign/OwnTerms';
+import { ConsentDetails } from '@/components/sign/ConsentDetails';
 import { Logo } from '@/components/Brand';
 import { consentWording } from '@/lib/policy';
 import { deviceZone, formatDate } from '@/lib/dates';
@@ -295,8 +296,9 @@ export default function InPersonPage() {
         <p>{sender} asks you to sign this, {name}.</p>
         <div id="ip-legal">
           <p className="small">{OFFLINE_WORDS.consentNote(host)}</p>
-          <p className="muted small">{wording.legal}</p>
-          <p className="muted small">{wording.practical}</p>
+          {wording.legal && <p className="muted small">{wording.legal}</p>}
+          {wording.practical && <p className="muted small">{wording.practical}</p>}
+          <ConsentDetails wording={wording} />
         </div>
         {pack.view?.own_terms && <OwnTermsBlock own={pack.view.own_terms} lang="en" paper={false} />}
         <label className="check ip-agree"><input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setError(''))} aria-describedby="ip-legal" /> <span>{wording.agree}</span></label>

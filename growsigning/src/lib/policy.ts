@@ -239,7 +239,8 @@ export const SUPPORT_OTHERS_PER_ADDRESS = 3;
 export const SUPPORT_KEEP_DAYS = 90;
 
 // ---- What a signer agrees to before any field opens ------------------------------------------------
-// The signing screen shows these words, the server writes their version into the audit line when the signer agrees,
+// The signing screen shows these words (since 2026-11-23: one sentence, the rest behind a link on the same screen),
+// the server writes their version into the audit line when the signer agrees,
 // and /help prints them with the version, so a certificate that says "wording 2026-11" can be read back by anyone.
 // The words say what kind of signature this is and what the software does not check. They never say that a
 // signature is valid or equal to a handwritten one: that depends on the country and on the kind of document, and
@@ -249,14 +250,24 @@ export const SUPPORT_KEEP_DAYS = 90;
 // checked the words, never from a machine translation, and its entry in SUPPORTED_LOCALES (src/lib/i18n.ts) says
 // legal: 'reviewed'. Until then that person reads the English words with `note`, one sentence in their language.
 // `language` is the language of the words returned, which the audit line records.
-export type ConsentWording = { version: string; legal: string; practical: string; agree: string; language: string; note: string };
-type ConsentWords = Omit<ConsentWording, 'version' | 'language' | 'note'>;
+// Since wording 2026-11-23 the screen shows one sentence, the one next to the tick (`agree`), and everything else is
+// one tap away under a plain link (`more`), as headed parts (`details`). `legal` and `practical` are then empty: they
+// are the paragraphs the older wordings printed above the tick, and those wordings have no `more` and no `details`.
+// The version names all of it, the sentence and the parts behind the link, so a record that names a version names
+// what the person ticked and what they could open.
+export type ConsentDetail = { h: string; lines: string[] };
+export type ConsentWording = { version: string; legal: string; practical: string; agree: string; more: string; details: ConsentDetail[]; language: string; note: string };
+type ConsentWords = Omit<ConsentWording, 'version' | 'language' | 'note' | 'more' | 'details'> & { more?: string; details?: ConsentDetail[] };
 // 2026-11-20: fewer words, so the consent screen fits one phone screen (research/ux-charter.md, P7: 120 words or
 // fewer before the tick). It dropped two things the wording before it said: that a copy can be downloaded before and
 // after, and that each step is recorded. It was shown for one day and is kept for the people who agreed to it.
 // 2026-11-21: says both again, in short sentences ("now or later": before agreeing, and afterwards from the same link). Someone who only reads or approves is no longer told "You can
 // decline": a person asked only to read has no Decline to press, so their words name what they can do.
-export const CONSENT_VERSION = '2026-11-21';
+// 2026-11-23: one short sentence with the tick, and the rest behind "How electronic signing works" (the owner's
+// decision: as simple as it can be, and nothing true deleted). What 2026-11-21 said above the tick is all still
+// there, one tap away: what kind of signature this is, what is recorded, that some documents need more than this,
+// how to get a copy or paper, and how to say no.
+export const CONSENT_VERSION = '2026-11-23';
 /**
  * The wording the signing screen showed before versions were recorded (until 20 November 2026). Its audit lines
  * name no version, only the person, so an evidence pack prints this one for them and says how it knows. It is
@@ -292,9 +303,29 @@ const CONSENT_WORDINGS: Record<string, Record<string, (sender: string, signs: bo
       : `You can download a copy now or later. You do not have to agree: ask ${sender} for a paper copy instead.`,
     agree: 'I agree to use electronic records and signatures.',
   }) },
+  '2026-11-23': { en: (sender, signs) => ({
+    legal: '',
+    practical: '',
+    agree: signs ? 'I agree to sign this document electronically.' : 'I agree to review this document electronically.',
+    more: 'How electronic signing works',
+    details: [
+      { h: 'What this is', lines: signs
+        ? ['This is a simple electronic signature: your name or mark on the page.', 'By agreeing, you accept this electronic method as a valid way for you and the other parties to sign this document.']
+        : ['What you do here is recorded electronically, not on paper.'] },
+      { h: 'What is recorded', lines: ['We record the time, your IP address and each step you take.', 'The record names these words, so anyone can read later what you agreed to.'] },
+      { h: 'When this may not be enough', lines: [
+        'The rules differ by country and by kind of document. Some documents need a handwritten, witnessed, notarised or qualified signature.',
+        `GrowSigning does not know which kind this document is. If you are not sure, ask ${sender} or a lawyer before you ${signs ? 'sign' : 'continue'}.`] },
+      { h: 'A copy, or paper', lines: [
+        'You can download or print a copy now, and later from this same link.',
+        `You do not have to agree. Ask ${sender} for a paper copy instead.`] },
+      ...(signs ? [{ h: 'Saying no', lines: ['You can decline. Choose Decline on the signing page, where it may be under Other actions.'] }] : []),
+    ],
+  }) },
 };
 /** Every wording ever shown, newest first, with the day it was first shown: /help prints them all, because an audit line names one. */
 export const CONSENT_HISTORY: { version: string; from: string }[] = [
+  { version: '2026-11-23', from: '23 November 2026' },
   { version: '2026-11-21', from: '21 November 2026' },
   { version: '2026-11-20', from: '20 November 2026' },
   { version: '2026-11', from: '20 November 2026' },
@@ -311,8 +342,24 @@ export const consentWording = (sender: string, signs: boolean, version: string =
   const v = keptVersion(version) ? version : CONSENT_VERSION;
   const held = Object.keys(CONSENT_WORDINGS[v]);
   const language = legalLocale(locale, held);
-  return { version: v, language, note: legalNote(locale, held), ...CONSENT_WORDINGS[v][language](sender, signs) };
+  return { version: v, language, note: legalNote(locale, held), more: '', details: [], ...CONSENT_WORDINGS[v][language](sender, signs) };
 };
+/** Whether this wording shows one sentence and keeps the rest behind its link (2026-11-23 and later). */
+export const consentIsShort = (w: Pick<ConsentWording, 'details'>): boolean => w.details.length > 0;
+/** The parts behind the link as plain lines, each heading on its own line: for the record and for a count of words. */
+export const consentDetailLines = (w: Pick<ConsentWording, 'details'>): string[] => w.details.flatMap((d, i) => [...(i ? [''] : []), `${d.h}:`, ...d.lines]);
+/**
+ * Everything of one wording, as the evidence pack writes it. An older wording: its paragraphs, then the sentence next
+ * to the tick. A short one: the sentence that was on the screen, then what could be opened from it, under the words
+ * of the link, so the record shows what was on offer and does not say the person read it.
+ */
+export const consentRecordLines = (w: ConsentWording): string[] => !consentIsShort(w)
+  ? [w.legal, '', w.practical, '', `"${w.agree}"`]
+  : ['On the screen, next to the box they ticked:', '', `"${w.agree}"`, '', `One tap away on the same screen, under the link "${w.more}" (the record does not say whether they opened it):`, '', ...consentDetailLines(w)];
+/** The whole wording as one paragraph of plain text: the helper's notes and anyone who wants to translate it. */
+export const consentPlain = (w: ConsentWording): string => !consentIsShort(w)
+  ? `${w.legal} ${w.practical} ${w.agree}`
+  : `${w.agree} ${w.details.map((d) => `${d.h}: ${d.lines.join(' ')}`).join(' ')}`;
 /** Whether this version exists in this language (a screen that agreed says which one it showed). */
 export const isConsentLanguage = (version: unknown, language: unknown): boolean => {
   const tag = normalizeLocale(language);
@@ -322,7 +369,7 @@ export const isConsentLanguage = (version: unknown, language: unknown): boolean 
 export const consentWordingAsRecorded = (sender: string, signs: boolean, version: string, language: unknown): ConsentWording => {
   const w = consentWording(sender, signs, version);
   const tag = normalizeLocale(language);
-  return tag && isConsentLanguage(w.version, tag) ? { ...w, language: tag, note: '', ...CONSENT_WORDINGS[w.version][tag](sender, signs) } : w;
+  return tag && isConsentLanguage(w.version, tag) ? { ...w, language: tag, note: '', more: '', details: [], ...CONSENT_WORDINGS[w.version][tag](sender, signs) } : w;
 };
 /**
  * What the audit line says after the signer's name. The certificate prints it, so it says where the words can be

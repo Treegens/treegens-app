@@ -558,7 +558,7 @@ test('outside: webhooks go only to WEBHOOK_ALLOW_HOSTS, at saving and at deliver
 test('outside: every place the server calls out is on the list', () => {
   // A file in src/server that opens a connection of its own must be one of these, each tied to a line of the list.
   const KNOWN: Record<string, string[]> = {
-    'mail.ts': ['mail'], 'routes-billing.ts': ['payments'], 'oidc.ts': ['google', 'microsoft'], 'sms.ts': ['sms'], 'tsa.ts': ['tsa'], 'ltv.ts': ['tsa'],
+    'mail.ts': ['mail'], 'routes-billing.ts': ['payments'], 'oidc.ts': ['google', 'microsoft'], 'sms.ts': ['sms'], 'tsa.ts': ['tsa'], 'ltv.ts': ['tsa'], 'sealcsc.ts': ['seal'],
     'chat.ts': ['chat'], 'convert.ts': ['converter'], 'routes-bounces.ts': ['sns'], 'webhooks.ts': ['webhooks'], 'pwned.ts': ['pwned'], 'ocr.ts': ['ocr'],
     'whatsapp.ts': ['whatsapp'], 'voice.ts': ['sms'], 'collect.ts': ['collect'],
   };

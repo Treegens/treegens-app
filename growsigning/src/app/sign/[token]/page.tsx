@@ -57,6 +57,7 @@ import { layers } from '@/lib/stacked';
 // The page made simpler: Other actions in one order, Finish that signs unless something needs a look, Next that opens.
 import { otherActions, bySwitches, lookAgain, nextOpens, nameDiffers, laterAtConsent, laterLabel, reviewTitle, witnessPlaces, GUIDE_NEXT, GUIDE_FINISH, FLAG_MARGIN, type ActionKey } from '@/components/sign/actions';
 import { ConsentTop } from '@/components/sign/ConsentTop';
+import { ConsentDetails } from '@/components/sign/ConsentDetails';
 import { SummaryLink } from '@/components/sign/Summary';
 import { Supplements, focusAlso, NO_ALSO, type AlsoLeft } from '@/components/sign/Supplements';
 import { readTypedName, writeTypedName } from '@/components/sign/typedName';
@@ -1138,10 +1139,13 @@ export default function SignPage() {
           <p className="sg-read"><a className="btn" href={`${downloadUrl}?inline=1`} target="_blank" rel="noreferrer" aria-label={T('sign.consent.download_label')}><Icon name="download" /> {T('sign.consent.download')}</a></p>
           {/* The words come from src/lib/policy.ts with a version, and the version goes back with the agreement, so the
               audit trail says which wording this person was shown. */}
+          {/* Since wording 2026-11-23 the screen shows one sentence, the one next to the tick. The rest is one tap away
+              under "How electronic signing works" (ConsentDetails.tsx), and nothing of it is gone. */}
           <div id="sg-legal" lang={wording.language}>
             {consentNote(lang, wording.note) && <p className="muted sg-legal" lang={signLangAttr(lang)}>{consentNote(lang, wording.note)}</p>}
-            <p className="muted sg-legal">{wording.legal}</p>
-            <p className="muted sg-legal">{wording.practical}</p>
+            {wording.legal && <p className="muted sg-legal">{wording.legal}</p>}
+            {wording.practical && <p className="muted sg-legal">{wording.practical}</p>}
+            <ConsentDetails wording={wording} />
           </div>
           {/* The account's own consent text, under ours: in full while the screen stays at 120 words, else one tap away. */}
           {data.own_terms && <OwnTermsBlock key={data.own_terms.id} own={data.own_terms} lang={data.language?.locale || 'en'} paper={menu.some((m) => m.key === 'paper')} />}

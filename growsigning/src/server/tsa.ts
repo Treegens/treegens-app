@@ -2,7 +2,9 @@
 // clause 6.3, Table 1, row "signature-time-stamp"). Settings:
 //   TSA_URL      the time-stamp service; several, separated by commas, are tried in order (TSA_URLS is read too)
 //   TSA_USER     and TSA_PASSWORD, when the service wants HTTP Basic credentials
-//   TSA_TRUST    optional: a PEM file of the certificates the service's own certificate must lead to
+//   TSA_TRUST    optional: a PEM file of the certificates the service's own certificate must lead to, the PEM text
+//                itself, or "bundled": the roots of DigiCert and SSL.com built into the server (tsaroots.ts, the
+//                same as deploy/tsa-roots.pem), for http://timestamp.digicert.com and http://ts.ssl.com
 // Each service gets 3 seconds and all of them together 4, because the last signer's Finish waits for the seal. A
 // service that did not answer in time is left alone for 10 minutes (TSA_REST_MS), so nobody who finishes after that
 // waits for it (signers who finish at the same moment wait together, never longer than the first one does). An
@@ -18,6 +20,7 @@ import crypto from 'node:crypto';
 import { seq, integer, octets, algorithm, bool, read, kids, whole, readOid, readInt, readOctets, readTime, readText, DerError } from './der.ts';
 import { parseSignedData, checkSigner, hashName, OID } from './sealcms.ts';
 import { readCert, issued, selfSigned, type CertInfo } from './x509.ts';
+import { BUNDLED_TSA_ROOTS } from './tsaroots.ts';
 
 export const TSA_TIMEOUT_MS = 3_000;
 /** All services together: the last signer's Finish waits for the seal, so never longer than this for time-stamps. */
@@ -66,7 +69,7 @@ export function trustCerts(): CertInfo[] | null {
   if (!f) return null;
   let text: string;
   try {
-    text = /-----BEGIN /.test(f) ? f : fs.readFileSync(f, 'utf8');
+    text = f.trim().toLowerCase() === 'bundled' ? BUNDLED_TSA_ROOTS : /-----BEGIN /.test(f) ? f.replace(/\\n/g, '\n') : fs.readFileSync(f, 'utf8');
   } catch {
     throw new TsaError(`TSA_TRUST names a file that cannot be read: ${f}.`);
   }
@@ -106,7 +109,9 @@ export function checkToken(token: Buffer, imprintFor: (hash: string) => Buffer |
     if (time < c.cert.notBefore || time > c.cert.notAfter) throw new TsaError('the certificate that signed the time-stamp was not valid at the time it gives');
     let trusted = false;
     if (trust) {
-      const pool = [...sd.certificates.map((d) => readCert(d)), ...trust];
+      // The listed certificates first: a service may send a copy of its root issued by an older root (DigiCert sends
+      // Trusted Root G4 issued by Assured ID Root CA), and the walk must stop at the listed one, not climb past it.
+      const pool = [...trust, ...sd.certificates.map((d) => readCert(d))];
       const anchored = (x: CertInfo) => trust.some((t) => t.der.equals(x.der));
       let at: CertInfo = c.cert;
       for (let hops = 0; hops < 8 && !anchored(at); hops++) {

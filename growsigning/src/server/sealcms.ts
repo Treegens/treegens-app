@@ -53,20 +53,24 @@ const HASH_OF: Record<string, string> = { [OID.sha1]: 'sha1', [OID.sha256]: 'sha
 export const hashName = (o: string) => HASH_OF[o] || null;
 
 /**
- * Whatever makes the signature value. The key never leaves it: a key file read into memory today (sealkey.ts), a
- * cloud KMS or an HSM later. `sign` is given the SHA-256 digest of the DER of the signed attributes, which is what a
- * KMS or a PKCS#11 token signs, and the DER itself, for a signer that hashes on its own (node:crypto does).
+ * Whatever makes the signature value. The key never leaves it: a key file read into memory (sealkey.ts), or a cloud
+ * signing service that keeps the key in its own hardware (sealcsc.ts, the CSC API of SSL.com eSigner). `sign` is
+ * given the SHA-256 digest of the DER of the signed attributes, which is all a cloud service is sent, and the DER
+ * itself, for a signer that hashes on its own (node:crypto does). `rsa-pkcs1` is RSA with PKCS #1 v1.5 padding
+ * (sha256WithRSAEncryption), which is what SSL.com's service signs with; a key file is signed with RSASSA-PSS.
  */
 export interface SealSigner {
-  readonly scheme: 'rsa-pss' | 'ecdsa-p256';
+  readonly scheme: 'rsa-pss' | 'rsa-pkcs1' | 'ecdsa-p256';
   /** The seal certificate first, then the certificates that issued it, as DER. */
   chain(): Buffer[];
   sign(digest: Buffer, message: Buffer): Promise<Buffer>;
 }
 
-// RSASSA-PSS with SHA-256, MGF1 with SHA-256 and a 32-byte salt (RFC 4055 section 3.1), or ECDSA with SHA-256.
+// RSASSA-PSS with SHA-256, MGF1 with SHA-256 and a 32-byte salt (RFC 4055 section 3.1), sha256WithRSAEncryption
+// (RFC 4055 section 5), or ECDSA with SHA-256.
 export function signatureAlgorithm(scheme: SealSigner['scheme']): Buffer {
   if (scheme === 'ecdsa-p256') return algorithm(OID.ecdsaSha256);
+  if (scheme === 'rsa-pkcs1') return algorithm(OID.sha256WithRsa, null);
   const sha256 = algorithm(OID.sha256, null);
   return algorithm(OID.rsaPss, seq(tagged(0, sha256), tagged(1, algorithm(OID.mgf1, sha256)), tagged(2, integer(32))));
 }

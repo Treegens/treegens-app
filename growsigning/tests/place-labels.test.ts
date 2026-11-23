@@ -97,8 +97,9 @@ test('a row that is already filled in gets nothing, and neither does a filled ce
   const found = findInText(page(items));
   assert.deepEqual(brief(found), ['signature:1', 'signature:2', 'date_signed:1']);
   clearOfText(found, items);
-  // The names in the filled row are not in the header, so the columns go by order.
-  assert.deepEqual(brief(assignSigners(findFields([page(items)]), ['Tom Okafor', 'Rosa Diaz'])), ['signature:1', 'signature:2', 'date_signed:1']);
+  // The names typed into the Name row say whose column it is, whatever the order of the signers.
+  assert.deepEqual(brief(assignSigners(findFields([page(items)]), ['Tom Okafor', 'Rosa Diaz'])), ['signature:2', 'signature:1', 'date_signed:2']);
+  assert.deepEqual(brief(assignSigners(findFields([page(items)]), ['Rosa Diaz', 'Tom Okafor'])), ['signature:1', 'signature:2', 'date_signed:1']);
 });
 
 test('a ruled row with no header: the empty cells beside the label', () => {
@@ -319,4 +320,244 @@ test('a PDF exported by a word processor (LibreOffice) gets the same fields, wit
   }
   // The first page is ordinary text with the words "signature" and "date" in it. Nothing is placed there.
   assert.deepEqual(findFields(pages).filter((f) => f.page === 0), []);
+});
+
+// ---- Found by the reviewers: each of these went wrong once ---------------------------------------------------------
+
+const OWNER5 = ['signature:1', 'signature:2', 'date_signed:1', 'date_signed:2', 'email:2'];
+/** Every field of the owner's table sits in its own cell. */
+const inOwnerCells = (found: Omit<Found, 'page'>[], what: string, dy = 0) => {
+  for (const f of found) {
+    const b = pts(f), col = f.signer === 1 ? [COLS[1], COLS[2]] : [COLS[2], COLS[3]];
+    const row = f.type === 'signature' ? [ROWS[1], ROWS[2]] : f.type === 'date_signed' ? [ROWS[2], ROWS[3]] : [ROWS[3], ROWS[4]];
+    assert.ok(b.x0 >= col[0] && b.x1 <= col[1] && b.top >= row[0] + dy - 1 && b.bottom <= row[1] + dy + 1, `${what}: ${f.type} for signer ${f.signer} is inside its cell`);
+  }
+};
+
+test('a line just above the table is not its header: a centred heading, an indented line, a place and date on the right', () => {
+  const above: [string, TextItem[]][] = [
+    ['a centred heading', [t('SIGNATURES', 290, 270, 12)]],
+    ['an indented line', [t('The parties sign here.', 290, 108)]],
+    ['a place and date set to the right', [t('Addis Ababa, 12 March 2026', 290, 400)]],
+    ['a heading and a line', [t('SIGNATURES', 268, 270, 12), t('Signed in two copies.', 290, 108)]],
+  ];
+  for (const [what, extra] of above) {
+    const items = [...ownerTable().slice(1), ...extra];
+    for (const [how, scan] of [['text only', page(items)], ['with borders', page(items, grid(COLS, ROWS))]] as const) {
+      const found = findInText(scan);
+      assert.deepEqual(brief(found), OWNER5, `${what}, ${how}`);
+      inOwnerCells(found, `${what}, ${how}`);
+      clearOfText(found, items);
+      // The names over the columns are still read, so the columns go by name: Marc first on the document, James second.
+      assert.deepEqual(brief(assignSigners(findFields([scan]), ['Marc Diamond', 'James Cohen'])), ['signature:2', 'signature:1', 'date_signed:2', 'date_signed:1', 'email:1'], `${what}, ${how}`);
+    }
+  }
+  // A title row inside the table that runs over both columns.
+  const merged = [...ownerTable().slice(1), t('SIGNATURES', 292, 270)];
+  const borders = [...grid(COLS, ROWS), { x: 72, y: 276, w: 468, h: 0 }, { x: 72, y: 276, w: 0, h: 24 }, { x: 540, y: 276, w: 0, h: 24 }];
+  for (const scan of [page(merged), page(merged, borders)]) {
+    const found = findInText(scan);
+    assert.deepEqual(brief(found), OWNER5);
+    assert.deepEqual(found[0].who, ['James Cohen']);
+    inOwnerCells(found, 'merged title row');
+  }
+  // A table with drawn borders and no header row at all, under a centred heading: the heading is not a column.
+  const bare = [t('SIGNATURES', 310, 270, 12), t('Signature', 340, 77), t('Date', 388, 77)];
+  const lone = findInText(page(bare, grid([72, 212, 540], [324, 372, 396])));
+  assert.deepEqual(brief(lone), ['signature:-', 'date_signed:-']);
+  for (const f of lone) assert.ok(pts(f).x0 >= 212 && pts(f).x1 <= 540, 'in the empty cell beside the label, not in the label column');
+});
+
+test('the line that leads into the signatures is not a place to sign', () => {
+  for (const lead of ['Signed by the parties:', 'Signed by both parties:', 'Signed by:', 'Signed for and on behalf of the parties:', 'Signed for the organisations:']) {
+    const items = [...ownerTable().slice(1), t(lead, 286)];
+    for (const scan of [page(items), page(items, grid(COLS, ROWS))]) {
+      const found = assignSigners(findFields([scan]), ['James Cohen', 'jimi cohen']);
+      assert.deepEqual(brief(found), OWNER5, lead);
+      inOwnerCells(found, lead);
+    }
+  }
+  // The same kind of line over signature blocks, with no table.
+  const blocks = [t('Schedule 1. Signed for the organisations:', 300), t('Signature: ______________', 340), t('Date: ___________', 370)];
+  assert.deepEqual(brief(findInText(page(blocks))), ['signature:-', 'date_signed:-']);
+  // A real place to sign that ends in a colon stays.
+  assert.deepEqual(brief(findInText(page([t('Client signature:', 300), t('Date:', 330)]))), ['signature:-', 'date_signed:-']);
+  // The space after a colon label is not empty when someone typed a little above the line.
+  assert.deepEqual(findInText(page([t('Signature:', 130), t('Rosa Diaz', 126, 135)])), []);
+});
+
+test('signer numbers never run past the people on the document when everyone has a place', () => {
+  const named = [t('James Cohen', 316, 217), t('Marc Diamond', 316, 381), t('Signature', 340, 77), t('Date', 388, 77)];
+  const company = [t('Treegens DAO', 316, 217), t('Diamond Forestry Ltd', 316, 381), t('Signature', 340, 77), t('Date', 388, 77)];
+  const two = ['James Cohen', 'jimi cohen'];
+  const where = (found: Found[]) => found.map((f) => `p${f.page}:${f.type}:${f.signer ?? '-'}`);
+  // A table with names on one page and a table with company names on the next: each table is worked out by itself.
+  assert.deepEqual(where(assignSigners(findFields([page(named), page(company)]), two)),
+    ['p0:signature:1', 'p0:signature:2', 'p0:date_signed:1', 'p0:date_signed:2', 'p1:signature:1', 'p1:signature:2', 'p1:date_signed:1', 'p1:date_signed:2']);
+  // The same with two blanks side by side on the second page.
+  const blanks = page([t('Signature: ______________', 300, 72), t('Signature: ______________', 300, 330)]);
+  assert.deepEqual(where(assignSigners(findFields([page(named), blanks]), two)).slice(4), ['p1:signature:1', 'p1:signature:2']);
+  // Labels set against the right of their cells are rows of the same table as the rest.
+  const right = (str: string, top: number): TextItem => { const i = t(str, top); return { ...i, x: 207 - i.w }; };
+  const flush = [t('James Cohen', 316, 217), t('Marc Diamond', 316, 381), right('Signature', 340), right('Date', 388), right('Email for notices', 412)];
+  for (const scan of [page(flush), page(flush, grid(COLS, ROWS))])
+    assert.deepEqual(brief(assignSigners(findFields([scan]), two)), ['signature:1', 'signature:2', 'date_signed:1', 'date_signed:2', 'email:1', 'email:2']);
+  // More columns than signers: only then is somebody missing. James is named over the third column.
+  const three = [t('Ana Silva', 316, 180), t('Witness', 316, 310), t('James Cohen', 316, 440), t('Signature', 340, 77)];
+  assert.deepEqual(brief(assignSigners(findFields([page(three)]), two)), ['signature:3', 'signature:2', 'signature:1']);
+
+  // Nobody gets two columns, and the closest name wins.
+  const junior = [t('James Cohen Jr.', 316, 217), t('James Cohen', 316, 381), t('Signature', 340, 77)];
+  assert.deepEqual(brief(assignSigners(findFields([page(junior)]), ['James Cohen', 'James Cohen Jr'])), ['signature:2', 'signature:1']);
+  const short = [t('James Cohen', 316, 217), t('James Diamond', 316, 381), t('Signature', 340, 77)];
+  assert.deepEqual(brief(assignSigners(findFields([page(short)]), ['James', 'Marc'])), ['signature:1', 'signature:2']);
+  assert.ok(!namesMatch('Cohen & James LLP', 'James Cohen'));
+  assert.ok(!namesMatch('James Smith and Ana Cohen of Cohen Farms', 'James Cohen'));
+  assert.ok(namesMatch('Cohen, James', 'James Cohen'));
+  assert.ok(namesMatch('JAMES R. COHEN', 'James Cohen'));
+  // A witness named near a signature is not the signer.
+  const witness = findFields([page([t('Signature:', 500), t('Witnessed by Marc Diamond', 520), t('Name:', 560)])]);
+  assert.deepEqual(brief(assignSigners(witness, ['James Cohen', 'Marc Diamond'])), ['signature:-', 'full_name:-']);
+
+  // A company over the name in the same header cell, or the names typed into a Name row: still matched by name.
+  const twoLine = [t('Treegens DAO', 304, 217), t('Diamond Forestry Ltd', 304, 381), t('James Cohen', 318, 217), t('Marc Diamond', 318, 381), t('Signature', 350, 77), t('Date', 398, 77)];
+  for (const scan of [page(twoLine), page(twoLine, grid(COLS, [290, 326, 374, 406]))]) {
+    const found = findFields([scan]);
+    assert.deepEqual(found[0].who, ['James Cohen', 'Treegens DAO']);
+    assert.deepEqual(brief(assignSigners(found, ['Marc Diamond', 'James Cohen'])), ['signature:2', 'signature:1', 'date_signed:2', 'date_signed:1']);
+  }
+});
+
+test('one signer, or one place to sign each and nothing to say whose is whose', () => {
+  // Two "Signature: ____  Date: ____" lines under each other, two signers: one line each, top to bottom.
+  const lines2 = [t('Signature: ______________________', 300), t('Date: ____________', 300, 330), t('Signature: ______________________', 350), t('Date: ____________', 350, 330)];
+  const found = findFields([page(lines2)]);
+  assert.deepEqual(brief(found), ['signature:-', 'date_signed:-', 'signature:-', 'date_signed:-']);
+  assert.deepEqual(brief(assignSigners(found, ['James Cohen', 'jimi cohen'])), ['signature:1', 'date_signed:1', 'signature:2', 'date_signed:2']);
+  // Name, signature and date stacked twice.
+  const stacked = [t('Name:', 300), t('Signature:', 335), t('Date:', 365), t('Name:', 430), t('Signature:', 465), t('Date:', 495)];
+  assert.deepEqual(brief(assignSigners(findFields([page(stacked)]), ['Ana Silva', 'Sam Lee'])), ['full_name:1', 'signature:1', 'date_signed:1', 'full_name:2', 'signature:2', 'date_signed:2']);
+  // One signer, or three: nothing says who signs where, so the places stay with whoever is picked.
+  assert.deepEqual(brief(assignSigners(found, ['James Cohen'])), ['signature:-', 'date_signed:-', 'signature:-', 'date_signed:-']);
+  assert.deepEqual(brief(assignSigners(found, ['A B', 'C D', 'E F'])), ['signature:-', 'date_signed:-', 'signature:-', 'date_signed:-']);
+  // One signer and two blanks on a line with no names (a signature and a witness): both stay with that signer.
+  const pair = findFields([page([t('Signature: ______________', 300, 72), t('Witness signature: ______________', 300, 300)])]);
+  assert.deepEqual(brief(pair), ['signature:1', 'signature:2']);
+  assert.deepEqual(brief(assignSigners(pair, ['James Cohen'])), ['signature:-', 'signature:-']);
+  assert.deepEqual(brief(assignSigners(pair, ['James Cohen', 'jimi cohen'])), ['signature:1', 'signature:2']);
+  // One signer and the owner's table: the other column has a name on it, so it waits for that person.
+  const table = assignSigners(findFields([page(ownerTable())]), ['James Cohen']);
+  assert.deepEqual(brief(table), ['signature:1', 'signature:2', 'date_signed:1', 'date_signed:2', 'email:2']);
+  assert.deepEqual(table.find((f) => f.signer === 2)!.who, ['Marc Diamond']);
+  assert.ok(table.every((f) => f.set && f.set.startsWith('t')), 'the editor can tell these are columns of a table');
+});
+
+test('side by side blocks without colons, labels that wrap, labels under a line', () => {
+  // Under party headings, no colons. This is not a table whose cells happen to hold the word Signature.
+  const sides = [
+    t('For Treegens DAO', 470, 72), t('For Diamond Forestry Ltd', 470, 330),
+    t('Signature', 510, 72), t('Signature', 510, 330),
+    t('Name', 545, 72), t('Name', 545, 330),
+    t('Date', 580, 72), t('Date', 580, 330),
+  ];
+  const found = findInText(page(sides));
+  assert.deepEqual(brief(found), ['signature:1', 'signature:2', 'full_name:1', 'full_name:2', 'date_signed:1', 'date_signed:2']);
+  clearOfText(found, sides);
+  assert.deepEqual(found[0].who, ['For Treegens DAO']);
+  assert.deepEqual(found[1].who, ['For Diamond Forestry Ltd']);
+
+  // "Email for" over "notices" in one cell is one label.
+  const wrapped = [...ownerTable().slice(1, 5), t('Email for', 412, 77), t('notices', 425, 77), t('jimi@treegens.org', 412, 217)];
+  for (const scan of [page(wrapped), page(wrapped, grid(COLS, [300, 324, 372, 396, 434]))]) assert.deepEqual(brief(findInText(scan)), OWNER5);
+
+  // "____________" typed as text with the label under it: the field goes on the blank.
+  const typed = [t('______________________', 100), t('Signature', 114, 72, 9), t('______________', 100, 330), t('Date', 114, 330, 9)];
+  const onBlank = findInText(page(typed));
+  assert.deepEqual(brief(onBlank), ['signature:-', 'date_signed:-']);
+  for (const f of onBlank) assert.ok(Math.abs(pts(f).bottom - 100) < 4 && pts(f).x0 < 80 + (f.type === 'signature' ? 0 : 258), 'the field stands on the blank, not beside the label');
+
+  // A drawn line, the name printed under it, and "Signature" under the name. The name says whose line it is.
+  const lined = [t('James Cohen', 520, 72), t('Marc Diamond', 520, 330), t('Signature', 534, 72, 9), t('Signature', 534, 330, 9)];
+  const lines: Rule[] = [{ x: 72, y: 506, w: 200, h: 0.5 }, { x: 330, y: 506, w: 200, h: 0.5 }];
+  const onLine = findFields([page(lined, lines)]);
+  assert.deepEqual(brief(onLine), ['signature:1', 'signature:2']);
+  for (const f of onLine) assert.ok(pts(f).bottom <= 506 && pts(f).bottom > 500);
+  assert.deepEqual(brief(assignSigners(onLine, ['Marc Diamond', 'James Cohen'])), ['signature:2', 'signature:1']);
+  // A rule across the whole page over a heading is decoration, not a line to sign on.
+  assert.deepEqual(findInText(page([t('Signature', 120), t('Each party signs below in ink.', 150)], [{ x: 72, y: 104, w: 468, h: 0.5 }])), []);
+
+  // Rows too low to write in get nothing, and no field is ever a slit.
+  const tiny = [t('A', 316, 217, 8), t('B', 316, 381, 8), t('Signature', 326, 77, 8), t('Date', 336, 77, 8)];
+  assert.deepEqual(findInText(page(tiny, grid(COLS, [308, 318, 328, 338]))), []);
+  // In a table every field is as wide as its cell, so the two columns look the same.
+  const even = findInText(page(ownerTable(), grid(COLS, ROWS)));
+  for (const f of even) assert.ok(Math.abs(pts(f).x1 - pts(f).x0 - (f.signer === 1 ? 147 : 147)) < 20, `${f.type} fills its cell`);
+  assert.ok(Math.abs(even[0].w - even[2].w) < 0.001, 'the date is as wide as the signature over it');
+});
+
+test('more words that only look like labels: lists of people, lists of words, data with a gap', () => {
+  const sheet = (pitch: number) => [t('Name', 200, 77), t('Signature', 200, 225), t('Date', 200, 385), t('Rosa Diaz', 200 + pitch, 77), t('Tom Okafor', 200 + 2 * pitch, 77)];
+  const staff = [t('Name', 200, 77), t('Title', 200, 225), t('Email', 200, 385), t('Rosa Diaz', 232, 77), t('Director', 232, 225), t('rosa@example.org', 232, 385), t('Tom Okafor', 264, 77)];
+  const sheetGrid = grid([72, 220, 380, 540], [180, 212, 244, 276]);
+  const none: [string, PageScan][] = [
+    ['a sign-in sheet with tall rows', page(sheet(32))],
+    ['a sign-in sheet with very tall rows', page(sheet(38))],
+    ['the same with borders', page(sheet(32), sheetGrid)],
+    ['an empty sign-in sheet with borders', page(sheet(32).slice(0, 3), sheetGrid)],
+    ['a staff list with tall rows', page(staff)],
+    ['a staff list with borders', page(staff, sheetGrid)],
+    ['a list of definitions, then numbered headings that are exactly a label', page([
+      t('Company', 100), t('means Treegens DAO.', 100, 180), t('Date', 118), t('means the date of signing.', 118, 180), t('Title', 136), t('means ownership of the land.', 136, 180), t('Signature', 154), t('means a mark made by a person.', 154, 180),
+      t('2. Title', 190, 72, 18), t('Title passes on payment.', 214), t('3. Date', 250, 72, 18), t('The date is 1 March 2026.', 274),
+    ])],
+    ['a paragraph whose last line is the one word signature', page([t('This deed is not valid without a wet-ink', 100), t('signature', 114), t('The next paragraph starts here and goes on for a while.', 160)])],
+    ['a heading in the size of the body text with space under it', page([t('Signature', 100), t('Some text here about the deal and more.', 160)])],
+    ['a wrapped word over a numbered heading', page([t('The parties agree that the effective', 100), t('Date', 114), t('2. Title', 140), t('Title to the goods passes on delivery.', 160)])],
+    ['a list with bullets', page([t('The cover sheet states:', 90), t('• Title', 110), t('• Date', 126), t('• Signature', 142), t('of each party to the agreement.', 158)])],
+    ['numbered clause headings', page([t('1. Name', 100), t('2. Date', 130), t('3. Signature', 160), t('4. Company', 190)])],
+    ['an index of words', page([t('Index', 80, 72, 14), t('Company', 110), t('Date', 124), t('Email', 138), t('Name', 152), t('Position', 166), t('Signature', 180), t('Title', 194)])],
+    ['a plan with one column still empty', page([
+      t('Phase 1', 200, 200), t('Phase 2', 200, 320), t('Phase 3', 200, 440),
+      t('Title', 226, 72), t('Survey', 226, 200), t('Planting', 226, 320),
+      t('Date', 252, 72), t('March', 252, 200), t('June', 252, 320),
+      t('Company', 278, 72), t('Treegens', 278, 200), t('Diamond', 278, 320),
+    ], grid([67, 195, 315, 435, 545], [184, 210, 236, 262, 288]))],
+    ['the same plan without borders', page([
+      t('Phase 1', 200, 200), t('Phase 2', 200, 320), t('Phase 3', 200, 440),
+      t('Title', 226, 72), t('Survey', 226, 200), t('Planting', 226, 320),
+      t('Date', 252, 72), t('March', 252, 200), t('June', 252, 320),
+    ])],
+  ];
+  for (const [what, scan] of none) assert.deepEqual(findFields([scan]).map((f) => `${f.type} at ${Math.round(f.x * 612)},${Math.round(f.y * 792)}`), [], what);
+});
+
+test('real word processor PDFs the reviewers made: a heading over the table, a lead-in line, a sign-in sheet', async () => {
+  // Each PDF was printed by LibreOffice from the .html file of the same name next to it.
+  const { readFileSync } = await import('node:fs');
+  const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const read = async (name: string) => {
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(new URL(`./fixtures/${name}.pdf`, import.meta.url))), verbosity: 0 }).promise;
+    const pages = await scanPdf(doc);
+    await doc.destroy();
+    return [pages, pages.map(({ rules: _rules, ...p }) => p)] as PageScan[][];
+  };
+  const want = ['signature:1', 'signature:2', 'date_signed:1', 'date_signed:2', 'email:2'];
+  for (const name of ['place-labels-heading', 'place-labels-leadin']) {
+    for (const scans of await read(name)) {
+      const how = `${name}, ${scans[0].rules ? 'with borders' : 'text only'}`;
+      const found = assignSigners(findFields(scans), ['James Cohen', 'jimi cohen']);
+      assert.deepEqual(brief(found), want, how);
+      const { w, h } = scans[0].size;
+      const at = (str: string) => scans[0].items.find((i) => i.str.trim() === str)!;
+      for (const f of found) {
+        const head = at(f.signer === 1 ? 'James Cohen' : 'Marc Diamond'), label = at(f.type === 'signature' ? 'Signature' : f.type === 'date_signed' ? 'Date' : 'Email for notices');
+        assert.ok(Math.abs(f.x * w - head.x) < 8, `${how}: ${f.type} starts under "${head.str}"`);
+        assert.ok(f.y * h < label.y && (f.y + f.h) * h > label.y - label.h, `${how}: ${f.type} is on the row of "${label.str}"`);
+        for (const i of scans[0].items) assert.ok(!(i.x < (f.x + f.w) * w && i.x + i.w > f.x * w && i.y - 0.8 * i.h < (f.y + f.h) * h && i.y > f.y * h), `${how}: ${f.type} covers "${i.str}"`);
+      }
+      // The other way round on the document: the names over the columns still decide.
+      assert.deepEqual(brief(assignSigners(findFields(scans), ['Marc Diamond', 'James Cohen'])), ['signature:2', 'signature:1', 'date_signed:2', 'date_signed:1', 'email:1'], how);
+    }
+  }
+  for (const scans of await read('place-labels-signin')) assert.deepEqual(findFields(scans), []);
 });

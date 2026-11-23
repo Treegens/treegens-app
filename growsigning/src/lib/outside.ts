@@ -27,11 +27,12 @@ import { READ_OUTSIDE } from './aiassist.ts';
 import { pwnedUrl } from './signinrules.ts';
 import { ssoOffered } from './orgsso.ts';
 import { isPrivateAddress } from './chatboundary.ts';
+import { cscSettings, CSC_SETTINGS } from './seal.ts';
 
 type Env = Record<string, string | undefined>;
 
 export type OutsideMode = 'all' | 'listed' | 'none';
-export type ServiceId = 'mail' | 'payments' | 'collect' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks' | 'ocr' | 'whatsapp' | 'orgsso';
+export type ServiceId = 'mail' | 'payments' | 'collect' | 'google' | 'microsoft' | 'sms' | 'tsa' | 'seal' | 'chat' | 'converter' | 'pwned' | 'sns' | 'webhooks' | 'ocr' | 'whatsapp' | 'orgsso';
 
 export type OutsideService = {
   id: ServiceId;
@@ -143,6 +144,10 @@ export function outsideServices(env: Env = process.env): OutsideService[] {
     on: wa === 'meta' || wa === 'twilio', hosts: wa === 'meta' ? ['graph.facebook.com'] : wa === 'twilio' ? ['api.twilio.com'] : [] });
   const tsa = tsaHosts(env);
   out.push({ id: 'tsa', name: 'Time-stamp service', purpose: 'Adds a time stamp from that service to the digital seal of a signed PDF, and one over the last value of each record when everyone has finished. Without it the seal carries the server\'s own time only. It is sent fingerprints, never the document. With it, the server also asks the places named inside the seal\'s and the service\'s certificates (their OCSP services and revocation lists) whether those certificates are still good, sending a certificate\'s serial number: those addresses come from the certificates and are not listed here.', settings: ['TSA_URL', 'TSA_URLS'], on: tsa.length > 0, hosts: tsa });
+  // The cloud seal (src/server/sealcsc.ts), only when it is set up completely: half set, it is refused and calls nobody.
+  const csc = cscSettings(env);
+  out.push({ id: 'seal', name: 'Cloud signing service for the digital seal (SSL.com eSigner)', purpose: 'Makes the digital seal of each completed PDF with a certificate whose key stays in that service\'s hardware. It is sent the SHA-256 fingerprint of what the seal signs, never the document, and the account name and password the operator set to sign in. Once a day it is also asked for the certificate chain.', settings: ['SEAL_CSC_CLIENT_ID', 'SEAL_CSC_USERNAME', 'SEAL_CSC_PASSWORD', 'SEAL_CSC_URL', 'SEAL_CSC_TOKEN_URL'],
+    on: csc.complete, hosts: csc.complete ? [...new Set([hostOfUrl(csc.url), hostOfUrl(csc.tokenUrl)].filter(Boolean))] : [] });
   const chat = chatProvider(env);
   const chatOn = !!chat && chatModelOn(env);
   out.push({ id: 'chat', name: 'AI model for the help chat', purpose: `Writes the help chat's answers from what a person types into the chat. ${READ_OUTSIDE}`, settings: [chat?.keyVar || 'SUPPORT_CHAT_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY'].filter((v, i, a) => a.indexOf(v) === i),
@@ -239,7 +244,7 @@ export function applyOutsideCalls(env: Env = process.env): SwitchedOff[] {
     const extra = hostList(env.OUTBOUND_ALLOW);
     for (const s of outsideServices(env)) {
       if (!blockedInNone(s, extra) || s.id === 'sns') continue;
-      const all = s.id === 'chat' ? ['SUPPORT_CHAT_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY'] : s.id === 'sms' ? ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SMS_WEBHOOK_URL', 'SMS_WEBHOOK_TOKEN'] : s.id === 'converter' ? ['CONVERTER_URL'] : s.settings;
+      const all = s.id === 'chat' ? ['SUPPORT_CHAT_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY'] : s.id === 'sms' ? ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'SMS_WEBHOOK_URL', 'SMS_WEBHOOK_TOKEN'] : s.id === 'converter' ? ['CONVERTER_URL'] : s.id === 'seal' ? [...CSC_SETTINGS] : s.settings;
       const had = all.filter((k) => clean(env[k]));
       for (const k of had) delete env[k];
       // The leaked-password check is on without any setting, so it is switched off by one.

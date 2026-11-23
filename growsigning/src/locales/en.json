@@ -1439,7 +1439,7 @@
   "settings.own.stopped": "Stopped. Signers now see only our own words. Your versions are kept.",
   "settings.own.not_saved": "Not saved. Try again.",
   "settings.own.title": "Your consent text",
-  "disclosure.is": "Signers can read this on the screen where they agree to sign on screen, under our own sentence on what kind of signature this is. Our sentence always stays. GrowSigning shows your words as you wrote them and does not check that they meet any law.",
+  "disclosure.is": "Signers can read this on the screen where they agree to sign on screen, under our own link on how electronic signing works. Our link always stays. GrowSigning shows your words as you wrote them and does not check that they meet any law.",
   "settings.own.shown": "{label} version {version}, saved {day}.",
   "settings.own.shown_by": "{label} version {version}, saved {day} by {who}.",
   "settings.own.shown_label": "Shown to signers now:",

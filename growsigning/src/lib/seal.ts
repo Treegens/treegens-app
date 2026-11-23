@@ -4,8 +4,29 @@
 
 type Env = Record<string, string | undefined>;
 
-/** Whether the operator of this server has set a seal key (SEAL_P12 or SEAL_KEY_PEM). It may still be refused. */
-export const sealSet = (env: Env = process.env) => !!(env.SEAL_P12 || env.SEAL_KEY_PEM);
+/**
+ * The settings of a seal made by a cloud signing service through the CSC API (SSL.com eSigner, src/server/sealcsc.ts).
+ * The private key stays in that service's hardware; only a SHA-256 fingerprint is sent to it.
+ */
+export const CSC_SETTINGS = ['SEAL_CSC_URL', 'SEAL_CSC_TOKEN_URL', 'SEAL_CSC_CLIENT_ID', 'SEAL_CSC_CLIENT_SECRET', 'SEAL_CSC_USERNAME', 'SEAL_CSC_PASSWORD', 'SEAL_CSC_CREDENTIAL_ID', 'SEAL_CSC_TOTP_SECRET'] as const;
+/** Without these three the service cannot be signed in to. The rest are optional (see .env.example). */
+export const CSC_REQUIRED = ['SEAL_CSC_CLIENT_ID', 'SEAL_CSC_USERNAME', 'SEAL_CSC_PASSWORD'] as const;
+export const CSC_DEFAULT_URL = 'https://cs.ssl.com/csc/v0';
+export const CSC_DEFAULT_TOKEN_URL = 'https://login.ssl.com/oauth2/token';
+
+/**
+ * The cloud seal settings as read. `any`: at least one of them that names an account is set (the two addresses alone
+ * do not count). `missing`: required ones that are not set, so a half set is refused and logged. `complete`: all set.
+ */
+export function cscSettings(env: Env = process.env): { any: boolean; missing: string[]; complete: boolean; url: string; tokenUrl: string } {
+  const v = (k: string) => (env[k] || '').trim();
+  const any = CSC_SETTINGS.filter((k) => k !== 'SEAL_CSC_URL' && k !== 'SEAL_CSC_TOKEN_URL').some((k) => v(k));
+  const missing = any ? CSC_REQUIRED.filter((k) => !v(k)) : [];
+  return { any, missing, complete: any && !missing.length, url: (v('SEAL_CSC_URL') || CSC_DEFAULT_URL).replace(/\/+$/, ''), tokenUrl: v('SEAL_CSC_TOKEN_URL') || CSC_DEFAULT_TOKEN_URL };
+}
+
+/** Whether the operator of this server has set a seal: a key file (SEAL_P12 or SEAL_KEY_PEM) or a cloud signing service (SEAL_CSC_*). It may still be refused. */
+export const sealSet = (env: Env = process.env) => !!(env.SEAL_P12 || env.SEAL_KEY_PEM || cscSettings(env).any);
 /** Whether a time-stamp service is set (TSA_URL, or TSA_URLS). */
 export const timeStampSet = (env: Env = process.env) => /https?:\/\//i.test(`${env.TSA_URL || ''}${env.TSA_URLS || ''}`);
 

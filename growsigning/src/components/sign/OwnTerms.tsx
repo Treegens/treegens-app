@@ -1,6 +1,6 @@
 'use client';
-// The account's own consent text on the consent screen, under our own sentence on what kind of signature this is,
-// which always stays (src/lib/policy.ts). The words are the version the server says is in use for this person's
+// The account's own consent text on the consent screen, under our own link "How electronic signing works"
+// (ConsentDetails.tsx), which always stays (src/lib/policy.ts). The words are the version the server says is in use for this person's
 // language (ownTermsFor in src/server/disclosure.ts). The screen sends its id back with the agreement, so the record
 // names exactly the words that were on the screen.
 //

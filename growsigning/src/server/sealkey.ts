@@ -1,7 +1,10 @@
-// The key and certificate the digital seal is made with, behind a signer (SealSigner in sealcms.ts) so a cloud KMS or
-// an HSM can take the place of a key file later without the rest changing. Read from the settings:
+// The key and certificate the digital seal is made with, behind a signer (SealSigner in sealcms.ts), so a key file and
+// a cloud signing service are used the same way by everything else. Read from the settings:
 //   SEAL_P12 (path to a .p12 or .pfx file) with SEAL_P12_PASSWORD, or
-//   SEAL_KEY_PEM, SEAL_CERT_PEM and SEAL_CHAIN_PEM (each a path to a PEM file, or the PEM text itself).
+//   SEAL_KEY_PEM, SEAL_CERT_PEM and SEAL_CHAIN_PEM (each a path to a PEM file, or the PEM text itself), or
+//   SEAL_CSC_* (sealcsc.ts): a cloud signing service (SSL.com eSigner) that keeps the key and signs a fingerprint.
+//     The certificate chain is the one the service gives; the key usage, the chain and the dates are checked here the
+//     same way, and every signature value it answers is checked with the certificate before it is used.
 // RSA of 2048 bits or more (signed with RSASSA-PSS) or ECDSA on P-256. Sealing is refused, and completed PDFs are
 // made without a seal exactly as before, when the key cannot be read, does not belong to the certificate, the
 // certificate has expired or is not yet valid, its key usage allows neither digitalSignature nor nonRepudiation, or the
@@ -17,6 +20,7 @@ import { id, now, isEmail, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
 import { seal } from './colcrypt.ts';
 import { dayText } from '../lib/dates.ts';
+import { cscConfigured, cscSettingsProblem, cscMaterial, cscSigner, type CscMaterial } from './sealcsc.ts';
 
 export type SealKey = { signer: SealSigner; cert: CertInfo; chain: CertInfo[]; hash: string };
 export type SealState = { on: true; key: SealKey } | { on: false; configured: boolean; why?: string };
@@ -92,20 +96,7 @@ function check(at = new Date()): SealKey {
   if (key.asymmetricKeyType === 'rsa' && (d.modulusLength || 0) >= 2048) scheme = 'rsa-pss';
   else if (key.asymmetricKeyType === 'ec' && d.namedCurve === 'prime256v1') scheme = 'ecdsa-p256';
   else throw new Refused('The seal key must be RSA of 2048 bits or more, or ECDSA on the P-256 curve.');
-  if (cert.keyUsage && !cert.keyUsage.digitalSignature && !cert.keyUsage.nonRepudiation) throw new Refused(`The seal certificate (${cert.name}) does not allow its key to sign documents: its key usage has neither digitalSignature nor nonRepudiation.`);
-  // The chain, from the seal certificate up, as far as the given certificates go.
-  const chain: CertInfo[] = [cert];
-  const rest = infos.filter((c) => c !== cert);
-  for (let c = cert; !selfSigned(c); ) {
-    const up = rest.find((x) => !chain.includes(x) && issued(x, c));
-    if (!up) {
-      if (c === cert) throw new Refused(`The certificate that issued the seal certificate (${cert.issuerName}) is not given. Put it in ${process.env.SEAL_P12 ? 'the .p12 file' : 'SEAL_CHAIN_PEM'}.`);
-      break;
-    }
-    chain.push(up);
-    c = up;
-  }
-  checkDates(chain, at);
+  const chain = chainOf(cert, infos, process.env.SEAL_P12 ? 'Put it in the .p12 file.' : 'Put it in SEAL_CHAIN_PEM.', at);
   const signer: SealSigner = {
     scheme,
     chain: () => chain.map((c) => c.der),
@@ -117,6 +108,41 @@ function check(at = new Date()): SealKey {
     },
   };
   return { signer, cert, chain, hash: certHash(cert.der) };
+}
+
+// The key usage, and the chain from the seal certificate up as far as the given certificates go, with their dates.
+function chainOf(cert: CertInfo, infos: CertInfo[], where: string, at: Date): CertInfo[] {
+  if (cert.keyUsage && !cert.keyUsage.digitalSignature && !cert.keyUsage.nonRepudiation) throw new Refused(`The seal certificate (${cert.name}) does not allow its key to sign documents: its key usage has neither digitalSignature nor nonRepudiation.`);
+  const chain: CertInfo[] = [cert];
+  const rest = infos.filter((c) => c !== cert);
+  for (let c = cert; !selfSigned(c); ) {
+    const up = rest.find((x) => !chain.includes(x) && issued(x, c));
+    if (!up) {
+      if (c === cert) throw new Refused(`The certificate that issued the seal certificate (${cert.issuerName}) is not given. ${where}`);
+      break;
+    }
+    chain.push(up);
+    c = up;
+  }
+  checkDates(chain, at);
+  return chain;
+}
+
+// The seal of a cloud signing service: the certificate and chain it gave (sealcsc.ts), checked as a key file's are.
+function cscCheck(m: CscMaterial, at: Date): SealKey {
+  let infos: CertInfo[];
+  try {
+    infos = m.certs.map(readCert);
+  } catch {
+    throw new Refused('One of the certificates the signing service gave cannot be read.');
+  }
+  const cert = infos[0];
+  const k = cert.x509.publicKey;
+  const d = k.asymmetricKeyDetails || {};
+  if (!((k.asymmetricKeyType === 'rsa' && (d.modulusLength || 0) >= 2048) || (k.asymmetricKeyType === 'ec' && d.namedCurve === 'prime256v1')))
+    throw new Refused('The certificate of the signing service must have an RSA key of 2048 bits or more, or an ECDSA key on the P-256 curve.');
+  const chain = chainOf(cert, infos, 'The signing service did not give it with the certificate.', at);
+  return { signer: cscSigner(m, cert, () => chain.map((c) => c.der)), cert, chain, hash: certHash(cert.der) };
 }
 
 function checkDates(chain: CertInfo[], at: Date) {
@@ -135,12 +161,39 @@ const signature = () => SETTINGS.map((k) => `${k}=${process.env[k] || ''}`).join
 /** The seal key as it is now, or why there is none. */
 export function sealState(at = new Date()): SealState {
   if (!sealConfigured()) return { on: false, configured: false };
+  if (cscConfigured()) return cscState(at);
   const sig = signature();
   if (g.__sealKey?.sig !== sig) {
     try {
       g.__sealKey = { sig, key: check(at) };
     } catch (e) {
       g.__sealKey = { sig, why: e instanceof Refused ? e.message : `The seal key could not be read: ${(e as Error)?.message || e}` };
+    }
+  }
+  const s = g.__sealKey;
+  if (s.why) return refused(s.why);
+  try {
+    checkDates(s.key.chain, at);
+  } catch (e) {
+    return refused((e as Error).message);
+  }
+  return { on: true, key: s.key };
+}
+
+// The cloud seal: from the chain the service gave last (fetched before each seal by cscReady, finalpipe.ts).
+function cscState(at: Date): SealState {
+  const problem = cscSettingsProblem();
+  if (problem) return refused(problem);
+  const got = cscMaterial();
+  // Not fetched yet and nothing failed: the seal is not used for this file, but nobody is alarmed.
+  if (!('material' in got)) return got.why ? refused(got.why) : { on: false, configured: true, why: 'The seal certificate is still being fetched from the signing service.' };
+  const m = got.material;
+  const sig = `csc\n${m.sig}\n${m.fetchedAt}`;
+  if (g.__sealKey?.sig !== sig) {
+    try {
+      g.__sealKey = { sig, key: cscCheck(m, at) };
+    } catch (e) {
+      g.__sealKey = { sig, why: e instanceof Refused ? e.message : `The seal certificate of the signing service could not be read: ${(e as Error)?.message || e}` };
     }
   }
   const s = g.__sealKey;
