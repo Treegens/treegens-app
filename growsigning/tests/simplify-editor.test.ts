@@ -253,7 +253,7 @@ test('a field shows Assigned to, Required and Label; the rest is under its More 
   // No tag jargon and no "validation" in what a person reads (comments in the code may still explain it).
   const seen = step.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.doesNotMatch(seen, /\{\{signature|tags such as|or tags found|<span>Validation<\/span>/);
-  assert.match(step, /'We found no blanks or form fields in this document\. Pick a field and click where it goes\.'/);
+  assert.match(step, /'We found no blanks, signature labels or form fields in this document\. Pick a field and click where it goes\.'/);
 });
 
 // ---- 4. Sign now ---------------------------------------------------------------------------------------------------

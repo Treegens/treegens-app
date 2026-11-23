@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMe } from '../AppShell';
 import { newId, toast } from '../ui';
 import { PdfDoc } from '../PdfDoc';
-import { findFields, overlap, scanPdf, type Found, type PageScan } from '@/lib/autoplace';
+import { assignSigners, findFields, overlap, scanPdf, type Found, type PageScan } from '@/lib/autoplace';
 import { useSuggest } from './SuggestFields';
 import { snapBox, type Guide } from './snap';
 import { Lock, UndoRedo, Wand } from './parts';
@@ -334,20 +334,23 @@ export function StepFields({ ed }: { ed: Ed }) {
     setFinding('Looking through your documents');
     const setFound = (text: string) => setNote({ text, count: fields.current().length });
     try {
-      const all: (Found & { doc: string })[] = [];
+      const read: (Found & { doc: string })[] = [];
       const scans: { doc: string; pages: PageScan[] }[] = [];
       for (const d of docs.filter((x) => !x.supplemental)) {
         const pdf = pdfs[d.id];
         if (!pdf) throw new Error('The document is still loading. Try again in a moment.');
         const pages = await scanPdf(pdf, (n, total) => setFinding(total > 3 ? `Looking at page ${n} of ${total}` : 'Looking through your documents'));
         scans.push({ doc: d.id, pages });
-        all.push(...findFields(pages).map((f) => ({ ...f, doc: d.id })));
+        read.push(...findFields(pages).map((f) => ({ ...f, doc: d.id })));
       }
+      // A table column or signature block that carries a signer's name is theirs, whatever their place in the order.
+      // The rest go by order: first column or block for the first signer, as numbered tags do.
+      const all = assignSigners(read, signers.map((r) => String(r.name || '')));
       // Pages where nothing was found go to the AI, where the account allows it (SuggestFields.tsx); its suggestions
       // are listed under the button for the sender to add.
       const askedAi = suggest.ask(scans, all);
       // When the AI was asked, its panel says that nothing was found, in one notice with what it suggests.
-      if (!all.length) return askedAi ? undefined : setFound('We found no blanks or form fields in this document. Pick a field and click where it goes.');
+      if (!all.length) return askedAi ? undefined : setFound('We found no blanks, signature labels or form fields in this document. Pick a field and click where it goes.');
 
       const cur = fields.current();
       const fresh: any[] = [];
@@ -385,7 +388,9 @@ export function StepFields({ ed }: { ed: Ed }) {
         reveal.current = { id: fresh[0].id, focus: false };
       }
       const people = new Set(fresh.map((f) => f.recipient_id));
-      const forWhom = people.size === 1 ? ` for ${label(rcps.find((r) => r.id === [...people][0]))}` : '';
+      // "Added 5 fields: 2 for Ana Silva and 3 for Sam Lee." With one person it is "Added 4 fields for Ana Silva."
+      const share = [...people].map((id) => `${fresh.filter((f) => f.recipient_id === id).length} for ${label(rcps.find((r) => r.id === id))}`);
+      const forWhom = people.size === 1 ? ` for ${label(rcps.find((r) => r.id === [...people][0]))}` : people.size > 1 ? `: ${share.slice(0, -1).join(', ')} and ${share[share.length - 1]}` : '';
       const parts = [`Found ${plural(all.length, 'place')}.`];
       if (fresh.length) parts.push(`Added ${plural(fresh.length, 'field')}${forWhom}. Undo takes them away again.`);
       if (taken) parts.push(fresh.length ? `${taken} already had a field.` : taken === all.length ? 'Each one already has a field, so nothing was added.' : `${taken} already had a field.`);
@@ -477,7 +482,7 @@ export function StepFields({ ed }: { ed: Ed }) {
             <button type="button" className="btn sm ed-find" disabled={!ready || !!finding || !active || !!ed.wording} onClick={findForMe} aria-describedby="ed-find-help">
               <Wand /> {finding ? 'Looking' : 'Place fields for me'}
             </button>
-            <p id="ed-find-help" className="muted small ed-hide-sm">Looks for form fields and for blanks after words such as &ldquo;Signature:&rdquo;.</p>
+            <p id="ed-find-help" className="muted small ed-hide-sm">Looks for form fields, signature tables and empty space after words such as &ldquo;Signature:&rdquo;.</p>
           </div>
           <div className="ed-group ed-palbox">
             <h3 id="ed-add">Add a field</h3>

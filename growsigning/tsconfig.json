@@ -116,7 +116,9 @@
     ".next-simprev/types/**/*.ts",
     ".next-simprev/dev/types/**/*.ts",
     ".next-landfix/types/**/*.ts",
-    ".next-landfix/dev/types/**/*.ts"
+    ".next-landfix/dev/types/**/*.ts",
+    ".next-place/types/**/*.ts",
+    ".next-place/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
