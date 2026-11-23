@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { consentWording, consentIsShort, CONSENT_HISTORY, adoptLine, LANGUAGE_NOTE, cannotOpenLine } from '@/lib/policy';
+import { consentWording, consentIsShort, CONSENT_HISTORY, CONSENT_PARTS, adoptLine, LANGUAGE_NOTE, cannotOpenLine, type ConsentPart } from '@/lib/policy';
 import { ConsentDetailWords } from '@/components/sign/ConsentDetails';
 import { versionText } from '@/lib/wordingday';
 import { COUNTRY_NOTES, paperWordList } from '@/lib/paperwork';
@@ -41,15 +41,43 @@ function WordingQuote({ version }: { version?: string }) {
   );
 }
 
+// Who each other set of words is for, in the words of this page.
+const PART_WORDS: Record<ConsentPart, string> = {
+  signer: 'Someone who signs', inperson: 'Someone who signs in person, on the sender\'s device', witness: 'A witness', approver: 'Someone who approves',
+  step: 'Someone who changes the document or chooses who comes next', reader: 'Someone who only reads',
+};
+/**
+ * What the people who do not sign through their own link are shown instead: their sentence, and each line behind the
+ * link that is not also the signer's. So every word a record can point to is printed here, not only the signer's.
+ */
+function OtherParts() {
+  const mine = consentWording('the sender', 'signer');
+  const said = new Set(mine.details.flatMap((d) => d.lines));
+  return (
+    <ul className="pub-parts">
+      {CONSENT_PARTS.filter((p) => p !== 'signer').map((p) => {
+        const w = consentWording('the sender', p);
+        const own = w.details.flatMap((d) => d.lines.filter((l) => !said.has(l)));
+        return <li key={p}><b>{PART_WORDS[p]}</b> ticks &quot;{w.agree}&quot;{own.length ? <> and reads these lines in place of the signer&apos;s: &quot;{own.join(' ')}&quot;</> : null}</li>;
+      })}
+    </ul>
+  );
+}
+
 /** For people who sign: the exact words of the consent screen, with the version the audit trail names. */
 export function ConsentWords() {
   const w = consentWording('the sender', true);
   const earlier = CONSENT_HISTORY.filter((h) => h.version !== w.version);
   return (
     <QA id="consent-wording" q="What do I agree to before I sign?">
-      <p>Before any field opens, the signing page asks you to tick a box next to one sentence. A link right above it, &quot;{w.more}&quot;, opens the rest: what kind of signature this is, what is recorded, when this may not be enough, and how to get a copy, ask for paper or decline. Both are printed below, word for word. The document&apos;s history records that you agreed, when, and which wording your screen showed.</p>
+      <p>You tick one box: &quot;{w.agree}&quot; The rest is behind the link &quot;{w.more}&quot; on the same screen, under Continue. Both are printed here in full.</p>
       <WordingQuote />
-      <p className="muted small">This is the wording of {versionText(w.version)}, the one in use now, as shown to someone who signs. Where it says &quot;the sender&quot;, your screen names the person. Someone who approves or only reads ticks &quot;{consentWording('the sender', false).agree}&quot; and is told the same without the sentences about signing. When you place your signature you also agree to this: &quot;{adoptLine('signature')}&quot;</p>
+      <p className="muted small">The document&apos;s history records that you agreed, when, and which wording your screen showed. This is the wording of {versionText(w.version)}, the one in use now, as shown to someone who signs. Where it says &quot;the sender&quot;, your screen names the person. When you place your signature you also agree to this: &quot;{adoptLine('signature')}&quot;</p>
+      <details className="pub-fold">
+        <summary>What other people are shown: in person, witnesses, approvers and readers</summary>
+        <p className="muted small">The same, with the lines about signing and about saying no changed to fit what each of them can do:</p>
+        <OtherParts />
+      </details>
       <p className="muted small">{LANGUAGE_NOTE} If you cannot read what you are asked to agree to, do not tick the box: ask the sender to explain it or to send the document on paper.</p>
       {/* A record names the wording its person was shown, and that may be an earlier one: each stays here to be read. */}
       <details className="pub-fold">

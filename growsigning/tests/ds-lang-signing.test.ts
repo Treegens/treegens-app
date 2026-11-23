@@ -191,7 +191,7 @@ test('consent in a language without checked legal text is shown in English with 
   assert.equal(consentWording('Ada', true, undefined, 'en').note, '');
   // The page sends the wording's language and its own (src/app/sign/[token]/page.tsx).
   const page = read('src/app/sign/[token]/page.tsx');
-  assert.match(page, /consentWording\(sender\.name, acts, undefined, lang\)/);
+  assert.match(page, /consentWording\(sender\.name, consentPart\(me\.role\), undefined, lang\)/);
   assert.match(page, /language: wording\.language, page_language: lang/);
   assert.match(page, /\{consentNote\(lang, wording\.note\) && <p/);
 });

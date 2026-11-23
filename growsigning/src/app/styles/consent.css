@@ -19,6 +19,14 @@
 /* "How electronic signing works" on the consent screen (src/components/sign/ConsentDetails.tsx), and the same parts
    printed on /help: our short headings with their sentences under them. */
 .sg-how { margin: 0 0 2px; }
+/* Under Continue on the consent screen: a little air, and an arrow that turns, so it reads as something that opens here. */
+.sg-consent > .sg-how, .ip .sg-how { margin: 10px 0 0; }
+.sg-how > summary { gap: 8px; list-style: none; }
+.sg-how > summary::-webkit-details-marker { display: none; }
+.sg-how > summary::after { content: ''; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+.sg-how[open] > summary::after { transform: translateY(2px) rotate(225deg); }
+.pub-parts { margin: 4px 0 0; padding-left: 20px; }
+.pub-parts > li { margin: 4px 0; overflow-wrap: anywhere; }
 .sg-how-body { display: grid; gap: 10px; margin: 2px 0 10px; padding: 12px 14px; border-left: 4px solid var(--leaf); background: #fbfaf6; border-radius: 0 10px 10px 0; text-align: left; font-size: 15px; }
 .sg-how-part > b { display: block; font-size: 14.5px; }
 .sg-how-part > p { margin: 2px 0 0; overflow-wrap: anywhere; }

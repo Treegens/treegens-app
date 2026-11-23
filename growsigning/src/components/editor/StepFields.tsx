@@ -644,7 +644,7 @@ export function StepFields({ ed }: { ed: Ed }) {
         ) : (
           <div>
             <div className="ed-sheetbar">
-              <span className="truncate"><span className="dot" style={{ background: color(selected.recipient_id) }} /> <b>{selected.type === 'text' ? fillInTag(selected, !selected.shared && rcps.some((r) => r.id === selected.recipient_id) ? label(rcps.find((r) => r.id === selected.recipient_id)) : null) : kindTitle(selected, list, true)}</b>{selLocked && <> <Lock /></>}</span>
+              <span className={needsLabel(selected) ? 'ed-bartwo' : 'truncate'}><span className="dot" style={{ background: color(selected.recipient_id) }} /> <b>{selected.type === 'text' ? fillInTag(selected, !selected.shared && rcps.some((r) => r.id === selected.recipient_id) ? label(rcps.find((r) => r.id === selected.recipient_id)) : null) : kindTitle(selected, list, true)}</b>{selLocked && <> <Lock /></>}</span>
               {!selLocked && <button type="button" className="btn sm" onClick={toggleSheet} aria-expanded={sheet}>{sheet ? 'Hide settings' : needsLabel(selected) ? 'Add a label' : 'Settings'}</button>}
               {!selLocked && <button type="button" className="btn sm danger" onClick={() => remove(selected.id)}>Delete</button>}
               <button type="button" className="btn sm ghost" onClick={() => (setSel(null), setSheet(false))}>Done</button>

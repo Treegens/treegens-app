@@ -56,7 +56,7 @@ test('the consent text says what kind of signature this is and never that it equ
   assert.match(said, /ask Ada Sender or a lawyer before you sign/);
   // Need 16: the parties accept the method between themselves, in so many words.
   assert.match(said, /you accept this electronic method as a valid way for you and the other parties to sign this document/);
-  assert.match(said, /Ask Ada Sender for a paper copy instead/);
+  assert.match(said, /Ask Ada Sender for a paper copy, or choose Other actions, then Decline to sign\./);
   assert.doesNotMatch(said, PROMISES);
   // No em dash anywhere, and no line break inside a sentence.
   assert.doesNotMatch(said, /\n|\u2014/);
@@ -85,7 +85,7 @@ test('the signing screen and the signature dialog show those words and nothing s
   assert.doesNotMatch(pad, PROMISES);
   // The screen prints the shared wording, ties it to the tick box for a screen reader, and sends its version back.
   // In the page's language where a person checked that wording, else English (tests/ds-lang-signing.test.ts).
-  assert.match(page, /const wording = consentWording\(sender\.name, acts, undefined, lang\)/);
+  assert.match(page, /const wording = consentWording\(sender\.name, consentPart\(me\.role\), undefined, lang\)/);
   assert.match(page, /<p className="muted sg-legal">\{wording\.legal\}<\/p>/);
   assert.match(page, /aria-describedby=\{formError \? 'sg-legal sg-agree-err' : 'sg-legal'\}/);
   assert.match(page, /<span lang=\{wording\.language\}>\{wording\.agree\}<\/span>/);

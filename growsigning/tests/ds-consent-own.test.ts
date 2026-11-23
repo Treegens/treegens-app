@@ -547,8 +547,11 @@ test('screens: "Sign on paper instead" only with the account\'s text and only fo
   assert.match(page, /!me\.consented \|\| \(data\.own_terms\?\.each_visit && !agreedHere\) \? 'consent'/);
   assert.match(page, /e\?\.code === 'terms'/);
   // Under our own words, not in place of them. Since wording 2026-11-23 ours are one sentence next to the tick and the
-  // link "How electronic signing works" (consent lane, 23 November 2026): the account's text sits right under that link.
-  assert.match(page, /<ConsentDetails wording=\{wording\} \/>\s*<\/div>\s*\{\/\*[^*]*\*\/\}\s*\{data\.own_terms && <OwnTermsBlock key=\{data\.own_terms\.id\}/);
+  // link "How electronic signing works" (consent lane, 23 November 2026): the account's text sits under our own block, above the box.
+  // Our link moved under Continue (so opening it never pushes the box away): the account's text still follows our
+  // own block and stands above the box, and our link is still on the same card.
+  assert.match(page, /<div id="sg-legal" lang=\{wording\.language\}>[^]*?<\/div>\s*\{\/\*[^*]*\*\/\}\s*\{data\.own_terms && <OwnTermsBlock key=\{data\.own_terms\.id\}/);
+  assert.ok(page.indexOf('<OwnTermsBlock key=') < page.indexOf('className="check sg-agree"') && page.indexOf('className="check sg-agree"') < page.indexOf('<ConsentDetails wording={wording} />'));
   assert.match(page, /me\.asked_paper \? t\(data\.language\?\.locale, 'sign\.paper\.closed_title'\)/);
 
   // The fold: measured against the 120 words, with the line "Read <Org>'s terms" when it does not fit.

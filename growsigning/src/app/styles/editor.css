@@ -235,3 +235,5 @@ label.check.ed-tap > input[type='checkbox'] { width: 20px; height: 20px; }
 .ed-notecheck .ed-nolabel li { justify-content: flex-start; }
 .ed-letthem { margin: -4px 0 12px; }
 .ed-letthem .linklike { min-height: 24px; }
+/* On a phone, "Ana Partner types here" under a dropped Fill in field is read in full: two lines, never cut off. */
+.ed-bartwo { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; font-size: 14px; }

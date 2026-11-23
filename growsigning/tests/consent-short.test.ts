@@ -11,9 +11,10 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { boot, Client, signUp, simple, tokenFor, PNG, type Server } from './helpers.ts';
+import { boot, Client, signUp, simple, upload, tokenFor, PNG, type Server } from './helpers.ts';
+import { otherActions } from '../src/components/sign/actions.ts';
 import {
-  CONSENT_VERSION, CONSENT_HISTORY, consentWording, consentIsShort, consentPlain, consentRecordLines, consentDetailLines, consentVersionOf, isConsentVersion,
+  CONSENT_VERSION, CONSENT_HISTORY, CONSENT_PARTS, consentPart, consentSigns, consentWording, consentIsShort, consentPlain, consentRecordLines, consentDetailLines, consentVersionOf, isConsentVersion,
 } from '../src/lib/policy.ts';
 
 let env: Server['env'];
@@ -61,10 +62,10 @@ test('the wording in use is one short sentence next to the tick, with nothing of
     assert.doesNotMatch(`${face.agree} ${face.more}`, /does not know|kind|paper|lawyer|handwritten|notaris|Rosa/i);
     assert.ok(words(face.agree) <= 8, face.agree);
   }
-  // Lighter, in numbers: our own words on the screen before the tick were 100 (wording 2026-11-21), and are now the 4
-  // of the link. With the sentence next to the tick: 108 before, 11 now. The whole screen, measured in a browser at
-  // 390 by 844 and 1440 by 900 with a one-line message: 114 words before the tick then, 19 now
-  // (research/consent-before-*.png, research/consent-after-*.png).
+  // Lighter, in numbers: our own words on the screen before the tick were 100 (wording 2026-11-21), and are now
+  // none: the link of 4 words stands under Continue. With the sentence next to the tick: 108 before, 11 now. The
+  // whole screen, measured in a browser at 390 by 844 and 1440 by 900 with a one-line message: 114 words before the
+  // tick then, 15 now (research/consent-before-*.png, research/consent-final-*.png).
   const old = consentWording('Rosa Gardener', true, '2026-11-21');
   assert.equal(words(`${old.legal} ${old.practical}`), 100);
   assert.equal(words(w.more), 4);
@@ -76,13 +77,15 @@ test('the screen shows the sentence with the tick and the link, and sends back t
   const page = read('src/app/sign/[token]/page.tsx');
   const consent = page.slice(page.indexOf("if (stage === 'consent') {"), page.indexOf('// ---- The document'));
   // The words come from the wording in use, in the person's language where a person has checked one.
-  assert.match(consent, /const wording = consentWording\(sender\.name, acts, undefined, lang\);/);
+  assert.match(consent, /const wording = consentWording\(sender\.name, consentPart\(me\.role\), undefined, lang\);/);
   // One tick, and the sentence is its label.
   assert.equal((consent.match(/type="checkbox"/g) || []).length, 1);
   assert.match(consent, /<input type="checkbox" checked=\{agree\} [^\n]*\/> <span lang=\{wording\.language\}>\{wording\.agree\}<\/span>/);
-  // The link stands right above the tick, inside the block the tick is described by.
-  assert.match(consent, /<div id="sg-legal" lang=\{wording\.language\}>[^]*?<ConsentDetails wording=\{wording\} \/>\s*<\/div>/);
-  assert.ok(consent.indexOf('<ConsentDetails') < consent.indexOf('type="checkbox"'));
+  // The link stands under Continue, on the same card: opening it never moves the box or the button (the review
+  // measured the box pushed to y=1098 on an 844 px phone when the link stood above it).
+  assert.match(consent, /\}\}>\{T\('sign\.consent\.continue'\)\}<\/button>\s*<ConsentDetails wording=\{wording\} \/>\s*<\/div>/);
+  assert.ok(consent.indexOf('<ConsentDetails') > consent.indexOf('type="checkbox"'));
+  assert.equal((consent.match(/<ConsentDetails/g) || []).length, 1);
   // A paragraph of an older wording is printed only when that wording has one. Today's has none.
   assert.match(consent, /\{wording\.legal && <p className="muted sg-legal">\{wording\.legal\}<\/p>\}/);
   assert.match(consent, /\{wording\.practical && <p className="muted sg-legal">\{wording\.practical\}<\/p>\}/);
@@ -92,7 +95,8 @@ test('the screen shows the sentence with the tick and the link, and sends back t
   assert.match(consent, /body: \{ version: version\.current, wording: wording\.version, language: wording\.language, /);
   // The same on a host's device without a connection (in person).
   const ip = read('src/app/in-person/page.tsx');
-  assert.match(ip, /<ConsentDetails wording=\{wording\} \/>/);
+  assert.match(ip, /<Ways [^\n]*\/>\s*<ConsentDetails wording=\{wording\} \/>/);
+  assert.match(ip, /const wording = consentWording\(sender, consentPart\('inperson'\), undefined, 'en'\);/);
   assert.match(ip, /<span>\{wording\.agree\}<\/span>/);
   assert.match(ip, /consent: \{ wording: wording\.version, language: wording\.language, /);
 });
@@ -144,14 +148,17 @@ test('everything the wording before it said is still said, one tap away', () => 
     assert.ok(said.includes(`If you are not sure, ask ${sender} or a lawyer before you sign.`));
     // A copy, paper, and saying no.
     assert.match(said, /You can download or print a copy now, and later from this same link\./);
-    assert.ok(said.includes(`You do not have to agree. Ask ${sender} for a paper copy instead.`));
-    assert.match(said, /You can decline\. Choose Decline on the signing page/);
-    assert.deepEqual(w.details.map((d) => d.h), ['What this is', 'What is recorded', 'When this may not be enough', 'A copy, or paper', 'Saying no']);
+    assert.ok(said.includes(`You do not have to agree. Ask ${sender} for a paper copy, or choose Other actions, then Decline to sign.`));
+    assert.deepEqual(w.details.map((d) => d.h), ['What this is', 'What is recorded', 'When this may not be enough', 'A copy, paper, or saying no']);
+    // In words a person uses: no "names these words", and nobody is told that "anyone" can read their record.
+    assert.doesNotMatch(said, /names these words|anyone/);
+    assert.match(said, /An IP address is the internet address of your connection\./);
+    assert.match(said, /The record also says which version of this text you were shown, so it can be checked later\./);
     // Each fact of wording 2026-11-21, by its own words: none was dropped on the way behind the link.
     const before = consentWording(sender, true, '2026-11-21');
     for (const fact of ['simple electronic signature', 'your name or mark', 'We record the time, your IP address and each step', 'rules differ by country and by kind of document',
       'handwritten, witnessed, notarised or qualified signature', 'GrowSigning does not know which kind this document is', `ask ${sender} or a lawyer before you sign`,
-      'you accept this electronic method as a valid way for you and the other parties to sign this document', 'download', 'decline', `${sender} for a paper copy instead`]) {
+      'you accept this electronic method as a valid way for you and the other parties to sign this document', 'download', 'decline', `${sender} for a paper copy`]) {
       assert.ok(`${before.legal} ${before.practical}`.toLowerCase().includes(fact.toLowerCase()), `2026-11-21 said: ${fact}`);
       assert.ok(said.toLowerCase().includes(fact.toLowerCase()), `2026-11-23 still says: ${fact}`);
     }
@@ -252,12 +259,98 @@ test('nothing can be signed before agreeing, and declining needs no agreement', 
   const sig = view.fields.find((f: any) => f.type === 'signature');
   const done = await c.post(`/sign/${tok}/complete`, { values: { [sig.id]: '1' }, signature_png: PNG });
   assert.equal(done.status, 400);
-  assert.match(done.data.error, /Please agree to use electronic records and signatures first\./);
+  // In the words of the sentence on the screen today, not of the wording before it.
+  assert.equal(done.data.error, 'Please tick the box to agree to sign electronically first.');
+  assert.equal(JSON.parse(read('src/locales/en.json'))['sign.error.consent_first'], 'Please tick the box to agree first.');
   assert.equal((await consentLines(e.id)).length, 0);
   // Decline works from the consent screen, without the tick.
   assert.equal((await c.post(`/sign/${tok}/decline`, { reason: 'I would like this on paper' })).status, 200);
   assert.equal((await ada.get(`/envelopes/${e.id}`)).data.envelope.status, 'declined');
   assert.equal((await consentLines(e.id)).length, 0, 'declining is not agreeing');
+});
+
+// ---- 5. Each person is shown, and recorded with, their own words -----------------------------------------------------------
+
+test('one rule says whose words they are, for the screen and for the record', () => {
+  assert.deepEqual(['signer', 'inperson', 'witness', 'approver', 'editor', 'agent', 'viewer', 'cc'].map(consentPart), ['signer', 'inperson', 'witness', 'approver', 'step', 'step', 'reader', 'reader']);
+  assert.deepEqual(CONSENT_PARTS.filter(consentSigns), ['signer', 'inperson', 'witness'], 'a witness signs too');
+  // The screen and the evidence pack both ask it, and neither decides "who signs" by itself for the wording.
+  assert.match(read('src/app/sign/[token]/page.tsx'), /consentWording\(sender\.name, consentPart\(me\.role\), undefined, lang\)/);
+  assert.match(read('src/server/evidence.ts'), /consentWordingAsRecorded\(sender\?\.name \|\| 'the sender', r \? consentPart\(r\.role\) : 'signer', version, /);
+  // true and false still mean someone who signs and someone who only reads.
+  assert.deepEqual(consentWording('Ada', true), consentWording('Ada', 'signer'));
+  assert.deepEqual(consentWording('Ada', false), consentWording('Ada', 'reader'));
+  // An older wording knew only "signs or not": a witness read the signer's paragraphs there too.
+  assert.deepEqual(consentWording('Ada', 'witness', '2026-11-21'), consentWording('Ada', true, '2026-11-21'));
+  assert.deepEqual(consentWording('Ada', 'approver', '2026-11-21'), consentWording('Ada', false, '2026-11-21'));
+});
+
+test('nobody is told a way to say no that their screen does not have', () => {
+  // The names the menu gives its entries (src/app/sign/[token]/page.tsx), by the role of the person.
+  const page = read('src/app/sign/[token]/page.tsx');
+  assert.match(page, /const declineLabel = me\.role === 'approver' \? 'Decline to approve' : isStepRole\(me\.role\) \? 'Decline' : 'Decline to sign';/);
+  assert.match(page, /absent: \{ key: 'absent', label: 'I was not there',/);
+  const last = (role: string) => consentWording('Rosa Gardener', consentPart(role)).details.at(-1)!.lines.at(-1)!;
+  const menu = (role: string) => otherActions({ role }, { stage: 'consent', deadline: false });
+  for (const [role, way] of [['signer', 'Other actions, then Decline to sign.'], ['approver', 'Other actions, then Decline to approve.'], ['editor', 'Other actions, then Decline.'], ['agent', 'Other actions, then Decline.']] as const) {
+    assert.ok(last(role).endsWith(way), `${role}: ${last(role)}`);
+    assert.ok(menu(role).includes('decline'), `${role} has Decline in Other actions`);
+  }
+  // A witness cannot decline for the people who sign, so they are not told to. Their way out is "I was not there".
+  assert.ok(!menu('witness').includes('decline') && menu('witness').includes('absent'));
+  assert.equal(last('witness'), 'You do not have to agree. Ask Rosa Gardener for a paper copy. If you did not see them sign, choose Other actions, then I was not there.');
+  assert.doesNotMatch(consentPlain(consentWording('Rosa Gardener', 'witness')), /decline/i);
+  // Someone who only reads has nothing to decline.
+  assert.ok(!menu('viewer').includes('decline'));
+  assert.equal(last('viewer'), 'You do not have to agree. Ask Rosa Gardener for a paper copy instead.');
+  assert.doesNotMatch(consentPlain(consentWording('Rosa Gardener', 'reader')), /decline|Other actions/i);
+  // In person the same words must hold on the host's device without signal, which has no Other actions: the button
+  // there is on the screen, under the same name.
+  assert.equal(last('inperson'), 'You do not have to agree. Ask Rosa Gardener for a paper copy, or choose Decline to sign. It is on this screen or under Other actions.');
+  assert.ok(menu('inperson').includes('decline'));
+  assert.match(read('src/app/in-person/page.tsx'), /onClick=\{onNo\}>Decline to sign<\/button>/);
+  // Every part: one sentence of at most 8 words on the face, and plain short sentences behind the link.
+  for (const p of CONSENT_PARTS) {
+    const w = consentWording('Rosa Gardener', p);
+    assert.equal(w.agree, consentSigns(p) ? 'I agree to sign this document electronically.' : 'I agree to review this document electronically.', p);
+    for (const d of w.details) for (const l of d.lines) for (const s of l.split(/(?<=[.!?])\s+/)) assert.ok(words(s) <= 22, `${p}: ${s}`);
+  }
+});
+
+test('a witness is recorded with the sentence their screen showed, and their own way out', async () => {
+  const file = await upload(ada, 1);
+  const made = await ada.post('/envelopes', {
+    subject: 'Deed of dedication', send: true, documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'ann', role: 'signer', name: 'Ann Signer', email: 'ann.short@example.com' }, { id: 'wit', role: 'witness', witness_for: 'ann', name: 'Will Witness', email: 'will.short@example.com' },
+      { id: 'app', role: 'approver', name: 'Abe Approver', email: 'abe.short@example.com' }],
+    fields: [{ document_id: 'd', recipient_id: 'ann', type: 'signature', page: 0, x: 0.1, y: 0.3, w: 0.25, h: 0.06 }, { document_id: 'd', recipient_id: 'wit', type: 'signature', page: 0, x: 0.1, y: 0.6, w: 0.22, h: 0.05 }],
+  });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const id = made.data.envelope.id;
+  for (const who of ['ann', 'will', 'abe']) assert.equal((await new Client().post(`/sign/${tokenFor(id, `${who}.short@example.com`)}/consent`, { wording: CONSENT_VERSION, language: 'en' })).status, 200, who);
+  const blocks = (await consentTxt(id)).split('----');
+  const of = (name: string) => blocks.find((b) => b.includes(`${name} <`))!;
+  // The witness: the signer's sentence, as on their screen (the pack used to print the reviewer's here).
+  const will = of('Will Witness');
+  assert.ok(will.includes('"I agree to sign this document electronically."'), will);
+  assert.ok(!will.includes('I agree to review this document electronically.'));
+  for (const line of consentDetailLines(consentWording('Ada Sender', 'witness'))) assert.ok(will.includes(line), line);
+  assert.ok(will.includes('choose Other actions, then I was not there.'));
+  assert.doesNotMatch(will, /Decline/);
+  // And a witness still cannot decline for the others, so that sentence would have been untrue.
+  assert.equal((await new Client().post(`/sign/${tokenFor(id, 'will.short@example.com')}/decline`, { reason: 'no' })).status >= 400, true);
+  // The signer and the approver, each with their own.
+  assert.ok(of('Ann Signer').includes('choose Other actions, then Decline to sign.'));
+  const abe = of('Abe Approver');
+  assert.ok(abe.includes('"I agree to review this document electronically."') && abe.includes('choose Other actions, then Decline to approve.'), abe);
+});
+
+test('/help prints the words of the people who are not the signer too', () => {
+  const help = read('src/app/help/outside.tsx');
+  assert.match(help, /CONSENT_PARTS\.filter\(\(p\) => p !== 'signer'\)\.map\(/);
+  assert.match(help, /<summary>What other people are shown: in person, witnesses, approvers and readers<\/summary>/);
+  // The answer starts with the sentence itself.
+  assert.match(help, /<p>You tick one box: &quot;\{w\.agree\}&quot; The rest is behind the link &quot;\{w\.more\}&quot; on the same screen, under Continue\./);
 });
 
 test('the docs say the same: README, the API description and the certificate page', async () => {
@@ -267,7 +360,7 @@ test('the docs say the same: README, the API description and the certificate pag
   await import('../src/server/openapi-disclosure.ts');
   const spec = JSON.stringify((await ada.get('/openapi.json')).data.paths['/sign/{token}/consent']);
   assert.ok(spec.includes('2026-11-23') && spec.includes('I agree to sign this document electronically.') && spec.includes('How electronic signing works'), spec.slice(0, 400));
-  assert.match(read('src/app/security/certificate/page.tsx'), /the sentence next to the box, and what the link above it opened/);
+  assert.match(read('src/app/security/certificate/page.tsx'), /the sentence next to the box, and what the link on the same screen opened/);
   // No em dash in anything this change wrote.
   const dash = String.fromCharCode(0x2014);
   for (const f of ['src/components/sign/ConsentDetails.tsx', 'tests/consent-short.test.ts', 'src/app/help/outside.tsx']) assert.ok(!read(f).includes(dash), f);

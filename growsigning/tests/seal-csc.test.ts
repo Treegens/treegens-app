@@ -108,19 +108,14 @@ const pmul = (k: bigint, pt: Pt): Pt => {
 };
 const bigOf = (b: Buffer) => BigInt('0x' + b.toString('hex'));
 const be32 = (x: bigint) => Buffer.from(x.toString(16).padStart(64, '0'), 'hex');
-// r depends only on k, so a k whose r starts with byte 0x30 is found once per key and used for every signature (never
-// do that with a real key: it gives the key away; this one is thrown away with the test).
-const kFor = new Map<crypto.KeyObject, { k: bigint; r: bigint }>();
+// r depends only on k, so one fixed k whose r starts with byte 0x30 gives such a signature over any digest (never do
+// that with a real key: it gives the key away; this one is thrown away with the test). Found once with a random search.
+const K30 = 0x47f757e29e14792f85437a51a75f64c4da02da313882c992bad085ccf8fa581bn;
+const R30 = md(pmul(K30, P256.g)![0], P256.n);
 function ecdsaDigest(key: crypto.KeyObject, digest: Buffer): Buffer {
   const d = bigOf(Buffer.from(key.export({ format: 'jwk' }).d!, 'base64url'));
-  let kr = kFor.get(key);
-  while (!kr) {
-    const k = md(bigOf(crypto.randomBytes(32)), P256.n);
-    const r = k ? md(pmul(k, P256.g)![0], P256.n) : 0n;
-    if (r && be32(r)[0] === 0x30) kFor.set(key, (kr = { k, r }));
-  }
-  const sv = md(inv(kr.k, P256.n) * (bigOf(digest) + kr.r * d), P256.n);
-  return Buffer.concat([be32(kr.r), be32(sv)]);
+  const sv = md(inv(K30, P256.n) * (bigOf(digest) + R30 * d), P256.n);
+  return Buffer.concat([be32(R30), be32(sv)]);
 }
 
 function answer(res: http.ServerResponse, status: number, body: any) {
@@ -711,7 +706,7 @@ test('an ECDSA credential that answers the raw form of a signature starting with
   reset();
   fake.ec30 = true;
   fake.leaf = makeCert({ cn: 'Example Operator EC Seal', issuer: inter, ku: 0xc0, ec: true });
-  ecdsaDigest(fake.leaf.key, Buffer.alloc(32)); // the search for k is done here, not while a seal waits
+  assert.equal(ecdsaDigest(fake.leaf.key, Buffer.alloc(32))[0], 0x30);
   settings(cscEnv());
   for (let i = 0; i < 2; i++) {
     const { out: { id, pdf }, said } = await told(() => complete());

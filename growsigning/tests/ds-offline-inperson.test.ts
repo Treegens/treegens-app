@@ -297,7 +297,8 @@ test('the screens: the action only in the More of someone who signs in person, t
   assert.match(read('src/components/AppShell.tsx'), /lockIfHanded\(\)\.then/);
   const page = read('src/app/in-person/page.tsx');
   assert.match(page, /OFFLINE_WORDS\.saved/);
-  assert.match(page, />Decline<\/button>/);
+  // Named as the consent wording of 2026-11-23 names it for someone who signs in person ("choose Decline to sign").
+  assert.match(page, />Decline to sign<\/button>/);
   const sw = read('public/sw.js');
   assert.match(sw, /const IN_PERSON = '\/in-person';/);
   assert.match(sw, /pdfjs/);

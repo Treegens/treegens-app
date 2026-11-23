@@ -47,7 +47,7 @@ export const DEFAULT_NEEDS = 'A phone, tablet or computer with a current web bro
 /** The sentence Settings shows under the form. We never call our own text, or theirs, an ESIGN consumer disclosure. */
 export const ESIGN_NOTE = 'If you deal with consumers in the United States, the ESIGN Act section 101(c) lists what this text must say. Ask your lawyer.';
 /** What Settings says the text is and is not. */
-export const OWN_TEXT_IS = 'Signers can read this on the screen where they agree to sign on screen, under our own link on how electronic signing works. Our link always stays. GrowSigning shows your words as you wrote them and does not check that they meet any law.';
+export const OWN_TEXT_IS = 'Signers can read this on the screen where they agree to sign on screen, above the box they tick. Our own link on how electronic signing works always stays on that screen. GrowSigning shows your words as you wrote them and does not check that they meet any law.';
 
 /** How often the consent screen is shown: once for each document (the default), or every time the link is opened. */
 export const HOW_OFTEN = [['once', 'Once for each document'], ['each', 'Every time the link is opened']] as const;

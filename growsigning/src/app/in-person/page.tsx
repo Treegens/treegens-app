@@ -10,7 +10,7 @@ import { AdoptSignature } from '@/components/SignaturePad';
 import { OwnTermsBlock } from '@/components/sign/OwnTerms';
 import { ConsentDetails } from '@/components/sign/ConsentDetails';
 import { Logo } from '@/components/Brand';
-import { consentWording } from '@/lib/policy';
+import { consentWording, consentPart } from '@/lib/policy';
 import { deviceZone, formatDate } from '@/lib/dates';
 import { OFFLINE_WORDS, PIN_TRIES, OFFLINE_DAYS } from '@/lib/offlinesign';
 import { idbBox, peek, unlock, saveResult, sendResult, wipe, HANDED_KEY, PinError, type Pack, type Result } from '@/components/sign/offlineInPerson';
@@ -116,7 +116,7 @@ export default function InPersonPage() {
   const host = pack?.host || 'the host';
   const subject = pack?.view?.envelope?.subject || 'the document';
   const sender = pack?.view?.envelope?.sender?.name || host;
-  const wording = consentWording(sender, true, undefined, 'en');
+  const wording = consentWording(sender, consentPart('inperson'), undefined, 'en');
   const fields: any[] = (pack?.view?.fields || []).filter((f: any) => !f.readonly && !AUTO.includes(f.type));
 
   const trySend = useCallback(async (p: Pack, r: Result) => {
@@ -298,13 +298,13 @@ export default function InPersonPage() {
           <p className="small">{OFFLINE_WORDS.consentNote(host)}</p>
           {wording.legal && <p className="muted small">{wording.legal}</p>}
           {wording.practical && <p className="muted small">{wording.practical}</p>}
-          <ConsentDetails wording={wording} />
         </div>
         {pack.view?.own_terms && <OwnTermsBlock own={pack.view.own_terms} lang="en" paper={false} />}
         <label className="check ip-agree"><input type="checkbox" checked={agree} onChange={(e) => (setAgree(e.target.checked), setError(''))} aria-describedby="ip-legal" /> <span>{wording.agree}</span></label>
         {error && <p className="notice err" role="alert">{error}</p>}
         <button className="btn primary ip-wide" onClick={() => (agree ? (setError(''), setStage('sign'), window.scrollTo(0, 0)) : setError('Tick the box first, then choose Continue.'))}>Continue</button>
         <Ways urls={urls} files={pack.files} host={host} onNo={() => setStage('not_signing')} />
+        <ConsentDetails wording={wording} />
       </div>
     </main>
   );
@@ -402,7 +402,7 @@ function Ways({ urls, files, host, onNo }: { urls: string[]; files: Pack['files'
   return (
     <p className="ip-ways small">
       {files.map((f, i) => urls[i] && <a key={f.id} className="btn sm" href={urls[i]} download={`${f.name}.pdf`}>Download {files.length > 1 ? f.name : 'a copy'}</a>)}
-      <button type="button" className="btn sm" onClick={onNo}>Decline</button>
+      <button type="button" className="btn sm" onClick={onNo}>Decline to sign</button>
       <span className="muted">For paper instead, ask {host}.</span>
     </p>
   );

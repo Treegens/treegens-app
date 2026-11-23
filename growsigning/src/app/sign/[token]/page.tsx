@@ -6,7 +6,7 @@ import { PdfDoc } from '@/components/PdfDoc';
 import { HandBack } from '@/components/HandBack';
 import { AdoptSignature, type SavedMark } from '@/components/SignaturePad';
 import { formatDate, formatDateValue, deviceZone } from '@/lib/dates';
-import { consentWording } from '@/lib/policy';
+import { consentWording, consentPart } from '@/lib/policy';
 import { NUMBER_HINT } from '@/lib/numbers';
 import { twoWaysUnderField } from '@/lib/twoways';
 import { Shell, StateCard, Sender, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
@@ -1122,7 +1122,8 @@ export default function SignPage() {
     // Three words at most: the screen holds 120 words before the tick, and our own text takes most of them.
     const ask = me.role === 'approver' ? T('sign.consent.ask_approve') : me.role === 'viewer' ? T('sign.consent.ask_read') : me.role === 'witness' ? T('sign.consent.ask_witness') : '';
     // In the page's language where a person has checked that wording, else English with one sentence saying why (note).
-    const wording = consentWording(sender.name, acts, undefined, lang);
+    // By the person's part (consentPart), the same rule the evidence pack prints the record with.
+    const wording = consentWording(sender.name, consentPart(me.role), undefined, lang);
     return (
       <Shell data={data} bar={other} footer={report} helpInNewTab plainBar onHelp={headHelp}>
         {notice}
@@ -1140,12 +1141,12 @@ export default function SignPage() {
           {/* The words come from src/lib/policy.ts with a version, and the version goes back with the agreement, so the
               audit trail says which wording this person was shown. */}
           {/* Since wording 2026-11-23 the screen shows one sentence, the one next to the tick. The rest is one tap away
-              under "How electronic signing works" (ConsentDetails.tsx), and nothing of it is gone. */}
+              under "How electronic signing works" (ConsentDetails.tsx), and nothing of it is gone. The link stands
+              under Continue, so opening it never pushes the box or the button off the screen. */}
           <div id="sg-legal" lang={wording.language}>
             {consentNote(lang, wording.note) && <p className="muted sg-legal" lang={signLangAttr(lang)}>{consentNote(lang, wording.note)}</p>}
             {wording.legal && <p className="muted sg-legal">{wording.legal}</p>}
             {wording.practical && <p className="muted sg-legal">{wording.practical}</p>}
-            <ConsentDetails wording={wording} />
           </div>
           {/* The account's own consent text, under ours: in full while the screen stays at 120 words, else one tap away. */}
           {data.own_terms && <OwnTermsBlock key={data.own_terms.id} own={data.own_terms} lang={data.language?.locale || 'en'} paper={menu.some((m) => m.key === 'paper')} />}
@@ -1176,6 +1177,7 @@ export default function SignPage() {
               setBusy(false);
             }
           }}>{T('sign.consent.continue')}</button>
+          <ConsentDetails wording={wording} />
         </div>
         {menuDialog}
         {dialogs}

@@ -72,7 +72,7 @@ function assertTurn(e: any, r: any, role?: StepRole) {
   if (!isStepRole(r.role) || (role && r.role !== role))
     throw bad(role === 'agent' ? 'Only the person who chooses who comes next can do this.' : role === 'editor' ? 'Only the person who can change the document can do this.' : 'This link is for someone who signs. There is nothing here to change.', 403);
   if (e.status !== 'sent' || (r.status !== 'sent' && r.status !== 'viewed')) throw r.status === 'completed' ? bad('You have already finished your step. Nothing was changed.', 409, { code: 'already_finished' }) : notOpen(e, r);
-  if (!r.consent_at) throw bad('Please agree to use electronic records first.', 400, { code: 'consent_first' });
+  if (!r.consent_at) throw bad('Please tick the box to agree first.', 400, { code: 'consent_first' });
 }
 
 /** Why a later person cannot be changed by `me`, or '' when they can. */

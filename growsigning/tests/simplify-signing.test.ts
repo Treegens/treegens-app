@@ -135,7 +135,7 @@ test('the consent screen: the sender once, 120 words or fewer before the tick, t
   // tests/ux/flows.cjs counts it: 114 words before the tick with a four-word subject and no message, 116 with the
   // sender's message behind "Read the message" (tests/out/repair-simplify-signing/probe.log).
   // Since wording 2026-11-23 our own words above the tick are none: one sentence next to the tick, of 10 words at
-  // most, and a link of 4 (consent lane, 23 November 2026; measured in a browser: 19 words before the tick where
+  // most, and a link of 4 under Continue (consent lane, 23 November 2026; measured in a browser: 15 words before the tick where
   // there were 114). The 100-word rule is kept for the wording it was written for, which people agreed to.
   for (const signs of [true, false]) {
     const now = consentWording('Rosa Gardener', signs);

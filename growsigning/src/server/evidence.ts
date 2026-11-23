@@ -7,7 +7,7 @@ import { audit, notCompletedNotice, notifySender, buildPdf, verifyChain, loadEnv
 import { safeName, type ZipEntry } from './zip.ts';
 import { labelOf } from '../lib/bysender.ts';
 import { ownTextEvidence } from './disclosure.ts';
-import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf, consentVersionOf, consentUnstated, consentHeading, consentRecordLines } from '../lib/policy.ts';
+import { CONSENT_VERSION, UNVERSIONED_CONSENT, consentWording, consentWordingAsRecorded, consentLanguageOf, consentVersionOf, consentUnstated, consentHeading, consentRecordLines, consentPart } from '../lib/policy.ts';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '../lib/evidence.ts';
 import { FINGERPRINT_KEPT_DAYS } from '../lib/evidence.ts';
 import { deviceName } from '../lib/phone.ts';
@@ -418,7 +418,8 @@ export async function evidencePack(e: any, madeBy: string): Promise<{ entries: Z
       const version = named || UNVERSIONED_CONSENT;
       const r = people.find((p: any) => labelOf(p) === a.actor);
       // In the language the line names (English for a line from before languages were recorded): policy.ts.
-      const w = consentWordingAsRecorded(sender?.name || 'the sender', !r || r.role === 'signer' || r.role === 'inperson', version, consentLanguageOf(a.detail));
+      // By the person's part, with the same rule as their screen (consentPart): a witness signs too, and is told their own way out.
+      const w = consentWordingAsRecorded(sender?.name || 'the sender', r ? consentPart(r.role) : 'signer', version, consentLanguageOf(a.detail));
       const how = !named ? ' (their audit line names no wording, because it was written before GrowSigning recorded which wording a screen showed; until then the signing screen showed this one, so this is inferred from the form of the line, which only the code before that change wrote, and not stated by their screen)'
         : consentUnstated(a.detail) ? ' (their screen did not say which wording it showed; this is the one in use then)' : '';
       return [`${a.actor}, ${stampText(a.at)}${a.ip ? `, from ${a.ip}` : ''}. ${consentHeading(w)}${how}:`, '', ...consentRecordLines(w), '', '----', ''];

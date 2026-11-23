@@ -2267,7 +2267,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
   // accepted: a scan accepted before a "sign again" never waves a later Finish through.
   const paperMark = body?.[Symbol.for('growsigning.paper.finish')];
   const onPaper = !!paperMark && paperMark === r.paper_scan_id;
-  if (!r.consent_at && !onPaper) throw bad('Please agree to use electronic records and signatures first.');
+  if (!r.consent_at && !onPaper) throw bad('Please tick the box to agree to sign electronically first.');
   if (!onPaper) assertSupplements(e, r);
   // What other people filled in that this person's formulas count must be what their screen was given: someone who
   // finished meanwhile changes the result, and then nothing is signed until the person has seen it (logic.ts).

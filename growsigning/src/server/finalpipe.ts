@@ -8,7 +8,8 @@
 // and the certificate is drawn from it (sealLineFor). When the plan cannot be kept, the file is rendered again with
 // one that can, so the certificate never says more than the file does, and the PDF is never held back:
 //   - no time-stamp service gave a time-stamp that checks out: sealed at B-B, and the certificate says the time is
-//     the server's clock;
+//     the server's clock (with a cloud seal, a paid signing, the same signature is kept at B-B instead, under a
+//     certificate line drawn to be true either way: seal.ts);
 //   - the seal itself failed (a bug, a key that stopped working): made without a seal, as before any seal settings,
 //     and the people who run the server are told.
 // What happened is written into the envelope's audit trail once the file is stored (sealStored).
