@@ -26,7 +26,7 @@ export function ConsentDetailWords({ wording }: { wording: Words }) {
   );
 }
 
-/** The link and, once tapped, the parts under it. Nothing for a wording that prints everything above the tick. */
+/** The link (under Continue on the consent screen) and, once tapped, the parts under it. Nothing for a wording that prints everything above the tick. */
 export function ConsentDetails({ wording }: { wording: Words & Pick<ConsentWording, 'more'> }) {
   const [open, setOpen] = useState(false);
   if (!wording.details.length) return null;
