@@ -68,12 +68,12 @@ test('the provider comes from the settings, first match wins, and the key never 
   const env = (o: Record<string, string>) => o;
   assert.equal(prov.chatProvider(env({})), null);
   const or = prov.chatProvider(env({ OPENROUTER_API_KEY: 'k' }))!;
-  assert.deepEqual([or.baseUrl, or.model, or.style, or.name, or.keyVar], ['https://openrouter.ai/api/v1', 'moonshotai/kimi-k3-20260715', 'openrouter', 'OpenRouter', 'OPENROUTER_API_KEY']);
+  assert.deepEqual([or.baseUrl, or.model, or.style, or.name, or.keyVar], ['https://openrouter.ai/api/v1', 'moonshotai/kimi-k3', 'openrouter', 'OpenRouter', 'OPENROUTER_API_KEY']);
   const ms = prov.chatProvider(env({ MOONSHOT_API_KEY: 'k', OPENROUTER_API_KEY: 'k' }))!;
   assert.deepEqual([ms.baseUrl, ms.model, ms.style, ms.name], ['https://api.moonshot.ai/v1', 'kimi-k3', 'moonshot', 'Moonshot AI']);
   // The generic key wins over both, and defaults to OpenRouter with Kimi K3.
   const gen = prov.chatProvider(env({ SUPPORT_CHAT_API_KEY: 'k', MOONSHOT_API_KEY: 'k' }))!;
-  assert.deepEqual([gen.baseUrl, gen.model, gen.style, gen.keyVar], ['https://openrouter.ai/api/v1', 'moonshotai/kimi-k3-20260715', 'openrouter', 'SUPPORT_CHAT_API_KEY']);
+  assert.deepEqual([gen.baseUrl, gen.model, gen.style, gen.keyVar], ['https://openrouter.ai/api/v1', 'moonshotai/kimi-k3', 'openrouter', 'SUPPORT_CHAT_API_KEY']);
   const own = prov.chatProvider(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.example.org/v1/', SUPPORT_CHAT_MODEL: 'm' }))!;
   assert.deepEqual([own.baseUrl, own.model, own.style, own.name], ['https://llm.example.org/v1', 'm', 'plain', 'the service at llm.example.org']);
   assert.equal(prov.chatProvider(env({ SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://api.moonshot.ai/v1' }))!.style, 'moonshot');
@@ -134,7 +134,7 @@ test('the answer streams to the page, and the request asks for little thinking, 
   assert.equal(call.url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(call.headers.authorization, 'Bearer or-test-key');
   assert.equal(call.headers['x-title'], 'GrowSigning help');
-  assert.equal(call.body.model, 'moonshotai/kimi-k3-20260715');
+  assert.equal(call.body.model, 'moonshotai/kimi-k3');
   assert.equal(call.body.stream, true);
   assert.equal(call.body.max_tokens, 1200);
   assert.ok(!('temperature' in call.body), 'Kimi K3 refuses any temperature but 1, so none is sent');
@@ -697,7 +697,7 @@ test('"Where your data is" lists the help chat provider from the same settings, 
   // With a model, AI help when sending and signing may read document text too, and says so after the chat's part (src/lib/aiassist.ts).
   assert.ok(p.data.startsWith(prov.CHAT_SENT));
   assert.match(p.data, /Only what people type into the help chat/);
-  assert.match(p.purpose, /moonshotai\/kimi-k3-20260715, reached at openrouter\.ai/);
+  assert.match(p.purpose, /moonshotai\/kimi-k3, reached at openrouter\.ai/);
   assert.deepEqual(p.missing, ['The operator of this server has not said in which country its help chat provider handles what people type. Ask them.']);
   assert.ok(on.unstated.includes(p.missing[0]));
   const stated = dataPlace({ MOONSHOT_API_KEY: 'k', SUPPORT_CHAT_PROVIDER_COUNTRY: 'Singapore' }).processors.find((x) => x.id === 'chat')!;

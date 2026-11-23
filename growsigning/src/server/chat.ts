@@ -157,6 +157,24 @@ export function modelCall(p: ChatProvider, messages: { role: 'system' | 'user' |
 }
 
 /**
+ * The provider's own reason for refusing a request, for the server log: its error message, shortened. It is the
+ * provider's words about the request (unknown model, privacy setting, no credit), never what the person asked.
+ */
+export async function refusalReason(res: Response): Promise<string> {
+  try {
+    const raw = (await res.text()).slice(0, 2000);
+    let msg = raw;
+    try {
+      const o = JSON.parse(raw);
+      msg = String(o?.error?.message ?? o?.message ?? raw);
+    } catch {}
+    return msg.replace(/\s+/g, ' ').trim().slice(0, 200);
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Asks the model and streams its answer to the page as Server-Sent Events, or answers with the built-in answers when
  * there is no model, a limit is reached, or the model is down, slow or says nothing. Events, one JSON object each:
  *   {open, mode: 'ai', person, tools, removed}  first
@@ -196,8 +214,8 @@ export async function answer(c: Cleaned, screen: ChatScreen, who: Who): Promise<
   if (!res.ok || !res.body) {
     clearTimeout(timer);
     // The status only: never what was asked.
-    console.warn(`[chat] ${p.name} answered ${res.status}. The built-in answers took over.`);
-    res.body?.cancel().catch(() => {});
+    const reason = await refusalReason(res);
+    console.warn(`[chat] ${p.name} answered ${res.status}${reason ? ` ("${reason}")` : ''}. The built-in answers took over.`);
     return builtIn(c, 'down', undefined, screen);
   }
   return relay(res, c, screen, () => clearTimeout(timer), () => timedOut, abort);

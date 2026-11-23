@@ -276,7 +276,7 @@ test('4. /security and /security/processing name the model and host; "nothing is
   // A hosted provider on an ordinary server: this server stores nothing, and the provider's own terms decide keeping
   // and training. Never "nothing is sent to train a model" there.
   const hosted = chatPrivacyPoint({ OPENROUTER_API_KEY: 'k' });
-  assert.match(hosted.text, /^It goes to OpenRouter, which is listed under "Where your data is" below\. Answers come from moonshotai\/kimi-k3-20260715 on openrouter\.ai\./);
+  assert.match(hosted.text, /^It goes to OpenRouter, which is listed under "Where your data is" below\. Answers come from moonshotai\/kimi-k3 on openrouter\.ai\./);
   assert.match(hosted.text, /What OpenRouter keeps of what is typed, and whether it trains on it, is set by its own terms\.$/);
   for (const env of [{ OPENROUTER_API_KEY: 'k' }, { MOONSHOT_API_KEY: 'k' }, { SUPPORT_CHAT_API_KEY: 'k', SUPPORT_CHAT_BASE_URL: 'https://llm.example.org/v1' }]) {
     const t = chatPrivacyPoint(env).text, row = dataPlace(env).processors.find((x: any) => x.id === 'chat')!;

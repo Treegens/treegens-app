@@ -18,7 +18,7 @@ import path from 'node:path';
 import { all, get, run, dataDir } from './db.ts';
 import { keys, storeState } from './filestore.ts';
 import { bad, hmac, now, str } from './util.ts';
-import { admit, modelCall } from './chat.ts';
+import { admit, modelCall, refusalReason } from './chat.ts';
 import { chatProvider, chatModelOn } from '../lib/chatprovider.ts';
 import { aiAnswersFor } from './tenantpolicy.ts';
 import { keepText, keptText } from './searchtext.ts';
@@ -131,8 +131,8 @@ export async function ask(system: string, user: string, o: { maxTokens: number; 
       res = await modelCall(p, messages, { tuned: false, signal: abort.signal, maxTokens: o.maxTokens, title: o.title });
     }
     if (!res.ok) {
-      res.body?.cancel().catch(() => {});
-      console.warn(`[assist] ${p.name} answered ${res.status}.`);
+      const reason = await refusalReason(res);
+      console.warn(`[assist] ${p.name} answered ${res.status}${reason ? ` ("${reason}")` : ''}.`);
       throw new ModelDown(String(res.status));
     }
     const text = (await collect(res, o.cap)).trim();

@@ -2,7 +2,7 @@
 //   SUPPORT_CHAT_API_KEY  any host that speaks the OpenAI chat API, at SUPPORT_CHAT_BASE_URL (default OpenRouter),
 //                         with SUPPORT_CHAT_MODEL (default Kimi K3 there)
 //   MOONSHOT_API_KEY      Moonshot AI's own API, model kimi-k3
-//   OPENROUTER_API_KEY    OpenRouter, model moonshotai/kimi-k3-20260715
+//   OPENROUTER_API_KEY    OpenRouter, model moonshotai/kimi-k3
 // With none of them the chat still answers, from the built-in answers, and nothing leaves the server.
 //
 // /security ("Where your data is") and /security/processing list the provider from this same function, so the pages
@@ -16,7 +16,7 @@ const val = (v: string | undefined): string | null => (v || '').replace(/\s+/g, 
 
 export const OPENROUTER_URL = 'https://openrouter.ai/api/v1';
 export const MOONSHOT_URL = 'https://api.moonshot.ai/v1';
-export const OPENROUTER_MODEL = 'moonshotai/kimi-k3-20260715';
+export const OPENROUTER_MODEL = 'moonshotai/kimi-k3';
 export const MOONSHOT_MODEL = 'kimi-k3';
 
 export type ChatProvider = {
