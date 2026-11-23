@@ -98,7 +98,7 @@ test('no page says that 100% or everything customers pay goes to Treegens: card 
   assert.match(read('src/server/chatkb.ts'), /and from people who send documents\. \$\{MONEY_LINE\}/);
   // Since the 5 trees rule (23 November 2026) the trees total counts finished signatures, not dollars, and the page
   // says where the trees of a free signature come from. (Before: "It counts each whole dollar, before card fees".)
-  assert.match(read('src/components/ImpactView.tsx'), /Free signatures are paid for from what plans earn\./);
+  assert.match(read('src/components/ImpactView.tsx'), /Jimi plants the trees\./);
 });
 
 // ---- 2. Originals in the account's export ------------------------------------------------------------------------

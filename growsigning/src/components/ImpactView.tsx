@@ -52,7 +52,7 @@ export function Methodology({ perContract = false }: { perContract?: boolean } =
       <ul style={{ paddingLeft: 20, lineHeight: 1.7, margin: 0 }}>
         <li><b>Every signature plants {PRICING.treesPerSignature} trees.</b> They are mangroves, planted by Treegens. It makes no difference where the signature came from: the {PRICING.welcomeSignatures} free ones a new account starts with, the monthly plan, a top-up, a free code or a reward for inviting a friend.</li>
         <li>A signature is counted when a person you asked finishes signing. Signing your own document uses no signature, so it plants none. Approving, reading and getting a copy are not signatures.</li>
-        <li>{MONEY_LINE} That is the monthly plan and top-ups alike. Free signatures are paid for from what plans earn.</li>
+        <li>{MONEY_LINE} That is the monthly plan and top-ups alike. Jimi plants the trees.</li>
         <li>The total is every finished signature times {PRICING.treesPerSignature}. It says what our signatures plant, not what has been planted already: Treegens plants afterwards. A signature keeps its trees once it is finished. The public total is shown from {TOTALS_FROM.treesPublic} trees up, and only once customers have paid something. An account sees its own from {TOTALS_FROM.treesPlanted} trees up.</li>
         <li>
           <details data-fold>

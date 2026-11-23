@@ -235,7 +235,7 @@ test('the public total: never for a few free signatures on a server nobody has p
     assert.doesNotMatch(read(f), /Trees planted by|have planted|has done so far|come out of that same money/, `${f}: nothing says the trees are planted already`);
   assert.match(band, /Trees our signatures plant/);
   assert.match(view, /It says what our signatures plant, not what has been planted already: Treegens plants afterwards\./);
-  assert.match(view, /Free signatures are paid for from what plans earn\./);
+  assert.match(view, /Jimi plants the trees\./);
 });
 
 // Repair (review finding, medium): the completion emails said nothing about trees.
