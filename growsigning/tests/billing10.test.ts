@@ -110,14 +110,16 @@ test('the tree sentence at review asks one rule: every next signature out of a p
   assert.equal(credits.paidForecast(p.id, 2), true);
   assert.equal(credits.paidForecast(p.id, 3), false, 'one more than there is');
   assert.equal(credits.paidForecast(p.id, 0), false);
-  // The draft's own answer is the same rule (GET /envelopes/:id/impact asks allPaidForecast).
+  // Since the 5 trees rule (23 November 2026) the draft's answer no longer asks about payments: every signature
+  // from the balance plants trees, so the review step asks allCountForecast (tests/trees-5.test.ts). paidForecast
+  // stays as the rule of the order signatures are used in.
   const e = await simple(p.c, 'draft', { recipients: [{ id: 'r', role: 'signer', name: 'Dana Draft', email: `draft-${p.k}@signers.example` }] });
   const full = () => ({ ...db.get('SELECT * FROM envelopes WHERE id=?', e.id), recipients: db.all('SELECT * FROM recipients WHERE envelope_id=?', e.id) });
-  assert.equal(impact.allPaidForecast(full()), true);
-  // A payment that went back in full plants nothing, so nothing is promised (the old copy of the rule missed this).
+  assert.equal(impact.allCountForecast(full()), true);
+  // A payment that went back in full is no longer "a payment that stands"; the draft's signatures still count.
   db.run('UPDATE payments SET refunded_cents=amount_cents WHERE account_id=?', p.id);
   assert.equal(credits.paidForecast(p.id, 1), false);
-  assert.equal(impact.allPaidForecast(full()), false);
+  assert.equal(impact.allCountForecast(full()), true);
   assert.doesNotMatch(readFileSync('src/server/impact.ts', 'utf8'), /lotsOf\(/, 'impact.ts keeps no copy of the order');
 });
 

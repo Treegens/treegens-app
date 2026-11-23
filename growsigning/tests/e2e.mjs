@@ -335,7 +335,7 @@ try {
     await page.goto(`${BASE}/app/settings?tab=billing`);
     await page.getByRole('heading', { name: 'The rules', exact: true }).waitFor();
     await page.getByText(/\$9 a month/).first().waitFor();
-    await page.getByText(/plants 10 mangrove trees/).first().waitFor();
+    await page.getByText(/plants 5 trees/).first().waitFor();
     // The code GROWalition makes the plan free.
     await page.getByLabel('Code').fill('growalition');
     await page.getByRole('button', { name: 'Apply code' }).click();

@@ -152,7 +152,8 @@ test('the consent screen: the sender once, 120 words or fewer before the tick, t
   // The sender is named once, by name and address, and the account only when its name says more than the person's.
   assert.equal((consent.match(/<Sender /g) || []).length, 0, 'the "Sent by / Email / Account" box is gone');
   // The top of the screen lives in ConsentTop.tsx, which keeps it to 120 words (tests/open-signing.test.ts).
-  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} \/>/);
+  // With the tree line of the 5 trees rule handed in (tests/trees-5.test.ts).
+  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} trees=\{\(shown\) => <OpenTrees base=\{base\} show=\{!ask\} onShown=\{shown\} \/>\} \/>/);
   const top = read('src/components/sign/ConsentTop.tsx');
   // A colleague sent it for the owner (ds-colleagues): only this line reads "Ben Okoro (sent by Ana Silva)".
   assert.match(top, /<p className="sg-from">From <b>\{sender\.sent_by \? sentByName\(sender\.name, sender\.sent_by\) : sender\.name\}<\/b>\{org \? <> at \{org\}<\/> : null\}/);
@@ -268,7 +269,7 @@ test('the invitation: 80 words or fewer above the button, and one short footer w
   assert.match(under, /The link is personal to you\. Do not forward this email\./);
   assert.match(under, /Get help with this document/);
   assert.match(under, /Sent with GrowSigning\.$/);
-  assert.doesNotMatch(mail.html, /every dollar plants|no paper, no printer/, 'nothing that sells, to someone who only came to sign');
+  assert.doesNotMatch(mail.html, /every (dollar|signature) plants|no paper, no printer/, 'nothing that sells, to someone who only came to sign');
   // The most the software itself adds above the button: an access code, a private note line, a shared address.
   const d = await draft(c, { subject: 'Tree planting agreement', message: '', ordered: false,
     recipients: [

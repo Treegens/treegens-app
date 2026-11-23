@@ -3,7 +3,7 @@
 // With "reduce motion" switched on in the device it is a still picture of the end. It is decoration: screen readers
 // are told the sentence next to it, never the picture.
 //
-// `trees` seedlings are drawn, one for each mangrove the signature funds. For a free signature none is drawn (nothing
+// `trees` seedlings are drawn, one for each tree the signature plants (5). When it plants none, none is drawn (nothing
 // was planted, so no tree is shown): the leaf of the logo stands on the shore instead.
 import { MARK, TONES } from '@/lib/brandMark';
 

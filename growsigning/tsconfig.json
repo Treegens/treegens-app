@@ -124,7 +124,11 @@
     ".next-skepsig/types/**/*.ts",
     ".next-skepsig/dev/types/**/*.ts",
     ".next-sigsimple/types/**/*.ts",
-    ".next-sigsimple/dev/types/**/*.ts"
+    ".next-sigsimple/dev/types/**/*.ts",
+    ".next-trees5/types/**/*.ts",
+    ".next-trees5/dev/types/**/*.ts",
+    ".next-referrals/types/**/*.ts",
+    ".next-referrals/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

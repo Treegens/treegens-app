@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { api, useLoad, fmtDate, oops, toast } from '@/components/ui';
 import { MoreMenu } from '@/components/sender/More';
 import { FormLimits, formLimitLine } from '@/components/forms/FormLimits';
+import { ShareLinkDialog } from '@/components/sender/ShareLink';
+import { shareLinkShown } from '@/lib/sharename';
 import { POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '@/lib/policy';
 import { useST, senderRich } from '@/components/senderLang';
 
@@ -15,6 +17,8 @@ export default function PowerForms() {
   const [name, setName] = useState('');
   const [shared, setShared] = useState(false);
   const [limits, setLimits] = useState<any>(null);
+  // The form whose share link (growsigning.com/<name>) is being named or switched off (sender/ShareLink.tsx).
+  const [sharing, setSharing] = useState<any>(null);
   const link = (slug: string) => `${window.location.origin}/f/${slug}`;
 
   return (
@@ -55,6 +59,7 @@ export default function PowerForms() {
                   { key: 'open', label: T('forms.open'), href: `/f/${p.slug}`, newTab: true },
                   ...(mine ? [
                     { key: 'shared', label: p.shared_device ? T('forms.shared_yes') : T('forms.shared_no'), onPick: () => api(`/powerforms/${p.id}`, { method: 'PATCH', body: { shared_device: !p.shared_device } }).then(() => (toast(p.shared_device ? T('forms.now_ordinary') : T('forms.now_shared')), reload())).catch(oops) },
+                    { key: 'share_link', label: T('sharelink.more'), onPick: () => setSharing(p) },
                     { key: 'limits', label: T('forms.limits'), onPick: () => setLimits(p) },
                     { key: 'pause', label: p.active ? T('forms.pause') : T('forms.resume'), onPick: () => api(`/powerforms/${p.id}`, { method: 'PATCH', body: { active: !p.active } }).then(reload).catch(oops) },
                     { key: 'delete', label: T('forms.delete'), danger: true, onPick: () => window.confirm(T('forms.delete_confirm')) && api(`/powerforms/${p.id}`, { method: 'DELETE' }).then(reload).catch(oops) },
@@ -65,6 +70,8 @@ export default function PowerForms() {
                   {/* Whose it is, when it was made and what a visitor goes through stand under the name, where a phone shows them without scrolling the table sideways. */}
                   {/* Under the template's name: whether the envelope each visitor starts reminds them (reminderText in src/lib/policy.ts). */}
                   <td><b>{p.name}</b><div className="muted small">{p.template || T('forms.template_deleted')}{p.shared_device ? T('forms.tag_shared') : ''}{p.active ? '' : T('forms.tag_paused')}{T('forms.made_on', { day: fmtDate(p.created_at) })}</div>
+                    {/* Its readable address, the one Copy link and the QR code carry while it is on (sharelinks.ts). */}
+                    {p.share_link?.active && <div className="muted small" style={{ overflowWrap: 'anywhere' }}>{shareLinkShown(p.share_link.url)}</div>}
                     {p.questions > 0 && <div className="muted small">{T('forms.questions', { count: p.questions })}</div>}
                     {p.unlabelled > 0 && <div className="muted small">{T('forms.unlabelled', { count: p.unlabelled })}</div>}
                     {p.reminders && <div className="muted small">{p.reminders} {T('forms.from_template')}</div>}
@@ -85,6 +92,7 @@ export default function PowerForms() {
           </table></div>
         )}
       </div>
+      {sharing && <ShareLinkDialog kind="form" id={sharing.id} onClose={() => setSharing(null)} onChanged={() => reload()} />}
       {limits && <FormLimits form={limits} onClose={() => setLimits(null)} onSaved={() => (setLimits(null), reload())} />}
     </div>
   );

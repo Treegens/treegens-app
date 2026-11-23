@@ -96,8 +96,9 @@ test('no page says that 100% or everything customers pay goes to Treegens: card 
   // The footer of every public page and the helper's instructions use the one line.
   assert.match(read('src/components/Public.tsx'), /<p>\{MONEY_SHORT\}<\/p>/);
   assert.match(read('src/server/chatkb.ts'), /and from people who send documents\. \$\{MONEY_LINE\}/);
-  // The trees total is said to count whole dollars, before card fees.
-  assert.match(read('src/components/ImpactView.tsx'), /It counts each whole dollar, before card fees, so it can be more than the money that reached Treegens\./);
+  // Since the 5 trees rule (23 November 2026) the trees total counts finished signatures, not dollars, and the page
+  // says where the trees of a free signature come from. (Before: "It counts each whole dollar, before card fees".)
+  assert.match(read('src/components/ImpactView.tsx'), /A free signature has no payment of its own: its trees come out of that same money\./);
 });
 
 // ---- 2. Originals in the account's export ------------------------------------------------------------------------
@@ -340,7 +341,8 @@ test('the consent screen stays at 120 words before the tick for a group, a witne
   // 119; in person 117, 119 folded. Before: a group's member read 201 words before the tick, a witness 122.
   // A group: the "For" line names the group, and what agreeing does for the group comes after the tick, right above
   // Continue. The long explanation of how a group works stays in the email (groupInvite), not before the tick.
-  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} \/>/);
+  // Since the 5 trees rule the top also carries the tree line, which is counted with the rest (ConsentTop.tsx).
+  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} trees=\{\(shown\) => <OpenTrees base=\{base\} show=\{!ask\} onShown=\{shown\} \/>\} \/>/);
   assert.match(read('src/components/sign/ConsentTop.tsx'), /\{group \|\| \(me\.link_by_sender/);
   const tick = consent.indexOf('<label className="check sg-agree">');
   const note = consent.indexOf('<GroupConsentNote data={data} />');

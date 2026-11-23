@@ -39,7 +39,7 @@ export type RequestFacts = {
   cosigner?: boolean;
   /** Everything is filled in and only Finish is left (a reminder says so). */
   ready: boolean;
-  /** Mangroves planted when they finish, 0 for none. */
+  /** Trees planted when they finish (5), 0 for none. */
   trees: number;
   url: string;
 };
@@ -83,6 +83,7 @@ export function requestMail(L: string, f: RequestFacts) {
   const lines: string[] = [
     ...(subjectUnder ? [f.subject] : []),
     ...(f.shared ? [mt(L, 'mail.request.shared', { name: f.name })] : []),
+    ...((f.kind === 'new' || f.kind === 'reminder') && f.trees >= 1 ? [mt(L, 'mail.request.trees', { count: f.trees })] : []),
     ...(f.kind === 'again' ? [
       { signed: mt(L, 'mail.request.again.signed', { subject: f.subject, when: first, sender: by }), approved: mt(L, 'mail.request.again.approved', { subject: f.subject, when: first, sender: by }), viewed: mt(L, 'mail.request.again.viewed', { subject: f.subject, when: first, sender: by }) }[fh],
       f.role === 'approver' ? mt(L, 'mail.request.again.look.approve', { sender: s }) : mt(L, 'mail.request.again.look.sign', { sender: s }),
@@ -99,7 +100,6 @@ export function requestMail(L: string, f: RequestFacts) {
     ...(f.message ? [theirWords(L, s, f.message)] : []),
     ...(f.note ? [mt(L, 'mail.request.note', { note: f.note })] : []),
     ...(f.accessCode ? [mt(L, 'mail.request.access_code', { sender: s })] : []),
-    ...(f.kind === 'new' && f.trees >= 1 ? [mt(L, 'mail.request.trees', { count: f.trees })] : []),
     mt(L, 'mail.request.reply', { sender: s, email: f.sender.email }),
   ];
   const label = f.done ? (f.complete ? mt(L, 'mail.request.button.completed') : mt(L, 'mail.request.button.view'))

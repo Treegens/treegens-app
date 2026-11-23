@@ -3,7 +3,7 @@
 // water is an estimate and is called one, with where it comes from. A total is shown only once it is large
 // enough to mean something (TOTALS_FROM in src/lib/impact.ts): until then its place is simply absent, never a tiny
 // number. Nothing here claims an offset or that signing undoes any harm.
-import { IMPACT, PRICING, TOTALS_FROM, fmtNum, totalWorthShowing } from '@/lib/impact';
+import { IMPACT, PRICING, TOTALS_FROM, TREES_BEFORE, TREES_RULE_DAY, fmtNum, totalWorthShowing } from '@/lib/impact';
 import { TREEGENS_URL, TREEGENS_ORG_URL, TREEGENS_READ_ON, MONEY_LINE } from '@/lib/impactwords';
 
 /** Is there any total worth showing for these numbers? */
@@ -15,7 +15,7 @@ export function ImpactStats({ i, dark }: { i: any; dark?: boolean }) {
   if (!paper && !planted) return null;
   return (
     <div className="grid g3">
-      {planted && <div className={`stat${dark ? '' : ' green'}`}><div className="k">Mangroves funded</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">{PRICING.treesPerUsd} for every dollar paid, less refunds</div></div>}
+      {planted && <div className={`stat${dark ? '' : ' green'}`}><div className="k">Trees planted by signatures</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">{PRICING.treesPerSignature} mangroves for every signature</div></div>}
       {paper && <div className="stat"><div className="k">Sheets of paper not used, estimated</div><div className="v num">{fmtNum(i.sheets)}</div><div className="s">across {fmtNum(i.envelopes)} completed envelope{i.envelopes === 1 ? '' : 's'}</div></div>}
       {paper && <div className="stat"><div className="k">Water not used, estimated</div><div className="v num">{fmtNum(i.litresWater)} L</div><div className="s">{IMPACT.litresWaterPerSheet} litres per sheet</div></div>}
     </div>
@@ -38,20 +38,21 @@ const out = { target: '_blank', rel: 'noreferrer' } as const;
 // When any of these is read again, change the sentence, this note and TREEGENS_READ_ON together.
 
 // `perContract`: a server under a government agreement (BILLING_MODE=deployment). Nothing is paid per signature there,
-// so mangroves are not counted from payments: they are set per contract (TREE_RULES in src/lib/govpricing.ts).
+// so mangroves are not counted from signatures: they are set per contract (TREE_RULES in src/lib/govpricing.ts).
 export function Methodology({ perContract = false }: { perContract?: boolean } = {}) {
   return (
     <div className="card">
       <h2 style={{ marginBottom: 10 }}>How we count</h2>
       <p>Two different things are counted here, and they are kept apart.</p>
-      <h3 style={{ margin: '14px 0 6px' }}>1. Mangroves: what the money does</h3>
+      <h3 style={{ margin: '14px 0 6px' }}>1. Trees: {PRICING.treesPerSignature} for every signature</h3>
       {perContract ? <p style={{ margin: 0 }}>On this server nothing is paid per signature, so no mangroves are counted from signatures. The trees of a government contract are set in the contract, whether or not the service is used, and each signed contract is listed on this page with its planting statements.</p> : (
       <ul style={{ paddingLeft: 20, lineHeight: 1.7, margin: 0 }}>
-        <li>{MONEY_LINE} That is the monthly plan and top-ups alike. Every dollar funds {PRICING.treesPerUsd} mangroves, and a signature costs one dollar, so a signature that was paid for funds {PRICING.treesPerUsd}.</li>
-        <li>A free signature funds none: the {PRICING.welcomeSignatures} signatures a new account starts with, a free code, or signing your own document. Nobody is told that a free signature planted anything.</li>
-        <li>The total of mangroves is what was paid, less anything refunded, times {PRICING.treesPerUsd}. It counts the trees funded from that money, not signatures used: a signature that expires unused was paid for, and its trees are planted all the same. It counts each whole dollar, before card fees, so it can be more than the money that reached Treegens. It is shown from {TOTALS_FROM.treesPlanted} trees up.</li>
+        <li><b>Every signature plants {PRICING.treesPerSignature} trees.</b> They are mangroves, planted by Treegens. It makes no difference where the signature came from: the {PRICING.welcomeSignatures} free ones a new account starts with, the monthly plan, a top-up, a free code or a reward for inviting a friend.</li>
+        <li>A signature is counted when a person you asked finishes signing. Signing your own document uses no signature, so it plants none. Approving, reading and getting a copy are not signatures.</li>
+        <li>{MONEY_LINE} That is the monthly plan and top-ups alike. A free signature has no payment of its own: its trees come out of that same money.</li>
+        <li>The total is every finished signature times {PRICING.treesPerSignature}, and a signature keeps its trees once it is finished. Before {TREES_RULE_DAY} the rule was another one: {TREES_BEFORE.paid} mangroves for a signature that was paid for and none for a free one. Signatures finished before that day stay in the total at what was promised then. A total is shown from {TOTALS_FROM.treesPlanted} trees up.</li>
         <li>The planting itself is done by Treegens planters. Treegens describes its own checking on <a href={TREEGENS_URL} {...out}>treegens.app</a>: a planter films the land and then the planting in the Treegens app, the phone records where the clips were filmed, and verifiers watch both videos and vote to approve or reject. The verifiers are members of the Treegens community who stake its token to take part. That is what Treegens says about its own work, as we read it there on {TREEGENS_READ_ON}. It is not our finding: we have not checked plantings ourselves.</li>
-        <li>The rate: <a href={TREEGENS_ORG_URL} {...out}>treegens.org</a> says ten cents is the average cost of planting a tree across a run, not an invoice for a named tree. That is where {PRICING.treesPerUsd} mangroves for a dollar comes from. It is an average Treegens states, not a price we can show for each tree.</li>
+        <li>The rate: <a href={TREEGENS_ORG_URL} {...out}>treegens.org</a> says ten cents is the average cost of planting a tree across a run, not an invoice for a named tree. At that average, the {PRICING.treesPerSignature} trees of a signature cost about fifty cents. It is an average Treegens states, not a price we can show for each tree.</li>
         <li>What you cannot check here yet: we do not publish receipts for the money sent to Treegens, or Treegens&apos; own statement of what it received. Until we do, the totals on this page are our own figures.</li>
       </ul>
       )}

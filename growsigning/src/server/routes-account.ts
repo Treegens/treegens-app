@@ -25,11 +25,13 @@ import { tick } from './cron.ts';
 import { redeemCode } from './routes-billing.ts';
 import { emailProblem } from './bounces.ts';
 import { trustInfo, keysOf, keyList, tellTeamsAboutKeys, handOver, wasWelcomed } from './routes-trust.ts';
-import { impactOf, PRICING, mangrovesFor } from '../lib/impact.ts';
+import { impactOf, PRICING } from '../lib/impact.ts';
+import { treesOfAccount, treesOfEveryone } from './impact.ts';
 import { clientPolicy } from './tenantpolicy.ts';
 import { keyDatesOn } from './airepo.ts';
 import { delegationOn } from './delegation.ts';
 import { DEFAULT_REMINDER_DAYS } from '../lib/policy.ts';
+import { noteSignup } from './referrals.ts';
 import { forgottenFile, disputeFacts } from './evidence.ts';
 import { importedForVerify } from './importer.ts';
 import { sealForVerify } from './seal.ts';
@@ -148,7 +150,7 @@ route('POST', '/auth/signup', async (c) => {
   // Long enough for the team being joined, and not a password from a leak (secpolicy.ts, pwned.ts).
   await newPasswordOk(password, { accounts: [inviteAccount(b.invite)] });
   if (get('SELECT id FROM users WHERE email=?', email)) throw bad(b.invite ? 'You already have a GrowSigning login with this address. Sign in with it and the invitation is accepted.' : 'An account with this email already exists. Sign in instead.', 409);
-  const made = await createLogin(c, { name, email, passwordHash: hashPassword(password), invite: b.invite, code: b.code });
+  const made = await createLogin(c, { name, email, passwordHash: hashPassword(password), invite: b.invite, code: b.code, ref: b.ref });
   return { user: publicUser(made.user) };
 }, 'public');
 
@@ -158,7 +160,7 @@ route('POST', '/auth/signup', async (c) => {
 // provider); an invitation does the same, because it was sent there. Everyone else is emailed our confirmation link.
 // An invitation or a code that cannot be used is refused before anything is created. `also` runs inside the same
 // transaction as the new login, for what must exist with it or not at all.
-export async function createLogin(c: Ctx, p: { name: string; email: string; passwordHash: string; verified?: boolean; invite?: any; code?: any; via?: string; also?: (userId: string) => void }) {
+export async function createLogin(c: Ctx, p: { name: string; email: string; passwordHash: string; verified?: boolean; invite?: any; code?: any; ref?: any; via?: string; also?: (userId: string) => void }) {
   const invite = p.invite ? openInvite(str(p.invite), p.email) : null;
   // A code that makes the plan free is checked before anything is created, so a typo is said out loud instead of
   // quietly giving an ordinary account. It only applies to a new workspace, not to joining someone else's team.
@@ -182,6 +184,10 @@ export async function createLogin(c: Ctx, p: { name: string; email: string; pass
   const user = get('SELECT * FROM users WHERE id=?', uid);
   if (!user.email_verified) await sendVerification(user, p.via);
   c.cookies.push(createSession(uid, accountId, c.secure));
+  // Invite a friend (referrals.ts): a new workspace made through someone's invite link is written down, so both get
+  // their free signatures once this account is real. The code comes with the form or from the browser's cookie, which
+  // is how it survives a trip through Google or Microsoft. Joining a team by invitation is not a new friend.
+  if (!invite) noteSignup(c, user, accountId, { ref: p.ref, welcomedBefore: wasWelcomed(p.email) });
   // A new login is signed in at once: that is a sign-in in the security record too (seclog.ts).
   signedUp(c, user, p.via);
   return { user, joined: (invite?.account_name as string) || null };
@@ -906,13 +912,14 @@ function globalImpact() {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE kind='envelope' AND status='completed'");
   // Only money we know was paid to GrowSigning by one of its accounts counts: the monthly plan and top-ups.
   const pay = get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id IS NOT NULL AND kind IN ('plan','topup')");
-  return { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: mangrovesFor(pay.cents / 100) };
+  // treesFunded: 5 for every finished signature, free ones included; older ones at what was promised then (impact.ts).
+  return { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: treesOfEveryone() };
 }
 route('GET', '/public/impact', () => globalImpact(), 'public');
 route('GET', '/impact', (c) => {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE account_id=? AND kind='envelope' AND status='completed'", c.account.id);
   const pay = get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id=? AND kind IN ('plan','topup')", c.account.id);
-  return { account: { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: mangrovesFor(pay.cents / 100) }, everyone: globalImpact() };
+  return { account: { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: treesOfAccount(c.account.id) }, everyone: globalImpact() };
 });
 
 // ---- Public verification -------------------------------------------------------------------

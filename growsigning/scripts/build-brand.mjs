@@ -457,7 +457,7 @@ async function buildExports() {
   const ow = 520, oh = Math.round((ow * lh) / lw);
   save('og-image.png', await shoot(1200, 630, `<div style="width:1200px;height:630px;background:${COLORS.paper};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:44px">
     ${img(dataUrl(read('logo.svg')), ow, oh, 'margin-top:-10px')}
-    <div style="font:500 40px/1.2 Lora, Georgia, serif;color:#45524a;letter-spacing:-0.005em">Sign on screen. Every dollar plants mangroves.</div>
+    <div style="font:500 40px/1.2 Lora, Georgia, serif;color:#45524a;letter-spacing:-0.005em">Sign on screen. Every signature plants 5 trees.</div>
   </div>`, { transparent: false }));
 
   // The guide.

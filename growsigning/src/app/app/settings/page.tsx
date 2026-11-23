@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { api, useLoad, fmtDate, oops, toast, Modal, Leaf } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
 import { AdoptSignature, useLooksCut } from '@/components/SignaturePad';
-import { PRICING, mangrovesFor } from '@/lib/impact';
+import { PRICING, treesFor } from '@/lib/impact';
 // Plain constants only: the rest of policy.ts reads the environment and is for the server.
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 import { DEFAULT_REMINDER_DAYS, reminderText } from '@/lib/policy';
@@ -22,6 +22,7 @@ import { RetentionSettings } from '@/components/settings/RetentionSettings';
 import { ArchiveSettings } from '@/components/settings/ArchiveSettings';
 import { SealStatus } from '@/components/settings/SealStatus';
 import { AgreementPlan } from '@/components/settings/AgreementPlan';
+import { InviteChoices, InviteCard, useInvite } from '@/components/sender/InviteFriend';
 import { ChannelsStatus } from '@/components/settings/ChannelsStatus';
 import { TakePayments } from '@/components/settings/TakePayments';
 import { ArchiveFormat } from '@/components/settings/ArchiveFormat';
@@ -586,6 +587,8 @@ function Billing() {
   const me = useMe();
   const admin = me.role !== 'member';
   const [b, reload] = useLoad(() => api('/billing'));
+  // Invite a friend: the link and its numbers, null where the offer is off (components/sender/InviteFriend.tsx).
+  const inv = useInvite();
   useEffect(() => {
     const again = () => (reload(), me.reload());
     window.addEventListener('sg-billing-changed', again);
@@ -634,9 +637,9 @@ function Billing() {
       <div className="card plan-hero">
         <Leaf size={28} color="#9ed88f" />
         <div>
-          <h2 className="serif" style={{ fontSize: 22 }}>Every dollar plants {P.treesPerUsd} mangrove trees</h2>
+          <h2 className="serif" style={{ fontSize: 22 }}>Every signature plants {P.treesPerSignature} trees</h2>
           <p style={{ margin: '4px 0 0' }}>
-            Everything you pay GrowSigning goes to Treegens tree planting, whether its signatures are used or not. {b.mangroves > 0 ? <>So far {me.account.name} has planted <b style={{ color: '#fff' }}>{b.mangroves.toLocaleString()} mangroves</b>. Thank you.</> : 'People who sign your documents never pay anything.'}
+            They are mangroves, planted by Treegens, and free signatures count too. What you pay, less card fees, goes to Treegens. {b.mangroves > 0 ? <>So far the signatures of {me.account.name} plant <b style={{ color: '#fff' }}>{b.mangroves.toLocaleString()} trees</b>. Thank you.</> : 'People who sign your documents never pay anything.'}
           </p>
         </div>
       </div>
@@ -669,6 +672,14 @@ function Billing() {
           <div className="balance"><b className="num">{Math.max(0, s.available)}</b> left to send with</div>
           {gone && <p className="plan-line lot-line" role="status"><b>{gone}</b> {grove ? 'Top up below to send again.' : 'Start the monthly plan below to send again.'}</p>}
           {b.renewal_pending && <p className="plan-line lot-line" role="status"><b>Your new month&apos;s {P.monthlySignatures} signatures arrive when the renewal payment goes through.</b> That is usually within the hour, and there is nothing for you to do.</p>}
+          {/* None left: the two ways to get more, side by side. Paying is further down as always; this names it and puts the invite link next to it. */}
+          {s.available <= 0 && inv?.open && (
+            <InviteChoices inv={inv} note={grove ? `Top up at $${P.topUpUsd} a signature: one payment you choose.` : `The monthly plan is ${price} for ${n(P.monthlySignatures)}.`}
+              more={!admin ? <span className="muted small">Only account admins can change the plan.</span>
+                : grove ? <a href="#top-up" className="btn sm primary">Top up</a>
+                : b.enabled && !b.problem && !b.disputed ? <button type="button" className="btn sm primary" disabled={busy} onClick={() => go('/billing/checkout')}>Start the plan for {price} a month</button>
+                : <span className="muted small">See the plan below.</span>} />
+          )}
           {/* Like a usage limit that resets: this month's signatures and when they reset, then every other lot with its own date. */}
           {b.period && (
             <p className="plan-line lot-line" style={{ marginTop: 6 }}><b>This month: {b.period.left} of {b.period.of} left.</b> {b.period.fresh === 'none'
@@ -743,7 +754,7 @@ function Billing() {
         )}
         {grove && !free && !b.ends_at && !b.problem && (
           <>
-            <p className="plan-line">{b.renews_at && Date.parse(b.renews_at) <= Date.now() ? <>The payment for the new month is being taken now: <b>{b.next_amount || price}</b> (your bank may show it up to an hour later), which adds {n(P.monthlySignatures)} and plants {mangrovesFor(P.monthlyUsd)} mangroves. You can still cancel: a month that has not been paid for yet is then withdrawn.</> : b.renews_at ? <>Next charge: <b>{b.next_amount || price} on {expiryMoment(b.renews_at)}</b> (your bank may show it up to an hour later), which adds {n(P.monthlySignatures)} and plants {mangrovesFor(P.monthlyUsd)} mangroves. That is the whole amount. We remind you by email a week before and again about a day before, and you can cancel right up to the charge.</> : <>Billed {price} each month. We remind you by email a week before and again about a day before every charge.</>}</p>
+            <p className="plan-line">{b.renews_at && Date.parse(b.renews_at) <= Date.now() ? <>The payment for the new month is being taken now: <b>{b.next_amount || price}</b> (your bank may show it up to an hour later), which adds {n(P.monthlySignatures)}, {treesFor(P.monthlySignatures)} trees when they are signed. You can still cancel: a month that has not been paid for yet is then withdrawn.</> : b.renews_at ? <>Next charge: <b>{b.next_amount || price} on {expiryMoment(b.renews_at)}</b> (your bank may show it up to an hour later), which adds {n(P.monthlySignatures)}, {treesFor(P.monthlySignatures)} trees when they are signed. That is the whole amount. We remind you by email a week before and again about a day before, and you can cancel right up to the charge.</> : <>Billed {price} each month. We remind you by email a week before and again about a day before every charge.</>}</p>
             {admin && <div className="row wrap"><button className="btn" onClick={() => setModal('cancel')}>Cancel plan</button></div>}
           </>
         )}
@@ -756,7 +767,7 @@ function Billing() {
         {b.disputed && <div className="notice warn" style={{ marginBottom: 12 }}><b>A payment on this account was disputed with the bank.</b> New payments are switched off until a person has looked. If that was a mistake, <Link href="/help?topic=billing#contact">write to us</Link> and we switch them back on.</div>}
         {!grove && !b.problem && !b.disputed && (
           <>
-            <p className="plan-line">{n(P.monthlySignatures)} added to your balance with every payment, {mangrovesFor(P.monthlyUsd)} mangroves planted each month. They belong to that month: what you do not use by the renewal expires, and the renewal brings a fresh {P.monthlySignatures}. Need more in a busy month? Top up at ${P.topUpUsd} a signature.</p>
+            <p className="plan-line">{n(P.monthlySignatures)} added to your balance with every payment: {treesFor(P.monthlySignatures)} trees a month when you use them all. They belong to that month: what you do not use by the renewal expires, and the renewal brings a fresh {P.monthlySignatures}. Need more in a busy month? Top up at ${P.topUpUsd} a signature.</p>
             {admin && b.enabled && b.other_paid?.length > 0 && (
               <div className="notice warn" style={{ marginBottom: 12 }}>You already pay for a plan on {b.other_paid.map((x: string) => `"${x}"`).join(' and ')}. Starting one here is a second, separate subscription. Each team needs only one.</div>
             )}
@@ -790,9 +801,9 @@ function Billing() {
       )}
 
       {admin && b.enabled && !b.disputed && (
-        <div className="card">
+        <div className="card" id="top-up">
           <h2>Top up</h2>
-          <p className="muted" style={{ margin: '4px 0 12px' }}>${P.topUpUsd} a signature. Each one plants {P.treesPerUsd} mangrove trees. A top-up is a single payment you choose: it never changes your plan or its price.</p>
+          <p className="muted" style={{ margin: '4px 0 12px' }}>${P.topUpUsd} a signature. Each one plants {P.treesPerSignature} trees when it is signed. A top-up is a single payment you choose: it never changes your plan or its price.</p>
           {grove ? (
             <>
               <div className="row wrap" role="group" aria-label="How many signatures">
@@ -800,7 +811,7 @@ function Billing() {
                 <label className="row small" style={{ gap: 6 }}>or <input type="number" min={1} max={P.topUpMax} value={qty} onChange={(e) => setQty(Number(e.target.value))} style={{ width: 90 }} aria-label="Number of signatures" /></label>
               </div>
               <div className="row between wrap" style={{ marginTop: 14 }}>
-                <div className="topup-sum"><b>{n(q)}</b> for <b>${q * P.topUpUsd}</b> plants <b>{mangrovesFor(q * P.topUpUsd).toLocaleString()} mangroves</b></div>
+                <div className="topup-sum"><b>{n(q)}</b> for <b>${q * P.topUpUsd}</b>: <b>{treesFor(q).toLocaleString()} trees</b> when signed</div>
                 <button className="btn primary" disabled={busy} onClick={() => go('/billing/topup', { quantity: q })}>Pay ${q * P.topUpUsd} and add {n(q)}</button>
               </div>
             </>
@@ -818,11 +829,14 @@ function Billing() {
         </div>
       )}
 
+      {/* Invite friends: the link, how many joined, how many rewards, the rules in three lines. With none left, the link is already above. */}
+      <InviteCard inv={inv} bare={!!s && s.available <= 0 && !!inv?.open} />
+
       {/* Every rule, closed until someone wants it (research/ux-charter.md, Plan): the dates above are what people need daily. */}
       <details className="card" data-fold="">
         <summary style={{ padding: '11px 0', cursor: 'pointer', fontWeight: 600, fontSize: 18 }}>How signatures work</summary>
         <ul className="rules" style={{ marginTop: 10 }}>
-          <li><b>{price} a month adds {n(P.monthlySignatures)}.</b> Extra signatures are ${P.topUpUsd} each. Every dollar plants {P.treesPerUsd} mangrove trees.</li>
+          <li><b>{price} a month adds {n(P.monthlySignatures)}.</b> Extra signatures are ${P.topUpUsd} each. Every signature plants {P.treesPerSignature} trees, free ones included.</li>
           <li><b>When signatures expire.</b> {b.expiry_rule}</li>
           <li><b>You only use one when somebody signs.</b> When an envelope is voided, declined or expires, the signatures held for people who had not signed yet come back. {b.held_rule} One that was already used stays used. Correcting a sent envelope and sending reminders are free.</li>
           <li><b>Some things are always free.</b> Signing your own documents, under your own name and address. People who approve, view or get a copy. Everyone who signs something you send. Your first {n(P.welcomeSignatures)}. Being asked to sign again after a change.</li>

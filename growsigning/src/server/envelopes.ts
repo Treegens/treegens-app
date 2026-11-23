@@ -14,6 +14,7 @@ import { treesInInvite, noteFinished } from './impact.ts';
 import { showsTrees } from './tenantpolicy.ts';
 import { mailLine } from '../lib/impactwords.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
+import { afterSignature, referralAbuse, inviteSentence } from './referrals.ts';
 import { STANDING_PAYMENT, personGen, lastExpiry, swapRefusal, reholdEnvelope, pastDateText, renewalPending } from './credits.ts';
 import { DATE_FORMATS, DEFAULT_DATE_FORMAT, momentText, momentForEmail, momentForReader, isDaytime, validZone, REMINDER_DAY_START, isDateValue, DATE_PROBLEM } from '../lib/dates.ts';
 import { NUMBER_RULE } from '../lib/numbers.ts';
@@ -1121,14 +1122,16 @@ export function outOfSignatures(account: any, need: number, have: number): strin
   const short = `This needs ${need} signature${need === 1 ? '' : 's'} and you have ${Math.max(0, have)} left.`;
   // Just after a month ends the new month's signatures are on their way with the renewal payment (renewalPending).
   const how = renewalPending(account)
-    ? `Your new month's ${PRICING.monthlySignatures} arrive when the renewal payment goes through, usually within the hour. To send before that, top up on the Plan page: $${PRICING.topUpUsd} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`
+    ? `Your new month's ${PRICING.monthlySignatures} arrive when the renewal payment goes through, usually within the hour. To send before that, top up on the Plan page: $${PRICING.topUpUsd} a signature. Every signature plants ${PRICING.treesPerSignature} trees.`
     : account.plan === 'grove'
-    ? `Top up on the Plan page: $${PRICING.topUpUsd} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`
-    : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`;
+    ? `Top up on the Plan page: $${PRICING.topUpUsd} a signature. Every signature plants ${PRICING.treesPerSignature} trees.`
+    : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures. Every signature plants ${PRICING.treesPerSignature} trees.`;
   // When the number is low because some expired (credits.ts), say so and when: nobody should have to guess.
   const gone = lastExpiry(account.id);
   const why = gone ? ` ${gone.n} signature${gone.n === 1 ? '' : 's'} you had not used expired on ${expiryMoment(gone.at)}; the Plan page shows every date.` : '';
-  return `${short}${why} ${how} Nothing is charged unless you choose it. Signing your own documents stays free.`;
+  // The other way to get more: invite a friend (referrals.ts). Said last, and only where the offer is on.
+  const invite = inviteSentence(account.id);
+  return `${short}${why} ${how} Nothing is charged unless you choose it. Signing your own documents stays free.${invite ? ` ${invite}` : ''}`;
 }
 
 // ---- Keeping scammers and strangers out ----------------------------------------------------
@@ -1472,7 +1475,9 @@ export async function lowBalanceMail(account: any, sender: { email: string; name
           lines: [`${account.name} has ${Math.max(0, after)} signature${after === 1 ? '' : 's'} left to send${sameEmail(to, sender.email) && !always ? '' : `, after ${did}`}. Envelopes already out are covered and can still be signed.`,
             more,
             ...(sameEmail(to, sender.email) && !isBuyer ? ['Only an owner or admin of your team can buy more. We have told them too.'] : []),
-            `Nothing is ever charged without you choosing it. Every dollar plants ${PRICING.treesPerUsd} mangrove trees.`],
+            // The second way to get more, with the account's own invite link (referrals.ts). Nothing where the offer is off.
+            ...(inviteSentence(account.id, true) ? [inviteSentence(account.id, true)] : []),
+            `Nothing is ever charged without you choosing it. Every signature plants ${PRICING.treesPerSignature} trees.`],
           ...(sameEmail(to, sender.email) && !isBuyer ? {} : { cta: { label: 'See your plan', url: `${baseUrl()}/app/settings?tab=billing` } }) });
       break;
     }
@@ -1548,6 +1553,9 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
     lines: [
       ...(subjectUnder ? [e.subject] : []),
       ...(shared ? [`More than one person on this document uses this email address. This link is for ${r.name} only.`] : []),
+      // Among the first lines, to everyone whose signature plants trees, when they are asked and when they are
+      // reminded: "5 trees will be planted with Treegens when you finish." (impact.ts).
+      ...((kind === 'new' || kind === 'reminder') && showsTrees(e.account_id) && treesInInvite(r) ? [mailLine(treesInInvite(r), r.role === 'inperson' ? r.name : '')] : []),
       ...(kind === 'again' ? [
         `${r.role === 'inperson' ? `${r.name} ${finishedHow(r)}` : `You ${finishedHow(r)}`} "${e.subject}" on ${ts(before)}. After that, ${changerWords(changer, sender.name, cosignerChanged(e.id, r.id))} changed the document, so what was ${finishedHow(r)} then no longer counts. It is kept on record, and so is the change.`,
         ...whatChanged,
@@ -1576,8 +1584,6 @@ export async function notifyRecipient(e: any, r: any, kind: Notice = 'new'): Pro
       ...delegateLines(e, r, kind), // to a person who named a delegate: that the delegate has it too (delegation.ts)
       ...(r.note ? [`Note for you: ${r.note}`] : []),
       ...(r.access_code ? [`You will need an access code to open it. ${sender.name} will give it to you separately. It is not in this email.`] : []),
-      // To someone who signs with a paid signature, and nobody else: what finishing plants (impact.ts).
-      ...(kind === 'new' && showsTrees(e.account_id) && treesInInvite(r) ? [mailLine(treesInInvite(r), r.role === 'inperson' ? r.name : '')] : []),
       `Reply to this email to reach ${sender.name} (${sender.email}).`,
     ],
     cta: { label: done ? (e.status === 'completed' ? 'View completed document' : 'View document') : r.role === 'cc' ? 'View document' : r.role === 'viewer' ? 'View document' : isStepRole(r.role) ? STEP_MAIL[r.role].button : `${r.role === 'approver' ? 'Review and approve' : r.role === 'witness' ? 'Open and witness' : 'Review and sign'}${kind === 'again' ? ' again' : ''}`, url: signUrl(r) },
@@ -2366,6 +2372,7 @@ export async function completeRecipient(e: any, r: any, body: any, actor: Actor)
     }
   }
   noteFinished(r.id); // trees: a finished signature is counted here, not when somebody looks (impact.ts)
+  await afterSignature(e.account_id); // invite a friend: the first signed document of an invited account (referrals.ts)
   counterFinished(e, r); // at a service counter: the link used there closes before the copy is emailed (counter.ts)
   const left = e.recipients.filter((x: any) => x.id !== r.id && x.status !== 'completed' && x.role !== 'cc');
   if (left.length) await tellSender(e, 'signed', (L) => ({ subject: st(L, `mail.sender.done.${verb.toLowerCase()}.subject`, { subject: e.subject }), heading: st(L, `mail.sender.done.${verb.toLowerCase()}.heading`, { name: r.name }), lines: [st(L, 'mail.sender.still_waiting', { names: namesIn(L, left.map((x: any) => x.name), true) })] }));
@@ -2876,6 +2883,7 @@ export async function reportAbuse(e: any, r: any, body: any, actor: Actor) {
   let paused = false;
   if (!viaForm && n >= limit && !account.suspended_at) {
     run('UPDATE accounts SET suspended_at=?, suspended_reason=? WHERE id=?', now(), `${n} different recipients reported documents from this account`, account.id);
+    referralAbuse(account.id); // an invite reward this account brought is taken back (referrals.ts)
     paused = true;
     // Never pause silently: say why, what still works, and how to reach a person.
     for (const u of all("SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=? AND m.role IN ('owner','admin')", account.id))

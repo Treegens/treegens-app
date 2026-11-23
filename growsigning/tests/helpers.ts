@@ -79,6 +79,8 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-delegation.ts');
   await import('../src/server/routes-govbilling.ts');
   await import('../src/server/routes-shares.ts');
+  await import('../src/server/routes-sharelinks.ts');
+  await import('../src/server/routes-referrals.ts');
   await import('../src/server/routes-fieldlib.ts');
   await import('../src/server/routes-phoneapp.ts');
   await import('../src/server/routes-webforms.ts');

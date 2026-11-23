@@ -135,7 +135,7 @@ export function renderMail(m: Mail): string {
     // Emails about a document go to people who only came to sign. The pages promise them no marketing, so these end
     // with where the email came from and nothing that sells. Emails to an account's own people keep the full line.
     ? `<br>${m.code || m.onPaper ? '' : `${esc(mt(L, 'mail.footer.no_paper'))} `}${esc(mt(L, 'mail.footer.sent_with'))}`
-    : `<br>${esc(mt(L, 'mail.footer.no_paper'))} ${esc(mt(L, 'mail.footer.trees', { trees: String(PRICING.treesPerUsd) }))}`}
+    : `<br>${esc(mt(L, 'mail.footer.no_paper'))} ${esc(mt(L, 'mail.footer.trees', { trees: String(PRICING.treesPerSignature) }))}`}
   </p>
 </div></body></html>`;
 }

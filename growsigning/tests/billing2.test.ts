@@ -284,13 +284,13 @@ test("the provider's echo of our own refund touches no other payment", async () 
   const p = await person('Gus');
   await subscribe(p);
   await event('invoice.paid', invoice(p, 'in_gus_2', { billing_reason: 'subscription_cycle' }));
-  assert.equal((await state(p)).mangroves, 180);
+  assert.equal((await p.c.get('/impact')).data.account.donatedUsd, 18); // the money, since trees are counted by signature now (tests/trees-5.test.ts)
   assert.equal((await p.c.post('/billing/refund')).data.refunded, '$9.00');
   // Newer provider versions do not say which invoice a charge belongs to.
   await event('charge.refunded', { id: 'ch_in_gus_2', customer: p.cus, amount: 900, amount_refunded: 900 });
   assert.equal(pay('in_gus_2').refunded_cents, 900);
   assert.equal(pay(`in_${p.k}_1`).refunded_cents, 0, 'the earlier payment is untouched');
-  assert.equal((await state(p)).mangroves, 90);
+  assert.equal((await p.c.get('/impact')).data.account.donatedUsd, 9);
   // A refund a person makes in the provider's dashboard is recorded against the right payment.
   await event('charge.refunded', { id: `ch_in_${p.k}_1`, customer: p.cus, amount: 900, amount_refunded: 400, invoice: `in_${p.k}_1` });
   assert.equal(pay(`in_${p.k}_1`).refunded_cents, 400);
@@ -489,7 +489,7 @@ test('a card dispute stops billing, is not fought, and cannot be refunded a seco
   const s = await state(p);
   assert.equal(s.plan, 'seedling');
   assert.equal(s.refund, null, 'the bank is returning it, so the app does not offer it again');
-  assert.equal(s.mangroves, 0);
+  assert.equal((await p.c.get('/impact')).data.account.donatedUsd, 0);
   assert.ok(subjects(p.email).includes('A payment was disputed, so we stopped billing you'));
   assert.ok(alerts().some((m) => m.includes('Card dispute') && m.includes('accepted with the payment provider automatically')));
   assert.equal(s.signatures.balance, 3, 'the signatures that payment bought and that were unused go with it');

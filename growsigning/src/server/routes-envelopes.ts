@@ -29,9 +29,10 @@ import { CLOSED, senderNotice } from './evidence.ts';
 import { sendWarnings } from './warnings.ts';
 import { emailRefusal, fieldProgress, formPageRefusal, yesNo } from './envelopes.ts';
 import { markPaying } from './collect.ts';
-import { PRICING } from '../lib/impact.ts';
+import { PRICING, treesForSignature } from '../lib/impact.ts';
 import { showsTrees } from './tenantpolicy.ts';
 import { printProblems, unprintable } from './pdftext.ts';
+import { shareLinkOf, autoShareLink, dropShareLinks } from './sharelinks.ts';
 import { powerformIdleHours, POWERFORM_OPEN_STARTS, POWERFORM_SHARED_OPEN_STARTS, powerformSharedIdleMinutes, MAX_PHOTOS_PER_DOCUMENT } from '../lib/policy.ts';
 import { POWERFORM_STARTS_PER_HOUR, POWERFORM_SHARED_STARTS_PER_HOUR } from '../lib/policy.ts';
 import { reminderText } from '../lib/policy.ts';
@@ -410,6 +411,8 @@ route('GET', '/envelopes/:id', (c) => {
   // kept_on_delete: whether deleting it now would only take it out of the lists (deleting.ts), for the delete dialog.
   // retention: how long it is kept, a purge asked for or announced, holds, and what a purge left (records.ts).
   // shared, sent_by_name, first_sender_name: whose it is when it came through a share, who sent it for whom (shares.ts).
+  // share_link: the document's readable address, growsigning.com/<name>, when its sender made one (sharelinks.ts).
+  if (e.kind !== 'template') env.share_link = shareLinkOf('envelope', e.id);
   return { ...shareFacts(c, e), envelope: env, audit: auditTrail(e.id), chain: verifyChain(e.id), deliveries, texts: textsOf(e.id), whatsapp: waOf(e.id), print_problems, removed_at: e.hidden_at || null, kept_on_delete: keptOnDelete(e), retention: retentionFacts(c, e), seal: sealFacts(e), archive_format: pdfaFacts(e), record_stamp: chainStampFacts(e.id, verifyChain(e.id).ok) };
 });
 
@@ -943,7 +946,7 @@ export function powerformTemplate(templateId: string) {
 // deleting the form, is for the people who may change the template: the person it belongs to, admins, and whoever
 // its rule lets change it (tplroles.ts). Everyone who may use the template sees the forms and can hand out their links.
 const mayRunForm = (c: Ctx, tpl: any) => !!tpl && mayChange(c, tpl);
-function assertMayRunForm(c: Ctx, tpl: any, doing: string) {
+export function assertMayRunForm(c: Ctx, tpl: any, doing: string) {
   if (mayRunForm(c, tpl)) return;
   const owner = (tpl && get('SELECT name FROM users WHERE id=?', tpl.sender_id)?.name) || 'a colleague';
   const chosen = tpl?.tpl_change === 'chosen' ? `${owner}, an admin of your team or a member they chose` : `${owner} or an admin of your team`;
@@ -980,6 +983,12 @@ function formToChange(c: Ctx, doing: string) {
   return p;
 }
 
+// share_link: the form's readable address, growsigning.com/<name> (sharelinks.ts). While it is on, "url" is that
+// address, so Copy link and the QR code carry it; the address with the slug keeps working beside it.
+const formShare = (p: any) => {
+  const share_link = shareLinkOf('form', p.id);
+  return { url: share_link?.active ? share_link.url : `${baseUrl()}/f/${p.slug}`, share_link };
+};
 route('GET', '/powerforms', (c) => ({
   // "uses" counts every start. "signed" is what people finished, and "open" is who is filling one in right now.
   // may_change says whether this person may pause, change or delete the form, and owner whose template it is on.
@@ -993,7 +1002,7 @@ route('GET', '/powerforms', (c) => ({
     .map(({ template_ref, ...p }) => ({ p, t: get('SELECT * FROM envelopes WHERE id=?', template_ref) }))
     .filter(({ t }) => !t || can(c, 'edit_any_template') || mayUse(c, t))
     // reminders: whether the envelope each visitor starts reminds them by itself, which it takes from the template.
-    .map(({ p, t }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, t), url: `${baseUrl()}/f/${p.slug}`, reminders: t ? reminderText(t.reminder_days) : null, questions: t ? questionCount(t.id) : 0, unlabelled: t ? unlabelledOf(t.id) : 0 })),
+    .map(({ p, t }) => ({ ...p, shared_device: !!p.shared_device, may_change: mayRunForm(c, t), ...formShare(p), reminders: t ? reminderText(t.reminder_days) : null, questions: t ? questionCount(t.id) : 0, unlabelled: t ? unlabelledOf(t.id) : 0 })),
 }));
 route('POST', '/powerforms', async (c) => {
   const b = await c.body();
@@ -1015,7 +1024,8 @@ route('POST', '/powerforms', async (c) => {
   if (noCustom) throw bad(`${noCustom} The form was not made.`);
   const pid = id('pwf');
   run('INSERT INTO powerforms (id, account_id, template_id, slug, name, created_at, shared_device) VALUES (?,?,?,?,?,?,?)', pid, c.account.id, tpl.id, token(9), name, now(), b.shared_device ? 1 : 0);
-  return { id: pid };
+  // A form is public from the start, so it gets its readable address at once when a free name comes out of its name.
+  return { id: pid, share_link: autoShareLink('form', pid, c.account.id, name) };
 });
 route('PATCH', '/powerforms/:id', async (c) => {
   // Only what the call names is changed, so pausing a form does not also change how it treats a shared device.
@@ -1029,6 +1039,7 @@ route('PATCH', '/powerforms/:id', async (c) => {
 route('DELETE', '/powerforms/:id', (c) => {
   formToChange(c, 'delete this PowerForm');
   run('DELETE FROM powerforms WHERE id=? AND account_id=?', c.params.id, c.account.id);
+  dropShareLinks('form', c.params.id);
 });
 
 route('GET', '/public/powerforms/:slug', async (c) => {
@@ -1047,6 +1058,8 @@ route('GET', '/public/powerforms/:slug', async (c) => {
   return { name: posing ? null : p.name, role: open.role_name || 'Signer', pages: tpl.documents.reduce((n: number, d: any) => n + d.pages, 0), brand: posing ? null : a, closed: !!posing || !!noCustom || formClosed(p, tpl) || !!formLimitClosed(p),
     // Closed because it reached the number of signatures it was set up for, or its closing date: said, with whom to ask.
     closed_why: posing || noCustom ? null : formLimitClosed(p), shared_device: !!p.shared_device, trees: showsTrees(p.account_id),
+    // Trees the visitor's signature plants (5), for the line at the top of the form page. 0 says nothing: tree words off, or no plans here.
+    plants: showsTrees(p.account_id) && creditsEnabled() ? treesForSignature() : 0,
     // The questions the visitor answers before the document (webforms.ts), with what the form page needs to check them.
     ...(posing || noCustom ? { questions: [] } : formView(tpl, open)) };
 }, 'public');

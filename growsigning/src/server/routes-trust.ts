@@ -5,6 +5,7 @@ import path from 'node:path';
 import { route, type Ctx } from './router.ts';
 import { all, get, run, tx, readBlob, dataDir } from './db.ts';
 import { bad, id, now, isEmail, str, rateLimit, baseUrl, parseCode, shortCode, sha256, hmac, HttpError } from './util.ts';
+import { referralAbuse } from './referrals.ts';
 import { checkPassword, hasPassword } from './auth.ts';
 import { sendMail } from './mail.ts';
 import { auditTrail, emailMyLinks, resendFromRetired } from './envelopes.ts';
@@ -708,7 +709,10 @@ route('POST', '/operator/accounts/:id', async (c) => {
     return { trusted: b.trusted };
   }
   const reason = str(b.reason, 300).trim() || 'Paused by the GrowSigning team';
-  if (b.paused) run('UPDATE accounts SET suspended_at=?, suspended_reason=? WHERE id=?', now(), reason, a.id);
+  if (b.paused) {
+    run('UPDATE accounts SET suspended_at=?, suspended_reason=? WHERE id=?', now(), reason, a.id);
+    referralAbuse(a.id); // an invite reward this account brought is taken back (referrals.ts)
+  }
   else {
     // Lifting a pause means a person has looked at everything reported so far. Those reports do not count again.
     run('UPDATE accounts SET suspended_at=NULL, suspended_reason=NULL, unpaused_at=? WHERE id=?', now(), a.id);

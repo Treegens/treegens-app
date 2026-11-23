@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, useLoad, oops, fmtDate } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
-import { PRICING, mangrovesFor } from '@/lib/impact';
+import { PRICING, treesFor } from '@/lib/impact';
 import { useST } from '@/components/senderLang';
 import { senderT } from '@/lib/senderlang';
 import type { BulkRow } from '@/components/sender/csv';
@@ -98,7 +98,7 @@ export function BatchCost({ check, failed, onPaying }: { check: BatchCheck | nul
         {' '}{T('bulk.cost.short_rest', { perRow })}
         <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
           {c.plan === 'grove'
-            ? <li><b>{T('bulk.cost.top_up', { count: c.short, price: usd(cost.top_up_usd) })}</b> {T('bulk.cost.top_up_rest', { trees: mangrovesFor(cost.top_up_usd) })}{tooBig ? ` ${T('bulk.cost.too_big', { max: PRICING.topUpMax })}` : ''}{!admin && ` ${T('bulk.cost.admin_can')}`}</li>
+            ? <li><b>{T('bulk.cost.top_up', { count: c.short, price: usd(cost.top_up_usd) })}</b> {T('bulk.cost.top_up_rest', { trees: treesFor(c.short) })}{tooBig ? ` ${T('bulk.cost.too_big', { max: PRICING.topUpMax })}` : ''}{!admin && ` ${T('bulk.cost.admin_can')}`}</li>
             : <li><b>{T('bulk.cost.plan', { price: usd(cost.plan_usd) })}</b> {T('bulk.cost.plan_rest', { count: cost.plan_signatures })}{cost.top_up > 0 ? <> {T('bulk.cost.then')} <b>{T('bulk.cost.then_top_up', { count: cost.top_up, price: usd(cost.top_up_usd) })}</b>. {T('bulk.cost.that_is')} <b>{T('bulk.cost.in_all', { price: usd(cost.usd) })}</b> {T('bulk.cost.before_batch')}</> : ` ${T('bulk.cost.covers')}`}{!admin && ` ${T('bulk.cost.admin_can')}`}</li>}
           {fits > 0 && <li><b>{T('bulk.cost.shorter')}</b> {T('bulk.cost.shorter_rest', { count: fits })}</li>}
           {next && c.plan === 'grove' && <li><b>{T('bulk.cost.wait')}</b> {T('bulk.cost.wait_rest', { count: PRICING.monthlySignatures, day: fmtDate(next) })}</li>}

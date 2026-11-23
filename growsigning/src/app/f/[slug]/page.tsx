@@ -1,5 +1,8 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { OpenTreesLine } from '@/components/impact/SignerTrees';
+import { RULE_LINE } from '@/lib/impactwords';
+import { useContext, useEffect, useRef, useState } from 'react';
+import { FormSlug } from '@/lib/formslug';
 import { useParams } from 'next/navigation';
 import { api, useLoad } from '@/components/ui';
 import { Mark } from '@/components/Brand';
@@ -29,7 +32,10 @@ const writeKept = (slug: string, v: any) => {
 };
 
 export default function PowerForm() {
-  const { slug } = useParams<{ slug: string }>();
+  // Opened by its share link (growsigning.com/<name>), the form is told its slug; at /f/<slug> the address says it.
+  const told = useContext(FormSlug);
+  const at_ = useParams<{ slug?: string }>();
+  const slug = told || at_.slug || '';
   const [form, , error] = useLoad(() => api(`/public/powerforms/${slug}`), [slug]);
   const [f, setF] = useState({ name: '', email: '' });
   const [busy, setBusy] = useState(false);
@@ -183,6 +189,8 @@ export default function PowerForm() {
               <span className="muted small">{form.brand?.name}</span>
             </div>
             <h1 className="serif" style={{ fontSize: 24 }}>{form.name}</h1>
+            {/* The first thing a person reads on a shared link: their signature plants 5 trees (impact/SignerTrees.tsx). */}
+            <OpenTreesLine trees={form.plants} />
             <p className="muted" style={{ margin: '8px 0 16px' }}>{asks ? t(locale, 'form.details_asks', { count: shownQuestions(form.questions, form.fields, answers).length }) : 'Enter your details to review and sign. It takes a minute, and no paper is involved.'}</p>
             {/* A shared device must not offer the next person the names and addresses typed before: no autofill there. */}
             <label className="f"><span>Your full name</span><input dir="auto" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete={form.shared_device ? 'off' : 'name'} autoFocus /></label>
@@ -196,7 +204,7 @@ export default function PowerForm() {
           </form>
         )}
       <p className="muted small center" style={{ marginTop: 14 }}>{/* The tree clause only for an account that shows trees to its signers ('Trees on screens and emails'). */}
-        {form?.trees ? 'Powered by GrowSigning, where every dollar plants mangrove trees.' : 'Powered by GrowSigning.'} <a href={`/help?topic=signing&form=${encodeURIComponent(slug)}#contact`}>Something not working? Get help</a></p>
+        {form?.trees && !form?.plants ? `Powered by GrowSigning. ${RULE_LINE}` : 'Powered by GrowSigning.'} <a href={`/help?topic=signing&form=${encodeURIComponent(slug)}#contact`}>Something not working? Get help</a></p>
     </div>
   );
 }

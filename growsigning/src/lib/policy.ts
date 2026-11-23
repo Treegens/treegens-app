@@ -30,7 +30,7 @@ export const TOPUP_WARN_DAYS: number[] = [30, 3];
  * of the provider, the welcome and receipt emails and every renewal reminder quote it, so they cannot disagree.
  */
 export const expiryRuleText = (): string =>
-  `The ${PRICING.monthlySignatures} signatures of each month of the monthly plan last until that month ends: at the renewal, or at the end of the paid month if you cancel. Unused ones expire then, and the next month brings a fresh ${PRICING.monthlySignatures}. With a free code the month is the calendar month in UTC. Top-up signatures last ${TOPUP_EXPIRY_MONTHS} months from their payment, and we email you ${TOPUP_WARN_DAYS[0]} and ${TOPUP_WARN_DAYS[1]} days before if any are unused. The ${PRICING.welcomeSignatures} free signatures of a new account last ${WELCOME_EXPIRY_DAYS} days. The one that ends soonest is always used first. Every date is on the Plan page. Every dollar still plants ${PRICING.treesPerUsd} mangroves, used or not.`;
+  `The ${PRICING.monthlySignatures} signatures of each month of the monthly plan last until that month ends: at the renewal, or at the end of the paid month if you cancel. Unused ones expire then, and the next month brings a fresh ${PRICING.monthlySignatures}. With a free code the month is the calendar month in UTC. Top-up signatures last ${TOPUP_EXPIRY_MONTHS} months from their payment, and we email you ${TOPUP_WARN_DAYS[0]} and ${TOPUP_WARN_DAYS[1]} days before if any are unused. The ${PRICING.welcomeSignatures} free signatures of a new account last ${WELCOME_EXPIRY_DAYS} days. The one that ends soonest is always used first. Every date is on the Plan page. Each signature plants ${PRICING.treesPerSignature} trees when signed.`;
 /** The same rule in one line, for a price list; the page links to the full rule on /help#expiry next to it. */
 export const expiryShortText = (): string =>
   `A month's ${PRICING.monthlySignatures} signatures last for that month, top-ups last ${TOPUP_EXPIRY_MONTHS} months, and every date is on your Plan page.`;
@@ -44,6 +44,7 @@ export const expiredWords = (x: { n: number; at: string; source?: string } | nul
   const what = x.source === 'welcome' ? `Your ${x.n} free signature${one ? '' : 's'}`
     : x.source === 'plan' || x.source === 'code' ? `${x.n} unused signature${one ? '' : 's'} of your last plan month`
     : x.source === 'topup' ? `${x.n} unused top-up signature${one ? '' : 's'}`
+    : x.source === 'referral' ? `${x.n} unused signature${one ? '' : 's'} from inviting a friend`
     : `${x.n} unused signature${one ? '' : 's'}`;
   return `${what} expired on ${expiryMoment(x.at)}.`;
 };
@@ -468,6 +469,14 @@ export const SIGNER_CODES_PER_HOUR = 5;
 export const SIGNER_CODES_PER_CALLER_HOUR = 100;
 /** How many one-time codes one sender's documents can send to one mailbox or one phone number in a day (a public form counts on its own). */
 export const SIGNER_CODES_PER_DESTINATION_DAY = 15;
+/** Share links (growsigning.com/<name>): how many names one internet address can open in a minute. */
+export const SHARE_LOOKUPS_PER_MINUTE = 30;
+/** Share links: how many codes one internet address can ask for in an hour, over every name and person. The limits of the code itself hold as well. */
+export const SHARE_CODE_ASKS_PER_HOUR = 10;
+/** Share links: how many codes one internet address can type in ten minutes. Five wrong ones end a code anyway. */
+export const SHARE_CODE_TRIES_PER_TEN_MINUTES = 20;
+/** Share links: how often one account can make, rename or switch its links in an hour. */
+export const SHARE_CHANGES_PER_HOUR = 60;
 /** How many texts with a signing link or a reminder can go to one phone number from one account in a day. */
 export const LINK_TEXTS_PER_NUMBER_DAY = 4;
 

@@ -640,14 +640,15 @@ test('two signers on one address each get their own completion email with their 
   await jo.post(`/envelopes/${solo.id}/send`);
   await signAll(solo.id, 'alone@example.com');
   assert.match(mailTo('alone@example.com').find((m) => m.subject === 'Completed: Just me')!.html, /<h1[^>]*>Your document is complete</);
-  // "Signers are never sent marketing": no email about a document carries the line about what a dollar buys.
-  for (const m of [...mailTo('both@example.com'), ...mailTo('alone@example.com')]) assert.doesNotMatch(m.html, /every dollar plants/);
+  // "Signers are never sent marketing": no email about a document carries the footer line that sells the product.
+  // (Since the 5 trees rule that line is about signatures, not dollars.)
+  for (const m of [...mailTo('both@example.com'), ...mailTo('alone@example.com')]) assert.doesNotMatch(m.html, /where every (dollar|signature) plants/);
   // (The newest email to this address can be the short one about their own login, which has no such line: the
   // email about the document is the one meant here.)
   assert.match(mailTo('alone@example.com').find((m) => m.subject === 'Just me')!.html, /Sent with GrowSigning\./);
   // An email to an account's own person about the account keeps it.
   // (Not the short email about their login, which has only the help address under it: any other one.)
-  assert.ok(mailTo('jo@example.com').some((m) => /every dollar plants/.test(m.html)));
+  assert.ok(mailTo('jo@example.com').some((m) => /where every signature plants 5 mangrove trees with Treegens/.test(m.html)));
 });
 
 // ---- Promises that are only markup or styling ------------------------------------------------------------------------

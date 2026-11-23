@@ -6,6 +6,7 @@
 /** Encrypted in the database, with a key of its own for each column, when FILE_ENCRYPTION_KEY is set. */
 export const SEALED_WORDS = [
   'signatures and initials, also the ones saved for reuse and earlier ones kept after a change',
+  'the phone number of each login',
   'what people typed or chose in fields, also as plain numbers, and what the sender filled in',
   'answers typed into a public form before it is signed',
   'comments',
@@ -16,7 +17,7 @@ export const SEALED_WORDS = [
 
 /** Kept readable in the database whatever the setting. Search, sending mail and joining records need them. */
 export const CLEAR_WORDS = [
-  'names, email addresses and phone numbers',
+  'names, email addresses and phone numbers of the people on a document (the phone number of a login is encrypted, see above)',
   'subjects and messages of envelopes, names of documents and folders, and who each email went to with its subject',
   'ids and fingerprints of files',
   'audit trails, with the IP addresses and browsers they record and what they repeat, such as a decline reason',

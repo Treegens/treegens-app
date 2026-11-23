@@ -27,6 +27,7 @@ import { sweepScanPhotos } from './scanphotos.ts';
 import { purgeDrafts } from './webforms.ts';
 import { columnsTick } from './colsweep.ts';
 import { acrobatTick } from './acrobat.ts';
+import { referralsTick } from './referrals.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -55,6 +56,8 @@ async function tickOnce() {
     // Signatures whose date has passed and that nobody holds expire, with a line in the plan history (credits.ts),
     // and top-ups about to expire unused are announced 30 and 3 days before (routes-billing.ts).
     signatures_expired: expireSignatures(), topups_warned: await topUpExpiryNotices(),
+    // Invite a friend: rewards that are due, for a friend whose account became real without a signature just now (referrals.ts).
+    referrals: await referralsTick(),
     retried: await billingRetries(), nudged: await dormancyNudges(), codes_ended: await endRemovedCodes(), purged: await purgeClosedAccounts(),
     // Help requests that have passed the time a person should have answered by: the operators are emailed and the customer is told.
     support: await supportTick(),

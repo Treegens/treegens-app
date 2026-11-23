@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, useLoad } from './ui';
 import { Logo, Mark } from './Brand';
-import { fmtNum, usd, TOTALS_FROM, totalWorthShowing } from '@/lib/impact';
+import { fmtNum, PRICING, TOTALS_FROM, totalWorthShowing } from '@/lib/impact';
 import { HelpChatButton } from './HelpChat';
 import { MONEY_LINE, MONEY_SHORT } from '@/lib/impactwords';
 import { useDeploymentBilling } from './BillingModePublic';
@@ -131,7 +131,7 @@ export function ImpactBand() {
           {MONEY_LINE} And a document signed on screen is not printed.
         </p>
         <div className="grid g4 keep2">
-          {planted && <div className="stat"><div className="k">Mangroves funded</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">from {usd(fmtNum(i.donatedUsd))} paid by customers</div></div>}
+          {planted && <div className="stat"><div className="k">Trees planted by signatures</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">{PRICING.treesPerSignature} mangroves for every signature</div></div>}
           {paper && <div className="stat"><div className="k">Sheets of paper not used, estimated</div><div className="v num">{fmtNum(i.sheets)}</div></div>}
           {paper && <div className="stat"><div className="k">Litres of water not used, estimated</div><div className="v num">{fmtNum(i.litresWater)}</div></div>}
         </div>

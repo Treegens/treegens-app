@@ -61,7 +61,7 @@ test('the four icon files and the preview picture in src/app are the brand kit f
   const apple = readPng(bytes('src/app/apple-icon.png'))!;
   assert.deepEqual([apple.width, apple.height], [180, 180]);
   assert.equal(read('src/app/opengraph-image.alt.txt').trim(), OG_ALT);
-  assert.equal(OG_ALT, 'GrowSigning: sign on screen. Every dollar plants mangroves.');
+  assert.equal(OG_ALT, 'GrowSigning: sign on screen. Every signature plants 5 trees.');
   assert.match(read('src/app/icon.svg'), /<title>growsigning<\/title>/);
   // An icon of the old shape left behind would be served next to the new one.
   for (const f of fs.readdirSync(path.join(root, 'src/app'))) assert.doesNotMatch(f, /^(icon|apple-icon|favicon)\d|^twitter-image/, f);
@@ -169,13 +169,14 @@ test('pages a person reaches from an email, and an address that does not exist, 
   assert.doesNotMatch(nf, /usePathname|useSearchParams|location\.|headers\(/);
 });
 
-test('the title of every page and link preview says what the price list says, not that signing plants trees', () => {
-  // Trees come from dollars paid; a free account's signatures plant none (brand/README.md, "Never promise").
+test('the title of every page and link preview says the rule of the price list: every signature plants 5 trees', () => {
+  // Since 23 November 2026 every signature plants 5 trees, free ones too (tests/trees-5.test.ts). Before, this
+  // test forbade "every signature plants": then trees came from dollars paid. "Saves a tree" stays forbidden.
   assert.match(SITE_TITLE, /^GrowSigning · /);
-  assert.match(SITE_TITLE, /every dollar plants mangroves/);
+  assert.match(SITE_TITLE, /every signature plants 5 trees/);
   assert.match(read('src/app/layout.tsx'), /title: \{ default: SITE_TITLE, template: '%s · GrowSigning' \}/);
   for (const f of ['src/app/layout.tsx', 'src/lib/site.ts', 'README.md', 'package.json', 'public/security/sbom.json', 'src/app/opengraph-image.alt.txt'])
-    assert.doesNotMatch(read(f), /signatures that plant trees|every signature (plants|saves)/i, f);
+    assert.doesNotMatch(read(f), /every dollar plants|every signature saves/i, f);
 });
 
 // ---- 1. The email header ---------------------------------------------------------------------------------------------

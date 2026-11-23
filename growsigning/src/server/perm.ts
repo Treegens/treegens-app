@@ -95,6 +95,8 @@ const NEEDS: Record<Need, string[]> = {
     'PUT /envelopes/:id/only-named', 'POST /envelopes/:id/away',
     // Moving to a colleague and "Send for" (routes-shares.ts).
     'POST /envelopes/:id/move', 'POST /envelopes/:id/send-for',
+    // The share link of a document: growsigning.com/<name> (routes-sharelinks.ts).
+    'GET /envelopes/:id/share-link', 'PUT /envelopes/:id/share-link',
     // Asking for a payment by card on a document or template (routes-collect.ts).
     'GET /envelopes/:id/collect', 'PUT /envelopes/:id/collect',
     // One envelope's own switches (routes-switches.ts).
@@ -118,7 +120,7 @@ const NEEDS: Record<Need, string[]> = {
     'GET /bulk', 'POST /bulk', 'GET /bulk-lists', 'POST /bulk-lists', 'DELETE /bulk-lists/:id', 'GET /bulk-lists/:id', 'GET /bulk/:id',
     'POST /bulk/:id/remind', 'POST /bulk/:id/void', 'POST /bulk/check',
   ],
-  forms: ['GET /powerforms', 'POST /powerforms', 'DELETE /powerforms/:id', 'PATCH /powerforms/:id'],
+  forms: ['GET /powerforms', 'POST /powerforms', 'DELETE /powerforms/:id', 'PATCH /powerforms/:id', 'GET /powerforms/:id/share-link', 'PUT /powerforms/:id/share-link'],
   contacts: ['GET /contacts', 'POST /contacts', 'DELETE /contacts/:id', 'PATCH /contacts/:id'],
   reports: ['GET /reports', 'GET /reports/csv', 'GET /reports/monthly', 'PUT /reports/monthly', 'GET /reports/summary'],
   api_keys: ['GET /api-keys', 'POST /api-keys', 'DELETE /api-keys/:id'],

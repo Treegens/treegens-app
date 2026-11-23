@@ -1,4 +1,5 @@
-// Trees (research/briefs.json "impact"): who is told that mangroves are planted and who is not, the first time and
+// Trees (research/briefs.json "impact", and the 5 trees rule of 23 November 2026, see tests/trees-5.test.ts):
+// who is told that trees are planted and who is not, the first time and
 // every later time, the counts, the line in the email, the signing record and its switch, and the words themselves.
 // The payment provider is the stand-in of the billing tests (tests/stripe-fake.ts): nothing here reaches the network.
 import { test, before } from 'node:test';
@@ -7,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { boot, Client, signUp, mailTo, simple, signAll, upload, tokenFor, type Server } from './helpers.ts';
 import { stripe, unix } from './stripe-fake.ts';
 import { finishLine, mailLine, signerWords, senderWords, reviewPlus, recordLines, SOFT_LINE, TREES_PER_SIGNATURE } from '../src/lib/impactwords.ts';
-import { TOTALS_FROM, totalWorthShowing } from '../src/lib/impact.ts';
+import { TOTALS_FROM, TREES_5_FROM, totalWorthShowing } from '../src/lib/impact.ts';
 import { englishIf } from './words.ts';
 
 let db: Server['db'];
@@ -73,85 +74,87 @@ before(async () => {
 
 // ---- The words ----------------------------------------------------------------------------------------------------
 
-test('the words: 10 mangroves only for a paid signature, the soft line for a free one, never a figure under one tree', () => {
-  assert.equal(TREES_PER_SIGNATURE, 10);
-  assert.equal(finishLine(10), '10 mangroves will be planted when you finish.');
+test('the words: 5 trees for every signature, the soft line only for one that plants none, never a figure under one tree', () => {
+  assert.equal(TREES_PER_SIGNATURE, 5);
+  assert.equal(finishLine(5), '5 trees will be planted when you finish.');
   assert.equal(finishLine(0), '');
   assert.equal(finishLine(0.4), '', 'nothing under one tree is ever said');
-  assert.equal(mailLine(10), '10 mangroves will be planted with Treegens when you finish.');
+  assert.equal(mailLine(5), '5 trees will be planted with Treegens when you finish.');
   assert.equal(mailLine(0), '');
-  assert.equal(mailLine(10, ' Walk-in Client '), '10 mangroves will be planted with Treegens when Walk-in Client finishes.', 'to a host: the person who signs is named');
+  assert.equal(mailLine(5, ' Walk-in Client '), '5 trees will be planted with Treegens when Walk-in Client finishes.', 'to a host: the person who signs is named');
   assert.equal(mailLine(0, 'Walk-in Client'), '');
 
-  const first = signerWords({ trees: 10, first: true, total: 10, sheets: 15 });
-  // One tense: a signature "plants", mangroves "are being planted". Nothing says the planting has already happened.
-  assert.equal(first.title, 'Your signature plants 10 mangroves');
-  assert.equal(first.under, 'You also saved 15 pages of paper from a tree.', 'under the title the mangroves are not said a second time');
-  assert.equal(first.line, 'You saved 15 pages of paper from a tree, and 10 mangroves are being planted.', 'the small card that stays after Close');
+  const first = signerWords({ trees: 5, first: true, total: 5, sheets: 15 });
+  // One tense: a signature "plants", trees "will be planted". Nothing says the planting has already happened.
+  assert.equal(first.title, 'Your signature plants 5 trees');
+  assert.equal(first.under, 'Mangroves, planted by Treegens. You also saved 15 pages of paper from a tree.', 'under the title: the kind of tree and who plants it, then the paper');
+  assert.equal(first.line, 'Your signature plants 5 trees. You saved 15 pages of paper from a tree.', 'the small card that stays after Close');
   assert.equal(first.count, '', 'the running count says nothing this signature did not already say');
-  assert.equal(first.announce, 'Your signature plants 10 mangroves.', 'one sentence for a screen reader');
-  assert.doesNotMatch(Object.values(first).join(' '), /\bplanted 10|just planted|have planted/, 'nothing is said to be planted already');
+  assert.equal(first.announce, 'Your signature plants 5 trees.', 'one sentence for a screen reader');
+  assert.doesNotMatch(Object.values(first).join(' '), /\bplanted 5|just planted|have planted/, 'nothing is said to be planted already');
 
-  const later = signerWords({ trees: 10, first: false, total: 40, sheets: 1 });
-  assert.equal(later.line, '10 more mangroves. You saved 1 page of paper from a tree.');
-  assert.equal(later.count, 'Your signatures on GrowSigning fund 40 mangroves so far.');
-  // "More" needs something before it: a first paid signature after a free one is not "10 more".
-  const afterFree = signerWords({ trees: 10, first: false, total: 10, sheets: 2 });
-  assert.equal(afterFree.line, 'You saved 2 pages of paper from a tree, and 10 mangroves are being planted.');
-  assert.equal(afterFree.title, 'Your signature plants 10 mangroves');
-  assert.doesNotMatch(Object.values(afterFree).join(' '), /more/);
+  const later = signerWords({ trees: 5, first: false, total: 20, sheets: 1 });
+  assert.equal(later.line, 'Your signature plants 5 more trees. You saved 1 page of paper from a tree.');
+  assert.equal(later.count, 'Your signatures on GrowSigning plant 20 trees so far.');
+  // "More" needs something before it: a first signature that plants, after one that planted none, is not "5 more".
+  const afterNone = signerWords({ trees: 5, first: false, total: 5, sheets: 2 });
+  assert.equal(afterNone.line, 'Your signature plants 5 trees. You saved 2 pages of paper from a tree.');
+  assert.equal(afterNone.title, 'Your signature plants 5 trees');
+  assert.doesNotMatch(Object.values(afterNone).join(' '), /more/);
 
-  const free = signerWords({ trees: 0, first: true, total: 0, sheets: 6 });
-  assert.equal(free.title, 'You signed your first document with GrowSigning');
-  assert.equal(free.line, 'You saved 6 pages of paper from a tree.');
-  assert.equal(free.under, 'You saved 6 pages of paper from a tree.');
-  assert.equal(free.count, '');
-  assert.doesNotMatch(Object.values(free).join(' '), /plant|mangrove|Treegens|plans/, 'a free signature is never said to plant anything, and nothing about plans is said to a signer');
-  // Free, but this person planted with earlier paid signatures: the count is true and is said.
-  assert.equal(signerWords({ trees: 0, first: false, total: 20, sheets: 2 }).count, 'Your signatures on GrowSigning fund 20 mangroves so far.');
+  // A signature that plants none: a sender signing their own document, or a server without plans.
+  const none = signerWords({ trees: 0, first: true, total: 0, sheets: 6 });
+  assert.equal(none.title, 'You signed your first document with GrowSigning');
+  assert.equal(none.line, 'You saved 6 pages of paper from a tree.');
+  assert.equal(none.under, 'You saved 6 pages of paper from a tree.');
+  assert.equal(none.count, '');
+  assert.doesNotMatch(Object.values(none).join(' '), /plant|mangrove|Treegens|plans/, 'a signature that plants none is never said to plant anything');
+  // Plants none itself, but this person planted with earlier signatures: the count is true and is said.
+  assert.equal(signerWords({ trees: 0, first: false, total: 20, sheets: 2 }).count, 'Your signatures on GrowSigning plant 20 trees so far.');
 
-  assert.equal(senderWords({ paid: 2, signers: 2, planted: 0, sheets: 15 }).promise, 'Every signature on it plants 10 mangroves with Treegens.');
-  assert.equal(senderWords({ paid: 1, signers: 3, planted: 0, sheets: 15 }).promise, 'Each paid signature on it plants 10 mangroves with Treegens.');
-  const trial = senderWords({ paid: 0, signers: 2, planted: 0, sheets: 15 });
-  assert.equal(trial.promise, '', 'no signature on it is paid for: nothing is said about planting');
-  assert.equal(trial.title, 'Your first document is out.');
-  assert.equal(trial.announce, 'Your first document is out.');
-  assert.equal(trial.saving, 'Paper saved: 15 pages.', 'short: the envelope page is read on every send');
-  assert.equal(trial.saved, 'This saved 15 pages of paper from a tree.');
-  assert.equal(senderWords({ paid: 0, signers: 1, planted: 0, sheets: 1 }).saving, 'Paper saved: 1 page.');
-  assert.equal(reviewPlus(true), 'Plus: 10 mangroves are planted for each person who signs.');
+  assert.equal(senderWords({ counted: 2, signers: 2, planted: 0, sheets: 15 }).promise, 'Every signature on it plants 5 trees with Treegens.');
+  assert.equal(senderWords({ counted: 1, signers: 3, planted: 0, sheets: 15 }).promise, 'Each person you asked to sign plants 5 trees with Treegens.');
+  const own = senderWords({ counted: 0, signers: 2, planted: 0, sheets: 15 });
+  assert.equal(own.promise, '', 'no signature on it counts: nothing is said about planting');
+  assert.equal(own.title, 'Your first document is out.');
+  assert.equal(own.announce, 'Your first document is out.');
+  assert.equal(own.saving, 'Paper saved: 15 pages.', 'short: the envelope page is read on every send');
+  assert.equal(own.saved, 'This saved 15 pages of paper from a tree.');
+  assert.equal(senderWords({ counted: 0, signers: 1, planted: 0, sheets: 1 }).saving, 'Paper saved: 1 page.');
+  assert.equal(reviewPlus(true), 'Plus: 5 trees are planted for each person who signs.');
   assert.equal(reviewPlus(false), '');
 
-  const paidRecord = recordLines({ sheets: 15, litresWater: 150, trees: 20, site: 'https://sign.example' });
-  assert.deepEqual(paidRecord, ['An estimate: about 15 sheets of paper and 150 litres of water were not used.', 'The signatures paid for on this document fund 20 mangroves, planted by Treegens. How we count: https://sign.example/impact']);
+  const withTrees = recordLines({ sheets: 15, litresWater: 150, trees: 10, site: 'https://sign.example' });
+  assert.deepEqual(withTrees, ['An estimate: about 15 sheets of paper and 150 litres of water were not used.', 'The signatures on this document plant 10 trees: mangroves, planted by Treegens. How we count: https://sign.example/impact']);
   assert.equal(recordLines({ sheets: 1, litresWater: 10, trees: 0, plans: true, site: 'https://sign.example' })[1], `${SOFT_LINE} How we count: https://sign.example/impact`);
   assert.equal(recordLines({ sheets: 1, litresWater: 10, trees: 0, plans: false, site: 'https://sign.example' })[1], 'How we count: https://sign.example/impact', 'no plans on this server: nothing is earned, so nothing is said to be given');
 
   // Every sentence above: no em dash, no generic claim, no carbon claim, no share of a tree, no money word.
-  const all = [finishLine(10), mailLine(10), SOFT_LINE, reviewPlus(true), ...paidRecord, ...Object.values(first), ...Object.values(later), ...Object.values(free), ...Object.values(trial)].join(' ');
+  const all = [finishLine(5), mailLine(5), SOFT_LINE, reviewPlus(true), ...withTrees, ...Object.values(first), ...Object.values(later), ...Object.values(none), ...Object.values(own)].join(' ');
   assert.doesNotMatch(all, /\u2014|eco.?friendly|\bgreen\b|sustainab|planet|carbon|CO2|climate|offset|\d of a tree|0\.\d+ tree/i);
-  assert.doesNotMatch([finishLine(10), ...Object.values(first), ...Object.values(later), ...Object.values(free)].join(' '), /\$|dollar|pays?\b|paid|price|plan\b/i, 'no money words where a signer reads');
+  assert.doesNotMatch([finishLine(5), ...Object.values(first), ...Object.values(later), ...Object.values(none)].join(' '), /\$|dollar|pays?\b|paid|price|plan\b/i, 'no money words where a signer reads');
 });
 
 // ---- Free signatures ----------------------------------------------------------------------------------------------
 
-test('a free signature (the trial): nobody is told a tree is planted, the first time is still marked, and it is shown once', async () => {
+test('a free signature (the trial) plants 5 trees like any other: the email, the link, the finished screen and the record say so', async () => {
   const p = await person('Trial');
   const eid = await send(p, 'una@signers.example');
-  assert.doesNotMatch(textOf(lastInvite('una@signers.example').html), /mangrove|planted/i, 'no tree line in the email for a free signature');
-  assert.deepEqual(await sees(eid, 'una@signers.example'), { finish: 0, done: null });
+  assert.match(textOf(lastInvite('una@signers.example').html), /5 trees will be planted with Treegens when you finish\./, 'the tree line is in the email for a free signature too');
+  assert.deepEqual(await sees(eid, 'una@signers.example'), { finish: 5, done: null });
   assert.equal((await signAll(eid, 'una@signers.example')).status, 200);
   const done = (await sees(eid, 'una@signers.example')).done;
-  assert.deepEqual(done, { trees: 0, first: true, celebrate: true, total: 0, sheets: 1 });
+  assert.deepEqual(done, { trees: 5, first: true, celebrate: true, total: 5, sheets: 1 });
   // Shown: the server remembers, on any device.
   assert.equal((await new Client().post(`/sign/${tokenFor(eid, 'una@signers.example')}/impact/seen`)).status, 200);
   assert.deepEqual((await sees(eid, 'una@signers.example')).done, { ...done, celebrate: false });
-  // The signing record says the soft line and claims no tree for this document.
+  // The signing record names the trees of this document, and nothing about dollars.
   const rec = await record(p, eid);
   assert.match(rec, /Signed without paper/);
   assert.match(rec, /An estimate: about 1 sheet of paper and 10 litres of water were not used\./);
-  assert.ok(rec.includes(SOFT_LINE));
-  assert.doesNotMatch(rec, /fund \d+ mangroves|of a tree|Every dollar/);
+  assert.match(rec, /The signatures on this document plant 5 trees: mangroves, planted by Treegens\./);
+  assert.ok(!rec.includes(SOFT_LINE));
+  assert.doesNotMatch(rec, /of a tree|Every dollar|paid for/);
 });
 
 test('a sender signing their own document plants nothing and is told nothing about planting', async () => {
@@ -164,7 +167,7 @@ test('a sender signing their own document plants nothing and is told nothing abo
   const d = (await sees(e.id, p.email)).done;
   assert.equal(d.trees, 0);
   assert.equal(d.total, 0);
-  assert.equal((await p.c.get(`/envelopes/${e.id}/impact`)).data.sent.paid, 0);
+  assert.equal((await p.c.get(`/envelopes/${e.id}/impact`)).data.sent.counted, 0);
 });
 
 test('a server that takes no payments says nothing about planting anywhere', async () => {
@@ -174,9 +177,9 @@ test('a server that takes no payments says nothing about planting anywhere', asy
   try {
     const eid = await send(p, 'zed@signers.example');
     assert.equal((await sees(eid, 'zed@signers.example')).finish, 0);
-    assert.doesNotMatch(textOf(lastInvite('zed@signers.example').html), /mangrove/i);
+    assert.doesNotMatch(textOf(lastInvite('zed@signers.example').html), /mangrove|trees will be planted/i);
     const d = (await p.c.get(`/envelopes/${eid}/impact`)).data;
-    assert.equal(d.sent.paid, 0);
+    assert.equal(d.sent.counted, 0);
     assert.equal(senderWords(d.sent).promise, '');
     assert.doesNotMatch(Object.values(senderWords(d.sent)).join(' '), /plant|mangrove|Treegens|earns|plans/i, 'the sender of a server with no plans reads nothing about giving or planting');
     // The signing record of such a server: the paper estimate and where the working is, and no sentence about plans.
@@ -184,7 +187,7 @@ test('a server that takes no payments says nothing about planting anywhere', asy
     const rec = await record(p, eid);
     assert.match(rec, /Signed without paper/);
     assert.match(rec, /How we count: http:\/\/test\.local\/impact/);
-    assert.ok(!rec.includes(SOFT_LINE) && !/earns from its plans|mangrove/i.test(rec), 'nothing is earned here, so nothing is said to be given');
+    assert.ok(!rec.includes(SOFT_LINE) && !/earns from its plans|mangrove|plant \d+ trees/i.test(rec), 'nothing is earned here, so nothing is said to be given');
     const draft = await simple(p.c, 'zed2@signers.example');
     assert.equal((await p.c.get(`/envelopes/${draft.id}/impact`)).data.plus, false);
   } finally {
@@ -194,7 +197,7 @@ test('a server that takes no payments says nothing about planting anywhere', asy
 
 // ---- Paid signatures ----------------------------------------------------------------------------------------------
 
-test('a paid signature: the line by Finish and in the email for the signer only, the first time once, then "10 more" and the count', async () => {
+test('a plan signature: the line by Finish and in the email for the signer only, the first time once, then "5 more" and the count', async () => {
   const p = await person('Payer');
   await subscribe(p);
   const file = await upload(p.c, 3);
@@ -214,37 +217,37 @@ test('a paid signature: the line by Finish and in the email for the signer only,
 
   // The email: one line for the person who signs, within the 80 words above the button, and none for the others.
   const mail = lastInvite('ada@signers.example');
-  assert.ok(aboveButton(mail.html).includes('10 mangroves will be planted with Treegens when you finish.'), aboveButton(mail.html));
+  assert.ok(aboveButton(mail.html).includes('5 trees will be planted with Treegens when you finish.'), aboveButton(mail.html));
   assert.ok(words(aboveButton(mail.html)) <= 80, `${words(aboveButton(mail.html))} words above the button`);
   assert.doesNotMatch(textOf(mail.html), /\$|dollar|pays for/i, 'no money words to someone who only came to sign');
   for (const other of ['abe', 'vic', 'cee']) {
     assert.ok(mailTo(`${other}@signers.example`).length > 0, `${other} was emailed`);
-    for (const m of mailTo(`${other}@signers.example`)) assert.doesNotMatch(textOf(m.html), /mangrove|planted/i, `${other} is not told they plant anything`);
+    for (const m of mailTo(`${other}@signers.example`)) assert.doesNotMatch(textOf(m.html), /mangrove|trees will be planted/i, `${other} is not told they plant anything`);
   }
 
   // The signing page: the signer is told next to Finish, an approver, a viewer and a copy are told nothing.
-  assert.deepEqual(await sees(eid, 'ada@signers.example'), { finish: 10, done: null });
+  assert.deepEqual(await sees(eid, 'ada@signers.example'), { finish: 5, done: null });
   for (const other of ['abe', 'vic', 'cee']) assert.deepEqual(await sees(eid, `${other}@signers.example`), { finish: 0, done: null });
 
   for (const who of ['ada', 'abe', 'vic']) assert.equal((await signAll(eid, `${who}@signers.example`)).status, 200, who);
   for (const other of ['abe', 'vic', 'cee']) assert.deepEqual(await sees(eid, `${other}@signers.example`), { finish: 0, done: null }, `${other} after finishing`);
   // 3 pages for 4 people: 12 sheets. The first time: the picture, once.
   const first = (await sees(eid, 'ada@signers.example')).done;
-  assert.deepEqual(first, { trees: 10, first: true, celebrate: true, total: 10, sheets: 12 });
-  assert.equal(signerWords(first).title, 'Your signature plants 10 mangroves');
+  assert.deepEqual(first, { trees: 5, first: true, celebrate: true, total: 5, sheets: 12 });
+  assert.equal(signerWords(first).title, 'Your signature plants 5 trees');
   await new Client().post(`/sign/${tokenFor(eid, 'ada@signers.example')}/impact/seen`);
   assert.equal((await sees(eid, 'ada@signers.example')).done.celebrate, false);
 
-  // The same person signs again, for another account even: no picture, "10 more", and the count from real rows.
+  // The same person signs again, for another account even: no picture, "5 more", and the count from real rows.
   const q = await person('Second');
   await subscribe(q);
   const e2 = await send(q, 'ADA@signers.example');
-  assert.equal((await sees(e2, 'ADA@signers.example')).finish, 10);
+  assert.equal((await sees(e2, 'ADA@signers.example')).finish, 5);
   assert.equal((await signAll(e2, 'ADA@signers.example')).status, 200);
   const later = (await sees(e2, 'ADA@signers.example')).done;
-  assert.deepEqual(later, { trees: 10, first: false, celebrate: false, total: 20, sheets: 1 });
-  assert.equal(signerWords(later).line, '10 more mangroves. You saved 1 page of paper from a tree.');
-  assert.equal(signerWords(later).count, 'Your signatures on GrowSigning fund 20 mangroves so far.');
+  assert.deepEqual(later, { trees: 5, first: false, celebrate: false, total: 10, sheets: 1 });
+  assert.equal(signerWords(later).line, 'Your signature plants 5 more trees. You saved 1 page of paper from a tree.');
+  assert.equal(signerWords(later).count, 'Your signatures on GrowSigning plant 10 trees so far.');
 
   // What is kept: no address, only a keyed hash.
   const rows = db.all('SELECT * FROM impact_signed');
@@ -252,11 +255,11 @@ test('a paid signature: the line by Finish and in the email for the signer only,
   assert.doesNotMatch(JSON.stringify(rows), /@|signers\.example|Ada/i);
   assert.doesNotMatch(JSON.stringify(db.all('SELECT * FROM impact_seen')), /@|signers\.example/);
 
-  // The sender's page: every signature on it is a paid one; the signing record names the trees of this document.
+  // The sender's page: every signature on it counts; the signing record names the trees of this document.
   const s = (await p.c.get(`/envelopes/${eid}/impact`)).data.sent;
-  assert.deepEqual([s.paid, s.signers, s.planted, s.sheets], [1, 1, 10, 12]);
+  assert.deepEqual([s.counted, s.signers, s.planted, s.here, s.sheets], [1, 1, 5, 5, 12]);
   const rec = await record(p, eid);
-  assert.match(rec, /The signatures paid for on this document fund 10 mangroves, planted by Treegens\. How we count: http:\/\/test\.local\/impact/);
+  assert.match(rec, /The signatures on this document plant 5 trees: mangroves, planted by Treegens\. How we count: http:\/\/test\.local\/impact/);
   assert.match(rec, /An estimate: about 12 sheets of paper and 120 litres of water were not used\./);
   // The owner dropped the CO2 figure: no answer of the API carries one, for the account, the public counter or the signer.
   for (const path of ['/impact', '/reports/summary']) assert.doesNotMatch(JSON.stringify((await p.c.get(path)).data), /co2|carbon/i, path);
@@ -277,6 +280,10 @@ test('the first time is by address: an earlier signature from before the count, 
   const e2 = await send(p, 'old@signers.example');
   assert.equal((await signAll(e2, 'old@signers.example')).status, 200);
   assert.equal((await sees(e2, 'old@signers.example')).done.first, false);
+  // Not their first signature, but the first of theirs that plants trees (the old one has no row): the seedlings
+  // are shown once for it, as for anyone whose earlier signature planted none.
+  assert.equal((await sees(e2, 'old@signers.example')).done.celebrate, true);
+  await new Client().post(`/sign/${tokenFor(e2, 'old@signers.example')}/impact/seen`);
   assert.equal((await sees(e2, 'old@signers.example')).done.celebrate, false);
   // A row outlives its envelope: with both envelopes gone from the tables, a third signature is still not the first.
   db.run('DELETE FROM recipients WHERE envelope_id IN (?,?)', e1, e2);
@@ -285,20 +292,27 @@ test('the first time is by address: an earlier signature from before the count, 
   assert.equal((await sees(e3, 'old@signers.example')).done.first, false);
 });
 
-test('a payment that went back no longer counts: the trees of its signatures are not claimed afterwards', async () => {
+test('a signature keeps its 5 trees when a payment goes back; one from before the change still follows its payment, as promised then', async () => {
   const p = await person('Refund');
   await subscribe(p);
   const eid = await send(p, 'rita@signers.example');
   assert.equal((await signAll(eid, 'rita@signers.example')).status, 200);
-  assert.equal((await sees(eid, 'rita@signers.example')).done.total, 10);
-  assert.equal(impact.treesOfAccount(p.id), 10);
+  const old = await send(p, 'rolf@signers.example');
+  assert.equal((await signAll(old, 'rolf@signers.example')).status, 200);
+  // As if Rolf had signed before the change, with a paid signature: the row says the 10 that was promised then.
+  const before = new Date(Date.parse(TREES_5_FROM) - 864e5).toISOString();
+  db.run('UPDATE impact_signed SET trees=10, at=? WHERE envelope_id=?', before, old);
+  assert.equal((await sees(eid, 'rita@signers.example')).done.total, 5);
+  assert.equal(impact.treesOfAccount(p.id), 15);
   const ch = stripe.refundByHand(`ch_ini_${p.k}_1`, 900);
   await event('charge.refunded', { ...ch, id: `ch_ini_${p.k}_1` });
+  // The signature happened: its 5 trees stay. The old promise was about the payment, so it goes with the payment.
   const d = (await sees(eid, 'rita@signers.example')).done;
-  assert.deepEqual([d.trees, d.total], [0, 0]);
-  assert.equal(impact.treesOfAccount(p.id), 0);
-  assert.equal(impact.treesOnEnvelope(eid), 0);
-  assert.equal((await p.c.get(`/envelopes/${eid}/impact`)).data.sent.planted, 0);
+  assert.deepEqual([d.trees, d.total], [5, 5]);
+  assert.equal(impact.treesOnEnvelope(eid), 5);
+  assert.equal(impact.treesOnEnvelope(old), 0);
+  assert.equal(impact.treesOfAccount(p.id), 5);
+  assert.equal((await p.c.get(`/envelopes/${eid}/impact`)).data.sent.planted, 5);
 });
 
 // ---- What a link gives away, and who may ask ---------------------------------------------------------------------
@@ -333,8 +347,8 @@ test('the first envelope an account ever sends: the picture once, for the person
   const p = await person('First');
   const e1 = await send(p, 'f1@signers.example');
   const a = (await p.c.get(`/envelopes/${e1}/impact`)).data.sent;
-  assert.deepEqual(a, { paid: 0, signers: 1, planted: 0, sheets: 1, celebrate: true });
-  assert.equal(senderWords(a).announce, 'Your first document is out.', 'the trial plants nothing, so nothing is promised');
+  assert.deepEqual(a, { counted: 1, signers: 1, planted: 0, here: 0, sheets: 1, celebrate: true });
+  assert.equal(senderWords(a).announce, 'Your first document is out. Every signature on it plants 5 trees with Treegens.', 'the trial plants trees too');
   assert.equal((await p.c.post(`/envelopes/${e1}/impact/seen`)).status, 200);
   assert.equal((await p.c.get(`/envelopes/${e1}/impact`)).data.sent.celebrate, false, 'shown once');
   const e2 = await send(p, 'f2@signers.example');
@@ -349,27 +363,27 @@ test('the first envelope an account ever sends: the picture once, for the person
   // A draft has no moment at all, and asking "seen" for an envelope that has none marks nothing.
   const fresh = await person('Fresh');
   const d = await simple(fresh.c, 'd1@signers.example');
-  assert.deepEqual((await fresh.c.get(`/envelopes/${d.id}/impact`)).data, { plus: false, sent: null });
+  assert.deepEqual((await fresh.c.get(`/envelopes/${d.id}/impact`)).data, { plus: true, sent: null });
   assert.equal((await fresh.c.post(`/envelopes/${d.id}/impact/seen`)).status, 200);
   assert.equal((await fresh.c.post(`/envelopes/${d.id}/send`)).status, 200);
   assert.equal((await fresh.c.get(`/envelopes/${d.id}/impact`)).data.sent.celebrate, true, 'the draft could not use up the first time');
 
-  // With a paid month: the promise names the trees, because every signature on it is a paid one.
+  // With a paid month: the same promise.
   const paid = await person('Paidfirst');
   await subscribe(paid);
   const pe = await send(paid, 'pf@signers.example');
   const s = (await paid.c.get(`/envelopes/${pe}/impact`)).data.sent;
-  assert.deepEqual([s.paid, s.signers, s.celebrate], [1, 1, true]);
-  assert.equal(senderWords(s).promise, 'Every signature on it plants 10 mangroves with Treegens.');
+  assert.deepEqual([s.counted, s.signers, s.celebrate], [1, 1, true]);
+  assert.equal(senderWords(s).promise, 'Every signature on it plants 5 trees with Treegens.');
 });
 
-test('the review step says "Plus: 10 mangroves" only when every signature of the draft would be a paid one', async () => {
+test('the review step says "Plus: 5 trees" when every signature of the draft counts, the trial included', async () => {
   const trial = await person('Reviewtrial');
   const d1 = await simple(trial.c, 'r1@signers.example');
-  assert.equal((await trial.c.get(`/envelopes/${d1.id}/impact`)).data.plus, false, 'the trial is free');
+  assert.equal((await trial.c.get(`/envelopes/${d1.id}/impact`)).data.plus, true, 'a free trial signature plants trees too');
 
   const paid = await person('Reviewpaid');
-  await subscribe(paid, 20); // ends before the trial: the paid month is used first
+  await subscribe(paid, 20);
   const d2 = await simple(paid.c, 'r2@signers.example');
   assert.equal((await paid.c.get(`/envelopes/${d2.id}/impact`)).data.plus, true);
   // Signing it yourself uses no signature: nothing is planted, nothing is said.
@@ -379,14 +393,13 @@ test('the review step says "Plus: 10 mangroves" only when every signature of the
   const none = await simple(paid.c, 'r3@signers.example', { recipients: [{ id: 'r', role: 'approver', name: 'Abe', email: 'r3@signers.example' }], fields: [] });
   assert.equal((await paid.c.get(`/envelopes/${none.id}/impact`)).data.plus, false);
 
-  // The trial ends first here, so the next signature is a free one: not "all paid".
+  // Whichever lot the signature comes out of (here the trial's, which ends first), it counts.
   const mixed = await person('Reviewmixed');
   await subscribe(mixed, 45);
   const d3 = await simple(mixed.c, 'r4@signers.example');
-  assert.equal((await mixed.c.get(`/envelopes/${d3.id}/impact`)).data.plus, false);
-  // And after sending, the truth is asked again: the held signature is the trial's.
+  assert.equal((await mixed.c.get(`/envelopes/${d3.id}/impact`)).data.plus, true);
   assert.equal((await mixed.c.post(`/envelopes/${d3.id}/send`)).status, 200);
-  assert.equal((await mixed.c.get(`/envelopes/${d3.id}/impact`)).data.sent.paid, 0);
+  assert.equal((await mixed.c.get(`/envelopes/${d3.id}/impact`)).data.sent.counted, 1);
 });
 
 // ---- The signing record and its switch ---------------------------------------------------------------------------
@@ -418,7 +431,7 @@ test('"Trees on the signing record": on by default, only admins switch it, and o
   const after = await send(p, 'g2@signers.example');
   assert.equal((await signAll(after, 'g2@signers.example')).status, 200);
   const rec = await record(p, after);
-  assert.doesNotMatch(rec, /Signed without paper|mangrove|sheets of paper|Treegens/);
+  assert.doesNotMatch(rec, /Signed without paper|mangrove|plant \d+ trees|sheets of paper|Treegens/);
   assert.match(rec, /Certificate|Signing record|Envelope/i, 'the rest of the record is there');
   // Screens are not changed by it: the signer's finished screen still has its numbers.
   assert.equal((await sees(after, 'g2@signers.example')).done.sheets, 1);
@@ -468,13 +481,14 @@ test('green claims: nothing generic, no carbon figure or claim anywhere, estimat
   assert.match(read('src/components/impact/SignerTrees.tsx'), /An estimate: one paper copy of every page[\s\S]*Where these numbers come from/);
   // Trees are decided by the server and only drawn by the page: no page works out who is paid.
   for (const f of ['src/components/impact/SignerTrees.tsx', 'src/components/impact/SenderTrees.tsx']) assert.doesNotMatch(read(f), /@\/server|paidSignatureFor/, f);
-  // The signing page: one line by Finish in each bar, the card on the finished screen, and nothing on the consent screen.
+  // The signing page: the line on the first screen (since the 5 trees rule), one line by Finish in each bar, and the card on the finished screen.
   const page = read('src/app/sign/[token]/page.tsx');
   assert.equal((page.match(/<TreeLine base=\{base\} show=\{acts && !hasNext\} \/>/g) || []).length, 2, 'the toolbar and the phone bar');
   assert.match(page, /<span className="sg-wide"><TreeLine /, 'the toolbar line is hidden where the phone bar shows its own');
   assert.equal((page.match(/<SignerDone /g) || []).length, 1);
   const consent = page.slice(page.indexOf("if (stage === 'consent')"), page.indexOf("if (stage === 'done')") > page.indexOf("if (stage === 'consent')") ? page.indexOf("if (stage === 'done')") : undefined);
-  if (page.includes("if (stage === 'consent')")) assert.doesNotMatch(consent.split('// ---- The document')[0], /TreeLine|SignerDone|mangrove/);
+  assert.equal((consent.match(/<OpenTrees base=\{base\}/g) || []).length, 1, 'the first screen says it once, through ConsentTop');
+  assert.doesNotMatch(consent.split('// ---- The document')[0], /<TreeLine|<SignerDone/);
   // The picture: decoration to a screen reader, still under "reduce motion", and nothing faster than a slow rise.
   const css = read('src/app/styles/impact.css');
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s+\.imp-pic\.imp-go \.imp-tree, \.imp-pic\.imp-go \.imp-leaf, \.imp-pic\.imp-go \.imp-sun \{ animation: none; \}/);
@@ -485,7 +499,7 @@ test('green claims: nothing generic, no carbon figure or claim anywhere, estimat
   assert.doesNotMatch(done, /w\.soft|SOFT_LINE/, 'nothing about plans on a screen a signer reads');
   assert.match(done, /e\.key === 'Escape'/);
   assert.match(done, />Close<\/button>/);
-  assert.match(done, /\{w\.under && <p>\{w\.under\}<\/p>\}/, 'under the title: the paper, not the mangroves a second time');
+  assert.match(done, /\{w\.under && <p>\{w\.under\}<\/p>\}/, 'under the title: who plants, and the paper');
   // After Close the focus lands on the small card, and a keyboard user sees it there.
   assert.match(css, /\.imp-small:focus-visible \{ outline: 3px solid/);
   assert.doesNotMatch(done, /role="dialog"\s|<dialog|aria-modal/, 'a card in the page, never a dialog to close');
@@ -503,9 +517,9 @@ test('a finished signature is counted by Finish itself: nobody has to open a scr
   assert.equal((await signAll(e2, 'quiet2@signers.example')).status, 200);
   // Nobody asked /impact and no record was drawn with the box on: the rows are there all the same.
   const rows = db.all('SELECT trees FROM impact_signed WHERE account_id=?', p.id);
-  assert.deepEqual(rows.map((r: any) => r.trees), [10, 10]);
-  assert.equal(impact.treesOfAccount(p.id), 20);
-  // A paid signature finished on an envelope that is cancelled afterwards stays counted.
+  assert.deepEqual(rows.map((r: any) => r.trees), [5, 5]);
+  assert.equal(impact.treesOfAccount(p.id), 10);
+  // A signature finished on an envelope that is cancelled afterwards stays counted.
   const made = await p.c.post('/envelopes', {
     subject: 'Two people', documents: [{ id: 'd', file_id: (await upload(p.c, 1)).id }],
     recipients: [{ id: 'a', role: 'signer', name: 'First One', email: 'v1@signers.example', routing_order: 1 }, { id: 'b', role: 'signer', name: 'Second One', email: 'v2@signers.example', routing_order: 1 }],
@@ -517,8 +531,9 @@ test('a finished signature is counted by Finish itself: nobody has to open a scr
   assert.equal((await signAll(e3, 'v1@signers.example')).status, 200);
   assert.equal((await p.c.post(`/envelopes/${e3}/void`, { reason: 'Wrong draft' })).status, 200);
   assert.equal(db.all('SELECT 1 FROM impact_signed WHERE envelope_id=?', e3).length, 1, 'written at Finish, before the cancel');
-  // What it counts for is still asked of the payments: the row is there, and paidSignatureFor decides its trees.
-  assert.equal(impact.treesOfAccount(p.id), 20 + impact.treesOnEnvelope(e3));
+  // The row is there with its 5 trees, and the account's total has it.
+  assert.equal(impact.treesOnEnvelope(e3), 5);
+  assert.equal(impact.treesOfAccount(p.id), 15);
   // Counting never stops a Finish: a row that cannot be read is simply not counted here.
   assert.doesNotThrow(() => impact.noteFinished('no-such-recipient'));
 });
@@ -531,20 +546,20 @@ test('people who sign in person at one desk are never added together, and the ho
   assert.equal((await p.c.post(`/envelopes/${one.id}/send`)).status, 200);
   // The email goes to the host: it names the person who signs, and does not tell the host "when you finish".
   const mail = textOf(mailTo(p.email).filter((m: any) => /Walk-in One/.test(m.html)).at(-1)!.html);
-  assert.match(mail, /10 mangroves will be planted with Treegens when Walk-in One finishes\./);
+  assert.match(mail, /5 trees will be planted with Treegens when Walk-in One finishes\./);
   assert.doesNotMatch(mail, /when you finish/);
   assert.equal((await signAll(one.id, p.email)).status, 200);
   const a = (await sees(one.id, p.email)).done;
-  assert.deepEqual([a.trees, a.first, a.celebrate, a.total], [10, true, true, 10]);
+  assert.deepEqual([a.trees, a.first, a.celebrate, a.total], [5, true, true, 5]);
   await new Client().post(`/sign/${tokenFor(one.id, p.email)}/impact/seen`);
 
-  // A second walk-in, a different person, under the same host address: their own first time, and only their own 10.
+  // A second walk-in, a different person, under the same host address: their own first time, and only their own 5.
   const two = await simple(p.c, p.email, walkIn('Walk-in Two'));
   assert.equal((await p.c.post(`/envelopes/${two.id}/send`)).status, 200);
   assert.equal((await signAll(two.id, p.email)).status, 200);
   const b = (await sees(two.id, p.email)).done;
-  assert.deepEqual([b.trees, b.first, b.celebrate, b.total], [10, true, true, 10]);
-  assert.doesNotMatch(Object.values(signerWords(b)).join(' '), /more|20 mangroves|so far/);
+  assert.deepEqual([b.trees, b.first, b.celebrate, b.total], [5, true, true, 5]);
+  assert.doesNotMatch(Object.values(signerWords(b)).join(' '), /more|10 trees|so far/);
   // Nothing of them is kept under the host's address, so the host's own later signature elsewhere inherits nothing.
   assert.equal(db.all('SELECT 1 FROM impact_signed WHERE account_id=? AND who IS NOT NULL', p.id).length, 0);
   const q = await person('Elsewhere');
@@ -552,41 +567,44 @@ test('people who sign in person at one desk are never added together, and the ho
   const e3 = await send(q, p.email);
   assert.equal((await signAll(e3, p.email)).status, 200);
   const c = (await sees(e3, p.email)).done;
-  assert.deepEqual([c.trees, c.first, c.total], [10, true, 10], 'the host signing for themselves starts their own count');
+  assert.deepEqual([c.trees, c.first, c.total], [5, true, 5], 'the host signing for themselves starts their own count');
   // The account's count has both walk-ins.
-  assert.equal(impact.treesOfAccount(p.id), 20);
+  assert.equal(impact.treesOfAccount(p.id), 10);
 });
 
-test('a first paid signature after a free one: never "10 more", and the seedlings are shown once for it', async () => {
-  const free = await person('Freefirst');
-  const e1 = await send(free, 'mona@signers.example');
-  assert.equal((await signAll(e1, 'mona@signers.example')).status, 200);
-  assert.equal((await sees(e1, 'mona@signers.example')).done.celebrate, true);
-  await new Client().post(`/sign/${tokenFor(e1, 'mona@signers.example')}/impact/seen`);
-  assert.equal((await sees(e1, 'mona@signers.example')).done.celebrate, false);
+test('a first signature that plants, after one that planted none: never "5 more", and the seedlings are shown once for it', async () => {
+  // The only signature that plants none is a sender's own. Mona signs her own document first.
+  const mona = await person('Mona');
+  const e1 = await simple(mona.c, mona.email, { recipients: [{ id: 'r', role: 'signer', name: mona.name, email: mona.email }] });
+  assert.equal((await mona.c.post(`/envelopes/${e1.id}/send`)).status, 200);
+  assert.equal((await signAll(e1.id, mona.email)).status, 200);
+  const own = (await sees(e1.id, mona.email)).done;
+  assert.deepEqual([own.trees, own.celebrate], [0, true]);
+  await new Client().post(`/sign/${tokenFor(e1.id, mona.email)}/impact/seen`);
+  assert.equal((await sees(e1.id, mona.email)).done.celebrate, false);
 
-  const paid = await person('Thenpaid');
-  await subscribe(paid);
-  const e2 = await send(paid, 'mona@signers.example');
-  assert.equal((await signAll(e2, 'mona@signers.example')).status, 200);
-  const d = (await sees(e2, 'mona@signers.example')).done;
-  assert.deepEqual(d, { trees: 10, first: false, celebrate: true, total: 10, sheets: 1 });
+  // Then somebody else asks her to sign, with a free trial signature of theirs: her first that plants.
+  const asker = await person('Asker');
+  const e2 = await send(asker, mona.email);
+  assert.equal((await signAll(e2, mona.email)).status, 200);
+  const d = (await sees(e2, mona.email)).done;
+  assert.deepEqual(d, { trees: 5, first: false, celebrate: true, total: 5, sheets: 1 });
   const w = signerWords(d);
-  assert.equal(w.title, 'Your signature plants 10 mangroves');
+  assert.equal(w.title, 'Your signature plants 5 trees');
   assert.doesNotMatch(`${w.line} ${w.count}`, /more/, 'none came before, so none are "more"');
-  await new Client().post(`/sign/${tokenFor(e2, 'mona@signers.example')}/impact/seen`);
-  assert.equal((await sees(e2, 'mona@signers.example')).done.celebrate, false, 'once');
-  // The free one, opened again later, does not bring the picture back either.
-  assert.equal((await sees(e1, 'mona@signers.example')).done.celebrate, false);
+  await new Client().post(`/sign/${tokenFor(e2, mona.email)}/impact/seen`);
+  assert.equal((await sees(e2, mona.email)).done.celebrate, false, 'once');
+  // Her own one, opened again later, does not bring the picture back either.
+  assert.equal((await sees(e1.id, mona.email)).done.celebrate, false);
   // And the third time is an ordinary later time.
-  const e3 = await send(paid, 'mona@signers.example');
-  assert.equal((await signAll(e3, 'mona@signers.example')).status, 200);
-  const third = (await sees(e3, 'mona@signers.example')).done;
-  assert.deepEqual([third.celebrate, third.total], [false, 20]);
-  assert.equal(signerWords(third).line, '10 more mangroves. You saved 1 page of paper from a tree.');
+  const e3 = await send(asker, mona.email);
+  assert.equal((await signAll(e3, mona.email)).status, 200);
+  const third = (await sees(e3, mona.email)).done;
+  assert.deepEqual([third.celebrate, third.total], [false, 10]);
+  assert.equal(signerWords(third).line, 'Your signature plants 5 more trees. You saved 1 page of paper from a tree.');
 });
 
-test('"Every signature" is said to a sender only when every person who signs has a paid signature, the sender included', async () => {
+test('"Every signature" is said to a sender only when every person who signs counts: not when the sender signs too', async () => {
   const p = await person('Cosign');
   await subscribe(p);
   const made = await p.c.post('/envelopes', {
@@ -598,8 +616,8 @@ test('"Every signature" is said to a sender only when every person who signs has
   const eid = made.data.envelope.id;
   assert.equal((await p.c.post(`/envelopes/${eid}/send`)).status, 200);
   const s = (await p.c.get(`/envelopes/${eid}/impact`)).data.sent;
-  assert.deepEqual([s.paid, s.signers], [1, 2], 'two signatures on it, one of them the sender\'s own, which plants nothing');
-  assert.equal(senderWords(s).promise, 'Each paid signature on it plants 10 mangroves with Treegens.');
+  assert.deepEqual([s.counted, s.signers], [1, 2], 'two signatures on it, one of them the sender\'s own, which plants nothing');
+  assert.equal(senderWords(s).promise, 'Each person you asked to sign plants 5 trees with Treegens.');
 });
 
 test('the sender\'s screens: the first-send picture inside the "Sent." card, started and marked only when on screen, and no card of its own', () => {
@@ -625,7 +643,7 @@ test('the sender\'s screens: the first-send picture inside the "Sent." card, sta
 test('the setting says itself in one line, and /impact says what a reader cannot check yet', () => {
   const setting = read('src/components/settings/TreesOnRecord.tsx');
   const hint = setting.match(/id="trees-record-hint"[^>]*>([^<]+)</)![1];
-  assert.equal(hint, 'Adds the paper saved and the mangroves funded to the last page of documents completed from now on. Saves by itself.');
+  assert.equal(hint, 'Adds the paper saved and the trees planted to the last page of documents completed from now on. Saves by itself.');
   assert.ok(words(hint) <= 22, `${words(hint)} words under the switch`);
   assert.match(setting, /role="switch"/);
   const view = read('src/components/ImpactView.tsx');

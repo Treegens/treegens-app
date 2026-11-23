@@ -204,7 +204,9 @@ test('every price on a public page is written as US$, with one line about curren
   assert.match(help, /buy more at \{usd\(P\.topUpUsd\)\} each, whenever you need them\. \{CURRENCY_NOTE\}/);
   assert.match(src('app/billing/stop/StopView.tsx'), /US\$\{info\.price\} a month/);
   assert.match(src('app/billing/stop/StopView.tsx'), /<dt>Next charge<\/dt><dd>US\$\{info\.price\} on/);
-  assert.match(src('components/Public.tsx'), /usd\(fmtNum\(i\.donatedUsd\)\)/);
+  // The band on the landing page no longer shows an amount of money: since the 5 trees rule (23 November 2026) its
+  // trees are counted by signature, so "from US$... paid by customers" under them would not be their source.
+  assert.doesNotMatch(src('components/Public.tsx'), /donatedUsd|\$\{?fmtNum/);
   // /impact shows no amount of money any more (totals are hidden until they mean something, tests/impact.test.ts),
   // so there is no price on it to write wrongly.
   assert.doesNotMatch(src('app/impact/page.tsx'), /\$\{?\d|donatedUsd/);

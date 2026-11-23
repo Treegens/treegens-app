@@ -189,7 +189,7 @@ test('English with zero setup: the new keys say what the screens said before, pl
   assert.equal(T('settings.roles.people', { count: 2, names: 'Ada, Ben' }), '2 people have it: Ada, Ben.');
   assert.equal(T('contacts.groups.used_by', { count: 1 }), '1 draft or template names this group.');
   assert.equal(T('inbox.waiting', { count: 1 }), '1 is waiting for you.');
-  assert.equal(T('public.home.note', { count: 5 }), '5 signatures free to try it, no card needed. Free signatures plant no trees. The people you send to never pay and never need an account.');
+  assert.equal(T('public.home.note', { count: 5 }), '5 signatures free to try it, no card needed. They plant trees too. The people you send to never pay and never need an account.');
   assert.equal(T('settings.org.reach', { agencies: 1, people: 3 }), '1 agency (3 people)');
   // The ink names say what INK_WORD says, so a stamp is named the same on every screen.
   return import('../src/lib/stampink.ts').then(({ INK_WORD }) => {

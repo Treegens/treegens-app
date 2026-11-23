@@ -8,10 +8,10 @@
 // paper as the last sentence of the card that says who the document is waiting on.
 import { useEffect, useRef, useState } from 'react';
 import { api, useLoad } from '@/components/ui';
-import { reviewPlus, senderWords, TREES_PER_SIGNATURE } from '@/lib/impactwords';
+import { plantedLine, reviewPlus, senderWords, TREES_PER_SIGNATURE } from '@/lib/impactwords';
 import { Mangroves } from './Mangroves';
 
-/** At the review step, after "This saves 15 pages of paper from a tree.": only when every signature will be a paid one. */
+/** At the review step, after "This saves 15 pages of paper from a tree.": when every signature of the draft plants trees. */
 export function ReviewPlus({ envelopeId, people }: { envelopeId: string; people: number }) {
   // Asked again when the number of people changes: the answer is about the draft as it is saved.
   const [d] = useLoad(() => api(`/envelopes/${envelopeId}/impact`), [envelopeId, people]);
@@ -69,7 +69,7 @@ export function SentHead({ envelopeId, id }: { envelopeId: string; id: string })
   if (!first || !w) return <h2 id={id}>Sent.</h2>;
   return (
     <>
-      {!closed && <div className="imp-tap imp-sentpic" ref={pic} onClick={() => setClosed(true)}><Mangroves trees={s.paid > 0 ? TREES_PER_SIGNATURE : 0} go={go} /></div>}
+      {!closed && <div className="imp-tap imp-sentpic" ref={pic} onClick={() => setClosed(true)}><Mangroves trees={s.counted > 0 ? TREES_PER_SIGNATURE : 0} go={go} /></div>}
       {/* A heading that changes is not read out by itself: the one sentence is said once, after the region exists. */}
       <h2 id={id}>{w.title}</h2>
       <span className="imp-vh" role="status">{go ? w.title : ''}</span>
@@ -88,7 +88,7 @@ export function SenderTrees({ envelopeId, status, line }: { envelopeId: string; 
   if (!s) return null;
   const w = senderWords(s);
   const done = status === 'completed';
-  const plants = s.paid < 1 ? '' : done ? `Its signatures plant ${(s.paid * TREES_PER_SIGNATURE).toLocaleString('en')} mangroves with Treegens.` : w.promise;
+  const plants = s.counted < 1 ? '' : done ? plantedLine(Number(s.here) || 0) : w.promise;
   const paper = done ? w.saved : w.saving;
   if (!paper && !plants) return null;
   const words = `${paper}${paper && plants ? ' ' : ''}${plants}`;

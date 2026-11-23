@@ -598,7 +598,7 @@ CREATE TABLE IF NOT EXISTS archive_refused (
   token_hash TEXT, added_by TEXT, added_by_name TEXT, added_at TEXT, PRIMARY KEY (account_id, email)
 );
 -- Trees (src/server/impact.ts). One row for each finished signature of a person who signs: how many mangroves its
--- payment funds (10 when the signature was paid for, 0 when it was free). "who" is a keyed hash of the address, never
+-- signature plants (5 for every signature since 23 November 2026; before that 10 when it was paid for, 0 when free). "who" is a keyed hash of the address, never
 -- the address, so a row can outlive its envelope without keeping anybody's name or email.
 CREATE TABLE IF NOT EXISTS impact_signed (
   recipient_id TEXT NOT NULL, gen INTEGER NOT NULL DEFAULT 0, envelope_id TEXT, account_id TEXT, who TEXT,
@@ -1081,6 +1081,41 @@ CREATE TABLE IF NOT EXISTS acrobat_checks (
 CREATE INDEX IF NOT EXISTS acrobat_checks_at ON acrobat_checks(created_at);
 -- What the Acrobat check told the operators once (a day without a time stamp, a silence) and when the first check was.
 CREATE TABLE IF NOT EXISTS acrobat_marks (key TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- Share links (src/server/sharelinks.ts): growsigning.com/<name> opens one envelope ("Who are you?", then a code by
+-- email) or one public form. kind is 'envelope' or 'form' and target_id the envelope or the powerform. A target has
+-- at most one row that is not ended: active 1 while the link works, 0 while its sender has it switched off. A name
+-- that was renamed away stays as an ended row (ended_why 'renamed'), so the old address says plainly that it stopped
+-- and nobody else can take it over.
+CREATE TABLE IF NOT EXISTS share_links (
+  name TEXT PRIMARY KEY, kind TEXT NOT NULL, target_id TEXT NOT NULL, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, ended_at TEXT, ended_why TEXT
+);
+CREATE INDEX IF NOT EXISTS share_links_target ON share_links(kind, target_id);
+-- Invite a friend (src/server/referrals.ts, src/lib/referral.ts). referral_codes: the one invite link of an account,
+-- and whether its owner asked for no more emails about it. referrals: one line for each friend who signed up through
+-- a link, so an operator can see who invited whom: the inviting account, the friend's login and account, where it
+-- stands (pending, rewarded, refused, taken_back) and why, how many signatures each side was given, and keyed
+-- fingerprints (never the values) of the friend's email address as one person and of their phone number, so the same
+-- person is never a rewarded friend twice. referral_devices: keyed fingerprints of the browsers (a cookie) and
+-- internet addresses an account was used from when its invite link was looked at or when it signed up, for the rule
+-- that nobody is rewarded for inviting themselves. Lines older than 90 days go (referralsTick).
+CREATE TABLE IF NOT EXISTS referral_codes (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
+  mail_off INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS referrals (
+  id TEXT PRIMARY KEY, inviter_account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  friend_user_id TEXT NOT NULL UNIQUE, friend_account_id TEXT NOT NULL, friend_mark TEXT NOT NULL, phone_mark TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', reason TEXT NOT NULL DEFAULT '', at TEXT NOT NULL, decided_at TEXT,
+  inviter_got INTEGER NOT NULL DEFAULT 0, friend_got INTEGER NOT NULL DEFAULT 0, taken_back_at TEXT, taken_back INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS referrals_inviter ON referrals(inviter_account_id, status);
+CREATE INDEX IF NOT EXISTS referrals_friend ON referrals(friend_account_id);
+CREATE INDEX IF NOT EXISTS referrals_mark ON referrals(friend_mark);
+CREATE TABLE IF NOT EXISTS referral_devices (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, device TEXT NOT NULL, ip TEXT NOT NULL, at TEXT NOT NULL,
+  PRIMARY KEY (account_id, device, ip)
+);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each
@@ -1312,6 +1347,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // link or a reminder to this person, so reminders by text follow at most once a day.
   ['recipients', 'verify', 'TEXT'],
   ['recipients', 'phone', 'TEXT'],
+  // users.phone: the phone number a person gives at sign-up. Invite a friend reads it (userPhone in referrals.ts):
+  // a friend counts once they gave one, and never with the number of the person who invited them.
+  ['users', 'phone', 'TEXT'],
   ['recipients', 'text_link', 'INTEGER NOT NULL DEFAULT 0'],
   ['recipients', 'check_gen', 'INTEGER NOT NULL DEFAULT 0'],
   ['recipients', 'checked_at', 'TEXT'],
@@ -1879,6 +1917,18 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['fields', 'shared_initials', 'INTEGER NOT NULL DEFAULT 0'],
   ['fields', 'shared_after', 'INTEGER NOT NULL DEFAULT 0'],
   ['recipients', 'shared_shown', 'TEXT'],
+  // The rules for making an account (src/server/signuprules.ts; the number itself is users.phone above). email_key:
+  // the mailbox of the address, so one person has one login whatever the spelling. phone_key: a keyed fingerprint of
+  // the number, for "is this number taken". phone_rule: NULL a login from before the rule (asked once, may wait),
+  // 1 a login made since (asked before the app opens), 2 a login an organisation made (never asked). phone_asked_at:
+  // when a login from before the rule said "Not now". phone_verified_at: when the number was checked by a code, only
+  // where the server sends text messages. phone_code: the code that is out, as a fingerprint, with its end and tries.
+  ['users', 'email_key', 'TEXT'],
+  ['users', 'phone_key', 'TEXT'],
+  ['users', 'phone_rule', 'INTEGER'],
+  ['users', 'phone_asked_at', 'TEXT'],
+  ['users', 'phone_verified_at', 'TEXT'],
+  ['users', 'phone_code', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

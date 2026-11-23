@@ -146,7 +146,7 @@ test('a dispute we do not concede sets the signatures aside, and the bank\'s dec
   s = await state(p);
   assert.equal(s.signatures.balance, 52, 'and they come back');
   assert.equal(s.payments.find((x: any) => x.id === 'cs4_won_top').refunded, null);
-  assert.equal(s.mangroves, 490);
+  assert.equal((await p.c.get('/impact')).data.account.donatedUsd, 49); // the money, since trees are counted by signature now (tests/trees-5.test.ts)
   assert.ok(subjects(p.email).includes('The disputed payment stands'));
   assert.equal(s.disputed, true, 'payments stay off until a person switches them back on');
 
@@ -159,7 +159,7 @@ test('a dispute we do not concede sets the signatures aside, and the bank\'s dec
   s = await state(q);
   assert.equal(s.signatures.balance, 12);
   assert.equal(s.payments.find((x: any) => x.id === 'cs4_lost_top').refunded, '$40.00');
-  assert.equal(s.mangroves, 90);
+  assert.equal((await q.c.get('/impact')).data.account.donatedUsd, 9);
 
   // Signatures that are held for envelopes that are out go with the money too. Nobody keeps both.
   const h = await person('Held');

@@ -29,14 +29,16 @@ test('the home page says one thing: one button, three points, and nothing of the
   for (const gone of ['FEATURES', 'COMPARE', 'PROMISES', 'The rules', 'How it compares', 'Nine things', 'Everything you need', 'See the impact'])
     assert.ok(!home.includes(gone), `"${gone}" is no longer on the home page`);
   assert.ok(words(home) < 450, `the source of the home page is short (${words(home)} words with its code)`);
-  // The hero is about the mangroves a paid signature plants, with the leaf of the logo, and says what a free one does.
+  // The hero is the 5 trees rule (23 November 2026): every signature plants 5 trees, the free ones too. Before, it
+  // said "Every signature you pay for plants 10 mangroves" and "Free signatures plant no trees".
   // The words are in the catalogue since lang-sender-rest: the same sentence, with the number of trees in <em>.
   assert.match(fs.readFileSync('src/app/page.tsx', 'utf8'), /T\.rich\('public\.home\.h1', \{ trees: <em>\{T\('public\.home\.h1_trees', \{ count: String\(TREES_PER_SIGNATURE\) \}\)\}<\/em> \}\)/);
-  assert.match(fs.readFileSync('src/locales/en.json', 'utf8'), /"public\.home\.h1": "Every signature you pay for plants \{trees\}",\n  "public\.home\.h1_trees": "\{count\} mangroves\."/);
+  assert.match(fs.readFileSync('src/locales/en.json', 'utf8'), /"public\.home\.h1": "Every signature plants \{trees\}",\n  "public\.home\.h1_trees": "\{count\} trees\."/);
   // The kicker says what the product is before anything else (review of the landing, 2026-11-22): it used to say
   // "Planted with Treegens", which a first-time visitor read as a partner badge before knowing who Treegens are.
   assert.match(home, /<Mark size=\{28\}(?: tone="dark")? label="" \/> Sign documents online/);
-  assert.match(home, /Free signatures plant no trees\./);
+  assert.match(home, /They plant trees too\./);
+  assert.doesNotMatch(home, /Free signatures plant no trees|you pay for plants/);
   // Green claims: what happens is said as what happens. No generic word and nothing about carbon.
   assert.doesNotMatch(home, /eco-friendly|\bgreen\b(?!-)|sustainab|planet|carbon|CO2|offset|climate|neutral/i);
   // Everything else is linked once from the body of the page.
@@ -133,13 +135,13 @@ test('no total is shown until it means something, and no figure under one tree a
   // The helper that wrote "0.0005" of a tree is used by no screen.
   const all = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? all(`${dir}/${e.name}`) : /\.tsx?$/.test(e.name) ? [`${dir}/${e.name}`] : []));
   for (const f of all('src')) if (f !== 'src/lib/impact.ts') assert.doesNotMatch(read(f), /fmtTrees|of a tree`|\.trees\.toFixed/, f);
-  // A signer is told about mangroves only when the signature was paid for, and never about a share of a tree.
+  // A signer is told about the trees their signature plants (5, every signature), and never about a share of a tree.
   assert.equal(finishLine(0), '');
-  assert.equal(finishLine(10), '10 mangroves will be planted when you finish.');
+  assert.equal(finishLine(5), '5 trees will be planted when you finish.');
   assert.equal(reviewPlus(false), '');
   const free = signerWords({ trees: 0, first: true, total: 0, sheets: 15 });
   assert.doesNotMatch(`${free.title} ${free.line} ${free.count}`, /mangrove/i);
-  assert.equal(signerWords({ trees: 10, first: true, total: 10, sheets: 15 }).line, 'You saved 15 pages of paper from a tree, and 10 mangroves are being planted.');
+  assert.equal(signerWords({ trees: 5, first: true, total: 5, sheets: 15 }).line, 'Your signature plants 5 trees. You saved 15 pages of paper from a tree.');
 });
 
 // ---- 4. Settings ----------------------------------------------------------------------------------------------------

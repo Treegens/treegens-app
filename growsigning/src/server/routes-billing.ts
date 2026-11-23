@@ -6,14 +6,15 @@ import { sendMail, recordMail, deliverQueued, type Mail } from './mail.ts';
 import { billingEnabled, hasNotPaid } from './envelopes.ts';
 import { grant, creditSummary, available, findFreeCode, STANDING_PAYMENT, addMonths } from './credits.ts';
 import { lotsOf, lotOfPayment, ledgerSums, refundFromLot, takeBackLots, restoreTaken, stillLive, markWarned, expireSignatures, lastExpiry, renewalPending, type LotView } from './credits.ts';
-import { PRICING, mangrovesFor } from '../lib/impact.ts';
+import { PRICING, treesFor } from '../lib/impact.ts';
+import { treesOfAccount } from './impact.ts';
 import { refundDays, dormantStopDays, refundRuleText, newAccountDailyRecipients, unpaidDailyRecipients, PRICE_NOTICE_DAYS, priceRuleText, priceChangeDay, PAID_TRUST_DAYS } from '../lib/policy.ts';
 import { expiryRuleText, expiryMoment, HELD_EXPIRY_TEXT, TOPUP_WARN_DAYS, TOPUP_EXPIRY_MONTHS } from '../lib/policy.ts';
 
 export { refundDays, dormantStopDays, expireSignatures };
 
 // How GrowSigning charges:
-//   - $9 a month adds 9 signatures. Extra signatures are $1 each. Every dollar plants 10 mangroves, used or not.
+//   - $9 a month adds 9 signatures. Extra signatures are $1 each. Every signature plants 5 trees, free ones included.
 //   - Signatures expire (expiryRuleText): a month's 9 at the end of that month, a top-up's 12 months after its
 //     payment, the trial's 3 thirty days after the account was made. The soonest to expire is used first, and the
 //     dates are shown on the Plan page and in every email that counts signatures. One is used only when somebody
@@ -61,7 +62,8 @@ export const backfillPrices = () => fillPrices();
 // Did an email leave? Only when the mail server took it. With no mail server it sits in the outbox, which counts
 // only on a development server, where the outbox is where people read their mail.
 const mailLeft = (status: string) => status === 'sent' || (status === 'outbox' && (process.env.NODE_ENV !== 'production' || process.env.DEV_OUTBOX === '1'));
-const trees = (cents: number) => `${mangrovesFor(cents / 100).toLocaleString('en')} mangrove trees`;
+// "45 trees": what a number of signatures plants once they are signed (treesFor in src/lib/impact.ts).
+const trees = (signatures: number) => `${treesFor(signatures).toLocaleString('en')} trees`;
 const planUrl = () => `${baseUrl()}/app/settings?tab=billing`;
 // An account with a subscription always has its price written down (fillPrices does that at start). Should one turn
 // up without it anyway (a row restored from an old backup while the server runs), it is written down the same way
@@ -589,9 +591,9 @@ export const stopBillingFor = (acct: any): Promise<boolean> => serial(acct?.id, 
 
 // ---- What the Plan page shows ----------------------------------------------------------------
 
-const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', signature: 'Signature used', refund: 'Refund', dispute: 'Card dispute', adjust: 'Adjustment', expired: 'Expired unused' };
+const LEDGER_LABEL: Record<string, string> = { welcome: 'Welcome signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', referral: 'Invite a friend', signature: 'Signature used', refund: 'Refund', dispute: 'Card dispute', adjust: 'Adjustment', expired: 'Expired unused' };
 // What a lot is, for the Plan page and the emails.
-const LOT_LABEL: Record<string, string> = { welcome: 'Your free signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', adjust: 'Added by a person here' };
+const LOT_LABEL: Record<string, string> = { welcome: 'Your free signatures', plan: 'Monthly plan', code: 'Monthly plan, free with your code', topup: 'Top-up', referral: 'Invite a friend', adjust: 'Added by a person here' };
 
 // The same as numbers, for the page that stops a renewal without logging in.
 function keepParts(accountId: string) {
@@ -622,6 +624,9 @@ function whatYouKeep(accountId: string, planEnds = false): string {
   if (count(tops)) parts.push(`Your ${sigs(count(tops))} from top-ups keep their own dates: ${TOPUP_EXPIRY_MONTHS} months after each payment${tops.length > 1 ? `, the first of them on ${expiryMoment(first(tops))}` : `, on ${expiryMoment(first(tops))}`}.`);
   const trial = of(['welcome']);
   if (count(trial)) parts.push(`The ${sigs(count(trial))} every new account gets expire on ${expiryMoment(first(trial))}.`);
+  // Free signatures from inviting a friend (referrals.ts): each lot keeps its own date.
+  const invited = of(['referral']);
+  if (count(invited)) parts.push(`The ${sigs(count(invited))} from inviting a friend expire ${invited.length > 1 ? `on their own dates, the first on ${expiryMoment(first(invited))}` : `on ${expiryMoment(first(invited))}`}.`);
   parts.push('Signing your own documents is always free.');
   return parts.join(' ');
 }
@@ -712,8 +717,9 @@ export function billingState(acct: any, user?: any) {
     sums: enabled ? ledgerSums(acct.id) : null,
     expiry_rule: expiryRuleText(),
     held_rule: HELD_EXPIRY_TEXT,
-    // The trees follow the money: everything paid, less refunds, whether its signatures were used or not.
-    mangroves: mangrovesFor(paid / 100),
+    // The trees follow the signatures: 5 for every one finished on this account's documents, free ones included
+    // (treesOfAccount in impact.ts; signatures from before the change count what was promised then).
+    mangroves: treesOfAccount(acct.id),
     refund: enabled ? refundOffer(acct, lots) : null,
     // Refunds that have been asked for and not confirmed by the provider yet, so the page can say so at the top.
     // `auto`: one the software owes without being asked, with `why` in the customer's words. `by_hand`: the provider
@@ -889,7 +895,7 @@ async function redeemNow(accountId: string, typed: any): Promise<string> {
     ] : []),
     whatYouKeep(a.id),
     ...(a.stripe_customer_id ? ['If a card is still saved from an earlier payment, it stays saved for top-ups. You can remove it on the Plan page at any time.'] : []),
-    `Nothing is charged for the plan, so there is nothing to cancel. If you need more in a busy month you can top up at ${money(PRICING.topUpUsd * 100)} a signature, and every dollar plants ${PRICING.treesPerUsd} mangrove trees.`,
+    `Nothing is charged for the plan, so there is nothing to cancel. If you need more in a busy month you can top up at ${money(PRICING.topUpUsd * 100)} a signature. Every signature plants ${PRICING.treesPerSignature} trees.`,
   ], { label: 'Open the Plan page', url: planUrl() });
   return code;
 }
@@ -921,7 +927,7 @@ export async function endRemovedCodes(): Promise<number> {
       await mailAdmins(a.id, `The code ${a.promo_code} has ended`, 'Your free monthly plan has ended', [
         `The code ${a.promo_code} is no longer active, so ${a.name} no longer gets ${sigs(PRICING.monthlySignatures)} a month for free. Nothing was charged and nothing will be.`,
         whatYouKeep(a.id, true),
-        `To keep getting ${sigs(PRICING.monthlySignatures)} a month you can start the monthly plan for ${PLAN_PRICE()} on the Plan page. Every dollar plants ${PRICING.treesPerUsd} mangrove trees.`,
+        `To keep getting ${sigs(PRICING.monthlySignatures)} a month you can start the monthly plan for ${PLAN_PRICE()} on the Plan page. Every signature plants ${PRICING.treesPerSignature} trees.`,
       ], { label: 'Open the Plan page', url: planUrl() });
       ended++;
     }, true);
@@ -972,7 +978,7 @@ route('POST', '/billing/topup', async (c) => {
   const s = await withCustomer(a, c.user.email, (who) => stripe('POST', 'checkout/sessions', {
     mode: 'payment', 'line_items[0][quantity]': String(quantity),
     'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': String(PRICING.topUpUsd * 100),
-    'line_items[0][price_data][product_data][name]': `GrowSigning signature (plants ${PRICING.treesPerUsd} mangrove trees)`,
+    'line_items[0][price_data][product_data][name]': `GrowSigning signature (plants ${PRICING.treesPerSignature} mangrove trees)`,
     'metadata[kind]': 'sg_topup', 'metadata[credits]': String(quantity), 'metadata[sg_account]': a.id,
     'payment_intent_data[description]': `GrowSigning top-up: ${sigs(quantity)} for ${a.name} (${a.id})`, 'payment_intent_data[metadata][sg_account]': a.id,
     // The provider makes an invoice for it, marked as a top-up so it is never mistaken for a monthly payment.
@@ -1046,7 +1052,7 @@ async function adopt(accountId: string, customer: string | null, subscriptionId:
   if (!inv0 && sid(sub?.latest_invoice)) inv0 = await stripe('GET', `invoices/${sid(sub.latest_invoice)}`).catch(() => null);
   const freeFirst = !!inv0 && inv0.status === 'paid' && (!inv0.billing_reason || inv0.billing_reason === 'subscription_create') && !(Number(inv0.amount_paid) > 0);
   await mailAdmins(accountId, `Welcome to ${PRICING.planName}`, 'Thank you. Your signatures plant mangroves.', [
-    `You are on the monthly plan: ${price} a month adds ${sigs(PRICING.monthlySignatures)} to your balance with every payment. That is ${trees(priceFor(account(a.id), end))} planted each month.`,
+    `You are on the monthly plan: ${price} a month adds ${sigs(PRICING.monthlySignatures)} to your balance with every payment. Every signature plants ${PRICING.treesPerSignature} trees with Treegens: ${trees(PRICING.monthlySignatures)} a month when you use them all.`,
     ...(freeFirst ? [`Your first invoice came to ${money(0)}, so this first month brought no signatures. Signatures are added only for what is paid, and that invoice paid nothing (a discount, a credit or a free trial set up with the payment provider made it free). Each payment from here on adds them as above.`] : []),
     ...(end ? [`Next charge: ${price} on ${day(end)}, and every month after that until you cancel. We remind you a week before and again about a day before.`] : []),
     `Each month's ${sigs(PRICING.monthlySignatures)} belong to that month: what you do not use by the renewal expires, and the renewal brings a fresh ${PRICING.monthlySignatures}. Need more? Top up any time at ${money(PRICING.topUpUsd * 100)} a signature; top-ups last ${TOPUP_EXPIRY_MONTHS} months.`,
@@ -1103,7 +1109,7 @@ async function applyTopUp(s: any): Promise<boolean> {
   const receipt = s.invoice ? await topUpReceipt(s.id, sid(s.invoice)!) : null;
   await mailAdmins(a.id, `Receipt: ${money(cents, currency)} for ${sigs(credits)}`, `${sigs(credits)} added. Thank you.`, [
     `${money(cents, currency)} for ${a.name}, paid today. You now have ${sigs(Math.max(0, available(a.id)))} to send.`,
-    `That plants ${trees(cents)} with Treegens, whether the signatures are used or not.`,
+    `Every signature plants ${PRICING.treesPerSignature} trees with Treegens: ${trees(credits)} when these are all signed.`,
     `This was a single payment. It does not repeat and does not change your plan. These ${sigs(credits)} can be used until ${expiryMoment(until)}, ${TOPUP_EXPIRY_MONTHS} months from today. We email you ${TOPUP_WARN_DAYS[0]} days and ${TOPUP_WARN_DAYS[1]} days before, if any are still unused then.`,
     expiryRuleText(),
     refundRuleText(refundDays()),
@@ -1737,7 +1743,7 @@ async function applyInvoice(o: any): Promise<void> {
 
   await mailAdmins(a.id, `Receipt: ${money(cents, currency)} for ${sigs(credits)}`, 'Payment received. Thank you.', [
     `${money(cents, currency)} for ${a.name}, charged today. ${sigs(credits)} added: you now have ${sigs(Math.max(0, available(a.id)))} to send.`,
-    `That plants ${trees(Math.min(cents, said))} with Treegens, whether the signatures are used or not.`,
+    `Every signature plants ${PRICING.treesPerSignature} trees with Treegens: ${trees(credits)} when these are all signed.`,
     `These ${sigs(credits)} belong to this month of the plan and can be used until ${expiryMoment(monthEnds)}. Those not used by then expire${a.cancel_at ? '' : `, and the renewal brings a fresh ${PRICING.monthlySignatures}`}.`,
     ...(next && !a.cancel_at ? [`Next charge: ${money(priceFor(account(a.id), next))} on ${day(next)}. We remind you a week before and again about a day before.`] : []),
     expiryRuleText(),
@@ -1792,7 +1798,7 @@ async function remindRenewal(acct: any, cents?: number | null, currency = 'usd',
     await mailAdmins(a.id, 'We stopped your renewal so you are not charged for nothing', `You will not be charged on ${day(when)}`, [
       `${a.name} has not sent anything in ${stopAfter} days, so we turned the renewal off rather than charge you again. Reference ${r.reference}.`,
       whatYouKeep(a.id, true),
-      'If you want to keep the monthly plan (thank you: every dollar plants mangroves), press "Keep the plan after all" on the Plan page. We will not stop this renewal a second time.',
+      'If you want to keep the monthly plan (thank you: every signature plants mangroves), press "Keep the plan after all" on the Plan page. We will not stop this renewal a second time.',
     ], { label: 'Keep my plan', url: planUrl() });
     return true;
   }
@@ -1854,7 +1860,7 @@ async function warnTopUp(accountId: string, lotRef: string): Promise<boolean> {
   const ids = await mailAdmins(a.id, `${sigs(l.left)} from your top-up expire on ${expiryMoment(l.expires_at)}`, stage === String(near) ? 'Your top-up signatures expire in a few days' : 'Some of your top-up signatures expire next month', [
     `${a.name} bought ${sigs(l.qty)} on ${day(l.at)}${p ? ` (${money(p.amount_cents, p.currency)})` : ''}. ${l.left} of them ${l.left === 1 ? 'is' : 'are'} still unused, and ${l.left === 1 ? 'it expires' : 'they expire'} on ${expiryMoment(l.expires_at)}, ${TOPUP_EXPIRY_MONTHS} months after that payment.`,
     `When you send, the signature that expires soonest is always used first, so ${l.left === 1 ? 'this one goes' : 'these go'} before newer ones${l.held ? `. ${sigs(l.held)} of this top-up ${l.held === 1 ? 'is' : 'are'} held for envelopes that are out: held ones do not expire while they are held` : ''}.`,
-    `The mangroves this top-up paid for are planted whether its signatures are used or not.${stage === String(far) ? ` We email you once more ${near} days before, if any are still unused then.` : ''}`,
+    `A signature plants its ${PRICING.treesPerSignature} trees when it is signed, so an unused one plants none.${stage === String(far) ? ` We email you once more ${near} days before, if any are still unused then.` : ''}`,
     expiryRuleText(),
   ], { label: 'Open the Plan page', url: planUrl() }, l.expires_at);
   await afterMail(ids, (how) => log(a.id, 'topup-expiry', `${sigs(l.left)} of a top-up of ${sigs(l.qty)} expire on ${expiryMoment(l.expires_at)}${how.some(mailLeft) ? '' : '. The mail server did not take the email; it is tried again until then'}.`, l.ref));
@@ -2403,7 +2409,7 @@ export async function dormancyNudges(): Promise<number> {
   for (const a of rows) {
     run('UPDATE accounts SET dormant_nudged_at=? WHERE id=?', now(), a.id);
     await mailAdmins(a.id, 'Still using GrowSigning?', 'You are on the monthly plan but have not sent anything in 60 days', [
-      `${a.name} pays ${money(chargePrice(a))} a month and has ${sigs(Math.max(0, available(a.id)))} it has not used. Every dollar plants mangroves, and we are grateful. But we would rather you paid on purpose.`,
+      `${a.name} pays ${money(chargePrice(a))} a month and has ${sigs(Math.max(0, available(a.id)))} it has not used. Every signature plants mangroves, and we are grateful. But we would rather you paid on purpose.`,
       'If you are not using it, stop the renewal with the link below. You keep every document, and the signatures you have already paid for can be used until their own dates.',
     ], 'stop');
   }

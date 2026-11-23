@@ -1,5 +1,5 @@
 // Billing, against a simulated payment provider.
-// The model: $9 a month adds 9 signatures, extra signatures are $1 each, every dollar plants 10 mangroves, and
+// The model: $9 a month adds 9 signatures, extra signatures are $1 each, every signature plants 5 trees (since 23 November 2026), and
 // signatures expire (a month's at its end, top-ups after 12 months, the trial's after 30 days; tests/billing9.test.ts). These tests also cover the complaints people most often make about subscriptions:
 // surprise renewals, being charged after cancelling, no way to cancel, refused refunds, surprise charges, lockouts.
 import { test, before } from 'node:test';
@@ -94,26 +94,28 @@ test('a new account has 3 signatures to try; one is held per signer and only use
   await owner.post(`/envelopes/${last.id}/void`, { reason: 'test over' });
 });
 
-test('the monthly plan: $9 adds 9 signatures and plants 90 mangroves', async () => {
+test('the monthly plan: $9 adds 9 signatures, 45 trees when they are all signed', async () => {
   assert.equal((await owner.post('/billing/checkout')).data.url, 'https://pay.example/subscription');
   await subscribe();
   assert.equal(account().plan, 'grove');
   const welcome = mailTo('olive@example.com').find((m) => m.subject === 'Welcome to Grove')!;
   assert.match(welcome.html, /\$9\.00 a month adds 9 signatures/);
-  assert.match(welcome.html, /90 mangrove trees/);
+  assert.match(welcome.html, /Every signature plants 5 trees with Treegens: 45 trees a month when you use them all\./);
   assert.match(welcome.link, /\/billing\/stop\?token=/, 'with a stop link that needs no login');
 
   const before = (await sig()).balance;
   await monthly('in_1');
   assert.equal((await sig()).balance, before + 9);
   const receipt = mailTo('olive@example.com').find((m) => m.subject === 'Receipt: $9.00 for 9 signatures')!;
-  assert.match(receipt.html, /90 mangrove trees/);
+  assert.match(receipt.html, /Every signature plants 5 trees with Treegens: 45 trees when these are all signed\./);
   assert.match(receipt.html, /Next charge/);
   const state = (await owner.get('/billing')).data;
   assert.equal(state.price, 9);
   assert.equal(state.payments[0].credits, 9);
   assert.equal(state.payments[0].receipt_url, 'https://pay.example/in_1');
-  assert.equal(state.mangroves, 90);
+  // Trees are counted when a signature is finished, not when money arrives: one was signed before this payment.
+  assert.equal(state.mangroves, db.get('SELECT COALESCE(SUM(trees),0) n FROM impact_signed WHERE account_id=?', account().id).n);
+  assert.equal(state.mangroves, 5);
   assert.ok(state.renews_at);
   await monthly('in_1'); // the provider repeating itself changes nothing
   assert.equal((await sig()).balance, before + 9);
@@ -137,7 +139,7 @@ test('top-ups: $1 a signature, only ever on purpose', async () => {
   await topUp('cs_top1', 5); // replayed event
   assert.equal((await sig()).balance, before + 5);
   const receipt = mailTo('olive@example.com').find((m) => m.subject === 'Receipt: $5.00 for 5 signatures')!;
-  assert.match(receipt.html, /50 mangrove trees/);
+  assert.match(receipt.html, /Every signature plants 5 trees with Treegens: 25 trees when these are all signed\./);
   assert.equal(account().plan, 'grove', 'a top-up never changes the plan');
 
   // The count can never exceed what was paid for.
@@ -261,11 +263,12 @@ test('unused signatures from the latest payment are refunded on request, to the 
   db.run("UPDATE payments SET at=? WHERE id!='cs_old' AND account_id=?", new Date(Date.now() - 100 * 864e5).toISOString(), accountId);
   assert.equal((await owner.get('/billing')).data.refund, null);
 
-  // Refunded money is not counted as planted.
+  // Refunded money is not counted as paid. The trees are counted by finished signature (5 each), not by dollar.
   const pub = (await new Client().get('/public/impact')).data;
   const paid = db.get('SELECT SUM(amount_cents - refunded_cents) c FROM payments').c / 100;
   assert.equal(pub.donatedUsd, paid);
-  assert.equal(pub.treesFunded, Math.floor(paid * 10));
+  assert.equal(pub.treesFunded, db.get('SELECT COALESCE(SUM(trees),0) n FROM impact_signed').n);
+  assert.equal(pub.treesFunded % 5, 0);
 });
 
 test('locked out? stop billing by card, or find every subscription by email', async () => {

@@ -211,7 +211,10 @@ test('a form with no questions works as before, and its QR code carries the publ
   const tpl = (await owner.post('/envelopes', { kind: 'template', subject: 'Plain waiver', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Guest' }], fields: [box('s', 'signature', 0.5, { h: 0.06 })] })).data.envelope;
   const pf = await owner.post('/powerforms', { template_id: tpl.id, name: 'Plain waiver' });
   const row = (await owner.get('/powerforms')).data.powerforms.find((p: any) => p.id === pf.data.id);
-  assert.equal(row.url, `http://test.local/f/${row.slug}`);
+  // Share links: the public address is the form's readable one, growsigning.com/<name> (tests/share-links.test.ts);
+  // the address with the slug keeps working beside it.
+  assert.equal(row.url, `http://test.local/${row.share_link.name}`);
+  assert.match(row.share_link.name, /^[a-z0-9]+(-[a-z0-9]+)*$/);
   const { qrEncode } = await import('../src/lib/qr.ts');
   assert.ok(qrEncode(row.url).size >= 21, 'the link fits a QR code');
   const form = (await visitor().get(`/public/powerforms/${row.slug}`)).data;

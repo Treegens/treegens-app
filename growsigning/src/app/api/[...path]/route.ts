@@ -58,6 +58,8 @@ import '@/server/routes-preview';
 import '@/server/routes-delegation';
 import '@/server/routes-govbilling';
 import '@/server/routes-shares';
+import '@/server/routes-sharelinks';
+import '@/server/routes-referrals';
 import '@/server/routes-fieldlib';
 import '@/server/routes-phoneapp';
 import '@/server/routes-offline';

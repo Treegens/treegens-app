@@ -14,7 +14,7 @@
 
 ## The idea
 
-A leaf that is also the nib of a fountain pen: the midrib is the slit of the nib, and the round hole sits where the vein begins. You sign on screen, and something grows, because every dollar paid to GrowSigning plants mangroves with Treegens.
+A leaf that is also the nib of a fountain pen: the midrib is the slit of the nib, and the round hole sits where the vein begins. You sign on screen, and something grows, because every signature plants 5 mangrove trees with Treegens.
 
 ## The files, and which to use where
 
@@ -43,7 +43,7 @@ All in `brand/` unless said. Every SVG has its letters as paths, a `<title>`, no
 | `src/components/Brand.tsx` | `<Mark>`, `<Logo>`, `<SentWith>` | every logo in the app |
 | `src/app/styles/brand.css` | Lora and the `--serif` stack | the headings |
 
-The OG line is "Sign on screen. Every dollar plants mangroves." It says what the price list says (10 mangroves for every dollar paid), and nothing about signing alone planting trees, because a free account's signatures do not.
+The OG line is "Sign on screen. Every signature plants 5 trees." It says the one rule of the price list: every signature plants 5 trees, the free ones too.
 
 ## Clear space and smallest sizes
 
@@ -105,7 +105,7 @@ Five rules, taken from how the product already writes.
 
 1. **Plain words.** "Upload a PDF, add who needs to sign and place the fields. It takes about a minute."
 2. **Say what happened and what to do next.** "We could not open this envelope. It may have been deleted, or it belongs to someone else on your team. Ask them to share it, or go back to your list."
-3. **Never promise what the code does not do.** "Every dollar plants 10 mangrove trees with Treegens" is a number from the price list. "Every signature saves a tree" is not true, so it is never written.
+3. **Never promise what the code does not do.** "Every signature plants 5 trees with Treegens" is the rule of the price list. "Every signature saves a tree" is not true, so it is never written.
 4. **No em dashes.** Commas, colons and full stops do the work. "Signed digitally, so no paper, no printer and no courier."
 5. **No jargon.** "Do not forward this email. The link is personal to you."
 
@@ -152,7 +152,7 @@ Copy four files into `src/app/`, then delete the `icons:` line (the data URI lea
 | `public/brand/apple-touch-icon.png` | `src/app/apple-icon.png` | `<link rel="apple-touch-icon">` |
 | `public/brand/og-image.png` | `src/app/opengraph-image.png` | `og:image`, 1200 by 630 |
 
-Also add `src/app/opengraph-image.alt.txt` with `GrowSigning: sign on screen. Every dollar plants mangroves.` and, in `metadata`, `metadataBase: new URL(process.env.APP_URL || 'http://localhost:3000')` (so the preview's URL is absolute) and `twitter: { card: 'summary_large_image' }`. After that, `node scripts/build-brand.mjs` keeps these four copies up to date.
+Also add `src/app/opengraph-image.alt.txt` with `GrowSigning: sign on screen. Every signature plants 5 trees.` and, in `metadata`, `metadataBase: new URL(process.env.APP_URL || 'http://localhost:3000')` (so the preview's URL is absolute) and `twitter: { card: 'summary_large_image' }`. After that, `node scripts/build-brand.mjs` keeps these four copies up to date.
 
 ### 3. Theme colour: `src/app/layout.tsx`
 

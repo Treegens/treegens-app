@@ -33,6 +33,7 @@ import './styles/starters.css';
 import './styles/home.css';
 import './styles/aiassist.css';
 import './styles/phoneapp.css';
+import './styles/sharelink.css';
 // After globals.css, so its --serif (Lora first) wins. Keep it the last style import.
 import './styles/govpricing.css';
 import './styles/brand.css';
@@ -44,7 +45,7 @@ import { pageLocale, shippedLocales, dir } from '@/lib/i18n';
 
 export const metadata: Metadata = {
   title: { default: SITE_TITLE, template: '%s · GrowSigning' },
-  description: 'Send, sign and manage documents without paper. Every dollar plants 10 mangrove trees with Treegens.',
+  description: 'Send, sign and manage documents without paper. Every signature plants 5 trees with Treegens.',
   // The icons, the link preview picture and its alt text are files in src/app (favicon.ico, icon.svg, apple-icon.png,
   // opengraph-image.png, opengraph-image.alt.txt), copied from the brand kit by scripts/build-brand.mjs; Next writes
   // their tags. The preview's address is absolute, from APP_URL (src/lib/site.ts).

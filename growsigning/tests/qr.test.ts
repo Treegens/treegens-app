@@ -617,17 +617,24 @@ async function formOf(owner: Client, name: string) {
 test('a form comes with its public address, built from APP_URL and never from the request', async () => {
   const owner = await signUp('Quinn Owner', 'quinn.qr@example.com', newIp());
   const form = await formOf(owner, 'Beach clean-up waiver');
-  assert.equal(form.url, `http://test.local/f/${form.slug}`);
+  // Share links: the address a form is handed out under is its readable one, growsigning.com/<name>
+  // (tests/share-links.test.ts). It is built from APP_URL like the address with the slug, which keeps working.
+  assert.equal(form.url, 'http://test.local/beach-clean-up-waiver');
+  assert.equal(form.share_link.url, form.url);
   // A request that claims another host does not get that host printed on a sheet.
   const forged = await owner.call('GET', '/powerforms', undefined, { 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' });
-  assert.equal(forged.data.powerforms.find((p: any) => p.id === form.id).url, `http://test.local/f/${form.slug}`);
+  assert.equal(forged.data.powerforms.find((p: any) => p.id === form.id).url, 'http://test.local/beach-clean-up-waiver');
 
   // The code drawn from it holds exactly that address, and that address is the form.
   const made = qrForLink(form.url);
   assert.ok(made.ok);
   const scanned = readQr(made.qr.modules).text;
   assert.equal(scanned, form.url);
-  const slug = new URL(scanned).pathname.replace('/f/', '');
+  // The readable address leads to the form by its slug.
+  const behind = await new Client().get(`/public/share${new URL(scanned).pathname}`);
+  assert.equal(behind.data.state, 'form');
+  const slug = behind.data.slug;
+  assert.equal(slug, form.slug);
   const open = await new Client().get(`/public/powerforms/${slug}`);
   assert.equal(open.status, 200);
   assert.equal(open.data.name, 'Beach clean-up waiver');

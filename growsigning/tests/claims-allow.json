@@ -1,6 +1,7 @@
 {
   "about": "The reviewed list for the honesty scan (tests/gov-g01.test.ts, tests/claims-scan.ts). Each entry lets the lines of one file that contain `has` use the words the scan looks for. kind 'denial': the sentence says we do not have it; `claim` names the entry of src/lib/claims.ts it denies ('any' for 'nothing is certified'), and the test fails the day that entry reads as held. kind 'explains': it says what a law, a standard or another provider does, and nothing about us. kind 'not-shown': words the software looks for in what people type; no person reads them. A sentence that says we HAVE something is never added here: it is printed with claimText() from the registry. Add an entry only after reading the sentence, and say why.",
   "allow": [
+    { "file": "src/lib/sharename.ts", "has": "const CLAIMS = ['official', 'verified', 'certified']", "kind": "not-shown", "why": "Words a share link name may not hold (official, verified, certified): looked for in what a sender types, so that no link reads as checked by anyone. No person is shown them as a claim of ours." },
     { "file": "README.md", "has": "audited or certified by anyone", "kind": "denial", "claim": "any", "why": "Says the self-hosting papers are not audited or certified." },
     { "file": "README.md", "has": "not audited, not certified", "kind": "denial", "claim": "any", "why": "Quotes the heading of docs/controls.md." },
     { "file": "README.md", "has": "Anything certified, and more than one server", "kind": "denial", "claim": "any", "why": "Under 'What is not in it'." },

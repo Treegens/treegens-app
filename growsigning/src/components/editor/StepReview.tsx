@@ -4,7 +4,7 @@ import { ROLE_LABEL, fmtDate, api, useLoad, oops } from '../ui';
 // The sentence for "none left because some expired" (plain words, no environment).
 import { expiredWords } from '@/lib/policy';
 import { useMe } from '../AppShell';
-import { PRICING, mangrovesFor } from '@/lib/impact';
+import { PRICING, treesFor } from '@/lib/impact';
 import { scanWarning } from '@/lib/scans';
 import type { Outcome } from './changes';
 import { plural, type Ed } from './shared';
@@ -27,6 +27,8 @@ import { sendLaterLabel, waitNote } from './SendLater';
 import { RuleLine } from './RecipientRule';
 import { SeeWhatTheySee } from './SeeWhatTheySee';
 import { OwnDocsLine } from './OwnDocsChoice';
+// Out of signatures: pay, or invite a friend, side by side (components/sender/InviteFriend.tsx).
+import { InviteChoices, useInvite } from '@/components/sender/InviteFriend';
 
 const TONE: Record<string, string> = { finished: 'completed', sign_again: 'expired', copy_sent: 'completed', unchanged: '', updated: 'sent', new_link: 'expired', held: 'expired', invited: 'sent', waiting: '', removed: 'voided' };
 
@@ -54,6 +56,7 @@ export type ReviewProps = {
 function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean }) {
   const me = useMe();
   const [b] = useLoad(() => api('/billing'));
+  const inv = useInvite();
   const s = b?.signatures;
   if (!s) return null; // payments are not connected, so nothing is counted
   const mine = me.user.email.toLowerCase();
@@ -78,17 +81,18 @@ function SignatureCost({ rcps, correcting }: { rcps: any[]; correcting: boolean 
         <b>This needs {each(need)} and you have {have} ready.</b> {b.renewal_pending ? `Your new month's ${PRICING.monthlySignatures} arrive when the renewal payment goes through, usually within the hour. ` : have === 0 && expiredWords(b.last_expiry) ? `${expiredWords(b.last_expiry)} ` : ''}Nothing is charged unless you choose it, and your work here is saved. You can:
         <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
           {b.plan === 'grove'
-            ? <li><b>Top up {each(short)} for ${short * PRICING.topUpUsd}.</b> One payment, nothing recurring, and it plants {mangrovesFor(short * PRICING.topUpUsd)} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>
-            : <li><b>Start the monthly plan:</b> ${PRICING.monthlyUsd} a month for {PRICING.monthlySignatures} signatures, month to month, and every dollar plants {PRICING.treesPerUsd} mangrove trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>}
+            ? <li><b>Top up {each(short)} for ${short * PRICING.topUpUsd}.</b> One payment, nothing recurring, and when they are signed, {treesFor(short)} trees are planted.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>
+            : <li><b>Start the monthly plan:</b> ${PRICING.monthlyUsd} a month for {PRICING.monthlySignatures} signatures, month to month. Every signature plants {PRICING.treesPerSignature} trees.{!admin && ' An owner or admin of your team can do this on the Plan page.'}</li>}
           {s.held > 0 && <li><b>Free some up.</b> {each(s.held)} {s.held === 1 ? 'is' : 'are'} held for people who have not signed yet. Cancelling a document you no longer need (Cancel the request, in More on its page) gives its signatures back at once, unless their own date has passed (then they expire instead).</li>}
           {next && !b.renewal_pending && Date.parse(next) > Date.now() && b.plan === 'grove' && <li><b>Wait.</b> The next {each(PRICING.monthlySignatures)} arrive on {fmtDate(next)}.</li>}
           <li><b>Send to fewer people now.</b> Signing your own copy, approvers, viewers and copies are always free.</li>
         </ul>
-        <div className="row wrap" style={{ marginTop: 10 }}>
+        {/* The two ways to get more, side by side: pay as before, or invite a friend (InviteFriend.tsx). */}
+        <InviteChoices inv={inv} more={<>
           {admin && b.enabled && b.plan === 'grove' && <button type="button" className="btn sm primary" onClick={() => pay('/billing/topup', { quantity: short })}>Pay ${short * PRICING.topUpUsd} and add {each(short)}</button>}
           {admin && b.enabled && b.plan !== 'grove' && <button type="button" className="btn sm primary" onClick={() => pay('/billing/checkout')}>Start the plan for ${PRICING.monthlyUsd} a month</button>}
           <Link href="/app/settings?tab=billing" className="btn sm">Open the Plan page</Link>
-        </div>
+        </>} />
       </div>
     );
   }

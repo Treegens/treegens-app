@@ -9,6 +9,7 @@ import { safeNext, signInErrorText, signInNotice, removedText } from '@/lib/sign
 import { signedOutNotice } from '@/lib/signinrules';
 import { useSso, SsoChoice } from './SsoSignIn';
 import { usePublicT } from './publicLang';
+import { PRICING } from '@/lib/impact';
 
 type Mode = 'login' | 'signup' | 'forgot' | 'reset';
 type Provider = { id: string; name: string };
@@ -34,6 +35,10 @@ export function AuthForm({ mode }: { mode: Mode }) {
   // would make that person a second login (the server refuses it and sends them to Settings), so the page says where
   // connecting is done instead.
   const [signedInAs, setSignedInAs] = useState('');
+  // Invite a friend (src/server/referrals.ts): how many free signatures the invite in the address brings, 0 without
+  // one. The server keeps the code in a cookie of this browser, so it also counts after Google or Microsoft. Who sent
+  // the invite is never shown.
+  const [friend, setFriend] = useState(0);
   // Single sign-on of an organisation (src/server/orgsso.ts): looked up as the person leaves the email box. With it,
   // the password box gives way in place to "Continue with <name> sign-in" (research/ux-notes.json, ds-sso-oidc).
   const sso = useSso(mode, f.email);
@@ -47,6 +52,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
     if (p.get('sso_error')) sso.setError(p.get('sso_error')!);
     if (p.get('code')) setF((s) => ({ ...s, code: p.get('code')! }));
     if (p.get('signin_error')) setCameBack(signInErrorText(p.get('signin_error'), p.get('provider')));
+    if (mode === 'signup' && p.get('ref') && !p.get('invite')) api(`/public/referrals/${encodeURIComponent(p.get('ref')!)}`).then((r) => setFriend(r?.ok ? Number(r.signatures) || 0 : 0)).catch(() => {});
     if (mode === 'login' || mode === 'signup') {
       api('/auth/providers').then((r) => setProviders(r.providers || [])).catch(() => {});
       api('/me').then((r) => {
@@ -120,7 +126,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
       <Link href="/" className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></Link>
       <form className="card" onSubmit={submit}>
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>{T(`auth.title.${mode}`)}</h1>
-        {mode === 'signup' && <p className="muted small">{q?.get('invite') ? T('auth.invited_team') : T('auth.free_start')}</p>}
+        {mode === 'signup' && <p className="muted small">{q?.get('invite') ? T('auth.invited_team') : T('auth.free_start', { trees: String(PRICING.treesPerSignature) })}</p>}
+        {mode === 'signup' && friend > 0 && <div className="notice" style={{ marginTop: 10 }} role="status">{T('auth.friend_invited', { count: friend })}</div>}
         {mode === 'login' && q?.get('invite') && <p className="muted small">{T('auth.invited_login')}</p>}
         {mode === 'forgot' && q?.get('invite') && <p className="muted small">{T('auth.invited_forgot')}</p>}
         {mode === 'login' && q?.get('closing') && <div className="notice" style={{ marginTop: 10 }}>{T('auth.closing')}</div>}

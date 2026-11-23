@@ -6,7 +6,7 @@ import { bad } from './util.ts';
 import { find } from './routes-sign.ts';
 import { mine } from './routes-envelopes.ts';
 import { record } from './seclog.ts';
-import { treesAtFinish, signerMoment, signerSaw, senderMoment, senderSaw, allPaidForecast, recordShowsTrees, signs } from './impact.ts';
+import { treesAtFinish, signerMoment, signerSaw, senderMoment, senderSaw, allCountForecast, recordShowsTrees, signs } from './impact.ts';
 // 'Trees on screens and emails' (src/server/tenantpolicy.ts): off, these routes answer as for someone who plants nothing.
 import { showsTrees } from './tenantpolicy.ts';
 import { isGovernment } from '../lib/deployment.ts';
@@ -15,9 +15,9 @@ import { refuseLoosening, setByFor } from './orgs.ts';
 const CLOSED = ['voided', 'expired', 'declined'];
 
 // For the person holding a signing link, once any access code or one-time code has been passed (find refuses before).
-//   { finish: 10 }  mangroves that will be planted when they finish: only for someone who signs, whose turn it is,
-//                   with a paid signature. 0 for everyone else, and the page then says nothing.
-//   { done: {...} } after they finished: trees (10 or 0), first, celebrate, total, sheets. Null for an approver, a
+//   { finish: 5 }   trees that will be planted when they finish: for someone who signs, whose turn it is. 0 for
+//                   everyone else, and the page then says nothing.
+//   { done: {...} } after they finished: trees (5 or 0), first, celebrate, total, sheets. Null for an approver, a
 //                   viewer, a copy or a witness.
 route('GET', '/sign/:token/impact', (c) => {
   const { e, r } = find(c);
@@ -33,13 +33,13 @@ route('POST', '/sign/:token/impact/seen', (c) => {
 }, 'public');
 
 // For the sender, on an envelope of theirs.
-//   A draft:  { plus: true } when every signature of it would come out of a payment, so the review step may say that
-//             each person who signs plants 10 mangroves. A forecast, not a promise: it is asked again after sending.
-//   Sent:     { paid, signers, planted, sheets, celebrate }.
+//   A draft:  { plus: true } when every signature of it counts, so the review step may say that 5 trees are planted
+//             for each person who signs. Asked again after sending.
+//   Sent:     { counted, signers, planted, sheets, celebrate }.
 route('GET', '/envelopes/:id/impact', (c) => {
   const e = mine(c, c.params.id, 'envelope');
   if (!showsTrees(e.account_id)) return { plus: false, sent: null };
-  if (e.status === 'draft') return { plus: allPaidForecast(e), sent: null };
+  if (e.status === 'draft') return { plus: allCountForecast(e), sent: null };
   return { plus: false, sent: senderMoment(e, c.user.id) };
 });
 

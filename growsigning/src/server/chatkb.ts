@@ -16,9 +16,10 @@ import {
 import { replyPromise } from '../lib/support.ts';
 // When signatures expire (decided 2026-11-20), in the same words as the Plan page, /help and the pricing block.
 import { expiryRuleText, HELD_EXPIRY_TEXT } from '../lib/policy.ts';
+import { referralOfferOn, referralRuleText, referralRulesFrom } from '../lib/referral.ts';
 import { PRICING, usd, CURRENCY_NOTE } from '../lib/impact.ts';
 import { isDeploymentBilling } from '../lib/billingmode.ts';
-import { MONEY_LINE } from '../lib/impactwords.ts';
+import { MONEY_LINE, RULE_FULL } from '../lib/impactwords.ts';
 import { CHAT_SCREENS, CHAT_TOOLS, type ChatScreen } from '../lib/chat.ts';
 import { helpTopics, notInIt } from './chatsources.ts';
 import {
@@ -85,6 +86,8 @@ export const FAQ: Faq[] = [
     answer: () => 'In the app: Settings, then Plan, then Cancel plan (owners and admins). Without logging in: every email about a payment has a stop link, and Find my subscription on the help page emails one. The plan runs to the end of the month already paid for, and nothing is deleted.' },
   { id: 'price', side: 'sender', words: ['price', 'cost', 'how much', 'pricing', 'free', 'plan', 'pay', 'expensive'],
     answer: (s) => `A new account gets ${sigs(PRICING.welcomeSignatures)} free. ${PRICING.planName} is ${usd(PRICING.monthlyUsd)} a month with ${sigs(PRICING.monthlySignatures)}, and extra signatures are ${usd(PRICING.topUpUsd)} each. Signing is always free for the people who sign. ${sending(s) ? 'Settings, then Plan, has the rules on when signatures expire.' : 'Pricing on our front page has the rules on when signatures expire.'}` },
+  { id: 'invite', side: 'sender', words: ['invite a friend', 'invite friends', 'refer', 'referral', 'invite link', 'free signatures', 'more free'],
+    answer: () => (referralOfferOn(process.env) ? `${referralRuleText(referralRulesFrom(process.env))} Your link is under Settings, then Plan, then Invite friends.` : 'There is no invite offer on this server.') },
   { id: 'price-change', side: 'sender', words: ['price go up', 'price increase', 'raise the price', 'price change', 'new price'],
     answer: () => priceRuleText() },
   { id: 'find', words: ['lost', 'cannot find', "can't find", 'link stopped', 'link does not work', 'link expired', 'resend', 'signing link', 'where is my document', 'never got', 'deleted the email'],
@@ -225,7 +228,7 @@ export function systemPrompt(screen: ChatScreen, env: Record<string, string | un
   const dormant = dormantStopDays();
   const reachable = supportReachable(env);
   const email = (env.SUPPORT_EMAIL || '').trim();
-  return `You are the GrowSigning helper, an AI assistant inside GrowSigning, an e-signature service. You answer questions from visitors, from people who were sent a document to sign, and from people who send documents. ${MONEY_LINE}
+  return `You are the GrowSigning helper, an AI assistant inside GrowSigning, an e-signature service. You answer questions from visitors, from people who were sent a document to sign, and from people who send documents. ${MONEY_LINE} ${RULE_FULL}
 
 How you answer:
 - You are an AI and you can be wrong. When it matters, say so. The rules printed on GrowSigning's own pages are what count, not what you say.
@@ -259,6 +262,9 @@ ${isDeploymentBilling(env) ? '- This server is provided under an agreement: noth
 - The button is under Settings, then Plan. There is no form and no approval. Money goes back to the card that paid; banks usually show it within 5 to 10 working days.
 - A charge after cancelling, a second charge for the plan, or a renewal above what the reminder said is refunded by the software by itself.
 - Anything outside this rule is for a person to look at. Never promise one.
+
+=== INVITE A FRIEND ===
+- ${referralOfferOn(env) ? `${referralRuleText(referralRulesFrom(env))} The link is under Settings, then Plan, then Invite friends. Nobody is told who invited them.` : 'There is no invite offer on this server.'}
 
 === PRICE CHANGES ===
 - ${priceRuleText()}

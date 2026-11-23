@@ -6,6 +6,7 @@ import { LeakCheckLine } from './leakcheck';
 import { EncryptionLine } from './encryption';
 import { TreeCommitments } from './commitments';
 import { AcrobatCheckCard } from './acrobat';
+import { ReferralRecord } from './referrals';
 import { useMe } from '@/components/AppShell';
 import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS, priceChangeDay } from '@/lib/policy';
 
@@ -174,6 +175,9 @@ export default function Operator() {
 
       {/* Whether Adobe Acrobat still shows our time stamps as valid, from the program that checks it (acrobat.tsx). */}
       <AcrobatCheckCard />
+
+      {/* Invite a friend: who invited whom, folded (referrals.tsx). Nothing while nobody has been invited. */}
+      <ReferralRecord />
 
       {/* Not a person waiting: the table of contracts, folded, after everything that is. */}
       <TreeCommitments />

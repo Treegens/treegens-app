@@ -416,14 +416,14 @@ test('trees on screens and emails, off: nothing by Finish, on the finished scree
   // On, as every account starts: the signer is told, in the email and by Finish.
   const first = await send(p, 'h1@signers.example');
   const page = async (eid: string, email: string) => (await new Client().get(`/sign/${tokenFor(eid, email)}`)).data.envelope;
-  assert.equal((await sees(first, 'h1@signers.example')).finish, 10);
+  assert.equal((await sees(first, 'h1@signers.example')).finish, 5);
   assert.ok((await page(first, 'h1@signers.example')).impact.sheets > 0, 'the finished screen has the paper to say');
-  assert.match(textOf(mailTo('h1@signers.example').at(-1)!.html), /10 mangroves will be planted with Treegens when you finish\./);
-  assert.equal((await p.c.get(`/envelopes/${first}/impact`)).data.sent.paid, 1);
+  assert.match(textOf(mailTo('h1@signers.example').at(-1)!.html), /5 trees will be planted with Treegens when you finish\./);
+  assert.equal((await p.c.get(`/envelopes/${first}/impact`)).data.sent.counted, 1);
   const finished = await signAll(first, 'h1@signers.example');
   assert.equal(finished.status, 200);
   assert.ok(finished.data.impact.sheets > 0);
-  assert.equal((await sees(first, 'h1@signers.example')).done.trees, 10);
+  assert.equal((await sees(first, 'h1@signers.example')).done.trees, 5);
   assert.match(textOf(mailTo('h1@signers.example').at(-1)!.html), /sheets? of paper and .* litres of water were not used/);
 
   assert.equal((await p.c.put('/account/policy', { impact_display: 'off' })).status, 200);
@@ -431,7 +431,7 @@ test('trees on screens and emails, off: nothing by Finish, on the finished scree
   assert.deepEqual(await sees(first, 'h1@signers.example'), { finish: 0, done: null });
   const second = await send(p, 'h2@signers.example');
   assert.deepEqual(await sees(second, 'h2@signers.example'), { finish: 0, done: null });
-  assert.doesNotMatch(textOf(mailTo('h2@signers.example').at(-1)!.html), /mangrove|Treegens|planted/i, 'the invitation');
+  assert.doesNotMatch(textOf(mailTo('h2@signers.example').at(-1)!.html), /mangrove|Treegens|planted|\d trees/i, 'the invitation');
   assert.deepEqual((await p.c.get(`/envelopes/${second}/impact`)).data, { plus: false, sent: null }, 'the sender\'s envelope page');
   const drafted = await simple(p.c, 'h3@signers.example');
   assert.deepEqual((await p.c.get(`/envelopes/${drafted.id}/impact`)).data, { plus: false, sent: null }, 'the review step of a draft');
@@ -446,13 +446,13 @@ test('trees on screens and emails, off: nothing by Finish, on the finished scree
   assert.deepEqual(await sees(second, 'h2@signers.example'), { finish: 0, done: null }, 'the finished screen');
   for (const mail of mailTo('h2@signers.example')) assert.doesNotMatch(textOf(mail.html), /mangrove|Treegens|sheets? of paper|litres of water/i, `"${mail.subject}" says nothing about trees or paper`);
   for (const mail of mailTo(p.email).filter((x: any) => /Simple agreement|completed|finished/i.test(x.subject + x.html)).slice(-1)) assert.doesNotMatch(textOf(mail.html), /sheets? of paper|litres of water/i);
-  // Hidden is not the same as not counted: both paid signatures are in the account's total.
-  assert.equal(impact.treesOfAccount(p.id), 20);
+  // Hidden is not the same as not counted: both signatures are in the account's total, 5 trees each.
+  assert.equal(impact.treesOfAccount(p.id), 10);
   // The signing record has its own switch ('Trees on the signing record'), and this one does not touch it.
   assert.match(await pdfText(await download(p, second)), /Signed without paper/);
 
   assert.equal((await p.c.put('/account/policy', { impact_display: 'on' })).status, 200);
-  assert.equal((await sees(second, 'h2@signers.example')).done.trees, 10, 'back on, the facts are as they were');
+  assert.equal((await sees(second, 'h2@signers.example')).done.trees, 5, 'back on, the facts are as they were');
   assert.deepEqual(history(p.id).slice(-2), [{ trees_on_screens_and_emails: { from: 'on', to: 'off' } }, { trees_on_screens_and_emails: { from: 'off', to: 'on' } }]);
 });
 
@@ -464,7 +464,7 @@ test('the signing record of a government installation has no trees, no paper est
   const made = await download(p, old);
   const madeText = await pdfText(made);
   assert.match(madeText, /Signed without paper/);
-  assert.match(madeText, /fund 10 mangroves/);
+  assert.match(madeText, /plant 5 trees: mangroves, planted by Treegens/);
   assert.doesNotMatch(madeText, /\bAI\b|help chat|helper|model/i, 'nothing about the AI helper is ever on a record');
 
   government();
@@ -603,9 +603,9 @@ test('the settings page shows the switches under Account, and the AI one only wh
   // When a level above set the switch (multi-agency, gov G13), who set it is read first, then the hint.
   assert.match(rec, /aria-labelledby="trees-record-title" aria-describedby=\{d\.set_by \? 'trees-record-by trees-record-hint' : 'trees-record-hint'\}/);
   assert.match(rec, /<b id="trees-record-title">Trees on the signing record<\/b>/);
-  // The hint promises only what a signer sees everywhere: the paper. Trees only when a payment paid for some.
-  assert.doesNotMatch(sw, /what their signature plants/);
-  assert.match(sw, /how much paper their signature saved, and any trees it paid for/);
+  // The hint says what a signer sees: the paper, and the trees their signature plants (every signature, since
+  // the 5 trees rule of 23 November 2026; before it the hint said "any trees it paid for").
+  assert.match(sw, /how much paper their signature saved, and the trees it plants: when they open the link, next to Finish/);
   assert.match(sw, /'Trees on screens and emails'/);
   assert.match(sw, /\{d\.ai_available && row\('ai_helper', 'AI answers in the help chat'/);
   assert.match(sw, /role="switch"/);
@@ -639,11 +639,14 @@ test('the form page and the terms page of an account with trees off on screens s
   assert.equal((await q.c.post('/powerforms', { template_id: tq.id, name: 'Other form' })).status, 200);
   assert.equal((await visitor().get(`/public/powerforms/${db.get('SELECT slug FROM powerforms WHERE account_id=?', q.id).slug}`)).data.trees, true);
   // The pages print the tree clause only when the answer says so, and say only "Powered by GrowSigning." otherwise.
-  for (const [file, v] of [['src/app/f/[slug]/page.tsx', 'form'], ['src/app/agree/[slug]/page.tsx', 'data']]) {
-    const src = read(file);
-    assert.equal((src.match(/every dollar plants mangrove trees/g) || []).length, 1, file);
-    assert.ok(src.includes(`{${v}?.trees ? 'Powered by GrowSigning, where every dollar plants mangrove trees.' : 'Powered by GrowSigning.'}`), file);
-  }
+  // (Since the 5 trees rule the clause is about signatures, not dollars; the form page says it at the top instead,
+  // from `plants`, which is 0 for an account with tree words off.)
+  const formPage = read('src/app/f/[slug]/page.tsx');
+  assert.ok(formPage.includes("{form?.trees && !form?.plants ? `Powered by GrowSigning. ${RULE_LINE}` : 'Powered by GrowSigning.'}"), 'the form page');
+  assert.ok(formPage.includes('<OpenTreesLine trees={form.plants} />'), 'the form page says the trees from the server\'s number');
+  const agreePage = read('src/app/agree/[slug]/page.tsx');
+  assert.ok(agreePage.includes("{data?.trees ? 'Powered by GrowSigning, where signatures plant mangrove trees.' : 'Powered by GrowSigning.'}"), 'the terms page');
+  for (const src of [formPage, agreePage]) assert.doesNotMatch(src, /every dollar plants/);
 });
 
 test('the trust pages call the signing record a signing record, next to the page of certifications GrowSigning does not hold', () => {

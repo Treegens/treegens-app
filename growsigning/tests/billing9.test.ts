@@ -227,7 +227,7 @@ test('the 3 signatures of a new account expire 30 days after it was made', async
   const e = await simple(p.c, 'late', { recipients: [{ id: 'r', role: 'signer', name: 'Late Signer', email: `late-${p.k}@signers.example` }] });
   const r = await p.c.post(`/envelopes/${e.id}/send`);
   assert.equal(r.status, 402);
-  assert.equal(r.data.error, `This needs 1 signature and you have 0 left. 3 signatures you had not used expired on ${expiryMoment(lot(p, 'welcome').expires_at)}; the Plan page shows every date. The monthly plan is $9 for 9 signatures, and every dollar plants 10 mangrove trees. Nothing is charged unless you choose it. Signing your own documents stays free.`);
+  assert.equal(r.data.error, `This needs 1 signature and you have 0 left. 3 signatures you had not used expired on ${expiryMoment(lot(p, 'welcome').expires_at)}; the Plan page shows every date. The monthly plan is $9 for 9 signatures. Every signature plants 5 trees. Nothing is charged unless you choose it. Signing your own documents stays free. Or invite a friend from the Plan page: you both get 3 free signatures after their first signed document.`);
   // Once something new has arrived, the sentence about the old expiry is gone.
   await subscribe(p, 30);
   assert.equal(credits.lastExpiry(p.id), null);
@@ -626,7 +626,7 @@ test('a top-up is emailed 30 days and 3 days before it expires, once each and on
   assert.equal(mails(p.email, subject).length, 1, 'once, 30 days before');
   const first = lastMail(p.email, subject)!;
   assert.match(first, new RegExp(`5 of them are still unused, and they expire on ${expiryMoment(expires)}, 12 months after that payment`));
-  assert.match(first, /The mangroves this top-up paid for are planted whether its signatures are used or not\. We email you once more 3 days before, if any are still unused then\./);
+  assert.match(first, /A signature plants its 5 trees when it is signed, so an unused one plants none\. We email you once more 3 days before, if any are still unused then\./);
   assert.equal(mails(q.email, subject).length, 0, 'nothing for a top-up that is used up');
   assert.equal(history(p, 'topup-expiry').length, 1);
   travel(27);
@@ -645,17 +645,19 @@ test('a top-up is emailed 30 days and 3 days before it expires, once each and on
 
 // ---- 9. Trees follow the money -------------------------------------------------------------------------------
 
-test('the trees count the money paid, not the signatures used: a month that expires unused still planted its 90', async () => {
+// Changed on 23 November 2026 with the 5 trees rule (tests/trees-5.test.ts): before it this test pinned "the trees
+// count the money paid, not the signatures used", 90 for a month that expired unused. Trees now follow signatures.
+test('the trees count finished signatures, 5 each: a month that expires unused planted none, and the rule says so', async () => {
   const p = await person('Trees');
   await subscribe(p, 10);
   travel(11);
   assert.equal(lot(p, 'plan').expired, 9);
-  assert.equal(state(p).mangroves, 90);
+  assert.equal(state(p).mangroves, 0);
   const imp = (await new Client().get('/public/impact')).data;
-  const paid = db.get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) c FROM payments WHERE kind IN ('plan','topup')").c / 100;
-  assert.equal(imp.treesFunded, Math.floor(paid * PRICING.treesPerUsd));
-  assert.match(readFileSync('src/components/ImpactView.tsx', 'utf8'), /It counts the trees funded from that money, not signatures used: a signature that expires unused was paid for, and its trees are planted all the same\./);
-  assert.match(expiryRuleText(), /Every dollar still plants 10 mangroves, used or not\./);
+  assert.equal(imp.treesFunded, db.get('SELECT COALESCE(SUM(trees),0) n FROM impact_signed').n);
+  assert.equal(PRICING.treesPerSignature, 5);
+  assert.match(readFileSync('src/components/ImpactView.tsx', 'utf8'), /The total is every finished signature times \{PRICING\.treesPerSignature\}, and a signature keeps its trees once it is finished\./);
+  assert.match(expiryRuleText(), /Each signature plants 5 trees when signed\./);
 });
 
 // ---- 10. Nothing promises that signatures never expire --------------------------------------------------------

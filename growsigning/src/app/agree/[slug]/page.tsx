@@ -261,7 +261,7 @@ export default function Agree() {
       )}
       <ReportPage slug={slug} open={report} setOpen={setReport} />
       {/* The tree clause only for an account that shows trees to its signers ('Trees on screens and emails'). */}
-      {!embed && <p className="cw-foot">{data?.trees ? 'Powered by GrowSigning, where every dollar plants mangrove trees.' : 'Powered by GrowSigning.'} <a href={`/help?form=${encodeURIComponent(slug)}`}>Get help</a></p>}
+      {!embed && <p className="cw-foot">{data?.trees ? 'Powered by GrowSigning, where signatures plant mangrove trees.' : 'Powered by GrowSigning.'} <a href={`/help?form=${encodeURIComponent(slug)}`}>Get help</a></p>}
     </main>
   );
 }

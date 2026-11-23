@@ -23,15 +23,17 @@ import { consentFit, headingFor, splitAsk } from '@/lib/consentfit';
 /** A word joiner: the full stop after the address (an inline block) never wraps onto a line of its own. */
 const NO_BREAK = '\u2060';
 
-export function ConsentTop({ data, ask, myEmail }: { data: any; ask: string; myEmail: ReactNode }) {
+export function ConsentTop({ data, ask, myEmail, trees }: { data: any; ask: string; myEmail: ReactNode; trees?: (onShown: () => void) => ReactNode }) {
   const env = data.envelope;
   const me = data.recipient;
   const sender = env.sender || {};
   const top = useRef<HTMLDivElement>(null);
   const [level, setLevel] = useState(0);
+  // The tree line arrives a moment after the screen (impact/SignerTrees.tsx): the words are then counted once more.
+  const [treesIn, setTreesIn] = useState(false);
   const hasWords = !!(data.message || data.note);
   useLayoutEffect(() => {
-    if (level) return;
+    if (level && !treesIn) return;
     const root = top.current;
     const tick = root?.closest('.sg-shell')?.querySelector('input[type=checkbox]');
     if (!root || !tick) return;
@@ -40,8 +42,8 @@ export function ConsentTop({ data, ask, myEmail }: { data: any; ask: string; myE
     range.setEndBefore(tick.closest('label') || tick);
     const part = (k: string) => wordsIn(root.querySelector(`[data-fit="${k}"]`)?.textContent || '');
     const need = consentFit(wordsIn(range.toString()), CONSENT_WORDS, { email: part('email'), words: hasWords ? part('words') : 0, prefix: part('prefix'), forLine: part('for') });
-    if (need) setLevel(need);
-  }, [level, hasWords, data.message, data.note, env.subject]);
+    if (need > level) setLevel(need);
+  }, [level, treesIn, hasWords, data.message, data.note, env.subject]);
 
   // A heading for someone who is not asked to sign never starts with the app's "Please sign: " (headingFor).
   const heading = headingFor(env.subject, !!ask);
@@ -68,6 +70,8 @@ export function ConsentTop({ data, ask, myEmail }: { data: any; ask: string; myE
             : <>For {me.name}{level < 1 ? <span data-fit="email">, {myEmail}</span> : null}{NO_BREAK}.</>)}
         </p>
       )}
+      {/* Before the sender's words and before anything legal: "When you sign, 5 trees are planted." */}
+      {trees?.(() => setTreesIn(true))}
       {/* The sender's own words, in full while the screen stays at 120 words before the tick, else one tap away. */}
       <div data-fit="words"><SenderWords sender={sender.name} message={data.message} note={data.note} fold={level >= 2} /></div>
     </div>

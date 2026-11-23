@@ -3,6 +3,7 @@ import { all, get, run, db } from './db.ts';
 import { now } from './util.ts';
 import { PRICING } from '../lib/impact.ts';
 import { TOPUP_EXPIRY_MONTHS, WELCOME_EXPIRY_DAYS, expiryMoment } from '../lib/policy.ts';
+import { referralRulesFrom } from '../lib/referral.ts';
 
 // Signatures are the unit people pay for. One credit is one person signing one envelope.
 //   - $9 a month adds 9 signatures. A top-up adds one per dollar. Every dollar plants 10 mangroves, used or not.
@@ -23,7 +24,8 @@ import { TOPUP_EXPIRY_MONTHS, WELCOME_EXPIRY_DAYS, expiryMoment } from '../lib/p
 // Without a payment provider connected there is nothing to buy, so nothing is counted.
 export const creditsEnabled = () => !!process.env.STRIPE_SECRET_KEY;
 
-export type CreditReason = 'welcome' | 'plan' | 'code' | 'topup' | 'signature' | 'refund' | 'dispute' | 'adjust' | 'expired';
+// 'referral': the free signatures for inviting a friend, and for being the friend (src/server/referrals.ts).
+export type CreditReason = 'welcome' | 'plan' | 'code' | 'topup' | 'referral' | 'signature' | 'refund' | 'dispute' | 'adjust' | 'expired';
 
 // Codes that make the monthly plan free. Anyone who enters one gets the plan's signatures every month at no charge.
 // Set FREE_PLAN_CODES (comma separated) to change them; the spelling given there is the one shown to people.
@@ -75,6 +77,8 @@ function expiryFor(accountId: string, reason: string, ref: string, at: string): 
     const made = get('SELECT created_at FROM accounts WHERE id=?', accountId)?.created_at || at;
     return new Date(Date.parse(made) + WELCOME_EXPIRY_DAYS * DAY).toISOString();
   }
+  // Invite a friend: so many days after the reward arrived, as the trial's last after sign-up (src/lib/referral.ts).
+  if (reason === 'referral') return new Date(Date.parse(at) + referralRulesFrom(process.env).expiry_days * DAY).toISOString();
   if (reason === 'code') return /^\d{4}-\d{2}$/.test(ref) ? monthAfter(ref) : addMonths(at, 1);
   if (reason === 'topup') return addMonths(at, TOPUP_EXPIRY_MONTHS);
   if (reason === 'plan') {
@@ -316,6 +320,7 @@ function lotWords(l: Lot): string {
   if (l.source === 'code') return `of the ${sigsWord(l.qty)} of ${new Date(l.at).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })} that came free with your code, at the end of that month (${until})`;
   if (l.source === 'topup') return `of the ${sigsWord(l.qty)} of the top-up bought on ${expiryMoment(l.at)}, ${TOPUP_EXPIRY_MONTHS} months after that payment (${until})`;
   if (l.source === 'welcome') return `of the ${sigsWord(l.qty)} every new account gets, ${WELCOME_EXPIRY_DAYS} days after the account was made (${until})`;
+  if (l.source === 'referral') return `of the ${sigsWord(l.qty)} for inviting a friend that arrived on ${expiryMoment(l.at)} (${until})`;
   return `of ${sigsWord(l.qty)} added on ${expiryMoment(l.at)}, on ${until}`;
 }
 
@@ -512,6 +517,20 @@ export function refundFromLot(accountId: string, n: number, ref: string, payment
   const k = l && liveAt(l, now()) ? Math.min(n, Math.max(0, freeIn(l))) : 0;
   if (k <= 0) return 0;
   const r = run("INSERT OR IGNORE INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,'refund',?,?)", accountId, -k, ref, now());
+  if (!r.changes) return 0;
+  addDraw(Number(r.lastInsertRowid), l!.id, k);
+  return k;
+}
+
+// A gift that is taken back (an invite reward whose friend turned out to be abuse, src/server/referrals.ts): what is
+// left of that lot and not held leaves, with a line in the ledger ('adjust', once per `backRef`). Signatures of it
+// that were used already stay used, and nothing is taken from any other lot. The answer is how many were taken.
+export function takeBackGift(accountId: string, source: string, ref: string, backRef: string): number {
+  settle(accountId);
+  const l = loadLots(accountId).find((x) => x.source === source && x.ref === ref);
+  const k = l ? Math.max(0, freeIn(l)) : 0;
+  if (k <= 0) return 0;
+  const r = run("INSERT OR IGNORE INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,'adjust',?,?)", accountId, -k, backRef, now());
   if (!r.changes) return 0;
   addDraw(Number(r.lastInsertRowid), l!.id, k);
   return k;

@@ -8,9 +8,9 @@ import { shareTarget } from './phoneapp.ts';
 /** The product's name as it is written in a sentence, a title or an email. The drawn logo writes it "growsigning". */
 export const PRODUCT = 'GrowSigning';
 
-/** The title of a page that has none of its own, and of a link preview. It says what the price list says (trees come
- * from dollars paid) and not that signing alone plants trees: a free account's signatures plant none. */
-export const SITE_TITLE = 'GrowSigning · sign on screen, every dollar plants mangroves';
+/** The title of a page that has none of its own, and of a link preview. It says the one rule of the price list:
+ * every signature plants 5 trees (PRICING.treesPerSignature in impact.ts; tests/trees-5.test.ts holds the two together). */
+export const SITE_TITLE = 'GrowSigning · sign on screen, every signature plants 5 trees';
 
 /** Where link previews point. APP_URL when it is a usable http or https address, else this machine during development, so
  * a mistyped APP_URL gives previews with the wrong address instead of taking every page down with it. */
@@ -25,14 +25,14 @@ export function siteBase(appUrl: string | undefined = process.env.APP_URL): URL 
 }
 
 /** The alt text of the link preview picture (src/app/opengraph-image.png), also in src/app/opengraph-image.alt.txt. */
-export const OG_ALT = 'GrowSigning: sign on screen. Every dollar plants mangroves.';
+export const OG_ALT = 'GrowSigning: sign on screen. Every signature plants 5 trees.';
 
 /** The web app manifest, served at /manifest.webmanifest by src/app/manifest.ts. */
 export function webManifest() {
   return {
     name: PRODUCT,
     short_name: PRODUCT,
-    description: 'Send, sign and keep agreements on screen. Every dollar paid plants mangrove trees with Treegens.',
+    description: 'Send, sign and keep agreements on screen. Every signature plants 5 mangrove trees with Treegens.',
     id: '/app',
     start_url: '/app',
     scope: '/',

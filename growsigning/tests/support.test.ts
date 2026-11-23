@@ -112,7 +112,7 @@ test('the whole life of a request, from both sides: asked, taken, a question bac
   assert.match(said, /within 8 hours of your message, counted in real hours: nights and weekends count too/);
   assert.match(said, /do not reply to this email: a reply does not reach your request/);
   assert.ok(!said.includes('PRIVATE-WORDS'), 'anyone can type any address, so her words are not mailed back');
-  assert.doesNotMatch(said, /every dollar plants/, 'and someone who may only have come to sign is sold nothing');
+  assert.doesNotMatch(said, /every (dollar|signature) plants/, 'and someone who may only have come to sign is sold nothing');
   const l = link('lena@cust.test', asked.reference);
   // The people who answer were told, with the time that was promised. No support address is set, so that is them.
   for (const op of ['maya@ops.test', 'ravi@ops.test']) assert.match(text(mails(op, asked.reference).at(-1)!.html), /Help request .* From Lena Locked <lena@cust\.test>, not logged in\. Urgent\. The customer was told a person will have answered by/);
@@ -948,7 +948,7 @@ test('the links sent again leave out what the address disowned or we closed as n
   assert.ok(sent[0].html.includes(keep.reference) && !sent[0].html.includes(disown.reference) && !sent[0].html.includes(spam.reference));
   // Every email about a help request ends with where it came from, and not with a line about signing documents.
   for (const m of mailTo('fay@cust.test')) {
-    assert.doesNotMatch(text(m.html), /Signed digitally|every dollar plants/, m.subject);
+    assert.doesNotMatch(text(m.html), /Signed digitally|every (dollar|signature) plants/, m.subject);
     assert.match(text(m.html), /Sent by the people who answer help requests at GrowSigning\./);
   }
 });

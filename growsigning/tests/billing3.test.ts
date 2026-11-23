@@ -204,7 +204,7 @@ test('a dispute takes the unused signatures with it, bigger ones are left to a p
   assert.match(mail.html, /72 signatures that payment bought are set aside until the bank decides\. If the payment stands, they come back/);
   assert.equal(s.payments.find((x: any) => x.id === 'cs3_disp_top').refunded, null, 'nothing has gone back yet, so nothing is shown as refunded');
   assert.equal(s.payments.find((x: any) => x.id === 'cs3_disp_top').disputed, 'open');
-  assert.equal(s.mangroves, 1090, 'and the money still counts until the bank decides');
+  assert.equal((await p.c.get('/impact')).data.account.donatedUsd, 109, 'and the money still counts until the bank decides'); // the money, since trees are counted by signature now (tests/trees-5.test.ts)
   assert.doesNotMatch(mail.html, /stay yours|start the plan again/);
   assert.ok(alerts().some((m) => m.includes('Card dispute') && m.includes('NOT accepted automatically') && m.includes('28 signatures bought with that payment had already been used')));
   assert.equal((await p.c.post('/billing/topup', { quantity: 5 })).status, 403);
@@ -238,7 +238,7 @@ test('the invoice the provider makes for a top-up is not a second payment, and i
   await event('invoice.paid', topInvoice);
   let s = await state(p);
   assert.equal(s.payments.length, 2, 'the monthly payment and the top-up, nothing else');
-  assert.equal(s.mangroves, 190);
+  assert.equal((await p.c.get('/impact')).data.account.donatedUsd, 19);
   assert.equal(s.payments[0].receipt_url, 'https://pay.example/in3_top_inv', 'its link goes on the top-up');
   assert.equal(alerts().some((m) => m.includes('in3_top_inv')), false, 'and nobody is alarmed about it');
   // The other way round: the invoice is reported before the checkout says which invoice is its own.
@@ -249,7 +249,7 @@ test('the invoice the provider makes for a top-up is not a second payment, and i
   s = await state(p);
   assert.equal(s.payments.length, 3);
   assert.equal(s.payments[0].receipt_url, 'https://pay.example/in3_top_inv2');
-  assert.equal(s.mangroves, 220);
+  assert.equal((await p.c.get('/impact')).data.account.donatedUsd, 22);
 
   // Something else being sold on the same provider account: not ours, not counted, nobody alerted, nothing refunded.
   const before = (await new Client().get('/public/impact')).data.donatedUsd;

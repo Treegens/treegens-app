@@ -39,6 +39,8 @@ export const SEALED_COLUMNS: { table: string; column: string; where?: string }[]
   { table: 'recipients', column: 'decline_reason' },
   { table: 'users', column: 'signature_png' },
   { table: 'users', column: 'initials_png' },
+  // The phone number a login gave (src/server/signuprules.ts). "Is this number taken" is answered by users.phone_key.
+  { table: 'users', column: 'phone' },
   { table: 'earlier_signatures', column: 'signature_png' },
   { table: 'earlier_signatures', column: 'initials_png' },
   { table: 'earlier_signatures', column: 'answers' },

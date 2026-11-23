@@ -46,12 +46,36 @@ export const PRICING = {
   monthlyUsd: 9, // the monthly plan
   monthlySignatures: 9, // signatures added to the balance with every monthly payment
   topUpUsd: 1, // one extra signature
-  treesPerUsd: 10, // mangrove trees planted for every dollar paid
+  treesPerSignature: 5, // trees planted for every signature: plan, top-up, free trial and reward signatures alike
   welcomeSignatures: 3, // free signatures for a new account, once, to try the product
   topUpMax: 500, // most signatures in one top-up
 };
 
-export const mangrovesFor = (usd: number) => Math.floor(usd * PRICING.treesPerUsd);
+// ---- Trees: one rule, one counting function ---------------------------------------------------------------------
+// Every signature plants 5 trees (the owner's decision of 23 November 2026). It makes no difference where the
+// signature came from: the free ones a new account starts with, the monthly plan, a top-up, a free code or a reward
+// for inviting a friend. The trees are mangroves, planted by Treegens.
+//
+// Before that day the rule was another one: 10 mangroves for a signature that was paid for, none for a free one.
+// A signature finished before the change keeps what was promised for it then, so totals never change after the fact,
+// and a signing record that was already issued is never written again.
+/** The first moment of the 5 trees rule (UTC). Signatures finished before it are counted by the rule of their day. */
+export const TREES_5_FROM = '2026-11-23T00:00:00.000Z';
+/** The same day in words, for the pages that explain the counting. */
+export const TREES_RULE_DAY = '23 November 2026';
+/** What a signature finished before TREES_5_FROM was promised: 10 when it was paid for, none when it was free. */
+export const TREES_BEFORE = { paid: 10, free: 0 };
+
+/**
+ * The one counting function: the trees one finished signature plants. `at` is when it was finished (now when left
+ * out) and `paid` whether it came out of a payment, which only matters for a signature from before the change.
+ */
+export function treesForSignature(s: { at?: string | null; paid?: boolean } = {}): number {
+  if (s.at && s.at < TREES_5_FROM) return s.paid ? TREES_BEFORE.paid : TREES_BEFORE.free;
+  return PRICING.treesPerSignature;
+}
+/** Trees for a number of signatures under today's rule: 9 signatures, 45 trees. */
+export const treesFor = (signatures: number) => Math.max(0, Math.floor(Number(signatures) || 0)) * PRICING.treesPerSignature;
 
 // How a price is written on a public page. A bare "$9" reads as nine local dollars in Australia, Canada, Singapore,
 // New Zealand or Mexico, and only US dollars are accepted, so the country is always written out.
@@ -59,7 +83,7 @@ export const usd = (amount: number | string): string => `US$${amount}`;
 /** The one line about currency under every public price list. */
 export const CURRENCY_NOTE = 'Prices are in US dollars, and so is every payment. If your card is in another currency, your bank converts the amount and may add a fee of its own.';
 
-// Signing is always free for recipients. Everything paid goes to tree planting.
+// Signing is always free for recipients. What is paid, less card fees, goes to tree planting.
 export const PLANS = {
   seedling: { name: 'Seedling', price: 0, blurb: `Try it with ${PRICING.welcomeSignatures} free signatures. Signing your own documents is always free.` },
   grove: { name: PRICING.planName, price: PRICING.monthlyUsd, blurb: `${PRICING.monthlySignatures} signatures every month. Top up any time at $${PRICING.topUpUsd} each.` },

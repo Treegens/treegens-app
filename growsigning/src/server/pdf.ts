@@ -574,8 +574,8 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   }
 
   // 'Trees on the signing record' (Settings, Account): on unless the account's admins switched it off, as a
-  // government tenant will have. Estimates are called estimates, and trees are claimed only for signatures that
-  // were paid for (src/server/impact.ts, src/lib/impactwords.ts).
+  // government tenant will have. Estimates are called estimates, and the trees are those of the signatures finished
+  // on this document, 5 for each (src/server/impact.ts, src/lib/impactwords.ts).
   // Not when someone printed it to sign on paper: "were not used" would not be true (paper.ts).
   if (!recordShowsTrees(e.account_id) || paperSigned(e).size) return;
   const i = impactOf(e.sheets || 0);

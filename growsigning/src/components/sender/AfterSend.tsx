@@ -7,6 +7,7 @@ import { useMe } from '../AppShell';
 import { joinNames } from './lib';
 import { ownLink } from './OwnLink';
 import { sentForAfter } from '@/lib/shares';
+import { ShareLinkLine, ShareLinkDialog } from './ShareLink';
 
 // Shown once, on the page a sender lands on right after sending (the editor sends them here with ?sent=1). Someone
 // waiting for a signature on their phone hears nothing until the end unless they found the setting, so the one
@@ -14,12 +15,18 @@ import { sentForAfter } from '@/lib/shares';
 // Notifications ("Each time someone signs"), for all of this person's envelopes. Nothing here is a second setting.
 // `sentFor`: the colleague this person just sent it for (src/server/shares.ts). The emails about it go to them, so this
 // card says so, and offers no switch of this person's own.
+// The line under the first paragraph offers the document's readable address, growsigning.com/<name>, for a chat or
+// a QR code next to the emails that already went out (sender/ShareLink.tsx, the same dialog as "Share link" in More).
 export function AfterSend({ envelope, sentFor }: { envelope: any; sentFor?: string }) {
   const me = useMe();
   const [show, setShow] = useState(false);
   const [on, setOn] = useState(!!me.user.notify?.signed);
   const [said, setSaid] = useState<{ text: string; err?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
+  // The share link as this card last heard of it: from the page, or from its own dialog a moment ago.
+  const [sharing, setSharing] = useState(false);
+  const [link, setLink] = useState<any>(envelope.share_link || null);
+  useEffect(() => setLink(envelope.share_link || null), [envelope.share_link?.name, envelope.share_link?.active]);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get('sent') !== '1') return;
@@ -55,6 +62,8 @@ export function AfterSend({ envelope, sentFor }: { envelope: any; sentFor?: stri
           ? <>We email you at {me.user.email} when {acting.length === 1 ? `${acting[0].name} has` : 'everyone has'} finished.</>
           : <>You have switched off the email that tells you when everyone has finished. You can switch it back on under <Link href="/app/settings?tab=notifications">Settings, Profile</Link>.</>}
       </p>
+      {!sentFor && <ShareLinkLine envelope={{ ...envelope, share_link: link }} onOpen={() => setSharing(true)} />}
+      {sharing && <ShareLinkDialog kind="envelope" id={envelope.id} onClose={() => setSharing(false)} onChanged={setLink} />}
       {/* People with no address, whose link the sender said they would send: nobody else will (OwnLink.tsx). */}
       {own.length > 0 && sentFor && <p className="sn-hint warn"><b>Tell {sentFor} to send {joinNames(own.map((r: any) => r.name))} the link.</b> Only {sentFor} or an admin can. We do not write to them.</p>}
       {own.length > 0 && !sentFor && <p className="sn-hint warn"><b>Now send {joinNames(own.map((r: any) => r.name))} the link yourself.</b> It is next to {own.length === 1 ? 'their name' : 'each of their names'} below. We do not write to them.</p>}

@@ -1,5 +1,6 @@
 import { refundRuleText, priceRuleText, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 import { expiryRuleText, HELD_EXPIRY_TEXT } from '@/lib/policy';
+import { referralOfferOn, referralRuleText, referralRulesFrom } from '@/lib/referral';
 import { BULK_COST_NOTE, NO_BAA_TITLE, NO_BAA_TEXT, NO_BAA_FIRST, NO_BAA_AFTER, reminderText, DEFAULT_REMINDER_DAYS } from '@/lib/policy';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
@@ -195,6 +196,13 @@ export default function Help() {
             {dormantStopDays > 0 && <p className="muted small">We also do not charge for a plan nobody uses. If nothing has been sent for {dormantStopDays} days when a renewal comes up, we stop the renewal and tell you, with one click to keep it. The signatures you have can be used until their own dates either way.</p>}
           </QA>
 
+          {referralOfferOn(process.env) && (
+            <QA id="invite" q="How do I get free signatures by inviting a friend?">
+              <p>{referralRuleText(referralRulesFrom(process.env))}</p>
+              <p>Your link is under Settings, then Plan, then Invite friends, with a Copy button and buttons that open your own email or your phone&apos;s share sheet. When you run out of signatures, the same link is offered next to the button that gets you more.</p>
+            </QA>
+          )}
+
           <QA id="signatures" q="How do signatures work, and what is free?">
             <p>A signature is one person signing one document. A new account gets {sigs(P.welcomeSignatures)} free to try the product. {P.planName} is {usd(P.monthlyUsd)} a month and adds {sigs(P.monthlySignatures)} with every payment. On {P.planName} you can buy more at {usd(P.topUpUsd)} each, whenever you need them. {CURRENCY_NOTE}</p>
             <ul className="pub-list">
@@ -238,6 +246,10 @@ export default function Help() {
             <p>Signatures already collected stay unless you make that choice, and so does what a signer who has finished left empty or unticked. People whose part changed get an email that says what changed, and a signing page that is open at that moment loads the changed document before anyone can finish on it. Someone who is asked to sign again keeps their link, their first signature stays on record with the document as they signed it, which they can still download, and it does not use another signature. A correction never counts as a new document, and the audit trail says what each one changed.</p>
           </QA>
 
+          <QA id="share-link" q="Can I share a link instead of relying on the email?">
+            <p>Yes. A document that is out for signing can have a short address of its own, such as growsigning.com/garden-agreement, for a chat, a poster or a QR code: <b>Get a share link</b> right after sending, or <b>Share link</b> in More on the document&apos;s page. You can rename it or switch it off there.</p>
+            <p>Whoever opens it sees the name of the document, your name and the names of the people whose turn it is, never an email address. They pick their name and type a 6-digit code that we email to the address you gave for them, so nobody can sign as someone else with the link. The emails we sent keep working. A public form has such an address from the start.</p>
+          </QA>
           <QA id="not-received" q="The person says they never got the email">
             <p>Open the document. It shows whether each email left our server, and whether the person has opened the document.</p>
             <ul className="pub-list">

@@ -1,12 +1,12 @@
 'use client';
-// Trees on the signing page: one line next to Finish, and the finished screen. The server decides everything that
-// is a claim (GET /api/sign/:token/impact, src/server/impact.ts): whether this signature is paid for, whether it is
-// the person's first, and the counts. This file only draws, with the words of src/lib/impactwords.ts.
+// Trees on the signing page: the first thing a person reads when they open their link, one line next to Finish, and
+// the finished screen. The server decides everything that is a claim (GET /api/sign/:token/impact,
+// src/server/impact.ts): whether this signature plants trees, whether it is the person's first, and the counts. This file only draws, with the words of src/lib/impactwords.ts.
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/components/ui';
 import { Mark } from '@/components/Brand';
 import { IMPACT } from '@/lib/impact';
-import { finishLine, signerWords } from '@/lib/impactwords';
+import { finishLine, openLine, OPEN_UNDER, signerWords } from '@/lib/impactwords';
 import { Mangroves } from './Mangroves';
 
 // The toolbar and the phone's bottom bar both show the line: one question to the server for the two of them.
@@ -16,7 +16,38 @@ const ask = (base: string) => {
   return asked.get(base)!;
 };
 
-/** Next to Finish: "10 mangroves will be planted when you finish." Only for someone who signs with a paid signature. */
+/**
+ * The first screen, above everything legal: a leaf, "When you sign, 5 trees are planted." and who plants them.
+ * Nothing at all for someone whose signature plants none, or where tree words are switched off. `onShown` tells the
+ * screen around it that words were added, so it can count its words again (ConsentTop.tsx).
+ */
+export function OpenTrees({ base, show, onShown }: { base: string; show: boolean; onShown?: () => void }) {
+  const [trees, setTrees] = useState(0);
+  useEffect(() => {
+    let live = true;
+    if (show) ask(base).then((d) => live && setTrees(Number(d?.finish) || 0));
+    return () => void (live = false);
+  }, [base, show]);
+  const line = show ? openLine(trees) : '';
+  useEffect(() => {
+    if (line) onShown?.();
+  }, [line]);
+  return <OpenTreesLine trees={show ? trees : 0} />;
+}
+
+/** The same two lines for a page that already knows the number: a public form before the person has a link of their own. */
+export function OpenTreesLine({ trees }: { trees: number }) {
+  const line = openLine(Number(trees) || 0);
+  if (!line) return null;
+  return (
+    <div className="sg-open-trees" data-feature="impact">
+      <Mark size={30} label="" />
+      <p><b>{line}</b><span>{OPEN_UNDER}</span></p>
+    </div>
+  );
+}
+
+/** Next to Finish: "5 trees will be planted when you finish." For everyone whose signature plants trees. */
 export function TreeLine({ base, show }: { base: string; show: boolean }) {
   const [trees, setTrees] = useState(0);
   useEffect(() => {

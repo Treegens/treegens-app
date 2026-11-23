@@ -53,7 +53,7 @@ test('1. the confirmation email has a 6-digit code, is 50 words or fewer, and ke
   assert.match(mail.html, new RegExp(`It works for ${CONFIRM_CODE_HOURS} hours\\.`));
   assert.match(mail.link, /\/verify-email\?token=/, 'the button in the email still confirms');
   // No browser or password advice, no selling line in it.
-  assert.doesNotMatch(mail.html, /browser|password|mangrove|every dollar/i);
+  assert.doesNotMatch(mail.html, /browser|password|mangrove|every dollar|every signature plants/i);
   // The code is not kept in the database in a form that gives it away.
   const row = db.get("SELECT verify_code_hash h FROM users WHERE email='code.one@start.test'");
   assert.ok(row.h && !row.h.includes(code!));

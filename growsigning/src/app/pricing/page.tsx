@@ -1,16 +1,17 @@
 // Prices, the rules that go with them, and how they compare. Moved here from the home page, which now says one thing.
 import { refundRuleText, PRICE_NOTICE_DAYS } from '@/lib/policy';
 import { expiryShortText } from '@/lib/policy';
+import { referralOfferOn, referralRulesFrom } from '@/lib/referral';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { OpenOnHash } from '@/components/OpenOnHash';
 import { DeploymentHome } from '@/components/DeploymentHome';
 import { isDeploymentBilling } from '@/lib/billingmode';
-import { PLANS, PRICING, usd, CURRENCY_NOTE } from '@/lib/impact';
+import { PLANS, PRICING, usd, CURRENCY_NOTE, treesFor } from '@/lib/impact';
 import { publicFacts, abuseFacts } from '@/app/help/facts';
 import { BULK_COST_NOTE, NO_BAA_TITLE, NO_BAA_TEXT } from '@/lib/policy';
 
-export const metadata = { title: 'Pricing', description: 'What GrowSigning costs, the rules that go with the prices, and how it compares. You pay for signatures that actually happen, and every dollar plants 10 mangroves with Treegens.' };
+export const metadata = { title: 'Pricing', description: 'What GrowSigning costs, the rules that go with the prices, and how it compares. You pay for signatures that actually happen, and every signature plants 5 trees with Treegens.' };
 // The refund window is a setting. Read it when the page is asked for, not when the site is built.
 export const dynamic = 'force-dynamic';
 
@@ -53,15 +54,16 @@ export default function Pricing() {
       <main id="main">
         <section className="wrap section" id="pricing" aria-labelledby="pricing-h">
           <h1 id="pricing-h" className="pub-h1">Simple pricing that plants trees</h1>
-          <p className="pub-sub" style={{ marginBottom: 0 }}>You pay for signatures that actually happen. Every dollar plants {P.treesPerUsd} mangrove trees with Treegens, and both plans have the same features.</p>
+          <p className="pub-sub" style={{ marginBottom: 0 }}>You pay for signatures that actually happen. Every signature plants {P.treesPerSignature} trees with Treegens, the free ones too, and both plans have the same features.</p>
           <div className="pub-plans">
             <div className="card pub-plan">
               <h3>{PLANS.seedling.name}</h3>
               <div className="price">{usd(PLANS.seedling.price)}</div>
               <p className="muted">Try it, and sign your own documents for free.</p>
               <ul>
-                <li><b>{sigs(P.welcomeSignatures)} free</b> to try the product</li>
+                <li><b>{sigs(P.welcomeSignatures)} free</b> to try the product, {treesFor(P.welcomeSignatures)} trees planted</li>
                 <li>No card needed</li>
+                {referralOfferOn(process.env) && <li><b>Invite a friend:</b> you both get {sigs(referralRulesFrom(process.env).signatures)} free after their first signed document. <Link href="/help#invite">The rules</Link></li>}
                 <li>Signing is free for everyone you send to</li>
               </ul>
               <Link href="/signup" className="btn">Start free</Link>
@@ -71,7 +73,7 @@ export default function Pricing() {
               <div className="price">{usd(P.monthlyUsd)}<small> / month</small></div>
               <p className="muted">For people who send regularly.</p>
               <ul>
-                <li><b>{sigs(P.monthlySignatures)} added every month</b></li>
+                <li><b>{sigs(P.monthlySignatures)} added every month</b>, {treesFor(P.monthlySignatures)} trees</li>
                 <li>More when you need them, {usd(P.topUpUsd)} a signature</li>
                 <li>Month to month. Cancel in one click</li>
               </ul>
@@ -105,7 +107,7 @@ export default function Pricing() {
               <li><b>Same features on both plans.</b> Templates, Send to many, forms, branding, teams, the API and webhooks are on {PLANS.seedling.name} and on {P.planName}.</li>
               <li id="bulk-cost"><b>What Send to many costs.</b> {BULK_COST_NOTE} A list of {LIST} people needs {sigs(LIST)}: starting from none on {P.planName}, that is the {P.monthlySignatures} of the month and {listTopUp} more at {usd(P.topUpUsd)} each, {usd(listUsd)} in all, paid before the batch goes out. The Send to many page shows your own numbers before you press Send. What nobody signs comes back to your balance when you cancel the batch or it runs out of time (unless its own date has passed by then), and the refund rule applies to it. An account that has not paid yet can newly email {firstWeekDaily} people a day in its first week and {unpaidDaily} a day after that.</li>
               <li><b>Stopping never costs you your documents.</b> Cancelling or a failed payment deletes nothing and locks nothing. Export is free.</li>
-              <li><b>Where the money goes.</b> What you pay, less card fees, goes to Treegens tree planting. Every dollar plants {P.treesPerUsd} mangrove trees, whether its signatures are used or not.</li>
+              <li><b>Where the money goes.</b> What you pay, less card fees, goes to Treegens tree planting. Every signature plants {P.treesPerSignature} mangrove trees, the free ones included.</li>
               <li id="not-for-patients"><b>{NO_BAA_TITLE}</b> {NO_BAA_TEXT} <Link href="/security#not">What would have to be true first</Link>.</li>
             </ul>
             </details>

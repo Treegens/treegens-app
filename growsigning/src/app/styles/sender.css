@@ -233,3 +233,22 @@ table.sn-batch tr.cont td { border-bottom: 0; padding-bottom: 2px; }
 .sn-usage-when { margin: 10px 0 0; font-size: 14px; }
 .sn-usage-when a { display: inline-block; padding: 12px 0; margin: -12px 0; }
 .sn-usage-when + .sn-usage-note { margin: 12px 0 0; }
+
+/* Invite a friend (components/sender/InviteFriend.tsx): two choices side by side when the signatures run out, one
+   under the other on a phone; the link with its Copy and share buttons; the small card on the Plan page. */
+.inv-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.inv-choice { background: var(--surface, #fff); border: 1px solid var(--line, #e4dfd3); border-radius: 12px; padding: 14px; min-width: 0; color: var(--ink, #1c2a22); }
+.inv-choice h3 { font-family: var(--sans); font-size: 16px; line-height: 1.3; margin: 0 0 6px; }
+.inv-choice p { font-size: 14px; line-height: 1.45; margin: 0 0 10px; }
+.inv-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.inv-actions .btn { min-height: 44px; }
+.inv-link input { width: 100%; min-width: 0; font-size: 14px; margin: 0 0 8px; text-overflow: ellipsis; }
+.inv-link p { margin: 8px 0 0; }
+.inv-only { margin-top: 10px; }
+.inv-counts { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 14px 0 4px; }
+.inv-counts dt { font-size: 13px; color: var(--muted, #6b776f); }
+.inv-counts dd { margin: 0; font-size: 22px; font-weight: 700; }
+.inv-rules { margin-top: 10px; }
+@media (max-width: 640px) {
+  .inv-choices { grid-template-columns: minmax(0, 1fr); }
+}

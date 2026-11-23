@@ -17,6 +17,7 @@ import { MailStopLines, remindedText } from '@/components/sender/MailNews';
 import { ConfirmDialog, CorrectDialog, ExtendDialog, VoidDialog } from '@/components/sender/dialogs';
 import { fail } from '@/components/sender/feedback';
 import { AfterSend } from '@/components/sender/AfterSend';
+import { ShareLinkDialog } from '@/components/sender/ShareLink';
 import { PrintNotice } from '@/components/sender/PrintNotice';
 import { PayLinkNote } from '@/components/sender/PayLinkNote';
 import { CollectNote } from '@/components/sender/CollectNote';
@@ -43,7 +44,7 @@ export default function EnvelopeDetail() {
   const router = useRouter();
   const me = useMe();
   const [data, reload, error] = useLoad(() => api(`/envelopes/${id}`), [id]);
-  const [dialog, setDialog] = useState<'' | 'void' | 'extend' | 'delete' | 'time' | 'move'>('');
+  const [dialog, setDialog] = useState<'' | 'void' | 'extend' | 'delete' | 'time' | 'move' | 'share'>('');
   const [fix, setFix] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   // The details that are checked key dates: shown in the Key dates fold only, not a second time under Details.
@@ -224,6 +225,9 @@ export default function EnvelopeDetail() {
   })).filter((l) => shareOk(l.key));
   // Move to a colleague, before Cancel the request (charter 2.5), on a team only.
   const moveAt = more.findIndex((l) => l.key === 'cancel' || l.key === 'delete');
+  // The document's share link, growsigning.com/<name>: made, copied, shown as a QR code, renamed or switched off
+  // in one dialog (sender/ShareLink.tsx). For a document that is out, or one that had a link while it was.
+  if (!isTpl && !removed && (out || e.share_link)) more.unshift({ key: 'share_link', label: 'Share link', onPick: () => setDialog('share') });
   if (moveAllowed(me, e, data)) more.splice(moveAt < 0 ? more.length : moveAt, 0, { key: 'move', label: MOVE_LABEL, onPick: () => setDialog('move') });
   // The same name the document has on Home and in Documents (listName): "Planting partnership", not "Please sign: ...".
   const title = listName(e.subject) || (isTpl ? 'Untitled template' : 'Untitled');
@@ -406,6 +410,7 @@ export default function EnvelopeDetail() {
       {/* What can be checked about the signed PDF, folded: today its digital seal, when it carries one (FileChecks.tsx). */}
       <FileChecks seal={data.seal} archive={data.archive_format} />
 
+      {dialog === 'share' && <ShareLinkDialog kind="envelope" id={e.id} onClose={() => setDialog('')} onChanged={() => reload()} />}
       {dialog === 'move' && <MoveDialog envelope={e} onClose={() => setDialog('')} onDone={() => (setDialog(''), toast('Moved. It belongs to them now, and its history says so.'), router.push(isTpl ? '/app/templates' : '/app/envelopes'))} />}
       {dialog === 'time' && <ChangeTimeDialog envelope={e} onClose={() => setDialog('')} onDone={() => (setDialog(''), reload())} />}
       {dialog === 'extend' && <ExtendDialog envelope={e} onClose={() => setDialog('')} onDone={() => (setDialog(''), reload())} />}

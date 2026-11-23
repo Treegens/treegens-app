@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { PRICING } from '@/lib/impact';
 import type { Allowance } from './allowance';
 import { expiryMoment, expiredWords } from '@/lib/policy';
+import { InviteChoices, useInvite } from './InviteFriend';
 
 const PLAN_PAGE = '/app/settings?tab=billing';
 
@@ -26,7 +27,8 @@ function SignatureBalance({ a, canUpgrade }: { a: NonNullable<Allowance>; canUpg
             {a.held > 0 ? <> <span className="muted">{a.held} more {a.held === 1 ? 'is' : 'are'} set aside for people who have not signed yet.</span></> : null}
           </p>
         </div>
-        <Link href={PLAN_PAGE} className="btn sm">{canUpgrade ? 'Get more and plant mangroves' : 'See the plan'}</Link>
+        {/* With two or fewer left, the two ways to get more stand side by side below instead (LowChoices). */}
+        {left > 2 && <Link href={PLAN_PAGE} className="btn sm">{canUpgrade ? 'Get more signatures' : 'See the plan'}</Link>}
       </div>
       {/* When they reset, like a usage limit. The rules live in one place: the Plan page, behind this link. */}
       <p className="sn-usage-when muted">
@@ -39,6 +41,19 @@ function SignatureBalance({ a, canUpgrade }: { a: NonNullable<Allowance>; canUpg
         </p>
       )}
       {left > 0 && left <= 2 && <p className="sn-usage-note"><b>Running low.</b> Each new signer needs one. Nothing is charged unless you choose it.</p>}
+      {left <= 2 && <LowChoices plan={a.plan} canUpgrade={canUpgrade} />}
     </section>
+  );
+}
+
+// Out of signatures, or nearly: the two ways to get more, side by side (InviteFriend.tsx). "Get more signatures" is
+// the Plan page as before; "Invite a friend" is the person's own link to pass on. Where the invite offer is off,
+// only the first one draws.
+function LowChoices({ plan, canUpgrade }: { plan: string; canUpgrade: boolean }) {
+  const inv = useInvite();
+  const note = plan === 'grove' ? `Top up at $${PRICING.topUpUsd} a signature: one payment you choose.` : `The monthly plan is $${PRICING.monthlyUsd} for ${PRICING.monthlySignatures} signatures.`;
+  return (
+    <InviteChoices inv={inv} note={`${note}${canUpgrade ? '' : ' An owner or admin of your team can do this.'}`}
+      more={<Link href={PLAN_PAGE} className="btn sm primary">{!canUpgrade ? 'See the plan' : plan === 'grove' ? 'Top up' : 'Start the plan'}</Link>} />
   );
 }

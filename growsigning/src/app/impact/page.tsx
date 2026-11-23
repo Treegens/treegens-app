@@ -19,7 +19,7 @@ export default function PublicImpact() {
       <main id="main" className="wrap stack" style={{ paddingTop: 20 }}>
         <div>
           <h1 className="pub-h1">{T('public.impact.h1')}</h1>
-          <p className="pub-lead">{T('public.impact.lead_start')}{gov ? '' : <> {T('public.impact.lead_money', { trees: String(PRICING.treesPerUsd) })}</>} {T('public.impact.lead_end')}</p>
+          <p className="pub-lead">{T('public.impact.lead_start')}{gov ? '' : <> {T('public.impact.lead_money', { trees: String(PRICING.treesPerSignature) })}</>} {T('public.impact.lead_end')}</p>
         </div>
         {/* Totals appear once they are large enough to mean something. Until then nothing stands in their place. */}
         {d && <ImpactStats i={d} />}
@@ -31,7 +31,7 @@ export default function PublicImpact() {
         ) : (
           <div className="card row between wrap" style={{ background: 'var(--green-deep)', color: '#fff', borderColor: 'var(--green-deep)' }}>
             <div style={{ maxWidth: 620 }}>
-              <h2 className="serif" style={{ fontSize: 22 }}>{T('public.impact.paid_h', { trees: String(PRICING.treesPerUsd) })}</h2>
+              <h2 className="serif" style={{ fontSize: 22 }}>{T('public.impact.paid_h', { trees: String(PRICING.treesPerSignature) })}</h2>
               <p style={{ margin: '6px 0 0', color: '#cfe2d3' }}>{T('public.impact.paid_body')}</p>
             </div>
             <Link href="/signup" className="btn lg" style={{ background: '#ffd24a', borderColor: '#ffd24a', color: '#2b2100' }}>{T('public.impact.start')}</Link>
