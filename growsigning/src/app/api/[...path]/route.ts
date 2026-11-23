@@ -64,6 +64,7 @@ import '@/server/routes-offline';
 import '@/server/routes-paper';
 import '@/server/routes-webforms';
 import '@/server/routes-switches';
+import '@/server/routes-acrobat';
 import '@/server/openapi';
 import { handle } from '@/server/router';
 

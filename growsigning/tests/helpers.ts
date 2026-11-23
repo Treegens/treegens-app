@@ -85,6 +85,7 @@ export async function boot(): Promise<Server> {
   await import('../src/server/routes-offline.ts');
   await import('../src/server/routes-paper.ts');
   await import('../src/server/routes-switches.ts');
+  await import('../src/server/routes-acrobat.ts');
   await import('../src/server/openapi.ts');
   const billing = await import('../src/server/routes-billing.ts');
   handle = (await import('../src/server/router.ts')).handle;

@@ -57,7 +57,7 @@ const NEEDS: Record<Need, string[]> = {
     'POST /me/two-step/reset/stop', 'POST /me/two-step/setup', 'POST /operator/accounts/:id', 'PUT /operator/accounts/:id/org',
     'POST /operator/billing/accounts/:id/clear-dispute', 'GET /operator/billing/disputed', 'GET /operator/billing/lookup',
     'POST /operator/billing/price-notice', 'POST /operator/disputes/:id', 'GET /operator/holds', 'POST /operator/holds/:id/lift',
-    'GET /operator/leak-check', 'GET /operator/encryption', 'GET /operator/tree-commitments', 'POST /operator/tree-commitments', 'POST /operator/tree-commitments/:id/signed',
+    'GET /operator/leak-check', 'GET /operator/encryption', 'GET /operator/acrobat-check', 'GET /operator/acrobat-check/:id/screenshot', 'GET /operator/tree-commitments', 'POST /operator/tree-commitments', 'POST /operator/tree-commitments/:id/signed',
     'POST /operator/tree-commitments/:id/statements', 'DELETE /operator/tree-commitments/:id/statements/:sid', 'GET /billing-mode', 'GET /operator/orgs', 'POST /operator/orgs', 'PUT /operator/orgs/:id/break-glass', 'GET /operator/queue',
     'POST /operator/reports/:id', 'GET /operator/support', 'GET /operator/support/:id', 'POST /operator/support/:id', 'GET /orgs',
     'GET /orgs/:id', 'POST /orgs/:id/admins', 'DELETE /orgs/:id/admins/:user', 'POST /orgs/:id/agencies',

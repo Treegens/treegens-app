@@ -1069,6 +1069,18 @@ CREATE TABLE IF NOT EXISTS shared_changes (
   recipient_id TEXT NOT NULL, name TEXT NOT NULL, before TEXT, after TEXT, initials_png TEXT, sign_again TEXT, at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS shared_changes_env ON shared_changes(envelope_id, field_id, id);
+-- The automatic Adobe Acrobat check (src/server/acrobat.ts): one row per sample PDF made for the program that opens it
+-- in Acrobat, with the time-stamp service that answered and, once reported, what Acrobat showed and the server's
+-- verdict. The screenshot is a file in the blob store (screenshot_sha256). The last 60 are kept. No customer data.
+CREATE TABLE IF NOT EXISTS acrobat_checks (
+  id TEXT PRIMARY KEY, created_at TEXT NOT NULL, tsa_host TEXT NOT NULL, tsa_name TEXT, tsa_time TEXT, trusted INTEGER NOT NULL DEFAULT 0,
+  forced INTEGER NOT NULL DEFAULT 0, pdf_sha256 TEXT NOT NULL, ip TEXT, reported_at TEXT, verdict TEXT, banner_text TEXT, banner_colour TEXT,
+  panel_lines TEXT, acrobat_version TEXT, os TEXT, notes TEXT, screenshot_sha256 TEXT, screenshot_size INTEGER,
+  alerted INTEGER NOT NULL DEFAULT 0, missed_alerted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS acrobat_checks_at ON acrobat_checks(created_at);
+-- What the Acrobat check told the operators once (a day without a time stamp, a silence) and when the first check was.
+CREATE TABLE IF NOT EXISTS acrobat_marks (key TEXT PRIMARY KEY, at TEXT NOT NULL);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS never alters an existing table, so each

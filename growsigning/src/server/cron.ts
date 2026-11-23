@@ -26,6 +26,7 @@ import { counterTick } from './counter.ts';
 import { sweepScanPhotos } from './scanphotos.ts';
 import { purgeDrafts } from './webforms.ts';
 import { columnsTick } from './colsweep.ts';
+import { acrobatTick } from './acrobat.ts';
 // Loaded for what it listens to: what became of a text is written to its envelope's record from there.
 import './signercode.ts';
 
@@ -100,6 +101,8 @@ async function tickOnce() {
     // Key dates: completed documents read by the AI a few at a time, and "Remind me" emails before a checked date (airepo.ts).
     key_dates_read: await keyDatesTick().catch((e) => (console.error('[cron] key dates', e?.message), 0)),
     key_dates_reminded: await keyReminders().catch((e) => (console.error('[cron] key date reminders', e?.message), 0)),
+    // The automatic Adobe Acrobat check: a sample never reported on, no check for too long, and the last 60 kept (acrobat.ts).
+    acrobat_check: await acrobatTick().catch((e) => (console.error('[cron] acrobat check', e?.message), null)),
     // With FILE_ENCRYPTION_KEY: database values still in the clear or under an old key, a batch a tick (colsweep.ts).
     values_encrypted: (() => { try { return columnsTick(); } catch (e: any) { console.error('[cron] encrypted columns', e?.message); return 0; } })() };
 }

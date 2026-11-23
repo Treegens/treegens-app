@@ -5,6 +5,7 @@ import { Tickets } from './tickets';
 import { LeakCheckLine } from './leakcheck';
 import { EncryptionLine } from './encryption';
 import { TreeCommitments } from './commitments';
+import { AcrobatCheckCard } from './acrobat';
 import { useMe } from '@/components/AppShell';
 import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS, priceChangeDay } from '@/lib/policy';
 
@@ -170,6 +171,9 @@ export default function Operator() {
           </div>
         ))}
       </div>
+
+      {/* Whether Adobe Acrobat still shows our time stamps as valid, from the program that checks it (acrobat.tsx). */}
+      <AcrobatCheckCard />
 
       {/* Not a person waiting: the table of contracts, folded, after everything that is. */}
       <TreeCommitments />

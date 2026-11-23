@@ -2717,6 +2717,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SEAL_KEY_PEM`, `SEAL_CERT_PEM`, `SEAL_CHAIN_PEM` | The same key as PEM: the private key (not encrypted), the seal certificate, and the certificates that issued it. Each a path or the PEM text itself. Set these or `SEAL_P12`, not both. | none |
 | `TSA_URL` | An RFC 3161 time-stamp service, so the seal carries its time (PAdES B-T) and not only the server's clock (B-B), and a completed PDF without a seal still gets a time stamp over the whole file. `http://ts.ssl.com,http://timestamp.digicert.com` are free. Several, separated by commas, are tried in order, 3 seconds each and 4 in all. A time more than 5 minutes from the server's clock is not used. `TSA_URLS` is read the same way. | none: B-B |
 | `LTV_WAIT_MS` | With `TSA_URL`: how long, in milliseconds, all the answers about the seal's and the time-stamp service's certificates (OCSP, else revocation lists) may take together at completion, because the last signer's Finish waits for the stored file. When one does not answer in time the file stays at B-T and the page of the document says so. The document time stamp after them shares the same time. At most 120000. 0 turns long-term checking off (nothing is asked, the file stays at B-T and nothing is said). With `OUTSIDE_CALLS` listed or none, the hosts the certificates name must be added to `OUTBOUND_ALLOW`. | 20000 |
+| `ACROBAT_CHECK_TOKEN` | Optional. A long random secret (`openssl rand -hex 32`) for the program on your own computer that checks in Adobe Acrobat Reader that our time stamps show as valid (see "Automatic Adobe Acrobat check"). It is sent only as `Authorization: Bearer <token>`. At least 32 characters; shorter counts as unset. Unset, its two routes answer 404 as if they did not exist. | none: no Acrobat check |
 | `TSA_USER`, `TSA_PASSWORD` | HTTP Basic credentials for the time-stamp service, when it asks for them. They go to every address in `TSA_URL`, and only over https: with them set, a plain http address is not asked. | none |
 | `SEAL_CSC_CLIENT_ID`, `SEAL_CSC_USERNAME`, `SEAL_CSC_PASSWORD` | Seals with a cloud signing service instead of a key file (SSL.com eSigner, see "The cloud seal"): the client id and the SSL.com account. All three, or the seal is refused and the startup log names what is missing. Not together with `SEAL_P12` or `SEAL_KEY_PEM`. | none |
 | `SEAL_CSC_CLIENT_SECRET`, `SEAL_CSC_CREDENTIAL_ID`, `SEAL_CSC_TOTP_SECRET` | The client secret when the client has one; the credential to seal with (else the first eSealing one listed); the one-time code secret (base64, as SSL.com shows it) only for a certificate that asks for a code. | none |
@@ -3465,6 +3466,41 @@ Production, step by step (also in `.env.example`):
   needed on the server. DigiCert's service sends a copy of Trusted Root G4 issued by Assured ID Root CA; the chain
   walk stops at the listed root. Both services were asked from the machine this was built on, and both time stamps
   verified with `openssl ts -verify` against `deploy/tsa-roots.pem`.
+
+### Automatic Adobe Acrobat check
+
+Adobe Acrobat Reader shows a blue bar, "Signed and all signatures are valid", for a PDF whose only signature is a
+document time stamp from `ts.ssl.com` (its panel says "Signature is a document timestamp signature" and "Source of
+Trust obtained from Adobe Approved Trust List (AATL)"). A program on our own computer that can work Acrobat checks
+this on a schedule and tells the server what it saw (`src/server/acrobat.ts`, `routes-acrobat.ts`). It needs
+`ACROBAT_CHECK_TOKEN` on the server and the same value in the program, and `TSA_URL`.
+
+- `GET /api/ops/acrobat-check/sample` gives a new one-page PDF that says it is a GrowSigning Acrobat check and holds
+  no customer data, with one document time stamp made exactly as completed documents without a server seal get
+  theirs. With a server seal on, completed documents also carry the seal, and this check does not cover how Acrobat
+  shows that (the operator card says so). The headers
+  `X-Check-Id`, `X-Tsa-Host` and `X-Tsa-Trusted` say which check it is and which service stamped it.
+  `?tsa=timestamp.digicert.com` asks only that service (it must be in `TSA_URL`), to test the backup too. When no
+  service answers it is 503 with the reason, and the operators are told once a day (once for all the services, and
+  once for each service named with `?tsa=`). At most 40 samples are made in any 24 hours, from all addresses together.
+- `POST /api/ops/acrobat-check/result` takes what Acrobat showed: `check_id`, `banner_text`, `banner_colour`
+  (blue, yellow, red, none or other), `panel_lines`, `acrobat_version`, `os`, and optionally a PNG screenshot
+  (`screenshot_png_base64`, at most 1.5 MB and 10 million pixels, an ordinary 8-bit PNG without a palette; only its
+  pixels are kept) and `notes`. Each check is reported once. The server decides: it passes only when the bar is blue
+  and says "Signed and all signatures are valid", neither the bar nor the panel holds one of Acrobat's warning words
+  (invalid, problem, unknown, revoked and the like), and the server could check the time stamp against `TSA_TRUST`.
+  Anything else emails the operators at once, with the bar, the panel lines, the service and a link to the check,
+  up to 5 fail emails a day; later fails that day are on the operator card only.
+- The program's job, in plain words: once a week, fetch one sample from each service (`?tsa=ts.ssl.com` and
+  `?tsa=timestamp.digicert.com`), open each in Acrobat Reader, read the bar and the signature panel, take a
+  screenshot, and report.
+- Silence is a failure too: a sample with no result within 2 hours, or no check at all for more than 8 days after
+  the first one, is told to the operators once by the timer.
+- `/app/operator` has an "Adobe Acrobat check" card: the last result with its screenshot, the last 10 checks and the
+  day the next one is expected. The last 60 checks are kept. Both routes need `Authorization: Bearer <token>`
+  (never in the address); without it, or without the setting, they answer 404, however often they are tried, and
+  `/api/openapi.json` leaves them out. A token shorter than 32 characters counts as unset (with a warning in the
+  log). 30 calls an hour from one address with the right token; calls without it never use that up.
 
 ### Long-term checking and the record's time stamp
 
