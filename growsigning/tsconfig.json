@@ -121,10 +121,10 @@
     ".next-place/dev/types/**/*.ts",
     ".next-sigclip/types/**/*.ts",
     ".next-sigclip/dev/types/**/*.ts",
-    ".next-consent/types/**/*.ts",
-    ".next-consent/dev/types/**/*.ts",
     ".next-skepsig/types/**/*.ts",
-    ".next-skepsig/dev/types/**/*.ts"
+    ".next-skepsig/dev/types/**/*.ts",
+    ".next-sigsimple/types/**/*.ts",
+    ".next-sigsimple/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

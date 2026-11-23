@@ -21,7 +21,7 @@ import { BY_SENDER_LINE } from '@/lib/bysender';
 import { encryptedFilesPoint, notEncryptedPoint } from '@/lib/storedfiles';
 import { DatabaseLists } from './dblists';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '@/lib/evidence';
-import { sealSet, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/seal';
+import { sealSet, timeStampSet, cscSettings, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS, SEAL_CLOUD, TIME_STAMP_ONLY } from '@/lib/seal';
 import { DEVICE_COOKIE_WORDS } from '@/lib/witness';
 import { chatPrivacyPoint } from '@/lib/chatprovider';
 import { readPossible, READ_SENT, READ_KEPT } from '@/lib/aiassist';
@@ -63,6 +63,10 @@ export default function Security() {
   const notEncrypted = notEncryptedPoint();
   // Whether the operator of this server has set a seal key (src/server/seal.ts). When not, nothing here speaks of one.
   const sealed = sealSet();
+  // Whether the seal is made by a cloud signing service (SEAL_CSC_*, src/server/sealcsc.ts), and whether a completed
+  // PDF without a seal still gets a time stamp over the whole file (TSA_URL, src/server/finalpipe.ts).
+  const sealCloud = sealed && cscSettings().complete;
+  const stampOnly = !sealed && timeStampSet();
   // Whether an email leaves this server only over an encrypted connection (SMTP_REQUIRE_TLS), and what that does not cover.
   const mailTls = mailTlsPoint();
   return (
@@ -123,7 +127,8 @@ export default function Security() {
           <Point title="The audit trail is hash chained, and what that does not stop.">{CHAIN_TRUTH}</Point>
           <Point title="Completed documents end with a signing record.">A document everyone has finished ends with a signing record, headed Certificate of Completion, with the full audit trail. A voided, declined or expired one has none, and its copies say so on the first page and across every page. On the signing record, read the names, times and places for what they are. {WHO_WHEN_WHERE} <Link href="/security/certificate">How to read a GrowSigning signing record</Link> goes through every line. For every signer it says how they were checked before the document opened: a one-time code with the masked address or number it went to and the time it was typed in, an access code, or &ldquo;Link sent by email only&rdquo; when there was no check, so nobody reads more into it than happened.</Point>
           <Point title="Anyone can verify a signed PDF.">Drop the file on <Link href="/verify">Verify a document</Link>. We compare its SHA-256 fingerprint with the one recorded when signing finished. One changed byte and it no longer matches. A match shows that the file is unchanged since then, not who was behind each signature. No account is needed, and the file is not kept. When a sender deletes their account, the fingerprint of each completed document is kept for one more year with its envelope ID and its day, so the check can still say that the file was completed here and has been deleted since. A printed copy can be looked up by the envelope ID at the foot of each page.</Point>
-          {sealed && <Point title="A digital seal inside each completed PDF.">{SEAL_TRUTH} {SEAL_TIME} {SEAL_TRUST} {SEAL_LIMITS} <Link href="/verify">Verify a document</Link> checks the seal of a file too, and <Link href="/security/certificate#seal">How to read a GrowSigning signing record</Link> says what its line on the certificate means.</Point>}
+          {sealed && <Point title="A digital seal inside each completed PDF.">{SEAL_TRUTH} {sealCloud && <>{SEAL_CLOUD} </>}{SEAL_TIME} {SEAL_TRUST} {SEAL_LIMITS} <Link href="/verify">Verify a document</Link> checks the seal of a file too, and <Link href="/security/certificate#seal">How to read a GrowSigning signing record</Link> says what its line on the certificate means.</Point>}
+          {stampOnly && <Point title="A time stamp over each completed PDF.">{TIME_STAMP_ONLY}</Point>}
         </Block>
 
         <Block id="your-documents" title="Your documents stay yours">

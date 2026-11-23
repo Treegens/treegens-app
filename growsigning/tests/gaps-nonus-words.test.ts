@@ -7,7 +7,7 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { boot, Client, simple, tokenFor, signUp, mailTo, type Server } from './helpers.ts';
-import { CONSENT_VERSION, consentWording, isConsentVersion, adoptLine, LANGUAGE_NOTE } from '../src/lib/policy.ts';
+import { CONSENT_VERSION, consentWording, consentPlain, isConsentVersion, adoptLine, LANGUAGE_NOTE } from '../src/lib/policy.ts';
 import { usd, CURRENCY_NOTE } from '../src/lib/impact.ts';
 import { PDFDocument } from 'pdf-lib';
 import { paperWarnings, paperAuditNote, paperWordList, PAPER_KINDS, PAPER_TAIL, STAMP_ZONES, stampNote, COUNTRY_NOTES } from '../src/lib/paperwork.ts';
@@ -43,26 +43,31 @@ const PROMISES = /same legal effect|as valid as|legally binding|is legally valid
 // ---- A. Words that were not true -----------------------------------------------------------------------------------
 
 test('the consent text says what kind of signature this is and never that it equals a handwritten one', () => {
+  // Since wording 2026-11-23 (the owner's decision of 23 November 2026: one short sentence, the rest behind a link)
+  // these sentences are no longer above the tick. They are one tap away under "How electronic signing works", and
+  // every one of them is still said: this test reads them there. tests/consent-short.test.ts has the rest.
   const w = consentWording('Ada Sender', true);
   assert.equal(w.version, CONSENT_VERSION);
-  assert.match(w.legal, /simple electronic signature/);
-  assert.match(w.legal, /rules differ by country and by kind of document/);
-  assert.match(w.legal, /handwritten, witnessed, notarised or qualified signature/);
-  assert.match(w.legal, /GrowSigning does not know which kind this document is/);
-  assert.match(w.legal, /ask Ada Sender or a lawyer before you sign/);
+  const said = consentPlain(w);
+  assert.match(said, /simple electronic signature/);
+  assert.match(said, /rules differ by country and by kind of document/);
+  assert.match(said, /handwritten, witnessed, notarised or qualified signature/);
+  assert.match(said, /GrowSigning does not know which kind this document is/);
+  assert.match(said, /ask Ada Sender or a lawyer before you sign/);
   // Need 16: the parties accept the method between themselves, in so many words.
-  assert.match(w.legal, /you accept this electronic method as a valid way for you and the other parties to sign this document/);
-  assert.match(w.practical, /ask Ada Sender for a paper copy instead/);
-  assert.doesNotMatch(`${w.legal} ${w.practical} ${w.agree}`, PROMISES);
-  // One paragraph each, and no em dash anywhere.
-  assert.doesNotMatch(`${w.legal}${w.practical}`, /\n|\u2014/);
+  assert.match(said, /you accept this electronic method as a valid way for you and the other parties to sign this document/);
+  assert.match(said, /Ask Ada Sender for a paper copy instead/);
+  assert.doesNotMatch(said, PROMISES);
+  // No em dash anywhere, and no line break inside a sentence.
+  assert.doesNotMatch(said, /\n|\u2014/);
 
   // Someone who approves or only reads is not told that they sign, or that they accept a way of signing.
   const reads = consentWording('Ada Sender', false);
-  assert.doesNotMatch(reads.legal, /and sign|your name or mark|you accept this electronic method/);
-  assert.match(reads.legal, /rules differ by country and by kind of document/);
-  assert.match(reads.legal, /ask Ada Sender or a lawyer before you continue/);
-  assert.doesNotMatch(`${reads.legal} ${reads.practical}`, PROMISES);
+  const readsSaid = consentPlain(reads);
+  assert.doesNotMatch(readsSaid, /and sign|your name or mark|you accept this electronic method|to sign this document/);
+  assert.match(readsSaid, /rules differ by country and by kind of document/);
+  assert.match(readsSaid, /ask Ada Sender or a lawyer before you continue/);
+  assert.doesNotMatch(readsSaid, PROMISES);
 
   // A version we never showed is not a version, and asking for its words gives the current ones under their own name.
   assert.equal(isConsentVersion(CONSENT_VERSION), true);

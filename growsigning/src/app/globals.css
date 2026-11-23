@@ -155,10 +155,11 @@ table.t tr.click:hover td { background: #fbfaf6; }
 .field.fill.done { background: rgba(231, 242, 232, 0.55); border-color: var(--green); }
 .field.fill.next { box-shadow: 0 0 0 3px rgba(217, 164, 0, 0.35); }
 .field.fill input, .field.fill select, .field.fill textarea { border: 0; background: transparent; border-radius: 0; padding: 0 0.3em; height: 100%; font-size: inherit; min-height: 0; resize: none; }
-.field.fill img { width: 100%; height: 100%; object-fit: contain; }
+/* A little air left and right, so the first and last letter of a signature never sit on the border of the field. */
+.field.fill img { width: 100%; height: 100%; object-fit: contain; padding: 0 max(4%, 2px); box-sizing: border-box; }
 .field.fill .cta { width: 100%; text-align: center; font-weight: 700; color: #7a5b00; }
 .field.other { border: 0; background: transparent; pointer-events: none; padding: 0 0.3em; }
-.field.other img { width: 100%; height: 100%; object-fit: contain; }
+.field.other img { width: 100%; height: 100%; object-fit: contain; box-sizing: border-box; }
 .field.box { justify-content: center; padding: 0; }
 /* A strike-out: the sender's line through wording printed on the page. One line through the middle, or corner to
    corner when the box covers more than one line. The PDF draws the same shape (strikeLines in src/lib/strike.ts). */

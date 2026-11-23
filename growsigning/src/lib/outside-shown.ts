@@ -3,7 +3,8 @@
 //
 // It keeps every row of outsideServices() (src/lib/outside.ts) and changes only words:
 //  - The time-stamp service is shown whenever it is set up, with or without a seal: finishPdf (src/server/finalpipe.ts)
-//    asks it for a time stamp over the last line of each record at completion either way (src/server/auditstamp.ts).
+//    asks it for a time stamp over the last line of each record at completion either way (src/server/auditstamp.ts),
+//    and, without a seal, for one over the whole completed PDF.
 //    Without a seal its words do not speak of one, and the certificate checks (OCSP, revocation lists) are not
 //    mentioned, because those happen only after a seal (withLongTerm in src/server/ltv.ts).
 //  - Webhooks and the document converter get words a non-technical reader can follow, and the converter says that it
@@ -15,7 +16,7 @@ import { sealSet } from './seal.ts';
 
 type Env = Record<string, string | undefined>;
 
-export const TSA_WITHOUT_SEAL = 'Adds a time stamp from that service over the last line of each document\'s record when everyone has finished. It is sent a fingerprint of that line, never the document.';
+export const TSA_WITHOUT_SEAL = 'Adds a time stamp from that service over each completed PDF and over the last line of each document\'s record when everyone has finished. It is sent fingerprints of those, never the document.';
 export const WEBHOOKS_NAME = 'Messages to an account\'s own systems (webhooks)';
 export const WEBHOOKS_PURPOSE = 'When an admin of an account sets it up, this server tells an address they choose when one of their documents changes. Nothing is sent until an admin adds an address.';
 export const CONVERTER_PURPOSE = 'Turns Word, Excel, PowerPoint and similar files into PDF. It receives the whole file someone uploads. It is usually run by the operator of this server; ask them who runs it and where.';

@@ -580,7 +580,10 @@ test('G: the evidence pack holds the signed PDF, the certificate alone, the trai
   const consent = zip['consent.txt'].toString();
   assert.match(consent, /Sam Signer <pack-signer@disputes\.example>/);
   assert.match(consent, /Wording 2026-11/);
-  assert.match(consent, /I agree to use electronic records and signatures\./);
+  // The sentence of the wording in use since 23 November 2026 (one short sentence, the rest behind a link), and the
+  // rest printed as what could be opened: tests/consent-short.test.ts.
+  assert.match(consent, /"I agree to sign this document electronically\."/);
+  assert.match(consent, /One tap away on the same screen, under the link "How electronic signing works"/);
   const readme = zip['README.txt'].toString();
   for (const f of ['signed.pdf', 'certificate.pdf', 'audit-trail.txt', 'audit-trail.json', 'emails/', 'consent.txt']) assert.ok(readme.includes(f), f);
   assert.match(readme, /no secret key/);

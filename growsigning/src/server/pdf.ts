@@ -224,6 +224,9 @@ export function fieldDisplayValue(f: any, r: any, dateFormat?: string | null, se
   }
 }
 
+/** The smallest the line under a signature is printed, in points. Smaller than this it is a smudge, not words. */
+export const CAPTION_MIN = 3.2;
+
 async function drawField(ctx: Ctx, page: PDFPage, f: any) {
   const m = mapper(page);
   const vx = f.x * m.W, vy = f.y * m.H, vw = f.w * m.W, vh = f.h * m.H;
@@ -235,20 +238,25 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
     if (!f.value || !r) return;
     const img = await image(ctx, f.type === 'signature' ? r.signature_png : r.initials_png || r.signature_png);
     if (!img) return;
-    const caption = f.type === 'signature' && vh >= 30;
+    // A little air left and right, so the first and last letter never sit on the edge of the field or a table line.
+    const inset = Math.min(Math.max(vw * 0.04, 2), vw * 0.2), room = vw - inset * 2;
+    // The small line under a signature stays inside the field as well. In a narrow field (a table cell) the full
+    // words do not fit at a size anyone can read: then the short form is printed, and in a field too narrow even
+    // for that, no line at all (the certificate carries the proof either way).
+    const id = String(r.id).slice(-8);
+    const fit = (t: string) => Math.min(4.5, (4.5 * room) / (ctx.font.widthOfTextAtSize(t, 4.5) + 0.5));
+    let line = `Signed via GrowSigning · ${id}`, size = f.type === 'signature' && vh >= 30 ? fit(line) : 0;
+    if (size && size < CAPTION_MIN) (line = `GrowSigning · ${id}`), (size = fit(line));
+    const caption = size >= CAPTION_MIN;
     const availH = caption ? vh - 7 : vh;
     // The whole picture, as large as fits, in the middle of the field: never cropped and never past an edge. The
     // picture itself holds all of the ink with clear space around it (src/lib/sigmark.ts).
-    const s = Math.min(vw / img.width, availH / img.height);
+    const s = Math.min(room / img.width, availH / img.height);
     const w = img.width * s, h = img.height * s;
     const p = m.pt(vx + (vw - w) / 2, vy + (availH + h) / 2);
     page.drawImage(img, { x: p.x, y: p.y, width: w, height: h, rotate: m.rotate });
     if (caption) {
-      // The small line under the signature stays inside the field as well: in a narrow field (a table cell) it is
-      // printed in smaller letters instead of running into the next cell.
-      const line = `Signed via GrowSigning · ${String(r.id).slice(-8)}`;
-      const size = Math.min(4.5, (4.5 * vw) / (ctx.font.widthOfTextAtSize(line, 4.5) + 0.5));
-      const c = m.pt(vx, vy + vh - 1);
+      const c = m.pt(vx + inset, vy + vh - 1);
       page.drawText(line, { x: c.x, y: c.y, size, font: ctx.font, color: GREEN, rotate: m.rotate });
     }
     return;

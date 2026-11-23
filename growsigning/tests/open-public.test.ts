@@ -643,7 +643,10 @@ test('22. the wording version reads day first where a person sees it, and stays 
   assert.match(read('src/app/help/outside.tsx'), /This is the wording of \{versionText\(w\.version\)\}, the one in use now/);
   assert.match(read('src/server/pdf.ts'), /readableWording\(payLineForPrint\(a\.action, a\.detail\)\)/);
   assert.match(read('src/components/sender/History.tsx'), /readableWording\(removedInWords\(l\.detail, dayText\)\)/);
-  assert.equal(CONSENT_VERSION, '2026-11-21');
+  // The wording in use moved to 2026-11-23 (one sentence, the rest behind a link: tests/consent-short.test.ts), and reads the same way.
+  assert.equal(CONSENT_VERSION, '2026-11-23');
+  assert.equal(versionText(CONSENT_VERSION), '23 Nov 2026');
+  assert.equal(readableWording(`Sam. ${consentAuditNote(CONSENT_VERSION)}`), 'Sam. Wording of 23 Nov 2026, in English (en), as printed on the help page under "What do I agree to before I sign?".');
 });
 
 test('22. on a signed PDF the consent line names the wording day first, never as 2026-11-21', { skip: !havePoppler && 'pdftotext is not installed' }, async () => {

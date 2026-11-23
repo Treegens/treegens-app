@@ -14,7 +14,11 @@ export const SIG_PAD = 6;
 export const TYPED_MAX_W = 860;
 /** The letter size a typed signature starts from, and the smallest a long name is shrunk to. */
 export const TYPED_SIZE = 104;
-export const TYPED_MIN_SIZE = 24;
+export const TYPED_MIN_SIZE = 10;
+/** A name with spaces whose ink at full size is wider than this is written on two lines, so it is not a flat strip. */
+export const TYPED_WRAP_OVER = 1200;
+/** The distance between the two lines of such a name, as a share of the letter size. */
+export const TYPED_LINE = 1.05;
 /** The colour of signature ink: a dark blue, as from a pen. */
 export const TYPED_INK = '#10243a';
 // Pixels fainter than this are not ink (the soft outermost edge of a letter).
@@ -56,12 +60,88 @@ export function trimInk(src: HTMLCanvasElement, doc: Document = document): strin
   return b ? crop(src, b, doc) : null;
 }
 
+/**
+ * True when a signature picture looks cut off: its ink ends in a straight wall of solid pixels at the left, right,
+ * top or bottom of the ink, as when a letter ran off the canvas it was drawn on. Typed signatures made before the
+ * ink was measured (see the top of this file) are like that, and so is a line drawn past the edge of the pad. Ink
+ * that ends by itself fades out over its last pixel, so it has no such wall. A photo, with no see-through part at
+ * all, is never called cut: its edges are the edges of the photo.
+ */
+export function looksCut(d: ArrayLike<number>, w: number, h: number): boolean {
+  const b = inkBox(d, w, h);
+  if (!b) return false;
+  const solid = (x: number, y: number) => d[(y * w + x) * 4 + 3] >= 250;
+  let inked = 0;
+  for (let i = 3; i < w * h * 4; i += 4) if (d[i] > FAINT) inked++;
+  if (inked > w * h * 0.6) return false;
+  const wall = (n: number, at: (i: number) => boolean) => {
+    for (let i = 0, run = 0; i < n; i++) {
+      run = at(i) ? run + 1 : 0;
+      if (run >= 3) return true;
+    }
+    return false;
+  };
+  return wall(h, (y) => solid(b.x0, y)) || wall(h, (y) => solid(b.x1, y)) || wall(w, (x) => solid(x, b.y0)) || wall(w, (x) => solid(x, b.y1));
+}
+
+/** looksCut for a picture given as a data URL or address. False when it cannot be read. */
+export async function pictureLooksCut(src: string, doc: Document = document): Promise<boolean> {
+  try {
+    const img = doc.createElement('img');
+    img.src = src;
+    await img.decode();
+    const c = doc.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    if (!c.width || !c.height) return false;
+    const x = c.getContext('2d', { willReadFrequently: true })!;
+    x.drawImage(img, 0, 0);
+    return looksCut(x.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A long name on two lines: the space to break at, chosen so the two lines are as near the same width as can be.
+ * `widthOf` measures a piece of text. One line when the name is not wider than `over`, or has no space in it.
+ */
+export function twoLines(text: string, widthOf: (t: string) => number, over: number = TYPED_WRAP_OVER): string[] {
+  if (widthOf(text) <= over) return [text];
+  let best: string[] = [text], bestW = Infinity;
+  for (const m of text.matchAll(/\s+/g)) {
+    const a = text.slice(0, m.index), b = text.slice(m.index! + m[0].length);
+    if (!a || !b) continue;
+    const wide = Math.max(widthOf(a), widthOf(b));
+    if (wide < bestW) (bestW = wide), (best = [a, b]);
+  }
+  return best;
+}
+
+/**
+ * Makes the words of a button or label smaller until they fit between its padding, down to `min` pixels, so a long
+ * name is shown whole instead of ending in "…". Call it again when the words or the width change.
+ */
+export function fitLabel(el: HTMLElement, min = 12, doc: Document = document): void {
+  el.style.fontSize = '';
+  const s = getComputedStyle(el), size = parseFloat(s.fontSize);
+  const ruler = doc.createElement('canvas').getContext('2d')!;
+  ruler.font = `${size}px ${s.fontFamily}`;
+  const m = ruler.measureText(el.textContent || '');
+  // Tails included, and a little air so the last letter does not sit on the "…" limit.
+  const need = Math.max(m.width, (m.actualBoundingBoxLeft || 0) + (m.actualBoundingBoxRight || 0)) + 2;
+  // The padding is set in em, so it gets smaller with the letters: count it per pixel of letter size.
+  const pad = (parseFloat(s.paddingLeft) + parseFloat(s.paddingRight)) / size, room = el.clientWidth;
+  if (need + pad * size <= room) return;
+  el.style.fontSize = `${Math.max(min, Math.floor((room / (need / size + pad)) * 10) / 10)}px`;
+}
+
 const RTL_FIRST = /^[^\p{L}]*[֐-ࣿיִ-﷿ﹰ-﻿]/u;
 
 /**
  * A typed name or typed initials as a picture, in the font family given (a CSS font-family list). The font must be
  * loaded before this is called. All of the ink is in the picture, with SIG_PAD clear pixels around it. Null when
- * the text leaves no ink (only spaces).
+ * the text leaves no ink (only spaces). A very long name with spaces in it is written on two lines.
  */
 export function typedMark(text: string, family: string, doc: Document = document): string | null {
   // A name whose first letter is Arabic or Hebrew is laid out as right-to-left text, so a number or a Latin word in
@@ -74,10 +154,9 @@ export function typedMark(text: string, family: string, doc: Document = document
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
   };
-  // The real ink around the point the text is drawn from: how far it reaches left, right, up and down.
-  const ink = (size: number) => {
-    set(probe, size);
-    const m = probe.measureText(text);
+  // The real ink of one line around the point it is drawn from: how far it reaches left, right, up and down.
+  const inkOfLine = (line: string, size: number) => {
+    const m = probe.measureText(line);
     // A browser without ink measures gets the plain width and a generous guess. The edge check below covers the rest.
     const left = Number.isFinite(m.actualBoundingBoxLeft) ? m.actualBoundingBoxLeft : 0;
     const right = Number.isFinite(m.actualBoundingBoxRight) ? m.actualBoundingBoxRight : m.width;
@@ -86,6 +165,26 @@ export function typedMark(text: string, family: string, doc: Document = document
     // The ink can start right of the origin (left is then negative) or end before the advance: never count less
     // than the text's own box, so the canvas is always at least as large as what the browser lays out.
     return { left: Math.max(left, 0), right: Math.max(right, m.width, 1), up: Math.max(up, 1), down: Math.max(down, 0) };
+  };
+  set(probe, TYPED_SIZE);
+  const inkWidth = (t: string) => {
+    const b = inkOfLine(t, TYPED_SIZE);
+    return b.left + b.right;
+  };
+  // Two lines only for left-to-right names: they start at the same left edge.
+  const lines = direction === 'ltr' ? twoLines(text, inkWidth) : [text];
+  // The ink of all the lines together, around the point the first line is drawn from.
+  const ink = (size: number) => {
+    set(probe, size);
+    const box = { left: 0, right: 1, up: 1, down: 0 };
+    lines.forEach((line, i) => {
+      const b = inkOfLine(line, size), dy = i * size * TYPED_LINE;
+      box.left = Math.max(box.left, b.left);
+      box.right = Math.max(box.right, b.right);
+      box.up = Math.max(box.up, b.up - dy);
+      box.down = Math.max(box.down, b.down + dy);
+    });
+    return box;
   };
   let size = TYPED_SIZE;
   let box = ink(size);
@@ -96,17 +195,30 @@ export function typedMark(text: string, family: string, doc: Document = document
   }
   // Room to spare on every side. If ink still reaches an edge (a font whose measures are off), draw again with more.
   let room = Math.ceil(size * 0.25) + SIG_PAD;
-  for (let attempt = 0; attempt < 4; attempt++, room *= 3) {
+  // A straight letter that lands exactly on a line of pixels would read as a cut edge (looksCut): then the text is
+  // drawn again a part of a pixel further in, where its edge fades out as ink does.
+  let nudge = 0;
+  for (let attempt = 0; attempt < 6; attempt++) {
     const c = doc.createElement('canvas');
     c.width = Math.ceil(box.left + box.right) + room * 2;
     c.height = Math.ceil(box.up + box.down) + room * 2;
-    const ctx = c.getContext('2d')!;
+    const ctx = c.getContext('2d', { willReadFrequently: true })!;
     set(ctx, size);
     ctx.fillStyle = TYPED_INK;
-    ctx.fillText(text, room + box.left, room + box.up);
-    const b = boxOf(c);
+    lines.forEach((line, i) => ctx.fillText(line, room + box.left + nudge, room + box.up + nudge + i * size * TYPED_LINE));
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    const b = inkBox(d, c.width, c.height);
     if (!b) return null;
-    if (!touchesEdge(b, c.width, c.height) || attempt === 3) return crop(c, b, doc);
+    const last = attempt === 5;
+    if (touchesEdge(b, c.width, c.height) && !last) {
+      room *= 3;
+      continue;
+    }
+    if (looksCut(d, c.width, c.height) && !last) {
+      nudge += 0.37;
+      continue;
+    }
+    return crop(c, b, doc);
   }
   return null;
 }

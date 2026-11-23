@@ -261,7 +261,8 @@ test('legal texts: in the person\'s language only once a person checked it, else
   assert.equal(w.note, '');
   assert.deepEqual(consentWording('Ada Sender', true), { ...w }, 'the same as asking without a language');
   // What an audit line recorded is read back in that language, even one that is not held: English then.
-  assert.equal(consentWordingAsRecorded('Ada Sender', true, CONSENT_VERSION, 'en').legal, w.legal);
+  assert.deepEqual(consentWordingAsRecorded('Ada Sender', true, CONSENT_VERSION, 'en'), w);
+  assert.ok(w.agree && w.details.length, 'and it has words: the sentence, and what its link opens');
   assert.equal(consentWordingAsRecorded('Ada Sender', true, CONSENT_VERSION, 'xx').language, 'en');
 });
 
@@ -598,9 +599,12 @@ test('the evidence pack reads the wording and the language from the end of the a
   const text = unzipped(zip)['consent.txt'].toString();
   assert.ok(text.includes(`. Wording ${CONSENT_VERSION}, in English (en):`), text.slice(0, 600));
   const { consentWording } = await import('../src/lib/policy.ts');
-  const shownThen = consentWording('Ada Sender', true, CONSENT_VERSION).legal, older = consentWording('Ada Sender', true, '2026-11').legal;
-  assert.notEqual(shownThen, older, 'the two versions say different things, or this test proves nothing');
-  assert.ok(text.includes(shownThen), 'the words their screen showed');
+  // Since wording 2026-11-23 the screen shows one sentence and the rest is behind a link: the pack prints both.
+  const now = consentWording('Ada Sender', true, CONSENT_VERSION);
+  const shownThen = now.agree, older = consentWording('Ada Sender', true, '2026-11').legal;
+  assert.ok(shownThen && older && shownThen !== older, 'the two versions say different things, or this test proves nothing');
+  assert.ok(text.includes(`"${shownThen}"`), 'the words their screen showed');
+  for (const d of now.details) for (const l of d.lines) assert.ok(text.includes(l), l);
   assert.ok(!text.includes(older), 'the older wording is not printed for someone who never saw it');
   assert.equal(text.split('----').length, 2, 'one entry');
   assert.doesNotMatch(text, new RegExp(`Wording ${UNVERSIONED_CONSENT}`));

@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
 import { PrintButton } from '../processing/PrintButton';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE, CERTIFICATE_PAGE_VERSION } from '@/lib/evidence';
-import { sealSet, timeStampSet, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS } from '@/lib/seal';
+import { sealSet, timeStampSet, cscSettings, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS, SEAL_CLOUD } from '@/lib/seal';
 
 export const metadata = { title: 'How to read a GrowSigning signing record', description: 'Every line of the signing record at the end of a document completed with GrowSigning (its pages are headed Certificate of Completion): where the software takes it from, what it shows and what it does not. Dated, for a lawyer to attach.' };
 
@@ -94,7 +94,7 @@ export default function HowToReadACertificate() {
             server whose operator has set a seal key: without one no certificate has the line, and nothing here speaks of it. */}
         {sealSet() && <>
           <h2 id="seal">Digital seal</h2>
-          <Line label="Digital seal" from="Printed only on the certificate of a signed PDF that carries the seal: the name on the certificate the seal was made with, who issued that certificate, and where the time in the seal comes from (this server's clock, or a time stamp from a time-stamp service, and whether that service's certificate was checked). The seal is added to the file right after the certificate is drawn, as an invisible signature over every byte of it. A certificate handed out on its own, as certificate.pdf in an evidence pack, is cut out of the signed PDF and carries no seal itself: the line speaks of the signed PDF." shows={<>{SEAL_TRUTH} {SEAL_TIME}</>} not={<>Who stood behind each signature, or that a signature is valid in law. {SEAL_TRUST} {SEAL_LIMITS}</>} />
+          <Line label="Digital seal" from="Printed only on the certificate of a signed PDF that carries the seal: the name on the certificate the seal was made with, who issued that certificate, and where the time in the seal comes from (this server's clock, or a time stamp from a time-stamp service, and whether that service's certificate was checked). The seal is added to the file right after the certificate is drawn, as an invisible signature over every byte of it. A certificate handed out on its own, as certificate.pdf in an evidence pack, is cut out of the signed PDF and carries no seal itself: the line speaks of the signed PDF." shows={<>{SEAL_TRUTH} {cscSettings().complete && <>{SEAL_CLOUD} </>}{SEAL_TIME}</>} not={<>Who stood behind each signature, or that a signature is valid in law. {SEAL_TRUST} {SEAL_LIMITS}</>} />
         </>}
 
         <h2>On the pages of the documents</h2>

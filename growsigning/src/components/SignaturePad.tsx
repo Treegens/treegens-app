@@ -1,17 +1,54 @@
 'use client';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Dialog } from './sign/Dialog';
 import { adoptLine } from '@/lib/policy';
 import { handwritingWrites } from '@/lib/scripts';
 import { drawnProblem, inkShare, pictureProblem, onePen, twoFingers, PEN_WIDTH } from '@/lib/ink';
 import { DRAWING_IS } from '@/lib/fieldkinds';
 import { waysLimited, type SignWay } from '@/lib/switches';
-import { trimInk, typedMark, TYPED_INK, TYPED_SIZE } from '@/lib/sigmark';
+import { fitLabel, pictureLooksCut, trimInk, typedMark, TYPED_INK, TYPED_SIZE } from '@/lib/sigmark';
 
 const STYLES = ['Sig Dancing', 'Sig Caveat', 'Sig Vibes', 'Sig Sacramento'];
 // The handwriting fonts have Latin letters only. A name with none of them is typed in the device's own plain font:
 // one style, said as such, instead of four buttons that would all show the same picture.
 const PLAIN = 'system-ui, sans-serif';
+// The style the person chose last, so their initials open in the same handwriting as their signature (and the other
+// way round) without another tap. Kept for this visit only: in memory, and in the tab's own storage across a reload.
+const STYLE_KEY = 'gs-sig-style';
+let lastStyle = '';
+function rememberedStyle(): string {
+  if (!lastStyle) {
+    try {
+      lastStyle = sessionStorage.getItem(STYLE_KEY) || '';
+    } catch {}
+  }
+  return STYLES.includes(lastStyle) ? lastStyle : STYLES[0];
+}
+function rememberStyle(f: string) {
+  lastStyle = f;
+  try {
+    sessionStorage.setItem(STYLE_KEY, f);
+  } catch {}
+}
+// A name longer than this gets one style to a row, so all of it can be read before it is chosen.
+const LONG_NAME = 22;
+
+/**
+ * True when a saved signature picture looks cut off at an edge (looksCut in src/lib/sigmark.ts): one typed before
+ * the letters were measured lost the tail of a "j" there. Such a picture is not offered as the first choice.
+ */
+export function useLooksCut(image?: string | null): boolean {
+  const [cut, setCut] = useState(false);
+  useEffect(() => {
+    let on = true;
+    setCut(false);
+    if (image) pictureLooksCut(image).then((c) => on && setCut(c));
+    return () => {
+      on = false;
+    };
+  }, [image]);
+  return cut;
+}
 const INK = TYPED_INK;
 // The server stores signatures up to 700,000 characters. Stay well inside that.
 const MAX_CHARS = 600_000;
@@ -90,10 +127,31 @@ export function AdoptSignature({ kind: asked, name, saved: savedIn, onDone, onCl
   const initials = name.split(/\s+/).filter(Boolean).map((p) => p[0]).join('').slice(0, 4).toUpperCase();
   // Typed as the two marks adoptLine knows: "drawing" is only ever put into sentences, and a drawing has no adoptLine.
   const word = (drawing ? 'drawing' : kind === 'signature' ? 'signature' : 'initials') as 'signature' | 'initials';
-  const TABS: [Tab, string][] = drawing ? [['draw', 'Draw']] : saved ? [['saved', 'Saved'], ...make] : make;
+  // A saved picture that looks cut off at an edge is not the first choice: the dialog opens on making a fresh one,
+  // says why in one line, and keeps the saved one as the last tab for the person who wants it as it is.
+  const cut = useLooksCut(saved?.image) && !!make.length;
+  const TABS: [Tab, string][] = drawing ? [['draw', 'Draw']] : saved ? (cut ? [...make, ['saved', 'Saved']] : [['saved', 'Saved'], ...make]) : make;
   const [tab, setTab] = useState<Tab>(drawing ? 'draw' : saved ? 'saved' : make[0]?.[0] || 'type');
+  const touched = useRef(false);
+  useEffect(() => {
+    if (cut && !touched.current) setTab(make[0][0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cut]);
   const [text, setText] = useState(kind === 'signature' ? name : initials);
-  const [font, setFont] = useState(STYLES[0]);
+  const [font, setFont] = useState(rememberedStyle);
+  const styles = useRef<HTMLDivElement>(null);
+  // A long name is shown whole in each style, in smaller letters, instead of ending in "…".
+  useLayoutEffect(() => {
+    const fit = () => styles.current?.querySelectorAll<HTMLElement>('.sigstyle').forEach((b) => fitLabel(b));
+    fit();
+    let on = true;
+    document.fonts?.ready.then(() => on && fit()).catch(() => {});
+    window.addEventListener('resize', fit);
+    return () => {
+      on = false;
+      window.removeEventListener('resize', fit);
+    };
+  }, [text, tab]);
   const [error, setError] = useState('');
   const [inked, setInked] = useState(false);
   const [photo, setPhoto] = useState('');
@@ -216,6 +274,7 @@ export function AdoptSignature({ kind: asked, name, saved: savedIn, onDone, onCl
       await document.fonts?.load(`${TYPED_SIZE}px '${font}'`, text).catch(() => {});
       image = typedMark(text.trim(), handwritingWrites(text) ? `'${font}', cursive` : PLAIN);
       if (!image) return setError('Type at least one letter or number, then try again.');
+      if (handwritingWrites(text)) rememberStyle(font);
     } else if (tab === 'draw') {
       // A tap or a speck is not a signature: refused in words before it goes on the page (src/lib/ink.ts). A drawing
       // may be anything the person draws.
@@ -257,6 +316,7 @@ export function AdoptSignature({ kind: asked, name, saved: savedIn, onDone, onCl
     const next = e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i + n - 1) % n : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1;
     if (next < 0) return;
     e.preventDefault();
+    touched.current = true;
     setTab(TABS[next][0]);
     setError('');
     document.getElementById(`${ids}-${TABS[next][0]}`)?.focus();
@@ -267,10 +327,11 @@ export function AdoptSignature({ kind: asked, name, saved: savedIn, onDone, onCl
       {/* One way only (Settings, Sending): no row of tabs with a single tab in it, the box itself. */}
       {(drawing || TABS.length > 1) && <div className="tabs sg-sigtabs" role="tablist" aria-label={`How to make your ${word}`} onKeyDown={tabKey}>
         {TABS.map(([t, label]) => (
-          <button key={t} type="button" role="tab" id={`${ids}-${t}`} aria-selected={tab === t} aria-controls={`${ids}-panel`} tabIndex={tab === t ? 0 : -1} className={tab === t ? 'on' : ''} onClick={() => (setTab(t), setError(''))}>{label}</button>
+          <button key={t} type="button" role="tab" id={`${ids}-${t}`} aria-selected={tab === t} aria-controls={`${ids}-panel`} tabIndex={tab === t ? 0 : -1} className={tab === t ? 'on' : ''} onClick={() => ((touched.current = true), setTab(t), setError(''))}>{label}</button>
         ))}
       </div>}
       <div {...(drawing || TABS.length > 1 ? { role: 'tabpanel', 'aria-labelledby': `${ids}-${tab}` } : {})} id={`${ids}-panel`}>
+        {cut && <p className="notice warn small sg-sigcut" role="status">Your saved {word} {kind === 'signature' ? 'was' : 'were'} cut off at the edge. {tab === 'saved' ? 'Type, Draw or Upload makes a whole one.' : `Here is a fresh one: choose ${sign} to use it.`}</p>}
         {tab === 'saved' && saved && (
           <div>
             <div className="sg-sigpreview"><img src={saved.image} alt={`Your saved ${word}`} /></div>
@@ -286,7 +347,7 @@ export function AdoptSignature({ kind: asked, name, saved: savedIn, onDone, onCl
           <div className="stack">
             <label className="f"><span>{kind === 'signature' ? 'Full name' : 'Initials'}</span><input dir="auto" value={text} onChange={(e) => setText(e.target.value)} maxLength={60} autoComplete="off" /></label>
             {handwritingWrites(text) ? (
-              <div className="grid g2 sg-sigstyles" role="group" aria-label="Choose a style">
+              <div ref={styles} className={`grid g2 sg-sigstyles${text.trim().length > LONG_NAME ? ' long' : ''}`} role="group" aria-label="Choose a style">
                 {STYLES.map((f, i) => (
                   <button key={f} type="button" className={`sigstyle${font === f ? ' on' : ''}`} style={{ fontFamily: `'${f}', cursive` }} onClick={() => setFont(f)} aria-pressed={font === f} aria-label={`Style ${i + 1}: ${text || 'Your name'}`}>
                     {text || 'Your name'}

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, useLoad, fmtDate, oops, toast, Modal, Leaf } from '@/components/ui';
 import { useMe } from '@/components/AppShell';
-import { AdoptSignature } from '@/components/SignaturePad';
+import { AdoptSignature, useLooksCut } from '@/components/SignaturePad';
 import { PRICING, mangrovesFor } from '@/lib/impact';
 // Plain constants only: the rest of policy.ts reads the environment and is for the server.
 import { CLOSE_GRACE_DAYS, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
@@ -79,6 +79,14 @@ const longDate = (s?: string | null) => (s ? new Date(s).toLocaleDateString(scre
 const utcDate = (s?: string | null) => (s ? `${new Date(s).toLocaleDateString(screenLocale(), { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}, UTC` : '');
 const longMoment = (s?: string | null) => (s ? `${longDate(s)} at ${new Date(s).toLocaleTimeString(screenLocale(), { hour: 'numeric', minute: '2-digit' })}` : '');
 
+// A saved signature that was cut off at an edge when it was made (useLooksCut in SignaturePad.tsx): said here, with
+// the one thing to do about it.
+function CutNote({ image, word }: { image?: string | null; word: 'signature' | 'initials' }) {
+  const cut = useLooksCut(image);
+  if (!cut) return null;
+  return <p className="notice warn small" role="status" style={{ margin: '8px 0 0' }}>{word === 'signature' ? 'This signature looks' : 'These initials look'} cut off at the edge. Choose Change {word} to make {word === 'signature' ? 'it' : 'them'} again, whole.</p>;
+}
+
 function Profile() {
   const me = useMe();
   const [f, setF] = useState({ name: me.user.name, title: me.user.title || '', company: me.user.company || '' });
@@ -110,6 +118,7 @@ function Profile() {
             return (
               <div key={k} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 12 }}>
                 <div style={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{img ? <img src={img} alt={`Your ${k}`} style={{ maxHeight: 76, maxWidth: '100%' }} /> : <span className="muted small">No {k} saved</span>}</div>
+                <CutNote image={img} word={k} />
                 <div className="row" style={{ justifyContent: 'center', marginTop: 8 }}>
                   <button className="btn sm" onClick={() => setAdopt(k)}>{img ? 'Change' : 'Create'} {k}</button>
                   {img && <button className="btn sm ghost danger" onClick={() => save({ [`${k}_png`]: '' }, 'Removed')}>Remove</button>}

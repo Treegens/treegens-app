@@ -54,7 +54,19 @@ export function sealCertificateLine(o: { name: string; issuer: string; level: Se
 export const SEAL_TRUTH = 'A PDF completed while a seal is set up carries a digital seal: a standard PDF signature made with the certificate of whoever runs this server, invisible on the pages. A PDF reader that checks signatures can then show, without asking us, whether the file has changed since it was sealed, and which certificate sealed it. If the seal certificate cannot be used at that moment (it has expired, for example), the file is made without a seal: its certificate of completion then says nothing about one, and its history says "Not sealed". It is a seal of the server, not a signature of the people who signed: it does not show who stood behind each signature, and their signatures stay electronic signatures with the audit trail. We do not claim it is an advanced or a qualified seal.';
 
 /** Why Acrobat may say "validity unknown", for the security pages. */
-export const SEAL_TRUST = 'Acrobat shows such a seal as valid only when the certificate comes from an authority on the Adobe Approved Trust List or on an EU trusted list. Getting such a certificate is a purchase the operator of the server makes. With any other certificate Acrobat says the validity is unknown: that means it cannot tell whose certificate it is, not that the file was changed, and it still shows whether the file changed after the seal.';
+export const SEAL_TRUST = 'Acrobat shows such a seal as valid only when the certificate comes from an authority on the Adobe Approved Trust List or on an EU trusted list. Getting such a certificate is a purchase the operator of the server makes. With one, Acrobat\'s signature bar reads "Signed and all signatures are valid". With any other certificate Acrobat says the validity is unknown: that means it cannot tell whose certificate it is, not that the file was changed, and it still shows whether the file changed after the seal.';
+
+/**
+ * How the seal is made when the operator uses a cloud signing service (SEAL_CSC_*, src/server/sealcsc.ts), for the
+ * security pages: said only on a server set up that way.
+ */
+export const SEAL_CLOUD = 'On this server the seal is made by a cloud signing service of SSL.com (eSigner), which keeps the private key of the seal certificate in its own hardware. For each completed PDF this server sends that service only a fingerprint (a SHA-256 hash) of what the seal signs, never the document, and puts the signature it gets back into the file after checking it. When the service does not answer within a few seconds, the file is made without a seal, as when a certificate cannot be used.';
+
+/**
+ * A completed PDF without a seal, on a server with a time-stamp service (finishPdf, src/server/finalpipe.ts), for the
+ * security pages. No words about a seal: it is not one.
+ */
+export const TIME_STAMP_ONLY = 'With a time-stamp service set up, every completed PDF also gets a time stamp from that service over the whole file. A PDF reader shows it as a document time stamp: when the file existed in this form, by that service\'s clock, and whether it changed after. It does not say who made the file. When the service does not answer within a few seconds, the file goes out without it and its history says so.';
 
 /** The time in the seal, with and without a time-stamp service. */
 export const SEAL_TIME = 'The time in the seal is our server\'s clock. With a time-stamp service set up, the seal also carries a time stamp from that service, taken only when it is over this seal and within five minutes of our clock. We call it a trusted time stamp only when the operator has also given the server the certificates that service must lead to; otherwise nobody here checked whose service answered. When no service answers within a few seconds, the file is sealed without a time stamp and stays that way; the certificate of completion says which it was.';

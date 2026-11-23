@@ -588,7 +588,7 @@ test('the system prompt is built from policy.ts, the help topics and README, so 
   assert.ok(p.includes(usd(PRICING.monthlyUsd)) && p.includes(`${PRICING.monthlySignatures} signatures`) && p.includes(`${PRICING.welcomeSignatures} signatures free`));
   for (const x of [...policy.KEPT_AFTER_DELETION, ...policy.DELETED_WITH_ACCOUNT]) assert.ok(p.includes(x), x.slice(0, 50));
   for (const w of policy.WHO_CAN_SEE) assert.ok(p.includes(`${w.who} ${w.what}`), w.who);
-  for (const x of [policy.NO_BAA_TEXT, policy.LANGUAGE_NOTE, policy.consentWording('the sender', true).legal, policy.BULK_COST_NOTE]) assert.ok(p.includes(x), x.slice(0, 50));
+  for (const x of [policy.NO_BAA_TEXT, policy.LANGUAGE_NOTE, policy.consentPlain(policy.consentWording('the sender', true)), policy.BULK_COST_NOTE]) assert.ok(p.includes(x), x.slice(0, 50));
   assert.ok(p.includes(`${policy.CLOSE_GRACE_DAYS} days to undo it`));
   // A setting changes the prompt the moment it changes, like the pages.
   const was = process.env.REFUND_DAYS;

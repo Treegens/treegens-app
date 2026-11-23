@@ -134,8 +134,14 @@ test('the consent screen: the sender once, 120 words or fewer before the tick, t
   // copy can be downloaded and that each step is recorded). The whole screen was measured in a browser the way
   // tests/ux/flows.cjs counts it: 114 words before the tick with a four-word subject and no message, 116 with the
   // sender's message behind "Read the message" (tests/out/repair-simplify-signing/probe.log).
+  // Since wording 2026-11-23 our own words above the tick are none: one sentence next to the tick, of 10 words at
+  // most, and a link of 4 (consent lane, 23 November 2026; measured in a browser: 19 words before the tick where
+  // there were 114). The 100-word rule is kept for the wording it was written for, which people agreed to.
   for (const signs of [true, false]) {
-    const w = consentWording('Rosa Gardener', signs);
+    const now = consentWording('Rosa Gardener', signs);
+    assert.equal(`${now.legal}${now.practical}`, '');
+    assert.ok(words(now.agree) <= 10 && words(now.more) <= 5, now.agree);
+    const w = consentWording('Rosa Gardener', signs, '2026-11-21');
     assert.ok(words(`${w.legal} ${w.practical}`) <= 100, `${words(`${w.legal} ${w.practical}`)} words`);
     // No sentence of more than 21 words (the one about accepting the method is 21, and its words are pinned by
     // tests/gaps-nonus-words.test.ts, so it stays).
@@ -335,19 +341,21 @@ test('Help on a signer\'s screen opens with one line, names no model, and "Talk 
 // ---- 6. After the skeptic and the simplicity review (repair-simplify-signing) ------------------------------------------
 
 test('wording 2026-11-21 says again what 2026-11-20 dropped, and tells nobody they can decline who has no Decline', () => {
-  assert.equal(CONSENT_VERSION, '2026-11-21');
+  // 2026-11-21 is no longer the wording in use (2026-11-23 is: one sentence, the rest behind a link). It is kept for
+  // the people who agreed to it, so what it says is still pinned here, by its own name.
+  assert.equal(CONSENT_VERSION, '2026-11-23');
   // The version rule: every wording ever shown is still there to be read back, newest first.
-  assert.deepEqual(CONSENT_HISTORY.map((h) => h.version), ['2026-11-21', '2026-11-20', '2026-11']);
-  for (const v of ['2026-11-21', '2026-11-20', '2026-11']) assert.equal(isConsentVersion(v), true, v);
+  assert.deepEqual(CONSENT_HISTORY.map((h) => h.version), ['2026-11-23', '2026-11-21', '2026-11-20', '2026-11']);
+  for (const v of ['2026-11-23', '2026-11-21', '2026-11-20', '2026-11']) assert.equal(isConsentVersion(v), true, v);
   const old = consentWording('Rosa Gardener', true, '2026-11-20');
   assert.equal(old.practical, 'You can decline, or ask Rosa Gardener for a paper copy instead.', 'what people agreed to on that day is kept word for word');
-  const w = consentWording('Rosa Gardener', true);
+  const w = consentWording('Rosa Gardener', true, '2026-11-21');
   // The two disclosures: how the person gets and keeps a copy, and that each step is recorded.
   assert.match(w.practical, /^You can download a copy now or later, /);
   assert.match(w.legal, /We record the time, your IP address and each step\./);
   assert.match(w.practical, /decline, or ask Rosa Gardener for a paper copy instead\.$/);
   // Someone asked to read or to approve: the same two, and no "You can decline" (a reader has no Decline to press).
-  const r = consentWording('Rosa Gardener', false);
+  const r = consentWording('Rosa Gardener', false, '2026-11-21');
   assert.match(r.practical, /^You can download a copy now or later\./);
   assert.match(r.legal, /We record the time, your IP address and each step\./);
   assert.doesNotMatch(`${r.legal} ${r.practical}`, /decline/i);

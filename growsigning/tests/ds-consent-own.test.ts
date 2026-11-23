@@ -546,8 +546,9 @@ test('screens: "Sign on paper instead" only with the account\'s text and only fo
   assert.match(page, /own: data\.own_terms\?\.id/);
   assert.match(page, /!me\.consented \|\| \(data\.own_terms\?\.each_visit && !agreedHere\) \? 'consent'/);
   assert.match(page, /e\?\.code === 'terms'/);
-  // Under our sentence, not in place of it.
-  assert.match(page, /<p className="muted sg-legal">\{wording\.practical\}<\/p>\s*<\/div>\s*\{\/\*[^*]*\*\/\}\s*\{data\.own_terms && <OwnTermsBlock key=\{data\.own_terms\.id\}/);
+  // Under our own words, not in place of them. Since wording 2026-11-23 ours are one sentence next to the tick and the
+  // link "How electronic signing works" (consent lane, 23 November 2026): the account's text sits right under that link.
+  assert.match(page, /<ConsentDetails wording=\{wording\} \/>\s*<\/div>\s*\{\/\*[^*]*\*\/\}\s*\{data\.own_terms && <OwnTermsBlock key=\{data\.own_terms\.id\}/);
   assert.match(page, /me\.asked_paper \? t\(data\.language\?\.locale, 'sign\.paper\.closed_title'\)/);
 
   // The fold: measured against the 120 words, with the line "Read <Org>'s terms" when it does not fit.
