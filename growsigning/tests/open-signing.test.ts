@@ -258,7 +258,9 @@ test('a time-stamp service that did not answer is left alone for ten minutes, so
     // A service that answers with an error made nobody wait, so it is asked every time.
     await assert.rejects(timeStamp(sig, ['https://error.test/ts']), /error\.test: it answered HTTP 503/);
     await assert.rejects(timeStamp(sig, ['https://error.test/ts']), /error\.test: it answered HTTP 503/);
-    assert.equal(calls.filter((u) => u.includes('error.test')).length, 2);
+    // Each of the two signers asked it, and each asked once more a quarter of a second later (TSA_RETRY_STATUS in
+    // tsa.ts, held by tests/seal-spec.test.ts 3b): two tries each, never a third, and no rest in between.
+    assert.equal(calls.filter((u) => u.includes('error.test')).length, 4);
     // Another service in the list is still asked while the first one rests.
     await assert.rejects(timeStamp(sig, ['https://hangs.test/ts', 'https://error.test/ts']), /hangs\.test: not asked.*; error\.test: it answered HTTP 503/);
     // After the rest it is asked again (the clock is moved, not waited for).
@@ -314,7 +316,8 @@ test('signers who finish at the same moment while a time-stamp service hangs wai
   globalThis.fetch = (async () => (asked++, await new Promise((r) => setTimeout(r, 50)), new Response('no', { status: 500 }))) as any;
   try {
     const all = await Promise.all([1, 2, 3].map(() => timeStamp(crypto.randomBytes(32), ['https://slowok.test/ts']).catch((e) => e.message)));
-    assert.equal(asked, 3);
+    // Three signers, and each asks once more after HTTP 500 (the retry in tsa.ts): two tries each, nobody skipped.
+    assert.equal(asked, 6);
     for (const m of all) assert.match(m, /slowok\.test: it answered HTTP 500/);
   } finally {
     globalThis.fetch = realFetch;

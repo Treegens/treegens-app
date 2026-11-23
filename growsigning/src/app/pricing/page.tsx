@@ -63,7 +63,6 @@ export default function Pricing() {
               <ul>
                 <li><b>{sigs(P.welcomeSignatures)} free</b> to try the product, {treesFor(P.welcomeSignatures)} trees planted</li>
                 <li>No card needed</li>
-                {referralOfferOn(process.env) && <li><b>Invite a friend:</b> you both get {sigs(referralRulesFrom(process.env).signatures)} extra free once someone signs the first document your friend sends. <Link href="/help#invite">The rules</Link></li>}
                 <li>Signing is free for everyone you send to</li>
               </ul>
               <Link href="/signup" className="btn">Start free</Link>
@@ -100,6 +99,8 @@ export default function Pricing() {
             <ul>
               <li><b>Only real signatures are used up.</b> Sending holds one signature for each person who has to sign, so nobody is stopped halfway. It is used when that person signs. If the document is cancelled, declined or left to expire, the ones held for people who had not signed yet come back, unless their own date has passed by then.</li>
               <li><b>What is always free.</b> Signing your own documents. Approvers, viewers and people who get a copy. Corrections, reminders and more time. And signing, for everyone you send to.</li>
+              {/* Kept out of the plan card, which has three lines. It is here, one press away, when the offer is on. */}
+              {referralOfferOn(process.env) && <li id="invite"><b>Invite a friend:</b> you both get {sigs(referralRulesFrom(process.env).signatures)} extra free once someone signs the first document your friend sends. <Link href="/help#invite">The rules</Link>.</li>}
               <li id="expiry"><b>When signatures expire.</b> {expiryShortText()} <Link href="/help#expiry">How signatures expire</Link>.</li>
               <li><b>Month to month.</b> {P.planName} is {usd(P.monthlyUsd)} a month for the whole team. No yearly contract, no notice period, no per-person fees. Before each renewal we email you the exact amount and the date, with a link that stops it.</li>
               <li><b>No surprise price rises.</b> If the monthly price ever goes up, you are told by email at least {PRICE_NOTICE_DAYS} days before your first renewal at the new price, and a renewal that charges more without that notice refunds the difference by itself.</li>

@@ -16,6 +16,8 @@
 // When no service gave a time stamp, those that failed at once in a way that passes (no connection, or HTTP 429, 500,
 // 502, 503, 504) are asked once more a quarter of a second later, inside the same 4 seconds; a time-stamp request can
 // be repeated freely. A second service that answers well is used first, so nobody waits for a retry that is not needed.
+// The second try never makes a signer wait twice: a service that timed out is not asked again (it rests), a resting
+// service is not asked at all, and both tries at one service end within the 3 seconds one try at it always had.
 // Only with TSA_TRUST does anything call the time stamp "trusted": without it nobody checked whose service answered.
 // TSA_USER and TSA_PASSWORD are only ever sent to https addresses; with them set, a plain http address is not asked.
 import fs from 'node:fs';
@@ -175,6 +177,9 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls(), until = Dat
   const trust = trustCerts();
   const user = process.env.TSA_USER;
   const again = new Set<string>();
+  /** When this call first asked each service: its second try ends within the same TSA_TIMEOUT_MS, counted from then. */
+  const firstAsked = new Map<string, number>();
+  const own = (url: string) => (firstAsked.get(url) ?? Date.now()) + TSA_TIMEOUT_MS - Date.now();
   for (let second = false; ; second = true) {
     const round = second ? urls.filter((u) => again.has(u)) : urls;
     again.clear();
@@ -206,7 +211,10 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls(), until = Dat
         failures.set(url, `${host}: not asked, because a request sent to it ${Math.round((Date.now() - first) / 1000)} seconds ago has had no answer`);
         continue;
       }
-      const wait = Math.min(TSA_TIMEOUT_MS, left, shared);
+      // A second try has what is left of the 3 seconds its first try started. With too little left, the first
+      // try's failure stands as it was said.
+      if (second && own(url) < 500) continue;
+      const wait = Math.min(TSA_TIMEOUT_MS, left, shared, own(url));
       const nonce = crypto.randomBytes(8);
       nonce[0] &= 0x7f;
       // The user name and password go out with the request, so never over a connection anyone on the way can read.
@@ -215,6 +223,7 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls(), until = Dat
         continue;
       }
       const sent = { at: Date.now() };
+      if (!second) firstAsked.set(url, sent.at);
       out.add(sent);
       asking.set(url, out);
       try {
@@ -253,6 +262,7 @@ export async function timeStamp(signature: Buffer, urls = tsaUrls(), until = Dat
     // No service gave a time stamp. Those that failed at once in a way that passes (no connection, or "busy") are
     // asked once more after a short pause, inside the same seconds. A service that answered well is never asked twice,
     // and neither is one that timed out (it rests) or whose answer did not check out.
+    for (const u of [...again]) if (own(u) < TSA_RETRY_PAUSE_MS + 500) again.delete(u);
     if (second || !again.size || until - Date.now() < TSA_RETRY_PAUSE_MS + 500) break;
     await new Promise((r) => setTimeout(r, TSA_RETRY_PAUSE_MS));
   }

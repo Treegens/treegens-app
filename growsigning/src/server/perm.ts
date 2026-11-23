@@ -77,6 +77,9 @@ const NEEDS: Record<Need, string[]> = {
     'GET /me/delegate', 'PUT /me/delegate', 'DELETE /me/delegate',
     // Sharing one's own documents with a colleague (routes-shares.ts): their own, whatever their role.
     'GET /me/shares', 'POST /me/shares', 'DELETE /me/shares/:id', 'GET /me/sends-for',
+    // Invite a friend (routes-referrals.ts). The card with the account's invite link and its counts is for everyone
+    // in the account, like the plan page it sits on. The record of who invited whom checks for an operator itself.
+    'GET /referrals', 'GET /operator/referrals',
   ],
   by_kind: [
     'GET /envelopes', 'POST /envelopes', 'DELETE /envelopes/:id', 'GET /envelopes/:id', 'PATCH /envelopes/:id', 'PUT /envelopes/:id',
