@@ -93,31 +93,40 @@ export function sealAttributes(digest: Buffer, cert: CertInfo): Buffer[] {
  * Signs: `digest` is SHA-256 of the bytes the seal covers. `unsigned` is asked for the unsigned attributes once the
  * signature value is known (the time-stamp token over it, for B-T). Returns the DER of the ContentInfo.
  */
-export async function buildSignedData(digest: Buffer, signer: SealSigner, unsigned?: (signature: Buffer) => Promise<Buffer[]>): Promise<{ der: Buffer; signature: Buffer }> {
+/**
+ * `bare` is the same SignedData without any unsigned attribute, built from the same signature value: a seal whose time
+ * stamp could not be got or does not fit is kept without it, and the signer (a paid cloud signing, sealcsc.ts) is not
+ * asked to sign again.
+ */
+export async function buildSignedData(digest: Buffer, signer: SealSigner, unsigned?: (signature: Buffer) => Promise<Buffer[]>): Promise<{ der: Buffer; signature: Buffer; bare: () => Buffer }> {
   const chain = signer.chain();
   const cert = readCert(chain[0]);
   const attrs = sealAttributes(digest, cert);
   // The signature is over the DER of the attributes as a SET OF (RFC 5652 section 5.4), sorted.
   const toSign = setOf(...attrs);
   const signature = await signer.sign(crypto.createHash('sha256').update(toSign).digest(), toSign);
+  const assemble = (extra: Buffer[]) => {
+    const signerInfo = seq(
+      integer(1),
+      seq(cert.issuerDer, integer(cert.serialBytes)),
+      algorithm(OID.sha256, null),
+      tagged(0, content(read(toSign))), // [0] IMPLICIT SET OF Attribute: the same members, the same order
+      signatureAlgorithm(signer.scheme),
+      octets(signature),
+      ...(extra.length ? [tagged(1, Buffer.concat([...extra].sort(Buffer.compare)))] : []),
+    );
+    const signedData = seq(
+      integer(1),
+      setOf(algorithm(OID.sha256, null)),
+      seq(oid(OID.data)),
+      tagged(0, Buffer.concat(chain)),
+      setOf(signerInfo),
+    );
+    return seq(oid(OID.signedData), tagged(0, signedData));
+  };
+  const bare = () => assemble([]);
   const extra = unsigned ? await unsigned(signature) : [];
-  const signerInfo = seq(
-    integer(1),
-    seq(cert.issuerDer, integer(cert.serialBytes)),
-    algorithm(OID.sha256, null),
-    tagged(0, content(read(toSign))), // [0] IMPLICIT SET OF Attribute: the same members, the same order
-    signatureAlgorithm(signer.scheme),
-    octets(signature),
-    ...(extra.length ? [tagged(1, Buffer.concat([...extra].sort(Buffer.compare)))] : []),
-  );
-  const signedData = seq(
-    integer(1),
-    setOf(algorithm(OID.sha256, null)),
-    seq(oid(OID.data)),
-    tagged(0, Buffer.concat(chain)),
-    setOf(signerInfo),
-  );
-  return { der: seq(oid(OID.signedData), tagged(0, signedData)), signature };
+  return { der: assemble(extra), signature, bare };
 }
 
 export const signatureTimeStampAttribute = (token: Buffer) => attribute(OID.signatureTimeStamp, token);

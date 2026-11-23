@@ -382,6 +382,10 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     if (rid && !seen.has(rid))
       throw bad(f.recipient_id ? `${which}, a ${f.type} field, is for the recipient "${str(f.recipient_id, 60)}", who is not on this envelope. Use the id of one of its recipients, or add that person. Nothing was saved.`
         : `${which}, a ${f.type} field, has no recipient_id. Every field except a note and a strike-out belongs to one recipient. Nothing was saved.`);
+    // The mix-up this guards against: a note is the sender's own words. One sent for a person and with no words is a
+    // blank they were meant to type in, and it would be shown to nobody, so it is said here and never dropped quietly.
+    if (f.type === 'note' && f.recipient_id && !String(f.value ?? '').trim())
+      throw bad(`${which}, a note, was sent for the recipient "${str(f.recipient_id, 60)}" and with no words. A note is your own text, printed on the page: nobody types in it, and an empty one is shown to nobody. For a blank this person types in, use the type "text". For your own words, put them in "value" and leave "recipient_id" out. Nothing was saved.`);
     const fid = fldId(f.id);
     if (placed.has(fid)) throw bad(`${which} has the same id "${str(f.id, 60)}" as field ${placed.get(fid)}. Give every field an id of its own, or leave the ids out. Nothing was saved.`);
     placed.set(fid, i + 1);
@@ -1814,7 +1818,24 @@ export function finalPdf(e: any): Buffer | null {
 }
 
 // Builds and stores the signed copy of a completed envelope if it does not have one yet. True when it has one.
+// One build at a time for each envelope in this process: the 15-minute timer (finalsDue) can pick an envelope whose
+// completion is still building its file (a seal and its time stamps take seconds). It then waits for that build
+// instead of making the file a second time, which would also mean a second, paid signing with a cloud seal.
+const building: Map<string, Promise<boolean>> = ((globalThis as any).__sgBuildFinal ??= new Map());
+
 export async function buildFinal(envelopeId: string): Promise<boolean> {
+  const already = building.get(envelopeId);
+  if (already) return already;
+  const job = buildFinalOnce(envelopeId);
+  building.set(envelopeId, job);
+  try {
+    return await job;
+  } finally {
+    building.delete(envelopeId);
+  }
+}
+
+async function buildFinalOnce(envelopeId: string): Promise<boolean> {
   const e = loadEnvelope(envelopeId);
   if (!e || e.status !== 'completed') return false;
   // Each person shown only some of the files gets a completed copy of their own as well (visibility.ts). One that

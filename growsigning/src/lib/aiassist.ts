@@ -12,7 +12,7 @@
 /** The field kinds a suggestion may be. Anything else the model answers is dropped. */
 export const SUGGEST_TYPES = ['signature', 'initials', 'date_signed', 'full_name', 'text', 'checkbox'] as const;
 export type SuggestType = (typeof SUGGEST_TYPES)[number];
-export const SUGGEST_WORDS: Record<SuggestType, string> = { signature: 'Signature', initials: 'Initials', date_signed: 'Date signed', full_name: 'Name', text: 'Text', checkbox: 'Checkbox' };
+export const SUGGEST_WORDS: Record<SuggestType, string> = { signature: 'Signature', initials: 'Initials', date_signed: 'Date signed', full_name: 'Name', text: 'Fill in', checkbox: 'Checkbox' };
 
 /** At most this many pages are sent in one ask, and this many characters of their text in all. */
 export const SUGGEST_PAGES_MAX = 10;

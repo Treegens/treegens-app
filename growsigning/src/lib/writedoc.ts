@@ -67,7 +67,7 @@ function tagsWith(text: string, order: Map<number, number>): Tag[] {
 }
 /** The tags in a text, in order. `signer` counts from 1, the people in the order of the numbers the tags give. */
 export const tagsIn = (text: string): Tag[] => tagsWith(text, signerOrder(text));
-const FIELD_WORD: Record<string, string> = { signature: 'Signature', initials: 'Initials', date_signed: 'Date signed', full_name: 'Name', email: 'Email', title: 'Title', company: 'Company', checkbox: 'Tick box', text: 'Text' };
+const FIELD_WORD: Record<string, string> = { signature: 'Signature', initials: 'Initials', date_signed: 'Date signed', full_name: 'Name', email: 'Email', title: 'Title', company: 'Company', checkbox: 'Tick box', text: 'Fill in' };
 /** What a tag is called on its chip in the preview: "Signature, Person 2", the word step 2 uses for the same row. */
 export const tagChip = (t: Pick<Tag, 'type' | 'signer' | 'label'>) => `${t.label || FIELD_WORD[t.type] || 'Field'}, Person ${t.signer}`;
 /** How many people sign or fill in. */

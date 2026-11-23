@@ -25,7 +25,7 @@ import { stampChainHead, saveChainStamp, type ChainStamp } from './auditstamp.ts
 import { cscReady } from './sealcsc.ts';
 import { tsaUrls, TsaError } from './tsa.ts';
 import { addDocTimeStamp } from './ltv.ts';
-import { inArchiveFormat, archiveStored } from './pdfa.ts';
+import { inArchiveFormat, archiveStored, discarded } from './pdfa.ts';
 
 type Render = (e: any) => Promise<Uint8Array>;
 /** `stamped`: a file without a seal that got a document time stamp over the whole file; `stampFailed`: why it did not. */
@@ -42,28 +42,33 @@ const chains = new WeakMap<Uint8Array, ChainStamp>();
 export async function finishPdf(e: any, render: Render): Promise<Uint8Array> {
   const until = Date.now() + TSA_TOTAL_MS;
   const chain = await stampChainHead(e.id, until);
+  // What the record's time stamp left of the seconds for time-stamps. The seal's own time stamp gets that much from
+  // the moment its signature value is there (seal.ts), so rendering and a slow cloud signing do not use it up.
+  const left = Math.max(0, until - Date.now());
   // The archive format (pdfa.ts) wraps the seal: PDF/A first, then the seal, then veraPDF checks the finished file.
-  const pdf = await inArchiveFormat(chain ? { ...e, chain_stamp: chain } : e, render, (x, r) => finishSealed(x, r, until));
+  const pdf = await inArchiveFormat(chain ? { ...e, chain_stamp: chain } : e, render, (x, r) => finishSealed(x, r, until, left));
   if (chain) chains.set(pdf, chain);
   return pdf;
 }
 
-async function finishSealed(e: any, render: Render, until: number): Promise<Uint8Array> {
+async function finishSealed(e: any, render: Render, until: number, left: number): Promise<Uint8Array> {
   // A cloud seal (sealcsc.ts): its certificate chain is fetched first when it is not there or more than a day old.
   await cscReady();
   const plan = sealPlan();
-  if (plan) plan.until = until;
+  if (plan) Object.assign(plan, { until, tsaMs: left });
   // A seal key that is set but refused (expired, for example): the file as before, and the record says so. Without
   // any seal settings, the file as before. With a time-stamp service, either one still gets a time stamp over it.
   if (!plan) return sealConfigured() ? stampOnly(await render(e), { unsealed: 'refused' }) : stampOnly(await render(e), null);
   try {
-    const r = await sealPdf(await render({ ...e, seal_plan: plan }), plan);
+    const page = await render({ ...e, seal_plan: plan });
+    if (discarded.has(page)) return page;
+    const r = await sealPdf(page, plan);
     return longTerm(r, plan);
   } catch (err) {
     if (err instanceof TimeStampMissing) {
       const bb = sealPlan(err.message);
       if (bb) {
-        bb.until = until;
+        Object.assign(bb, { until, tsaMs: left });
         try {
           const r = await sealPdf(await render({ ...e, seal_plan: bb }), bb);
           return keep(r.bytes, { done: r.done });
@@ -78,8 +83,16 @@ async function finishSealed(e: any, render: Render, until: number): Promise<Uint
 
 async function unsealed(e: any, render: Render, err: any): Promise<Uint8Array> {
   const why = String(err?.message || err).slice(0, 300);
-  tellOperators(`A completed PDF could not be sealed, so it was made without a seal (envelope ${e.id}): ${why}`);
+  // The operators are told once per reason, not once per document: during an outage of a signing service every
+  // completed PDF fails the same way. Which documents it was goes to the log only.
+  console.error(`[seal] envelope ${e.id} was completed without a seal: ${why}`);
+  tellOperators(`A completed PDF could not be sealed, so it was made without a seal: ${why}`, `unsealed\n${alertReason(why)}`);
   return stampOnly(await render(e), { unsealed: 'failed' });
+}
+
+/** The reason without the parts that differ from one document to the next (seconds, counts), so one alert covers them. */
+export function alertReason(why: string): string {
+  return why.replace(/\d+(\.\d+)?/g, 'N');
 }
 
 /**
@@ -89,7 +102,7 @@ async function unsealed(e: any, render: Render, err: any): Promise<Uint8Array> {
  * within its seconds, the file goes out without it and the record says why.
  */
 async function stampOnly(pdf: Uint8Array, o: Outcome | null): Promise<Uint8Array> {
-  if (!tsaUrls().length) return o ? keep(pdf, o) : pdf;
+  if (!tsaUrls().length || discarded.has(pdf)) return o ? keep(pdf, o) : pdf;
   try {
     const d = await addDocTimeStamp(Buffer.from(pdf), tsaUrls());
     return keep(d.bytes, { ...o, stamped: { host: d.host, time: d.time, tsaName: d.tsaName, trusted: d.trusted } });

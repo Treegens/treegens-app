@@ -1,11 +1,11 @@
 'use client';
-import { YOUR_TEXT_NAME, FILL_IN_NAME, OLD_NOTE_WORD, isEmptyNote, isLeftoverNote, unwrittenNotes } from '@/lib/fieldkinds';
+import { YOUR_TEXT_NAME, OLD_NOTE_WORD, LET_THEM_TYPE, SIGNER_ROLES_TYPING, isEmptyNote, isLeftoverNote, unwrittenNotes, asFillIn } from '@/lib/fieldkinds';
 import { plural, type Ed } from './shared';
 
-// The last look before sending: boxes of the sender's own text ("Your text") that hold no words, or still hold only
-// the word an older draft started them with. An empty box is never shown to anyone who signs and never printed, so
-// this warns and does not block. Each one is listed with a button that opens it in step 2 with the cursor in its
-// words, and one that takes it off.
+// The last look before sending: "Your text" boxes that hold no words, or still hold only the word an older draft
+// started them with. An empty box is never shown to anyone who signs and never printed, so this is one short line
+// that warns and does not block. Each box has three buttons: write its words (step 2 opens with the cursor in them),
+// let the person who signs type there instead (the same box, in the same place, becomes a "Fill in" field), or remove it.
 const SHOWN = 12;
 
 export function NoteCheck({ ed }: { ed: Ed }) {
@@ -14,21 +14,31 @@ export function NoteCheck({ ed }: { ed: Ed }) {
   const list = unwrittenNotes(ed.fields.value).filter((f) => (ed.wording ? isLeftoverNote(f) : !ed.isLockedField(f)));
   if (!list.length) return null;
   const empty = list.filter(isEmptyNote).length, left = list.length - empty;
+  // Who types when a box is turned into a blank: the first person who signs and has not finished. Step 2 opens on the
+  // field right away, where "Assigned to" changes it.
+  const typer = ed.rcps.find((r) => SIGNER_ROLES_TYPING.includes(r.role) && !ed.isIdle(r) && r.status !== 'completed');
   const where = (f: any) => {
     const d = ed.docs.find((x) => x.id === f.document_id);
     return `Page ${f.page + 1}${ed.docs.length > 1 && d ? ` of ${d.name || 'a document'}` : ''}`;
   };
+  const letThemType = (f: any) => {
+    ed.setFields((l) => l.map((x) => (x.id === f.id ? asFillIn(x, typer.id) : x)));
+    ed.showField(f.id);
+  };
   return (
-    <section className="notice warn" aria-labelledby="ed-noteempty-h" data-check="your-text">
-      <b id="ed-noteempty-h">{empty ? `${plural(empty, 'box', 'boxes')} of your own text ${empty === 1 ? 'is' : 'are'} empty.` : `${plural(left, 'box', 'boxes')} of your own text ${left === 1 ? 'says' : 'say'} only \u201c${OLD_NOTE_WORD}\u201d.`}</b>{' '}
-      {empty > 0 && <>An empty box is left off the document: nobody who signs sees it, and it is not printed. </>}
-      {left > 0 && <>A box that says only &ldquo;{OLD_NOTE_WORD}&rdquo; is printed with that word. </>}
-      {ed.wording ? <>The wording is locked, so to change it ask {ed.wording.ask}.</> : <>&ldquo;{YOUR_TEXT_NAME}&rdquo; is for words you type yourself. If the person who signs should type here, remove it and add a &ldquo;{FILL_IN_NAME}&rdquo; field in step 2.</>}
+    <section className="notice warn ed-notecheck" aria-labelledby="ed-noteempty-h" data-check="your-text">
+      <b id="ed-noteempty-h">
+        {empty > 0 && `${plural(empty, `empty “${YOUR_TEXT_NAME}” box`, `empty “${YOUR_TEXT_NAME}” boxes`)} will be left off the document.`}
+        {empty > 0 && left > 0 && ' '}
+        {left > 0 && `${plural(left, `“${YOUR_TEXT_NAME}” box says`, `“${YOUR_TEXT_NAME}” boxes say`)} only “${OLD_NOTE_WORD}” and will be printed like that.`}
+      </b>
+      {ed.wording && <> The wording is locked, so to change it ask {ed.wording.ask}.</>}
       <ul className="ed-nolabel">
         {list.slice(0, SHOWN).map((f) => (
           <li key={f.id}>
-            <span>{where(f)}: {isEmptyNote(f) ? 'empty' : `says only “${OLD_NOTE_WORD}”`}</span>
+            <span>{where(f)}{isEmptyNote(f) ? '' : `: says only “${OLD_NOTE_WORD}”`}</span>
             {!ed.wording && <button type="button" className="btn sm" onClick={() => ed.showField(f.id)} aria-label={`Write your text on ${where(f).toLowerCase()}`}>Write it</button>}
+            {!ed.wording && typer && <button type="button" className="btn sm" data-act="let-them-type" onClick={() => letThemType(f)} aria-label={`${LET_THEM_TYPE}, on ${where(f).toLowerCase()}`}>{LET_THEM_TYPE}</button>}
             {!ed.wording && <button type="button" className="btn sm" onClick={() => ed.setFields((l) => l.filter((x) => x.id !== f.id))} aria-label={`Remove the box on ${where(f).toLowerCase()}`}>Remove</button>}
           </li>
         ))}

@@ -8,8 +8,10 @@ import type { KeptForPerson } from '../../lib/tplroles';
 export const TYPES: [string, string, number, number][] = [
   ['signature', 'Signature', 0.22, 0.055], ['initials', 'Initials', 0.08, 0.045], ['date_signed', 'Date signed', 0.14, 0.026], ['full_name', 'Name', 0.2, 0.026],
   ['email', 'Email', 0.24, 0.026], ['company', 'Company', 0.2, 0.026], ['title', 'Title', 0.2, 0.026], ['text', 'Fill in', 0.22, 0.026],
+  // "Your text" comes straight after "Fill in" in the full list, so the two that get mixed up are read side by side.
+  ['note', 'Your text', 0.25, 0.026],
   ['number', 'Number', 0.12, 0.026], ['date', 'Date', 0.14, 0.026], ['checkbox', 'Checkbox', 0.024, 0], ['radio', 'Radio', 0.024, 0],
-  ['dropdown', 'Dropdown', 0.2, 0.026], ['attachment', 'Attachment', 0.2, 0.03], ['note', 'Your text', 0.25, 0.026],
+  ['dropdown', 'Dropdown', 0.2, 0.026], ['attachment', 'Attachment', 0.2, 0.03],
   // The sender's line through wording printed on the page (src/lib/strike.ts). Like a note, it belongs to nobody.
   ['strike', 'Strike out', 0.3, 0.02],
   // A company stamp or seal (src/server/stamps.ts). It starts at 40 mm across: see add() in StepFields.tsx.

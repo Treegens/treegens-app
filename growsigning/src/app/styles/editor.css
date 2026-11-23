@@ -230,3 +230,8 @@ label.check.ed-tap > input[type='checkbox'] { width: 20px; height: 20px; }
 .ed-kind-says { margin: -4px 0 12px; }
 .field.edit.ed-empty { border-style: dashed; }
 .field.edit.ed-empty .tag i { font-weight: 500; opacity: 0.75; }
+/* The short warning about "Your text" boxes at step 3: on a phone its three buttons share one row. */
+.ed-notecheck .ed-nolabel li > span { flex: 1 1 100%; }
+.ed-notecheck .ed-nolabel li { justify-content: flex-start; }
+.ed-letthem { margin: -4px 0 12px; }
+.ed-letthem .linklike { min-height: 24px; }

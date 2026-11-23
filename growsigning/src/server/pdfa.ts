@@ -528,6 +528,12 @@ export async function idle() {
 const running = new Map<string, Promise<Uint8Array>>();
 
 /**
+ * A render that is thrown away (it could not be made PDF/A, so the run is made again as a normal file). finishSealed
+ * (finalpipe.ts) neither seals nor time-stamps it: with a cloud seal each seal is a paid signing.
+ */
+export const discarded = new WeakSet<Uint8Array>();
+
+/**
  * Runs `finish` (the seal and what follows it) over the envelope, in the archive format when the account asked for
  * it. With the switch off or no checker: `finish(e, render)` exactly.
  */
@@ -559,7 +565,8 @@ async function archiveRun(e: any, plan: ArchivePlan, render: Render, finish: Fin
       return await toPdfA(b, x.subject);
     } catch (err) {
       broke = err;
-      return b; // never stored: the run is made again below as a normal file
+      discarded.add(b); // never stored: the run is made again below as a normal file, so it is not sealed (finalpipe.ts)
+      return b;
     }
   };
   const made = await finish({ ...e, pdfa_plan: plan }, asPdfA);

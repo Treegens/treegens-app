@@ -24,7 +24,7 @@ import { NameChoice, DateFrom, FieldLookMore, SavedPalette, kindTitle, onlyDateS
 import { AnyoneOption, SharedChoice, assignedValue, assignPatch, assignIds, canvasWho, offersAnyone, useDropShared, SHARED_COLOR } from './SharedChoice';
 import { paletteKinds, personLabel } from '@/lib/editorux';
 // "Fill in" (they type) and "Your text" (you type): the names, the one-line hints and the empty box (src/lib/fieldkinds.ts).
-import { KIND_HINT, KIND_SAYS, YOUR_TEXT_EMPTY, isEmptyNote, fillInTag } from '@/lib/fieldkinds';
+import { KIND_HINT, KIND_SAYS, YOUR_TEXT_EMPTY, LET_THEM_TYPE, isEmptyNote, fillInTag, emailTag, asFillIn } from '@/lib/fieldkinds';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
@@ -43,6 +43,9 @@ export function StepFields({ ed }: { ed: Ed }) {
   const [finding, setFinding] = useState('');
   const [note, setNote] = useState<{ text: string; count: number } | null>(null); // what the last search found
   const [sheet, setSheet] = useState(false);
+  // "Tap" on a touch screen, "Click" with a mouse: known only once the page is in the browser.
+  const [press, setPress] = useState('Click');
+  useEffect(() => setPress(window.matchMedia('(pointer: coarse)').matches ? 'Tap' : 'Click'), []);
   // "More fields": every kind beyond the six most documents need. And the selected field's More options.
   const [allTypes, setAllTypes] = useState(false);
   const [fieldMore, setFieldMore] = useState(false);
@@ -187,6 +190,30 @@ export function StepFields({ ed }: { ed: Ed }) {
     // Your own text is typed at once: the settings open (on a phone they slide up) with the cursor in the box.
     if (type === 'note') (setSheet(true), (typeIn.current = f.id));
     if (fromKeyboard) reveal.current = { id: f.id, focus: type !== 'note' };
+  }
+
+  // An empty "Your text" box that is clicked or tapped later: its settings open with the cursor in its words, as when it was dropped.
+  function writeIn(id: string) {
+    setSel(id);
+    setSheet(true);
+    typeIn.current = id;
+    setTimeout(() => typeIn.current === id && ((typeIn.current = null), document.getElementById('ed-note-text')?.focus({ preventScroll: true })), 80);
+  }
+  // "Your text" dropped where the person who signs was meant to type: the same box becomes a blank for the selected person,
+  // in the same place, with the cursor in its label.
+  function letThemType(f: any) {
+    if (!active) return toast('Add a signer in step 1 first, then they can type here.', true);
+    setFields((l) => l.map((x) => (x.id === f.id ? asFillIn(x, active) : x)));
+    setSheet(true);
+    setTimeout(() => document.getElementById('ed-label')?.focus({ preventScroll: true }), 80);
+  }
+  // On a phone the settings stay closed after a drop. For a blank without a label the button says what is still to do,
+  // and opens them with the cursor in the label.
+  const needsLabel = (f: any) => f?.type === 'text' && !f.readonly && !String(f.label || '').trim();
+  function toggleSheet() {
+    const opening = !sheet;
+    setSheet(opening);
+    if (opening && needsLabel(selected)) setTimeout(() => document.getElementById('ed-label')?.focus({ preventScroll: true }), 120);
   }
 
   function place(doc: any, page: number, x: number, y: number) {
@@ -539,7 +566,7 @@ export function StepFields({ ed }: { ed: Ed }) {
         <p className="small ed-status" role="status">{finding ? `${finding}…` : note && note.count === list.length ? note.text : ''}</p>
         {suggest.panel}
         <p className="muted small ed-hint">
-          {ed.wording ? `The wording is locked, so the fields stay as the template has them. Select a field to see it, and to fill in one the template left empty for you. To change the fields, ask ${ed.wording.ask}.` : tool === 'text' ? 'Click on the page where they should type.' : tool === 'note' ? 'Click on the page where your words should go.' : tool ? `Click on the page to place the ${TLABEL[tool].toLowerCase()} field.` : 'Drag a field onto the page, or pick one and click where it goes.'}
+          {ed.wording ? `The wording is locked, so the fields stay as the template has them. Select a field to see it, and to fill in one the template left empty for you. To change the fields, ask ${ed.wording.ask}.` : tool === 'text' ? `${press} on the page where they should type.` : tool === 'note' ? `${press} on the page where your words should go.` : tool ? `${press} on the page to place the ${TLABEL[tool].toLowerCase()} field.` : `Drag a field onto the page, or pick one and ${press.toLowerCase()} where it goes.`}
           {!ed.wording && !tool && <span className="ed-hide-sm"> Drag to move, pull the corner to resize.</span>}
         </p>
       </div>
@@ -574,8 +601,8 @@ export function StepFields({ ed }: { ed: Ed }) {
                           <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${f.type === 'stamp' ? ' stamp' : ''}${strikeClass(f)}${locked ? ' locked' : ''}${isEmptyNote(f) ? ' ed-empty' : ''}`}
                             style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, ['--fc' as any]: f.shared && offersAnyone(f, open) ? SHARED_COLOR : color(f.recipient_id), borderRadius: f.type === 'radio' ? '50%' : undefined }}
                             tabIndex={0} role="button" aria-label={`${kindTitle(f, list, true)} field${canvasWho(f, open, owner ? ` for ${label(owner)}` : senderStamp(f) ? ', your own stamp' : '')}, page ${page + 1}${locked ? ', locked' : ''}`}
-                            onClick={(e) => e.stopPropagation()} onFocus={() => setSel(f.id)} onPointerDown={(e) => drag(e, f, 'move')}>
-                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? (isEmptyNote(f) ? <i>{YOUR_TEXT_EMPTY}</i> : f.value) : f.type === 'text' ? fillInTag(f, owner && !f.shared ? label(owner) : null) : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || kindTitle(f, list)}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
+                            onClick={(e) => (e.stopPropagation(), isEmptyNote(f) && !locked && writeIn(f.id))} onFocus={() => setSel(f.id)} onPointerDown={(e) => drag(e, f, 'move')}>
+                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? (isEmptyNote(f) ? <i>{YOUR_TEXT_EMPTY}</i> : f.value) : f.type === 'text' ? fillInTag(f, owner && !f.shared ? label(owner) : null) : f.type === 'email' ? emailTag(f, owner ? label(owner) : null) : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || kindTitle(f, list)}{!!f.required && f.type !== 'note' && f.type !== 'email' && <span className="req">*</span>}</span>}
                             {sel === f.id && !locked && <span className="grip" onPointerDown={(e) => drag(e, f, 'resize')} />}
                           </div>
                         );
@@ -617,8 +644,8 @@ export function StepFields({ ed }: { ed: Ed }) {
         ) : (
           <div>
             <div className="ed-sheetbar">
-              <span className="truncate"><span className="dot" style={{ background: color(selected.recipient_id) }} /> <b>{kindTitle(selected, list, true)}</b>{selLocked && <> <Lock /></>}</span>
-              {!selLocked && <button type="button" className="btn sm" onClick={() => setSheet(!sheet)} aria-expanded={sheet}>{sheet ? 'Hide settings' : 'Settings'}</button>}
+              <span className="truncate"><span className="dot" style={{ background: color(selected.recipient_id) }} /> <b>{selected.type === 'text' ? fillInTag(selected, !selected.shared && rcps.some((r) => r.id === selected.recipient_id) ? label(rcps.find((r) => r.id === selected.recipient_id)) : null) : kindTitle(selected, list, true)}</b>{selLocked && <> <Lock /></>}</span>
+              {!selLocked && <button type="button" className="btn sm" onClick={toggleSheet} aria-expanded={sheet}>{sheet ? 'Hide settings' : needsLabel(selected) ? 'Add a label' : 'Settings'}</button>}
               {!selLocked && <button type="button" className="btn sm danger" onClick={() => remove(selected.id)}>Delete</button>}
               <button type="button" className="btn sm ghost" onClick={() => (setSel(null), setSheet(false))}>Done</button>
             </div>
@@ -652,13 +679,15 @@ export function StepFields({ ed }: { ed: Ed }) {
                 {!SENDER_MARK(selected.type) && !senderStamp(selected) && !['date_signed', 'full_name', 'email', 'approve', 'decline'].includes(selected.type) && selected.formula == null && !selected.date_from && !selected.shared && (
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
                 )}
-                {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">{selected.type === 'text' ? '(the hint they see in the blank, and hear from a screen reader)' : '(shown to the signer, and read out by a screen reader)'}</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} placeholder={selected.type === 'text' ? 'For example: Email for notices' : undefined} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
+                {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">{selected.type === 'text' ? '(the hint they see in the blank)' : '(shown to the signer, and read out by a screen reader)'}</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} placeholder={selected.type === 'text' ? 'For example: Email for notices' : undefined} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
                 {/* Which name a name field holds, and what a date from another date counts from (FieldLook.tsx). */}
                 <NameChoice field={selected} patch={(p) => patchField(selected.id, p)} />
                 <DateFrom field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />
                 <ButtonWordsNote field={selected} people={rcps} />
                 {/* What your own text says is the whole of it, so it stays in view. Everything else that is rarely needed is under More options. */}
-                {selected.type === 'note' && <label className="f"><span>Your words <span className="hint">(printed on the page as you type them)</span></span><textarea id="ed-note-text" style={{ minHeight: 60 }} placeholder={YOUR_TEXT_EMPTY} aria-describedby="ed-kind-says" value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>}
+                {selected.type === 'note' && <label className="f"><span>Your words</span><textarea id="ed-note-text" style={{ minHeight: 60 }} placeholder={YOUR_TEXT_EMPTY} aria-describedby="ed-kind-says" value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>}
+                {/* The mix-up put right in one step: the same box, in the same place, becomes a blank for the selected person. */}
+                {selected.type === 'note' && !!active && <p className="small ed-letthem">Should they type here instead? <button type="button" className="linklike" id="ed-let-them" onClick={() => letThemType(selected)}>{LET_THEM_TYPE}</button></p>}
                 {selected.type === 'dropdown' && <label className="f"><span>Options <span className="hint">(one per line)</span></span><textarea value={(selected.options || []).join('\n')} onChange={(e) => patchField(selected.id, { options: e.target.value.split('\n') })} onBlur={(e) => patchField(selected.id, { options: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} /></label>}
                 {selected.type === 'radio' && <label className="f"><span>Group <span className="hint">(one choice per group)</span></span><input value={selected.group_name || ''} onChange={(e) => patchField(selected.id, { group_name: e.target.value })} /></label>}
                 <button type="button" className="btn sm ed-fieldmore" data-more="item" aria-expanded={fieldMore} aria-controls="ed-field-more" onClick={() => setFieldMore(!fieldMore)}>More options</button>

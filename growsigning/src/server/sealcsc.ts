@@ -46,7 +46,8 @@ type Config = { url: string; tokenUrl: string; clientId: string; clientSecret: s
 export type CscMaterial = { credentialId: string; certs: Buffer[]; authMode: string; signAlgo: string; fetchedAt: number; sig: string };
 
 const g = globalThis as any;
-const st = (): { sig?: string; token?: { value: string; until: number }; material?: CscMaterial; loading?: Promise<void> | null; why?: string; failedAt?: number } => (g.__sgCsc ??= {});
+type State = { sig?: string; token?: { value: string; until: number }; tokenLoading?: Promise<string> | null; material?: CscMaterial; loading?: Promise<void> | null; why?: string; failedAt?: number; otpLine?: Promise<unknown> };
+const st = (): State => (g.__sgCsc ??= {});
 
 const v = (k: string) => (process.env[k] || '').trim();
 const settingsSig = () => ['SEAL_CSC_URL', 'SEAL_CSC_TOKEN_URL', 'SEAL_CSC_CLIENT_ID', 'SEAL_CSC_CLIENT_SECRET', 'SEAL_CSC_USERNAME', 'SEAL_CSC_PASSWORD', 'SEAL_CSC_CREDENTIAL_ID', 'SEAL_CSC_TOTP_SECRET'].map((k) => `${k}=${v(k)}`).join('\n');
@@ -117,9 +118,26 @@ async function call(url: string, body: any, token: string | null, until: number)
   return json;
 }
 
-async function accessToken(c: Config, until: number, fresh = false): Promise<string> {
+/**
+ * The access token: kept until shortly before it expires, and fetched once for all the seals that need it at the same
+ * moment (one password grant, not one per document). `stale`: the token the service just refused; a new one is
+ * fetched only if that is still the one kept.
+ */
+async function accessToken(c: Config, until: number, stale?: string): Promise<string> {
   const s = st();
-  if (!fresh && s.token && s.token.until > Date.now()) return s.token.value;
+  if (stale && s.token?.value === stale) s.token = undefined;
+  if (s.token && s.token.until > Date.now()) return s.token.value;
+  if (s.tokenLoading) return s.tokenLoading;
+  const p = fetchToken(c, until, s);
+  s.tokenLoading = p;
+  try {
+    return await p;
+  } finally {
+    if (s.tokenLoading === p) s.tokenLoading = null;
+  }
+}
+
+async function fetchToken(c: Config, until: number, s: State): Promise<string> {
   const j = await call(c.tokenUrl, { client_id: c.clientId, ...(c.clientSecret ? { client_secret: c.clientSecret } : {}), grant_type: 'password', username: c.username, password: c.password }, null, until)
     .catch((e) => {
       throw new CscError(`signing in to the signing service failed: ${e.message}. Check SEAL_CSC_CLIENT_ID, SEAL_CSC_CLIENT_SECRET, SEAL_CSC_USERNAME and SEAL_CSC_PASSWORD.`);
@@ -127,19 +145,19 @@ async function accessToken(c: Config, until: number, fresh = false): Promise<str
   if (typeof j.access_token !== 'string' || !j.access_token) throw new CscError('the signing service gave no access token');
   const life = Number(j.expires_in) > 0 ? Number(j.expires_in) * 1000 : 3600_000;
   // Kept until a minute before it expires (half its life when it is short), so it never runs out during a seal.
-  s.token = { value: j.access_token, until: Date.now() + Math.max(life - 60_000, life / 2) };
+  if (st() === s) s.token = { value: j.access_token, until: Date.now() + Math.max(life - 60_000, life / 2) };
   return j.access_token;
 }
 
 /** A call with the access token; a token the service no longer takes is fetched again once. */
 async function withToken(c: Config, path: string, body: any, until: number): Promise<any> {
   const url = `${c.url}/${path}`;
+  const token = await accessToken(c, until);
   try {
-    return await call(url, body, await accessToken(c, until), until);
+    return await call(url, body, token, until);
   } catch (e: any) {
     if (e?.status !== 401) throw e;
-    st().token = undefined;
-    return call(url, body, await accessToken(c, until, true), until);
+    return call(url, body, await accessToken(c, until, token), until);
   }
 }
 
@@ -260,32 +278,78 @@ export function cscSigner(m: CscMaterial, cert: CertInfo, chain: () => Buffer[])
       const c = config();
       const until = Date.now() + CSC_SIGN_TOTAL_MS;
       const hash = digest.toString('base64');
-      const otp = c.totp && m.authMode !== 'implicit' ? { OTP: totpCode(c.totp) } : {};
-      let sad: string;
-      try {
-        const a = await withToken(c, 'credentials/authorize', { credentialID: m.credentialId, numSignatures: 1, hash: [hash], ...otp }, until);
-        sad = typeof a.SAD === 'string' ? a.SAD : '';
-      } catch (e: any) {
-        if ('OTP' in otp && e?.status && e.status < 500) throw new CscError(`the signing service refused to authorize the seal (${e.message}). The one-time code may be wrong: check SEAL_CSC_TOTP_SECRET and that this server's clock is right.`);
-        throw new CscError(`the signing service did not authorize the seal: ${e?.message || e}`);
-      }
-      if (!sad) throw new CscError('the signing service gave no signature activation data');
+      const sad = c.totp && m.authMode !== 'implicit' ? await withOtp(c, m, hash, until) : await authorize(c, m, hash, {}, until);
       let j: any;
       try {
         j = await withToken(c, 'signatures/signHash', { credentialID: m.credentialId, SAD: sad, hash: [hash], hashAlgo: SHA256, signAlgo: m.signAlgo }, until);
       } catch (e: any) {
+        if (pointsAtCredential(e)) staleMaterial(m);
         throw new CscError(`the signing service did not sign: ${e?.message || e}`);
       }
       const b64 = Array.isArray(j.signatures) ? j.signatures[0] : null;
       if (typeof b64 !== 'string' || !b64) throw new CscError('the signing service answered without a signature');
       let sig: Buffer = Buffer.from(b64, 'base64');
       // ECDSA may come back as the two numbers side by side (IEEE P1363); the seal holds the DER form.
-      if (ec && sig[0] !== 0x30 && sig.length === 64) sig = p1363ToDer(sig);
+      // A DER signature on P-256 is never 64 bytes long, so a 64-byte one is always the raw form, whatever its first byte.
+      if (ec && sig.length === 64) sig = p1363ToDer(sig);
       const ok = ec ? crypto.verify('sha256', message, { key: cert.x509.publicKey, dsaEncoding: 'der' }, sig) : crypto.verify('sha256', message, cert.x509.publicKey, sig);
-      if (!ok) throw new CscError('the signature the signing service gave does not verify with the seal certificate, so it was not used');
+      if (!ok) {
+        // The key behind the credential may have been renewed or changed: the chain is fetched again before the next seal.
+        staleMaterial(m);
+        throw new CscError('the signature the signing service gave does not verify with the seal certificate, so it was not used. The certificate is fetched again from the service before the next seal');
+      }
       return sig;
     },
   };
+}
+
+async function authorize(c: Config, m: CscMaterial, hash: string, otp: { OTP?: string }, until: number): Promise<string> {
+  let sad: string;
+  try {
+    const a = await withToken(c, 'credentials/authorize', { credentialID: m.credentialId, numSignatures: 1, hash: [hash], ...otp }, until);
+    sad = typeof a.SAD === 'string' ? a.SAD : '';
+  } catch (e: any) {
+    if ('OTP' in otp && e?.status && e.status < 500) throw Object.assign(new CscError(`the signing service refused to authorize the seal (${e.message}). The one-time code may be wrong: check SEAL_CSC_TOTP_SECRET and that this server's clock is right.`), { otpRefused: true });
+    if (pointsAtCredential(e)) staleMaterial(m);
+    throw new CscError(`the signing service did not authorize the seal: ${e?.message || e}`);
+  }
+  if (!sad) throw new CscError('the signing service gave no signature activation data');
+  return sad;
+}
+
+/**
+ * With one-time codes (a credential not converted to eSealing): one authorize at a time, so two seals never send the
+ * same code, and a code that was refused is tried once more with the next one when the 30 seconds turned over in
+ * between (the code can be read just before the step ends). This mode is meant for few seals; eSealing needs no code.
+ */
+async function withOtp(c: Config, m: CscMaterial, hash: string, until: number): Promise<string> {
+  const s = st();
+  const before = s.otpLine || Promise.resolve();
+  let done!: () => void;
+  const mine = new Promise<void>((r) => (done = r));
+  s.otpLine = before.then(() => mine);
+  try {
+    await before;
+    const first = totpCode(c.totp);
+    try {
+      return await authorize(c, m, hash, { OTP: first }, until);
+    } catch (e: any) {
+      const next = totpCode(c.totp);
+      if (!e?.otpRefused || next === first) throw e;
+      return await authorize(c, m, hash, { OTP: next }, until);
+    }
+  } finally {
+    done();
+  }
+}
+
+// A refusal that says something about the credential itself (not the token, not too many requests, not the service).
+const pointsAtCredential = (e: any) => typeof e?.status === 'number' && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 408 && e.status !== 429;
+
+/** The chain kept is not used again: the next seal waits for credentials/info (with the usual pause after a failure). */
+function staleMaterial(m: CscMaterial) {
+  const s = st();
+  if (s.material === m) s.material = undefined;
 }
 
 function p1363ToDer(raw: Buffer): Buffer {

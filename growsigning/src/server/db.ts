@@ -1901,6 +1901,23 @@ export function fillOldSupport(d: any = db()): number {
     WHEN verified=1 THEN 'signed_in' ELSE 'form' END WHERE came_by IS NULL`).run().changes);
 }
 
+/**
+ * Once, for boxes made before a new "Your text" box started empty: the old editor put the word "Note" into every new
+ * box, so a box nobody wrote in still holds it and would be shown to signers and printed. In drafts and templates
+ * (nothing sent, nobody has seen it) a box holding exactly that word is emptied, and an empty box is shown to nobody
+ * and never printed. Envelopes already sent are left as their signers saw them. After this one pass a box that says
+ * "Note" was typed by its sender and is kept. Returns how many boxes were emptied.
+ */
+export function sweepLeftoverNotes(d: any): number {
+  d.exec('CREATE TABLE IF NOT EXISTS once_done (name TEXT PRIMARY KEY, at TEXT NOT NULL)');
+  if (d.prepare("SELECT 1 FROM once_done WHERE name='leftover_notes'").get()) return 0;
+  // col_find reads a value that is kept encrypted (src/server/colcrypt.ts); one that cannot be read is left alone.
+  const n = Number(d.prepare(`UPDATE fields SET value=NULL WHERE type='note' AND value IS NOT NULL AND trim(col_find(value), ' ' || char(9) || char(10) || char(13))='Note'
+    AND envelope_id IN (SELECT id FROM envelopes WHERE status='draft')`).run().changes);
+  d.prepare("INSERT INTO once_done (name, at) VALUES ('leftover_notes', ?)").run(new Date().toISOString());
+  return n;
+}
+
 function migrate(d: any) {
   const hadPrefill = d.prepare('PRAGMA table_info(fields)').all().some((c: any) => c.name === 'prefill');
   const hadWelcomed = d.prepare('PRAGMA table_info(users)').all().some((c: any) => c.name === 'welcomed_at');
@@ -1988,6 +2005,7 @@ export function db(): any {
     registerSql(d); // col_find and col_replace for values kept encrypted (src/server/colcrypt.ts)
     d.exec(SCHEMA);
     migrate(d);
+    sweepLeftoverNotes(d);
     g.__tsdb = d;
   }
   return g.__tsdb;

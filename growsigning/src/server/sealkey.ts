@@ -22,7 +22,8 @@ import { seal } from './colcrypt.ts';
 import { dayText } from '../lib/dates.ts';
 import { cscConfigured, cscSettingsProblem, cscMaterial, cscSigner, type CscMaterial } from './sealcsc.ts';
 
-export type SealKey = { signer: SealSigner; cert: CertInfo; chain: CertInfo[]; hash: string };
+/** `metered`: each signature is a paid signing of a cloud service (sealcsc.ts), so a seal is never signed twice for a time stamp. */
+export type SealKey = { signer: SealSigner; cert: CertInfo; chain: CertInfo[]; hash: string; metered?: boolean };
 export type SealState = { on: true; key: SealKey } | { on: false; configured: boolean; why?: string };
 
 const SETTINGS = ['SEAL_P12', 'SEAL_P12_PASSWORD', 'SEAL_KEY_PEM', 'SEAL_CERT_PEM', 'SEAL_CHAIN_PEM'];
@@ -142,7 +143,7 @@ function cscCheck(m: CscMaterial, at: Date): SealKey {
   if (!((k.asymmetricKeyType === 'rsa' && (d.modulusLength || 0) >= 2048) || (k.asymmetricKeyType === 'ec' && d.namedCurve === 'prime256v1')))
     throw new Refused('The certificate of the signing service must have an RSA key of 2048 bits or more, or an ECDSA key on the P-256 curve.');
   const chain = chainOf(cert, infos, 'The signing service did not give it with the certificate.', at);
-  return { signer: cscSigner(m, cert, () => chain.map((c) => c.der)), cert, chain, hash: certHash(cert.der) };
+  return { signer: cscSigner(m, cert, () => chain.map((c) => c.der)), cert, chain, hash: certHash(cert.der), metered: true };
 }
 
 function checkDates(chain: CertInfo[], at: Date) {
@@ -212,10 +213,11 @@ function refused(why: string): SealState {
 }
 
 // Logged and filed once for each reason (and again after a restart only if no open alert says the same).
-export function tellOperators(why: string) {
+/** `key`: what makes two alerts the same one (the reason without what differs per document); the words by default. */
+export function tellOperators(why: string, key = why) {
   g.__sealTold ??= new Set<string>();
-  if (g.__sealTold.has(why)) return;
-  g.__sealTold.add(why);
+  if (g.__sealTold.has(key)) return;
+  g.__sealTold.add(key);
   const subject = 'Completed PDFs are not being sealed';
   const lines = [why, 'Until this is fixed, completed PDFs are made exactly as before, without the digital seal, and their certificate of completion says nothing about a seal. Nothing else stops. Documents completed in the meantime are not sealed afterwards.'];
   console.error(`\n[seal] ${subject}\n[seal] ${lines.join('\n[seal] ')}\n`);

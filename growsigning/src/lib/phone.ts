@@ -21,10 +21,10 @@ export function deviceName(ua: string | null | undefined): { device: string; bro
 
 // ---- Fields that are read out by their type only ---------------------------------------------------
 // Someone who signs with a screen reader cannot see where a field sits on the page. They hear its label. A field
-// the sender gave no label is announced by its type alone ("Type here, required"), which does not say what to type.
+// the sender gave no label is announced by its type alone ("Text box, required"), which does not say what to type.
 
 /** What a signer hears for a field of this type when it has no label. The same words as LABEL in src/components/sign/fields.ts. */
-export const HEARD_AS: Record<string, string> = { text: 'Type here', number: 'Number', date: 'Date', dropdown: 'Choice', attachment: 'Attachment', checkbox: 'Checkbox', radio: 'Option' };
+export const HEARD_AS: Record<string, string> = { text: 'Text box', number: 'Number', date: 'Date', dropdown: 'Choice', attachment: 'Attachment', checkbox: 'Checkbox', radio: 'Option' };
 /**
  * The fields that need a label to mean anything when read out: the ones a signer fills in whose type does not say
  * what belongs in them. A signature, a name or an email address explains itself. So does wording the sender wrote.

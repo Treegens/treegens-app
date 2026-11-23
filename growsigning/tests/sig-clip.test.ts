@@ -15,7 +15,8 @@ import path from 'node:path';
 import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { PDFDocument, degrees } from 'pdf-lib';
 import { boot, signUp, Client, tokenFor } from './helpers.ts';
-import { inkBox, touchesEdge, SIG_PAD, TYPED_MAX_W, TYPED_SIZE } from '../src/lib/sigmark.ts';
+import { CAPTION_MIN } from '../src/server/pdf.ts';
+import { inkBox, looksCut, touchesEdge, twoLines, SIG_PAD, TYPED_LINE, TYPED_MAX_W, TYPED_SIZE, TYPED_WRAP_OVER } from '../src/lib/sigmark.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), 'utf8');
@@ -28,7 +29,10 @@ const FAMILIES = [...STYLES.map((f) => `'${f}', cursive`), PLAIN];
 // Letters with tails to the left (j, f, y, g), a slanted end (f), swashes on capitals (Q, J, and the bar of a T that ends the text), accents above, a
 // name long enough to be drawn smaller, and the single letters people use as initials.
 const LONG = 'Maximiliana Alexandrovna Featherstonehaugh-Fitzwilliam';
-const NAMES = ['jimi cohen', 'fy Jörg', 'Qq gyp', 'J. ff', 'Ángel Ñandú', LONG, 'j', 'f', 'JC', 'Jy', 'JT'];
+// Two more long ones: 49 letters with spaces (written on two lines), and 60 of the widest letter with no space at all.
+const LONG49 = 'Maximiliana Josephine van der Westhuizen-Fitzroy';
+const WIDE60 = 'W'.repeat(60);
+const NAMES = ['jimi cohen', 'fy Jörg', 'Qq gyp', 'J. ff', 'Ángel Ñandú', LONG, LONG49, WIDE60, 'j', 'f', 'JC', 'Jy', 'JT', 'H', 'Il', 'ETL'];
 
 // ---- 0. The measuring itself, without a browser ---------------------------------------------------------------
 
@@ -43,14 +47,56 @@ test('the ink box is the smallest box around every pixel that is not see-through
   for (const b of [{ x0: 0, y0: 2, x1: 7, y1: 4 }, { x0: 3, y0: 0, x1: 7, y1: 4 }, { x0: 3, y0: 2, x1: 9, y1: 4 }, { x0: 3, y0: 2, x1: 7, y1: 5 }]) assert.equal(touchesEdge(b, w, h), true, JSON.stringify(b));
 });
 
+test('a very long name with spaces is split into two lines of about the same width, and only then', () => {
+  const w = (t: string) => t.length * 40; // every letter 40 wide
+  assert.deepEqual(twoLines('jimi cohen', w), ['jimi cohen'], 'a short name stays on one line');
+  assert.deepEqual(twoLines('W'.repeat(60), w), ['W'.repeat(60)], 'nothing to break at');
+  const long = 'Maximiliana Josephine van der Westhuizen';
+  assert.ok(w(long) > TYPED_WRAP_OVER);
+  assert.deepEqual(twoLines(long, w), ['Maximiliana Josephine', 'van der Westhuizen']);
+  assert.deepEqual(twoLines(' a b ', w, 10), ['a', 'b '.trimEnd() + ' '].map((x, i) => (i ? 'b ' : ' a')), 'never an empty line');
+});
+
+test('a picture whose ink ends in a straight wall of solid pixels looks cut off, and ink that fades out does not', () => {
+  const w = 40, h = 30;
+  const pic = () => new Uint8Array(w * h * 4);
+  const dot = (d: Uint8Array, x: number, y: number, a = 255) => (d[(y * w + x) * 4 + 3] = a);
+  // A round blob: its outermost pixels are faint, as the edge of a letter is.
+  const blob = pic();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) dot(blob, x, y, Math.max(0, Math.min(255, Math.round((9 - Math.hypot(x - 20, y - 15)) * 255))));
+  assert.equal(looksCut(blob, w, h), false, 'a round shape');
+  // The same blob sliced through at x = 16, with clear space left of the cut (as after trimming).
+  const sliced = blob.slice();
+  for (let y = 0; y < h; y++) for (let x = 0; x < 16; x++) dot(sliced, x, y, 0);
+  assert.equal(looksCut(sliced, w, h), true, 'sliced on the left');
+  // Sliced at the right. A flat top or bottom is not a cut: whole letters stand on a line.
+  for (const [cutAt, is] of [[(x: number, y: number) => x > 24, true], [(x: number, y: number) => y < 11, false], [(x: number, y: number) => y > 19, false]] as const) {
+    const d = blob.slice();
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (cutAt(x, y)) dot(d, x, y, 0);
+    assert.equal(looksCut(d, w, h), is);
+  }
+  // A photo: nothing see-through at all. Its edges are the edges of the photo.
+  assert.equal(looksCut(pic().fill(255), w, h), false, 'a photo');
+  assert.equal(looksCut(pic(), w, h), false, 'a blank picture');
+});
+
 test('the dialog makes every typed and drawn mark through sigmark, and no longer places text by its width', () => {
   assert.match(PAD_SRC, /image = typedMark\(text\.trim\(\), handwritingWrites\(text\) \? `'\$\{font\}', cursive` : PLAIN\);/);
   assert.match(PAD_SRC, /pad\.current \? trimInk\(pad\.current\) : null;/);
   assert.doesNotMatch(PAD_SRC, /fillText\(/, 'no second way of drawing a typed name');
+  // A saved picture that looks cut off is not the first choice: the dialog opens on a fresh one and says why.
+  assert.match(PAD_SRC, /const cut = useLooksCut\(saved\?\.image\) && !!make\.length;/);
+  assert.match(PAD_SRC, /if \(cut && !touched\.current\) setTab\(make\[0\]\[0\]\);/);
+  assert.match(PAD_SRC, /cut \? \[\.\.\.make, \['saved', 'Saved'\]\]/);
+  assert.match(PAD_SRC, /cut off at the edge\./);
+  assert.match(read('src/app/app/settings/page.tsx'), /<CutNote image=\{img\} word=\{k\} \/>/);
+  // Initials open in the style the signature was just made in, and the other way round.
+  assert.match(PAD_SRC, /useState\(rememberedStyle\)/);
+  assert.match(PAD_SRC, /if \(handwritingWrites\(text\)\) rememberStyle\(font\);/);
   // Wherever a signature picture is shown it is fitted whole into its box, never cropped to fill it.
   const css = read('src/app/globals.css');
-  assert.match(css, /\.field\.fill img \{ width: 100%; height: 100%; object-fit: contain; \}/);
-  assert.match(css, /\.field\.other img \{ width: 100%; height: 100%; object-fit: contain; \}/);
+  assert.match(css, /\.field\.fill img \{ width: 100%; height: 100%; object-fit: contain; padding: 0 max\(4%, 2px\); box-sizing: border-box; \}/);
+  assert.match(css, /\.field\.other img \{ width: 100%; height: 100%; object-fit: contain;[^}]*\}/);
   const sign = read('src/app/styles/sign.css');
   assert.match(sign, /\.sg-sigpreview img \{[^}]*object-fit: contain;/);
   assert.match(sign, /\.sg-review-sig img \{[^}]*object-fit: contain;/);
@@ -114,7 +160,7 @@ after(async () => {
 // ---- 1. Every style, every hard name --------------------------------------------------------------------------
 
 test('1. every style with every hard name: all of the ink is in the picture, with clear space on every side', { skip, timeout: 120_000 }, async () => {
-  const rows = await page.evaluate(async ({ FAMILIES, NAMES, SIZE }: any) => {
+  const rows = await page.evaluate(async ({ FAMILIES, NAMES, SIZE, LINE }: any) => {
     const w = window as any, out: any[] = [];
     for (const family of FAMILIES)
       for (const text of NAMES) {
@@ -123,18 +169,25 @@ test('1. every style with every hard name: all of the ink is in the picture, wit
         const p = await w.pixels(png);
         const got = w.sm.inkBox(p.d, p.w, p.h);
         // The answer to compare with, made another way: the same text in the middle of a canvas far larger than
-        // any signature, where nothing can be cut off, and the box of what was painted there.
+        // any signature, where nothing can be cut off, and the box of what was painted there. A very long name is
+        // written on two lines, as typedMark does, and one too wide for this canvas in letters a quarter the size:
+        // only its shape is compared.
         const big = document.createElement('canvas');
         big.width = 4200;
         big.height = 1400;
         const x = big.getContext('2d', { willReadFrequently: true })!;
         x.font = `${SIZE}px ${family}`;
-        x.fillText(text, 900, 700);
-        const all = w.sm.inkBox(x.getImageData(0, 0, big.width, big.height).data, big.width, big.height);
-        out.push({ family, text, png, w: p.w, h: p.h, got, all, leftOfStart: 900 - all.x0, pastWidth: all.x1 - (900 + x.measureText(text).width) });
+        const inkW = (t: string) => { const m = x.measureText(t); return Math.max(m.actualBoundingBoxLeft, 0) + Math.max(m.actualBoundingBoxRight, m.width, 1); };
+        const lines = w.sm.twoLines(text, inkW);
+        const k = Math.max(...lines.map(inkW)) > 3000 ? 0.25 : 1;
+        x.font = `${SIZE * k}px ${family}`;
+        lines.forEach((line: string, i: number) => x.fillText(line, 900, 500 + i * SIZE * k * LINE));
+        const d = x.getImageData(0, 0, big.width, big.height).data;
+        const all = w.sm.inkBox(d, big.width, big.height);
+        out.push({ family, text, png, w: p.w, h: p.h, got, all, k, lines: lines.length, cut: w.sm.looksCut(p.d, p.w, p.h), leftOfStart: 900 - all.x0, pastWidth: all.x1 - (900 + x.measureText(lines[0]).width) });
       }
     return out;
-  }, { FAMILIES, NAMES, SIZE: TYPED_SIZE });
+  }, { FAMILIES, NAMES, SIZE: TYPED_SIZE, LINE: TYPED_LINE });
   assert.equal(rows.length, FAMILIES.length * NAMES.length);
   for (const r of rows) {
     const what = `${r.family} "${r.text}"`;
@@ -143,13 +196,23 @@ test('1. every style with every hard name: all of the ink is in the picture, wit
     assert.deepEqual(r.got, { x0: SIG_PAD, y0: SIG_PAD, x1: r.w - SIG_PAD - 1, y1: r.h - SIG_PAD - 1 }, `${what}: clear space on every side`);
     // And it is all of the ink: as wide and as high as the same text painted where nothing can be cut off.
     const W = r.all.x1 - r.all.x0 + 1, H = r.all.y1 - r.all.y0 + 1, w = r.got.x1 - r.got.x0 + 1, h = r.got.y1 - r.got.y0 + 1;
-    if (W <= TYPED_MAX_W) {
+    // A fresh picture never reads as cut off, so it is never mistaken for one made before the fix.
+    assert.equal(r.cut, false, `${what}: reads as cut off`);
+    if (W <= TYPED_MAX_W && r.k === 1) {
       assert.ok(Math.abs(w - W) <= 1 && Math.abs(h - H) <= 1, `${what}: the ink is ${W} by ${H} pixels, the picture holds ${w} by ${h}`);
     } else {
       // A long name is drawn in smaller letters: the same shape, no wider than the limit.
       assert.ok(w <= TYPED_MAX_W + 2, `${what}: ${w} pixels wide`);
-      assert.ok(Math.abs(w / h - W / H) / (W / H) < 0.04, `${what}: the shape changed from ${(W / H).toFixed(2)} to ${(w / h).toFixed(2)}, so ink is missing`);
+      // (One pixel of rounding counts for more in a picture only a few pixels high.)
+      assert.ok(Math.abs(w / h - W / H) / (W / H) < 0.04 + 1 / h + 1 / H, `${what}: the shape changed from ${(W / H).toFixed(2)} to ${(w / h).toFixed(2)}, so ink is missing`);
     }
+    // No flat strip: a name with spaces is never more than 9 times as wide as it is high.
+    if (/\s/.test(r.text)) assert.ok(w / h < 9, `${what}: ${w} by ${h} is a flat strip`);
+  }
+  // The long names with spaces went onto two lines in the handwriting styles, and the one without stayed on one.
+  for (const r of rows.filter((r: any) => r.family !== PLAIN)) {
+    if (r.text === LONG || r.text === LONG49) assert.equal(r.lines, 2, `${r.family} "${r.text}"`);
+    else assert.equal(r.lines, 1, `${r.family} "${r.text}"`);
   }
   // The names really are hard: in the styles on offer, ink reaches well left of where the text starts and past
   // where it ends. Text placed by its width alone, 20 pixels in, is what cut the "j" off.
@@ -201,6 +264,47 @@ test('1b. a drawn mark that runs off the pad on every side, and an uploaded pict
   assert.equal(made.blank, null, 'an empty pad is no signature');
   assert.equal(made.spaces, null, 'neither is a name of spaces');
   marks.push({ key: 'drawn off every edge', kind: 'drawn', png: made.drawn }, { key: 'uploaded JPEG', kind: 'upload', png: made.upload }, { key: 'uploaded PNG', kind: 'upload', png: made.uploadPng });
+});
+
+// ---- 1d. A signature saved before the fix --------------------------------------------------------------------
+
+test('1d. a typed signature made the old way (cut at the left of its canvas) is recognised as cut off, and whole ones are not', { skip, timeout: 60_000 }, async () => {
+  const got = await page.evaluate(async ({ STYLES }: any) => {
+    const w = window as any, out: any[] = [];
+    for (const f of STYLES)
+      for (const name of ['jimi cohen', 'j', 'fy Jörg', 'gyp', 'Jy']) {
+        // The old way: the name 20 pixels in from the left of a fixed 900 by 220 canvas, then trimmed to its ink.
+        const c = document.createElement('canvas');
+        c.width = 900;
+        c.height = 220;
+        const x = c.getContext('2d')!;
+        x.font = `104px '${f}', cursive`;
+        x.fillStyle = '#10243a';
+        x.textBaseline = 'middle';
+        x.fillText(name, 20, 110);
+        const lost = x.measureText(name).actualBoundingBoxLeft - 20; // pixels of ink that fell off the left
+        // Trimmed with room around it, and trimmed hard against the cut (either way an old picture could look).
+        const box = w.sm.inkBox(x.getImageData(0, 0, 900, 220).data, 900, 220);
+        const hard = document.createElement('canvas');
+        hard.width = box.x1 - box.x0 + 1;
+        hard.height = box.y1 - box.y0 + 1;
+        hard.getContext('2d')!.drawImage(c, -box.x0, -box.y0);
+        out.push({ f, name, lost, old: await w.sm.pictureLooksCut(w.sm.trimInk(c)), hard: await w.sm.pictureLooksCut(hard.toDataURL('image/png')), fresh: await w.sm.pictureLooksCut(w.sm.typedMark(name, `'${f}', cursive`)) });
+      }
+    return { out, unreadable: await w.sm.pictureLooksCut('data:image/png;base64,AAAA') };
+  }, { STYLES });
+  let cut = 0;
+  for (const r of got.out) {
+    const what = `'${r.f}' "${r.name}" (${r.lost.toFixed(1)} pixels lost)`;
+    assert.equal(r.fresh, false, `${what}: the fresh picture reads as cut off`);
+    if (r.lost >= 3) (cut++, assert.equal(r.old, true, `${what}: the old picture is not recognised`), assert.equal(r.hard, true, `${what}: trimmed hard`));
+    if (r.lost <= 0) assert.equal(r.old, false, `${what}: an old picture that lost nothing is called cut off`);
+  }
+  assert.ok(cut >= 2, 'the owner\'s "jimi cohen" and a lone "j" lose their tail the old way in at least one style');
+  assert.equal(got.unreadable, false, 'a picture that cannot be read is left alone');
+  // The marks of test 1b: a photo is never called cut off. A line drawn off the side of the pad is.
+  const flags = await page.evaluate(async (pngs: string[]) => Promise.all(pngs.map((p) => (window as any).sm.pictureLooksCut(p))), ['uploaded JPEG', 'uploaded PNG', 'drawn off every edge'].map((k) => marks.find((m) => m.key === k)!.png));
+  assert.deepEqual(flags, [false, false, true]);
 });
 
 // ---- 1c. The styles to choose from in the dialog ---------------------------------------------------------------
@@ -290,6 +394,45 @@ test('1c. the four styles shown in the dialog are whole too: no tail cut off by 
       assert.ok(counts[i + 1] > 20, `${r.family} "${r.text}" at ${vw}: drawn`);
       assert.equal(counts[i], counts[i + 1], `${r.family} "${r.text}" at ${vw} px wide (${r.size}): ${counts[i + 1] - counts[i]} pixels of ink are cut off by the edge of the button`);
     }
+    // A long name is not shortened with "…": one style to a row, in letters made to fit (fitLabel), never tiny.
+    const long = await pg.evaluate(async ({ FAMILIES, LONGS, fitSrc }: any) => {
+      const sm = await import(URL.createObjectURL(new Blob([fitSrc], { type: 'text/javascript' })));
+      document.body.innerHTML = '';
+      const wide = Math.min(document.documentElement.clientWidth - 32, 620), out: any[] = [];
+      const ruler = document.createElement('canvas').getContext('2d')!;
+      for (const family of FAMILIES)
+        for (const text of LONGS) {
+          const dialog = document.createElement('div');
+          dialog.className = 'sg-dialog wide';
+          dialog.style.cssText = `position:static;transform:none;animation:none;width:${wide}px;padding:40px 16px;margin:0;max-height:none`;
+          const grid = document.createElement('div');
+          grid.className = 'grid g2 sg-sigstyles long';
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'sigstyle';
+          b.style.fontFamily = family;
+          b.textContent = text;
+          grid.appendChild(b);
+          dialog.appendChild(grid);
+          document.body.appendChild(dialog);
+          const before = parseFloat(getComputedStyle(b).fontSize);
+          sm.fitLabel(b);
+          const s = getComputedStyle(b);
+          ruler.font = `${s.fontSize} ${s.fontFamily}`;
+          out.push({ family, text, before, size: parseFloat(s.fontSize), need: ruler.measureText(text).width, room: b.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight), row: b.clientWidth / dialog.clientWidth });
+        }
+      return out;
+    }, { FAMILIES, LONGS: [LONG, LONG49, 'jimi cohen'], fitSrc: stripTypeScriptTypes(read('src/lib/sigmark.ts')) });
+    for (const r of long) {
+      const what = `${r.family} "${r.text}" at ${vw}`;
+      assert.ok(r.row > 0.8, `${what}: one style to a row`);
+      if (r.text === 'jimi cohen') assert.equal(r.size, r.before, `${what}: a short name keeps its size`);
+      else assert.ok(r.size >= 12 && r.size <= r.before, `${what}: ${r.size}px`);
+      // On a phone the 54 letter name, and a long one in the wide plain letters, reach the smallest size (12) and may
+      // still be shortened; everything else
+      // fits, and on a computer all of them do.
+      if (!(vw < 600 && r.size === 12 && (r.text === LONG || r.family === PLAIN))) assert.ok(r.need <= r.room + 0.5, `${what}: needs ${r.need.toFixed(0)} of ${r.room.toFixed(0)} pixels at ${r.size}px`);
+    }
     await pg.close();
   }
 });
@@ -352,15 +495,20 @@ test('2. in small fields on the signing page (a table cell, an initials box, a f
       const X0 = Math.round((f.x - 14) * k), Y0 = Math.round((f.y - 14) * k), X1 = Math.round((f.x + f.w + 14) * k), Y1 = Math.round((f.y + f.h + 14) * k);
       // The space inside the border of the field: past it, a picture would be cut off or lie on the page.
       const ix0 = Math.ceil((f.x + f.bl) * k), iy0 = Math.ceil((f.y + f.bt) * k), ix1 = Math.floor((f.x + f.w - f.br) * k) - 1, iy1 = Math.floor((f.y + f.h - f.bb) * k) - 1;
-      let outside = 0, inside = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+      let outside = 0, inside = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1, mx0 = 1e9, mx1 = -1;
+      // The middle half of the height, away from the rounded corners of the border: how much air is left and right.
+      const my0 = iy0 + (iy1 - iy0) / 4, my1 = iy1 - (iy1 - iy0) / 4;
       for (let y = Math.max(0, Y0); y < Y1; y++)
         for (let x = Math.max(0, X0); x < X1; x++) {
           const out = x < ix0 || x > ix1 || y < iy0 || y > iy1;
           if (out ? !ink(x, y) : !seen(x, y)) continue;
           if (out) outside++;
-          else (inside++, (x0 = Math.min(x0, x)), (y0 = Math.min(y0, y)), (x1 = Math.max(x1, x)), (y1 = Math.max(y1, y)));
+          else {
+            (inside++, (x0 = Math.min(x0, x)), (y0 = Math.min(y0, y)), (x1 = Math.max(x1, x)), (y1 = Math.max(y1, y)));
+            if (y >= my0 && y <= my1) ((mx0 = Math.min(mx0, x)), (mx1 = Math.max(mx1, x)));
+          }
         }
-      return { outside, inside, box: [x0 - ix0, y0 - iy0, ix1 - x1, iy1 - y1], room: [ix1 - ix0 + 1, iy1 - iy0 + 1] };
+      return { outside, inside, box: [x0 - ix0, y0 - iy0, ix1 - x1, iy1 - y1], air: mx1 < 0 ? null : [mx0 - ix0, ix1 - mx1], room: [ix1 - ix0 + 1, iy1 - iy0 + 1] };
     });
   }, { shot: `data:image/png;base64,${shot.toString('base64')}`, rects });
   assert.equal(found.length, marks.length * BOXES.length);
@@ -368,9 +516,12 @@ test('2. in small fields on the signing page (a table cell, an initials box, a f
     const m = marks[Math.floor(n / BOXES.length)], box = BOXES[n % BOXES.length];
     const what = `${m.key} in a ${box[0]} by ${box[1]} field`;
     assert.equal(f.outside, 0, `${what}: ${f.outside} pixels of ink at or past the edge of the field`);
-    assert.ok(f.inside > 0, `${what}: the signature shows`);
+    // (Sixty letters with no space between them, in a field 26 wide, are too small to leave a mark at all.)
+    if (!m.key.endsWith(WIDE60)) assert.ok(f.inside > 0, `${what}: the signature shows`);
     // Every side has room left, and the picture reaches (almost) across one direction: it was fitted, not cropped.
     assert.ok(f.box.every((gap: number) => gap >= 0), `${what}: gaps ${f.box}`);
+    // The person's own field keeps a little air left and right, so no letter sits on its border (screenshot at 2x).
+    if (n % BOXES.length % 2 === 0 && f.air) assert.ok(f.air[0] >= 3 && f.air[1] >= 3, `${what}: air left and right ${f.air}`);
   });
 });
 
@@ -405,7 +556,9 @@ test('3. in the signed PDF: typed, drawn and uploaded marks in narrow fields lea
     for (const page of [0, 1]) {
       // A table cell (no room for the small line), a narrow and high field (with the small line), a wide one, initials.
       fields.push({ id: `a${page}${i}`, document_id: 'd', recipient_id: rid, type: 'signature', page, x: 0.08, y, w: 0.11, h: 0.022 });
-      fields.push({ id: `b${page}${i}`, document_id: 'd', recipient_id: rid, type: 'signature', page, x: 0.3, y, w: 0.075, h: 0.055 });
+      fields.push({ id: `b${page}${i}`, document_id: 'd', recipient_id: rid, type: 'signature', page, x: 0.3, y, w: 0.085, h: 0.055 });
+      // Too narrow for even the short form of the small line (27 points): the signature alone.
+      fields.push({ id: `n${page}${i}`, document_id: 'd', recipient_id: rid, type: 'signature', page, x: 0.42, y, w: 0.045, h: 0.055 });
       fields.push({ id: `c${page}${i}`, document_id: 'd', recipient_id: rid, type: 'signature', page, x: 0.5, y, w: 0.25, h: 0.045 });
       fields.push({ id: `i${page}${i}`, document_id: 'd', recipient_id: rid, type: 'initials', page, x: 0.85, y, w: 0.03, h: 0.022 });
     }
@@ -435,11 +588,11 @@ test('3. in the signed PDF: typed, drawn and uploaded marks in narrow fields lea
   const stored = db.all('SELECT f.type, f.page, f.x, f.y, f.w, f.h, r.email FROM fields f JOIN recipients r ON r.id=f.recipient_id WHERE f.envelope_id=?', eid);
   assert.equal(stored.length, fields.length);
   const SCALE = 4;
-  const result = await page.evaluate(async ({ pdf, stored, SCALE }: any) => {
+  const both = await page.evaluate(async ({ pdf, stored, SCALE }: any) => {
     const pdfjs: any = await import('/pdfjs/pdf.min.mjs' as any);
     pdfjs.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.mjs';
     const doc = await pdfjs.getDocument({ data: Uint8Array.from(atob(pdf), (ch) => ch.charCodeAt(0)) }).promise;
-    const out: any[] = [];
+    const out: any[] = [], captions: any[] = [];
     for (const pageNo of [0, 1]) {
       const pg = await doc.getPage(pageNo + 1);
       const vp = pg.getViewport({ scale: SCALE });
@@ -456,6 +609,8 @@ test('3. in the signed PDF: typed, drawn and uploaded marks in narrow fields lea
         const i = (py * c.width + px) * 4;
         return d[i] < 235 || d[i + 1] < 235 || d[i + 2] < 235;
       };
+      // The small lines under signatures, as the PDF holds them: their words and their size in points.
+      for (const t of (await pg.getTextContent()).items) if (/GrowSigning ·/.test(t.str)) captions.push({ page: pageNo, str: t.str, size: Math.hypot(t.transform[0], t.transform[1]) });
       for (const f of stored.filter((s: any) => s.page === pageNo)) {
         const fx0 = f.x * c.width, fy0 = f.y * c.height, fx1 = (f.x + f.w) * c.width, fy1 = (f.y + f.h) * c.height;
         const band = 10 * SCALE; // 10 points around the field
@@ -470,14 +625,24 @@ test('3. in the signed PDF: typed, drawn and uploaded marks in narrow fields lea
         out.push({ ...f, outside, inside, gaps: [(x0 - fx0) / SCALE, (y0 - fy0) / SCALE, (fx1 - x1) / SCALE, (fy1 - y1) / SCALE], size: [c.width, c.height] });
       }
     }
-    return out;
+    return { out, captions };
   }, { pdf: Buffer.from(pdf).toString('base64'), stored, SCALE });
+  const result = both.out;
   assert.equal(result.length, fields.length);
+  // The small line: whole under a wide signature, the short form in a narrow field, none in a very narrow one or a
+  // table cell, and never in letters too small to read.
+  const full = both.captions.filter((c: any) => /^Signed via GrowSigning · \S{8}$/.test(c.str)), short = both.captions.filter((c: any) => /^GrowSigning · \S{8}$/.test(c.str));
+  assert.equal(full.length + short.length, both.captions.length, JSON.stringify(both.captions.map((c: any) => c.str)));
+  assert.equal(full.length, people.length * 2, 'the whole line under every wide signature');
+  assert.equal(short.length, people.length * 2, 'the short form under every narrow one (52 points)');
+  for (const c of both.captions) assert.ok(c.size >= CAPTION_MIN - 0.01 && c.size <= 4.51, `"${c.str}" is printed at ${c.size.toFixed(2)} points`);
   for (const r of result) {
     const what = `${r.type} of ${r.email} on page ${r.page + 1} (${(r.w * r.size[0] / SCALE).toFixed(0)} by ${(r.h * r.size[1] / SCALE).toFixed(0)} points)`;
     assert.ok(r.inside > 20, `${what}: the mark is printed`);
     assert.equal(r.outside, 0, `${what}: ${r.outside} pixels printed outside the field`);
     for (const gap of r.gaps) assert.ok(gap > -0.3, `${what}: gaps to the edges of the field, in points: ${r.gaps.map((g: number) => g.toFixed(2))}`);
+    // A little air left and right of every mark, so it never sits on a table line.
+    assert.ok(r.gaps[0] >= 1.5 && r.gaps[2] >= 1.5, `${what}: air left and right, in points: ${r.gaps[0].toFixed(2)}, ${r.gaps[2].toFixed(2)}`);
   }
   // Kept for looking at: tests/out is where the suites leave what they made.
   fs.mkdirSync(path.join(ROOT, 'tests/out/sig-clip'), { recursive: true });

@@ -26,8 +26,12 @@ import { now } from './util.ts';
 import { sealCertificateLine, type SealLevel } from '../lib/seal.ts';
 
 /** `tsaTrusted`: TSA_TRUST is set, so a time stamp is only taken from a service whose certificate leads to it. */
-/** `until`: when the time for time-stamps of this Finish ends (shared with the record's time stamp, finalpipe.ts). */
-export type SealPlan = { key: SealKey; level: SealLevel; tsa: string[]; tsaTrusted?: boolean; tsaFailed?: string; until?: number };
+/**
+ * `until`: when the time for time-stamps of this Finish ends. `tsaMs`, when set, wins: the seconds for time-stamps
+ * still left (the record's time stamp, finalpipe.ts, used the rest), counted from when the signature value is there,
+ * so the time spent rendering and at a cloud signing service never uses up the seal's time stamp.
+ */
+export type SealPlan = { key: SealKey; level: SealLevel; tsa: string[]; tsaTrusted?: boolean; tsaFailed?: string; until?: number; tsaMs?: number };
 /** `tsaToken`: the seal's time-stamp token, for the long-term step (ltv.ts); `ltv`: what that step did. */
 export type SealDone = { level: SealLevel; certHash: string; name: string; issuer: string; at: string; tsaHost?: string; tsaTime?: string; tsaTrusted?: boolean; tsaFailed?: string; tsaToken?: Buffer; ltv?: LongTerm | null };
 
@@ -43,24 +47,33 @@ export function sealPlan(noTsa?: string): SealPlan | null {
 export function sealLineFor(e: any): string | null {
   const p: SealPlan | undefined = e?.seal_plan;
   if (!p) return null;
-  return sealCertificateLine({ name: p.key.cert.name, issuer: p.key.cert.issuerName, level: p.level, tsaTrusted: !!p.tsaTrusted, tsaFailed: !!p.tsaFailed });
+  return sealCertificateLine({ name: p.key.cert.name, issuer: p.key.cert.issuerName, level: p.level, tsaTrusted: !!p.tsaTrusted, tsaFailed: !!p.tsaFailed, orNone: !!p.key.metered });
 }
 
 /** The seal could not be got from any time-stamp service: the caller seals again at B-B. */
 export class TimeStampMissing extends Error {}
 
-/** Seals `pdf` with the plan's key; with time-stamp services in the plan, B-T or a TimeStampMissing. */
+/**
+ * Seals `pdf` with the plan's key; with time-stamp services in the plan, B-T or a TimeStampMissing. A metered key (a
+ * paid cloud signing) is never asked to sign twice: when its time stamp cannot be got or does not fit, the same
+ * signature is kept at B-B with the reason, and the certificate was drawn saying that can happen (sealLineFor).
+ */
 export async function sealPdf(pdf: Uint8Array, plan: SealPlan, when = new Date()): Promise<{ bytes: Buffer; done: SealDone }> {
   const prepared = await prepareSeal(pdf, when);
   const digest = crypto.createHash('sha256').update(coveredBytes(prepared.bytes, prepared.byteRange)).digest();
   let stamp: Awaited<ReturnType<typeof timeStamp>> | null = null;
-  const { der } = await buildSignedData(digest, plan.key.signer, plan.tsa.length ? async (signature) => {
+  let missing: string | null = null;
+  const { der, bare } = await buildSignedData(digest, plan.key.signer, plan.tsa.length ? async (signature) => {
     try {
-      stamp = await timeStamp(signature, plan.tsa, plan.until);
+      stamp = await timeStamp(signature, plan.tsa, plan.tsaMs != null ? Date.now() + plan.tsaMs : plan.until);
       // The certificate was drawn saying whether the service is checked against TSA_TRUST: never seal with less.
       if (plan.tsaTrusted && !stamp.trusted) throw new TsaError('the setting TSA_TRUST was taken away while the file was being sealed');
     } catch (e) {
-      throw new TimeStampMissing(e instanceof TsaError ? e.message : String((e as Error)?.message || e));
+      stamp = null;
+      const why = e instanceof TsaError ? e.message : String((e as Error)?.message || e);
+      if (!plan.key.metered) throw new TimeStampMissing(why);
+      missing = why;
+      return [];
     }
     return [signatureTimeStampAttribute(stamp.token)];
   } : undefined);
@@ -69,15 +82,20 @@ export async function sealPdf(pdf: Uint8Array, plan: SealPlan, when = new Date()
     bytes = fillSeal(prepared, der);
   } catch (e) {
     // A time-stamp token with a long chain can be more than the room kept for it: the seal without it fits.
-    if (stamp) throw new TimeStampMissing(`the time-stamp is too large to fit in the seal (${(e as Error).message})`);
-    throw e;
+    if (!stamp) throw e;
+    const why = `the time-stamp is too large to fit in the seal (${(e as Error).message})`;
+    if (!plan.key.metered) throw new TimeStampMissing(why);
+    stamp = null;
+    missing = why;
+    bytes = fillSeal(prepared, bare());
   }
   const st = stamp as Awaited<ReturnType<typeof timeStamp>> | null;
+  const failed = missing || plan.tsaFailed;
   return {
     bytes,
     done: {
       level: st ? 'B-T' : 'B-B', certHash: plan.key.hash, name: plan.key.cert.name, issuer: plan.key.cert.issuerName, at: when.toISOString(),
-      ...(st ? { tsaHost: st.host, tsaTime: st.time.toISOString(), tsaTrusted: st.trusted, tsaToken: st.token } : {}), ...(plan.tsaFailed ? { tsaFailed: plan.tsaFailed } : {}),
+      ...(st ? { tsaHost: st.host, tsaTime: st.time.toISOString(), tsaTrusted: st.trusted, tsaToken: st.token } : {}), ...(failed ? { tsaFailed: failed } : {}),
     },
   };
 }

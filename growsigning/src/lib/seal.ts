@@ -39,8 +39,17 @@ export type SealLevel = 'B-B' | 'B-T';
  * It speaks of "the signed PDF this certificate closes", not "this file", because the certificate is also handed out
  * on its own, cut out of the signed PDF (the evidence pack), and that extract carries no seal.
  */
-export function sealCertificateLine(o: { name: string; issuer: string; level: SealLevel; tsaTrusted?: boolean; tsaFailed?: boolean }): string {
-  const time = o.level === 'B-T'
+/**
+ * `orNone`: the seal is made by a paid cloud signing (src/server/sealcsc.ts), which is not asked to sign a second time
+ * when the time stamp then fails, so the certificate (drawn before the seal) says both what was asked and what happens
+ * without it. True either way.
+ */
+export function sealCertificateLine(o: { name: string; issuer: string; level: SealLevel; tsaTrusted?: boolean; tsaFailed?: boolean; orNone?: boolean }): string {
+  const time = o.level === 'B-T' && o.orNone
+    ? `${o.tsaTrusted
+      ? `The seal asks a time-stamp service for a trusted time stamp, so that its time does not rest on this server's clock alone.`
+      : `The seal asks a time-stamp service for a time stamp, which this server checks is over this seal and within five minutes of its own clock; it was not set up to check whose service it is.`} When no service answers in time, the seal carries none and its time is this server's clock. A reader shows which it is, and which service.`
+    : o.level === 'B-T'
     ? o.tsaTrusted
       ? `The seal carries a trusted time stamp from a time-stamp service, so its time does not rest on this server's clock alone. A reader shows which service.`
       : `The seal carries a time stamp from a time-stamp service. This server checked that it is over this seal and within five minutes of its own clock; it was not set up to check whose service it is. A reader shows which service.`
@@ -69,7 +78,7 @@ export const SEAL_CLOUD = 'On this server the seal is made by a cloud signing se
 export const TIME_STAMP_ONLY = 'With a time-stamp service set up, every completed PDF also gets a time stamp from that service over the whole file. A PDF reader shows it as a document time stamp: when the file existed in this form, by that service\'s clock, and whether it changed after. It does not say who made the file. When the service does not answer within a few seconds, the file goes out without it and its history says so.';
 
 /** The time in the seal, with and without a time-stamp service. */
-export const SEAL_TIME = 'The time in the seal is our server\'s clock. With a time-stamp service set up, the seal also carries a time stamp from that service, taken only when it is over this seal and within five minutes of our clock. We call it a trusted time stamp only when the operator has also given the server the certificates that service must lead to; otherwise nobody here checked whose service answered. When no service answers within a few seconds, the file is sealed without a time stamp and stays that way; the certificate of completion says which it was.';
+export const SEAL_TIME = 'The time in the seal is our server\'s clock. With a time-stamp service set up, the seal also carries a time stamp from that service, taken only when it is over this seal and within five minutes of our clock. We call it a trusted time stamp only when the operator has also given the server the certificates that service must lead to; otherwise nobody here checked whose service answered. When no service answers within a few seconds, the file is sealed without a time stamp and stays that way; the certificate of completion says which it was. With a cloud seal, the certificate is drawn before the seal and says the seal asks for a time stamp and carries none when no service answers; the history of the document and a PDF reader say which it was.';
 
 /** What it is not, for the "not" lists. */
 export const SEAL_LIMITS = 'A seal carries what is needed to check it after its certificate has expired (long-term validation) only when a time-stamp service is set up and the certificates name where to check them; then, right after the seal, the answers of those places are added to the file, and a time stamp over the whole file after them. When one of those places does not answer within a few seconds, the file goes out without them and the page of the document says so. Those additions are made once, at completion, and never renewed over the years, because that would change the file people hold. Files completed before the seal was set up are never sealed afterwards: their fingerprint is in emails people hold, and sealing them would change the file.';

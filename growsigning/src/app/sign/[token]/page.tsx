@@ -20,7 +20,7 @@ import { HelpChat } from '@/components/HelpChat';
 import { TextView } from '@/components/sign/TextView';
 import { PageFields, PageOthers, otherSource, type FieldCtx } from '@/components/sign/TextFields';
 import { SharedNotes, sharedSaid, ownAnswers, needsInitials, INITIALS_FIRST, autosaved, LockedShared } from '@/components/sign/SharedNotes';
-import { AUTO, TYPED, fieldName, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
+import { AUTO, TYPED, fieldName, fieldHint, groupKey, isBox, isMulti, buildItems, problemWith, pos, readKept, writeKept } from '@/components/sign/fields';
 import { useLiveLogic } from '@/components/sign/logic';
 import { keepTitle, accountMarks, tapOnMark, restoreMarks, saveBody, placeFlag, type Marks, type Box, type FlagSide } from '@/components/sign/fields';
 // Drawing, Approve and Decline on the page, first and last name, dates from dates, same answer, text style (fieldkinds).
@@ -1314,7 +1314,7 @@ export default function SignPage() {
     // A character limit is said under the box while the person is in it (sign.css .sg-doc-count), so typing that stops is never a mystery.
     const count = lengthHint(f, value);
     const again = askAgain && askAgain.id === f.id && askAgain.value === value ? askAgain.text : '';
-    const shared = { dir: 'auto' as const, 'aria-label': name + sharedSaid(f), 'aria-required': !!f.required, 'aria-invalid': wrong || !!again, 'aria-describedby': [count && `f-${f.id}-count`, again && `f-${f.id}-again`].filter(Boolean).join(' ') || undefined, placeholder: name + (f.required ? ' *' : ''), value, maxLength: inputLimit(f), title: wrong ? problemWith(f, value, env.date_format) : f.type === 'number' ? amountHint(f) || NUMBER_HINT : undefined };
+    const shared = { dir: 'auto' as const, 'aria-label': name + sharedSaid(f), 'aria-required': !!f.required, 'aria-invalid': wrong || !!again, 'aria-describedby': [count && `f-${f.id}-count`, again && `f-${f.id}-again`].filter(Boolean).join(' ') || undefined, placeholder: fieldHint(f) + (f.required ? ' *' : ''), value, maxLength: inputLimit(f), title: wrong ? problemWith(f, value, env.date_format) : f.type === 'number' ? amountHint(f) || NUMBER_HINT : undefined };
     return (
       <div key={f.id} {...common}>
         {isMulti(f)

@@ -61,6 +61,10 @@ const fake = {
   delayMs: 0,
   down: false,
   badSignature: false,
+  /** The certificate behind the credential, when the service changed it (a renewed key); the first one otherwise. */
+  leaf: null as Made | null,
+  /** An ECDSA credential that answers the raw form (IEEE P1363) of a signature whose first byte is 0x30. */
+  ec30: false,
 };
 let server: http.Server;
 let base = '';
@@ -72,6 +76,51 @@ function totp(secret: string, at = Date.now()) {
   const h = crypto.createHmac('sha1', Buffer.from(secret, 'base64')).update(c).digest();
   const o = h[h.length - 1] & 15;
   return String((h.readUInt32BE(o) & 0x7fffffff) % 1e6).padStart(6, '0');
+}
+
+// ECDSA on P-256 over a digest the fake service is given (as an HSM signs a hash), in the raw form r || s. Node signs
+// only messages, so it is done here by hand; only the tests use it.
+const P256 = { p: 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn, n: 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n,
+  g: [0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296n, 0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5n] as [bigint, bigint] };
+const md = (a: bigint, m: bigint) => ((a % m) + m) % m;
+const inv = (a: bigint, m: bigint) => {
+  let [r0, r1, s0, s1] = [md(a, m), m, 1n, 0n];
+  while (r1) {
+    const q = r0 / r1;
+    [r0, r1, s0, s1] = [r1, r0 - q * r1, s1, s0 - q * s1];
+  }
+  return md(s0, m);
+};
+type Pt = [bigint, bigint] | null;
+const padd = (a: Pt, b: Pt): Pt => {
+  if (!a) return b;
+  if (!b) return a;
+  const { p } = P256;
+  if (a[0] === b[0] && md(a[1] + b[1], p) === 0n) return null;
+  const l = a[0] === b[0] ? md((3n * a[0] * a[0] - 3n) * inv(2n * a[1], p), p) : md((b[1] - a[1]) * inv(b[0] - a[0], p), p);
+  const x = md(l * l - a[0] - b[0], p);
+  return [x, md(l * (a[0] - x) - a[1], p)];
+};
+const pmul = (k: bigint, pt: Pt): Pt => {
+  let r: Pt = null;
+  for (; k; k >>= 1n, pt = padd(pt, pt)) if (k & 1n) r = padd(r, pt);
+  return r;
+};
+const bigOf = (b: Buffer) => BigInt('0x' + b.toString('hex'));
+const be32 = (x: bigint) => Buffer.from(x.toString(16).padStart(64, '0'), 'hex');
+// r depends only on k, so a k whose r starts with byte 0x30 is found once per key and used for every signature (never
+// do that with a real key: it gives the key away; this one is thrown away with the test).
+const kFor = new Map<crypto.KeyObject, { k: bigint; r: bigint }>();
+function ecdsaDigest(key: crypto.KeyObject, digest: Buffer): Buffer {
+  const d = bigOf(Buffer.from(key.export({ format: 'jwk' }).d!, 'base64url'));
+  let kr = kFor.get(key);
+  while (!kr) {
+    const k = md(bigOf(crypto.randomBytes(32)), P256.n);
+    const r = k ? md(pmul(k, P256.g)![0], P256.n) : 0n;
+    if (r && be32(r)[0] === 0x30) kFor.set(key, (kr = { k, r }));
+  }
+  const sv = md(inv(kr.k, P256.n) * (bigOf(digest) + kr.r * d), P256.n);
+  return Buffer.concat([be32(kr.r), be32(sv)]);
 }
 
 function answer(res: http.ServerResponse, status: number, body: any) {
@@ -104,7 +153,7 @@ function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     if (p === '/csc/v0/credentials/list') return answer(res, 200, { credentialIDs: body.clientData === 'DS_ESEAL' ? ['cred-eseal-1'] : [] });
     if (p === '/csc/v0/credentials/info') {
       if (body.credentialID !== 'cred-eseal-1') return answer(res, 400, { error: 'invalid_request', error_description: 'unknown credential' });
-      return answer(res, 200, { key: { status: 'enabled', algo: ['1.2.840.113549.1.1.11'], len: 2048 }, cert: { status: 'valid', certificates: [leaf, inter, root].map((c) => c.der.toString('base64')) }, authMode: fake.authMode, SCAL: '1', multisign: true });
+      return answer(res, 200, { key: { status: 'enabled', algo: fake.ec30 ? ['1.2.840.10045.4.3.2'] : ['1.2.840.113549.1.1.11'], len: 2048 }, cert: { status: 'valid', certificates: [fake.leaf || leaf, inter, root].map((c) => c.der.toString('base64')) }, authMode: fake.authMode, SCAL: '1', multisign: true });
     }
     if (p === '/csc/v0/credentials/authorize') {
       if (fake.authMode === 'explicit' && body.OTP !== totp(fake.totpSecret)) return answer(res, 400, { error: 'invalid_otp', error_description: 'The OTP is invalid' });
@@ -115,8 +164,9 @@ function handle(req: http.IncomingMessage, res: http.ServerResponse) {
       if (JSON.stringify(sad.hash) !== JSON.stringify(body.hash)) return answer(res, 400, { error: 'invalid_request', error_description: 'hash not authorized' });
       // RSA PKCS #1 v1.5 over the digest it was sent: the DigestInfo is made here, as an HSM does.
       const digest = Buffer.from(body.hash[0], 'base64');
+      if (fake.ec30) return answer(res, 200, { signatures: [ecdsaDigest((fake.leaf || leaf).key, digest).toString('base64')] });
       const info = Buffer.concat([Buffer.from('3031300d060960864801650304020105000420', 'hex'), digest]);
-      let sig = crypto.privateEncrypt({ key: leaf.key, padding: crypto.constants.RSA_PKCS1_PADDING }, info);
+      let sig = crypto.privateEncrypt({ key: (fake.leaf || leaf).key, padding: crypto.constants.RSA_PKCS1_PADDING }, info);
       if (fake.badSignature) sig = Buffer.from(sig.map((b, i) => (i === 10 ? b ^ 1 : b)));
       return answer(res, 200, { signatures: [sig.toString('base64')] });
     }
@@ -131,7 +181,7 @@ const cscEnv = (more: Record<string, string> = {}) => ({
 const reset = () => {
   fake.calls = [];
   fake.tokens.clear();
-  Object.assign(fake, { expiresIn: 3600, authMode: 'implicit', totpSecret: '', delayMs: 0, down: false, badSignature: false });
+  Object.assign(fake, { expiresIn: 3600, authMode: 'implicit', totpSecret: '', delayMs: 0, down: false, badSignature: false, leaf: null, ec30: false });
 };
 const calls = (p: string) => fake.calls.filter((c) => c.path.endsWith(p));
 
@@ -502,4 +552,208 @@ test('TSA_TRUST=bundled: the built-in roots are the ones in deploy/tsa-roots.pem
   assert.equal(tsaMod.checkAnswer(ans, imprint, nonce, [x509.readCert(newRoot.der)]).trusted, true);
   assert.throws(() => tsaMod.checkAnswer(ans, imprint, nonce, [x509.readCert(makeCert({ cn: 'Stranger', ca: true }).der)]), /does not lead to one in TSA_TRUST/);
   settings({});
+});
+
+// ---- After review: paid signings, time-stamp seconds, alerts, a renewed key, the token, codes ---------------------
+
+const signs = () => calls('/signatures/signHash').length;
+
+test('a slow but working signing service does not use up the seconds for the seal\'s time stamp: B-T with one signing', async () => {
+  reset();
+  settings(cscEnv({ TSA_URL: 'https://tsa.test/stamp', TSA_TRUST: write('tsa-trust3.pem', tsaRoot.pem) }));
+  const stub = withTsa((req) => tsaAnswer(req, tsa, [tsaRoot]));
+  try {
+    await complete(); // warm: token and chain kept
+    fake.calls = [];
+    // 2.5 seconds for each of authorize and signHash: 5 seconds at the service, more than the 4 for time stamps.
+    fake.delayMs = 2500;
+    const { id } = await complete();
+    const row = s.db.get('SELECT seal_level, seal_tsa FROM envelopes WHERE id=?', id);
+    assert.equal(row.seal_level, 'B-T');
+    assert.equal(row.seal_tsa, 'trusted');
+    assert.equal(signs(), 1, 'signed once');
+    assert.equal(calls('/credentials/authorize').length, 1);
+  } finally {
+    stub.restore();
+    reset();
+  }
+});
+
+test('when the time stamp fails after a cloud signature, the same signature is kept at B-B with the reason: never a second paid signing, and the certificate said so beforehand', async () => {
+  reset();
+  settings(cscEnv({ TSA_URL: 'https://tsa.test/stamp', TSA_TRUST: write('tsa-trust4.pem', tsaRoot.pem) }));
+  await csc.cscReady();
+  // What the certificate of completion says for a cloud seal that asks for a time stamp: true with it and without.
+  const plan = seal.sealPlan()!;
+  assert.equal(plan.level, 'B-T');
+  const line = seal.sealLineFor({ seal_plan: plan })!;
+  assert.match(line, /asks a time-stamp service for a trusted time stamp/);
+  assert.match(line, /When no service answers in time, the seal carries none and its time is this server's clock/);
+  assert.doesNotMatch(line, /carries a trusted time stamp/);
+  const down = withTsa(() => 503);
+  try {
+    fake.calls = [];
+    const { id, pdf } = await complete();
+    const row = s.db.get('SELECT seal_level, seal_tsa FROM envelopes WHERE id=?', id);
+    assert.equal(row.seal_level, 'B-B');
+    assert.equal(row.seal_tsa, null);
+    assert.equal(signs(), 1, 'one signing, not two');
+    const chk = (await seal.checkSeal(pdf))!;
+    assert.equal(chk.intact, true);
+    assert.equal(chk.whole_file, true);
+    assert.equal(chk.level, 'B-B');
+    const sealed = auditOf(id).find((a) => /^Sealed by /.test(a.action))!;
+    assert.match(sealed.detail, /The time in the seal is this server's clock\. The time-stamp service could not give a time stamp: .*answered HTTP 503/);
+    if (PDFSIG) assert.match(pdfsig(write('cloud-bb.pdf', pdf)), /Signature is Valid/);
+  } finally {
+    down.restore();
+  }
+  // A key file (free to sign with) keeps the old way: sealed again at B-B under a certificate that says so.
+  settings({ SEAL_KEY_PEM: leaf.keyPem, SEAL_CERT_PEM: leaf.pem, SEAL_CHAIN_PEM: inter.pem + root.pem, TSA_URL: 'https://tsa.test/stamp', TSA_TRUST: write('tsa-trust5.pem', tsaRoot.pem) });
+  const p2 = seal.sealPlan()!;
+  assert.doesNotMatch(seal.sealLineFor({ seal_plan: p2 })!, /asks a time-stamp service/);
+  settings({});
+});
+
+test('two builds of the same completed file wait for each other (the timer and the last Finish): one signing', async () => {
+  reset();
+  settings(cscEnv());
+  const { id } = await complete();
+  const env = await import('../src/server/envelopes.ts');
+  s.db.run('UPDATE envelopes SET final_sha256=NULL, final_size=NULL WHERE id=?', id);
+  fake.calls = [];
+  fake.delayMs = 300;
+  const [a, b] = await Promise.all([env.buildFinal(id), env.buildFinal(id)]);
+  assert.equal(a, true);
+  assert.equal(b, true);
+  assert.equal(signs(), 1);
+  assert.ok(s.db.get('SELECT final_sha256 FROM envelopes WHERE id=?', id).final_sha256);
+  reset();
+});
+
+test('a render that is thrown away (it could not be made PDF/A) is not sealed or time-stamped', async () => {
+  reset();
+  settings(cscEnv({ TSA_URL: 'https://tsa.test/stamp' }));
+  const stub = withTsa((req) => tsaAnswer(req, tsa, [tsaRoot]));
+  try {
+    const { id } = await complete();
+    const fp = await import('../src/server/finalpipe.ts');
+    const pdfa = await import('../src/server/pdfa.ts');
+    fake.calls = [];
+    const asked = stub.asked();
+    const page = new Uint8Array(Buffer.from('%PDF-1.7 thrown away'));
+    pdfa.discarded.add(page);
+    const e = s.db.get('SELECT * FROM envelopes WHERE id=?', id);
+    const out = await fp.finishPdf({ ...e, id: 'env_none_' + id }, async () => page);
+    assert.equal(out, page);
+    assert.equal(signs(), 0);
+    assert.equal(stub.asked(), asked, 'no time stamp asked for');
+  } finally {
+    stub.restore();
+    settings({});
+  }
+});
+
+test('while the service is down, the operators are told once for the reason, not once per document; the log names each document', async () => {
+  reset();
+  settings(cscEnv());
+  await csc.cscReady();
+  fake.down = true;
+  s.db.run("UPDATE support_requests SET status='closed' WHERE message LIKE 'Completed PDFs are not being sealed%'");
+  const before = s.db.get("SELECT COUNT(*) n FROM support_requests WHERE message LIKE 'Completed PDFs are not being sealed%'").n;
+  const { out: a, said: sa } = await told(() => complete());
+  const { out: b, said: sb } = await told(() => complete());
+  const { out: c, said: sc } = await told(() => complete());
+  assert.equal(s.db.get("SELECT COUNT(*) n FROM support_requests WHERE message LIKE 'Completed PDFs are not being sealed%'").n, before + 1, 'one alert');
+  for (const [x, said] of [[a, sa], [b, sb], [c, sc]] as const) assert.match(said, new RegExp(`envelope ${x.id} was completed without a seal`));
+  assert.doesNotMatch(sb + sc, /\[seal\] Completed PDFs are not being sealed/, 'the alert is not repeated');
+  reset();
+});
+
+test('a key renewed behind the same credential: the first seal fails the check and the chain is fetched again, so the next one seals with the new certificate', async () => {
+  reset();
+  settings(cscEnv());
+  await complete();
+  assert.equal(calls('/credentials/info').length, 1);
+  // SSL.com renews the key: it now signs with a new one, and its chain names the new certificate.
+  fake.leaf = makeCert({ cn: 'Example Operator Cloud Seal 2027', issuer: inter, ku: 0xc0 });
+  const { out: first, said } = await told(() => complete());
+  assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', first.id).seal_level, null, 'the one signature that did not verify is not used');
+  assert.match(said, /does not verify with the seal certificate[\s\S]*fetched again/);
+  const { id, pdf } = await complete();
+  assert.equal(calls('/credentials/info').length, 2, 'fetched again before the next seal, not a day later');
+  assert.equal(s.db.get('SELECT seal_cert FROM envelopes WHERE id=?', id).seal_cert, crypto.createHash('sha256').update(fake.leaf.der).digest('hex'));
+  assert.equal((await seal.checkSeal(pdf))!.name, 'Example Operator Cloud Seal 2027');
+  reset();
+});
+
+test('seals that start together share one password grant; a token refused once is fetched again only once', async () => {
+  reset();
+  settings(cscEnv());
+  await csc.cscReady();
+  const key = (sealkey.sealState() as any).key;
+  const msg = (i: number) => Buffer.from(`attributes ${i}`);
+  const go = () => Promise.all([0, 1, 2, 3].map((i) => key.signer.sign(crypto.createHash('sha256').update(msg(i)).digest(), msg(i))));
+  (globalThis as any).__sgCsc.token = undefined;
+  fake.calls = [];
+  await go();
+  assert.equal(calls('/oauth2/token').length, 1, 'one grant for four seals');
+  // The service forgets the token: four 401s, one new grant.
+  fake.tokens.clear();
+  fake.calls = [];
+  await go();
+  assert.equal(calls('/oauth2/token').length, 1);
+  assert.equal(signs(), 4);
+  reset();
+});
+
+test('an ECDSA credential that answers the raw form of a signature starting with byte 0x30 still seals', async () => {
+  reset();
+  fake.ec30 = true;
+  fake.leaf = makeCert({ cn: 'Example Operator EC Seal', issuer: inter, ku: 0xc0, ec: true });
+  ecdsaDigest(fake.leaf.key, Buffer.alloc(32)); // the search for k is done here, not while a seal waits
+  settings(cscEnv());
+  for (let i = 0; i < 2; i++) {
+    const { out: { id, pdf }, said } = await told(() => complete());
+    assert.equal(s.db.get('SELECT seal_level FROM envelopes WHERE id=?', id).seal_level, 'B-B', said);
+    const sd = sealcms.parseSignedData(cmsOf(pdf).cms);
+    assert.equal(sd.signers[0].signatureAlgorithm, '1.2.840.10045.4.3.2');
+    assert.equal((await seal.checkSeal(pdf))!.intact, true);
+  }
+  assert.equal(calls('/signatures/signHash')[0].body.signAlgo, '1.2.840.10045.4.3.2');
+  reset();
+});
+
+test('with one-time codes, a code refused just as its 30 seconds end is tried once more with the next one', async () => {
+  reset();
+  fake.authMode = 'explicit';
+  fake.totpSecret = TOTP;
+  settings(cscEnv({ SEAL_CSC_TOTP_SECRET: TOTP }));
+  await csc.cscReady();
+  const key = (sealkey.sealState() as any).key;
+  const msg = Buffer.from('attributes at the edge');
+  const real = Date.now;
+  // The clock starts just before a 30-second step ends and moves 10 ms each time it is read: the first code is read
+  // in the old step, and the service (same clock) checks it in the new one.
+  const end = (Math.floor(real() / 30_000) + 1) * 30_000;
+  let t = end - 25;
+  Date.now = () => (t += 10);
+  try {
+    fake.calls = [];
+    await key.signer.sign(crypto.createHash('sha256').update(msg).digest(), msg);
+  } finally {
+    Date.now = real;
+  }
+  const otps = calls('/credentials/authorize').map((c) => c.body.OTP);
+  assert.equal(otps.length, 2);
+  assert.notEqual(otps[0], otps[1]);
+  assert.equal(signs(), 1);
+  reset();
+});
+
+test('the outside list names every setting the cloud seal sends, the client secret included', async () => {
+  const outside = await import('../src/lib/outside.ts');
+  const on = outside.outsideServices({ SEAL_CSC_CLIENT_ID: 'a', SEAL_CSC_USERNAME: 'b', SEAL_CSC_PASSWORD: 'c' }).find((x) => x.id === 'seal')!;
+  assert.match(on.purpose, /client secret/);
+  for (const k of ['SEAL_CSC_CLIENT_SECRET', 'SEAL_CSC_CREDENTIAL_ID', 'SEAL_CSC_TOTP_SECRET', 'SEAL_CSC_CLIENT_ID', 'SEAL_CSC_USERNAME', 'SEAL_CSC_PASSWORD']) assert.ok(on.settings.includes(k), k);
 });

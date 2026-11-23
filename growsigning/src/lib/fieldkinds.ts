@@ -292,7 +292,7 @@ export const YOUR_TEXT_NAME = 'Your text';
 export const KIND_HINT: Record<string, string> = {
   text: 'They type here',
   note: 'You type, they read',
-  email: 'Their email, filled in for them',
+  email: 'Filled in for them',
 };
 /** The longer sentence, said once a kind is picked or selected. */
 export const KIND_SAYS: Record<string, string> = {
@@ -300,8 +300,10 @@ export const KIND_SAYS: Record<string, string> = {
   note: 'Your own words, printed on the page. Nobody can type here when signing.',
   email: 'Prints the email address you sent the document to. They type nothing.',
 };
-/** What the signer reads in an empty box to type into when the sender gave it no label. */
+/** What the signer reads in an empty box to type into when the sender gave it no label: the hint inside the blank only. */
 export const TYPE_HERE = 'Type here';
+/** What that same box is called in a sentence or a list on the signing side ("Text box is still empty"). */
+export const TEXT_BOX_NAME = 'Text box';
 /** What a "Your text" box says in the editor only, while it is still empty. Never sent, never printed. */
 export const YOUR_TEXT_EMPTY = 'Type your text';
 /** The word older drafts put into a new box before anything was typed. It was never the sender's wording. */
@@ -317,5 +319,18 @@ export const isLeftoverNote = (f: any): boolean => f?.type === 'note' && noteWor
 export const unwrittenNotes = <F extends { type: string; value?: any }>(fields: F[]): F[] => fields.filter((f) => isEmptyNote(f) || isLeftoverNote(f));
 /** What a "Your text" box is saved with: its words as typed, or nothing at all when there are none. */
 export const noteValue = (value: any): string | null => (String(value ?? '').trim() ? String(value) : null);
+/**
+ * A "Your text" box turned into a blank for `recipientId` to type in, in the same place: for the sender who dropped
+ * "Your text" and meant the person who signs to type there. Whatever words it held are dropped: they were the
+ * sender's, and a blank starts empty.
+ */
+export const asFillIn = <F extends Record<string, any>>(f: F, recipientId: string): F =>
+  f?.type === 'note' && recipientId ? { ...f, type: 'text', recipient_id: recipientId, readonly: false, required: true, value: '', label: f.label || '' } : f;
+/** The roles a blank can be for: the people who sign. */
+export const SIGNER_ROLES_TYPING = ['signer', 'inperson'];
+/** The button that does it, in the review step and in the side panel. */
+export const LET_THEM_TYPE = 'Let them type here';
+/** What is on an Email field in the editor: whose address is printed there. */
+export const emailTag = (f: any, person?: string | null): string => String(f?.label || '').trim() || (person ? `${person}\u2019s email` : 'Email');
 /** What is on a "Fill in" box in the editor: its label, or who types there. */
 export const fillInTag = (f: any, person?: string | null): string => String(f?.label || '').trim() || (person ? `${person} types here` : FILL_IN_NAME);

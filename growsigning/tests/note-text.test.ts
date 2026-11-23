@@ -8,9 +8,12 @@ import { readFileSync } from 'node:fs';
 import { boot, Client, signUp, upload, tokenFor, PNG, type Server } from './helpers.ts';
 import {
   FILL_IN_NAME, YOUR_TEXT_NAME, KIND_HINT, KIND_SAYS, TYPE_HERE, YOUR_TEXT_EMPTY, OLD_NOTE_WORD,
-  noteWords, isEmptyNote, isLeftoverNote, unwrittenNotes, noteValue, fillInTag,
+  noteWords, isEmptyNote, isLeftoverNote, unwrittenNotes, noteValue, fillInTag, emailTag, asFillIn, LET_THEM_TYPE, TEXT_BOX_NAME,
 } from '../src/lib/fieldkinds.ts';
-import { LABEL, fieldName, buildItems } from '../src/components/sign/fields.ts';
+import { LABEL, fieldName, fieldHint, buildItems } from '../src/components/sign/fields.ts';
+import { SUGGEST_WORDS } from '../src/lib/aiassist.ts';
+import { tagChip } from '../src/lib/writedoc.ts';
+import { sweepLeftoverNotes } from '../src/server/db.ts';
 import { HEARD_AS, unlabelled } from '../src/lib/phone.ts';
 import { COMMON_FIELDS, paletteKinds } from '../src/lib/editorux.ts';
 import { FIELD_TYPES } from '../src/server/envelopes.ts';
@@ -76,14 +79,18 @@ test('the two kinds are named for who types, and the stored types are unchanged'
   assert.ok(!paletteKinds(all).includes('note') && !paletteKinds(all).includes('email'));
   assert.ok(paletteKinds(all, { open: true }).includes('note') && paletteKinds(all, { open: true }).includes('email'));
   assert.equal(TLABEL.email, 'Email');
-  assert.match(KIND_HINT.email, /^Their email, filled in for them$/);
+  assert.equal(KIND_HINT.email, 'Filled in for them');
+  // In the full list the two that get mixed up stand next to each other.
+  assert.equal(all.indexOf('note'), all.indexOf('text') + 1);
 });
 
 test('the hint is on the screen where the kind is chosen, and the names are the same in the editor, review, help, README and API description', () => {
   const step = read('src/components/editor/StepFields.tsx');
   assert.match(step, /<small id=\{`ed-kind-\$\{t\}`\}>\{KIND_HINT\[t\]\}<\/small>/, 'the one line under the name in the list of kinds');
   assert.match(step, /aria-label=\{KIND_HINT\[t\] \? label : undefined\} aria-describedby=\{KIND_HINT\[t\] \? `ed-kind-\$\{t\}` : undefined\}/, 'a screen reader hears the name, then the hint');
-  assert.match(step, /tool === 'text' \? 'Click on the page where they should type\.' : tool === 'note' \? 'Click on the page where your words should go\.'/);
+  // "Tap" on a touch screen, "Click" with a mouse.
+  assert.match(step, /tool === 'text' \? `\$\{press\} on the page where they should type\.` : tool === 'note' \? `\$\{press\} on the page where your words should go\.`/);
+  assert.match(step, /setPress\(window\.matchMedia\('\(pointer: coarse\)'\)\.matches \? 'Tap' : 'Click'\)/);
   assert.match(step, /id="ed-note-text"/);
   assert.doesNotMatch(step, />Text<\/span><textarea/, 'the box for your own words is no longer called Text');
   assert.match(read('src/components/editor/StepReview.tsx'), /\{!closed && <NoteCheck ed=\{ed\} \/>\}/);
@@ -146,12 +153,32 @@ test('a Fill in field shows who types there until it has a label, and the label 
   assert.equal(fillInTag({ type: 'text', label: '  ' }, null), 'Fill in');
   // On the signing page: the label, or "Type here" when the sender gave none. Never the word "Text".
   assert.equal(fieldName({ type: 'text', label: 'Email for notices' }), 'Email for notices');
-  assert.equal(fieldName({ type: 'text', label: '' }), TYPE_HERE);
+  // "Type here" is only the hint inside the blank. In a sentence or a list the same field is a "Text box", so nothing
+  // reads '"Type here" is still empty'.
+  assert.equal(fieldHint({ type: 'text', label: '' }), TYPE_HERE);
+  assert.equal(fieldHint({ type: 'text', label: 'Email for notices' }), 'Email for notices');
+  assert.equal(fieldHint({ type: 'number', label: '' }), 'Number');
   assert.equal(TYPE_HERE, 'Type here');
+  assert.equal(fieldName({ type: 'text', label: '' }), TEXT_BOX_NAME);
+  assert.equal(TEXT_BOX_NAME, 'Text box');
+  assert.equal(`${fieldName({ type: 'text', label: '' })} is still empty.`, 'Text box is still empty.');
+  // The sender's other screens use the editor's name for the kind too.
+  assert.equal(SUGGEST_WORDS.text, FILL_IN_NAME);
+  assert.equal(tagChip({ type: 'text', signer: 1, label: '' }), 'Fill in, Person 1');
+  // An Email field in the editor says whose address it prints, and carries no "required" star: they type nothing.
+  assert.equal(emailTag({ type: 'email', label: '' }, 'Ana Signer'), 'Ana Signer\u2019s email');
+  assert.equal(emailTag({ type: 'email', label: 'Work email' }, 'Ana Signer'), 'Work email');
+  assert.match(read('src/components/editor/StepFields.tsx'), /f\.type !== 'note' && f\.type !== 'email' && <span className="req">/);
   assert.equal(HEARD_AS.text, LABEL.text, 'the review step quotes what a screen reader says');
   assert.notEqual(LABEL.note, 'Note');
   const page = read('src/app/sign/[token]/page.tsx');
-  assert.match(page, /placeholder: name \+ \(f\.required \? ' \*' : ''\)/, 'the blank shows its label as the hint');
+  assert.match(page, /placeholder: fieldHint\(f\) \+ \(f\.required \? ' \*' : ''\)/, 'the blank shows its label as the hint');
+  // On a phone the bar under a dropped Fill in field says who types there, and its button says what is still to do.
+  const step = read('src/components/editor/StepFields.tsx');
+  assert.match(step, /<b>\{selected\.type === 'text' \? fillInTag\(selected, /);
+  assert.match(step, /sheet \? 'Hide settings' : needsLabel\(selected\) \? 'Add a label' : 'Settings'/);
+  assert.match(step, /\(the hint they see in the blank\)/);
+  assert.doesNotMatch(step, /hear from a screen reader/);
   // A Fill in field without a label is still brought up at review; the sender's own words never are.
   assert.deepEqual(unlabelled([{ type: 'text', label: '' }, { type: 'text', label: 'Email for notices' }, { type: 'note', readonly: true, value: '' }]).length, 1);
   // Next goes to a Fill in field, required or not, and never to the sender's own words.
@@ -265,4 +292,83 @@ test('a box kept with only spaces from before this rule is still shown to nobody
   db.run("UPDATE fields SET value='   ' WHERE envelope_id=? AND type='note'", r.data.envelope.id);
   const a = await signer(r.data.envelope.id, 'ana3@notetext.example');
   assert.deepEqual(a.v.others.filter((f: any) => f.type === 'note'), []);
+});
+
+// ---- After the reviews ----------------------------------------------------------------------------------------------
+
+test('"Let them type here": a "Your text" box becomes a blank for the person, in the same place', () => {
+  const note = { id: 'f1', type: 'note', recipient_id: null, page: 0, x: 0.5, y: 0.4, w: 0.25, h: 0.026, required: true, readonly: true, value: 'Note', label: '' };
+  const f = asFillIn(note, 'r1');
+  assert.deepEqual({ type: f.type, recipient_id: f.recipient_id, readonly: f.readonly, required: f.required, value: f.value }, { type: 'text', recipient_id: 'r1', readonly: false, required: true, value: '' });
+  assert.deepEqual([f.id, f.page, f.x, f.y, f.w, f.h], ['f1', 0, 0.5, 0.4, 0.25, 0.026], 'the same box, where it was');
+  assert.equal(asFillIn(note, ''), note, 'with nobody to type there, nothing changes');
+  const other = { id: 'f2', type: 'signature', recipient_id: 'r1' };
+  assert.equal(asFillIn(other, 'r2'), other, 'only a "Your text" box is changed');
+  assert.equal(LET_THEM_TYPE, 'Let them type here');
+  // The button is at step 3 beside "Write it", and in the box's own settings.
+  const check = read('src/components/editor/NoteCheck.tsx');
+  assert.match(check, /data-act="let-them-type" onClick=\{\(\) => letThemType\(f\)\}/);
+  assert.match(read('src/components/editor/StepFields.tsx'), /id="ed-let-them" onClick=\{\(\) => letThemType\(selected\)\}>\{LET_THEM_TYPE\}/);
+  // The warning itself is one short line, in the field's real name.
+  assert.match(check, /will be left off the document\./);
+  assert.doesNotMatch(check, /box of your own text|boxes of your own text/);
+  assert.doesNotMatch(check, /remove it and add a/);
+  // An empty box that is clicked later opens with the cursor in its words, as when it was dropped.
+  assert.match(read('src/components/editor/StepFields.tsx'), /isEmptyNote\(f\) && !locked && writeIn\(f\.id\)/);
+});
+
+test('a note sent for a person and with no words is refused with the way out; the editor\'s own empty box is not', async () => {
+  const s = await person('Ada Api', 'ada@notetext.example');
+  const file = await upload(s, 1);
+  const base = { subject: 'Api', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r1', role: 'signer', name: 'Ana Signer', email: 'ana5@notetext.example' }] };
+  const sig = box('sig', 'r1', 'signature', 0.8, { h: 0.06, required: true });
+  const wrong = await s.post('/envelopes', { ...base, fields: [sig, { ...box('n', null, 'note', 0.3), recipient_id: 'r1', label: 'Email for notices', required: true, value: '' }], send: true });
+  assert.equal(wrong.status, 400, JSON.stringify(wrong.data));
+  assert.match(JSON.stringify(wrong.data), /use the type \\"text\\"/);
+  assert.match(JSON.stringify(wrong.data), /Nothing was saved/);
+  assert.equal(db.all("SELECT 1 FROM envelopes WHERE subject='Api'").length, 0);
+  // With words it is the sender's text as before, for nobody in particular. With no recipient and no words it is the editor's empty box.
+  const fine = await s.post('/envelopes', { ...base, fields: [sig, { ...box('n', null, 'note', 0.3), recipient_id: 'r1', value: 'Two copies.' }, box('n2', null, 'note', 0.35, { value: '' })] });
+  assert.equal(fine.status, 200, JSON.stringify(fine.data));
+  assert.deepEqual(db.all("SELECT recipient_id, value FROM fields WHERE envelope_id=? AND type='note' ORDER BY y", fine.data.envelope.id).map((x: any) => [x.recipient_id, x.value]), [[null, 'Two copies.'], [null, null]]);
+});
+
+test('boxes that still hold the old starting word "Note" are emptied once in drafts and templates, so no path prints it', async () => {
+  const s = await person('Lea Leftover', 'lea@notetext.example');
+  const file = await upload(s, 1);
+  const tpl = await s.post('/envelopes', {
+    kind: 'template', subject: 'Old template', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r', role: 'signer', role_name: 'Tenant' }],
+    fields: [box('old', null, 'note', 0.1, { value: 'x' }), box('own', null, 'note', 0.2, { value: 'Note: rent is due on the 1st.' }), box('sig', 'r', 'signature', 0.85, { required: true, h: 0.06 })],
+  });
+  assert.equal(tpl.status, 200, JSON.stringify(tpl.data));
+  const tid = tpl.data.envelope.id;
+  // An envelope that is already out keeps what its signers were shown.
+  const out = await s.post('/envelopes', { subject: 'Out', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r1', role: 'signer', name: 'Ana Signer', email: 'ana6@notetext.example' }], fields: [box('seen', null, 'note', 0.1, { value: 'x' }), box('sig', 'r1', 'signature', 0.8, { h: 0.06, required: true })], send: true });
+  assert.equal(out.status, 200, JSON.stringify(out.data));
+  // As an older version left them: the word the old editor started every new box with.
+  const leave = (eid: string) => db.run("UPDATE fields SET value='Note' WHERE envelope_id=? AND type='note' AND y < 0.15", eid);
+  leave(tid);
+  leave(out.data.envelope.id);
+  const notes = (eid: string) => db.all("SELECT value FROM fields WHERE envelope_id=? AND type='note' ORDER BY y", eid).map((x: any) => x.value);
+  assert.deepEqual(notes(tid), ['Note', 'Note: rent is due on the 1st.']);
+  // The pass ran when the database opened. Run it as a database from before this change would.
+  db.run("DELETE FROM once_done WHERE name='leftover_notes'");
+  assert.equal(sweepLeftoverNotes(db.db()), 1, 'the template\'s box');
+  assert.deepEqual(notes(tid), [null, 'Note: rent is due on the 1st.'], 'words that only start with Note are the sender\'s and stay');
+  assert.deepEqual(notes(out.data.envelope.id), ['Note'], 'an envelope already sent is left as its signers saw it');
+  assert.equal(sweepLeftoverNotes(db.db()), 0, 'once only');
+  // After the pass a box that says "Note" was typed by its sender, and is kept.
+  const typed = await s.post('/envelopes', { subject: 'Typed', documents: [{ id: 'd', file_id: file.id }], recipients: [{ id: 'r1', role: 'signer', name: 'Ana Signer', email: 'ana8@notetext.example' }], fields: [box('t', null, 'note', 0.1, { value: 'Note' })] });
+  assert.equal(sweepLeftoverNotes(db.db()), 0);
+  assert.deepEqual(notes(typed.data.envelope.id), ['Note']);
+  // The template used without the editor, through the API and a bulk send: the word is on nobody's page.
+  const used = await s.post('/envelopes', { template_id: tid, recipients: { Tenant: { name: 'Tia Tenant', email: 'tia2@notetext.example' } }, send: true });
+  assert.equal(used.status, 200, JSON.stringify(used.data));
+  const tia = await signer(used.data.envelope.id, 'tia2@notetext.example');
+  assert.deepEqual(tia.v.others.filter((f: any) => f.type === 'note').map((f: any) => f.value), ['Note: rent is due on the 1st.']);
+  const bulk = await s.post('/bulk', { template_id: tid, rows: [{ Tenant: { name: 'Bo Bulk', email: 'bo2@notetext.example' } }] });
+  assert.equal(bulk.status, 200, JSON.stringify(bulk.data));
+  const be = db.get("SELECT e.id FROM envelopes e JOIN recipients r ON r.envelope_id=e.id WHERE r.email='bo2@notetext.example'").id;
+  const bo = await signer(be, 'bo2@notetext.example');
+  assert.deepEqual(bo.v.others.filter((f: any) => f.type === 'note').map((f: any) => f.value), ['Note: rent is due on the 1st.']);
 });
