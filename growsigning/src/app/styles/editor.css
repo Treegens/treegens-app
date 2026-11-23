@@ -1,0 +1,239 @@
+/* Styles for the editor screens. Shared tokens and components live in ../globals.css. */
+
+/* Read by screen readers, not drawn. Still focusable, so a hidden file input keeps working from the keyboard. */
+.ed-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.ed-only-sm { display: none; }
+.ed-break { overflow-wrap: anywhere; }
+.ed-narrow { margin: 0 auto; max-width: 860px; }
+.ed-review { max-width: 760px; }
+.ed .palette button:focus-visible, .ed .steps button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.ed .palette button:disabled { opacity: 0.5; cursor: not-allowed; }
+.ed .btn.ed-danger { background: var(--red); border-color: var(--red); color: #fff; }
+.ed .btn.ed-danger:hover { background: #932d25; border-color: #932d25; }
+.ed-top .btn.ghost { gap: 4px; }
+
+/* A strip under the top bar: "this envelope is already out", or "your changes are not saved yet". */
+.ed-banner { background: var(--blue-soft); color: #1d3f6e; border-bottom: 1px solid #cfdcf0; padding: 10px 18px; font-size: 14px; }
+.ed-banner.err { background: var(--red-soft); color: #7d241d; border-bottom-color: #f1cfca; }
+
+/* Step 1 */
+.ed-drop { display: block; position: relative; }
+.ed-drop:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
+.ed-uploads { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.ed-uploads li { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
+.ed-uploads li.err { background: var(--red-soft); border-color: #f1cfca; color: #7d241d; }
+.ed-upload-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; min-width: 0; }
+.ed-upload-head > span:first-child { min-width: 0; flex: 1; }
+.ed-progress { height: 6px; border-radius: 3px; background: #e7e2d6; overflow: hidden; }
+.ed-progress > i { display: block; height: 100%; background: var(--green); border-radius: 3px; transition: width 0.15s; }
+.ed-progress > i.busy { background-image: linear-gradient(90deg, var(--green) 0%, var(--leaf) 50%, var(--green) 100%); background-size: 200% 100%; animation: ed-slide 1.1s linear infinite; }
+@keyframes ed-slide { from { background-position: 200% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .ed-progress > i.busy { animation: none; } .ed-progress > i { transition: none; } }
+.ed-doc { margin-top: 10px; }
+/* The upload box says what this device can do: a mouse can drop and click, a finger taps. One of the two is shown. */
+.ed-touch { display: none; }
+@media (pointer: coarse) { .ed-fine { display: none; } .ed-touch { display: revert; } }
+/* The pictures a sender chose at once, in page order, before they become one document. */
+.ed-photos { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 6px; max-height: 42vh; overflow-y: auto; }
+.ed-photos li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; min-width: 0; }
+.ed-photos li > .num { flex: none; min-width: 1.6em; text-align: right; }
+.ed-photos img { flex: none; width: 44px; height: 44px; object-fit: cover; border-radius: 6px; background: #ece8dd; }
+.ed-photos .btn { flex: none; min-width: 44px; min-height: 44px; }
+.ed-photo-actions { flex-wrap: wrap; }
+.ed-photo-actions .btn { min-height: 44px; white-space: normal; }
+@media (max-width: 520px) { .ed-photo-actions { flex-direction: column-reverse; } .ed-photo-actions .btn { width: 100%; } }
+.ed-lockline { display: flex; gap: 8px; align-items: flex-start; }
+.ed-lockline svg { margin-top: 3px; }
+.rcpt.ed-locked { background: #faf8f2; }
+.ed-static { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.ed-static > span { display: block; margin-bottom: 5px; }
+.ed-static > div { font-weight: 400; font-size: 14px; padding: 9px 0; }
+
+/* Step 2. On a wide screen the three columns fill the window under the top bar and any banner. */
+@media (min-width: 901px) {
+  .ed-step2 { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+  .ed-step2 .editor { flex: 1; min-height: 0; height: auto; }
+}
+.ed-mid { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ed-mid .canvas { flex: 1; min-height: 0; }
+.ed-bar { display: flex; align-items: center; gap: 14px; padding: 8px 16px; background: #f4f1e8; border-bottom: 1px solid var(--line); }
+.ed-undo { display: inline-flex; gap: 6px; }
+.ed-tools .ed-group { margin-bottom: 16px; }
+.ed-tools h3 { margin-bottom: 8px; }
+.ed-signers { display: grid; gap: 6px; }
+.ed-signers .btn { justify-content: flex-start; min-width: 0; }
+.ed-signers .btn.on { border-color: var(--fc); box-shadow: 0 0 0 1px var(--fc); }
+.ed-find { width: 100%; }
+.ed-findbox p { margin: 6px 0 0; }
+.ed-status { margin: 0 0 10px; color: var(--green-deep); background: var(--green-soft); border-radius: 8px; padding: 8px 10px; }
+.ed-status:empty { display: none; }
+.ed-hint { margin: 10px 0 0; }
+.ed-size { grid-template-columns: 1fr 1fr; gap: 8px; }
+.ed-sheetbar { display: none; }
+
+.field.edit.locked { cursor: default; border-style: dashed; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--fc, var(--green)) 16%, transparent) 0 6px, color-mix(in srgb, var(--fc, var(--green)) 6%, transparent) 6px 12px); }
+.field.edit.locked .tag { display: inline-flex; align-items: center; gap: 3px; opacity: 0.8; }
+.field.edit.locked svg { flex: none; }
+/* A checkbox is smaller than its own resize handle. Hang the handle outside the box so the box can still be grabbed. */
+.field.edit.box .grip { right: -13px; bottom: -13px; }
+@media (pointer: coarse) {
+  .field.edit .grip { width: 16px; height: 16px; right: -8px; bottom: -8px; }
+  .field.edit.box .grip { right: -17px; bottom: -17px; }
+  /* A thumb needs about 44px. The corner's area grows away from the field only (from the dot's outer edge, 44px down
+     and to the right), so it never lies over the field itself: a tick box is smaller than the area and could not be
+     moved. The area is placed from inside the dot's 2px border (box-sizing), hence -2px and 16 - 4 + 2 + 30 = 44. */
+  .field.edit .grip::after { content: ''; position: absolute; inset: -2px -30px -30px -2px; }
+  /* The same for the field. At phone width a tick box is about 9px, so every field gets an area of at least 44px
+     around its middle to tap and drag by. The areas lie behind every real field (the overlay is its own stacking
+     order), so where two areas meet, the field that is drawn there still wins. */
+  .ed .pdfpage .overlay { z-index: 0; }
+  .field.edit { overflow: visible; }
+  .field.edit::before { content: ''; position: absolute; z-index: -1; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+}
+/* The line a field snapped to while it is being dragged. */
+.ed-guide { position: absolute; z-index: 6; pointer-events: none; background: #d6249f; }
+.ed-guide.x { width: 1px; margin-left: -0.5px; }
+.ed-guide.y { height: 1px; margin-top: -0.5px; }
+
+/* Step 3 */
+/* Fields without a label: one row for each, with the button that opens it. */
+.ed-nolabel { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.ed-nolabel li { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid rgba(0, 0, 0, 0.08); }
+.ed-nolabel li > span { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.ed-nolabel .btn { min-height: 44px; }
+.ed-people { list-style: none; margin: 0; padding: 0; }
+.ed-people li { display: flex; gap: 10px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+.ed-people li:first-child { border-top: 0; }
+.ed-people li > .dot { margin-top: 6px; }
+.ed-people li.gone b { text-decoration: line-through; text-decoration-color: var(--muted); }
+.ed-actions { justify-content: flex-end; }
+
+@media (max-width: 900px) {
+  .ed-only-sm { display: block; }
+  .ed-hide-sm, .ed-wide { display: none !important; }
+
+  /* Everything that can be tapped is at least 44px tall, the size of a thumb. */
+  .ed .btn, .ed .palette button, .ed .steps button { min-height: 44px; }
+  .ed .steps button { min-width: 44px; justify-content: center; }
+  .ed .btn.sm { min-width: 44px; }
+  .ed input:not([type='checkbox']):not([type='radio']), .ed select { min-height: 40px; }
+  .ed label.check { min-height: 40px; }
+  .ed input[type='checkbox'] { width: 18px; height: 18px; }
+
+  .ed-top { gap: 6px; padding: 0 8px; }
+  .ed-top .steps { gap: 2px; justify-content: center; }
+  .ed-top .steps button { padding: 6px 8px; }
+  .ed-banner { padding: 8px 12px; font-size: 13px; }
+  .ed-doc { flex-wrap: wrap; gap: 6px 8px; }
+  .ed-doc input { flex: 1 1 100%; }
+  .ed-doc > .muted { margin-right: auto; }
+  .ed-actions .grow { display: none; }
+  .ed-actions .btn.primary { flex: 1; }
+
+  /* Step 2: tools become two strips that stay under the top bar, the page sits below, settings slide up. */
+  .ed .editor { display: block; }
+  .ed .editor .pane.ed-tools { position: sticky; top: 61px; z-index: 15; padding: 8px 10px; box-shadow: 0 4px 10px rgba(23, 36, 28, 0.06); }
+  .ed-tools h3 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .ed-tools .ed-group { margin: 0; }
+  .ed-row-a, .ed-row-b { display: flex; gap: 6px; align-items: center; }
+  .ed-row-b { margin-top: 6px; }
+  .ed-row-a .ed-group, .ed-palbox { flex: 1; min-width: 0; }
+  .ed-findbox { flex: none; }
+  .ed-signers, .ed .palette { display: flex; gap: 6px; overflow-x: auto; padding: 2px; scrollbar-width: none; }
+  .ed-signers::-webkit-scrollbar, .ed .palette::-webkit-scrollbar { display: none; }
+  .ed-signers .btn { flex: none; max-width: 62vw; }
+  .ed .palette button { flex: none; white-space: nowrap; padding: 8px 12px; }
+  .ed-find { width: auto; }
+  .ed-status { margin: 6px 0 0; }
+  .ed-hint { margin: 6px 0 0; }
+  .ed-bar { padding: 6px 10px; }
+  .ed .editor .canvas { padding: 12px 8px 66vh; } /* room to scroll the last fields clear of the settings sheet */
+
+  .ed .editor .pane.ed-settings { display: none; }
+  .ed .editor .pane.ed-settings.has { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; max-height: 62vh; overflow-y: auto; border-top: 1px solid var(--line); box-shadow: 0 -8px 24px rgba(23, 36, 28, 0.14); padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+  .ed-sheetbar { display: flex; gap: 6px; align-items: center; }
+  .ed-sheetbar > span:first-child { flex: 1; min-width: 0; }
+  .ed-sheetbody { display: none; margin-top: 12px; }
+  .ed-settings.open .ed-sheetbody, .ed-sheetbody.always { display: block; }
+}
+
+/* ---- The three steps made simpler (research/ux-charter.md, 2.3) ------------------------------------------------ */
+/* A person's More, a file's More and a step's More options: one line for each choice, with what it is set to now. */
+.ed-more { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 6px; display: grid; gap: 2px; }
+.ed-line-btn { font: inherit; width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; background: none; border: 0; border-radius: 8px; cursor: pointer; text-align: left; color: var(--ink); }
+.ed-line-btn:hover { background: rgba(31, 111, 67, 0.06); }
+.ed-line-btn:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.ed-line-btn > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.ed-line-go { color: var(--green); font-weight: 600; font-size: 13px; flex: none; }
+.ed-pick { padding: 4px 8px 12px; }
+.ed-pick .ed-check, .ed-pick .ed-myself, .ed-pick .ed-lang { margin-top: 10px; }
+.ed-pick .ed-check { border-top: 0; padding-top: 0; }
+.ed-pick select, .ed-pick input:not([type='checkbox']) { min-height: 44px; }
+.ed-person-says { margin-top: 6px; overflow-wrap: anywhere; }
+.ed-person .ed-email { min-width: 0; }
+.ed-file-more { gap: 8px; margin-top: 8px; }
+.ed-file-more .btn { min-height: 44px; }
+.ed-file-note { margin: 6px 0 0; }
+.ed-fold { margin-top: 6px; }
+.ed-fold > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 6px; color: var(--green); font-weight: 600; list-style: none; width: fit-content; }
+.ed-fold > summary::-webkit-details-marker { display: none; }
+.ed-fold > summary::before { content: '+'; display: inline-block; width: 1em; }
+.ed-fold[open] > summary::before { content: '−'; }
+.ed-fold > summary:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; border-radius: 6px; }
+#ed-step1-more { margin-top: 12px; padding-top: 10px; gap: 10px; justify-items: start; }
+#ed-step1-more label.check { min-height: 44px; }
+.ed-review-more { display: grid; gap: 12px; justify-items: start; }
+.ed-review-more > .stack { width: 100%; }
+.ed .palette .ed-morefields { background: none; border-style: dashed; color: var(--green); grid-column: 1 / -1; justify-content: center; }
+.ed-fieldmore { width: 100%; margin: 4px 0 8px; }
+#ed-field-more { margin-top: 0; border-top: 0; padding-top: 4px; display: block; }
+.ed-keys ul { margin: 0; }
+@media (max-width: 900px) {
+  .ed-person > input { flex: 1 1 100% !important; }
+  .ed-person > input[type='number'] { flex: 0 0 64px !important; }
+  .ed-person > .btn[data-more] { margin-left: auto; }
+  .ed .palette .ed-morefields { min-height: 44px; }
+}
+@media (max-width: 900px) {
+  /* The boxes of the new parts are as tall as a thumb as well. */
+  .ed .ed-pick input:not([type='checkbox']):not([type='radio']), .ed .ed-pick select, .ed .ed-words input:not([type='checkbox']):not([type='radio']), .ed .ed-review-more input:not([type='checkbox']):not([type='radio']), .ed .ed-review-more select,
+  .ed .ed-sheetbody input:not([type='checkbox']):not([type='radio']), .ed .ed-sheetbody select, .ed .ed-person > input:not([type='checkbox']):not([type='radio']), .ed .ed-doc > input:not([type='checkbox']):not([type='radio']) { min-height: 44px; }
+  .ed .ed-sheetbody label.check, .ed .ed-pick label.check { min-height: 44px; }
+}
+@media (max-width: 480px) {
+  /* "Files and people" is longer than "Add" was: smaller letters, and on the narrowest phones the number alone. */
+  .ed-top .steps button span:not(.n) { font-size: 12.5px; line-height: 1.15; text-align: left; }
+}
+@media (max-width: 350px) {
+  .ed-top .steps button span:not(.n) { display: none; }
+}
+/* A link inside a folded note is as tall as any other thing a finger presses. */
+.ed-tap-link { display: inline-flex; align-items: center; min-height: 44px; }
+/* A tick box with its words: the whole line is the target, 44 px tall (Required, Read only, Format and limits). */
+label.check.ed-tap { min-height: 44px; }
+label.check.ed-tap > input[type='checkbox'] { width: 20px; height: 20px; }
+.ed-checks-fold > summary { width: auto; }
+.ed-textlink { margin-top: 10px; }
+.ed-checkpick .ed-check-says { margin: 8px 0 0; }
+/* The name of the step, on screens too narrow for it in the top bar. */
+.ed-stepname { display: none; margin: 10px 16px 0; font-weight: 600; }
+@media (max-width: 350px) { .ed-stepname { display: block; } }
+/* Every field button of the palette is 44 px to press, with a mouse too (it was 37 px on a desktop). */
+.ed .palette button { min-height: 44px; }
+
+/* "Fill in" (they type) and "Your text" (you type): who types is said under the name where the kind is chosen
+   (src/lib/fieldkinds.ts KIND_HINT), and an empty "Your text" box looks empty in the editor. */
+.ed .palette button.ed-kind { align-items: flex-start; }
+.ed-kind-in { display: grid; gap: 1px; min-width: 0; text-align: left; }
+.ed-kind-in small { font-size: 11px; font-weight: 500; line-height: 1.25; color: var(--muted, #5f6b65); }
+.ed .palette button.ed-kind.on small { color: #fff; }
+.ed-kind-says { margin: -4px 0 12px; }
+.field.edit.ed-empty { border-style: dashed; }
+.field.edit.ed-empty .tag i { font-weight: 500; opacity: 0.75; }
+/* The short warning about "Your text" boxes at step 3: on a phone its three buttons share one row. */
+.ed-notecheck .ed-nolabel li > span { flex: 1 1 100%; }
+.ed-notecheck .ed-nolabel li { justify-content: flex-start; }
+.ed-letthem { margin: -4px 0 12px; }
+.ed-letthem .linklike { min-height: 24px; }
+/* On a phone, "Ana Partner types here" under a dropped Fill in field is read in full: two lines, never cut off. */
+.ed-bartwo { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; font-size: 14px; }

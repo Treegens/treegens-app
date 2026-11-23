@@ -1,0 +1,1705 @@
+{
+ "themes": [
+  {
+   "id": "billing-renewal-no-warning",
+   "title": "Annual plan auto-renews with no usable warning",
+   "what_goes_wrong": "Annual plans renew and the card is charged without a reminder the customer noticed. Some get a 'renewed' email afterwards that does not state the amount. Many had stopped using the product and find a charge of several hundred dollars. DocuSign says it 'typically' sends a reminder about a month before, which is not a guarantee.",
+   "who": "Billing owners of small and individual accounts, especially dormant ones",
+   "prevalence": 5,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "g2-capterra",
+    "trustradius-gartner",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "BBB 1-star review (Oct 2025): auto-renewed with no reminder; the charge came first, then a 'renewed' email that left out the amount; no visible way to preview upcoming charges.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/customer-reviews"
+    },
+    {
+     "paraphrase": "Trustpilot reviewer says no notice is given that renewal is coming and there is no refund unless it is the first 30 days of the account.",
+     "url": "https://ie.trustpilot.com/review/docusign.com?page=5"
+    },
+    {
+     "paraphrase": "Capterra reviewers: renewal comes with no warning, and no renewal email shows the price, so they must log in to see the charge.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=5"
+    },
+    {
+     "paraphrase": "Community post (2026): USD 990 renewal charged on an account the poster no longer used; chargeback started.",
+     "url": "https://community.docusign.com/payments-99/unauthorized-renewal-charge-of-usd-990-refund-request-account-id-94667241-27897"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "Before every renewal charge the system sends email and in-app reminders at 30, 7 and 1 day, each stating the exact amount, seat count and charge date; the charge job refuses to run if no reminder was logged as sent.",
+    "Every renewal reminder and receipt contains a 'do not renew' link that turns off renewal without logging in.",
+    "The billing page always shows 'Next charge: AMOUNT on DATE' and an auto-renew on/off toggle.",
+    "A paid account with no documents sent in the last 90 days is not renewed unless the owner clicks an explicit 'yes, renew'; otherwise it drops to the free tier with all documents kept.",
+    "The renewal confirmation email states the amount charged and links to the invoice."
+   ]
+  },
+  {
+   "id": "billing-charged-after-cancel",
+   "title": "Still charged after cancelling",
+   "what_goes_wrong": "Customers cancel, sometimes with a confirmation email in hand, and are billed anyway: months later, monthly after closure, or for a new year because the cancellation 'did not save'. Charges also continue after a card dispute is opened. Many only stop it by blocking the card.",
+   "who": "Billing owners who cancelled or downgraded",
+   "prevalence": 5,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "trustradius-gartner",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Cancelled in January with an email confirmation, then found the card charged eight months later.",
+     "url": "https://ie.trustpilot.com/review/docusign.com"
+    },
+    {
+     "paraphrase": "Community (2026): cancelled 15 Oct 2025 with proof, charged again months later, card could not be removed, two weeks of silence from support; froze the card and filed a dispute.",
+     "url": "https://community.docusign.com/general-discussion-145/charged-without-consent-after-cancelling-last-october-2-weeks-of-silence-from-support-is-this-normal-27034"
+    },
+    {
+     "paraphrase": "Long community thread of users charged after cancelling, including one charged a renewal right after being downgraded to free.",
+     "url": "https://community.docusign.com/esignature-111/i-was-charged-even-after-canceling-subscription-23641"
+    },
+    {
+     "paraphrase": "TrustRadius review: cancellation did not save, the annual plan renewed after months of non-use, and a refund was refused.",
+     "url": "https://www.trustradius.com/products/docusign/reviews"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Cancellation is one atomic server-side operation that also cancels the subscription at the payment processor; the UI shows success only after the processor confirms, and shows an error (never silence) if it fails.",
+    "On cancellation the user sees on screen, and receives by email, a cancellation ID, the date access ends and a statement that no further charges will be made.",
+    "The charge job refuses to charge any subscription in cancelled, free or closed state; an automated test covers this.",
+    "A daily reconciliation compares processor charges with subscription states; any charge found on a cancelled or free account is refunded automatically within 24 hours, with an email to the customer and an internal alert.",
+    "When a card dispute is opened on a subscription, all further charges on that subscription are frozen until it is resolved."
+   ]
+  },
+  {
+   "id": "billing-refund-refused-on-renewal",
+   "title": "Refund refused on a renewal, even when unused and requested within hours",
+   "what_goes_wrong": "The 30-day refund rule covers only the first term of an annual plan. Renewals and monthly plans are treated as non-refundable, so people who ask for their money back within hours of a surprise renewal, with zero usage, are told the charge is 'valid'. Website and support sometimes give conflicting refund information.",
+   "who": "Billing owners charged a renewal on an unused or barely used account",
+   "prevalence": 5,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "g2-capterra",
+    "trustradius-gartner",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "June 2026 reviewer cancelled about 15 hours after a renewal, had not used the service, and was refused a refund because the renewal had started.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=5"
+    },
+    {
+     "paraphrase": "BBB: company replies state the 30-day refund window does not apply to a renewal and monthly renewals are not eligible; a Sept 2026 complainant was refused within 24 hours of an unannounced renewal.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints"
+    },
+    {
+     "paraphrase": "Reviewer forgot to cancel, had not used the product for a year, was charged $120 and told refunds are not given.",
+     "url": "https://nz.trustpilot.com/review/docusign.com?page=2"
+    },
+    {
+     "paraphrase": "Capterra review: auto-renewed without warning, refund refused though support was contacted immediately; website and support contradicted each other on refunds.",
+     "url": "https://www.capterra.com/compare/121506-142011/Docusign-vs-E-Sign"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "Every renewal charge has a 14-day refund window; a 'Request refund' button on the billing page pays out in full automatically, with no staff approval, when no document has been sent since the renewal.",
+    "The same refund rule applies to first terms and renewals, monthly and annual; it is shown as one short paragraph at checkout and on every receipt.",
+    "A refund request made inside the window when documents were sent since renewal returns a pro-rated amount, and the exact figure is shown before the user confirms.",
+    "Help pages, checkout and support macros quote the refund rule from one shared source so they cannot disagree."
+   ]
+  },
+  {
+   "id": "billing-no-self-serve-cancel",
+   "title": "No visible way to cancel or downgrade",
+   "what_goes_wrong": "The plan page offers only 'Upgrade' and 'Close Account'. Cancel options are greyed out, error out, sit under an unrelated menu, require a valid card on file, or redirect to an account team that does not answer. Downgrades have to be requested by email.",
+   "who": "Billing owners and trial users trying to leave or reduce their plan",
+   "prevalence": 5,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "g2-capterra",
+    "trustradius-gartner",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Trial user cannot find any cancel route; the account page shows only upgrade and close-account choices.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=2"
+    },
+    {
+     "paraphrase": "French reviewers say every change or cancel option was greyed out, an error blocked cancellation, or there was no cancel button.",
+     "url": "https://fr-be.trustpilot.com/review/docusign.com?page=2"
+    },
+    {
+     "paraphrase": "ComplaintsBoard: site logged the user out repeatedly and offered no cancel option; only customer service could cancel. Another was told the order form had no cancellation clause.",
+     "url": "https://www.complaintsboard.com/docusign-b135248"
+    },
+    {
+     "paraphrase": "BBB: company says cancelling lives under Settings > Plan Change; other complaints say cancelling was blocked until a new card was added and a downgrade had to be requested by email.",
+     "url": "https://prod.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=2"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "The billing page shows a 'Cancel plan' control for every plan type, including trials and sales-assisted contracts, and cancellation completes in at most two clicks with no chat, email or phone step.",
+    "Cancelling the plan is a separate action from closing the account; after cancelling, the account and all documents remain accessible.",
+    "The cancel control is never disabled and works with no valid card on file; if a contract term applies, it shows the end date and schedules non-renewal on the spot.",
+    "Downgrading to any lower plan, including free, is self-serve from the same page."
+   ]
+  },
+  {
+   "id": "support-no-human-reachable",
+   "title": "Support is a bot loop with no reachable human",
+   "what_goes_wrong": "People with billing, lockout or stuck-signature problems circle through a chatbot, find no support phone or email (the phone line reaches sales), wait days per reply, get a different agent each time who restarts the case, and have tickets closed unresolved. Some support contacts turn into upsell pitches.",
+   "who": "Any customer with a billing or access problem, including enterprise-plan customers",
+   "prevalence": 5,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "g2-capterra",
+    "trustradius-gartner",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Reviewer cannot reach anyone and goes round in circles with an AI bot; another says the chat is an AI passing itself off as a person.",
+     "url": "https://au.trustpilot.com/review/docusign.com?page=2"
+    },
+    {
+     "paraphrase": "Gartner 1.0-star review (Sept 2025): account locked without explanation, no phone line or callback, slow email replies from a different rep each time; switched providers.",
+     "url": "https://www.gartner.com/reviews/product/docusign-esignature"
+    },
+    {
+     "paraphrase": "Capterra reviewer: about 1-2 days to reach a person after going through FAQs and chat assistants.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/"
+    },
+    {
+     "paraphrase": "BBB review: no phone number for support, only sales; live chat is the only route and the agent could not help.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/customer-reviews"
+    }
+   ],
+   "fixable_by": "support-operations",
+   "requirements": [
+    "Every plan, including free, shows a support email address and contact form reachable in at most two clicks from any page.",
+    "Any chatbot offers 'talk to a person' on its first screen and hands the transcript to the human agent.",
+    "First-response targets are published (one business day; four business hours for billing and lockouts) and the target and current status are shown on each ticket in the app.",
+    "A ticket has one named owner and a visible history; it can be closed only by the customer or after an 'is this solved?' message goes unanswered for 7 days.",
+    "Billing-queue agents can issue refunds without escalation, and support conversations contain no sales offers."
+   ]
+  },
+  {
+   "id": "support-blocked-without-active-login",
+   "title": "Support is closed to exactly the people who need it: logged out, free, suspended or former customers",
+   "what_goes_wrong": "Opening a case requires logging in to an active paid account. People who were downgraded to free after cancelling, suspended, locked out, or whose checkout failed cannot contact anyone. Chat closes the complaint because there is no active account, and some are told to pay again to get live support.",
+   "who": "Former customers, free users, suspended or locked-out account owners",
+   "prevalence": 4,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "reddit",
+    "trustradius-gartner"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Cancelled, still billed, and cannot open a case because the account is now free.",
+     "url": "https://community.docusign.com/docusign-admin-102/cancelled-my-account-yet-still-got-billed-can-t-open-a-case-23262"
+    },
+    {
+     "paraphrase": "Paid account suspended; the user cannot access the support centre or submit a case, and requesting a callback logs them out again.",
+     "url": "https://community.docusign.com/esignature-111/paid-account-suspended-can-t-access-support-center-or-submit-case-25455"
+    },
+    {
+     "paraphrase": "French reviewers could not open a ticket without being logged in; chat closed the complaint because the account was no longer active.",
+     "url": "https://fr.trustpilot.com/review/docusign.com?page=8"
+    },
+    {
+     "paraphrase": "Poster was asked to pay again just to get live support while seeking a refund.",
+     "url": "https://community.docusign.com/esignature-111/how-can-i-get-a-refund-if-they-want-me-to-oay-again-just-to-get-in-person-support-22965"
+    }
+   ],
+   "fixable_by": "support-operations",
+   "requirements": [
+    "A logged-out support form is available to anyone and verifies identity by an emailed link or by card last four plus the date and amount of a recent charge.",
+    "Free users, suspended accounts and former customers (for at least 12 months after closure) can open billing and access-recovery tickets.",
+    "Billing and account-access support is never gated behind a paid plan or paid support tier.",
+    "A signer who is not a customer can report a signing problem through the same form and the sender is notified."
+   ]
+  },
+  {
+   "id": "billing-overage-no-warning",
+   "title": "Overage bills arrive with no warning at send time",
+   "what_goes_wrong": "When the document allowance runs out, sending continues and extra documents are billed per unit afterwards, declared non-refundable. Customers cannot see how many sends remain. Public signing links created a billable document on every repeat click even when nobody signed. Reported bills range from about $200 to over $2,000 (unverified reviewer figures).",
+   "who": "Senders and billing owners on metered plans, notably real-estate agents and small businesses",
+   "prevalence": 4,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "g2-capterra",
+    "reddit",
+    "trustradius-gartner"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "BBB: $962.80 overage on a Realtor plan; company says 166 extra envelopes were sent beyond 100 a year and overages are billed per envelope and not refundable.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=8"
+    },
+    {
+     "paraphrase": "Clients clicking a public signing link more than once created new envelopes that counted even unsigned; about $2,074.70 in overage and refund refused.",
+     "url": "https://ca.trustpilot.com/review/docusign.com?page=3"
+    },
+    {
+     "paraphrase": "User billed about $200 for envelopes over a limit they did not know existed and was never notified.",
+     "url": "https://community.docusign.com/esignature-111/i-was-billed-fore-additional-enveloppes-without-being-notified-by-docusign-23481"
+    },
+    {
+     "paraphrase": "Capterra reviewers could no longer see how many envelopes remained of the amount purchased and now pay per block of 100.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=41"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "No charge beyond the plan price is ever made without an explicit click, at the moment of the action, on a screen showing the exact price.",
+    "When the allowance is used up, the send screen stops and offers three choices: buy a top-up at the shown price, upgrade, or wait for the reset; the default spending cap for extra documents is zero.",
+    "A usage meter (used, remaining, reset date) appears on the dashboard and on the send screen, with email and in-app alerts at 80% and 100%.",
+    "Reusable public signing links count only completed signings; repeat opens by the same person never create a billable document."
+   ]
+  },
+  {
+   "id": "billing-renewal-price-increase-unannounced",
+   "title": "Renewal charged at a higher price than shown or quoted",
+   "what_goes_wrong": "The renewal charge is higher than the renewal email, the plan page or the previous term: 20% above the notified amount, $120 shown versus $228.53 charged because the billing page 'does not reflect new pricing', a plan silently moved from $45 to $90 a month, and steep per-envelope renewal quotes once contracts are stored there.",
+   "who": "Billing owners at renewal, from solo users to mid-size accounts",
+   "prevalence": 4,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "reddit",
+    "trustradius-gartner"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Renewal notification stated one annual price; the actual charge was more than 20 percent higher.",
+     "url": "https://ie.trustpilot.com/review/docusign.com?page=5"
+    },
+    {
+     "paraphrase": "BBB: charged $228.53 against a stated $120 yearly rate; the company said the Plan and Billing page does not reflect new pricing.",
+     "url": "https://prod.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=5"
+    },
+    {
+     "paraphrase": "Long-time customer says the fee was moved from $45/mo to $90/mo without consent; the $90 tier was not on the pricing page.",
+     "url": "https://community.docusign.com/general-discussion-145/do-not-auto-increase-a-subscription-fee-from-45-mo-to-90-mo-on-your-customers-27314"
+    },
+    {
+     "paraphrase": "TrustRadius 1/10 'bait and switch' review (2021): cost went from about $480 to about $9,000 a year as usage and API use grew.",
+     "url": "https://www.trustradius.com/reviews/docusign-2021-01-27-13-53-24"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "The amount charged at renewal must equal the amount stated in the renewal reminder; if they differ the system charges the lower amount and raises an internal alert.",
+    "A price increase applies only from the next renewal after at least 60 days' notice by email and in-app; without explicit acceptance the plan does not renew at the new price.",
+    "The billing page always shows the real next charge, including any pending price change.",
+    "A customer is never moved to a different plan or tier without an explicit action by the account admin.",
+    "The public pricing page lists the price of every tier, including any top-up and API rates."
+   ]
+  },
+  {
+   "id": "signer-forced-account-or-login",
+   "title": "Signers are pushed to create an account, log in, or start a trial",
+   "what_goes_wrong": "People who only want to sign once are told to register or log in, sometimes because their email already matches an account whose password they forgot. After signing they see sign-up and free-trial prompts and think the document is not finished; some click through into a paid trial, and some then receive marketing email. Signers abandon and senders lose deals.",
+   "who": "Signers (clients of the sender), and senders who lose the sale",
+   "prevalence": 4,
+   "severity": 4,
+   "angles_reporting": [
+    "signer-experience",
+    "reddit",
+    "g2-capterra",
+    "trustradius-gartner",
+    "bbb"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Sender asks why end users with no intention of creating accounts are prompted to, saying it confuses them and ruins the sale.",
+     "url": "https://community.docusign.com/esignature-111/why-does-docusign-insist-on-asking-endusers-that-have-no-intention-of-creating-accounts-only-to-confuse-them-and-ruining-the-sale-25172"
+    },
+    {
+     "paraphrase": "Signer was made to create an account despite already having one, asked the sender for a PDF instead, and now avoids the product.",
+     "url": "https://community.docusign.com/esignature-111/i-try-to-avoid-docusign-24557"
+    },
+    {
+     "paraphrase": "Capterra reviewer: recipients get a sign-up prompt on completion and worry the document will not be completed unless they create an account.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=5"
+    },
+    {
+     "paraphrase": "Community answer admits signers occasionally click through 'Start a Free Trial' prompts instead of skipping them.",
+     "url": "https://community.docusign.com/esignature-111/setting-up-first-time-customers-for-success-26065"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "A signer can open, sign and download a document from the emailed link with no account, password or app install, on every plan including free and trial.",
+    "No sender, admin or API setting can require a signer to log in to an account; stronger identity uses a one-time code instead.",
+    "If the signer's email matches an existing account, the link still opens the document directly, and an account lockout never blocks signing.",
+    "The completion screen contains only a confirmation, a download button and a statement that a copy was emailed; no sign-up, trial or payment prompt appears anywhere in the signing flow.",
+    "Signing a document never adds the signer's address to a marketing list; signers receive transactional emails only."
+   ]
+  },
+  {
+   "id": "signer-link-expired-dead-end",
+   "title": "Signing links expire or loop, and the recovery step fails",
+   "what_goes_wrong": "Email links stop working after 48 hours or five opens (per a DocuSign moderator). Signers who return after a weekend hit an 'expired' page; requesting a new link delivers nothing or loops back to the same page; resent links also show expired. Long forms time out and lose everything entered.",
+   "who": "Signers, and senders who must resend or fall back to paper",
+   "prevalence": 4,
+   "severity": 4,
+   "angles_reporting": [
+    "signer-experience",
+    "reddit",
+    "g2-capterra",
+    "trustpilot",
+    "bbb"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Moderator answer: signing links in emails expire after 48 hours or 5 clicks, whichever is first.",
+     "url": "https://community.docusign.com/general-discussion-145/how-long-before-a-docusign-link-expires-after-the-envelope-is-sent-27337"
+    },
+    {
+     "paraphrase": "Recipient says the sender resent the link at least four times and each one says expired.",
+     "url": "https://community.docusign.com/esignature-111/link-expired-24013"
+    },
+    {
+     "paraphrase": "SAP knowledge base: the emailed link is reported expired and the replacement link also expires immediately.",
+     "url": "https://userapps.support.sap.com/sap/support/knowledge/en/3533485"
+    },
+    {
+     "paraphrase": "Form timed out before the signer finished; on reconnecting everything already entered was lost.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=3"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "A signing link stays valid until the document is completed, declined, voided or past the sender's deadline; there is no limit on the number of opens (test: a link opened 50 times still works).",
+    "If a link is invalid for any reason, the same page lets the signer verify with a one-time code to their email or phone and continue into the document in the same session, with no action by the sender.",
+    "Field values are saved as the signer enters them and restored when the signer returns after a timeout or on another device.",
+    "The sender is notified automatically when a signer hits an expired or failed link."
+   ]
+  },
+  {
+   "id": "delivery-signing-email-not-arriving",
+   "title": "Signing emails never arrive, land in spam, or are silently held",
+   "what_goes_wrong": "The sender sees 'Sent' while the recipient sees nothing: messages go to junk, are quarantined by Microsoft 365, or are withheld by the vendor's own risk review without telling the sender. Senders find out when the client complains, cannot see why, and resend repeatedly. Emails look like spam and cannot be customised.",
+   "who": "Senders and their signers",
+   "prevalence": 4,
+   "severity": 4,
+   "angles_reporting": [
+    "signer-experience",
+    "g2-capterra",
+    "reddit",
+    "trustpilot",
+    "trustradius-gartner"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Envelopes show as sent but do not arrive.",
+     "url": "https://community.docusign.com/esignature-111/envelopes-not-arriving-despite-showing-as-sent-26007"
+    },
+    {
+     "paraphrase": "Capterra summary: roughly 41% of reviews mentioning email delivery or notifications are negative; signing emails sometimes land in clients' junk folders.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=9"
+    },
+    {
+     "paraphrase": "IBM support note: envelope emails from the docusign.net domain are frequently quarantined by Microsoft 365.",
+     "url": "https://www.ibm.com/support/pages/node/7252539"
+    },
+    {
+     "paraphrase": "A real contract was held for security review; support admitted the second signer would get a suspicious-looking email but would not stop it, and the sender abandoned the platform for that deal.",
+     "url": "https://ie.trustpilot.com/review/docusign.com?page=4"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "The sender sees a per-recipient delivery status: sent, delivered, bounced (with the bounce reason), opened, or held.",
+    "Every document gives the sender a copyable per-signer signing link, and SMS delivery is available on every paid plan.",
+    "If an outbound request is held for review, the sender is told immediately with the reason and expected time, nothing is sent to recipients until release, and the sender can cancel it.",
+    "The sender is alerted when a recipient has not opened the request within a configurable time (default 24 hours).",
+    "Outbound mail passes SPF, DKIM and DMARC; the sender can edit the subject and message, and paid plans can send from their own verified domain."
+   ]
+  },
+  {
+   "id": "phishing-brand-abuse-unverifiable-requests",
+   "title": "Recipients cannot tell real requests from scams, and abuse reports go nowhere",
+   "what_goes_wrong": "Attackers open genuine accounts and send fake invoices that pass email authentication because they really come from the platform. Recipients distrust every request and phone the sender to check; IT teams block the whole sending domain, breaking legitimate requests. Reports to the published abuse addresses bounce, and one caller was told there was no fraud team.",
+   "who": "Recipients, IT admins, and honest senders whose requests get blocked or ignored",
+   "prevalence": 4,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "reddit",
+    "signer-experience"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Security press: the vendor's API was abused to deliver fake invoices at scale from genuine accounts.",
+     "url": "https://www.securityweek.com/docusign-apis-abused-to-deliver-fake-invoices/"
+    },
+    {
+     "paraphrase": "BBB: reported a suspicious $599 branded email; rep said authenticity could not be verified and there was no fraud department; promised callback never came.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=2"
+    },
+    {
+     "paraphrase": "Reviewer now verifies each envelope by phone; attempts to forward scam emails to the advised reporting addresses bounced as undeliverable.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=2"
+    },
+    {
+     "paraphrase": "University IT notice: genuine notifications to internal signers were marked as phishing attempts.",
+     "url": "https://services.dartmouth.edu/TDClient/1806/Portal/KB/ArticleDet?ID=164034"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Every signing email shows the verified sender name and organisation and a short code; a public page on our own domain accepts that code and confirms whether the request is genuine and who sent it.",
+    "Every signing email has a 'Report this request' link that reaches a monitored abuse queue; a report can pause that sender's outbound mail pending review.",
+    "New and free accounts are rate-limited on sends to external addresses until email plus payment identity or domain is verified, and the limits are published.",
+    "Outbound requests are scanned for invoice and payment-lure patterns before delivery and held with notice to the sender if flagged.",
+    "The published abuse address accepts mail and returns an acknowledgement (test: a message to it never bounces)."
+   ]
+  },
+  {
+   "id": "envelope-counted-on-send",
+   "title": "A document is counted against the allowance when sent, even if voided, declined or never signed",
+   "what_goes_wrong": "The allowance is consumed at send time. A typo fixed by void-and-resend costs two sends; declined, expired and never-opened documents count too, and some corrections are counted as new documents or trigger an upgrade prompt. On small plans one mistake is a large share of the month.",
+   "who": "Senders and billing owners on metered plans",
+   "prevalence": 5,
+   "severity": 3,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "g2-capterra",
+    "trustradius-gartner",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Community thread: customer asks why envelopes are counted even though they were voided.",
+     "url": "https://community.docusign.com/esignature-111/counting-envelopes-while-its-voided-22409"
+    },
+    {
+     "paraphrase": "Vendor support article: envelopes are metered when sent, so a voided envelope followed by a new one counts as two.",
+     "url": "https://support.docusign.com/s/articles/How-do-I-see-how-many-envelopes-my-account-has-used?language=en_US"
+    },
+    {
+     "paraphrase": "G2 reviewer: you are charged for envelopes even if the recipient never actually signs.",
+     "url": "https://www.g2.com/products/docusign/reviews?page=2"
+    },
+    {
+     "paraphrase": "Trustpilot: a correction counts as a new envelope; another was pushed to upgrade when they could not fix an email typo while within their allowance.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=7"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "Only fully completed documents count against any allowance; voided, declined, expired, corrected and resent documents count as zero.",
+    "The counting rule is stated in one sentence on the pricing page and next to the usage meter.",
+    "Buying a top-up never changes the plan or the renewal price."
+   ]
+  },
+  {
+   "id": "send-cannot-correct-after-sending",
+   "title": "A mistake after sending means void and start over",
+   "what_goes_wrong": "A wrong email, misspelled name, wrong role or small text error usually cannot be fixed in place. The sender voids the whole document, loses signatures already collected, rebuilds it, and recipients get a void notice plus a second request. When a correction is possible, signers get no notice that the document changed.",
+   "who": "Daily senders",
+   "prevalence": 5,
+   "severity": 3,
+   "angles_reporting": [
+    "g2-capterra",
+    "trustradius-gartner",
+    "reddit",
+    "trustpilot"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "G2 reviewer (freelance developer): a small client-caught typo meant voiding the envelope and redoing the whole setup.",
+     "url": "https://www.g2.com/products/docusign/reviews?qs=pros-and-cons"
+    },
+    {
+     "paraphrase": "Capterra reviewer: fixing a minor email address or text error after sending often requires voiding everything and starting over, which confuses recipients.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/"
+    },
+    {
+     "paraphrase": "TrustRadius reviewers: voiding an entire envelope for a minor revision is a pain; changing a signer's role seems impossible without void and resend.",
+     "url": "https://www.trustradius.com/products/docusign/reviews?f=75"
+    },
+    {
+     "paraphrase": "Community: user unable to correct a recipient's email after sending.",
+     "url": "https://community.docusign.com/docusign-agreement-manager-81/unable-to-correct-recipient-email-after-sending-envelope-27298"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Until the last signature, the sender can change a recipient's name, email, role or signing order without voiding and without losing signatures already collected.",
+    "The sender can add or move fields or replace the document; only signers whose already-signed content changed are asked to sign again, and they are shown what changed.",
+    "Every correction emails the affected signers a 'this document was updated' notice, makes old links open the latest version, and is recorded in the audit trail.",
+    "Corrections and resends never consume allowance or incur a charge."
+   ]
+  },
+  {
+   "id": "account-lock-cuts-off-signed-documents",
+   "title": "Account locked, suspended or closed, cutting off signed contracts",
+   "what_goes_wrong": "Accounts are suspended during billing disputes or renewal talks, or locked with no warning or explanation; the business cannot send or open already-signed agreements and is told to pay the disputed charge to get back in. Accounts closed or reset by mistake lose their history and cannot be reopened.",
+   "who": "Account admins and owners of business accounts",
+   "prevalence": 3,
+   "severity": 5,
+   "angles_reporting": [
+    "trustpilot",
+    "trustradius-gartner",
+    "reddit",
+    "bbb"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Locked out for nearly three weeks in a billing dispute, unable to send contracts or reach signed agreements; reinstatement offered only on paying the disputed charge.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=3"
+    },
+    {
+     "paraphrase": "Customer paying over $50k a year had the account suspended mid-renewal talks and had to accept an unwanted renewal to keep working.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=4"
+    },
+    {
+     "paraphrase": "Gartner 1.0-star review (Sept 2025): paying account locked without warning or explanation and no payment problem to explain it.",
+     "url": "https://www.gartner.com/reviews/product/docusign-esignature"
+    },
+    {
+     "paraphrase": "User says the company mistakenly closed their account and phone staff could not reopen it.",
+     "url": "https://community.docusign.com/esignature-111/docusign-mistakenly-closed-my-account-and-nobody-on-the-phone-can-reopen-the-account-22337"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "Billing status (unpaid, disputed, cancelled) never blocks viewing or downloading completed documents and audit trails; only new sends are paused, and only after a grace period of at least 14 days with warnings.",
+    "No account is locked or restricted without an in-app banner and an email stating the reason, the action required and the deadline.",
+    "During any lock, documents already out for signature can still be signed and completed.",
+    "Account closure is a soft delete: the owner can restore the account and all documents self-serve for 90 days, and closure requires explicit confirmation and sends an email with an undo link."
+   ]
+  },
+  {
+   "id": "data-no-bulk-export",
+   "title": "No practical way to get all your documents out",
+   "what_goes_wrong": "There is no select-all download on standard plans; documents and certificates are fetched one at a time unless an add-on export tool is bought. Closing an account removes access and data is purged after 90 days; admin retention rules purge silently. Stored contracts become leverage at renewal.",
+   "who": "Admins and owners who want backups or want to leave",
+   "prevalence": 3,
+   "severity": 4,
+   "angles_reporting": [
+    "g2-capterra",
+    "reddit",
+    "bbb",
+    "trustpilot",
+    "trustradius-gartner"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "G2 reviewer: on standard plans there is no way to bulk-export signed contracts or see a total count; the choice is enterprise tools or one-by-one downloads.",
+     "url": "https://www.g2.com/survey_responses/docusign-review-5015236"
+    },
+    {
+     "paraphrase": "Forum answer confirms there is no built-in bulk download unless an extra app or integration is configured.",
+     "url": "https://community.docusign.com/esignature-111/how-to-bulk-download-export-completed-envelopes-26238"
+    },
+    {
+     "paraphrase": "Trustpilot reviewer found, after years as a paying customer, that bulk download of their own agreements costs extra.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=2"
+    },
+    {
+     "paraphrase": "BBB: closing the account removes access to stored documents and the data is purged 90 days after closure.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Every plan, including free, has an 'Export everything' action that produces a ZIP of all signed PDFs, audit certificates and a CSV index at no extra cost.",
+    "After cancellation, payment failure or closure, read-only access and export remain available for at least 12 months, and a download link is emailed before any deletion.",
+    "No document is deleted by a retention rule without notice to its owner at least 30 days ahead with a download link; the retention date is shown on each document.",
+    "The account shows a total document count, and completed documents can be auto-synced to a connected cloud drive."
+   ]
+  },
+  {
+   "id": "account-owner-email-lost",
+   "title": "Account tied to a departed employee or dead mailbox: billing cannot be stopped and documents are stranded",
+   "what_goes_wrong": "The account was created under a work email that no longer exists or by a former employee who was the only admin. The card keeps being charged; phone support says open a ticket, the ticket form needs the login, chat needs access to the mailbox. In some cases signed documents were lost for good.",
+   "who": "Business owners and admins after staff or email changes",
+   "prevalence": 3,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Account created for a former employee; once the email was deactivated the company could not retrieve documents and support insisted on reactivating the mailbox.",
+     "url": "https://www.trustpilot.com/review/docusign.com"
+    },
+    {
+     "paraphrase": "Changed jobs, cannot cancel the subscription without the old email; phone line says open a ticket, ticket form requires the locked login.",
+     "url": "https://community.docusign.com/esignature-111/changed-jobs-can-t-cancel-subscription-without-email-5765"
+    },
+    {
+     "paraphrase": "Need to cancel a subscription with no login access because the account is tied to a former employee.",
+     "url": "https://community.docusign.com/general-discussion-145/need-to-cancel-a-subscription-no-login-access-account-linked-to-former-employee-27341"
+    },
+    {
+     "paraphrase": "Email on the account was changed and could not be reverted; support said nothing could be done and all signed documents were lost.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=6"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Documents, templates and the subscription belong to the workspace, not to an individual login; a paid workspace with only one owner shows a persistent prompt to add a second owner.",
+    "A logged-out 'stop billing' flow verifies the payer by card last four plus the amount and date of a recent charge and turns off renewal without access to the login mailbox.",
+    "Workspace ownership can be recovered by domain verification (DNS record) or documented company proof, with a published turnaround time.",
+    "Changing the login email requires a second factor other than the old inbox and can be reverted for 30 days.",
+    "A role that needs a paid seat says so at the moment it is assigned."
+   ]
+  },
+  {
+   "id": "billing-seats-overcharged",
+   "title": "Billed for seats nobody asked for; seat reductions not applied",
+   "what_goes_wrong": "Renewals charge for more users than wanted: a requested reduction is ignored or never entered, a sole user is billed for a second seat, free users are converted into billable seats, swapping a user triggers a new charge. It often takes months to notice.",
+   "who": "Admins and billing owners of small teams",
+   "prevalence": 4,
+   "severity": 3,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Reduced from two seats to one before renewal but was still charged for two on renewal.",
+     "url": "https://nz.trustpilot.com/review/docusign.com?page=8"
+    },
+    {
+     "paraphrase": "BBB: seat-removal request ignored at renewal, later charged again for the same seat; $320.92 refunded after contact. Another sole user billed for a second seat, acknowledged as unjustified.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=2"
+    },
+    {
+     "paraphrase": "GBP 1,440 overcharge despite a confirmed seat reduction; another reviewer charged $390 for six unrequested seats (unverified reviewer figures).",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=7"
+    },
+    {
+     "paraphrase": "Reviewer charged at automatic annual renewal for three users instead of the one they expected.",
+     "url": "https://au.trustpilot.com/review/docusign.com"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "The seat count changes only through an explicit admin action in the product; the action shows the effective date and cost and sends a confirmation email.",
+    "A seat removal made before renewal is reflected in the renewal charge (automated test: reduce 2 to 1, renewal charges 1).",
+    "The renewal reminder lists every seat by user, last-active date, unit price and total.",
+    "Replacing the user on an existing seat creates no charge.",
+    "A free collaborator is never converted into a paid seat without an explicit admin confirmation showing the price."
+   ]
+  },
+  {
+   "id": "billing-hidden-cancellation-notice-window",
+   "title": "Hidden cancel-by deadline before renewal",
+   "what_goes_wrong": "The terms require cancelling at least five business days before the term ends (reviewers also cite 45 days and forum advice of 5-14 days). People who cancel before the renewal date but inside the window are charged the full next year. Some report an early-cancellation fee equal to the annual price.",
+   "who": "Billing owners cancelling close to renewal",
+   "prevalence": 3,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "BBB: company reply quotes terms that auto-renewal happens unless the subscription is cancelled at least five business days before the end of the term.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints"
+    },
+    {
+     "paraphrase": "Cancelled to avoid renewal but did not know cancellation had to be five business days before the renewal date; charged the annual fee.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=8"
+    },
+    {
+     "paraphrase": "Reviewer cites a 45-day cancellation notice period that was not clearly communicated at contract signing.",
+     "url": "https://se.trustpilot.com/review/docusign.com"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "A cancellation is accepted and effective at any time up to the renewal timestamp; there is no notice period, and the billing page shows 'cancel by' as the actual renewal date and time.",
+    "If a renewal charge was already queued or taken when a pre-renewal cancellation is recorded, it is reversed automatically.",
+    "Self-serve plans carry no early-termination fee."
+   ]
+  },
+  {
+   "id": "billing-monthly-price-annual-commitment",
+   "title": "Plan shown at a monthly price is really a 12-month commitment",
+   "what_goes_wrong": "Customers pick what looks like a monthly plan and later learn it is an annual commitment billed monthly or up front. Cancelling triggers an invoice for the remaining months, or they are told they are locked in until the following year.",
+   "who": "New self-serve buyers",
+   "prevalence": 3,
+   "severity": 4,
+   "angles_reporting": [
+    "bbb",
+    "trustpilot"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "BBB: plan understood as monthly was an annual commitment billed monthly; cancelling triggered collection of the ten remaining monthly payments.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints"
+    },
+    {
+     "paraphrase": "BBB: missed a 7-day trial window; support said the customer was locked into an annual contract at $30 a month through next August and refused to cancel or waive.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/customer-reviews"
+    },
+    {
+     "paraphrase": "BBB: paid $120 for a year after expecting a $10 monthly plan.",
+     "url": "https://prod.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=20"
+    },
+    {
+     "paraphrase": "Trustpilot: subscription presented as one month, cancellable anytime, was actually a one-year subscription.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=2"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "Checkout states the commitment in plain words (term length, amount charged today, total over the term, renewal date) and the confirmation email repeats it.",
+    "When an annual plan's price is shown per month, the annual total is displayed next to it at equal size, and an annual commitment requires ticking a box.",
+    "A true month-to-month plan exists and can be stopped in any month with no remaining balance.",
+    "Cancelling an annual plan paid in instalments never bills the remaining instalments early."
+   ]
+  },
+  {
+   "id": "pricing-fake-unlimited-hidden-caps",
+   "title": "'Unlimited' and per-user plans hide numeric caps",
+   "what_goes_wrong": "Seats sold as letting you send freely are capped at about 100 documents per user per year; 'unlimited' covers only manual web sends while API, bulk and form sends draw from a small pool; a plan long treated as unlimited began being enforced with the bill as the first notice; a bulk-send feature was capped at 10 recipients after purchase.",
+   "who": "Buyers and admins of paid plans, notably real-estate agents",
+   "prevalence": 3,
+   "severity": 4,
+   "angles_reporting": [
+    "bbb",
+    "reddit",
+    "trustpilot",
+    "g2-capterra"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "BBB: customer says the Realtor plan was sold as unlimited and no notice of per-envelope billing was given; company says the limit is 100 a year and enforcement began in 2024.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=8"
+    },
+    {
+     "paraphrase": "Community: user calls the per-user allowance restrictive for small businesses; moderator confirms 100 per year on annual, 10 per month on monthly.",
+     "url": "https://community.docusign.com/esignature-111/envelopes-and-users-2863"
+    },
+    {
+     "paraphrase": "Competitor guide (weaker source): 'unlimited' covers web-app sends only; integration, bulk and form sends are limited to 100 per user per year.",
+     "url": "https://fynk.com/en/blog/docusign-envelope-limits/"
+    },
+    {
+     "paraphrase": "Trustpilot: bulk send was capped at 10 people instead of the expected volume; later described as a temporary limit after a fraud issue.",
+     "url": "https://ie.trustpilot.com/review/docusign.com?page=9"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "The word 'unlimited' is used only where no numeric cap applies to any send channel (web, API, bulk, forms); otherwise the number is shown.",
+    "Every limit, including temporary anti-abuse limits on new accounts and the criteria for lifting them, is shown as a number on the pricing page, in the checkout summary and in the product before purchase.",
+    "A change to limits or their enforcement applies only from the next renewal, is announced by email and in-app with required acknowledgement, and allows a penalty-free exit.",
+    "In the first billing cycle after an enforcement change, exceeding the limit produces a warning, not a charge."
+   ]
+  },
+  {
+   "id": "trial-and-free-tier-traps",
+   "title": "Trials that cannot be cancelled and free use blocked by invisible limits",
+   "what_goes_wrong": "Trial users find no cancel route; free users are pushed into a 'free' trial at login and cannot get back to free; missing a 7-day window locks in an annual contract. People who only sign their own documents hit 'envelope allowance exceeded' with no visible limit, and trial expiry blocks self-signing behind a purchase prompt.",
+   "who": "Trial users, free users and occasional self-signers",
+   "prevalence": 3,
+   "severity": 4,
+   "angles_reporting": [
+    "bbb",
+    "trustpilot",
+    "reddit",
+    "signer-experience"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Signed up for a 30-day Business Pro trial and cannot find any way to cancel it; only 'Upgrade' and 'Close Account'.",
+     "url": "https://ie.trustpilot.com/review/docusign.com"
+    },
+    {
+     "paraphrase": "BBB review: forced into a 'free' trial when trying to log into a free account and unable to downgrade.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/customer-reviews"
+    },
+    {
+     "paraphrase": "Free-edition users report the allowance-exceeded error despite never sending envelopes to others.",
+     "url": "https://community.docusign.com/esignature-111/free-edition-envelope-allowance-exceeded-21846"
+    },
+    {
+     "paraphrase": "User unable to upload and sign their own documents after the free trial expired.",
+     "url": "https://community.docusign.com/esignature-111/unable-to-upload-and-sign-my-own-documents-after-free-trial-expiration-27882"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "A trial requires no card and reverts to the free tier automatically when it ends.",
+    "If a card is taken for a trial, a reminder 3 days before the end states the amount and has a one-click 'do not charge me' link, and the trial converts to a month-to-month plan, never an annual one.",
+    "An existing free user is never forced into a trial at login and can return to the free tier in at most two clicks.",
+    "Any free-tier limit is shown as a counter with its reset date, and signing your own document is free and not blocked when a trial ends."
+   ]
+  },
+  {
+   "id": "signer-identity-verification-dead-end",
+   "title": "Identity checks fail genuine signers with no reason and no alternative",
+   "what_goes_wrong": "Passport scans fail repeatedly with no explanation while each attempt is charged; public-record quiz questions list addresses and cars the signer never had; SMS codes never arrive, especially abroad; valid numbers are rejected and the signer is then blocked; a face liveness check failed an elderly signer. Only the sender can switch method.",
+   "who": "Signers asked for ID, SMS or knowledge-based verification; senders who pay per attempt",
+   "prevalence": 3,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "signer-experience"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Passport with a reflective cover failed eight times, each showing apparent success then a failure email with no reason; every attempt was charged.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=7"
+    },
+    {
+     "paraphrase": "Signer had never lived at or owned any of the listed items; knowledge-based authentication failed and they could not sign.",
+     "url": "https://community.docusign.com/esignature-171/knowledge-based-authentication-failed-23347"
+    },
+    {
+     "paraphrase": "Signer is not receiving the one-time code by SMS or by call; moderator says the sender should open a support ticket.",
+     "url": "https://community.docusign.com/esignature-171/not-receiving-otp-via-sms-or-call-24565"
+    },
+    {
+     "paraphrase": "Helper could not get an elderly person through the face liveness step despite assisting in person.",
+     "url": "https://community.docusign.com/esignature-171/frustrating-trying-identifying-liveness-with-elderly-person-23692"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "When a verification fails, the signer sees the specific reason (for example glare, blur, name mismatch, code expired) and how to fix it.",
+    "After two failed attempts the signer is offered an alternative method the sender pre-approved, and the sender is notified with the failure reason.",
+    "The sender is charged only for successful verifications.",
+    "The signer can choose the one-time-code channel (SMS, voice call or email) with a visible resend timer; phone numbers are validated with country code when the sender enters them.",
+    "Public-record quiz verification is not offered, and no biometric check is the only route."
+   ]
+  },
+  {
+   "id": "pricing-too-expensive-for-small-senders",
+   "title": "Too expensive and restrictive for people who send a few documents",
+   "what_goes_wrong": "Freelancers and small firms sending a handful of documents a month pay per-user prices for features they do not use. The entry plan is single-user with about five sends a month, some plans have a three-user minimum, tier jumps are steep and the structure is confusing. Capterra's own summary shows about 54% of pricing mentions are negative.",
+   "who": "Solo users, freelancers and small teams",
+   "prevalence": 4,
+   "severity": 3,
+   "angles_reporting": [
+    "g2-capterra",
+    "trustradius-gartner",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Capterra reviewers: too expensive for a small business sending only a few documents a month; confusing tiers; a low-cost monthly plan capped at 5 documents.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=15"
+    },
+    {
+     "paraphrase": "Software Advice profile: pricing rises sharply between tiers and a three-user minimum may not suit smaller teams.",
+     "url": "https://softwareadvice.com/cms/docusign-profile"
+    },
+    {
+     "paraphrase": "Roundup of Reddit threads: sentiment shifted to actively shopping for alternatives; an r/SaaS user calls the product outdated, overpriced and bloated.",
+     "url": "https://checkthat.ai/brands/docusign/reviews"
+    },
+    {
+     "paraphrase": "Gartner reviewer: pricing feels steep if you only use it occasionally.",
+     "url": "https://www.gartner.com/reviews/product/docusign-esignature"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "A free tier with a published number of completed documents per month is available indefinitely.",
+    "No plan has a seat minimum, and a single-user paid plan exists.",
+    "Every tier has a public price, and checkout shows the full total including any add-ons before payment.",
+    "People who only view, approve or sign inside a workspace do not need a paid seat."
+   ]
+  },
+  {
+   "id": "signer-cannot-get-copy-later",
+   "title": "Signers cannot get a copy of what they signed",
+   "what_goes_wrong": "The link to the signed document expires; months later the signer has to ask the sender or log in. Creating an account afterwards shows an empty list because earlier documents are not attached. Download and print buttons can be hidden by the sender's settings.",
+   "who": "Signers, and individuals keeping personal records",
+   "prevalence": 4,
+   "severity": 3,
+   "angles_reporting": [
+    "signer-experience",
+    "g2-capterra",
+    "bbb",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Signer needs a document signed three months ago; the email link has expired and they ask how to get a copy.",
+     "url": "https://community.docusign.com/esignature-111/i-need-to-access-a-document-that-i-sign-3-months-ago-but-the-link-in-my-email-has-expired-how-can-i-get-a-copy-25626"
+    },
+    {
+     "paraphrase": "No option to download the completed document; staff say the missing buttons are controlled by the sender's branding settings.",
+     "url": "https://community.docusign.com/esignature-171/no-option-to-download-the-completed-document-19042"
+    },
+    {
+     "paraphrase": "Capterra reviewer: if you do not open the signed-document link within a certain time you have to log in or request a new link.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=77"
+    },
+    {
+     "paraphrase": "Signed documents missing from a free account; only envelopes received after sign-up are included.",
+     "url": "https://community.docusign.com/esignature-111/signed-documents-not-in-my-free-account-20776"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "The completion email attaches the signed PDF and audit certificate (or a non-expiring link when the file is too large to attach).",
+    "A 'get my copy' page lets a signer enter the email they signed with, receive a one-time code and download the document with no account; it works for the full retention period, which is stated in the completion email.",
+    "Download and print are available to the signer before, during and after signing, and no sender, branding or API setting can hide them.",
+    "Once an email address is verified, every document ever sent to or signed by that address is listed, regardless of when an account was created."
+   ]
+  },
+  {
+   "id": "api-auth-and-sandbox-to-live-friction",
+   "title": "API authentication is a consent maze and sandbox does not match production",
+   "what_goes_wrong": "Server-to-server sending requires JWT impersonation, per-user or admin consent and a claimed domain, and still returns a bare consent_required error. Developers must separately discover a regional base URL or get auth-looking failures. Consent, keys and settings do not carry from sandbox to production, and SDKs lack token refresh.",
+   "who": "Developers integrating the API",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "developers-api",
+    "g2-capterra"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Reporter granted consent for impersonation scopes and still got consent_required; later commenters hit it again when moving from the dev account to production.",
+     "url": "https://github.com/docusign/docusign-esign-java-client/issues/118"
+    },
+    {
+     "paraphrase": "Issue calling JWT auth frustratingly hard; base URI is never applied to the client and another developer asks for a plain client-credentials flow.",
+     "url": "https://github.com/docusign/docusign-esign-csharp-client/issues/353"
+    },
+    {
+     "paraphrase": "After JWT login every API call failed with an auth-looking error while curl worked; the fix was setting an obscure host attribute, found by accident (2025).",
+     "url": "https://github.com/docusign/docusign-esign-python-client/issues/202"
+    },
+    {
+     "paraphrase": "Capterra reviewer: a week integrating, days of sandbox fixes, then an insufficient-consent error on the live API.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=77"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Server-to-server access uses an account-scoped API key with no per-user consent, impersonation or domain claim.",
+    "There is one API hostname for all accounts; no separate base-URL discovery call is needed before the first request.",
+    "Test mode is a key type on the same account and host, so templates, settings and webhooks carry over and going live means swapping one key.",
+    "A refused call returns the exact missing permission and a link to the screen that fixes it; a wrong-environment key returns its own specific error.",
+    "Any SDK that uses expiring tokens refreshes them automatically before expiry."
+   ]
+  },
+  {
+   "id": "billing-refund-discretionary-or-dispute-conditional",
+   "title": "Refunds are partial, slow, discretionary or conditional on dropping a bank dispute",
+   "what_goes_wrong": "An advertised money-back guarantee is not honoured or is refused as 'not eligible'. Refunds come as partial 'courtesy' amounts subject to finance approval, take weeks, or appear only after a public review or BBB filing. Customers are told to withdraw a card dispute first, or the company says the chargeback already refunded them while the bank says the merchant must.",
+   "who": "Billing owners seeking a refund",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Reviewer relied on the 30-day money-back guarantee shown on the website; two weeks later no refund had arrived. Another was told the plan was not eligible.",
+     "url": "https://ie.trustpilot.com/review/docusign.com?page=8"
+    },
+    {
+     "paraphrase": "Agent said the card dispute had to be removed before a refund would be considered; the customer was charged $75 in January 2026 and again in February.",
+     "url": "https://ca.trustpilot.com/review/docusign.com?page=7"
+    },
+    {
+     "paraphrase": "BBB: company said the refund was already issued 'via chargeback' while the bank said the merchant had to refund; another got a full refund only after filing the complaint.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=5"
+    },
+    {
+     "paraphrase": "BBB: charged $68.90, refunded only $65.00; manager could refund only a portion and wanted confirmation the charge would not be disputed.",
+     "url": "https://prod.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=3"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "A refund that meets the published rule is issued automatically for the full amount including tax to the original payment method the same day, with a reference number shown to the customer.",
+    "First-line support can approve refunds up to a published limit without finance approval.",
+    "A refund is never conditional on withdrawing a card dispute; when a dispute is open the merchant accepts it at the processor, confirms that in writing and freezes further billing.",
+    "The count of refunds granted only after an external escalation (review site, regulator, bank) is tracked as a defect metric."
+   ]
+  },
+  {
+   "id": "billing-card-removal-and-invoices",
+   "title": "Cannot remove the payment card; invoices and billing history hard to get",
+   "what_goes_wrong": "A card must stay on file so customers cannot delete it to stop renewals. Invoice downloads fail, some charges arrive with no receipt, and the billing history page disappears after cancelling.",
+   "who": "Billing owners and bookkeepers",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Platform does not allow removing credit card details; one card must remain on file.",
+     "url": "https://ie.trustpilot.com/review/docusign.com?page=5"
+    },
+    {
+     "paraphrase": "Invoice and receipt downloads often fail and access to the invoices page is lost once the plan is cancelled.",
+     "url": "https://au.trustpilot.com/review/docusign.com?page=3"
+    },
+    {
+     "paraphrase": "No receipt was received for a charge.",
+     "url": "https://ie.trustpilot.com/review/docusign.com?page=9"
+    },
+    {
+     "paraphrase": "BBB: duplicate charge and loss of access to billing history on a cancelled account.",
+     "url": "https://prod.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "The stored card can be deleted at any time, with a plain warning that the plan will not renew.",
+    "A PDF invoice is emailed for every charge to the owner and the billing contact.",
+    "Billing history and invoice downloads stay available after cancellation, and to former customers through a verified email link."
+   ]
+  },
+  {
+   "id": "billing-downgrade-deferred-no-proration",
+   "title": "Downgrades deferred a full term and plan switches without proration",
+   "what_goes_wrong": "A downgrade made before renewal is charged at the old plan's price and takes effect a year later. There is no self-serve downgrade, no prorated credit on a just-renewed annual plan, and no way to convert a monthly payment toward an annual plan.",
+   "who": "Billing owners changing plan",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "trustpilot",
+    "trustradius-gartner",
+    "g2-capterra"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Downgraded to a $300 annual plan but was charged for the original plan, with the downgrade only starting in 2027.",
+     "url": "https://au.trustpilot.com/review/docusign.com"
+    },
+    {
+     "paraphrase": "Asked for a monthly charge to be refunded in order to buy an annual plan instead; refused outright.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=4"
+    },
+    {
+     "paraphrase": "TrustRadius cons list includes no ability to downgrade the account (snippet-level).",
+     "url": "https://www.trustradius.com/products/docusign"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "Upgrades and downgrades are self-serve, and the exact credit or charge is shown before the user confirms.",
+    "A downgrade made before renewal is charged at the downgraded price at that renewal (automated test).",
+    "Switching from monthly to annual credits the unused part of the current month toward the annual price."
+   ]
+  },
+  {
+   "id": "pricing-core-features-tier-locked",
+   "title": "Everyday features locked behind higher tiers or paid add-ons",
+   "what_goes_wrong": "Bulk send, custom branding, drop-down fields, locked templates, multi-recipient workflows, SSO and SMS delivery turn out to be missing from the purchased plan or sold as add-ons. Customers discover it after building a workflow and are pushed up a tier for one feature.",
+   "who": "Senders and admins on lower and mid plans",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "g2-capterra",
+    "reddit",
+    "trustpilot",
+    "trustradius-gartner"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Capterra reviewer: no access to locked templates, drop-down fields, bulk send or action triggers on their plan; custom branding and complex workflows sit behind pricier tiers.",
+     "url": "https://www.capterra.com/p/121506/Docusign/#Capterra___3043135"
+    },
+    {
+     "paraphrase": "G2 reviewers: basic things such as custom branding are locked to high-tier plans.",
+     "url": "https://www.g2.com/products/docusign/reviews"
+    },
+    {
+     "paraphrase": "Admin cannot find the SSO option; lower plans do not support it and Business Pro needs an add-on.",
+     "url": "https://community.docusign.com/docusign-admin-102/sso-option-does-not-appear-27843"
+    },
+    {
+     "paraphrase": "User cannot find the option to send to a phone number; staff say multi-channel delivery is a separately sold add-on.",
+     "url": "https://community.docusign.com/esignature-111/send-to-a-phone-number-sms-19804"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "Every paid plan includes all field types, templates, reminders, multi-signer documents and custom branding (logo, colours, email wording).",
+    "A feature not in the current plan is labelled with the plan and price that includes it before the user can build on it.",
+    "Google and Microsoft single sign-on and one-time-code signer verification are in every paid plan.",
+    "Any pass-through cost (SMS, ID check) is shown at the moment of use before it is incurred."
+   ]
+  },
+  {
+   "id": "billing-prepaid-allowance-expires",
+   "title": "Prepaid sends vanish at renewal or on plan change",
+   "what_goes_wrong": "Envelopes are bought a year in advance and unused ones are lost at renewal; purchased extras have validity periods; a plan change moved an account to free and wiped paid envelopes while pending documents could no longer be reminded. Monthly resets fall on a different day from billing.",
+   "who": "Billing owners on prepaid or annual allowances",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "reddit",
+    "g2-capterra",
+    "trustpilot",
+    "bbb"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Staff reply confirms unused envelopes do not carry over after renewal.",
+     "url": "https://community.docusign.com/esignature-111/extra-envelopes-21642"
+    },
+    {
+     "paraphrase": "Capterra reviewers: payment is made in advance for envelopes so unused ones are wasted; estimating yearly need makes budgeting tricky.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=5"
+    },
+    {
+     "paraphrase": "Trustpilot: bulk-purchased envelopes do not roll over and disappear at contract end.",
+     "url": "https://ie.trustpilot.com/review/docusign.com?page=8"
+    },
+    {
+     "paraphrase": "BBB: after a plan change the account was moved to free, unused envelopes were lost and reminders on pending documents stopped working.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=2"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "Unused allowance and purchased credits roll over automatically while the account is active and never expire at renewal.",
+    "The dashboard shows the remaining balance and the reset date, and the allowance resets on the billing date.",
+    "After a downgrade or plan change, capacity already paid for stays usable until the end of the paid term, and documents already out for signature can still be reminded and completed."
+   ]
+  },
+  {
+   "id": "editor-templates-and-fields-fragile",
+   "title": "Template and field setup is manual and breaks easily",
+   "what_goes_wrong": "Every field is dragged on by hand. A small layout change in the PDF misplaces all fields; changing recipients resets custom fields; dragging sometimes duplicates a field; template edits are lost after saving; date format is locked to the account region; cloning a nearly correct document is not possible.",
+   "who": "Senders who prepare similar documents repeatedly (real estate, contractors, HR)",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "g2-capterra",
+    "trustradius-gartner",
+    "trustpilot"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Capterra reviewer: fields are placed by hand and a small layout shift in the PDF puts them in the wrong spots, so the template gets rebuilt.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/"
+    },
+    {
+     "paraphrase": "TrustRadius reviewers: template setup is very manual and should read PDF form fields; cloning is gone; template matching misplaces checkboxes on real-estate forms.",
+     "url": "https://www.trustradius.com/products/docusign/reviews?f=75"
+    },
+    {
+     "paraphrase": "Trustpilot: custom fields reset to standard whenever the parties are changed.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=8"
+    },
+    {
+     "paraphrase": "Capterra reviewer: dragging fields sometimes duplicates rather than moves them, forcing three rebuilds on one document.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=3"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Fields are bound to signer roles, so swapping the person in a role keeps every field's position, size and type.",
+    "'Replace document, keep fields' is available, with fields anchored to nearby text so they follow the content when the file changes.",
+    "On upload the editor detects existing PDF form fields and signature, date and checkbox positions and proposes fields the sender can accept or adjust.",
+    "Dragging a field always moves it; copying is a separate action; undo and redo work; templates autosave with version history; any sent or draft document can be duplicated.",
+    "A pixel-accurate 'preview as signer' is available before sending, and the date format is selectable per field."
+   ]
+  },
+  {
+   "id": "admin-offboarding-and-template-ownership",
+   "title": "Offboarding a user is awkward; templates have one owner",
+   "what_goes_wrong": "When someone leaves, admins struggle to hand over in-flight documents: the transfer option is in a different admin area, only sent items move, folder structure is lost, and closed users' documents are hard to reach. Templates can be edited or deleted only by their single owner.",
+   "who": "Workspace admins",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "trustradius-gartner",
+    "g2-capterra"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Admin asks how to handle someone who is leaving with documents still out for signature.",
+     "url": "https://community.docusign.com/esignature-171/how-do-you-deal-with-someone-who-is-leaving-and-has-documents-in-progress-of-being-signed-20423"
+    },
+    {
+     "paraphrase": "Admin asks how to get access to envelopes on an already closed user account.",
+     "url": "https://community.docusign.com/docusign-admin-102/admin-access-to-envelopes-on-a-closed-account-26962"
+    },
+    {
+     "paraphrase": "A template may be shared for sending but has only one owner, and the other users cannot modify it.",
+     "url": "https://community.docusign.com/esignature-171/template-ownership-4867"
+    },
+    {
+     "paraphrase": "Vendor admin guide: only the template owner can delete it, so ownership must be transferred when a user is closed or changes role.",
+     "url": "https://docs.docusign.com/supportdocs/ndse-admin-guide/Content/transfer.htm"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "A 'Remove member' flow moves all of the person's sent documents, drafts, templates and folders to a chosen successor in one action with folder structure preserved; in-flight documents stay signable and notifications go to the successor.",
+    "An admin can view and download the documents of a deactivated member at any time.",
+    "Templates live in a workspace library with per-template roles (use, edit, manage); an admin can always edit or archive any template.",
+    "Removing a member frees the seat immediately and the screen says so."
+   ]
+  },
+  {
+   "id": "integrations-break-silently",
+   "title": "Integrations break or stop syncing without notice",
+   "what_goes_wrong": "Connections to Salesforce, SharePoint, HubSpot and tax software stop after upgrades or credential expiry with no alert; false 'completed' emails fire on re-sync; status sent through a connected app is hard to trace; teams without a native integration check status by hand.",
+   "who": "Admins and senders who send from other systems",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "trustradius-gartner",
+    "reddit",
+    "g2-capterra"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Gartner Peer Community IT manager: integrations with other systems have broken multiple times and have to be monitored.",
+     "url": "https://www.gartner.com/peer-community/post/at-company-we-evaluating-using-docusign-tell-pros-cons-using-products-based-experience"
+    },
+    {
+     "paraphrase": "After an upgrade, one user's documents stopped writing back to Salesforce while other users were fine (Feb 2025).",
+     "url": "https://community.docusign.com/integrations-extensions-176/writeback-from-docusign-to-salesforce-not-working-after-upgrade-22651"
+    },
+    {
+     "paraphrase": "HubSpot user reports repeated connection errors and signed contracts not appearing for other users.",
+     "url": "https://community.hubspot.com/t/docusign-x-hubspot-integration/89652"
+    },
+    {
+     "paraphrase": "Capterra reviewer: no native integration with their project tool, so signing status is checked manually.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=4"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "An integration health page shows, per connector, status, last successful sync and failed deliveries with a plain-language error and a retry button.",
+    "The admin is emailed when a connector fails or a credential is about to expire.",
+    "Outbound events are idempotent: a re-sync never re-sends a 'completed' notification.",
+    "Every workspace can get viewed/signed/completed events by email digest or webhook without a native integration, and manual upload/download always works as a fallback.",
+    "Signed PDFs are standard flattened files whose signatures display in Adobe Acrobat, browser viewers and macOS Preview."
+   ]
+  },
+  {
+   "id": "account-duplicate-identities-per-email",
+   "title": "One email ends up with several unlinked accounts",
+   "what_goes_wrong": "Signing once creates a personal account; a later company invite creates another on the same email. The person logs into the empty one, incoming documents land unpredictably, signed documents seem missing, accounts cannot be merged, and an existing account can demand a password before signing. Adding an admin by typed email can create a duplicate user.",
+   "who": "Users invited to a company workspace, admins, and signers with an existing account",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "trustradius-gartner",
+    "reddit",
+    "signer-experience",
+    "g2-capterra"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Idea post about the confusion of multiple accounts under one email address.",
+     "url": "https://community.docusign.com/ideas/multiple-accounts-with-one-email-address-20524"
+    },
+    {
+     "paraphrase": "A user has two accounts with the same email but different account IDs; admin asks how to merge or deactivate one.",
+     "url": "https://community.docusign.com/esignature-111/one-of-our-docusign-users-has-two-accounts-with-the-same-email-id-but-his-account-id-is-different-how-can-i-merge-them-or-deactivate-one-account-1420"
+    },
+    {
+     "paraphrase": "Software Advice review (2021, may be dated): adding an admin by typed email can create a duplicate user; four accounts ended up on one SSO address.",
+     "url": "https://www.softwareadvice.com/ie/electronic-signature/docusign-profile/"
+    },
+    {
+     "paraphrase": "Sender reports a client locked out; moderator says the user may need their admin to reset the password.",
+     "url": "https://community.docusign.com/esignature-171/client-locked-out-4041"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "There is exactly one identity per email address; signing a document never creates a separate hidden account.",
+    "One identity can belong to several workspaces, with a workspace switcher always visible and the last-used workspace opened by default.",
+    "A single inbox lists every document sent to that email across all workspaces.",
+    "Granting a role picks from existing members; entering an email that matches an existing user never creates a second user."
+   ]
+  },
+  {
+   "id": "signer-mobile-signing-broken",
+   "title": "Signing on a phone is awkward or blocked",
+   "what_goes_wrong": "Documents laid out for paper need constant zooming; moving between fields and signing with a finger is awkward; some signers get 'signing on mobile not allowed, use a computer' from a sender setting; the app freezes or crops PDFs. (App-store reviews were not researched, so this is likely under-counted.)",
+   "who": "Signers on phones and tablets",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "g2-capterra",
+    "signer-experience"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Capterra reviewers: mobile needs lots of zooming because documents are formatted for paper; hard to sign with a finger and move between fields.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=39"
+    },
+    {
+     "paraphrase": "Error telling the signer that signing this envelope on a mobile device is not allowed and to use a computer.",
+     "url": "https://community.docusign.com/esignature-171/signing-mobile-not-allowed-2034"
+    },
+    {
+     "paraphrase": "Samsung Android user: the app freezes and they had to use the phone browser instead.",
+     "url": "https://community.docusign.com/mobile-23/no-joy-on-samsung-android-or-chrome-mobile-2141"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Signing works in iOS Safari, Android Chrome and in-app mail browsers with no app install, and no sender or template setting can block phones.",
+    "A guided 'next field' mode scrolls and zooms to each required field, with the primary action pinned at the bottom of the screen and touch targets of at least 44 px.",
+    "A signature can be typed or drawn, and a typed signature completes the document without any drawing step.",
+    "Each release is tested on a small-screen Android and iOS device before shipping."
+   ]
+  },
+  {
+   "id": "api-paywalled-and-go-live-gated",
+   "title": "API access costs extra, and production access is held back",
+   "what_goes_wrong": "API plans are priced separately; production use needs a paid API plan and a go-live review; embedded signing and bulk send sit in custom-priced tiers. One subscriber was billed monthly for a developer service that was never usable; sandbox accounts hit allowance errors that block building.",
+   "who": "Developers and small companies integrating signing into their product",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "trustpilot",
+    "g2-capterra",
+    "trustradius-gartner",
+    "reddit"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "API was listed in the base plan, but after buying the customer was upsold and the production app was not approved.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=10"
+    },
+    {
+     "paraphrase": "Software Advice profile: API access is limited to a higher plan; a paid plan is needed to take an integration live.",
+     "url": "https://softwareadvice.com/cms/docusign-profile"
+    },
+    {
+     "paraphrase": "Vendor developer plans page: separate API plans with production access requiring a paid plan and go-live process.",
+     "url": "https://ecom.docusign.com/plans/developer"
+    },
+    {
+     "paraphrase": "Developer account shows 'envelope allowance exceeded' in the demo environment.",
+     "url": "https://community.docusign.com/esignature-171/docusign-developer-envelope-allowance-exceeded-22155"
+    }
+   ],
+   "fixable_by": "pricing-policy",
+   "requirements": [
+    "API access, webhooks and embedded signing are included in every paid plan under the same document allowance, with a public per-document rate.",
+    "A free sandbox issues keys instantly and has documented limits; a limited or held call returns the reason.",
+    "Going live is self-serve with no sales conversation or manual review for standard use.",
+    "API billing starts only once production access is active on the account."
+   ]
+  },
+  {
+   "id": "documents-hard-to-find-no-admin-view",
+   "title": "Old documents are hard to find; admins cannot search across users",
+   "what_goes_wrong": "Finding an old document, resending it or seeing who has not signed takes many clicks; filters reset after opening a document; there is no good way to organise completed documents. Admins have no account-wide view and must search each user's inbox separately.",
+   "who": "Daily senders and admins of multi-user accounts",
+   "prevalence": 3,
+   "severity": 3,
+   "angles_reporting": [
+    "g2-capterra",
+    "trustradius-gartner"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "TrustRadius: an admin has no visibility into everyone's dashboards; there is no general search across all users' sent documents.",
+     "url": "https://www.trustradius.com/products/docusign/reviews?f=75"
+    },
+    {
+     "paraphrase": "Community idea post: searching across several shared-access users means running the same search separately for each user.",
+     "url": "https://community.docusign.com/ideas/search-across-multiple-shared-access-users-27143"
+    },
+    {
+     "paraphrase": "Capterra reviewers: needs a way to organise finalized documents; finding an old envelope, resending it or seeing who has not signed adds clicks.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=12"
+    },
+    {
+     "paraphrase": "Capterra reviewers: locating documents takes extra clicks and the search menu resets after opening a document.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=6"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Admins have an 'All documents' view with one search across every sender, filterable by sender, status, template and date, with optional team-scoped visibility.",
+    "The document list has full-text search, folders or tags, and filters that persist after a document is opened and closed.",
+    "Each row shows who has not yet signed and offers one-click remind, resend and download."
+   ]
+  },
+  {
+   "id": "billing-unrecognised-or-duplicate-accounts",
+   "title": "Card charged by an account the customer does not recognise",
+   "what_goes_wrong": "A second or third paid account under another email, or the same email, bills the card for months with no invoices. Support confirms the card is attached to another address but will not say which, or says it has no record of the customer.",
+   "who": "Billing owners and company card holders",
+   "prevalence": 2,
+   "severity": 4,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Company card billed by a third account nobody opened; support confirmed it was linked to another email address but refused to disclose which.",
+     "url": "https://www.trustpilot.com/review/docusign.com?page=2"
+    },
+    {
+     "paraphrase": "BBB: $45 monthly for about a year via a second account under the same email, no invoices received; support found it only after escalation.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/complaints?page=2"
+    },
+    {
+     "paraphrase": "BBB review: unable to cancel because the company said it had no record of the customer.",
+     "url": "https://www.bbb.org/us/ca/san-francisco/profile/document-scanning-service/docusign-inc-1116-447881/customer-reviews"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Every receipt and card statement descriptor carries an account identifier, and the receipt names the account email.",
+    "A 'find my subscriptions' lookup emails the owner a list of every paid account tied to their email address or card.",
+    "Creating a second paid account with an email or card already in use shows a warning naming the existing account.",
+    "Support can look up accounts by card last four plus charge date."
+   ]
+  },
+  {
+   "id": "billing-paid-but-not-activated",
+   "title": "Paid, but the plan is not active or the upgrade adds nothing",
+   "what_goes_wrong": "Payment is taken but the account stays on trial or free, the plan is attached to a different email, or an upgrade bought to get more sends adds none. With support unreachable these stay unresolved for months.",
+   "who": "New buyers and upgraders",
+   "prevalence": 2,
+   "severity": 4,
+   "angles_reporting": [
+    "reddit",
+    "trustpilot"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "User paid over $200 for an annual plan via Klarna five months earlier and the account was never upgraded.",
+     "url": "https://community.docusign.com/esignature-111/i-paid-over-200-for-an-annual-subscription-through-klarna-five-months-ago-and-my-account-was-never-upgraded-24402"
+    },
+    {
+     "paraphrase": "User stuck in trial status even after paying.",
+     "url": "https://community.docusign.com/esignature-111/stuck-in-trial-even-after-paying-26682"
+    },
+    {
+     "paraphrase": "Needed to send 12 documents, 10 beyond the plan limit; paid considerably more to upgrade but got no extra sends.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=20"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Plan entitlements are applied within 60 seconds of payment confirmation, including pay-later methods, and the billing page shows the plan state and last payment.",
+    "A payment received but not matched to an active plan is refunded automatically within 3 days and flagged to a human.",
+    "Before payment, the upgrade screen states exactly what the upgrade adds (sends, features), and the new allowance is usable immediately after payment."
+   ]
+  },
+  {
+   "id": "sdk-reliability-and-security-defects",
+   "title": "Official SDKs ship regressions, corrupt downloads and unpatched vulnerabilities",
+   "what_goes_wrong": "SDK upgrades broke token requests and returned corrupt PDFs; a hung create call invited duplicate sends; one user's Authorization header was sent on another user's request; a critical-CVE dependency took about five months to patch; errors are swallowed and calls have no timeouts. Evidence is from GitHub issue trackers only.",
+   "who": "Developers running the vendor SDKs in production",
+   "prevalence": 2,
+   "severity": 4,
+   "angles_reporting": [
+    "developers-api"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Node SDK 7.x: token generation broke; root cause was module-level default headers shared across clients, letting one user's Authorization header go out on another user's call (2024).",
+     "url": "https://github.com/docusign/docusign-esign-node-client/issues/351"
+    },
+    {
+     "paraphrase": "Document download through the Node SDK returns PDFs that will not open; a user-submitted fix was not merged; open since Aug 2022.",
+     "url": "https://github.com/docusign/docusign-esign-node-client/issues/305"
+    },
+    {
+     "paraphrase": "Critical sandbox-escape CVE in a dependency reported Dec 2023; fixed release shipped May 2024; a customer threatened to drop the library for SOC 2 reasons.",
+     "url": "https://github.com/docusign/docusign-esign-node-client/issues/342"
+    },
+    {
+     "paraphrase": "C# sync envelope calls never return in .NET 4.8 web apps: the envelope is created but the caller hangs (2023).",
+     "url": "https://github.com/docusign/docusign-esign-csharp-client/issues/399"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "SDK clients hold no shared mutable state; a CI test runs two tenants concurrently in one process and asserts no credential crossover.",
+    "Every SDK release is gated on an end-to-end suite against the sandbox: get credentials, send a document, download the signed PDF and verify its checksum, receive a webhook.",
+    "Create calls accept an idempotency key so a retried or timed-out call never sends a document twice.",
+    "SDKs use platform-default TLS verification with no off switch, keep runtime dependencies minimal, and ship a patched release within 7 days of a high-severity advisory.",
+    "Every SDK call has a default timeout of 30 seconds, a per-call override and cancellation, and errors carry HTTP status, error code, message and request ID."
+   ]
+  },
+  {
+   "id": "signer-accessibility-and-assistance",
+   "title": "Screen-reader users and less technical signers cannot get through the flow",
+   "what_goes_wrong": "A blind user's screen reader announced pages but not the document text; the accessible path is behind a hidden link and date pickers trap the keyboard. Older signers get stuck navigating inside documents and the helper on the phone cannot see what they see. Other blind users report signing successfully, so the failure is inconsistent.",
+   "who": "Signers using assistive technology; elderly and less technical signers",
+   "prevalence": 2,
+   "severity": 4,
+   "angles_reporting": [
+    "signer-experience"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Blind user could not read the document with their screen reader; it only announced pages.",
+     "url": "https://community.docusign.com/esignature-171/using-docusign-with-a-screen-reader-5024"
+    },
+    {
+     "paraphrase": "University guidance: screen-reader users must tab until they hear a hidden 'click here to read the document' link; the calendar entry is not keyboard reachable.",
+     "url": "https://ucop.edu/electronic-accessibility/web-developers/productivity-tools/docusign-and-accessibility.html"
+    },
+    {
+     "paraphrase": "Sender asks for help for elderly clients who keep failing to complete signing.",
+     "url": "https://community.docusign.com/esignature-171/help-for-elderly-people-27913"
+    },
+    {
+     "paraphrase": "Phone support staff: older signers get stuck navigating within documents; requests a remote-assistance feature.",
+     "url": "https://community.docusign.com/ideas/remote-assistance-25628"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "The signing page meets WCAG 2.1 AA: the document is exposed as tagged text in reading order, fields are native labelled controls in the tab sequence, and there are no keyboard traps, including date entry.",
+    "Each release is verified by completing a signing flow with NVDA, JAWS, VoiceOver and TalkBack.",
+    "On upload, an image-only scan is detected and the sender is warned or OCR is applied.",
+    "The signing screen shows a progress count and a single 'next' action, with no separate signature-style chooser step.",
+    "The sender can open a read-only view showing which field the signer has not yet completed, without being able to sign for them."
+   ]
+  },
+  {
+   "id": "embedded-signing-fragile",
+   "title": "Embedded signing and sending break in hard-to-diagnose ways",
+   "what_goes_wrong": "A signing link can only be made for recipients flagged as embedded at creation and breaks if recipients are edited; a second link for the same signer fails; the in-page view leaves an invisible overlay and never fires its end event; embedded sending cannot be restricted and leaves a full vendor session behind. Evidence is from GitHub issue trackers only.",
+   "who": "Developers embedding signing in their own product",
+   "prevalence": 2,
+   "severity": 3,
+   "angles_reporting": [
+    "developers-api"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "After a sender replaces signers in the embedded sender view, the recipient identifier is null and the generated view has no signature field; staff call it expected (2024).",
+     "url": "https://github.com/docusign/docusign-esign-php-client/issues/225"
+    },
+    {
+     "paraphrase": "Focused view left an invisible iframe covering the whole app after Agree; session-end event did not fire; closed after about 21 months with no visible fix.",
+     "url": "https://github.com/docusign/docusign-esign-java-client/issues/280"
+    },
+    {
+     "paraphrase": "After an embedded edit view, the session cookie lets the user act on the vendor's own site outside the host app; reporter did not go ahead with the vendor.",
+     "url": "https://github.com/docusign/docusign-esign-node-client/issues/237"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "A signing link can be requested for any recipient by recipient ID and re-issued any number of times until the document is completed; editing a recipient's name or email does not invalidate it.",
+    "The embed component fires completed, declined, closed, error and timeout events and removes itself from the page when the session ends.",
+    "Allowed origins are configured once per app; a misconfigured origin fails immediately with a readable console error.",
+    "An embedded session token is scoped to one document and grants no access to the main web app."
+   ]
+  },
+  {
+   "id": "signer-signature-or-name-cannot-be-corrected",
+   "title": "Signer cannot change the signature or fix their own name",
+   "what_goes_wrong": "A stored or first-adopted signature keeps being applied even after the signer updates or deletes it, and a mistake cannot be corrected by reopening the document. A signer whose name was misspelled by the sender cannot correct it while signing.",
+   "who": "Signers",
+   "prevalence": 2,
+   "severity": 3,
+   "angles_reporting": [
+    "trustpilot",
+    "bbb",
+    "g2-capterra",
+    "trustradius-gartner"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "After updating the signature the old deleted one kept being applied and only changed many hours later.",
+     "url": "https://uk.trustpilot.com/review/docusign.com?page=5"
+    },
+    {
+     "paraphrase": "Signature could not be changed after the first one was created, so errors could not be corrected even after reopening the document.",
+     "url": "https://uk.trustpilot.com/review/docusign.com"
+    },
+    {
+     "paraphrase": "Capterra: a signer could not correct their own misspelled name during signing.",
+     "url": "https://www.capterra.com/p/121506/Docusign/reviews/?page=72"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "A signer can redraw or retype their signature at any point before final submit, and the change applies immediately to every signature field in that document.",
+    "A stored signature is never applied without being shown to the signer for confirmation first.",
+    "A review step shows all completed fields before 'Finish'.",
+    "A signer can correct the spelling of their own name during signing; the change is logged in the audit trail and the sender is notified."
+   ]
+  },
+  {
+   "id": "signer-shared-email-mixups",
+   "title": "Two signers sharing one email address get mixed up",
+   "what_goes_wrong": "When a couple shares an address, only one email arrives, the same signature appears twice, one name changes into the other, or the first signer's signature moves onto the second signer's line. Workarounds are sender-side and assume separate addresses.",
+   "who": "Couples and households signing together; tax preparers, real-estate and financial senders",
+   "prevalence": 2,
+   "severity": 3,
+   "angles_reporting": [
+    "signer-experience"
+   ],
+   "evidence": [
+    {
+     "paraphrase": "Two signatories at one address received only one email and one signature appeared twice.",
+     "url": "https://community.docusign.com/esignature-171/i-can-send-to-a-single-signatory-what-about-when-there-are-two-signatories-with-the-same-email-address-can-they-both-sign-i-thought-they-might-each-receive-an-email-to-the-one-address-but-they-only-received-one-and-one-signature-appeared-twice-706"
+    },
+    {
+     "paraphrase": "Two signatures needed at the same address; one name changes into the other in transit.",
+     "url": "https://community.docusign.com/esignature-111/i-need-2-signatures-at-the-same-email-address-one-name-is-changing-to-the-other-in-transit-see-below-help-325"
+    },
+    {
+     "paraphrase": "Tax preparer: after the taxpayer signs, the spouse's attempt moves the taxpayer's signature to the spouse line.",
+     "url": "https://accountants.intuit.com/community/proseries-tax-discussions/discussion/re-is-anyone-else-having-major-issues-with-docusign/01/298837"
+    }
+   ],
+   "fixable_by": "product",
+   "requirements": [
+    "Two signers with the same email each receive a separate email naming that signer, with its own link, its own fields and its own signature.",
+    "One signer's signature is never applied to another signer's fields (automated test with two recipients on one address).",
+    "The sender is warned at send time when two signers share an address and is offered a per-person phone code."
+   ]
+  }
+ ],
+ "not_fixable_notes": "EVIDENCE LIMITS. All review-site and forum evidence comes from search-result summaries, not full-page reads; Trustpilot and BBB page numbers drift; money amounts and notice periods are single reviewers' unverified claims. Developer evidence is from GitHub issue pages read through a summariser. Trustpilot/BBB are self-selected angry customers, while G2/Capterra/Gartner/TrustRadius average about 4.5/5, so prevalence here means 'how often it appeared in the negative material', not how often it happens to users. Some cited pages are competitor blogs (fynk.com, checkthat.ai, softwareadvice profile summaries) and are weaker.\n\nANGLES THAT RETURNED NOTHING (open gaps, not 'searched and clean'): mobile app-store reviews (two angles), pricing-limits, security-phishing, sender-workflow, support-account, international/non-US (legal acceptance, eIDAS/QES, data residency, VAT invoices, languages, date formats), account security and signature disputes (2FA, audit trail, court challenges), and specialist workflows (real estate, HR, notary, in-person signing, outages). Mobile, international and audit-trail requirements should not be considered covered by this list.\n\nWHAT SOFTWARE CANNOT FULLY FIX. (1) Look-alike phishing sent from outside our platform that imitates the Sign&Grow brand: we can only make genuine requests verifiable and stop abuse of our own sending. (2) Recipient-side mail filtering and corporate quarantine: we can show delivery status and offer link/SMS fallback but cannot guarantee inbox placement. (3) SMS carrier failures abroad and third-party ID-check accuracy: mitigated by alternative methods, not eliminated. (4) Support themes need staffed humans with refund authority and response targets; product can only expose the channels. (5) Price level, free-tier size, refund windows, proration and seat-free roles are business decisions; the requirements state a policy the product can enforce, and the specific numbers (14 days, 60 days, 90 days, 12 months) are proposals taken from the research fix ideas, not validated figures.\n\nDROPPED OR FOLDED TO STAY WITHIN 45 (lower score or thin evidence): customer documents used for AI training (three sources, one angle; cheap to answer with a 'never used for training, opt-in only' commitment); cluttered interface and forced redesign that slowed common tasks; too many notification emails and reminders that cannot target only outstanding signers; thin admin reporting and usage data; webhook payload schema and docs gaps, polling rate limits, missing TypeScript types, bundler and packaging problems, dead API docs and unusable OpenAPI spec; account-manager gatekeeping and inaccurate sales quotes; reseller-sold plans nobody will cancel and emails trapped in an employer's organisation; bulk send that cannot be voided or corrected as a batch (2021-era source); large files failing without a clear error; no way for a signer to ask a question; date-field formatting; limited branding (folded into tier-locked features). DocuSign CLM implementation, search and reporting complaints were excluded as a different product from e-signature. The BBB observation that company replies restate the terms rather than fix causes is a pattern across the billing themes, not a separate requirement."
+}

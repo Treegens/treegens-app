@@ -1,0 +1,63 @@
+/* Styles for the settings screens. Shared tokens and components live in ../globals.css. */
+.setting-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.setting-row:first-of-type { border-top: 0; }
+.setting-row input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+.plan-hero { display: flex; gap: 14px; align-items: flex-start; background: var(--green-deep); border-color: var(--green-deep); color: #fff; }
+.plan-hero p { color: #cfe2d3; max-width: 640px; }
+.plan-line { margin: 12px 0 14px; font-size: 15.5px; max-width: 680px; }
+.meter { height: 10px; border-radius: 6px; background: #ece8dd; overflow: hidden; margin-top: 14px; max-width: 420px; }
+.meter > i { display: block; height: 100%; background: var(--green); border-radius: 6px; }
+ul.rules { margin: 0; padding-left: 20px; line-height: 1.6; }
+ul.rules li { margin-bottom: 8px; }
+ul.rules li:last-child { margin-bottom: 0; }
+.banner { border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.banner.paused { background: var(--red-soft); color: #7d241d; }
+.queue-item { border-top: 1px solid var(--line); padding: 14px 16px; }
+.queue-item:first-child { border-top: 0; }
+.queue-item pre { white-space: pre-wrap; font: inherit; margin: 6px 0 10px; background: #fbfaf6; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+ul.rules + .btn, ul.rules + .row { margin-top: 16px; }
+.balance { font-size: 20px; margin-top: 2px; }
+.balance b { font-family: var(--serif); font-size: 44px; letter-spacing: -0.01em; margin-right: 6px; }
+.topup-sum { font-size: 16px; }
+
+/* Plan history: one entry per block, so it reads at phone width and a long reference wraps instead of being cut off. */
+.plan-history { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.plan-history li { padding: 10px 16px; border-top: 1px solid var(--line); }
+.plan-history .ref { font-family: ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+
+/* The Plan tab on a phone: every button, link-button and box is at least 44 px tall (measured in tests/out/repair-expiry). */
+@media (max-width: 760px) {
+  .plan-tab .btn, .plan-tab .btn.sm, .plan-tab .linklike, .plan-tab input, .plan-tab summary { min-height: 44px; }
+  .plan-tab .linklike { display: inline-flex; align-items: center; }
+}
+
+/* Settings sections (research/ux-charter.md, 2.2): "Saved" next to what saved, cards, the one More options. */
+.set-saved { color: var(--green); font-size: 13.5px; font-weight: 600; }
+.set-saved:empty { display: none; }
+.set-card + .set-card, .set-card + .set-more, .set-card + .card, .card + .set-card, .set-more { margin-top: 16px; }
+.stack > .set-card, .stack > .set-more { margin-top: 16px; }
+.stack > .set-card:first-child { margin-top: 0; }
+.set-card > .card[style], .set-card > section.card { margin-top: 0 !important; }
+.set-group { font-size: 18px; margin: 0; }
+.set-more > summary, .set-fold { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-weight: 600; color: var(--green-deep); }
+.set-more > summary { font-size: 16px; }
+.set-more-body { margin-top: 8px; }
+.set-kept { margin: 6px 0 14px; }
+/* Every button and box inside a Settings card is a thumb-sized target (44 px), at every width. */
+.set-card .btn, .set-card select, .set-card input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='range']) { min-height: 44px; }
+/* And in every other card of every section (Team, Records and data, Developers, Plan): only a minimum, so nothing gets smaller.
+   A link inside a sentence ("cancel the plan") stays the height of its line, as the 44 px rule allows for words in text. */
+#set-panel .btn, #set-panel select, #set-panel input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='range']), #set-panel details > summary { min-height: 44px; }
+#set-panel details > summary { align-content: center; box-sizing: border-box; }
+
+/* Section tabs: a thumb-sized target at every width. */
+.tabs[role='tablist'] button { min-height: 44px; }
+/* Up to ten sections: the row wraps at every width, so none is ever cut at the edge ("rofile"). */
+.tabs[role='tablist'] { flex-wrap: wrap; overflow-x: visible; row-gap: 0; }
+
+/* A refused number, said under its own box (Settings, Sending). */
+.set-bad { display: block; margin-top: 6px; color: #8c241c; font-size: 13.5px; font-weight: 600; }
+/* Inviting on a phone: the address gets the whole width, then the role, then the button. */
+@media (max-width: 640px) {
+  .set-invite > label.f, .set-invite > .btn { flex: 1 1 100%; }
+}

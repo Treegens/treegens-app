@@ -1,0 +1,55 @@
+/* Click-to-agree: the page visitors accept terms on (also inside a frame on another website), and the team's
+   agreement screens. Every class here starts with "cw-". Shared tokens and components live in ../globals.css. */
+
+/* ---- The page visitors accept on ---- */
+.cw-page { max-width: 760px; margin: 4vh auto; padding: 0 16px 32px; }
+.cw-page.cw-embed { margin: 0 auto; padding: 8px; max-width: none; }
+.cw-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-width: 0; }
+.cw-head img { max-height: 36px; max-width: 160px; }
+.cw-head span { overflow-wrap: anywhere; }
+.cw-title { font-size: 24px; overflow-wrap: anywhere; margin-bottom: 4px; }
+.cw-embed .cw-title { font-size: 20px; }
+.cw-terms { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 14px 16px; max-height: 60vh; overflow: auto; margin: 12px 0; overflow-wrap: anywhere; }
+.cw-embed .cw-terms { max-height: 340px; }
+.cw-terms:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.cw-terms h2 { font-size: 19px; margin: 6px 0 10px; }
+.cw-terms h3 { font-size: 16px; margin: 6px 0 8px; }
+.cw-terms ul, .cw-terms ol { margin: 0 0 12px; padding-left: 22px; }
+.cw-terms li { margin-bottom: 4px; }
+.cw-terms.cw-pdf { padding: 6px; background: #f1eee6; }
+.cw-recorded { font-size: 13.5px; color: var(--muted); background: #fbfaf6; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; }
+.cw-recorded p { margin: 0 0 6px; }
+.cw-recorded p:last-child { margin: 0; }
+/* The tick box and the button answer a finger over at least 44 by 44 pixels. */
+.cw-tick { display: flex; gap: 10px; align-items: flex-start; min-height: 44px; padding: 8px 0; font-size: 15px; cursor: pointer; }
+.cw-tick input { width: 22px; height: 22px; margin: 1px 0 0; flex: none; }
+.cw-go { min-height: 44px; width: 100%; font-size: 16px; }
+.cw-why { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+.cw-as { font-size: 14px; margin: 0 0 10px; overflow-wrap: anywhere; }
+.cw-foot { font-size: 13px; color: var(--muted); text-align: center; margin-top: 14px; }
+.cw-foot a, .cw-foot button { min-height: 44px; display: inline-flex; align-items: center; }
+.cw-linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--green); text-decoration: underline; cursor: pointer; }
+.cw-report { margin-top: 12px; text-align: left; }
+.cw-done .btn { min-height: 44px; }
+/* The app's empty toast holder is fixed and moved with a transform, and Chrome counts anything like that above the
+   button as covering it, so a frame would refuse an honest press near its bottom edge. This page shows no toasts. */
+.cw-page ~ .toasts:empty { display: none; }
+.cw-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+/* ---- The team's screens ---- */
+.cw-snippet { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; background: #fbfaf6; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin: 6px 0 10px; }
+.cw-editor textarea { min-height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; }
+.cw-preview { border: 1px dashed var(--line); border-radius: 10px; padding: 12px 14px; background: #fff; max-height: 360px; overflow: auto; overflow-wrap: anywhere; }
+.cw-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.cw-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.cw-filters label.f { margin: 0; min-width: 130px; flex: 1; }
+.cw-state { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: #eeeae0; color: #4d5a52; white-space: nowrap; }
+.cw-state.live { background: var(--green-soft); color: var(--green); }
+.cw-state.stopped { background: var(--red-soft); color: var(--red); }
+.cw-cell { overflow-wrap: anywhere; min-width: 0; }
+/* A label.check is a flex row, and a long sentence beside a tick box squeezed the box to a dot on a phone. */
+.cw-team label.check input[type='checkbox'], .cw-team label.check input[type='radio'] { flex: none; width: 20px; height: 20px; margin: 2px 0 0; }
+@media (max-width: 900px), (pointer: coarse) {
+  .cw-team .btn, .cw-team select, .cw-team input:not([type='checkbox']):not([type='radio']) { min-height: 44px; }
+  .cw-team label.check { min-height: 44px; }
+}

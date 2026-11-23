@@ -1,0 +1,72 @@
+'use client';
+import { useState } from 'react';
+import { api } from './ui';
+import { Logo } from './Brand';
+import { IN_PERSON_LIMITS } from '@/lib/phone';
+import { useT } from '@/components/sign/lang';
+
+// The one screen of the app that a browser shows while it is locked: it was handed to someone to sign in person
+// (src/server/handover.ts), and until the owner of the account has typed their password nothing of the account is
+// shown or can be reached from here. Shown by AppShell in place of every page under /app.
+export type Locked = { name: string; has_password: boolean; signer: string | null; envelope_id: string | null; tries_left?: number };
+
+export function HandedOver({ info, onUnlocked }: { info: Locked; onUnlocked: () => void }) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [out, setOut] = useState(false);
+  // In English until this screen knows whose language to use: it belongs to the account, not to a signing link.
+  const T = useT();
+  const next = typeof window === 'undefined' ? '/app' : window.location.pathname;
+  const signIn = `/login?next=${encodeURIComponent(next)}`;
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    api('/auth/unlock', { body: { password } }).then(() => onUnlocked())
+      .catch((err: any) => {
+        setPassword('');
+        if (err?.code === 'signed_out') setOut(true);
+        // Not locked any more (unlocked in another tab, or the session ran out): let the app find out where it stands.
+        if (err?.code === 'not_locked') return onUnlocked();
+        setError(err?.status ? err.message : T('handover.no_server'));
+      })
+      .finally(() => setBusy(false));
+  };
+  return (
+    <main className="authbox ho" aria-labelledby="ho-h">
+      <div className="row" style={{ justifyContent: 'center', marginBottom: 14 }}><Logo height={22} /></div>
+      <div className="card">
+        <h1 id="ho-h" className="serif" style={{ fontSize: 22, marginBottom: 8 }}>{T('handover.title', { signer: info.signer || T('handover.someone') })}</h1>
+        <p className="muted">{T('handover.lead', { name: info.name })}</p>
+        {out ? (
+          <>
+            <p className="notice err" role="alert">{error}</p>
+            <a className="btn primary" style={{ width: '100%', minHeight: 48 }} href={signIn}>{T('handover.sign_in_page')}</a>
+          </>
+        ) : info.has_password ? (
+          <form onSubmit={submit}>
+            {/* The browser is asked not to fill this in by itself: whoever holds the device would only have to tap. */}
+            <label className="f"><span>{T('handover.password', { name: info.name })}</span>
+              <input type="password" name="unlock" autoComplete="one-time-code" autoFocus required value={password} onChange={(e) => setPassword(e.target.value)} aria-describedby={error ? 'ho-err' : undefined} aria-invalid={!!error} />
+            </label>
+            {error && <p id="ho-err" className="notice err" role="alert">{error}</p>}
+            <button className="btn primary" style={{ width: '100%', minHeight: 48 }} disabled={busy || !password}>{busy ? T('handover.checking') : T('handover.unlock', { name: info.name })}</button>
+            <p className="muted small" style={{ margin: '12px 0 0' }}><a href="/forgot">{T('handover.forgot')}</a> · <a href={signIn}>{T('handover.other_way')}</a></p>
+          </form>
+        ) : (
+          <>
+            <p>{T('handover.no_password')}</p>
+            <a className="btn primary" style={{ width: '100%', minHeight: 48 }} href={signIn}>{T('handover.sign_in_again', { name: info.name })}</a>
+          </>
+        )}
+      </div>
+      <details className="ho-more">
+        <summary>{T('handover.covers')}</summary>
+        <p className="small">{T('handover.covers_body')}</p>
+        <ul className="small">{IN_PERSON_LIMITS.map((l) => <li key={l}>{l}</li>)}</ul>
+      </details>
+      <p className="muted small center" style={{ marginTop: 14 }}>{T('handover.not_you', { name: info.name })} <a href="/help">{T('handover.help')}</a></p>
+    </main>
+  );
+}

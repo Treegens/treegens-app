@@ -1,0 +1,98 @@
+/* Stamps (src/components/stamps, src/server/stamps.ts): printed like ink, on screen as in the signed PDF. */
+
+/* The ink layer of a page (PdfDoc): right on the drawn page, starting no stacking context of its own, so each stamp
+   is multiplied into the page's pixels and the printed words show through it. Nothing in it can be clicked. */
+.pdfpage .ink { position: absolute; inset: 0; pointer-events: none; }
+.pdfpage .ink .st-print { position: absolute; display: flex; align-items: center; justify-content: center; }
+/* Turned by the stamp's natural tilt (a transform on the picture, about its middle), as in the PDF: the design keeps
+   the size of its field and its corners may reach a little past it. */
+.pdfpage .ink .st-print img { width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; opacity: 0.97; }
+
+/* A stamp field of the signer: a yellow box to tap while empty, see-through once the stamp is on, outlined on hover
+   and focus so it is still clear where to tap to change it. */
+.sg-doc .field.fill.stamp { background: rgba(255, 248, 214, 0.6); justify-content: center; }
+.sg-doc .field.fill.stamp.done { background: transparent; border-color: transparent; }
+/* On hover only where a pointer really hovers: on a touch screen "hover" sticks after a tap and would leave a box
+   round the stamp. */
+.sg-doc .field.fill.stamp.done:focus-visible { border-color: var(--green); border-style: dashed; }
+@media (hover: hover) and (pointer: fine) { .sg-doc .field.fill.stamp.done:hover { border-color: var(--green); border-style: dashed; } }
+.sg-doc .field.fill.stamp .cta { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.field.edit.stamp { background: color-mix(in srgb, var(--fc, var(--green)) 7%, transparent); border-style: dashed; align-items: flex-start; }
+
+/* The maker: before and after, side by side even on a phone, then the controls. */
+.st-maker { display: grid; gap: 12px; }
+.st-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.st-compare figure { margin: 0; min-width: 0; }
+.st-compare figcaption { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.st-paper { position: relative; background: #fff; border: 1px solid var(--line); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); padding: 10px 12px; font-family: var(--serif); font-size: 11px; line-height: 1.45; color: #1c1c1f; aspect-ratio: 1 / 1.08; overflow: hidden; }
+.st-paper p { margin: 0 0 6px; }
+.st-paper .st-small { font-size: 9px; color: #555; }
+.st-sigline { border-bottom: 1px solid #333; height: 28px; margin-top: 10px; position: relative; }
+.st-sig { font-family: 'Caveat', 'Segoe Script', cursive; font-size: 20px; position: absolute; bottom: 0; left: 8px; color: #1a2a6b; }
+.st-on { position: absolute; left: 36%; top: 30%; width: 58%; height: 58%; object-fit: contain; }
+.st-on.st-ink { mix-blend-mode: multiply; opacity: 0.97; }
+
+.st-inks { display: flex; flex-wrap: wrap; gap: 6px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.st-inks legend { font-weight: 600; font-size: 13px; margin-bottom: 6px; padding: 0; }
+.st-swatch { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px 0 10px; border: 1.5px solid var(--line); border-radius: 22px; cursor: pointer; font-size: 14px; background: var(--surface); }
+.st-swatch input, .st-card input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.st-swatch:focus-within, .st-card:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
+.st-swatch.on { border-color: var(--ink); font-weight: 600; }
+.st-dot { width: 20px; height: 20px; border-radius: 50%; flex: none; }
+.st-controls { display: grid; gap: 4px 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); align-items: start; }
+.st-range { margin-bottom: 8px; }
+.st-range input[type='range'] { width: 100%; min-height: 44px; margin: 0; accent-color: var(--green); }
+.st-range > span:first-child, .st-range > label { display: block; font-size: 13px; font-weight: 600; }
+.st-ends, .st-range > .st-ends { display: flex; justify-content: space-between; gap: 8px; font-weight: 400; margin: 0; }
+.st-row { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Every control of a stamp is at least 44 pixels tall, also the small buttons inside a dialog (sign.css makes those 40). */
+.st-row .btn, .st-other, .st-dialog .actions .btn, .st-list .btn, .sg-dialog .st-row .btn.sm, .sg-dialog .btn.sm.st-other, .ed-stamp .btn.sm { min-height: 44px; }
+.sg-others img.st-thumb { max-height: 96px; }
+.st-check { min-height: 44px; align-items: flex-start; padding-top: 10px; }
+.st-check input { width: 20px; height: 20px; flex: none; }
+.st-edges { grid-column: 1 / -1; border: 0; padding: 0; margin: 8px 0 0; min-width: 0; display: grid; gap: 0 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.st-edges legend { font-weight: 600; font-size: 14px; padding: 0; }
+.st-edges > p { grid-column: 1 / -1; margin: 2px 0 6px; }
+/* Everything but the ink sits behind one closed fold: the defaults are meant to be right. */
+.st-adjust > summary, .st-how > summary { min-height: 44px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; font-size: 14px; list-style: none; }
+.st-adjust > summary::-webkit-details-marker, .st-how > summary::-webkit-details-marker { display: none; }
+.st-adjust > summary::before, .st-how > summary::before { content: ''; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform 0.12s; flex: none; margin-left: 2px; }
+.st-adjust[open] > summary::before, .st-how[open] > summary::before { transform: rotate(45deg); }
+.st-adjust > .st-controls { margin-top: 6px; }
+/* The buttons of a stamp dialog stay in view at its bottom while the rest scrolls under them (as .sg-adopt-foot). */
+.st-foot { position: sticky; bottom: calc(-1 * var(--sg-dpb, 24px)); z-index: 3; margin: 0 0 calc(-1 * var(--sg-dpb, 24px)); padding: 8px 0 var(--sg-dpb, 24px); background: #fff; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+/* The stamp already on the document, offered again: a lower page, so the buttons sit right under it. */
+.st-dialog > .st-paper.st-same { aspect-ratio: auto; height: 250px; }
+.st-same .st-on { left: 30%; top: 22%; width: 64%; height: 74%; }
+.st-foot .actions, .sg-dialog .st-foot .actions { margin-top: 0; }
+
+/* The signing page's dialog: saved stamps, then a picture or a photo. */
+.st-dialog { display: grid; gap: 12px; }
+.st-saved { border: 0; padding: 0; margin: 0; min-width: 0; }
+.st-saved legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
+.st-saved-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.st-card { position: relative; display: grid; gap: 6px; padding: 8px; border: 1.5px solid var(--line); border-radius: 10px; cursor: pointer; min-height: 44px; background: #fff; }
+.st-card img { width: 100%; height: 90px; object-fit: contain; mix-blend-mode: multiply; }
+.st-card > span { display: grid; gap: 2px; font-size: 13px; }
+.st-card.on { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+.st-honest { margin: 0; }
+.st-other { justify-self: start; }
+
+/* Settings, Stamps and seals: the team's stamps as cards. */
+.st-how > p { margin: 0 0 6px; }
+.st-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-top: 12px; }
+.st-item { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; background: var(--surface); display: grid; gap: 8px; }
+.st-item .st-paper { aspect-ratio: auto; height: 150px; }
+.st-item .st-on { left: 30%; top: 12%; width: 64%; height: 80%; }
+.st-item h3 { font-size: 15px; margin: 0; overflow-wrap: anywhere; }
+.st-item .st-row { margin-top: 2px; }
+
+/* The text view: a stamp as a picture on a line of its own. */
+.sg-row-stamp { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sg-row-stamp img, .sg-others .st-thumb { width: 96px; height: 96px; object-fit: contain; mix-blend-mode: multiply; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+
+@media (max-width: 600px) {
+  .st-paper { font-size: 9px; padding: 8px; }
+  .st-sig { font-size: 16px; }
+  .st-saved-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -1,0 +1,6 @@
+/* The one line on Home on a phone: "Add GrowSigning to your home screen" (src/components/InstallHint.tsx). */
+.ph-hint { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ph-hint-x { min-width: 44px; min-height: 44px; border: 0; background: transparent; color: inherit; font-size: 22px; line-height: 1; cursor: pointer; border-radius: 8px; }
+.ph-hint-x:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+/* Under a document made from cleaned photos: the line and Undo cleanup (src/components/editor/FileRow.tsx). */
+.ed-file-note .ph-undo { margin-left: 6px; min-height: 44px; }

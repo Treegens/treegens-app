@@ -1,0 +1,15 @@
+node_modules
+.next
+.next-*
+data
+public/pdfjs
+public/fonts
+public/security
+backups
+assets/fonts
+next-env.d.ts
+*.tsbuildinfo
+.env
+.env.local
+tests/out
+certs

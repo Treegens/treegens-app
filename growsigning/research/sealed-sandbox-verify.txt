@@ -1,0 +1,89 @@
+GrowSigning seal against the SSL.com eSigner sandbox, 2026-11-23T02:36:12.538Z
+CSC API https://cs-try.ssl.com/csc/v0, token https://oauth-sandbox.ssl.com/oauth2/token, time stamps http://ts.ssl.com, TSA_TRUST=bundled
+
+Seal certificate from credentials/info: eSigner.com (Esigner, LLC), issued by SSL.com Client Certificate Intermediate CA RSA R2, valid to 2027-08-04T18:22:41.000Z
+Chain: eSigner.com (Esigner, LLC) > SSL.com Client Certificate Intermediate CA RSA R2 > SSL.com Root Certification Authority RSA - Development
+
+Envelope env_2dLJm8m5t9Uguv7R: completed, seal level B-T, time stamp trusted, long-term missing (for the certificate "eSigner.com (Esigner, LLC)", ocsp-dev.ssl.com: it answered HTTP 403; crl-dev.ssl.com: it answered HTTP 403; for the certificate "SSL.com Client Certificate Intermediate CA RSA R2", ocsp-dev.ssl.com: it answered HTTP 403; crl-dev.ssl.com: it answered HTTP 403)
+Record: Sealed by eSigner.com (Esigner, LLC). The signed PDF carries a digital seal made with the certificate of eSigner.com (Esigner, LLC), issued by SSL.com Client Certificate Intermediate CA RSA R2. A PDF reader shows if the file changed after this. The seal carries a trusted time stamp from ts.ssl.com at 2026-11-23T02:36:16.000Z: the certificate of that service leads to one this server was set up to trust. What is needed to check the seal after its certificate has expired could not be added, so the file can be checked only while that certificate is valid: for the certificate "eSigner.com (Esigner, LLC)", ocsp-dev.ssl.com: it answered HTTP 403; crl-dev.ssl.com: it answered HTTP 403; for the certificate "SSL.com Client Certificate Intermediate CA RSA R2", ocsp-dev.ssl.com: it answered HTTP 403; crl-dev.ssl.com: it answered HTTP 403.
+
+PASS  the file carries a seal
+PASS  openssl cms -verify: the seal holds over the bytes its ByteRange covers, to the sandbox root
+PASS  the signer certificate is the sandbox credential's: eSigner.com (Esigner, LLC) (SHA-256 660737451a5e44f3562e1ffca63ac971080c341cd706e9f269389cea9c4668ca)
+PASS  the whole chain the service gave is in the seal: 3 certificates
+PASS  the seal is signed with sha256WithRSAEncryption, as SSL.com signs
+PASS  openssl ts -verify: the signature time stamp is over the seal's signature and leads to a bundled root: Verification: OK
+      time Nov 23 02:36:16 2026 GMT, unspecified
+NOT DONE  the file carries a DSS with OCSP or CRL answers (PAdES B-LT): the sandbox certificates can only be checked at ocsp-dev.ssl.com and crl-dev.ssl.com, which this network refused: for the certificate "eSigner.com (Esigner, LLC)", ocsp-dev.ssl.com: it answered HTTP 403; crl-dev.ssl.com: it answered HTTP 403; for the certificate "SSL.com Client Certificate Intermediate CA RSA R2", ocsp-dev.ssl.com: it answered HTTP 403; crl-dev.ssl.com: it answered HTTP 403
+NOT DONE  a document time stamp covers the whole file (PAdES B-LTA): none was added, because the long-term step did not complete (see the DSS line); the same step is shown on its own below
+      GrowSigning's own check: intact true, whole file true, level B-T, long term null, time stamp 2026-11-23T02:36:16.000Z
+PASS  pdfsig: the signature is valid and covers the document
+      | Digital Signature Info of: /tmp/seal-sandbox-NnAnck/sealed.pdf
+      | Signature #1:
+      |   - Signature Field Name: Seal
+      |   - Signer Certificate Common Name: eSigner.com (Esigner, LLC)
+      |   - Signer full Distinguished Name: CN="eSigner.com (Esigner, LLC)",OU=Esigner.com Esealing,O="eSigner.com (Esigner, LLC)",L=Houston,ST=Texas,C=US
+      |   - Signing Time: Nov 23 2026 02:36:16
+      |   - Signing Hash Algorithm: SHA-256
+      |   - Signature Type: ETSI.CAdES.detached
+      |   - Signed Ranges: [0 - 72749], [138287 - 139086]
+      |   - Total document signed
+      |   - Signature Validation: Signature is Valid.
+      |   - Certificate Validation: Unknown issue with Certificate or corrupted data.
+      |
+PASS  pyHanko: the seal is intact and trusted up to the sandbox root, with nothing else changed after it
+      | =============
+      | Field 1: Seal
+      | =============
+      | 
+      | 
+      | Signer info
+      | -----------
+      | Certificate subject: "Common Name: eSigner.com (Esigner, LLC); Organizational Unit: Esigner.com Esealing; Organization: eSigner.com (Esigner, LLC); Locality: Houston; State/Province: Texas; Country: US"
+      | Certificate SHA1 fingerprint: ec1119fa38c67cdeca4786d1741771690afae54e
+      | Certificate SHA256 fingerprint: 660737451a5e44f3562e1ffca63ac971080c341cd706e9f269389cea9c4668ca
+      | Trust anchor: "Common Name: SSL.com Root Certification Authority RSA - Development, Organization: SSL Corporation, Locality: Houston, State/Province: Texas, Country: US"
+      | The signer's certificate is trusted.
+      | 
+      | 
+      | Integrity
+      | ---------
+      | The signature is cryptographically sound.
+      | 
+      | The digest algorithm used was 'sha256'.
+      | The signature mechanism used was 'sha256_rsa'.
+      | 
+      | 
+      | Signing time
+      | ------------
+      | Signing time as reported by signer: 2026-11-23T02:36:16+00:00
+      | 
+      | Signature timestamp token: 2026-11-23T02:36:16+00:00
+      | The token is guaranteed to be newer than the signature.
+      | This timestamp is backed by a time stamping authority.
+      | The timestamp token is cryptographically sound.
+      | TSA certificate subject: "Common Name: SSL.com Timestamping Unit 2026 E1, Organization: SSL Corp, Locality: Houston, State/Province: Texas, Country: US"
+      | TSA certificate SHA1 fingerprint: a36d86d3320769e6737653f05811887cf4d18d88
+      | TSA certificate SHA256 fingerprint: 574fea17aafa5e7c6a2b9b08c998b1735e450b3873ca44e6a24ca0930e63f3b0
+      | TSA cert trust anchor: "Common Name: SSL.com Root Certification Authority RSA, Organization: SSL Corporation, Locality: Houston, State/Province: Texas, Country: US"
+      | The TSA certificate is trusted.
+      | 
+      | 
+      | Modifications
+      | -------------
+      | The signature covers the entire file.
+      | 
+      | 
+      | Bottom line
+      | -----------
+      | The signature is judged VALID.
+      | 
+      | 
+      |
+PASS  page 1 looks the same before and after the seal (pdftoppm, 100 dpi, byte-identical PNG): SHA-256 1f7f9ca89be4389d... and 1f7f9ca89be4389d...
+PASS  without a seal, timestamp.digicert.com puts a document time stamp over the whole completed PDF, and openssl verifies it to a bundled root: time Nov 23 02:36:19 2026 GMT
+PASS  without a seal, ts.ssl.com puts a document time stamp over the whole completed PDF, and openssl verifies it to a bundled root: time Nov 23 02:36:20 2026 GMT
+
+The sandbox CA is "SSL.com Root Certification Authority RSA - Development", which is on no trust list. Acrobat will say
+"validity unknown" for this file, and that is expected. A production eSealing certificate chains to an authority on the
+Adobe Approved Trust List, and Acrobat then shows "Signed and all signatures are valid".

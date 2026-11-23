@@ -1,0 +1,1246 @@
+{
+ "audit:billing-terms": {
+  "results": [
+   {
+    "theme_id": "billing-seats-overcharged",
+    "requirement": "The seat count changes only through an explicit admin action in the product; the action shows the effective date and cost and sends a confirmation email.",
+    "verdict": "not_applicable",
+    "evidence": "There are no seats. One plan per account at one price: POST /billing/checkout in /home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts always sends line_items[0][quantity]=1 (seen in my probe L10, /home/user/treegens-app/sign-and-grow/tests/out/audit-billing-terms/p3-ledger.test.ts). Invite, remove and transfer routes in routes-account.ts never touch billing. Audited tree: HEAD 4ffeb42, npm test 61/61 pass, all probes re-run on it.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-seats-overcharged",
+    "requirement": "A seat removal made before renewal is reflected in the renewal charge (automated test: reduce 2 to 1, renewal charges 1).",
+    "verdict": "not_applicable",
+    "evidence": "No per-person fee exists, so a renewal cannot be for more people than wanted. The renewal is one fixed monthly price (STRIPE_PRICE_GROVE, quantity 1).",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-seats-overcharged",
+    "requirement": "The renewal reminder lists every seat by user, last-active date, unit price and total.",
+    "verdict": "not_applicable",
+    "evidence": "No seats to list. The reminder that exists (invoice.upcoming handler in routes-billing.ts) states the single amount and date and has a no-login stop link; covered by tests/billing.test.ts 'signatures roll over, and a reminder comes before each renewal with a one-click stop'.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-seats-overcharged",
+    "requirement": "Replacing the user on an existing seat creates no charge.",
+    "verdict": "not_applicable",
+    "evidence": "Members are free and unlimited; DELETE /account/members/:id and POST /account/invites in routes-account.ts make no payment-provider call.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-seats-overcharged",
+    "requirement": "A free collaborator is never converted into a paid seat without an explicit admin confirmation showing the price.",
+    "verdict": "not_applicable",
+    "evidence": "There is no paid seat to convert anyone into. The Team tab in /home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx says 'there is no charge per person' and the code agrees.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-hidden-cancellation-notice-window",
+    "requirement": "A cancellation is accepted and effective at any time up to the renewal timestamp; there is no notice period, and the billing page shows 'cancel by' as the actual renewal date and time.",
+    "verdict": "partly",
+    "evidence": "cancelPlan() in routes-billing.ts tells the provider cancel_at_period_end=true at once, with no notice window; tests/billing.test.ts asserts 'the provider was told straight away', and it works from the app, from an email link and by card. Plan page (screenshot ui-plan-active.png) shows 'Next charge: $9 on December 10, 2026'.",
+    "gap": "Only the date is shown, never the time, although the rules say 'Cancel any time up to the minute before a charge'. The app shows the date in the browser's time zone while emails use the UTC date (day() in routes-billing.ts), so for a renewal at 02:00 UTC a US customer sees one date in the app and the next day in the email.",
+    "suggested_fix": "In src/app/app/settings/page.tsx show renews_at with time and zone ('Next charge: $9 on 10 December 2026 at 14:08 your time'), and in routes-billing.ts add the time and 'UTC' to the reminder, receipt and find-my-subscription emails."
+   },
+   {
+    "theme_id": "billing-hidden-cancellation-notice-window",
+    "requirement": "If a renewal charge was already queued or taken when a pre-renewal cancellation is recorded, it is reversed automatically.",
+    "verdict": "partly",
+    "evidence": "The invoice.paid handler in applyStripeEvent() (routes-billing.ts) refunds a charge that arrives after the plan ended; tests/billing.test.ts 'a charge after cancellation refunds itself and adds nothing' proves the case where the plan is already marked ended.",
+    "gap": "Three holes, all reproduced: (1) a charge that lands within one hour after the paid month ended, while the account is still marked on the plan, is accepted as a normal payment with a receipt (probe P15); (2) if the automatic refund fails at the provider it is only written to the server log, never retried, and nobody is told (P16); (3) after a refund that 'ends the plan now', a failed provider call leaves the subscription alive and the next month is charged with no refund (O1).",
+    "suggested_fix": "routes-billing.ts invoice.paid: drop the 3600_000 grace (refund whenever cancel_at is in the past), and on a failed refund store a 'refund_due' flag on the payment, retry from cron.ts and email SUPPORT_EMAIL. In /billing/refund do not swallow the DELETE error: fall back to cancel_at_period_end and retry."
+   },
+   {
+    "theme_id": "billing-hidden-cancellation-notice-window",
+    "requirement": "Self-serve plans carry no early-termination fee.",
+    "verdict": "met",
+    "evidence": "cancelPlan() in routes-billing.ts makes exactly one provider call, POST subscriptions/{id} cancel_at_period_end=true, and creates no charge or invoice item. I listed the provider calls made by a cancellation in probe L10 (p3-ledger.test.ts): only that one call. tests/billing.test.ts 'cancelling keeps every signature' passes.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-monthly-price-annual-commitment",
+    "requirement": "Checkout states the commitment in plain words (term length, amount charged today, total over the term, renewal date) and the confirmation email repeats it.",
+    "verdict": "partly",
+    "evidence": "Before paying, the Plan page says 'Start the monthly plan for $9. Month to month. Cancel in one click.' (ui-plan-seedling.png). The 'Welcome to Grove' email from activate() says '$9.00 a month ... month to month: no contract, no notice period' and the receipt says 'Next charge: $9.00 on <date>' (asserted in tests/billing.test.ts and read in my probe L13).",
+    "gap": "The payment page itself is the provider's and the code passes no wording to it, so nothing we control states the renewal date before payment. The welcome email has no renewal date; it only appears in the receipt, which is never sent when the first payment is lost (see bug 1). No test covers what the checkout shows.",
+    "suggested_fix": "In POST /billing/checkout (routes-billing.ts) pass custom_text[submit][message] ('$9 today, then $9 on the same day each month until you cancel. No contract.') and add the first renewal date to the welcome email in activate()."
+   },
+   {
+    "theme_id": "billing-monthly-price-annual-commitment",
+    "requirement": "When an annual plan's price is shown per month, the annual total is displayed next to it at equal size, and an annual commitment requires ticking a box.",
+    "verdict": "not_applicable",
+    "evidence": "There is no annual plan: one price id (STRIPE_PRICE_GROVE) and one constant, PRICING.monthlyUsd in src/lib/impact.ts.",
+    "gap": "None in the product. Note the server never checks that the configured provider price really is $9 a month.",
+    "suggested_fix": "Optional hardening: at start-up fetch the price in routes-billing.ts and refuse checkout if it is not 900 cents with a monthly interval."
+   },
+   {
+    "theme_id": "billing-monthly-price-annual-commitment",
+    "requirement": "A true month-to-month plan exists and can be stopped in any month with no remaining balance.",
+    "verdict": "met",
+    "evidence": "cancelPlan() and POST /public/billing/stop in routes-billing.ts. tests/billing.test.ts 'signatures roll over, and a reminder comes before each renewal with a one-click stop' and 'cancelling keeps every signature' pass; my probe L10 shows cancelling creates no charge and returns ends_at equal to the end of the paid month.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-monthly-price-annual-commitment",
+    "requirement": "Cancelling an annual plan paid in instalments never bills the remaining instalments early.",
+    "verdict": "not_applicable",
+    "evidence": "No annual plan and no instalments exist.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "pricing-fake-unlimited-hidden-caps",
+    "requirement": "The word 'unlimited' is used only where no numeric cap applies to any send channel (web, API, bulk, forms); otherwise the number is shown.",
+    "verdict": "met",
+    "evidence": "I searched src/server, src/lib, src/components, the Plan page and the signing screen for 'unlimited': no use. Web, API, bulk and public forms all draw on the same numeric balance (sendEnvelope in envelopes.ts; /bulk and /public/powerforms in routes-envelopes.ts), proven by tests/billing.test.ts 'bulk send checks the whole batch first; a public form with no signatures says so'.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "pricing-fake-unlimited-hidden-caps",
+    "requirement": "Every limit, including temporary anti-abuse limits on new accounts and the criteria for lifting them, is shown as a number on the pricing page, in the checkout summary and in the product before purchase.",
+    "verdict": "partly",
+    "evidence": "Prices, the balance, held signatures and the refund window are shown as numbers on the Plan page and in the editor's review step (StepReview.tsx SignatureCost).",
+    "gap": "The first-week cap of 50 people a day for free accounts and for accounts on the free code (sendEnvelope in envelopes.ts, newAccountDailyRecipients in src/lib/policy.ts) appears only in the error when it is hit (probe C7). The Plan page list titled 'The rules, all of them' omits it, the 500-per-purchase top-up cap and the 500-row bulk cap. How to get the cap lifted is only 'Contact support'.",
+    "suggested_fix": "Add to the rules list in src/app/app/settings/page.tsx: 'In your first week, free and code accounts can send to 50 people a day; starting the monthly plan lifts it', plus the 500 caps. Return the cap in GET /billing so the page never hard-codes it."
+   },
+   {
+    "theme_id": "pricing-fake-unlimited-hidden-caps",
+    "requirement": "A change to limits or their enforcement applies only from the next renewal, is announced by email and in-app with required acknowledgement, and allows a penalty-free exit.",
+    "verdict": "policy",
+    "evidence": "The software gives the penalty-free exit: cancel at any time and refund of unused signatures from the latest payment (tests/billing.test.ts).",
+    "gap": "Nothing in the software announces a change or records an acknowledgement. Changing PRICING in src/lib/impact.ts or a limit in src/lib/policy.ts takes effect for every account on the next deploy, including people in the middle of a paid month.",
+    "suggested_fix": "Business rule for the operators, plus a small build: store the pricing version on each account at payment time and apply new numbers only from the next invoice.paid; add an announcement banner with an 'I have seen this' button."
+   },
+   {
+    "theme_id": "pricing-fake-unlimited-hidden-caps",
+    "requirement": "In the first billing cycle after an enforcement change, exceeding the limit produces a warning, not a charge.",
+    "verdict": "met",
+    "evidence": "Running out never produces a charge at any time: sendEnvelope() in envelopes.ts answers 402 with the reason and creates no payment. tests/billing.test.ts asserts 'Nothing is charged unless you choose it' and that the payments table stays empty; there is no overage code path in routes-billing.ts.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "trial-and-free-tier-traps",
+    "requirement": "A trial requires no card and reverts to the free tier automatically when it ends.",
+    "verdict": "not_applicable",
+    "evidence": "There is no timed trial. A new account gets 3 signatures once with no card (POST /auth/signup in routes-account.ts) and simply stays free. With the code GROWalition the monthly plan itself is free with no card (my probe C0: zero provider calls).",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "trial-and-free-tier-traps",
+    "requirement": "If a card is taken for a trial, a reminder 3 days before the end states the amount and has a one-click 'do not charge me' link, and the trial converts to a month-to-month plan, never an annual one.",
+    "verdict": "not_applicable",
+    "evidence": "No trial takes a card; POST /billing/checkout passes no trial settings and the only plan is monthly.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "trial-and-free-tier-traps",
+    "requirement": "An existing free user is never forced into a trial at login and can return to the free tier in at most two clicks.",
+    "verdict": "met",
+    "evidence": "POST /auth/login in routes-account.ts has no plan or trial logic. Leaving the paid plan is 'Cancel plan' then confirm (screenshot ui-plan-cancel-dialog.png), backed by POST /billing/cancel; tests/billing.test.ts shows the plan ending and the account back on the free tier with its signatures.",
+    "gap": "None. The plan stays on until the end of the paid month, which the dialog says.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "trial-and-free-tier-traps",
+    "requirement": "Any free-tier limit is shown as a counter with its reset date, and signing your own document is free and not blocked when a trial ends.",
+    "verdict": "partly",
+    "evidence": "The balance is a counter on the Plan page and in the editor review step; nothing resets, so no reset date is needed. Self-signing is free (isChargeable in credits.ts) and works at a zero balance after the plan ended (my probe L3; tests/billing.test.ts first test).",
+    "gap": "Self-signing IS blocked when the available balance is below zero: sendEnvelope() tests 'need > before' with need 0 and before -1 and answers 402 'This needs 0 signatures and you have 0 left ... Signing your own documents stays free'. A negative balance arises without wrongdoing, for example when a member is removed and their self-signed envelope passes to someone else (probe O2). The first-week 50-a-day cap is not shown as a counter.",
+    "suggested_fix": "envelopes.ts sendEnvelope(): refuse only when need > 0 && need > before. Add a test that an account with available -1 can still send a self-signed and an approver-only envelope."
+   },
+   {
+    "theme_id": "pricing-too-expensive-for-small-senders",
+    "requirement": "A free tier with a published number of completed documents per month is available indefinitely.",
+    "verdict": "partly",
+    "evidence": "Free forever: signing your own documents, approvers, viewers, copies and everything sent to you (tests/billing.test.ts first test). New accounts get 3 signatures once. With the code GROWalition the plan is free and adds 9 signatures every month with nothing charged (credits.ts monthlyCodeGrant; tests/billing.test.ts 'the code GROWalition makes the monthly plan free'; my probe C0 and screenshot ui-plan-gro.png).",
+    "gap": "Without the code there is no monthly free allowance for sending to other people: 3 signatures once, then payment. With the code, a month in which nobody opens the account is skipped and never made up (probe C3).",
+    "suggested_fix": "Business decision: either publish '3 once' as the free tier and accept this gap, or grant a small monthly number to every free account. In credits.ts make the code grant catch up on missed months."
+   },
+   {
+    "theme_id": "pricing-too-expensive-for-small-senders",
+    "requirement": "No plan has a seat minimum, and a single-user paid plan exists.",
+    "verdict": "met",
+    "evidence": "POST /billing/checkout in routes-billing.ts always sends quantity 1 (probe L10) and a one-person account can buy it; tests/billing.test.ts 'the monthly plan: $9 adds 9 signatures and plants 90 mangroves'.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "pricing-too-expensive-for-small-senders",
+    "requirement": "Every tier has a public price, and checkout shows the full total including any add-ons before payment.",
+    "verdict": "met",
+    "evidence": "PRICING in src/lib/impact.ts feeds the server and the Plan page. Top-ups: the button reads 'Pay $10 and add 10 signatures' (screenshot ui-plan-active.png) and POST /billing/topup returns the total and builds the price from the same constant; tests/billing.test.ts asserts total '$5.00', unit amount 100, quantity 5. There are no add-ons.",
+    "gap": "None in the product. The $9 the page shows and the price the provider charges are tied together only by configuration.",
+    "suggested_fix": "Optional: verify the configured price equals PRICING.monthlyUsd at start-up."
+   },
+   {
+    "theme_id": "pricing-too-expensive-for-small-senders",
+    "requirement": "People who only view, approve or sign inside a workspace do not need a paid seat.",
+    "verdict": "met",
+    "evidence": "isChargeable() and needed() in credits.ts count only signers who are not the sender; tests/billing.test.ts asserts an approver envelope and a self-signed one leave the balance unchanged. Recipients never pay, and team members cost nothing.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-refund-discretionary-or-dispute-conditional",
+    "requirement": "A refund that meets the published rule is issued automatically for the full amount including tax to the original payment method the same day, with a reference number shown to the customer.",
+    "verdict": "partly",
+    "evidence": "refundOffer() and POST /billing/refund in routes-billing.ts refund the unused share of the latest payment to the original charge with no approval and return the provider's refund id; tests/billing.test.ts 'unused signatures from the latest payment are refunded on request, to the cent' passes.",
+    "gap": "The rule the customer is given by email is wider than the rule the code applies. Each receipt says unused signatures 'from this payment' are refundable from the Plan page, but only the newest payment ever is: after two top-ups, or a monthly payment followed by a top-up, the earlier one cannot be refunded in the app (probe L4). Two refund requests at the same moment both pay out (L5).",
+    "suggested_fix": "routes-billing.ts: compute the offer per payment for every payment inside the window (oldest unused first) instead of lastPayment() only, and guard /billing/refund with a per-payment 'refunding' marker written before the provider call plus an Idempotency-Key header."
+   },
+   {
+    "theme_id": "billing-refund-discretionary-or-dispute-conditional",
+    "requirement": "First-line support can approve refunds up to a published limit without finance approval.",
+    "verdict": "policy",
+    "evidence": "Customers refund themselves with no approval, and billing help requests reach the operator queue (routes-trust.ts POST /public/support, GET /operator/queue). Refunds made by hand in the provider's dashboard are recorded by the charge.refunded handler.",
+    "gap": "The operator queue has no refund action and no limit is published; anything outside the self-serve rule needs someone with access to the provider's dashboard. The charge.refunded handler can mark the wrong payment (bug 6).",
+    "suggested_fix": "Publish the limit, and add POST /operator/payments/:id/refund in routes-trust.ts that calls the existing refundPayment() up to that limit."
+   },
+   {
+    "theme_id": "billing-refund-discretionary-or-dispute-conditional",
+    "requirement": "A refund is never conditional on withdrawing a card dispute; when a dispute is open the merchant accepts it at the processor, confirms that in writing and freezes further billing.",
+    "verdict": "partly",
+    "evidence": "No refund path asks about disputes. charge.dispute.created in applyStripeEvent() cancels the subscription and ends the plan at once; tests/billing.test.ts 'a card dispute stops all further billing' passes.",
+    "gap": "The dispute is not accepted at the processor by the software; it emails SUPPORT_EMAIL asking a person to do it, and with SUPPORT_EMAIL unset nobody is told. The customer gets no written confirmation and no 'plan ended' email (probe L11). The Plan page still offers a refund of the disputed payment, so it can be paid back twice.",
+    "suggested_fix": "In the dispute handler call POST disputes/{id}/close to accept it, email the account admins ('we accepted your dispute, billing is stopped'), mark the payment as disputed so refundOffer() skips it, and require SUPPORT_EMAIL when billing is on."
+   },
+   {
+    "theme_id": "billing-refund-discretionary-or-dispute-conditional",
+    "requirement": "The count of refunds granted only after an external escalation (review site, regulator, bank) is tracked as a defect metric.",
+    "verdict": "policy",
+    "evidence": "The software records every refund and its amount on the payment row, including refunds made outside the app.",
+    "gap": "Nothing records why a refund was made or whether it followed an escalation, so the metric cannot be produced.",
+    "suggested_fix": "Add a refund_source column (self-serve, automatic, support, escalation) set by refundPayment() and by the operator action, and show the escalation count on /app/operator."
+   },
+   {
+    "theme_id": "billing-card-removal-and-invoices",
+    "requirement": "The stored card can be deleted at any time, with a plain warning that the plan will not renew.",
+    "verdict": "partly",
+    "evidence": "POST /billing/remove-card in routes-billing.ts cancels the renewal first and detaches every card; tests/billing.test.ts asserts the card is gone. The dialog warns plainly (screenshot ui-plan-card-dialog.png).",
+    "gap": "Not 'at any time'. The Remove card button exists only while the plan is active and not cancelled: after cancelling, after the plan ended, and on a free-code account there is no way to remove the card in the app (screenshots ui-plan-cancelled.png, ui-plan-ended.png). For a free-code account with a card from a top-up the endpoint itself fails with 400 'There is no monthly plan on this account' (probe C6).",
+    "suggested_fix": "settings/page.tsx: show 'Remove card' whenever the account has a payment customer. routes-billing.ts remove-card: only call cancelPlan() when stripe_subscription_id is set."
+   },
+   {
+    "theme_id": "billing-card-removal-and-invoices",
+    "requirement": "A PDF invoice is emailed for every charge to the owner and the billing contact.",
+    "verdict": "partly",
+    "evidence": "Every monthly payment and every top-up sends a receipt email to the owner and all admins (invoice.paid handler and applyTopUp() in routes-billing.ts; asserted in tests/billing.test.ts). The monthly receipt links to the provider's invoice page.",
+    "gap": "No PDF is attached. Top-ups have no invoice at all: no link in the email and none in the Payments table (probe L13, screenshot ui-plan-cancelled.png). There is no separate billing contact. When the first payment is lost (bug 1) no receipt is sent.",
+    "suggested_fix": "routes-billing.ts topup: add invoice_creation[enabled]=true to the checkout session and store the invoice URL in payments.receipt_url; attach invoice_pdf to both receipt emails; add an optional billing_email on the account included by mailAdmins()."
+   },
+   {
+    "theme_id": "billing-card-removal-and-invoices",
+    "requirement": "Billing history and invoice downloads stay available after cancellation, and to former customers through a verified email link.",
+    "verdict": "partly",
+    "evidence": "GET /billing returns the payment list whatever the plan; tests/billing.test.ts asserts 'billing history stays available' after the plan ended and I saw the table on the ended account (ui-plan-ended.png).",
+    "gap": "After cancellation the button that opens the provider's invoice page is hidden, and top-ups never have an invoice link. A former customer who closed the account has no route at all: purgeUser() in routes-trust.ts removes the account and nothing offers an emailed link to past invoices.",
+    "suggested_fix": "Keep the invoices button visible whenever a payment customer exists; add POST /public/billing/history that emails a signed link (like stopToken) listing payments for that address, and keep payment rows with the payer's email after an account is closed."
+   },
+   {
+    "theme_id": "billing-downgrade-deferred-no-proration",
+    "requirement": "Upgrades and downgrades are self-serve, and the exact credit or charge is shown before the user confirms.",
+    "verdict": "met",
+    "evidence": "Start plan, top up, cancel, resume and refund are all buttons on the Plan page backed by routes in routes-billing.ts, each stating the amount first: 'Start the monthly plan for $9', 'Pay $10 and add 10 signatures', the cancel dialog, and 'Refund $5.00' (screenshots ui-plan-active.png, ui-plan-cancel-dialog.png, ui-plan-refund-dialog.png). tests/billing.test.ts covers each route.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-downgrade-deferred-no-proration",
+    "requirement": "A downgrade made before renewal is charged at the downgraded price at that renewal (automated test).",
+    "verdict": "not_applicable",
+    "evidence": "There is one paid plan, so no lower price exists. The only step down is cancelling, which stops the renewal at once (tests/billing.test.ts asserts the provider is told immediately).",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-downgrade-deferred-no-proration",
+    "requirement": "Switching from monthly to annual credits the unused part of the current month toward the annual price.",
+    "verdict": "not_applicable",
+    "evidence": "No annual plan exists.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "pricing-core-features-tier-locked",
+    "requirement": "Every paid plan includes all field types, templates, reminders, multi-signer documents and custom branding (logo, colours, email wording).",
+    "verdict": "met",
+    "evidence": "No feature route checks the plan (the only plan checks in src/server are top-ups and the new-account anti-abuse rules). My probe L12 (p4-bypass.test.ts), on a free account with billing on: all 15 field types, an ordered two-signer envelope, a template, a public form, reminders, an API key, and a logo and colour that appeared in the email sent to the signer all worked.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "pricing-core-features-tier-locked",
+    "requirement": "A feature not in the current plan is labelled with the plan and price that includes it before the user can build on it.",
+    "verdict": "met",
+    "evidence": "The only thing tied to the plan is buying top-ups. The Plan page says so next to the price ('Top-ups come with the monthly plan', screenshot ui-plan-seedling.png) and POST /billing/topup answers 400 naming the plan and $9.00; tests/billing.test.ts asserts it.",
+    "gap": "None for features. The first-week sending cap for unpaid accounts is not labelled; see the limits requirement.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "pricing-core-features-tier-locked",
+    "requirement": "Google and Microsoft single sign-on and one-time-code signer verification are in every paid plan.",
+    "verdict": "not_met",
+    "evidence": "I searched src for OAuth, Google and Microsoft sign-in: none. Login is email and password only (POST /auth/login in routes-account.ts). Signer verification is a fixed access code chosen by the sender (recipients.access_code), not a one-time code sent to the signer.",
+    "gap": "Neither single sign-on nor one-time-code verification exists on any plan.",
+    "suggested_fix": "Add Google and Microsoft OAuth routes beside /auth/login, and a per-recipient option that emails a six-digit code valid for ten minutes before the document opens (routes-sign.ts)."
+   },
+   {
+    "theme_id": "pricing-core-features-tier-locked",
+    "requirement": "Any pass-through cost (SMS, ID check) is shown at the moment of use before it is incurred.",
+    "verdict": "not_applicable",
+    "evidence": "There is no SMS delivery and no ID check anywhere in src/server, so no pass-through cost can be incurred.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-prepaid-allowance-expires",
+    "requirement": "Unused allowance and purchased credits roll over automatically while the account is active and never expire at renewal.",
+    "verdict": "met",
+    "evidence": "The balance is a sum over a ledger with no expiry (balance() in credits.ts). tests/billing.test.ts 'signatures roll over' asserts nothing is reset at renewal, and 'cancelling keeps every signature' asserts they survive the plan ending.",
+    "gap": "None for anything granted. Separate defect: on the free code, a month in which nobody opens the account is never granted at all (bug 13).",
+    "suggested_fix": "None here."
+   },
+   {
+    "theme_id": "billing-prepaid-allowance-expires",
+    "requirement": "The dashboard shows the remaining balance and the reset date, and the allowance resets on the billing date.",
+    "verdict": "partly",
+    "evidence": "The Plan page shows the balance, what is held, and for paying accounts 'Next charge: $9 on <date>, which adds 9 signatures' (screenshot ui-plan-active.png); signatures are added by the payment itself (invoice.paid handler).",
+    "gap": "For an account on the code GROWalition the page says 9 are added 'every month' but not when. They arrive the first time the balance is looked at in a new UTC calendar month, not on any shown date (credits.ts monthlyCodeGrant). I did not judge the home screen, which is being rewritten.",
+    "suggested_fix": "Return next_grant_at in billingState() for code accounts (first day of next UTC month) and show 'Your next 9 signatures arrive on 1 December' on the Plan page."
+   },
+   {
+    "theme_id": "billing-prepaid-allowance-expires",
+    "requirement": "After a downgrade or plan change, capacity already paid for stays usable until the end of the paid term, and documents already out for signature can still be reminded and completed.",
+    "verdict": "met",
+    "evidence": "No send, remind or sign path checks the plan. tests/billing.test.ts sends with leftover signatures after the plan ended. My probe L3: after the plan ended, a reminder went out (reminded: 1), the waiting signer completed, and the export still worked.",
+    "gap": "None.",
+    "suggested_fix": "None."
+   },
+   {
+    "theme_id": "billing-unrecognised-or-duplicate-accounts",
+    "requirement": "Every receipt and card statement descriptor carries an account identifier, and the receipt names the account email.",
+    "verdict": "partly",
+    "evidence": "Receipts name the workspace ('$9.00 for Name's workspace, charged today') and go to the owner and every admin (routes-billing.ts; text read in probe L13).",
+    "gap": "The receipt carries no account id and does not name the account email. No statement descriptor is set on the subscription or on top-ups, so the card statement shows only the merchant name.",
+    "suggested_fix": "routes-billing.ts: add the account id and the owner's email to both receipt emails; pass payment_intent_data[statement_descriptor_suffix] on top-ups and put a short account reference in the subscription's description."
+   },
+   {
+    "theme_id": "billing-unrecognised-or-duplicate-accounts",
+    "requirement": "A 'find my subscriptions' lookup emails the owner a list of every paid account tied to their email address or card.",
+    "verdict": "partly",
+    "evidence": "POST /public/billing/find in routes-billing.ts emails every paid plan the address administers, each with a no-login stop link; tests/billing.test.ts 'find every subscription by email' and my probe L14 confirm.",
+    "gap": "Nothing works from the card alone: stop-by-card needs the account email as well (probe L14: 400 without it). That is exactly the reported case, a card holder who does not know which address the account is under. The email lookup also skips plans where the person is no longer an admin.",
+    "suggested_fix": "Add a card route: last four digits plus the date and amount of a charge, matched against the provider's charges, which emails the account's admins and tells the requester 'we have written to the account holder'."
+   },
+   {
+    "theme_id": "billing-unrecognised-or-duplicate-accounts",
+    "requirement": "Creating a second paid account with an email or card already in use shows a warning naming the existing account.",
+    "verdict": "partly",
+    "evidence": "The same email cannot open a second account (409 at sign-up, probe L9). A person who administers another paid team sees 'You already pay for a plan on \"X\"' before starting a second one (other_paid in billingState(); Plan page; confirmed in probe L9).",
+    "gap": "No automated test in the repository covers the warning. Nothing detects the same card being used under a different email.",
+    "suggested_fix": "Add a test for other_paid in tests/billing.test.ts. After checkout, compare the card fingerprint with other customers and email both accounts' admins when it matches."
+   },
+   {
+    "theme_id": "billing-unrecognised-or-duplicate-accounts",
+    "requirement": "Support can look up accounts by card last four plus charge date.",
+    "verdict": "not_met",
+    "evidence": "The operator routes in routes-trust.ts list help requests, abuse reports and paused accounts only. There is no account or payment search.",
+    "gap": "Support has no tool in the product to find an account from a card and a charge date; the 'no paid plans found' email promises 'a person will trace it'.",
+    "suggested_fix": "Add GET /operator/payments?last4=&date= in routes-trust.ts that queries the provider's charges for that day and card and returns the matching account names, ids and admin emails."
+   },
+   {
+    "theme_id": "billing-paid-but-not-activated",
+    "requirement": "Plan entitlements are applied within 60 seconds of payment confirmation, including pay-later methods, and the billing page shows the plan state and last payment.",
+    "verdict": "partly",
+    "evidence": "activate() and POST /billing/sync in routes-billing.ts switch the plan on when the customer returns from checkout (tests/billing.test.ts 'back from checkout the plan is active at once'). The Plan page shows the plan state, next charge and payment list.",
+    "gap": "The 9 signatures are added only by the invoice.paid event, never by sync (probe P3). If that event arrives before checkout.session.completed for a new customer, the payment is stored against no account and the signatures are never added (P1). A top-up paid by a delayed method is never credited because checkout.session.async_payment_succeeded is not handled (P17). An event about an old subscription can end a new one (P4).",
+    "suggested_fix": "routes-billing.ts: put the account id in subscription_data[metadata] at checkout and match invoice.paid on it; when activate() runs, adopt any unmatched payment for that customer and grant its signatures; handle the async_payment_succeeded event through applyTopUp(); ignore subscription events whose id is not the account's current subscription."
+   },
+   {
+    "theme_id": "billing-paid-but-not-activated",
+    "requirement": "A payment received but not matched to an active plan is refunded automatically within 3 days and flagged to a human.",
+    "verdict": "partly",
+    "evidence": "A payment for a plan that already ended is refunded by the software (tests/billing.test.ts). A monthly payment that matches no account emails SUPPORT_EMAIL (invoice.paid handler).",
+    "gap": "An unmatched payment is never refunded, and with SUPPORT_EMAIL unset nobody is told (probe P24: zero emails, zero refunds). An unmatched top-up is dropped silently in applyTopUp(). A failed automatic refund is only logged (P16).",
+    "suggested_fix": "cron.ts: a daily pass over payments with no account or with a refund owed that refunds anything older than 3 days and emails SUPPORT_EMAIL; make SUPPORT_EMAIL mandatory when STRIPE_SECRET_KEY is set; record unmatched top-ups."
+   },
+   {
+    "theme_id": "billing-paid-but-not-activated",
+    "requirement": "Before payment, the upgrade screen states exactly what the upgrade adds (sends, features), and the new allowance is usable immediately after payment.",
+    "verdict": "partly",
+    "evidence": "The Plan page states what is added before payment ('9 signatures added to your balance with every payment', 'Pay $10 and add 10 signatures'). Top-ups are usable at once on return from checkout; tests/billing.test.ts asserts the balance rises through /billing/sync.",
+    "gap": "For the monthly plan the allowance is not usable on return: the plan shows active with no new signatures until the provider's event lands, and never if it lands first (probes P3, P1). The return message says 'Welcome to the monthly plan' even when nothing was activated (screenshot ui-plan-return-unconfirmed.png).",
+    "suggested_fix": "In /billing/sync fetch the session's paid invoice and record the payment and its 9 signatures there (same idempotent insert as the event). In settings/page.tsx show the welcome message only when sync returns plan 'grove', otherwise 'Payment is still being confirmed'."
+   }
+  ],
+  "bugs": [
+   {
+    "title": "First monthly payment is lost when the provider's 'invoice paid' event arrives before 'checkout completed'",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, applyStripeEvent(), invoice.paid branch (byCustomer lookup)",
+    "detail": "A new customer has no payment-customer id on the account until checkout.session.completed is processed. If invoice.paid is delivered first (the provider does not guarantee order, and for subscriptions this order is common), the payment row is stored with account_id NULL and the handler returns. The later checkout event turns the plan on but adds nothing, and a replay of invoice.paid is ignored. Result in probe P1: plan 'grove', balance still 3, no payment in history, no receipt, 0 mangroves, 'Welcome to Grove' sent. Reproduce: node --experimental-strip-types --no-warnings --test tests/out/audit-billing-terms/p1-activation.test.ts (test P1). The existing tests always send the checkout event first."
+   },
+   {
+    "title": "Signatures for free: send to yourself, then change the address",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts correctRecipient() and reassignRecipient(); completeRecipient() never checks the balance",
+    "detail": "Sending to your own address costs nothing and is allowed at a zero balance. POST /envelopes/:id/correct then changes the recipient to anyone with no balance check (only the full PUT correction checks), and the signing screen's 'assign to someone else' does the same. The outsider signs and the balance just goes negative. Probe L1 (tests/out/audit-billing-terms/p5-correct.test.ts): on a balance of 0, an honest send is refused with 402, but five self-addressed envelopes were sent, each corrected to another person, all five completed, balance -5, no payment. L2 shows the reassign route. Any account can repeat this in batches."
+   },
+   {
+    "title": "A negative balance blocks signing your own documents, with a self-contradicting message",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts sendEnvelope(): 'if (need > before)'",
+    "detail": "With available below zero, need 0 is still greater than before, so a self-signed or approver-only envelope is refused: 402 'This needs 0 signatures and you have 0 left ... Signing your own documents stays free.' A negative balance arises innocently: removing a team member hands their self-signed envelope to another sender, which makes it chargeable (probe O2 in p6-delete-fail.test.ts: available went 0 to -1 and the owner's own document was refused)."
+   },
+   {
+    "title": "The code GROWalition: a paying customer who adds it and then takes the offered refund ends up stuck",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/refund (sets plan='seedling' without regard to promo_code)",
+    "detail": "Probe C2 (p2-code.test.ts): subscribe, pay, redeem GROWalition, then click the refund the Plan page still offers. The account becomes plan 'seedling' with free_with 'GROWalition'. Top-up answers 400 'Top-ups are for accounts on the monthly plan', checkout answers 400 'Your plan is already free with the code', and entering the code again changes nothing. The Plan page shows 'Free with GROWalition' and 'Not started' side by side with a 'Start the monthly plan for $9' button that cannot work (screenshot tests/out/audit-billing-terms/ui-plan-stuck.png). The dispute handler does the same to a code account."
+   },
+   {
+    "title": "A mistyped code at sign-up is silently ignored",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-account.ts POST /auth/signup; /home/user/treegens-app/sign-and-grow/src/components/AuthForm.tsx",
+    "detail": "Typing 'GROWaliton' in the sign-up form's Code field creates an ordinary free account with no error, no hint and no email (probe C1; in the browser the person lands on the home screen and the Plan page just says 'Not started', screenshot ui-plan-typo-seedling.png). A correct code at sign-up also gets no confirmation email, unlike redeeming on the Plan page, so neither person is told what happened. The sign-up response does not include free_with."
+   },
+   {
+    "title": "An event about an old subscription ends the plan while a new one is being paid for",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts applyStripeEvent(), customer.subscription.updated/deleted branch (matches on customer only)",
+    "detail": "The handler never compares the event's subscription id with accounts.stripe_subscription_id. Probe P4: refund (ends sub_old), subscribe again (sub_new, paid), then the late 'deleted' event for sub_old arrives: plan becomes 'seedling', 'Your monthly plan has ended' is sent, and the next real charge on the live subscription is refunded as 'this plan was already cancelled' while the provider keeps the subscription active."
+   },
+   {
+    "title": "Returning subscriber: first payment is refunded as 'already cancelled' when events arrive in the other order",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts applyStripeEvent(), invoice.paid safety net",
+    "detail": "For an account that subscribed before (customer id known, plan ended), invoice.paid arriving before checkout.session.completed hits the 'plan is not grove' branch and is refunded automatically. Probe P2: the customer receives 'Refund sent: $9.00' followed by 'Welcome to Grove', has an active subscription and no signatures for the month."
+   },
+   {
+    "title": "'The plan ends now' after a refund, but a failed provider call is swallowed and the customer is charged next month",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/refund: stripe('DELETE', ...).catch(() => {})",
+    "detail": "Probe O1 (p6-delete-fail.test.ts): the DELETE of the subscription fails once; the app still answers plan_ended: true and marks the account free. A month later the provider's routine subscription.updated flips the account back to 'grove' and the $9 invoice is accepted with a normal receipt, no refund. The same swallowed call is in the dispute handler."
+   },
+   {
+    "title": "Two refund requests at once pay out twice",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/refund and refundPayment()",
+    "detail": "The offer is computed before the provider call and nothing marks the payment as being refunded. Probe L5 (p4-bypass.test.ts): a $10 top-up with 4 unused; two simultaneous POSTs both answered 200 'refunded $4.00', the provider received two $4.00 refunds, two 'Refund sent' emails went out, and the 4 signatures were deducted once. No Idempotency-Key is sent to the provider."
+   },
+   {
+    "title": "Our own refund, echoed back by the provider, marks an older payment as refunded too",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts applyStripeEvent(), charge.refunded branch (matches on amount, not on the charge)",
+    "detail": "After an in-app refund the refunded payment no longer satisfies 'refunded_cents < amount_refunded', so the handler picks the next most recent payment of the same amount. Probe L6: two $9 payments, the second refunded in the app, then the provider's charge.refunded for it: both rows show '$9.00 refunded' and the mangrove count dropped from 180 to 0 although $9 was really kept. Every customer with two or more monthly payments who refunds will see this, and the public impact total is understated."
+   },
+   {
+    "title": "Replaying an old checkout link turns the plan back on without paying",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/sync and activate()",
+    "detail": "sync activates on any session that was once paid, without checking that its subscription is still alive. Probe P5: subscribe, cancel, plan ended; POST /billing/sync with the old session id sets plan 'grove', status 'active', sends a second 'Welcome to Grove', and top-ups are allowed again. This sidesteps the rule that top-ups need the $9 monthly plan and lifts the unpaid-account limits."
+   },
+   {
+    "title": "Top-ups paid with a delayed payment method are never credited",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts applyStripeEvent() and applyTopUp()",
+    "detail": "checkout.session.completed with payment_status 'unpaid' is rightly skipped, but checkout.session.async_payment_succeeded is not handled at all. Probe P17: balance unchanged and no payment row after the money arrived. Applies whenever a bank-debit or pay-later method is enabled at the provider."
+   },
+   {
+    "title": "Money that cannot be matched, and refunds that fail, reach nobody",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts invoice.paid branch, applyTopUp(), automatic refund .catch(console.error)",
+    "detail": "Probe P24: with SUPPORT_EMAIL unset an unmatched $9 payment produced zero emails and no refund; an unmatched top-up is dropped without a row even when SUPPORT_EMAIL is set. Probe P16: when the automatic refund of a charge-after-cancel fails, it is logged to the console only, never retried, and neither support nor the customer is told. If the customer then uses the Plan page refund for that charge, 9 signatures they legitimately owned are deducted (probe L7: 12 became 3) because the row says credits 9 although none were ever added."
+   },
+   {
+    "title": "Free-code grants: quiet months are skipped, two codes stack, a switched-off code keeps paying out",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/credits.ts monthlyCodeGrant() and freeCodes()",
+    "detail": "The month's 9 signatures are added only when something reads the balance in that UTC month. Probe C3: an account quiet in September and October got one grant in November, not three. Probe C4: with FREE_PLAN_CODES='GROWalition,Mangrove2027' one account redeemed both and got 18 in the same month. Probe C5: after the code was removed from FREE_PLAN_CODES, an account already on it kept receiving monthly signatures, and there is no way to take an account off a code."
+   },
+   {
+    "title": "A charge landing within an hour after the paid month ended is kept",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts invoice.paid: 'Date.parse(a.cancel_at) < Date.now() - 3600_000'",
+    "detail": "Probe P15: cancel, set the end of the paid month to 10 minutes ago, deliver a $9 invoice.paid: not refunded, 9 signatures added, ordinary receipt sent. The hour of grace covers exactly the window in which a wrongful renewal charge would arrive."
+   },
+   {
+    "title": "Any paid invoice adds 9 signatures, whatever its amount",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts invoice.paid branch",
+    "detail": "Probe L8: a 50-cent invoice added 9 signatures and the page offered '$0.50' back for them. A discounted, prorated or hand-made invoice for the customer does the same. Nothing checks that the configured provider price is $9 a month."
+   },
+   {
+    "title": "Stopping by card: guess limits rest on a header the caller controls",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/router.ts (ip from the first X-Forwarded-For value); POST /public/billing/stop-by-card in routes-billing.ts",
+    "detail": "Security note from reading the code, not exploited: the per-IP limit uses the first X-Forwarded-For entry, which a caller can set, and limits live in memory and reset on restart. That leaves 5 guesses an hour per email at a card's last four digits. A match cancels a stranger's renewal and reveals the account name. Billing emails' stop links also stay valid for 120 days after an admin is removed from the team."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "Receipt emails in /home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts (invoice.paid handler and applyTopUp())",
+    "claim": "'Unused signatures from this payment are refunded in full within 30 days, from the Plan page.' and, for top-ups, 'Any you have not used are refundable in full within 30 days, from the Plan page.'",
+    "reality": "Only the single most recent payment can be refunded in the app. After a later top-up or renewal, the payment this receipt is about gets 400 'There is nothing unused inside that window right now ... use the contact form' (probe L4)."
+   },
+   {
+    "where": "Plan page rules list, /home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx",
+    "claim": "'Locked out? Every billing email has a link that stops the renewal without logging in.'",
+    "reality": "Only the welcome, renewal reminder, dormancy and find-my-subscription emails carry the stop link. The monthly receipt (the most frequent billing email), the top-up receipt, the payment-failed email and the refund email do not (probe L13: the receipt's only link is the invoice)."
+   },
+   {
+    "where": "Plan page rules list; cancellation email in cancelPlan(), routes-billing.ts",
+    "claim": "'Charged after cancelling? That should never happen. If it does, the software refunds it by itself.' and 'If a charge ever appears after this date, we refund it automatically.'",
+    "reality": "Not when the charge lands within an hour of the end of the paid month (P15), not when the refund call fails (logged only, P16), and not when the plan was ended by a refund whose provider call failed (O1: charged the next month with an ordinary receipt)."
+   },
+   {
+    "where": "POST /billing/topup error text in routes-billing.ts",
+    "claim": "'Start it for $9.00 a month and you get 9 signatures straight away.'",
+    "reality": "Returning from checkout turns the plan on but adds no signatures; they come only with a later provider event (P3), and never if that event arrives first (P1)."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx, Settings() return-from-checkout effect",
+    "claim": "Toast: 'Welcome to the monthly plan. Thank you for planting mangroves.' / 'Signatures added. Thank you for planting mangroves.'",
+    "reality": "Shown in .finally() whatever happened. With a session that could not be confirmed the toast appeared over a page reading 'Not started' (screenshot tests/out/audit-billing-terms/ui-plan-return-unconfirmed.png)."
+   },
+   {
+    "where": "Plan page for code accounts and the 'Code GROWalition accepted' email (POST /billing/redeem)",
+    "claim": "'9 signatures are added to your balance every month at no charge, and what you do not use rolls over.'",
+    "reality": "They are added only in months when the account is opened or used. Months with no activity are skipped for good (probe C3: three months, one grant)."
+   },
+   {
+    "where": "Plan page for code accounts and the code-accepted email",
+    "claim": "'There is no card on file for the plan and nothing to cancel.'",
+    "reality": "For someone who was paying before entering the code, the card stays stored with the payment provider and the Plan page offers no button to remove it; once the old subscription is gone the remove-card endpoint answers 400 (probe C6)."
+   },
+   {
+    "where": "Plan page heading, src/app/app/settings/page.tsx",
+    "claim": "'The rules, all of them'",
+    "reality": "The list leaves out the first-week limit of 50 people a day for free and code accounts, the 500-signature cap per top-up, and that top-ups stop when the plan ends. The first is only learned from the error (probe C7)."
+   },
+   {
+    "where": "outOfSignatures() in /home/user/treegens-app/sign-and-grow/src/server/envelopes.ts and SignatureCost in src/components/editor/StepReview.tsx",
+    "claim": "'Signing your own documents stays free.' and 'This envelope uses none of your signatures.'",
+    "reality": "The first sentence is printed inside the very 402 that refuses a self-signed document when the balance is below zero (probes L1, O2); the editor shows the second and the send then fails."
+   },
+   {
+    "where": "'You have used all your signatures' email in sendEnvelope(), envelopes.ts",
+    "claim": "'Your plan adds 9 more with each monthly payment'",
+    "reality": "Sent in those words to accounts on the code GROWalition, who make no monthly payment (probe C7)."
+   },
+   {
+    "where": "POST /billing/refund response and the refund dialog on the Plan page",
+    "claim": "plan_ended: true; 'Because this was a monthly payment, the plan ends now.'",
+    "reality": "Reported even when the call that ends the subscription at the provider failed; the subscription stayed active and renewed (probe O1)."
+   }
+  ]
+ },
+ "audit:billing-core": {
+  "results": [
+   {
+    "theme_id": "billing-renewal-no-warning",
+    "requirement": "Before every renewal charge the system sends email and in-app reminders at 30, 7 and 1 day, each stating the exact amount, seat count and charge date; the charge job refuses to run if no reminder was logged as sent.",
+    "verdict": "partly",
+    "evidence": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, applyStripeEvent, branch 'invoice.upcoming': emails every owner and admin 'Heads up: your plan renews on DATE for AMOUNT' with a no-login 'Do not renew' button. Covered by tests/billing.test.ts 'signatures roll over, and a reminder comes before each renewal with a one-click stop'. My run (tests/out/audit-billing-core/cancel2.ts) produced 'Heads up: your plan renews on November 23, 2026 for $9.00' with the amount, date and stop link in the body. The Plan page shows 'Next charge: $9 on DATE' at all times. There are no seats (one price per team) and no annual plan, so the 30-day step has no meaning here.",
+    "gap": "There is exactly one reminder and Sign&Grow does not schedule it: it is sent only when the payment provider emits its 'upcoming invoice' event, whose timing (and whether it is sent at all) is a setting in the provider's dashboard that README.md never mentions. No 7-day and 1-day sequence, no in-app banner as renewal approaches, nothing records that a reminder went out, and the provider charges whether or not one did (a failed email or an unsubscribed event means a silent renewal). The same event delivered twice sends two reminders (checked).",
+    "suggested_fix": "In src/server/cron.ts add a step that sends the reminders itself at 7 days and 1 day before accounts.renews_at, records each in a new renewal_reminders table (account, period end, kind, email status) and shows a banner in src/components/AppShell.tsx in the last 7 days. If no reminder for the coming period is recorded as sent 24 hours before renews_at, pause collection at the provider and alert SUPPORT_EMAIL. Ignore repeated provider events by event id. Add tests."
+   },
+   {
+    "theme_id": "billing-renewal-no-warning",
+    "requirement": "Every renewal reminder and receipt contains a 'do not renew' link that turns off renewal without logging in.",
+    "verdict": "partly",
+    "evidence": "Reminder: yes. routes-billing.ts 'invoice.upcoming' mail has the button 'Do not renew' -> /billing/stop?token=..., and POST /public/billing/stop works with no session (billing.test.ts 'signatures roll over...'; my check in tests/out/audit-billing-core/race.ts: valid token stops, a token re-pointed at another account and an expired token both get 410). The welcome mail carries the same link.",
+    "gap": "The receipt does not. In the 'invoice.paid' branch the only button is 'View invoice' (or 'Open the Plan page'); my run printed 'receipt has a stop link: false'. The top-up receipt, payment-failed, refund and free-code mails have none either.",
+    "suggested_fix": "In routes-billing.ts add links: [{ label: 'Stop renewing (no login needed)', url: stopUrl(a.id) }] to the receipt mail in the 'invoice.paid' branch and to the 'invoice.payment_failed' mail, and assert it in tests/billing.test.ts."
+   },
+   {
+    "theme_id": "billing-renewal-no-warning",
+    "requirement": "The billing page always shows 'Next charge: AMOUNT on DATE' and an auto-renew on/off toggle.",
+    "verdict": "met",
+    "evidence": "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx, Billing(): 'Next charge: $9 on December 2, 2026, which adds 9 signatures and plants 90 mangroves. That is the whole amount.' with 'Cancel plan' (off) and, once cancelled, 'Keep the plan after all' (on, POST /billing/resume). Server side: billingState() renews_at/ends_at in routes-billing.ts; billing.test.ts asserts state.renews_at and that resume clears cancel_at. Seen in a browser on desktop and phone width (tests/out/audit-billing-core/shots/02-plan-active.png, 05-plan-cancelled.png, 11-plan-mobile.png).",
+    "gap": "Residual, reported elsewhere: the amount printed is the constant from src/lib/impact.ts, not the provider's figure (see the price-increase theme), and the date is missing ('Billed $9 each month') until a paid invoice has been matched to the account.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-renewal-no-warning",
+    "requirement": "A paid account with no documents sent in the last 90 days is not renewed unless the owner clicks an explicit 'yes, renew'; otherwise it drops to the free tier with all documents kept.",
+    "verdict": "met",
+    "evidence": "routes-billing.ts 'invoice.upcoming' branch: when the account is older than dormantStopDays() (src/lib/policy.ts, default 90) and has sent nothing in that time, cancelPlan() turns the renewal off at the provider and mails 'We stopped your renewal so you are not charged for nothing' with a 'Keep my plan' button. Test: billing.test.ts 'paying but not using it: a nudge, then the renewal is stopped for them'. My run (cancel2.ts, section S): cancel_at set, provider cancel_at_period_end true, plan kept to the end of the paid month, signatures kept; after 'Keep my plan' the next upcoming-invoice event stops it again unless something was sent. Cancelling never deletes documents (same test file asserts export still works).",
+    "gap": "Residual: the rule runs only when the provider sends its upcoming-invoice event (same dependency as the reminder) and DORMANT_AUTO_STOP_DAYS=0 switches it off.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-renewal-no-warning",
+    "requirement": "The renewal confirmation email states the amount charged and links to the invoice.",
+    "verdict": "met",
+    "evidence": "routes-billing.ts 'invoice.paid' branch: subject 'Receipt: $9.00 for 9 signatures', body '$9.00 for <account>, charged today ... Next charge: $9.00 on DATE', button 'View invoice' pointing at the provider's hosted invoice; the same link is kept on the Plan page Payments table. Test: billing.test.ts 'the monthly plan: $9 adds 9 signatures and plants 90 mangroves' (receipt subject, receipt_url). My run (cancel2.ts, section M): receipt link was https://pay.example/in_m1 and the amount in subject and body matched the charge, including a $12.00 charge.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-charged-after-cancel",
+    "requirement": "Cancellation is one atomic server-side operation that also cancels the subscription at the payment processor; the UI shows success only after the processor confirms, and shows an error (never silence) if it fails.",
+    "verdict": "partly",
+    "evidence": "routes-billing.ts cancelPlan(): the provider is told first (cancel_at_period_end) and cancel_at is written only after it answers; billing.test.ts asserts 'the provider was told straight away'. My checks: with the provider failing, POST /billing/cancel answered 502, cancel_at stayed null and no confirmation mail was sent (tests/out/audit-billing-core/cancel.ts, section A); in a browser the failed cancel showed a red error, kept the dialog open and showed no 'Cancelled' notice (shots/04-cancel-provider-failed.png). Closing an account also refuses to proceed if the provider cannot be told (routes-trust.ts POST /me/delete, checked).",
+    "gap": "Two other ways a plan ends swallow a provider failure. (1) POST /billing/refund on a monthly payment ends the subscription with .catch(() => {}) and then marks the account cancelled and answers plan_ended: true; the dialog says 'the plan ends now'. In my run (cancel.ts, section B) the provider subscription stayed active, the provider's next status event put the account back on the paid plan, and the next $9 charge was kept. (2) The dispute handler does the same swallow.",
+    "suggested_fix": "In routes-billing.ts POST /billing/refund: end the subscription at the provider before refunding and fail the request with a clear message if that call fails (or return plan_ended: false, queue a retry and alert SUPPORT_EMAIL). Never set plan='seedling' without the provider's confirmation. Same in the 'charge.dispute.created' branch. Add a test with the provider failing."
+   },
+   {
+    "theme_id": "billing-charged-after-cancel",
+    "requirement": "On cancellation the user sees on screen, and receives by email, a cancellation ID, the date access ends and a statement that no further charges will be made.",
+    "verdict": "partly",
+    "evidence": "cancelPlan() returns { ends_at, reference } and mails every admin 'Cancelled. You will not be charged again. Cancellation reference: SG-... The plan runs until DATE ... No more payments are taken after that.' (printed in cancel.ts, section A; reference asserted in billing.test.ts). On screen (settings/page.tsx, the done.kind === 'cancel' notice), checked in a browser with a stand-in provider answer: 'Cancelled. You will not be charged again. The plan runs until December 2, 2026 ... Reference SG-AUDIT-TEST1. We emailed you this too.' in two clicks (shots/30-cancel-confirmed.png). The automatic stop for unused plans also mails a reference and date.",
+    "gap": "(1) A paying member who enters the code GROWalition has the paid renewal turned off silently (cancelPlan(..., quiet=true)): the 'Code accepted' mail carries no reference, no end date of the paid subscription and no statement about the card. (2) The reference is shown once: after a reload it is gone from the Plan page, it lives only in accounts.cancel_ref and is erased on resume or re-subscribe, so support cannot look an old one up. (3) When cancelling during a failing payment the mail's 'that month is already paid for' and 'will not be charged again' can both be untrue (see bugs).",
+    "suggested_fix": "In routes-billing.ts POST /billing/redeem send the cancellation confirmation (reference, end date, 'no further charges') when a paid subscription is being stopped. Keep cancellations in their own table (reference, account, when, by whom, ends_at) and show the reference on the Plan page while the plan is ending. In cancelPlan word the mail from the subscription's real status."
+   },
+   {
+    "theme_id": "billing-charged-after-cancel",
+    "requirement": "The charge job refuses to charge any subscription in cancelled, free or closed state; an automated test covers this.",
+    "verdict": "partly",
+    "evidence": "Sign&Grow has no charge job; the provider charges. Its guards are: telling the provider to stop on cancel and on closing, and the 'invoice.paid' branch in routes-billing.ts, which refunds a monthly payment that arrives for an account whose plan has ended and adds no signatures. Test: billing.test.ts 'cancelling keeps every signature; a charge after cancellation refunds itself and adds nothing'. My runs: a charge during the 30-day closing grace was refunded (cancel2.ts, X2); a charge after a dispute was refunded.",
+    "gap": "Not covered, each reproduced: (a) free state: an account on the code GROWalition that still has a live paid subscription is charged, the money is kept and 9 signatures are added (cancel.ts section F via POST /billing/resume; race.ts via a checkout opened before the code and paid after). (b) closed and purged account: the charge is stored against no account and not refunded; the only signal is a mail to SUPPORT_EMAIL if that is set (cancel2.ts, X). (c) cancelled while a payment was failing: the provider's retry is kept (cancel.ts, H). (d) the guard also fires wrongly on a returning customer (see bugs). No test covers the free or closed states.",
+    "suggested_fix": "In the 'invoice.paid' branch treat promo_code as 'must not be charged': refund, end the subscription and alert. In activate() refuse a new subscription for an account with a code (cancel it and refund). Refuse POST /billing/resume when promo_code is set. For a payment that matches no account, refund automatically when the customer id belonged to a closed account (keep closed customer ids in a small table). Add one test per state."
+   },
+   {
+    "theme_id": "billing-charged-after-cancel",
+    "requirement": "A daily reconciliation compares processor charges with subscription states; any charge found on a cancelled or free account is refunded automatically within 24 hours, with an email to the customer and an internal alert.",
+    "verdict": "partly",
+    "evidence": "What exists is event-time only: the 'invoice.paid' branch refunds at once and the customer gets 'Refund sent: $9.00' (billing.test.ts 'cancelling keeps every signature; a charge after cancellation refunds itself...').",
+    "gap": "There is no reconciliation: src/server/cron.ts tick() runs expiry, reminders, the unused-plan nudge and account purging, nothing about payments. If the automatic refund call fails once it is only written to the server console and never retried, because the payment row already exists and a redelivered event is ignored; in my run (cancel.ts, section G) refunded_cents stayed 0 after redelivery, the customer got nothing and nobody was alerted. There is no internal alert on success either, and a missed provider event is never caught.",
+    "suggested_fix": "Add reconcileBilling() to src/server/cron.ts, run daily: list the provider's charges of the last 35 days per customer, compare with accounts.plan / cancel_at / promo_code and the payments table, refund anything on an ended, free or closed account, mail the customer and SUPPORT_EMAIL, and retry rows marked refund_pending. In the 'invoice.paid' branch mark the row refund_pending when the refund call throws instead of only logging. Add a test."
+   },
+   {
+    "theme_id": "billing-charged-after-cancel",
+    "requirement": "When a card dispute is opened on a subscription, all further charges on that subscription are frozen until it is resolved.",
+    "verdict": "met",
+    "evidence": "routes-billing.ts 'charge.dispute.created' branch: looks up the charge's customer, ends the subscription at the provider and sets the account to the free tier. Test: billing.test.ts 'back from checkout the plan is active at once; a card dispute stops all further billing'. My run (cancel2.ts, Dispute): provider subscription 'canceled', and a later charge on that account was refunded automatically.",
+    "gap": "Residual, listed under bugs: the customer is not told, the alert goes out only if SUPPORT_EMAIL is set, and a provider failure is swallowed.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-refund-refused-on-renewal",
+    "requirement": "Every renewal charge has a 14-day refund window; a 'Request refund' button on the billing page pays out in full automatically, with no staff approval, when no document has been sent since the renewal.",
+    "verdict": "partly",
+    "evidence": "routes-billing.ts refundOffer() and POST /billing/refund (window from refundDays() in /home/user/treegens-app/sign-and-grow/src/lib/policy.ts, default 30 days); Plan page card 'Want your money back? ... Refund $9.00' then 'Send my refund'. Test: billing.test.ts 'unused signatures from the latest payment are refunded on request, to the cent'. My run on a real renewal (second monthly payment, nothing sent): offer $9.00, provider refund of 900 on that charge, no approval step (tests/out/audit-billing-core/refund.ts, K1).",
+    "gap": "Only the single most recent payment can be refunded. A renewal followed by a top-up (refund.ts, K2: after the $2 top-up was refunded the second request got 400 'use the contact form' with 9 unused signatures and the window open), or followed by the next monthly payment 28 days later (K3), loses its self-serve refund. REFUND_DAYS can be set below 14 and nothing enforces a floor. Two requests sent together are both paid (see bugs).",
+    "suggested_fix": "In routes-billing.ts make refundOffer() consider every payment still inside the window (newest first, unused signatures allotted across them) and let POST /billing/refund take a payment id. In src/lib/policy.ts return Math.max(14, ...) for refundDays(). Add tests for 'renewal then top-up' and 'two payments inside the window'."
+   },
+   {
+    "theme_id": "billing-refund-refused-on-renewal",
+    "requirement": "The same refund rule applies to first terms and renewals, monthly and annual; it is shown as one short paragraph at checkout and on every receipt.",
+    "verdict": "partly",
+    "evidence": "One code path for every payment: refundOffer() does not distinguish first payment, renewal or top-up, and there is no annual plan. The monthly receipt and the top-up receipt both carry the sentence (read in my runs: '...refunded in full within 30 days, from the Plan page'), as does the welcome mail. On the Plan page the 'Start the monthly plan for $9' button has 'Unused signatures refunded within 30 days' beside it.",
+    "gap": "Nothing is shown on the payment page itself: the parameters sent for both checkouts contain no text (printed in tests/out/audit-billing-core/policy.ts). The top-up pay button has no refund sentence next to it (only in the rules list further down). The receipt promises more than the code does ('from this payment ... within 30 days', but only the latest payment qualifies) and does not say that refunding a monthly payment ends the plan.",
+    "suggested_fix": "Add one refundRule() sentence to src/lib/policy.ts and use it in routes-billing.ts for custom_text[submit][message] on both checkout sessions, in both receipts and the welcome mail, and in settings/page.tsx next to both pay buttons."
+   },
+   {
+    "theme_id": "billing-refund-refused-on-renewal",
+    "requirement": "A refund request made inside the window when documents were sent since renewal returns a pro-rated amount, and the exact figure is shown before the user confirms.",
+    "verdict": "met",
+    "evidence": "routes-billing.ts refundOffer(): cents = price paid per signature x signatures not used; GET /billing returns refund { amount, signatures, of, reason }. Plan page: '7 of its 9 signatures have not been used, so $7.00 goes back to your card', then a dialog titled 'Refund $7.00' with 'Send my refund'. Test: billing.test.ts 'unused signatures from the latest payment are refunded on request, to the cent' (offer $7.00, provider call amount 700). My checks: the dialog text with the figure before confirming (shots/07-refund-dialog.png) and a 4-of-9 case offered $4.00 (race.ts).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-refund-refused-on-renewal",
+    "requirement": "Help pages, checkout and support macros quote the refund rule from one shared source so they cannot disagree.",
+    "verdict": "partly",
+    "evidence": "The number of days has one source: refundDays() in /home/user/treegens-app/sign-and-grow/src/lib/policy.ts, used by routes-billing.ts (mails, the refusal message, refund_days in GET /billing which the Plan page prints) and by src/app/help/facts.ts for the public pages. My check with REFUND_DAYS=14 (policy.ts script): API, welcome mail, monthly receipt and top-up receipt all said 14 and a refund on day 15 was refused.",
+    "gap": "Only the number is shared. The sentence is written out separately in the welcome mail, both receipts, the refusal error, three places on the Plan page, the landing page and the help page, and the versions already differ ('this payment' on the receipt, 'your latest payment' elsewhere). The payment page shows no rule. Canned support replies do not exist in the software, and no test compares the public page with the server.",
+    "suggested_fix": "Put the rule's wording in src/lib/policy.ts as refundRule() and render it everywhere from there; add a test that the help page, a receipt and GET /billing agree; show the same text to operators in /app/operator as the reply to paste."
+   },
+   {
+    "theme_id": "billing-no-self-serve-cancel",
+    "requirement": "The billing page shows a 'Cancel plan' control for every plan type, including trials and sales-assisted contracts, and cancellation completes in at most two clicks with no chat, email or phone step.",
+    "verdict": "met",
+    "evidence": "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx Billing(): 'Cancel plan' opens a dialog whose 'Cancel plan' button calls POST /billing/cancel (routes-billing.ts cancelPlan). Counted in a browser: two clicks to the confirmation, on desktop and visible at phone width (shots/02, 03, 30, 11). Test: billing.test.ts 'cancelling keeps every signature...' (cancel returns ends_at and a reference; twice is harmless). There is one paid plan, no trials and no contracts; a member who is not an admin is told 'Only account admins can change the plan'.",
+    "gap": "Residual, listed under bugs: no cancel control in two unusual states where a provider subscription can still exist (free with a code plus a live subscription; subscription marked unpaid).",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-no-self-serve-cancel",
+    "requirement": "Cancelling the plan is a separate action from closing the account; after cancelling, the account and all documents remain accessible.",
+    "verdict": "met",
+    "evidence": "Separate routes: POST /billing/cancel (routes-billing.ts) and POST /me/delete (/home/user/treegens-app/sign-and-grow/src/server/routes-trust.ts); the 'Your data' tab says 'Closing is separate from cancelling a plan'. Test: billing.test.ts 'cancelling keeps every signature; a charge after cancellation refunds itself and adds nothing' asserts that after the plan has ended the export still works, payment history is still there and an envelope can still be sent with the signatures left. My run (cancel.ts, section O) confirmed the account stays on the plan until the paid month ends.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-no-self-serve-cancel",
+    "requirement": "The cancel control is never disabled and works with no valid card on file; if a contract term applies, it shows the end date and schedules non-renewal on the spot.",
+    "verdict": "met",
+    "evidence": "The 'Cancel plan' button has no disabled state; only the confirm button is disabled while its own request is in flight (settings/page.tsx). cancelPlan() only sets cancel_at_period_end and never needs a card: with the provider holding no cards, cancel answered 200 with an end date (cancel.ts, section O), and it also worked while the subscription was past due (section H). The dialog shows 'The plan runs until December 2, 2026' before confirming and non-renewal is set immediately. billing.test.ts 'locked out? stop billing by card...' covers removing the card after cancelling.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-no-self-serve-cancel",
+    "requirement": "Downgrading to any lower plan, including free, is self-serve from the same page.",
+    "verdict": "met",
+    "evidence": "There are two tiers. 'Cancel plan' on the Plan page is the downgrade to the free tier at the end of the paid month; the refund button ends it at once. billing.test.ts asserts the account is on 'seedling' after the subscription ends and that signatures and documents are kept. Admin-only routes, no contact step (my check: all billing actions return 403 for a plain member and 200 for an admin).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-overage-no-warning",
+    "requirement": "No charge beyond the plan price is ever made without an explicit click, at the moment of the action, on a screen showing the exact price.",
+    "verdict": "met",
+    "evidence": "Only two routes create a charge: POST /billing/checkout and POST /billing/topup in routes-billing.ts, both admin-only, both opening the provider's payment page. The top-up button reads 'Pay $10 and add 10 signatures'. Sending never charges: sendEnvelope() in /home/user/treegens-app/sign-and-grow/src/server/envelopes.ts answers 402. Tests: billing.test.ts 'top-ups: $1 a signature, only ever on purpose' and the 402 case with zero payment rows. My checks: a top-up made one provider call (one-off payment, 100 cents x quantity) and none touching the subscription (refund.ts, P); in a browser, Send with nothing left got 402, the envelope stayed a draft and no payment appeared (shots/22-review-send-refused.png).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-overage-no-warning",
+    "requirement": "When the allowance is used up, the send screen stops and offers three choices: buy a top-up at the shown price, upgrade, or wait for the reset; the default spending cap for extra documents is zero.",
+    "verdict": "partly",
+    "evidence": "/home/user/treegens-app/sign-and-grow/src/components/editor/StepReview.tsx SignatureCost: 'This needs 1 signature and you have 0 ready ... Nothing is charged unless you choose it, and your work here is saved' with a link to the Plan page; the server refuses with 402 and the same explanation (seen in a browser for both tiers, shots/21 to 23). The spending cap is zero by construction: no code path charges automatically.",
+    "gap": "One choice is offered, not three: on the paid plan 'Top up for $1 a signature', on the free tier 'The monthly plan is $9 for 9 signatures' (a free account cannot top up). Waiting is never mentioned (the next 9 arrive with the monthly payment on a known date; voiding an unsigned envelope frees held signatures). The top-up cannot be bought from the send screen, the Send button stays enabled and fails after the click, and a team member who is not allowed to buy sees the same pitch (refund.ts, W).",
+    "suggested_fix": "In StepReview.tsx SignatureCost: for admins on the plan, a button that starts POST /billing/topup for the exact shortfall with the total on it; 'or wait: 9 more arrive on {renews_at}'; 'N are held on envelopes nobody has signed yet' with a link; for members 'ask {admin}'. Disable Send while short."
+   },
+   {
+    "theme_id": "billing-overage-no-warning",
+    "requirement": "A usage meter (used, remaining, reset date) appears on the dashboard and on the send screen, with email and in-app alerts at 80% and 100%.",
+    "verdict": "partly",
+    "evidence": "Plan page balance card (ready to send, held) and a line-by-line ledger; dashboard card from src/components/sender/UsageMeter.tsx ('0 signatures left to send with. 3 more are set aside...', 'Running low' at two or fewer, seen in a browser); send screen 'Sending holds 1 signature of the 18 you have ready'. Emails at two left and at none from sendEnvelope() in envelopes.ts (billing.test.ts asserts both subjects).",
+    "gap": "The warning emails go only to the person who pressed Send, not to the owner and admins who can buy: in my run a member used the team's last three and the owner received nothing (refund.ts, W). Thresholds are fixed at 2 and 0, so an account holding 100 hears nothing until 2. They fire only from sendEnvelope(), not when a correction adds a signer or an expired envelope is reopened. Nothing beside the meter says when the next 9 arrive.",
+    "suggested_fix": "In envelopes.ts move the low-balance mail into one helper called after anything that holds signatures, send it to every admin of the account as well as the sender, and add a proportional threshold (for example 20% of the last purchase). Show renews_at next to the meter in UsageMeter.tsx and StepReview.tsx."
+   },
+   {
+    "theme_id": "billing-overage-no-warning",
+    "requirement": "Reusable public signing links count only completed signings; repeat opens by the same person never create a billable document.",
+    "verdict": "met",
+    "evidence": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts POST /public/powerforms/:slug/start returns the envelope the same email address already started; a signature is used only in completeRecipient() (envelopes.ts). Tests: tests/trust.test.ts 'public forms do not multiply envelopes, and dates follow the chosen format' and billing.test.ts 'bulk send checks the whole batch first; a public form with no signatures says so and tells its owner'. My run (tests/out/audit-billing-core/count.ts, Q): three opens by one person, one in different letter case, gave one envelope and one held signature; the balance changed only when that person signed.",
+    "gap": "Residual, listed under bugs: every different visitor who starts and never signs keeps one signature held for 120 days.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-renewal-price-increase-unannounced",
+    "requirement": "The amount charged at renewal must equal the amount stated in the renewal reminder; if they differ the system charges the lower amount and raises an internal alert.",
+    "verdict": "partly",
+    "evidence": "The reminder quotes the provider's own upcoming-invoice amount (routes-billing.ts 'invoice.upcoming': money(o.amount_due)), so the two normally agree; billing.test.ts asserts '$9.00' in the subject.",
+    "gap": "Nothing enforces it. The quoted amount is not stored, the 'invoice.paid' branch compares nothing, there is no refund of a difference and no alert. In my run (cancel2.ts, M) a $12.00 charge on the $9 plan was accepted as it came: 9 signatures, 'Receipt: $12.00 for 9 signatures', no alert. README.md says the provider's price 'has to charge the same monthly amount' as the constant, by hand.",
+    "suggested_fix": "Store the reminded amount per period (accounts.reminded_cents / reminded_for). In the 'invoice.paid' branch, if amount_paid is higher than the reminded amount (or than PRICING.monthlyUsd when no reminder exists), refund the difference automatically, mail the customer and alert SUPPORT_EMAIL. At start-up compare the provider's price with PRICING and refuse to enable billing if they differ. Add a test."
+   },
+   {
+    "theme_id": "billing-renewal-price-increase-unannounced",
+    "requirement": "A price increase applies only from the next renewal after at least 60 days' notice by email and in-app; without explicit acceptance the plan does not renew at the new price.",
+    "verdict": "not_met",
+    "evidence": "No code for it. The price is the constant PRICING.monthlyUsd in /home/user/treegens-app/sign-and-grow/src/lib/impact.ts and, separately, whatever the provider's price object charges.",
+    "gap": "Changing the provider's price changes what every existing subscriber pays at their next renewal, with no notice, no acceptance and no 60-day rule; the Plan page would keep showing $9. Whether and when to raise prices is a business decision, but the guarantee itself has to be built.",
+    "suggested_fix": "Record price_cents on the account at activation (from the first paid invoice). Add a price_changes table, a notice mail, a banner and an explicit 'accept the new price' route. In the 'invoice.upcoming' branch, if amount_due is above accounts.price_cents and there is no acceptance at least 60 days after the notice, call cancelPlan() and tell the customer why."
+   },
+   {
+    "theme_id": "billing-renewal-price-increase-unannounced",
+    "requirement": "The billing page always shows the real next charge, including any pending price change.",
+    "verdict": "partly",
+    "evidence": "The Plan page prints 'Next charge: $9 on DATE'. The date is the provider's period end (accounts.renews_at); seen in a browser.",
+    "gap": "The amount is the constant, not the provider's next invoice. In my run the provider's upcoming invoice was $12.00, the reminder said $12.00, and GET /billing still returned price 9 (cancel2.ts, M). Tax, a coupon or a changed provider price are never reflected, and a free-code account with a live paid subscription shows no next charge at all.",
+    "suggested_fix": "Save amount_due and currency from 'invoice.upcoming' (or fetch the provider's upcoming invoice once a day) into accounts.next_amount_cents, return it from billingState() in routes-billing.ts and print that figure in settings/page.tsx; fall back to the constant only when nothing is known and say 'about'."
+   },
+   {
+    "theme_id": "billing-renewal-price-increase-unannounced",
+    "requirement": "A customer is never moved to a different plan or tier without an explicit action by the account admin.",
+    "verdict": "met",
+    "evidence": "The plan becomes paid only in activate() after a checkout an admin started, or free-with-code through POST /billing/redeem or the code typed at sign-up (routes-billing.ts, /home/user/treegens-app/sign-and-grow/src/server/routes-account.ts); there is only one paid tier. Every billing action is admin-only: in my run a plain member got 403 on cancel, checkout, topup, redeem, refund, resume, remove-card, portal and sync (cancel.ts, N). A top-up leaves the plan alone (billing.test.ts 'a top-up never changes the plan'; refund.ts, P). The code GROWalition works as stated: my run (tests/out/audit-billing-core/code.ts) shows plan free at sign-up, 12 signatures, no provider call, no payment row, checkout refused with 'already free'; test 'the code GROWalition makes the monthly plan free'. Moves the system makes by itself are downward only and announced (unused plan, failed payment, dispute).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "billing-renewal-price-increase-unannounced",
+    "requirement": "The public pricing page lists the price of every tier, including any top-up and API rates.",
+    "verdict": "met",
+    "evidence": "Checked on the page as rendered at the end of the audit (it was being rewritten while I worked; I looked only for the prices, not at the wording): /home/user/treegens-app/sign-and-grow/src/app/page.tsx reads PRICING from src/lib/impact.ts and shows 'Seedling $0', 'Grove $9 / month', 'More when you need them, $1 a signature' and 'Every feature, including the API' (there is no separate API rate; src/server/openapi.ts says the API is the same on every plan).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "envelope-counted-on-send",
+    "requirement": "Only fully completed documents count against any allowance; voided, declined, expired, corrected and resent documents count as zero.",
+    "verdict": "partly",
+    "evidence": "/home/user/treegens-app/sign-and-grow/src/server/credits.ts reserved()/needed() hold one signature per signer while an envelope is out; completeRecipient() in envelopes.ts uses one when that person signs. Test: billing.test.ts 'a new account has 3 signatures to try; one is held per signer and only used when somebody signs' (void before signing, decline, own document, name fix all cost nothing). My runs (tests/out/audit-billing-core/count.ts): a never-opened envelope that expired cost nothing; fixing an email typo and sending a reminder cost nothing.",
+    "gap": "The unit is a person signing, not a completed document, so a signature already made stays spent when the document never completes. Two signers, the first signs, the sender voids to fix a typo: balance 11, not back to 12; sending it again and completing it cost 3 signatures for a 2-signer document (count.ts, I). Same when the second signer declines or the deadline passes (J). So 'a typo fixed by void-and-resend costs two' still applies to everyone who had already signed.",
+    "suggested_fix": "Decide which it is. Either return them: in envelopes.ts voidEnvelope(), declineRecipient() and the expiry step of cronTick(), add one ledger line per chargeable recipient who had signed (grant(+1, 'refund', 'returned:' + recipient id)), and take it again if a reopened envelope completes. Or keep per-signature pricing and say so wherever the rule is stated: 'signatures already made on an envelope you later void are not returned'."
+   },
+   {
+    "theme_id": "envelope-counted-on-send",
+    "requirement": "The counting rule is stated in one sentence on the pricing page and next to the usage meter.",
+    "verdict": "partly",
+    "evidence": "Stated in all three places: Plan page balance card ('One signature is one person signing one envelope ... A signature is only used when somebody actually signs. If you void an envelope, or someone declines or runs out of time, it comes straight back'), dashboard card in src/components/sender/UsageMeter.tsx ('Set aside, not spent: sending holds one for each signer. It comes back if you void, or if they decline or it expires') and the landing page rules. Read from the rendered pages in a browser.",
+    "gap": "The Plan page version says more than the code does: 'Voided, declined and expired envelopes give theirs back' with no word that signatures already used on that envelope are not returned (see the requirement above). The dashboard wording is accurate; the two are written separately.",
+    "suggested_fix": "Keep one sentence in src/lib (next to PRICING or in policy.ts) and render it in settings/page.tsx, UsageMeter.tsx, StepReview.tsx and the landing page; use the accurate 'held, not yet signed' wording."
+   },
+   {
+    "theme_id": "envelope-counted-on-send",
+    "requirement": "Buying a top-up never changes the plan or the renewal price.",
+    "verdict": "met",
+    "evidence": "routes-billing.ts applyTopUp() writes a payment row and a ledger line and nothing else; POST /billing/topup opens a one-off payment separate from the subscription. Test: billing.test.ts 'top-ups: $1 a signature, only ever on purpose' asserts the plan is unchanged. My run (refund.ts, P): plan, renewal date, subscription id and cancel state identical before and after, zero subscription calls to the provider, receipt '$7.00 ... 7 signatures added'.",
+    "gap": "",
+    "suggested_fix": ""
+   }
+  ],
+  "bugs": [
+   {
+    "title": "First payment adds nothing when the provider reports the paid invoice before the finished checkout",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, applyStripeEvent 'invoice.paid' branch (byCustomer() finds no account) and activate()",
+    "detail": "The account learns its customer id only from the checkout event or from the browser coming back. If the paid-invoice event is handled first (the provider does not guarantee order, and for a checkout the finished-checkout event commonly comes last; README.md says billing was only tried with simulated events), the payment is stored against no account. Reproduce: tests/out/audit-billing-core/order.ts. Result: plan shows as active, balance stays 3 instead of 12, no receipt, payment missing from the Plan page, no refund on offer, and a redelivered event changes nothing. Only SUPPORT_EMAIL (if set) hears about it. The tests always send the checkout event first. Fix: put the account id in the subscription's metadata at checkout and read it in 'invoice.paid'; or store the customer id on unmatched payments and claim them in activate(), granting the signatures and sending the receipt then."
+   },
+   {
+    "title": "A returning customer's first payment is refunded as 'already cancelled' and the new plan starts empty",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, 'invoice.paid' branch, the check a.plan !== 'grove'",
+    "detail": "Someone who cancelled earlier and subscribes again still has their old customer id on the account and plan 'seedling'. If the paid-invoice event arrives before the finished-checkout event, the safety net for 'charged after cancelling' refunds the brand-new payment. Reproduce: order.ts, third section. Result: mails 'Refund sent: $9.00 (this plan was already cancelled)' then 'Welcome to Grove'; plan active, 0 signatures added, and the new subscription keeps running at the provider. Fix: before refunding, check whether the invoice belongs to a subscription other than the one that ended (invoice.subscription vs accounts.stripe_subscription_id) or whether a checkout is in progress; activate from the invoice in that case."
+   },
+   {
+    "title": "Two refund requests sent together are both paid",
+    "severity": "high",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, POST /billing/refund and refundPayment()",
+    "detail": "The offer is computed, then the provider is called, then the database is updated, with no lock and no idempotency key. Reproduce: tests/out/audit-billing-core/race.ts (provider stand-in that rejects refunds above what is left on the charge): 9 paid, 5 used, 4 unused; two POST /billing/refund fired together both answered 200 'refunded $4.00', the provider sent $4.00 twice, only 4 signatures left the balance, and two 'Refund sent' mails went out. It works whenever the refundable part is at most half the payment. Fix: inside one transaction mark the payment as refund-in-progress (UPDATE ... WHERE refunded_at IS NULL and check changes) before calling the provider, and send an Idempotency-Key of 'refund:' + payment id."
+   },
+   {
+    "title": "Refunding a monthly payment says the plan ended even when the provider did not end it; next month's charge is kept",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, POST /billing/refund: stripe('DELETE', ...).catch(() => {})",
+    "detail": "Reproduce: cancel.ts section B (provider refuses the DELETE). The answer is plan_ended: true and the account goes to the free tier, but the subscription is still active at the provider; its next status event puts the account back on the paid plan and the next $9 is accepted with a receipt. The customer was told on screen 'the plan ends now'."
+   },
+   {
+    "title": "Cancelling while a payment is failing: told 'you will not be charged again', then charged",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, cancelPlan() and the 'invoice.paid' branch",
+    "detail": "Reproduce: cancel.ts section H (provider behaviour simulated: subscription past due with the new period already open, then the retry of the open invoice succeeds after the customer cancelled). The cancellation mail says the plan runs to the end of a month that 'is already paid for' (it is not), the retried $9 is kept because cancel_at lies in the future, 9 signatures are added and a receipt follows the cancellation mail. Fix: when cancelling a past-due subscription, void the open invoice or end the subscription at once; in 'invoice.paid' refund a payment whose invoice was created before the cancellation but paid after it."
+   },
+   {
+    "title": "A failed automatic refund is never retried and nobody is told",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, 'invoice.paid' branch: refundPayment(...).catch(console.error)",
+    "detail": "Reproduce: cancel.ts section G. A charge arrives after the plan ended, the refund call fails once: the payment row stays unrefunded, the redelivered event is ignored because the row exists, no mail goes to the customer or to SUPPORT_EMAIL. The Plan page and the cancellation mail both promise this refund."
+   },
+   {
+    "title": "Paying member adds GROWalition, takes the refund the Plan page offers, and ends up half on the plan",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/refund (sets plan='seedling' without looking at promo_code); /home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx Billing()",
+    "detail": "Reproduce: cancel.ts section E; screen in tests/out/audit-billing-core/shots/09-plan-code-after-refund.png. After the code is entered the page still offers 'Refund $9.00 ... Refunding a monthly payment also ends the plan'. Taking it leaves plan 'seedling' with the code still set: the page shows both 'Free with GROWalition' and 'Not started', a 'Start the monthly plan for $9' button that answers 'already free', top-ups refused ('Top-ups are for accounts on the monthly plan'), and entering the code again does nothing. Fix: in the refund route keep plan='grove' and status 'free' when promo_code is set, and word the offer accordingly."
+   },
+   {
+    "title": "An account that is 'free with a code' can have a live paid subscription the Plan page hides",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts activate(), POST /billing/resume, 'invoice.paid' branch; settings/page.tsx (no cancel or card buttons when free)",
+    "detail": "Two ways, both reproduced. (1) race.ts: open checkout, enter the code, then pay the open checkout: the account has code GROWalition and an active subscription; the page says 'There is no card on file for the plan and nothing to cancel', shows no next charge and no Cancel button, and each monthly charge is kept. (2) cancel.ts section F: after the code turned the paid renewal off, POST /billing/resume turns it back on (200) and the next $9 is kept. Fix: refuse resume and activation when promo_code is set (cancel and refund the new subscription), and refund any monthly payment on a free-code account."
+   },
+   {
+    "title": "The provider's 'charge refunded' event after an in-app refund marks an older payment as refunded too",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, 'charge.refunded' branch (matches by account, amount and refunded_cents < refunded amount)",
+    "detail": "Reproduce: refund.ts section D. Two $9 payments; refund the latest in the app; then the provider's own event for that refund arrives. The refunded payment no longer matches the query, so the previous month's payment is marked refunded $9.00 as well. Payment history shows two refunds, and the mangrove count on the Plan page and the public totals drop to 0 for money that was kept. Root cause: monthly payments are stored without the provider's charge id. Fix: store charge and payment-intent ids from the invoice and match on them."
+   },
+   {
+    "title": "Anyone can lock up a sender's whole balance through a public form",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-envelopes.ts POST /public/powerforms/:slug/start; /home/user/treegens-app/sign-and-grow/src/server/credits.ts reserved()",
+    "detail": "Each new email address that starts a public form holds one of the owner's signatures until that envelope expires (120 days by default); no proof of the address is asked and the limit is 20 starts an hour per IP. Reproduce: count.ts section Q: three made-up addresses on a 3-signature account left 0 available, the fourth visitor got 503, the owner was mailed 'Top up or start the monthly plan and the form works again at once', and the owner cannot send any envelope of their own until they void those or pay. Nothing is billed, but it pushes people to buy. Fix: do not hold for a public form until the visitor opens the link from their email (or signs), give public-form envelopes a short expiry, and cap open unsigned starts per form."
+   },
+   {
+    "title": "'Running low' and 'all used' emails reach only the member who sent, not the people who can buy",
+    "severity": "medium",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts sendEnvelope(), the mail to sender.email",
+    "detail": "Reproduce: refund.ts section W. A member used the team's last three signatures: the member got '2 signatures left' and 'You have used all your signatures' and then a 402 quoting the plan price; the owner got nothing and members get 403 on every purchase."
+   },
+   {
+    "title": "A plain name fix is refused with 'This needs 1 signature' when the account is over-committed",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/envelopes.ts correctEnvelope() (if have < 0), correctRecipient() and reassignRecipient() (no balance check)",
+    "detail": "Reproduce: count.ts section R. With 0 available, re-address the sender's own free document to someone else through POST /envelopes/:id/correct: allowed, available becomes -1. A later name-only change to a different envelope through PUT /envelopes/:id gets 402 with the pitch for the monthly plan. Fix: in correctEnvelope compare what the envelope needed before and after and refuse only when it needs more; check the balance in correctRecipient and reassignRecipient when a free signer becomes a paid one."
+   },
+   {
+    "title": "A subscription the provider marks 'unpaid' cannot be cancelled from the app",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts cancelPlan() and the 'customer.subscription.updated' branch",
+    "detail": "Reproduce: cancel.ts section U. Status 'unpaid' (or 'incomplete') sets the account to the free tier while the subscription still exists at the provider; Cancel and the emailed stop link both answer 400 'There is no monthly plan on this account, so there is nothing to cancel and nothing will be charged', and the Plan page shows 'Not started'. Whether this state occurs depends on the provider's failed-payment setting. Fix: let cancelPlan() end any subscription id still on the account."
+   },
+   {
+    "title": "A charge on a closed and deleted account is neither refunded nor noticed unless SUPPORT_EMAIL is set",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, 'invoice.paid' branch for an unknown customer",
+    "detail": "Reproduce: cancel2.ts section X. The payment is stored with no account and no refund; with SUPPORT_EMAIL unset there is no mail at all. Closing does end the subscription first, so this needs a provider slip, but the closing mail says 'you will not be charged again'."
+   },
+   {
+    "title": "A card dispute stops billing but tells nobody unless SUPPORT_EMAIL is set, and hides a provider failure",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, 'charge.dispute.created' branch",
+    "detail": "Reproduce: cancel2.ts, Dispute. The customer gets no mail that the plan was ended. With the provider refusing the DELETE the account is marked cancelled while the subscription stays active, and nothing is logged or alerted."
+   },
+   {
+    "title": "Renewal reminder is sent again when the provider repeats the event; dates in billing emails are in UTC while the Plan page uses local time",
+    "severity": "low",
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, 'invoice.upcoming' branch and day(); /home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx longDate()",
+    "detail": "Reproduce: cancel2.ts section M: the same upcoming-invoice event twice gave two 'Heads up' mails (no event-id check). From the code: emails format dates with timeZone 'UTC', the Plan page with the browser's zone, so a customer in the Americas can read 'renews on 8 December' in the mail, see '7 December' on the page and be charged on the evening of the 7th."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx, 'The rules, all of them': 'Locked out? Every billing email has a link that stops the renewal without logging in'",
+    "claim": "Every billing email carries a no-login stop link.",
+    "reality": "Only the welcome mail, the renewal reminder and the unused-plan nudge do. The monthly receipt (checked: no stop link), top-up receipt, payment-failed, refund and code mails do not."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts, monthly receipt ('Unused signatures from this payment are refunded in full within 30 days, from the Plan page') and top-up receipt ('Any you have not used are refundable in full within 30 days')",
+    "claim": "Each payment can be refunded from the Plan page for 30 days.",
+    "reality": "Only the most recent payment can. After a later top-up or the next monthly payment the earlier one gets 'There is nothing unused inside that window right now, but use the contact form' although its signatures are unused and its 30 days are not over (tests/out/audit-billing-core/refund.ts, K2 and K3). The receipt also does not say that refunding a monthly payment ends the plan."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx: 'Voided, declined and expired envelopes give theirs back' and, under the balance, 'If you void an envelope, or someone declines or runs out of time, it comes straight back'",
+    "claim": "Voiding, a decline or an expiry returns the envelope's signatures.",
+    "reality": "Only signatures held for people who have not signed come back. One that was already used stays used: two signers, one signs, void: balance 11 of 12; sending again and completing cost 3 in total (count.ts, I and J)."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts cancelPlan() mail ('Cancelled. You will not be charged again', 'because that month is already paid for') and the same words in the Plan page notice",
+    "claim": "After cancelling there are no more charges, and the remaining time is already paid.",
+    "reality": "If the customer cancels while a payment is failing, the month is not paid, and the provider's retry of the open invoice is accepted afterwards: a receipt and 9 signatures follow the cancellation mail (cancel.ts, H)."
+   },
+   {
+    "where": "Plan page rule 'Charged after cancelling? That should never happen. If it does, the software refunds it by itself' and the cancellation mail 'If a charge ever appears after this date, we refund it automatically'",
+    "claim": "Any charge after cancelling is refunded automatically.",
+    "reality": "True only for a monthly invoice event on an account whose plan has already ended, and only if the refund call succeeds first time. It is not retried after a failure (cancel.ts, G), not applied when the end date is still ahead (H), not applied after a refund-with-provider-failure put the account back on the plan (B), and not applied to an account that was closed and deleted (cancel2.ts, X). There is no daily check behind it."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/redeem mail ('There is no card on file for it and nothing to cancel') and the Plan page text for a free plan ('There is no card on file for the plan and nothing to cancel')",
+    "claim": "On the free code there is no card and nothing that could be charged.",
+    "reality": "For a member who was paying when they entered GROWalition, the card stays on file with the provider and the paid subscription runs to the end of its month; the Change card and Remove card buttons disappear from the page, and the mail gives no cancellation reference. In the two cases listed under bugs a paid subscription is live and charging while this text is shown."
+   },
+   {
+    "where": "Plan page for a free plan ('9 signatures are added to your balance every month at no charge, and what you do not use rolls over') and the 'Code accepted' mail ('9 signatures are added to your balance every month'); /home/user/treegens-app/sign-and-grow/src/server/credits.ts monthlyCodeGrant()",
+    "claim": "With the code GROWalition, 9 signatures arrive every month and unused ones accumulate.",
+    "reality": "The month's 9 are added only when something reads the balance during that month, and only for the current month. An account that entered the code in July and was next opened in November had 21 (3 + 9 + 9), not 48: the months nobody looked were skipped (tests/out/audit-billing-core/code.ts). Fix: grant every missed month since promo_at when the balance is read, or from the timer."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/app/app/settings/page.tsx, Settings() effect after returning from checkout: toast 'Signatures added. Thank you for planting mangroves.' / 'Welcome to the monthly plan...'",
+    "claim": "The payment went through and the signatures or plan are in place.",
+    "reality": "The toast is shown because the address contains topped=1 or upgraded=1, whatever the sync call answered. In a browser, opening /app/settings?tab=billing&topped=1&session_id=cs_never_paid showed 'Signatures added' while the sync request failed with 500 and nothing was paid (tests/out/audit-billing-core/shots/10-topped-without-paying.png)."
+   },
+   {
+    "where": "Welcome mail ('a reminder before each renewal'), monthly receipt ('We will remind you before then') and Plan page ('We remind you by email before it happens')",
+    "claim": "A reminder is sent before every charge.",
+    "reality": "Sign&Grow has no reminder schedule of its own. One mail is sent if and when the payment provider emits its upcoming-invoice event; if that event is not switched on for the webhook, or the mail fails, the renewal goes through with no reminder and nothing notices."
+   },
+   {
+    "where": "/home/user/treegens-app/sign-and-grow/src/server/routes-billing.ts POST /billing/refund answer plan_ended: true, and the refund dialog 'Because this was a monthly payment, the plan ends now'",
+    "claim": "The plan has ended.",
+    "reality": "The call that ends the subscription at the provider has its failure discarded, so the answer is the same whether or not the provider ended it (cancel.ts, B)."
+   }
+  ]
+ },
+ "audit:developer": {
+  "results": [
+   {
+    "theme_id": "api-auth-and-sandbox-to-live-friction",
+    "requirement": "Server-to-server access uses an account-scoped API key with no per-user consent, impersonation or domain claim.",
+    "verdict": "partly",
+    "evidence": "src/server/auth.ts authenticate() accepts \"Authorization: Bearer tsk_...\", looks the SHA-256 up in api_keys and needs no consent screen, token exchange or domain claim; keys are made in src/server/routes-account.ts (POST /api-keys). Proven by tests/flow.test.ts 'accounts are isolated, API keys work, members see only their own envelopes' and my run of tests/out/audit-developer/api.ts (key used seconds after sign-up, first call 200).",
+    "gap": "The key belongs to the person who made it, not to the account. It acts with that person's role and sight (a member's key lists only that member's envelopes), admins cannot see or revoke other people's keys (GET /api-keys filters on user_id), and removing that person from the team deletes their keys without a word (checked: the integration then gets 401 \"Please sign in.\", no email was sent). Keys also carry the full role with no narrower permission: an owner's key can invite a new admin and mint more keys (checked). The scheme is matched case-sensitively: \"bearer tsk_...\" is refused with \"Please sign in.\"",
+    "suggested_fix": "src/server/auth.ts and routes-account.ts: add account-level keys that an admin creates with a chosen permission (for example send-only, read-only, admin) and that survive a member leaving; show admins every key on the account with who made it and when it was last used; in DELETE /account/members/:id hand the leaver's keys to the successor or name them in the removal dialog and email the admins; match the Bearer scheme without regard to case."
+   },
+   {
+    "theme_id": "api-auth-and-sandbox-to-live-friction",
+    "requirement": "There is one API hostname for all accounts; no separate base-URL discovery call is needed before the first request.",
+    "verdict": "met",
+    "evidence": "Every route is served under /api on the one host by src/app/api/[...path]/route.ts and src/server/router.ts handle(); src/server/openapi.ts publishes a single server entry and no route returns a region or base address (listRoutes()). tests/flow.test.ts 'accounts are isolated, API keys work...' makes GET /envelopes the very first call with a new key and gets 200; my api.ts run did the same.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "api-auth-and-sandbox-to-live-friction",
+    "requirement": "Test mode is a key type on the same account and host, so templates, settings and webhooks carry over and going live means swapping one key.",
+    "verdict": "partly",
+    "evidence": "There is only one environment, so nothing has to be carried over and there is no key to swap: the same key, account, templates and webhooks are used from the first call (api.ts). The Settings screen and src/server/openapi.ts say so in words: \"no separate test environment\".",
+    "gap": "There is no test key type at all, so every call a developer makes while building is live: real emails go to the recipients, a signature is held and used whenever the signer is someone else (a free account is refused on its 4th send with 402, a GROWalition account on its 13th; both checked), the envelopes count in reports and the public impact totals, and the certificate looks like a real one. The column envelopes.test_mode is created in src/server/db.ts but nothing reads or writes it. The only free way to practise is to send documents to yourself.",
+    "suggested_fix": "Add a key type tsk_test_... (api_keys.mode) in routes-account.ts; have auth.ts mark the request as test and createEnvelope() set envelopes.test_mode=1. For test envelopes: deliver emails only to the key owner's own address, hold and use no signatures (credits.needed() returns 0), stamp \"TEST\" on pages and certificate in pdf.ts, leave them out of /reports/summary and /public/impact, and add \"test\": true to webhook bodies. Same host, templates, settings and webhooks."
+   },
+   {
+    "theme_id": "api-auth-and-sandbox-to-live-friction",
+    "requirement": "A refused call returns the exact missing permission and a link to the screen that fixes it; a wrong-environment key returns its own specific error.",
+    "verdict": "partly",
+    "evidence": "Every refusal is JSON with a sentence and a request_id (src/server/router.ts handle(); tests/flow.test.ts 'retries are safe and every answer can be traced'). Checked in api.ts: admin-only route with a member key gives 403 \"Only account admins can do that.\"; out of signatures gives 402 with how many are needed, how many are left and the price; unconfirmed email gives 403 that says to confirm it. There is one environment, so a wrong-environment key cannot exist.",
+    "gap": "No refusal carries a link, and there is no machine-readable code or permission name. Every key problem gets the same 401 \"Please sign in.\": no header, lower-case \"bearer\", a malformed key, an unknown key, a revoked key and a key whose owner was removed (all checked). That is wrong advice for a program and gives no hint which of the six it was.",
+    "suggested_fix": "src/server/router.ts handle(): when an Authorization header is present but no key matches, answer 401 with code \"api_key_invalid\" and \"This API key is not recognised. It may have been revoked, or the person who made it has left the team. Create a new one at <baseUrl>/app/settings?tab=developers\". Give HttpError (src/server/util.ts) optional code and fix_url fields and set them for 401, 402 (Plan page), 403 admin-only (Team page), 403 unconfirmed email and 403 paused; add both to the Error schema in openapi.ts."
+   },
+   {
+    "theme_id": "api-auth-and-sandbox-to-live-friction",
+    "requirement": "Any SDK that uses expiring tokens refreshes them automatically before expiry.",
+    "verdict": "not_applicable",
+    "evidence": "No SDK is published and nothing expires: API keys have no expiry column (src/server/db.ts api_keys) and authenticate() never rejects a key for age, so there is no token to refresh.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "api-paywalled-and-go-live-gated",
+    "requirement": "API access, webhooks and embedded signing are included in every paid plan under the same document allowance, with a public per-document rate.",
+    "verdict": "met",
+    "evidence": "No plan check exists on POST /api-keys or POST /webhooks (src/server/routes-account.ts) or on POST /envelopes/:id/recipient-view (routes-envelopes.ts); API sends go through the same sendEnvelope() and the same signature ledger (src/server/credits.ts) as the app, at the one rate in src/lib/impact.ts PRICING. Checked with billing counted: free account (api.ts, hooks.ts) made a key, got 4 webhook events delivered, got an embedded link, sent 3 envelopes and was refused the 4th with 402 quoting \"$9 for 9 signatures\"; an account that entered GROWalition, typed in lower case (code.ts), got the plan free, 12 signatures, webhook and embedded link, and the 13th send was refused quoting \"$1 a signature\". The payments table stayed empty in both runs. tests/billing.test.ts 'the code GROWalition makes the monthly plan free' covers the code itself.",
+    "gap": "The price is stated in the 402 answer but not in the API description (openapi.ts); the public pages that carry it are being rewritten and were not judged.",
+    "suggested_fix": "Add the two prices from PRICING to info.description in src/server/openapi.ts so the rate is in the machine-readable description too."
+   },
+   {
+    "theme_id": "api-paywalled-and-go-live-gated",
+    "requirement": "A free sandbox issues keys instantly and has documented limits; a limited or held call returns the reason.",
+    "verdict": "partly",
+    "evidence": "A free account gets a working key at once, even before its email is confirmed (api.ts). Held calls say why (envelopes.ts sendEnvelope()): 402 with needed/left/price, 403 \"Confirm your email address before you send...\", 429 \"New accounts can send to 50 people a day during their first week...\" (code.ts), 422 for a fake payment notice (tests/trust.test.ts 'new free accounts cannot send fake payment notices...'). A refused create-and-send leaves no stray draft (checked).",
+    "gap": "It is not a sandbox: sends from it are live (see the test-mode requirement). The limits are not written down where a developer reads: src/server/openapi.ts mentions only the 402, 25 MB / 500 pages and 500 bulk rows. Missing are the 3 welcome signatures, the 50-people-a-day cap in the first week (it also applies to GROWalition accounts), email confirmation before sending, the payment-notice screen, and 30 documents / 50 recipients / 2,000 fields per envelope. A 429 carries no Retry-After.",
+    "suggested_fix": "Add a \"Limits\" part to info.description in src/server/openapi.ts built from PRICING and src/lib/policy.ts so the numbers cannot drift, document the 402/403/422/429 answers on POST /envelopes and POST /envelopes/{id}/send, and send Retry-After with 429 from router.ts."
+   },
+   {
+    "theme_id": "api-paywalled-and-go-live-gated",
+    "requirement": "Going live is self-serve with no sales conversation or manual review for standard use.",
+    "verdict": "met",
+    "evidence": "A key has no pending or review state: api_keys has no status column and authenticate() checks only the hash and team membership (src/server/auth.ts). In api.ts a brand-new account confirmed its email, made a key and sent an envelope through it within the same second. Paying is self-serve checkout, proven against a simulated provider in tests/billing.test.ts ('the monthly plan: $9 adds 9 signatures...', 'top-ups: $1 a signature...', 'the code GROWalition makes the monthly plan free').",
+    "gap": "One hold is not self-serve: an unpaid account (free, or free through GROWalition) may send to 50 people a day in its first week, and the refusal only says \"Contact support\". The operator screen has no way to lift it for one account, and a GROWalition account cannot pay to lift it because checkout is refused for it.",
+    "suggested_fix": "Add an operator action in src/server/routes-trust.ts that lifts the first-week cap for one account (accounts.sending_cleared_at) and check it in sendEnvelope()."
+   },
+   {
+    "theme_id": "api-paywalled-and-go-live-gated",
+    "requirement": "API billing starts only once production access is active on the account.",
+    "verdict": "not_applicable",
+    "evidence": "There is no API plan and no API charge that could start early: API calls draw on the same signature balance as the app, and money only moves through a checkout the customer starts (src/server/routes-billing.ts). After 17 API send attempts across two accounts the payments table was empty (api.ts, code.ts).",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "sdk-reliability-and-security-defects",
+    "requirement": "SDK clients hold no shared mutable state; a CI test runs two tenants concurrently in one process and asserts no credential crossover.",
+    "verdict": "not_applicable",
+    "evidence": "Sign&Grow publishes no SDK, only the HTTP API and /api/openapi.json, so there is no client object that could share state between tenants.",
+    "gap": "The same kind of defect does exist on the server: one process-wide value (the address of the latest request) is used in every tenant's emails. It is reported under bugs.",
+    "suggested_fix": "See the first bug."
+   },
+   {
+    "theme_id": "sdk-reliability-and-security-defects",
+    "requirement": "Every SDK release is gated on an end-to-end suite against the sandbox: get credentials, send a document, download the signed PDF and verify its checksum, receive a webhook.",
+    "verdict": "partly",
+    "evidence": "No SDK exists, so I judged the API's own release check, npm test (61 of 61 pass, run today). tests/flow.test.ts 'full signing flow: order, access code, completion, certificate, verification' sends, signs, downloads and proves the file's SHA-256 through /public/verify; 'accounts are isolated, API keys work...' gets a key.",
+    "gap": "No test touches src/server/webhooks.ts: nothing checks delivery, the signature header, the three tries, sending again or the failure email (searching the tests for \"webhook\" finds only the payment provider's). No test calls recipient-view. The key test only lists envelopes. Nothing runs the suite automatically: the repository's .github/workflows has no job for sign-and-grow. My throwaway hooks.ts shows the webhook leg works today, but a regression would not be caught.",
+    "suggested_fix": "Add tests/api.test.ts that uses only an API key, with ALLOW_PRIVATE_WEBHOOKS=1 and a local http receiver: make a key, upload, create and send with an Idempotency-Key, sign, receive envelope.completed with a valid X-SignAndGrow-Signature, download, and assert the SHA-256 equals final_sha256. Add a CI job that runs npm test and npm run typecheck on every push to sign-and-grow/."
+   },
+   {
+    "theme_id": "sdk-reliability-and-security-defects",
+    "requirement": "Create calls accept an idempotency key so a retried or timed-out call never sends a document twice.",
+    "verdict": "partly",
+    "evidence": "POST /envelopes in src/server/routes-envelopes.ts reads Idempotency-Key and keeps it in idempotency_keys; tests/flow.test.ts 'retries are safe and every answer can be traced'. In api.ts a repeated call and two calls at the same instant both returned one envelope and one email; POST /envelopes/:id/send repeated gives 400 \"already been sent\" and one email.",
+    "gap": "Three holes, all reproduced. (1) POST /bulk ignores the header: the same call twice made two batches and emailed every person twice. Bulk also runs inside the request, up to 500 sends each waiting on the mail server, which is exactly where a client times out and retries. (2) The key record is never cleaned up: create a draft with a key, delete it, then create-and-send with the same key and every retry makes and sends a new envelope (2 envelopes, 2 emails). (3) The key is looked up per account without checking who asks or what was sent: another team member using the same key got the first member's envelope back, and a different body is silently ignored.",
+    "suggested_fix": "src/server/routes-envelopes.ts: honour the header on POST /bulk (store the batch id and return the first answer); store user_id and a hash of the body with each key, answer 409 when either differs, and run mine() on a replayed envelope; replace the stale row when its envelope is gone (INSERT OR REPLACE, or delete the row in DELETE /envelopes/:id); make bulk a queued job that returns the batch id at once."
+   },
+   {
+    "theme_id": "sdk-reliability-and-security-defects",
+    "requirement": "SDKs use platform-default TLS verification with no off switch, keep runtime dependencies minimal, and ship a patched release within 7 days of a high-severity advisory.",
+    "verdict": "not_applicable",
+    "evidence": "No SDK is shipped, so there is no client TLS switch, client dependency tree or SDK release to patch. For the server's own outbound calls: webhook delivery uses plain fetch with default certificate checks and no switch to turn them off (src/server/webhooks.ts), and npm audit --omit=dev reported 0 vulnerabilities today.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "sdk-reliability-and-security-defects",
+    "requirement": "Every SDK call has a default timeout of 30 seconds, a per-call override and cancellation, and errors carry HTTP status, error code, message and request ID.",
+    "verdict": "partly",
+    "evidence": "No SDK, so timeouts and cancelling belong to the caller's HTTP client. Every API error is JSON with the HTTP status, a message and request_id, and X-Request-Id is on every response (src/server/router.ts handle(); tests/flow.test.ts 'retries are safe and every answer can be traced'; api.ts).",
+    "gap": "There is no error code. A program has to match English sentences: 403 alone means \"admins only\", \"confirm your email\" or \"sending is paused\", and 400 has dozens of meanings. On the server side, POST /bulk and POST /envelopes with send:true hold the connection until every email has been handed to the mail server, with no time limit of our own (src/server/mail.ts uses the mail library's defaults, which run to minutes).",
+    "suggested_fix": "Add a stable code to HttpError in src/server/util.ts and to the Error schema in src/server/openapi.ts (out_of_signatures, email_not_confirmed, sending_paused, admin_only, api_key_invalid, daily_limit ...); set connection and socket timeouts on the transport in mail.ts; queue bulk sends so the call returns straight away."
+   },
+   {
+    "theme_id": "embedded-signing-fragile",
+    "requirement": "A signing link can be requested for any recipient by recipient ID and re-issued any number of times until the document is completed; editing a recipient's name or email does not invalidate it.",
+    "verdict": "partly",
+    "evidence": "POST /envelopes/:id/recipient-view in src/server/routes-envelopes.ts returns the link for any recipient id once the envelope is sent, with no \"embedded\" flag needed. api.ts: links came back for the current signer, a later signer and a copy recipient; 25 repeat calls returned the identical address; a name fix kept the link working (also tests/trust.test.ts 'small things that stop people getting stuck'); the link is still issued after that person finished.",
+    "gap": "Changing the email address (POST /correct or PUT) or the signer handing over to someone else replaces the link: the address already given out answers 410 (checked). The same recipient id does return the new one, but nothing tells the integration: no webhook fires for POST /correct or for a reassignment (corr.ts; envelope.corrected only fires from PUT). No link before sending (404 on a draft). Every request writes \"Signing link issued\" into the audit trail, which is printed on the certificate (28 requests gave 28 lines). The person is always emailed the same link as well; that cannot be turned off for someone signing inside another product. No test covers the endpoint.",
+    "suggested_fix": "src/server/envelopes.ts: fire envelope.corrected with recipient_id and link_replaced: true from correctRecipient() and reassignRecipient(). routes-envelopes.ts: log \"Signing link issued\" once per recipient per day and keep it off the certificate; accept the call on drafts or say plainly to send first. Add a recipient option notify: false that skips the invitation email. Add a test."
+   },
+   {
+    "theme_id": "embedded-signing-fragile",
+    "requirement": "The embed component fires completed, declined, closed, error and timeout events and removes itself from the page when the session ends.",
+    "verdict": "partly",
+    "evidence": "There is on purpose no embed component, so nothing can be left covering the host page: next.config.mjs sends X-Frame-Options: SAMEORIGIN on every path (header checked on /sign/<token>; a frame on another origin was blocked). Outcomes reach the integrator's server as webhooks: recipient.completed, envelope.declined, envelope.completed, envelope.expired (hooks.ts: delivered, signature valid).",
+    "gap": "There is no way back to the integrator's product. The signing link takes no return address (opened with ?return_url=..., it was ignored) and the finished screen offers only View, Download, How we count and Help (looked at it in a browser). Nothing signals closed, error or session end. Webhook events have no test.",
+    "suggested_fix": "Let recipient-view accept return_url, checked against a list of https origins the account sets once under Settings, API and webhooks, and store it on the recipient. In src/app/sign/[token]/page.tsx show \"Back to <host>\" and go there with ?event=completed|declined|closed|expired|error&envelope_id=...&recipient_id=... after finishing, declining, a closed or expired envelope, and a failed load. Say in the API description that links do not time out."
+   },
+   {
+    "theme_id": "embedded-signing-fragile",
+    "requirement": "Allowed origins are configured once per app; a misconfigured origin fails immediately with a readable console error.",
+    "verdict": "not_applicable",
+    "evidence": "Signing is never shown inside another site's page, so there is no origin list to get wrong: next.config.mjs refuses framing for every origin, and an attempt fails at once with the browser's own console line \"Refused to display ... in a frame because it set 'X-Frame-Options' to 'sameorigin'\" (seen in Chromium via ui.mjs). The API description says the page cannot be framed.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "embedded-signing-fragile",
+    "requirement": "An embedded session token is scoped to one document and grants no access to the main web app.",
+    "verdict": "met",
+    "evidence": "The link is authorised only by recipients.token in src/server/routes-sign.ts find() and reaches only /sign/:token routes for that one recipient on that one envelope; the app accepts only a ts_session cookie or a tsk_ key (src/server/auth.ts authenticate()). Checked in api.ts: after opening the link and consenting, the browser held no cookies; /envelopes, the same envelope by id, /inbox, /api-keys, /webhooks, /billing, /contacts, /export, the sender's download and the source file all answered 401 and /me returned no user; the token could not read a document from another envelope (404). tests/flow.test.ts 'approver, viewer and in-person roles; documents stay private until it is your turn' covers the turn rule.",
+    "gap": "",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "integrations-break-silently",
+    "requirement": "An integration health page shows, per connector, status, last successful sync and failed deliveries with a plain-language error and a retry button.",
+    "verdict": "partly",
+    "evidence": "Settings, API and webhooks (src/app/app/settings/page.tsx Developers(), fed by GET /webhooks in src/server/routes-account.ts) lists each webhook, the latest deliveries as Delivered or Failed with the HTTP status, an error text, the time, and a \"Send again\" button (redeliver() in src/server/webhooks.ts); API keys show when they were last used. I looked at it with one working and two failing endpoints (tests/out/audit-developer/shot-developers2.png) and resent a delivery in hooks.ts.",
+    "gap": "There is no health per webhook: no status, no last successful delivery, and a delivery row does not say which webhook or which envelope it was for (three webhooks gave three look-alike rows). Errors are raw: \"fetch failed\", or just \"Failed (500)\". Only the latest 30 rows across all webhooks are shown (45 failures in the log, 30 listed), with no paging and no \"failed only\". \"Send again\" is one row at a time and vanishes once the stored body is dropped (see bugs). No test.",
+    "suggested_fix": "GET /webhooks: return for each webhook last_success_at, last_failure_at, failures in a row and a status (healthy or failing); accept ?webhook_id=, ?failed=1 and ?before= for paging. Screen: group deliveries under their webhook with a status badge and a link to the envelope, turn errors into sentences (\"We could not connect to your server\", \"Your server took longer than 10 seconds\", \"Your address redirects; give us the final one\", \"Your server answered with an error (500)\"), and add \"Send all failed again\"."
+   },
+   {
+    "theme_id": "integrations-break-silently",
+    "requirement": "The admin is emailed when a connector fails or a credential is about to expire.",
+    "verdict": "partly",
+    "evidence": "src/server/webhooks.ts deliver(): after three failed deliveries in a row every owner and admin gets \"A Sign&Grow webhook keeps failing\" with the address, the reason and a link to the log, at most once a day. Checked in hooks.ts: nothing after one or two failures, one email after the third, none for the fourth the same day. Nothing expires: API keys and webhook secrets have no expiry.",
+    "gap": "The one credential the software itself removes goes silently: taking a member off the team deletes their API keys with no email, and the removal dialog does not mention it (checked: the key answers 401, 0 emails). A delivery is only tried three times within about six seconds, so any outage longer than that needs a person to press \"Send again\" on each row; nothing is resent when the endpoint recovers and no email says it recovered. The alert has no test.",
+    "suggested_fix": "routes-account.ts DELETE /account/members/:id and routes-trust.ts (closing an account): email admins the names of the keys that stop working, and say so in the dialog in settings/page.tsx. webhooks.ts: write the delivery row before the first try and keep retrying from the timer (src/server/cron.ts) with growing gaps for 24 hours; email once when a failing webhook delivers again. Add tests for both."
+   },
+   {
+    "theme_id": "integrations-break-silently",
+    "requirement": "Outbound events are idempotent: a re-sync never re-sends a 'completed' notification.",
+    "verdict": "partly",
+    "evidence": "fireWebhooks() in src/server/webhooks.ts gives each event an id that is reused on the automatic retries and on \"Send again\" (hooks.ts: the resent body was byte-for-byte the same, same id). completeEnvelope() in src/server/envelopes.ts runs once: one envelope.completed and one \"Completed\" email per address, even when two finish requests arrive together (hooks.ts, race.ts).",
+    "gap": "The per-person \"signed\" event is not protected. Two Finish requests at the same moment (a double tap or a client retry) both succeed, because src/server/routes-sign.ts reads the recipient before waiting for the request body: the receiver gets two recipient.completed events with different ids, and a second \"Signed\" line is added to the audit trail after \"Envelope completed\". Declining twice at once gives two envelope.declined events and two emails to the sender (race.ts). No webhook test exists.",
+    "suggested_fix": "src/server/envelopes.ts completeRecipient() and declineRecipient(): make the change conditional (UPDATE recipients SET status=... WHERE id=? AND status IN ('sent','viewed')) and return the first answer quietly when no row changed; read the recipient again inside the function instead of trusting the copy from find(). Build the event id from event, envelope and recipient so a repeat always carries the same id."
+   },
+   {
+    "theme_id": "integrations-break-silently",
+    "requirement": "Every workspace can get viewed/signed/completed events by email digest or webhook without a native integration, and manual upload/download always works as a fallback.",
+    "verdict": "met",
+    "evidence": "Webhooks are open to every account with no plan check (src/server/routes-account.ts POST /webhooks; src/server/webhooks.ts): a free account with billing counted received envelope.sent, recipient.viewed, recipient.completed and envelope.completed, each signed correctly (hooks.ts). Emails per event are a per-user setting (notifyPrefs() and notifySender() in src/server/envelopes.ts; tests/trust.test.ts 'notifications are quiet by default and adjustable'). Upload, download and export have no plan or status gate (routes-envelopes.ts POST /files and GET /envelopes/:id/download; routes-trust.ts GET /export; tests/trust.test.ts 'everything can be exported...'); with sending paused and a zero balance all three still answered 200 (more.ts).",
+    "gap": "Emails are one per event to the envelope's sender, not a digest, and only admins can set up webhooks.",
+    "suggested_fix": ""
+   },
+   {
+    "theme_id": "integrations-break-silently",
+    "requirement": "Signed PDFs are standard flattened files whose signatures display in Adobe Acrobat, browser viewers and macOS Preview.",
+    "verdict": "partly",
+    "evidence": "src/server/pdf.ts renderEnvelopePdf() flattens form fields in each source, paints signatures into the page as ordinary images and appends the certificate; there is no certificate-based signature that a viewer could fail to show. misc.ts: the result is an unencrypted PDF 1.7 with no form, its SHA-256 equals final_sha256 and /public/verify accepts it. I rendered a signed file with pdf.js (the engine in Firefox and in this app) and with poppler: signature, typed text and the flattened form values all show (tests/out/audit-developer/pdfjs-signed-form.pdf.png, form-p1-1.png).",
+    "gap": "I could not open the files in Adobe Acrobat or macOS Preview here, and no test renders the output in any viewer. Two defects with real-world sources: a PDF with fillable fields comes out with page annotation entries that point at objects that no longer exist (poppler prints \"Syntax Error: Invalid XRef entry\"; strict checkers will reject the file), and an empty digital-signature field in the source survives as a live form widget (pdf.js lists Widget/Sig \"Signature1\") because a failing flatten() is swallowed by the try/catch.",
+    "suggested_fix": "pdf.ts renderEnvelopePdf(): after flatten, remove from every page's /Annots each entry that does not resolve or whose Subtype is Widget, and drop /AcroForm; when flatten throws, remove the widgets field by field instead of carrying on. Add a test that signs a form PDF and asserts no Widget annotations, no dangling entries and a clean pdftoppm run. Before each release a person opens one signed file in Acrobat and in Preview."
+   }
+  ],
+  "bugs": [
+   {
+    "title": "Links in emails take their address from whoever made the latest request when APP_URL is not set",
+    "severity": "high",
+    "where": "src/server/util.ts setOrigin()/baseUrl(); src/server/router.ts handle() (reads X-Forwarded-Host)",
+    "detail": "baseUrl() falls back to one process-wide value that every request overwrites from its Host / X-Forwarded-Host header, and every tenant's emails use it. Reproduced with APP_URL unset (tests/out/audit-developer/misc.ts, more.ts): (1) POST /api/auth/forgot for a victim's address with header X-Forwarded-Host: evil.example produced a reset email whose link is https://evil.example/reset?token=<real token>. (2) One anonymous GET /api/me with that header, then the timer (cron tick), produced a reminder email to a signer whose button is https://evil.example/sign/<real signing token>: whoever runs evil.example can then sign as that person. The README says to set APP_URL in production but nothing enforces it. Fix: refuse to start in production without APP_URL, never take the address for emails from request headers, and pass the origin along with the request instead of keeping it in a global."
+   },
+   {
+    "title": "An Idempotency-Key returns another team member's envelope",
+    "severity": "medium",
+    "where": "src/server/routes-envelopes.ts POST /envelopes (idempotency lookup)",
+    "detail": "The replay path does loadEnvelope() on whatever the key maps to in the account, without the mine() check. Reproduced in api.ts: the owner creates an envelope with Idempotency-Key: contract-4471; a plain member (who gets 404 on GET /envelopes/<id>) posts anything with the same key and receives the owner's envelope with subject and recipient addresses. Keys such as an order or contract number are guessable. The same path also ignores a different body: a second, different request with a used key silently returns the first envelope. Fix: store user_id and a body hash with the key, run mine() on the replay, answer 409 on a mismatch."
+   },
+   {
+    "title": "An Idempotency-Key stops protecting once its first envelope has been deleted: every retry sends again",
+    "severity": "medium",
+    "where": "src/server/routes-envelopes.ts POST /envelopes; table idempotency_keys in src/server/db.ts",
+    "detail": "The key row is written with INSERT OR IGNORE and never removed when the envelope is deleted. Reproduced in misc.ts: create a draft with key contract-4471, delete the draft, then create-and-send twice with the same key. Result: two different envelopes and two emails to the signer. The stale row points at nothing, so each call creates a new envelope and the new mapping is ignored. Fix: INSERT OR REPLACE when the old envelope is gone, or delete the row in DELETE /envelopes/:id."
+   },
+   {
+    "title": "Bulk send ignores Idempotency-Key and runs inside the request, so a timed-out call that is retried sends everything twice",
+    "severity": "medium",
+    "where": "src/server/routes-envelopes.ts POST /bulk",
+    "detail": "Reproduced in api.ts: the same POST /bulk twice with Idempotency-Key: bulk-1 created two batches and emailed each person twice (and holds twice the signatures when billing is on). The call sends up to 500 envelopes one after another and waits for the mail server on each, with no time limit of our own (100 rows took 0.46 s with no mail server at all; with a real one it grows by the mail server's response time per row), which is exactly when a client gives up and retries. Fix: honour the header on /bulk and return the first batch; queue the sends and return the batch id at once."
+   },
+   {
+    "title": "Failed webhook deliveries become impossible to send again because other customers' traffic erases them",
+    "severity": "medium",
+    "where": "src/server/webhooks.ts deliver() (the UPDATE that sets body=NULL); src/server/routes-account.ts GET /webhooks (LIMIT 30)",
+    "detail": "Stored bodies are dropped for rows with id < MAX(id) - 200, but id is one counter shared by all accounts. Reproduced in more.ts: my webhook fails once (row can be resent), another account logs 250 deliveries, my next event arrives, and my one failed delivery now answers \"This delivery is too old to send again.\" although I only ever had two deliveries. Also: the screen and GET /webhooks show only the latest 30 rows across all webhooks (45 failures in the log, 30 listed, no paging), and the log row is only written after all three tries, about six seconds after the event, so an event in flight during a restart leaves no trace (read from the code, not reproduced). Fix: count the 200 per webhook (ORDER BY id DESC LIMIT 200), never drop the body of a failed delivery, add paging, insert the row before the first try."
+   },
+   {
+    "title": "Two Finish (or Decline) requests at the same moment are both accepted",
+    "severity": "medium",
+    "where": "src/server/routes-sign.ts POST /sign/:token/complete and /decline; src/server/envelopes.ts completeRecipient(), declineRecipient()",
+    "detail": "The route loads the recipient, then waits for the request body, then acts on the stale copy. Reproduced in race.ts with Promise.all: both completes answer 200; the audit trail reads Signed, Envelope completed, Signed (the last line is added after the certificate was made, so the live trail no longer matches the certificate); the integration receives two recipient.completed webhooks with different ids. Two declines at once give two envelope.declined webhooks and two \"Declined\" emails to the sender. The signature ledger is not double-charged. Fix: conditional UPDATE ... WHERE status IN ('sent','viewed') and stop when no row changed."
+   },
+   {
+    "title": "Removing a team member silently deletes their API keys and breaks whatever used them",
+    "severity": "medium",
+    "where": "src/server/routes-account.ts DELETE /account/members/:id; src/app/app/settings/page.tsx (Remove dialog)",
+    "detail": "Reproduced in api.ts: a member's key works (200); the owner removes the member; the key answers 401 \"Please sign in.\"; no email goes to anyone. The dialog says only that their documents are handed over. Admins cannot see other people's keys beforehand (GET /api-keys shows only your own), so they cannot know an integration depends on that person. Fix: list the keys in the dialog, hand them over or email admins which ones stopped, and return a 401 that says the key no longer exists."
+   },
+   {
+    "title": "An API key carries its creator's whole role, with no narrower permission",
+    "severity": "medium",
+    "where": "src/server/auth.ts authenticate(); src/server/router.ts handle()",
+    "detail": "A key made by an owner or admin can do everything that person can. Checked in misc.ts: with only the key, POST /account/invites {role:'admin'} answers 200 (the invited address then joins as an admin) and POST /api-keys mints further keys. By the same code path it can call transfer-owner, cancel the plan, trigger a refund and export every document. One leaked integration key is a full takeover of the account. Fix: key permissions (send-only, read-only, admin) and no team, billing or key management through a key unless it was created for that."
+   },
+   {
+    "title": "No webhook is sent when a signing link is replaced, so integrations keep handing out a dead link",
+    "severity": "medium",
+    "where": "src/server/envelopes.ts correctRecipient(), reassignRecipient()",
+    "detail": "Reproduced in corr.ts: get a link with recipient-view; POST /envelopes/:id/correct with a new email. The old link answers 410 and zero webhooks are delivered. Same when the signer reassigns to someone else. Only PUT /envelopes/:id fires envelope.corrected. An integration that stored or is showing the old address has no signal to fetch the new one. Fix: fire envelope.corrected (with recipient_id and link_replaced) from both functions."
+   },
+   {
+    "title": "API keys keep working, and keep sending, after the account was closed",
+    "severity": "low",
+    "where": "src/server/routes-trust.ts POST /me/delete (scheduled close); src/server/auth.ts authenticate()",
+    "detail": "Reproduced in closing.ts: POST /me/delete answers closed: 'scheduled' and signs the browser out, but the account's key still answers 200 and still sends a real envelope with a real email. Thirty days later the account, that envelope and its signing link are purged. Fix: delete or disable keys when closing_at is set (restore on sign-in), or refuse key requests while an account is closing."
+   },
+   {
+    "title": "Signed PDFs made from fillable forms contain broken annotation entries; empty digital-signature fields survive",
+    "severity": "low",
+    "where": "src/server/pdf.ts renderEnvelopePdf() (src.getForm().flatten() inside try/catch)",
+    "detail": "Reproduced in misc.ts and inspect.ts: upload a PDF with a text field and a checkbox, send, sign, download. The first page's /Annots has two entries pointing at objects that do not exist; pdftotext and pdftoppm print \"Syntax Error: Invalid XRef entry 10 / 11\". Display is fine in pdf.js and poppler, but strict validators and archive or filing systems can reject the file. With a source that has an unsigned signature field, the widget remains in the signed file (pdf.js reports Widget/Sig \"Signature1\"). Fix: strip unresolved and Widget entries from /Annots after flattening and do not swallow a failed flatten."
+   },
+   {
+    "title": "Every request for an embedded signing link adds a line to the audit trail and the certificate",
+    "severity": "low",
+    "where": "src/server/routes-envelopes.ts POST /envelopes/:id/recipient-view",
+    "detail": "api.ts: 28 calls produced 28 \"Signing link issued\" audit rows, and the audit trail is printed in full on the certificate of completion. An integration that asks for the link on every page view will fill the certificate with pages of these lines. Fix: log once per recipient per day, or keep this event off the certificate."
+   },
+   {
+    "title": "Lower-case \"bearer\" is rejected as if no key was sent",
+    "severity": "low",
+    "where": "src/server/auth.ts authenticate() (regex /^Bearer\\s+(tsk_...)$/)",
+    "detail": "race.ts: Authorization: bearer <valid key> answers 401 \"Please sign in.\" The scheme name is case-insensitive in HTTP and some clients send it in lower case; the answer gives no hint what is wrong. Fix: add the i flag and return a key-specific 401."
+   },
+   {
+    "title": "Webhook address check can be bypassed by a hostname that changes its answer (not reproduced)",
+    "severity": "low",
+    "where": "src/server/webhooks.ts assertPublicUrl(), deliver()",
+    "detail": "From reading the code: the hostname is resolved and checked, then fetch resolves it again, so a name that answers with a public address first and 127.0.0.1 or 169.254.169.254 second gets a signed POST sent into the private network (the reply body is not returned, only the status is stored). The different messages \"That hostname does not resolve\" and \"must point to a public address\" also let an admin of any account probe internal names, and there is no limit on webhooks per account. Fix: connect to the address that was checked (custom lookup pinned to the validated IP), use one message, cap webhooks per account."
+   }
+  ],
+  "overclaims": [
+   {
+    "where": "src/server/webhooks.ts deliver(), email \"A Sign&Grow webhook keeps failing\"",
+    "claim": "\"Nothing is lost: every event is kept in the delivery log, and once your side is fixed you can send each one again from Settings.\"",
+    "reality": "Settings lists only the latest 30 deliveries across all webhooks with no paging; stored bodies are dropped by a counter shared with every other account, so a failed delivery can answer \"This delivery is too old to send again\" after a single further event (reproduced); and an event whose three tries were still running when the server restarted is not in the log at all."
+   },
+   {
+    "where": "src/server/openapi.ts, Idempotency-Key parameter on POST /envelopes",
+    "claim": "\"Repeating a call with the same key returns the first envelope instead of creating another.\"",
+    "reality": "Once the first envelope has been deleted, every repeat with that key creates and sends a new envelope (reproduced: 2 envelopes, 2 emails). The first envelope is also returned to a different team member who is not allowed to see it, and POST /bulk does not honour the header at all."
+   },
+   {
+    "where": "Settings, API and webhooks (src/app/app/settings/page.tsx) and WEBHOOK_EVENTS in src/server/webhooks.ts",
+    "claim": "\"We POST JSON to your URL when an envelope is sent, opened, signed, corrected, completed, declined, voided or expires.\"",
+    "reality": "A correction made with POST /envelopes/:id/correct (the call for fixing one person's name, email or access code) sends no webhook, and neither does a signer reassigning to someone else, even though both can replace the signing link. Only a full PUT fires envelope.corrected (reproduced in corr.ts)."
+   },
+   {
+    "where": "src/server/openapi.ts info.description",
+    "claim": "\"Errors are JSON: {\\\"error\\\": \\\"what went wrong and what to do\\\"}\"",
+    "reality": "Every API key failure (missing, malformed, unknown, revoked, owner removed, lower-case \"bearer\") answers only \"Please sign in.\", which says neither what went wrong nor what a program should do."
+   },
+   {
+    "where": "src/server/envelopes.ts sendEnvelope(), refusals 429 and 422",
+    "claim": "\"New accounts can send to 50 people a day during their first week. Need more right now? Contact support.\" and \"If it is genuine, use the contact form and a person will clear it for you.\"",
+    "reality": "The people running the service have no tool to do either for one account: the operator routes in src/server/routes-trust.ts can only pause or unpause an account and close requests and reports. The cap is one setting for every account, and an account that is free through GROWalition cannot lift it by paying because checkout is refused for it."
+   }
+  ]
+ }
+}

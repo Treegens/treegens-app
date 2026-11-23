@@ -1,0 +1,10 @@
+sRGB.icc
+
+This colour profile was made by scripts/make-srgb-icc.mjs in this repository from the published numbers of the sRGB
+colour space (IEC 61966-2-1: its primaries, its white point and its transfer curve). It contains no file and no data
+taken from anyone else's profile, so no third-party licence applies to it.
+
+Its authors place it in the public domain. Where that is not possible, anyone may use, copy, change and redistribute
+it, for any purpose, with or without GrowSigning, with no conditions. It comes with no warranty.
+
+It is the output intent of the PDF/A copies of completed documents (src/server/pdfa.ts).

@@ -1,0 +1,71 @@
+# Values for the GrowSigning chart. Read every line: this is an example to adapt, and nobody has run it in production.
+
+image:
+  repository: growsigning
+  # Name the image you built by its digest when you can ("tag" is then ignored): repository@sha256:...
+  tag: "local"
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# There is no "replicas" value on purpose. The database is one SQLite file, and SQLite has one writer: two pods on the
+# same volume would corrupt it or block each other. The Deployment is fixed at 1 replica with strategy Recreate, so
+# the old pod has stopped before the new one opens the database. An update therefore means a short stop.
+
+# The public https address people use. Every link in every email is built from it.
+appUrl: "https://sign.example.org"
+# How many proxies of your own sit between the internet and the pod (the ingress controller counts as one).
+trustedProxyHops: "1"
+
+# Settings that are not secret, as in .env.example (name: value). For example:
+#   OUTSIDE_CALLS: "none"
+#   SECURITY_CONTACT: "security@example.org"
+#   DATA_COUNTRY: "Finland"
+env: {}
+
+# The two keys. Give the name of a Secret you made yourself (kubectl create secret generic, or your secret store's
+# operator) with the keys APP_SECRET and FILE_ENCRYPTION_KEY. They are never in a backup, so keep a copy in a secret
+# store of your own. Other secret settings (SMTP_URL with a password, STRIPE_SECRET_KEY, ...) can go in the same
+# Secret: every key in it becomes a setting.
+secret:
+  existingSecret: ""
+  # Only for trying it out: with create=true the chart makes the Secret from the two values below, which then sit in
+  # your values file and in the release history. Do not do this for real data.
+  create: false
+  appSecret: ""
+  fileEncryptionKey: ""
+
+persistence:
+  # The one volume, mounted at /data: the database and the stored files.
+  size: 20Gi
+  storageClass: ""
+  # ReadWriteOnce: one node mounts it. That is the point.
+  accessMode: ReadWriteOnce
+  existingClaim: ""
+
+service:
+  port: 3000
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+networkPolicy:
+  enabled: true
+  # Who may reach the pod on its port. Empty means any pod in the cluster; narrow it to your ingress controller, for
+  # example:  - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+  ingressFrom: []
+  # Egress is DENIED by default: with the two lists below empty, the pod can reach nothing, not even DNS. Add only
+  # what the settings need. /security on the running server lists what it is configured to connect to; this list is
+  # what the network allows, and the two should say the same.
+  #
+  # allowDns lets the pod ask the cluster's DNS (needed for anything below that is named and not numbered).
+  allowDns: false
+  # Plain NetworkPolicy "to" rules with ports. Kubernetes NetworkPolicy knows addresses, not host names: give the
+  # address range of your mail relay and of each service you switched on (or use your network plugin's own policy
+  # kind if it can name hosts). Example, a mail relay at 10.20.0.25:
+  #   - to: [{ ipBlock: { cidr: 10.20.0.25/32 } }]
+  #     ports: [{ protocol: TCP, port: 587 }]
+  egressAllow: []

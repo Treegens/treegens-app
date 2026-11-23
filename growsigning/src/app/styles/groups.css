@@ -1,0 +1,32 @@
+/* Signing groups: the list on the Contacts page (SigningGroups.tsx), a group as a recipient in the editor
+   (editor/GroupRecipient.tsx), on the envelope page (sender/GroupMembers.tsx) and on the signing page
+   (sign/GroupNotice.tsx). 44 px is the smallest a finger can hit reliably, so every button here is at least that. */
+.sn-group-btn, .ed-group .btn, .sn-group-card .btn, .sg-group .btn { min-height: 44px; }
+.sn-groups-intro { margin: 4px 0 0; max-width: 70ch; }
+.sn-group-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.sn-group-form { padding: 14px 16px; border-top: 1px solid var(--line); background: #fbfaf6; display: grid; gap: 10px; }
+.sn-group-form label.f { margin: 0; }
+.sn-group-members { border: 0; padding: 0; margin: 0; min-width: 0; }
+.sn-group-members legend { font-weight: 700; font-size: 14px; padding: 0; margin-bottom: 6px; }
+.sn-group-members ol { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
+.sn-group-members li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; gap: 8px; align-items: end; }
+
+/* The editor: a recipient that is a group. */
+.ed-group-members { margin: 8px 0 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.ed-group-edit { margin-top: 10px; }
+.ed-group select { min-height: 44px; }
+
+/* The envelope page: the members of a group recipient. */
+.sn-group-card { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.sn-group-card ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sn-group-card li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; justify-content: space-between; }
+.sn-group-card li > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* The signing page: a member's own link to a group's document. */
+.sg-group { margin: 0 0 12px; }
+.sg-group p { margin: 6px 0 0; }
+
+@media (max-width: 900px) {
+  .sn-group-members li { grid-template-columns: minmax(0, 1fr); border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .sn-group-card li { flex-direction: column; align-items: stretch; }
+}

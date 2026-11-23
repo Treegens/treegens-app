@@ -1,0 +1,45 @@
+/* Custom fields: Settings, Account (src/components/settings/CustomFieldSettings.tsx), the last step of the editor
+   (src/components/editor/CustomFieldsStep.tsx) and the filter and column of the envelope list
+   (src/components/sender/CustomFieldFilter.tsx). Shared tokens live in ../globals.css. */
+.cf-list { list-style: none; padding: 0; margin: 8px 0 0; }
+.cf-item { padding: 10px 0; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.cf-item > .grow { min-width: 0; flex: 1 1 220px; }
+.cf-name, .cf-choices, .cf-value { overflow-wrap: anywhere; }
+.cf-actions { gap: 8px; }
+.cf-kind { border: 0; padding: 0; margin: 0 0 10px; }
+.cf-kind legend { font-weight: 600; margin-bottom: 4px; }
+.cf-radio, .cf-check { display: flex; gap: 8px; align-items: center; min-height: 44px; cursor: pointer; }
+.cf-radio input, .cf-check input { width: 20px; height: 20px; flex: none; margin: 0; }
+.cf-hint { margin: -6px 0 10px 28px; }
+textarea.cf-textarea { width: 100%; }
+
+/* The last step of the editor. */
+/* Written to win over the editor's own 40 px rule for a phone (.ed input:not(...):not(...) in editor.css). */
+.cf-step label.f.cf-box input:not([type='checkbox']):not([type='radio']), .cf-step label.f.cf-box select { width: 100%; min-height: 44px; }
+.cf-step .hint.cf-wrong { color: var(--red); }
+.cf-use { margin-top: 10px; }
+a.cf-link { display: inline-flex; align-items: center; min-height: 44px; }
+.cf-step .cf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 14px; }
+.cf-step .cf-req { color: var(--muted); font-weight: 400; }
+.cf-sent .cf-value { margin: 2px 0 8px; }
+
+/* The envelope list: the filter, and the chosen field as a column (on a phone, a line under the subject). */
+.cf-filter { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cf-filter select, .cf-filter input { min-height: 44px; max-width: 100%; }
+.cf-filter input { width: 14em; }
+.btn.cf-more { min-height: 44px; }
+.cf-details summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; }
+.cf-details summary { list-style: none; gap: 6px; }
+.cf-details summary::-webkit-details-marker { display: none; }
+.cf-details summary::before { content: '▸'; }
+.cf-details[open] summary::before { content: '▾'; }
+.cf-details dl { margin: 4px 0 0; }
+.cf-details dt { font-weight: 600; margin-top: 8px; overflow-wrap: anywhere; }
+.cf-details dd { margin: 0; overflow-wrap: anywhere; }
+/* A short value stays on one line ("North" is never broken); a long one without spaces still wraps. */
+.cf-col { overflow-wrap: anywhere; max-width: 16em; }
+td.cf-col { min-width: 10ch; }
+@media (max-width: 520px) {
+  .cf-filter { width: 100%; }
+  .cf-filter select, .cf-filter input { flex: 1 1 100%; width: 100%; }
+}

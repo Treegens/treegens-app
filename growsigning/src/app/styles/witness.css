@@ -1,0 +1,25 @@
+/* A witness for one signer: the choice in the editor, the block button, and the witness's screens on the signing page
+   (src/components/editor/WitnessChoice.tsx, src/components/sign/Witness.tsx). Every control is at least 44 px tall. */
+.ed-witness { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); min-width: 0; }
+.ed-witness select { width: 100%; max-width: 420px; min-height: 44px; }
+.ed-witness label.check { min-height: 44px; align-items: center; }
+.ed-witness label.check input { width: 20px; height: 20px; flex: none; }
+.ed-witness-how p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.ed-witness-block { margin-top: 10px; display: grid; gap: 4px; }
+.ed-witness-block .btn { min-height: 44px; justify-self: start; }
+.ed-witness-block p { margin: 0; }
+
+.wt-card { display: grid; gap: 12px; }
+.wt-card h2, .wt-card h3 { margin: 0; }
+.wt-statement { margin: 0; text-align: left; border-left: 4px solid var(--green, #1f7042); background: #f2f8f3; padding: 12px 14px; border-radius: 6px; font-size: 1.05rem; overflow-wrap: anywhere; }
+.wt-tick { display: flex; gap: 10px; align-items: flex-start; min-height: 44px; cursor: pointer; }
+.wt-tick input { width: 24px; height: 24px; margin-top: 2px; flex: none; }
+.wt-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.wt-actions .btn { min-height: 44px; }
+.wt-note { margin: 0; overflow-wrap: anywhere; }
+.wt-form { display: grid; gap: 10px; }
+.wt-form label { display: grid; gap: 4px; }
+.wt-form input, .wt-form textarea { min-height: 44px; width: 100%; box-sizing: border-box; }
+.wt-form .row { display: flex; flex-wrap: wrap; gap: 10px; }
+.wt-form .row > label { flex: 1 1 220px; min-width: 0; }
+.wt-who { margin: 0; overflow-wrap: anywhere; }

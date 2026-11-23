@@ -1,0 +1,1101 @@
+{
+  "_about": "The designer's note for each feature key: where it lives, its default with zero setup, what a person sees first, its words, and what it may never add. Built from research/ux.json (ux:charter) with every correction and merge of ux:check applied; where this file and an older note disagree, this file wins. gate: operator = absent everywhere until the operator sets it up; admin = with zero setup only inside Settings; always = there with zero setup; docs = no app screen (README, /app/operator, public trust pages). tests/ux/flows.cjs reads gate for the data-feature check. merged_into names the key whose screen, name and setting this one shares (null when it has its own). The rules for every screen are in research/ux-charter.md.",
+  "ds-lang-core": {
+    "lives": "Settings > Account: one select 'Language for the people you send to', hidden until a second language ships. Editor step 1, a person's More: one line 'Language', also only then. Never on the main person row.",
+    "default": "English for everyone. One language per person is decided at send: the person's choice, else the account default, else English. The email, the texts and the page all use it. With one language shipped nothing new is visible.",
+    "first_sight": "Once a second language ships, an admin sees the select in Settings > Account and senders see 'Language' in a person's More.",
+    "words": "Language; each language in its own name (Français, Español). Avoid locale, i18n, catalogue.",
+    "never": "A select with one option, a language field on the main person row, a new required choice in the editor.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-convert": {
+    "lives": "Editor step 1: the same drop zone takes office files; the converted note uses the one note line under the file (shared with gov-G07 and ds-tpl-combine). Operator settings only. Never a second upload button or a sender setting.",
+    "default": "Off until the operator sets a converter; without it the refusal says 'Save it as a PDF and add it again' and names the kinds.",
+    "first_sight": "A sender drops Contract.docx and sees the PDF with one line: 'Converted from Contract.docx. Check every page before you send.'",
+    "words": "Converted from <file>. Avoid LibreOffice, Gotenberg, MIME, conversion on screen.",
+    "never": "A conversion choice, a wait screen that blocks the editor, more than one note line under a file (the rest fold into '1 more note').",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-seal": {
+    "lives": "No sender or signer control. Envelope page > Checks on the file (folded) and one History line; Settings > Records and data shows one read-only status line for admins once it is set up; /security explains. One name and one place with gov-G05.",
+    "default": "Off with no seal settings; the output is byte for byte what it was.",
+    "first_sight": "Someone opens the signed PDF in a PDF reader and sees the seal panel; History says 'Sealed by <operator name>'.",
+    "words": "'Sealed by <operator name>' in History and Checks on the file. 'Digital seal (PAdES): PDF readers show if the file changed after signing.' only on the admin status line. Trusted time stamp. Never a bare 'seal' next to stamps. Avoid PAdES, PKI, CMS, RFC 3161 elsewhere.",
+    "never": "A signer step or wait, a sender choice, any 'qualified' or 'certified' wording unless the registry says held.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-mail-records": {
+    "lives": "Settings > Records and data > 'Copies of every email' (admins), up to 5 addresses. Its one line: 'Each copy has the signing link taken out.' Require TLS is an operator setting with no screen. Never in the editor or on the envelope page.",
+    "default": "Off, no addresses. In every copy the signing link is replaced by '(link removed in this copy)'.",
+    "first_sight": "An admin adds an archive address and reads 'We sent a link to confirm it. Copies start once it is confirmed.'",
+    "words": "Copies of every email. Avoid BCC, journaling, TLS on screens.",
+    "never": "A copy address field per document, a notice to senders or signers, a working signing link in a copy.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-templates-lib": {
+    "lives": "Templates page: 'Start from a ready-made one' as the empty state and as a link next to New template, opening a list inside Templates. Never on Home or in the editor's step 1.",
+    "default": "Available; nothing is added to the account until someone picks one.",
+    "first_sight": "An account with no templates sees 'Start from a ready-made one: volunteer agreement, consent form, ...' on Templates.",
+    "words": "Ready-made templates; note 'A starting point written by GrowSigning, not legal advice.' Avoid library, gallery.",
+    "never": "A popup, a step before the first send, ready-made templates in the send flow.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-sec-log": {
+    "lives": "Settings > Security > 'Security record' (admin card, below 'Your sign-in'), with Alerts and 'Send to your security system' in that card's More options. One place with gov-G12. Never for members, never in the sidebar or on the envelope page.",
+    "default": "Recording always on and invisible to everyone else; export off until an admin sets a destination.",
+    "first_sight": "An admin opens Settings > Security and sees 'Who signed in and what changed', newest first, with a search box.",
+    "words": "Security record, Alerts, Send to your security system (SIEM). Avoid events, syslog outside the destination form.",
+    "never": "Notices or lines in senders' or signers' screens, a new step at sign-in.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-retention": {
+    "lives": "Settings > Records and data > 'Keep and delete' (admins): two lines, and 'At the end: Delete the files / Remove names and answers, keep the record'; Holds; Deletion record. Envelope page: the status line shows the delete or hold date; the page's More has one Delete (its dialog gives the scheduled date and offers 'Keep it' instead), and 'Keep it' and 'Hold' (admins) only when a schedule is on. One place with gov-G11.",
+    "default": "Off: nothing is deleted automatically, and Keep it and Hold are not shown anywhere.",
+    "first_sight": "An admin sees 'Delete completed documents after [ ] days' and 'Delete cancelled, declined and expired ones after [ ] days', both off. A sender first meets it in one weekly email listing what will be deleted in the next 14 days, with Keep it on each row.",
+    "words": "Delete after, Keep it, Hold (kept until the hold ends), Deletion record, Remove names and answers. The Documents tab for cancelled, declined and expired is 'Stopped'. Avoid retention policy, purge, disposition, redact, 'Closed', 'Delete now', 'never delete'.",
+    "never": "A choice in the editor, a banner on the envelope page, a confirmation on the signing page, an email per document, a second Delete.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-custom-fields": {
+    "lives": "Settings > Sending > card 'Details and saved fields' (admins define). Editor step 3 shows the details only when defined; envelope page folded Details section; Documents filter in More options. Never on the signing page or steps 1 and 2.",
+    "default": "None defined, nothing shown anywhere.",
+    "first_sight": "A sender in an account with details sees 'Case number' on the review step, prefilled from the template when it has one.",
+    "words": "Details (each by its own name, like Case number). Avoid custom fields, metadata, envelope fields.",
+    "never": "A required detail unless the admin marked it required, anything on signer screens.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-channels": {
+    "lives": "Editor person More > 'How they get it': Email, Text, WhatsApp, I will send the link myself (the line is not listed while Email is the only way). Signing page code screen: 'Call me with the code' under the code box. Each only when the operator set it up. Envelope page: Copy link, QR code, WhatsApp and Text from the sender's own phone sit under one entry, 'Share the link yourself'.",
+    "default": "Off until set up; email stays the default.",
+    "first_sight": "A sender sees 'WhatsApp' as one more choice in 'How they get it', with the tick 'They agreed to get messages about this by WhatsApp'.",
+    "words": "WhatsApp and Text always mean we send it. Share the link yourself, Call me with the code. Avoid channel, voice OTP, Business API.",
+    "never": "A choice on the main person row, a second phone field, WhatsApp and text together for one person, a bare 'WhatsApp' that means 'from your own phone'.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-self-host": {
+    "lives": "No app screens. README 'Running it yourself', the container files, /api/health, /.well-known/security.txt and a 'Report a weakness' page linked from /security and the footer.",
+    "default": "Hosted service unchanged; the container starts with safe defaults.",
+    "first_sight": "An IT person reads 'Running it yourself' in the README.",
+    "words": "Run it yourself, Report a weakness. Avoid compliance jargon on public pages.",
+    "never": "A setup wizard in the app, anything in sender or signer screens.",
+    "merged_into": null,
+    "gate": "docs"
+  },
+  "ds-reports": {
+    "lives": "Sidebar More > Reports: date and status filters in one row, other filters in More options, Download CSV. Monthly email in Settings > Notifications (admins). Merged: 'Saved lists' are the people lists in Contacts (the same lists as groups), picked in Send to many as 'each gets their own copy'.",
+    "default": "Last 30 days. Members see their own sending, admins see all senders. Monthly email off.",
+    "first_sight": "Reports shows sent, finished and how long it took for the last 30 days, with a table by template.",
+    "words": "Reports, Finished, Time to finish. Avoid completion rate, KPIs, saved lists as a separate thing.",
+    "never": "Charts or numbers on Home, a Reports entry in the sidebar's top part, a member seeing colleagues' documents.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-lang-signing": {
+    "lives": "Signing page header: a language menu only when 2 or more languages ship; right to left automatic. Never a question before the consent.",
+    "default": "The language decided for that person at send (ds-lang-core: the person's choice, else the account default, else English). The header menu switches it and the switch is remembered for that link. Menu hidden with one language.",
+    "first_sight": "A French signer opens the link and the page is in French, with 'Français' in the header.",
+    "words": "Language names in their own language. Avoid flags, locale.",
+    "never": "A language step, flags, untranslated keys (fall back to English).",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-lang-mail": {
+    "lives": "No new controls. Emails and texts follow the person's language; /check, /verify and signer help get the same header menu as the signing page.",
+    "default": "As ds-lang-signing: the email, the texts and the page use the same language.",
+    "first_sight": "The invitation email arrives in the person's language.",
+    "words": "As ds-lang-signing.",
+    "never": "Two languages mixed in one email, except the one sentence saying the legal part is in English.",
+    "merged_into": "ds-lang-signing",
+    "gate": "operator"
+  },
+  "ds-consent-own": {
+    "lives": "Settings > Sending > More options > 'Your consent text' (admins), per language. Signing page consent screen: under our one sentence, shown inline only while the whole screen stays at or under 120 words, otherwise behind 'Read <Org>'s terms'. Merged with ds-paper: withdrawal is the second choice inside Other actions > 'Sign on paper instead': 'Ask <sender> to send it by post (stops signing electronically)'.",
+    "default": "Off: our own short text only, once per document.",
+    "first_sight": "A signer sees 'Read Acme's terms' above the one tick.",
+    "words": "Your consent text, Read <Org>'s terms, Sign on paper instead. Avoid ERSD, disclosure.",
+    "never": "A second tick, more than 120 words before the tick with every option on, ESIGN claims for our default text, a separate 'Stop signing electronically' entry.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-seal-ltv": {
+    "lives": "No new control. Envelope page > Checks on the file says 'Can be checked for years'. Operator settings only. Shared with gov-G06.",
+    "default": "Off unless the seal and a time stamp service are set; then automatic in the background.",
+    "first_sight": "Checks on the file: 'Digital seal. Can be checked for years.'",
+    "words": "Can be checked for years. Avoid LTV, B-LT, B-LTA, OCSP, CRL.",
+    "never": "A sender choice, a signer wait beyond LTV_WAIT_MS in the background.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-pdfa": {
+    "lives": "Settings > Records and data > 'Archive format (PDF/A)' switch (admins), listed only when the operator installed the checker. Result in Checks on the file and on the signing record.",
+    "default": "Off.",
+    "first_sight": "An admin sees 'Make completed files PDF/A, an archive format some archives require.'",
+    "words": "Archive format (PDF/A). Avoid veraPDF on sender screens except the checked line.",
+    "never": "A per-document choice, calling a file PDF/A unless the check passed.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-eseal": {
+    "lives": "Settings > Stamps and seals > 'Organisation seal (a certificate in your organisation's name, not a picture)' (admins upload it and choose who may use it). Editor step 2 > More fields > Organisation seal, only for allowed members.",
+    "default": "Off: no certificate, nothing in the editor.",
+    "first_sight": "An allowed sender finds 'Organisation seal' in More fields.",
+    "words": "Organisation seal. Avoid eSeal, a bare 'seal', PKCS#12 except on the upload control.",
+    "never": "A place in the six common fields, a signer action.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-sec-policy": {
+    "lives": "Settings > Security > 'Sign-in rules' (admin card: password length, sign out when idle, one session at a time, two-step for everyone). The leaked-password check runs at sign-up and password change with a plain error. Signing page: nothing, unless the account set 'Sign out after [ ] minutes'; then, on the first action after the limit, the link is checked again in place, every answer is kept, and one line says 'You were away for a while, so we checked the link again.'",
+    "default": "Length 8, idle sign-out off, one session off, leaked-password check on. In sovereign mode the check uses a bundled list or is skipped, and /app/operator says so ('Leaked-password check off: no outside calls').",
+    "first_sight": "Someone choosing a leaked password reads 'This password has appeared in a data leak. Choose another one.'",
+    "words": "Sign-in rules, Sign out after [ ] minutes of no use, One session at a time. Avoid session timeout, HIBP, compromised credentials.",
+    "never": "A timed 'Still there?' popup, forced expiry, character-mix rules, extra sign-up fields, a lost answer on the signing page, a sign-up blocked because the check could not run.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-page-tools": {
+    "lives": "Editor step 1, the file row: 'Pages' opens thumbnails with Remove, Turn and moving by drag or arrow keys, with Undo. Costs 1 choice per file row on a-send-first, so it merges only after simplify-editor has lowered step 1.",
+    "default": "Available, closed.",
+    "first_sight": "'Pages' on the file row after upload.",
+    "words": "Pages, Remove, Turn, Move. Avoid rotate, delete page.",
+    "never": "Thumbnails open by default, a fourth editor step.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-paper": {
+    "lives": "Settings > Sending > card 'When people sign': 'People may sign on paper' (admins). Only then: editor person More > How they sign: 'On paper allowed' or 'On paper only'; signing page Other actions: one entry 'Sign on paper instead' with two choices inside, 'Print it and send a photo' and (merged from ds-consent-own) 'Ask <sender> to send it by post (stops signing electronically)'; envelope page main button 'Look at the scan' when one arrives.",
+    "default": "Off. Nothing about paper is shown anywhere until an admin switches it on.",
+    "first_sight": "An admin finds 'People may sign on paper' in Settings > Sending.",
+    "words": "Sign on paper instead, Print it and send a photo, Look at the scan, Accept as signed by <name>, Ask again.",
+    "never": "Paper offered by default, a choice on the consent screen's main area, an extra tap for people who sign on screen, two paper entries in Other actions.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-id-small": {
+    "lives": "Editor person More > Check who signs > Access code: 'Code set', 'Set a new code', 'Make one for me'. Settings > Sending > More options: access code rules and the in-person ID question. The in-person flow asks the host one question before handing over (the same question as gov-G18).",
+    "default": "Codes stored safely without anyone noticing; minimum length 4; host question 'Which ID did you see?'. A code is shown once, right after it is made or set, with Copy and 'Tell <name> this code yourself. We do not show it again.'",
+    "first_sight": "A sender sees 'Code set' where the code used to be shown.",
+    "words": "Access code, Make one for me, Which ID did you see?",
+    "never": "Showing a stored code later ('Set a new code' is the way back), a second ID question, a new step for people who sign by link.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-sso-oidc": {
+    "lives": "Settings > Security > 'Single sign-on' (one admin card for OpenID Connect and SAML, the kind chosen inside) and 'Your email domains'. Login page: email and password stay on one screen; when the typed address belongs to a claimed domain, the password box is replaced in place by 'Continue with <Org> sign-in' as the person leaves the email box. One card with gov-G08 and ds-sso-saml-scim.",
+    "default": "Off; the login page is unchanged (flow g-sign-in measures it).",
+    "first_sight": "A member types their work email on the login page and sees 'Continue with Acme sign-in'.",
+    "words": "Single sign-on, Your email domains, Continue with <Org> sign-in. Admin line: 'OpenID Connect or SAML 2.0: the standard your sign-in service uses.'",
+    "never": "An email-first login with a second screen, a separate SSO login page, jargon on the login page, a button when nothing is set up.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-timing": {
+    "lives": "Editor step 3 More options: Send later. Person More: 'Wait before this person', listed only with signing order on. Envelope page: Pause and Resume in the page's More; when scheduled the status says 'Sends at 9:00 on 3 December' and the main button is Send now.",
+    "default": "Send now, no waits.",
+    "first_sight": "The Send button reads 'Send at 9:00 on 3 December' once a time is chosen.",
+    "words": "Send later, Pause, Resume, Wait 2 days before this person. Avoid scheduled, delayed routing.",
+    "never": "A date picker on the main review screen, a second send button.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-fields-checks": {
+    "lives": "Editor field panel > More options > Format and limits (letters only, postcode, my own pattern with my own error, min and max, currency, character limit, hide what they type). Checkbox group rules in the group's panel.",
+    "default": "No format.",
+    "first_sight": "A sender opens More options on a text field and sees 'Format: None'.",
+    "words": "Format, My own pattern, Hide what they type (shows dots, it is not encryption). Avoid regex, mask, validation.",
+    "never": "Controls in the main field panel, patterns shown to signers, errors without the fix ('Type 5 digits, like 12345').",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-a11y": {
+    "lives": "No new controls. Statement at /accessibility (footer). Text for scanned pages made automatically when the operator set OCR. Shared with gov-G04.",
+    "default": "On everywhere.",
+    "first_sight": "A screen reader user signs without help; a buyer reads the statement in the footer.",
+    "words": "Accessibility.",
+    "never": "A separate accessible mode, anything that needs a mouse, colour alone for a state.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-preview": {
+    "lives": "Editor step 3: one link above 'Who gets it', 'See what each person sees'; it opens a new tab with a 'Preview, nothing is sent' band that has the person switch. Costs 1 choice on a-send-first.",
+    "default": "Available.",
+    "first_sight": "The one link on the review step.",
+    "words": "See what each person sees. Avoid preview mode, recipient view.",
+    "never": "A link per person, a required preview, a dialog inside the editor.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-switches": {
+    "lives": "Settings > Sending > card 'When people sign': pass it on, questions and comments, ways to make a signature, mark pages until everyone has signed. These are account defaults and template settings, never asked per send (step 3 More options does not list them). Settings > Stamps and seals: members may place stamps. Limits and closing date on each form.",
+    "default": "Each switch keeps today's behaviour; marking pages off.",
+    "first_sight": "An admin sees the switches as plain sentences in Settings > Sending.",
+    "words": "People may pass it to someone else, Allow questions and comments, Ways to make a signature, Mark pages until everyone has signed (the word prefilled as 'Not signed yet'). Avoid watermark, adoption, 'words across unfinished copies'.",
+    "never": "Switches on the signing page or in step 3, a line on the signing page about an option that is off: the reason lives only in Help's built-in answer ('Rosa turned that off for this document. Use Questions and comments to ask her.').",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-supplements": {
+    "lives": "Editor step 1, the file's More: 'To read, not sign' with None, Must open it, Must tick 'I have been given'. It is a setting per file. Signing page: 'Also for you: Privacy notice' above the document.",
+    "default": "Off: every file is to sign.",
+    "first_sight": "A signer sees 'Also for you: Privacy notice (open)'.",
+    "words": "To read, not sign; Also for you; Must open it (the same words as the role). Avoid supplemental.",
+    "never": "An extra required tap unless the sender chose must open or must tick.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-visibility": {
+    "lives": "Editor step 3 More options: 'Each person sees only the files with their fields', with ticks per person; listed only with 2 or more files. Account default in Settings > Sending > 'When people sign'.",
+    "default": "Off: everyone sees every file.",
+    "first_sight": "A sender with two files finds the switch in More options.",
+    "words": "Each person sees only their files. Avoid visibility, private.",
+    "never": "The option on one-file sends, any notice on signer screens.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-witness-two": {
+    "lives": "The existing witness role in a person's More; the witness block offers 'Add a second witness'.",
+    "default": "One witness, as today.",
+    "first_sight": "'Add a second witness' under the first witness block.",
+    "words": "Witness, Add a second witness.",
+    "never": "More than two, anything for signers with no witness.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-id-login": {
+    "lives": "Operator providers: Settings > Connections > Identity checks for signers. Providers an admin adds: Settings > Security, next to Single sign-on, with the same OpenID Connect form. Editor person More > Check who signs: one choice per person, listing only what is set up. Signing page: codes, then consent, then one 'Prove who you are with <scheme>' screen that names the sender and the document in one line. One place with gov-G09, gov-G24, gov-G25 and ds-id-docs. Merged: a scheme picked under How they sign sets Check who signs to 'Done by <scheme> when they sign' and removes this screen.",
+    "default": "Off, absent everywhere until a provider exists.",
+    "first_sight": "A signer sees 'Prove who you are with BankID' and a single button.",
+    "words": "Prove who you are with <scheme>, Keep their ID number on the signing record. Admin: 'OpenID Connect provider: the standard your ID service uses.' Avoid identifier, IAL, AAL, eIDAS on signer screens.",
+    "never": "Unconfigured provider names, a check the sender did not choose, more than one check screen or one trip to a provider per signer, the identity screen before consent, keeping ID numbers unless the sender ticked it.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-phone-app": {
+    "lives": "Home on phones: one dismissible line 'Add GrowSigning to your home screen'; on iPhone it opens one Help answer with the two Safari steps. Sharing a file into the app opens the editor step 1. Scan cleanup inside the photo-to-document step with 'Undo cleanup'.",
+    "default": "On; the line shows on the first 3 visits from a phone, or until dismissed.",
+    "first_sight": "The one line on Home on a phone.",
+    "words": "Add to your home screen, Undo cleanup. Avoid PWA, install app.",
+    "never": "An install popup, anything on signing pages, caching any page with a token, a desktop banner.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-reading-view": {
+    "lives": "Signing page toolbar More > View: Page or Easy reading (replaces the Text view switch; one way). Folding sections only inside Easy reading.",
+    "default": "Page view.",
+    "first_sight": "A signer on a phone opens More and sees 'Easy reading'.",
+    "words": "Easy reading, Page. Avoid reflow, responsive signing, smart sections.",
+    "never": "A new switch on the toolbar's first row, folding the start of the document.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-lang-first": {
+    "lives": "No new UI: the languages appear in the existing menus; 'Report a wrong word' inside Help on the signing page.",
+    "default": "Only languages that passed review are offered.",
+    "first_sight": "A signer finds their language in the header menu.",
+    "words": "Report a wrong word.",
+    "never": "Machine-translated legal text, a draft language without the 'checked by a person' fallback sentence.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-qtsp": {
+    "lives": "Settings > Connections > 'Signing with a certificate' (providers the operator set up). Editor person More > How they sign. Signing page: at Sign, 'Sign with your <provider> certificate' replaces the signature dialog. Result in Checks on the file. One place with gov-G16. Merged: choosing a scheme here also counts as proving who they are (ds-id-login), so the signer makes one trip to the provider.",
+    "default": "Off, hidden.",
+    "first_sight": "A signer sees 'Sign with your <provider> certificate' and goes to the provider and back.",
+    "words": "Sign with your <provider> certificate (here 'certificate' means the signer's own, never the signing record). Admin: 'Qualified signature (QES) through <provider>, a trust service on the EU list.'",
+    "never": "QES or AES letters on signer screens, a 'qualified' badge unless the check said so, options that are not set up.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-cloud-pick": {
+    "lives": "Editor step 1, under the drop zone: up to 4 small 'From Google Drive' style buttons, one per source the operator set up. Admins can turn a source off in Settings > Connections > File sources.",
+    "default": "Absent until the operator sets a source up; then on for every account.",
+    "first_sight": "'From Google Drive' under 'Choose a file'.",
+    "words": "From Google Drive, From Dropbox; 'We only get the file you pick.'",
+    "never": "A second switch an admin must find before senders get a source, a sign-in prompt before picking, stored tokens, buttons for sources not set up.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-write-doc": {
+    "lives": "Editor step 1 More options: 'Write a document here', which replaces the drop zone with a plain text page with headings, lists and bold, and 'Add a place to sign' buttons that insert the tags.",
+    "default": "Closed.",
+    "first_sight": "'Write a document here' in step 1 More options.",
+    "words": "Write a document, Add a place to sign. Avoid tags, {{signature}} as the only way.",
+    "never": "A full word-processor toolbar, a fourth editor step.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-colleagues": {
+    "lives": "Settings > Away and sharing (listed only on accounts with 2 or more members): share my documents with a colleague, given and received. Envelope page More: Move to a colleague. Editor step 3 More options: Send for <name>, only when someone shared sending with you. Documents filter 'Shared with me'. Settings > Team: move a member's documents.",
+    "default": "Nothing shared.",
+    "first_sight": "A member opens Settings > Away and sharing and sees 'Documents I send: a colleague looks after them'.",
+    "words": "Share with a colleague, Move to a colleague, Send for Ben Okoro; recipients read 'Ben Okoro (sent by Ana Silva)'. Avoid on behalf of, transfer ownership.",
+    "never": "A sender picker on step 1, a sidebar entry.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-delegate": {
+    "lives": "Settings > Away and sharing > 'Someone signs for me while I am away', listed only when an admin allowed it in Settings > Team.",
+    "default": "Off for the account.",
+    "first_sight": "A person going on leave adds a name and dates.",
+    "words": "While I am away; on the signing page 'Signing for Ana Silva' joins the header's sender line.",
+    "never": "Anything for senders or signers when off, a saved signature offered to the delegate.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-fields-kinds": {
+    "lives": "Editor step 2 > More fields: Drawing, Approve and Decline buttons, 'Date from another date', saved fields; first or last name inside the Name field's options. Field panel More options: Text style (font, size, colour, bold), Same answer as. Saved fields listed in Settings > Sending > 'Details and saved fields'.",
+    "default": "The six common fields are unchanged.",
+    "first_sight": "New kinds appear in More fields.",
+    "words": "More fields, Text style, Same answer as, Saved fields, Date from another date (like 30 days after signing). Avoid Look, date formula, data label, formula field.",
+    "never": "Growth of the common fields row, text style options in the main panel.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-id-docs": {
+    "lives": "Settings > Connections > Identity checks (provider). Editor person More > Check who signs > Photo ID check (the one choice per person, as ds-id-login). Signing page: after consent, a plain screen first, then the provider.",
+    "default": "Off.",
+    "first_sight": "A signer reads what will be asked, who the provider is, how long pictures are kept, and 'Do not want to do this? Ask the sender for another way.'",
+    "words": "Photo ID check, Photo ID and selfie. Avoid IDV, liveness, biometric except in the plain explanation.",
+    "never": "A provider step without the plain screen and the way out, a second check for the same signer.",
+    "merged_into": "ds-id-login",
+    "gate": "operator"
+  },
+  "ds-webeid": {
+    "lives": "Editor person More > How they sign: 'With an ID card', only when set up. Signing page: 'Sign with your ID card', with what to install when it is missing. One place with ds-qtsp and gov-G23's card signing; counts as the identity check too (ds-id-login).",
+    "default": "Off, hidden.",
+    "first_sight": "A signer sees 'Sign with your ID card' instead of the signature dialog.",
+    "words": "Sign with your ID card. Avoid Web eID, PKCS, PIN pad jargon on the main screen.",
+    "never": "A card option the sender did not choose, a dead end without the other ways the sender allowed.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-sso-saml-scim": {
+    "lives": "Settings > Security: the same Single sign-on card as ds-sso-oidc (SAML chosen inside) and a 'Members from your directory' card; Team shows 'Members are managed by your directory' and hides Invite.",
+    "default": "Off.",
+    "first_sight": "An admin chooses 'SAML 2.0' inside the Single sign-on card.",
+    "words": "Single sign-on, Members from your directory. Admin line: 'SCIM: your directory adds and removes members here.'",
+    "never": "A second SSO card, SCIM words outside Settings > Security.",
+    "merged_into": "ds-sso-oidc",
+    "gate": "admin"
+  },
+  "ds-db-encrypt": {
+    "lives": "No app screens. /security and /security/processing list what is encrypted; the operator page warns when no key is set.",
+    "default": "A key by default for new installs.",
+    "first_sight": "An operator sees a warning on /app/operator when running without a key.",
+    "words": "Encrypted stored data.",
+    "never": "Any screen for senders or signers.",
+    "merged_into": null,
+    "gate": "docs"
+  },
+  "ds-lang-sender": {
+    "lives": "Settings > Profile > 'Language of your screens', listed only when a sender language ships.",
+    "default": "The browser's language among shipped ones, else English.",
+    "first_sight": "A sender sees the editor in their language.",
+    "words": "Language of your screens.",
+    "never": "A language question at sign-up.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-lang-sender-rest": {
+    "lives": "No new controls; the rest of the sender's app and public pages follow the same language. Operator screens stay English.",
+    "default": "As ds-lang-sender.",
+    "first_sight": "Settings and public pages in the person's language.",
+    "words": "As ds-lang-sender.",
+    "never": "Mixed languages on one screen apart from the sender's own words.",
+    "merged_into": "ds-lang-sender",
+    "gate": "operator"
+  },
+  "ds-routing-if": {
+    "lives": "Editor person More > 'Only when...' (the same builder as a field's Only show when), listed only once the document has a field it can test: after coming back from step 2, or in a template. A set condition shows as one line under that person in step 3's Who gets it.",
+    "default": "Off: everyone is asked.",
+    "first_sight": "'Only when Amount is more than 1000' under a person's name on the review step.",
+    "words": "Only when...; History: 'Not asked: Ben, because Amount was 800.' Avoid conditional routing.",
+    "never": "The line on a new document with no fields, a flowchart editor, a new step, showing a skipped person as signed.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-recipient-types": {
+    "lives": "Editor person More > Role. The list leads with 5: Needs to sign, Needs to approve, Gets a copy, Must open it, Is a witness. After a divider: Can change the document, Chooses who comes next, and Notary (only when set up). One line under the chosen role. Merged: 'Chooses the next person' and 'Can update addresses' are one role, 'Chooses who comes next' (fills in or changes the people after them). 'Signs in person' is not a role: it is 'In person, with me' under How they sign.",
+    "default": "Needs to sign.",
+    "first_sight": "The two new roles after the divider at the end of the role list.",
+    "words": "Must open it, Can change the document, Chooses who comes next. Avoid editor, agent, intermediary, 'Needs to view', 'Can update addresses'.",
+    "never": "More than 8 roles with everything set up, roles on the main row, descriptions for every option at once.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-web-forms": {
+    "lives": "Sidebar More > Forms: one list and one kind, Form. Merged: 'Anyone with this link can sign' and 'Fill-in form' are the same thing. New form from a template, public link and QR code. On a phone every form opens one question at a time, with no choice; then the person signs on the normal signing page.",
+    "default": "No forms.",
+    "first_sight": "Forms lists the account's forms with 'New form'.",
+    "words": "Form, Anyone with this link can sign. Avoid web form, PowerForm, fill-in form as a second kind.",
+    "never": "Two kinds of form, a layout choice, a separate sidebar entry, form set-up inside the send flow.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-pay-collect": {
+    "lives": "Settings > Connections > Take payments (when the operator set up the provider). Editor step 3 More options > 'Ask for a payment' (one control: take it here, or link to your own payment page, which keeps the pay link). Signing page: a Pay screen after the last signature and before Done, only for documents that ask for one.",
+    "default": "Off.",
+    "first_sight": "A sender finds 'Ask for a payment' in step 3 More options.",
+    "words": "Ask for a payment, Pay. Avoid checkout, collect.",
+    "never": "Two separate payment controls, card fields on documents that did not ask, Pay before consent.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-dev-api": {
+    "lives": "Settings > Developers: one card 'Signing inside your site' (origins; merged with gov-G17's portal signing), and 'Sender screen in your app'. Anchor tags through the API only.",
+    "default": "Off.",
+    "first_sight": "A developer adds an origin under Developers.",
+    "words": "Signing inside your site. Avoid iframe, frame-ancestors on screen.",
+    "never": "Anything outside Developers, a second card for portals, embed settings for members.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-offline-inperson": {
+    "lives": "Part of the one in-person flow (How they sign: 'In person, with me'; gov-G18's Counter is its queue view) on the host's installed app: a line 'Saved on this device. It is sent when you are back online.'",
+    "default": "Automatic for in-person signers when the app is installed; no switch.",
+    "first_sight": "The host sees that line when the signal drops.",
+    "words": "Saved on this device. Avoid offline mode, sync.",
+    "never": "Offline for people signing by link, a choice before the host starts.",
+    "merged_into": "gov-G18",
+    "gate": "always"
+  },
+  "ds-perm-profiles": {
+    "lives": "Settings > Team > More options: 'What each role can do' and 'Groups of members'. Custom roles appear in the existing role select on invite.",
+    "default": "Owner, Admin and Member exactly as today.",
+    "first_sight": "An admin opens More options on Team.",
+    "words": "What each role can do, Groups of members. Avoid permission profile, capability.",
+    "never": "A second picker on invite, changes to existing accounts.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "ds-part11": {
+    "lives": "One setting, merged from three: the account default 'Strict signing' in Settings > Sending > More options (admin line 'Used for 21 CFR Part 11'), and the per-person choice 'Sign in to sign' under Check who signs. Not in step 3 More options. Signing page: the sign-in screen, the reason asked in the signature dialog, the password asked once at Finish.",
+    "default": "Off.",
+    "first_sight": "An admin finds 'Strict signing' in Settings > Sending.",
+    "words": "Strict signing, Reason for signing, Sign in to sign. Avoid Part 11 on signer screens.",
+    "never": "On by default, a third place to switch it, a password at every signature, extra steps for documents that did not ask.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-ai-assist": {
+    "lives": "Settings > Account > AI card: 'Let the AI read document text', with one line on what the switch is used for. Editor step 2: one 'Place fields for me' button (tags first, AI suggestions when allowed). Step 3: 'Draft a message', only when a model is configured and the switch is on; More options 'Plain summary for signers'. Signing page: when the sender switched the summary on, one link above the document, where 'Also for you' sits: 'Summary (written by AI, check it)'.",
+    "default": "No model configured: nothing about AI is shown. With a model: AI reading document text off; Draft a message uses only names and people.",
+    "first_sight": "A sender sees 'Draft a message' next to the message box.",
+    "words": "Draft a message, Place fields for me, Summary (written by AI, check it). Avoid AI assistant, LLM.",
+    "never": "'Draft a message' on the switch alone, the summary in the toolbar's More, suggestions applied without the sender, a summary presented as the document, AI words in the signed record.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-ai-repo": {
+    "lives": "Sidebar More > Key dates, only when the Key dates switch is on (its own switch on the AI card, not the reading switch); envelope page Details: 'Ends on 3 March 2027 (found by AI, check it)'.",
+    "default": "Off. When switched on it reads only documents completed after that, unless the admin presses 'Look through older documents'.",
+    "first_sight": "Key dates lists completed documents with their end and renewal dates and 'Remind me'.",
+    "words": "Key dates, Remind me, found by AI, check it. Avoid repository, extraction, obligations.",
+    "never": "Switching on by itself with 'Let the AI read document text', a Home widget, reminders switched on without the person.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-tpl-combine": {
+    "lives": "Templates > Use dialog: 'Add another template'. Editor step 1: the one note line under the file (shared with ds-convert and gov-G07), 'This looks like your template Volunteer agreement. Use it?'.",
+    "default": "Matching on as a single dismissible line; combining only when asked.",
+    "first_sight": "The one line after upload.",
+    "words": "Add another template; one wording: 'This looks like your template <name>. Use it?'. Avoid composite, matching.",
+    "never": "Applying a template by itself, a picker before upload.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-collab-fields": {
+    "lives": "Editor field panel: Assigned to gains 'Anyone on the document'. Signing page shows who last changed it.",
+    "default": "One person per field.",
+    "first_sight": "'Anyone on the document' at the end of Assigned to.",
+    "words": "Anyone on the document can fill it in. Avoid collaborative.",
+    "never": "A new field kind in the common row.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "ds-notary": {
+    "lives": "Settings > Connections > Notary (partner set up by the operator). Editor person More > Role: Notary, after the divider, only when set up. A notary flow only for documents that chose it.",
+    "default": "Hidden until set up.",
+    "first_sight": "A sender finds 'Notary' in the role list.",
+    "words": "Notary, Notarise.",
+    "never": "Notary words in normal sends.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-regions": {
+    "lives": "Settings > Records and data > 'Where your data is kept' (read-only line). A region select at sign-up only when the operator offers 2 or more regions.",
+    "default": "One region; no question.",
+    "first_sight": "The read-only line in Records and data.",
+    "words": "Where your data is kept. Avoid data residency.",
+    "never": "A region question with one region.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "ds-cmk": {
+    "lives": "Settings > Security > 'Your own encryption key' (owner only, the last card). One card with gov-G22.",
+    "default": "Off: the server's key.",
+    "first_sight": "The owner sees 'Use your own encryption key' with the key services listed.",
+    "words": "Your own encryption key. Admin line: 'KMS or HSM: the service that holds your key.' Avoid CMK, KEK, wrap.",
+    "never": "Anything for senders; a revoked-key screen that is not plain ('The documents of Acme cannot be opened right now because their key is not available.').",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "gov-G01": {
+    "lives": "Settings > Account: 'Trees on screens and emails', 'Trees on the signing record', and the AI helper switch. Public /security/certifications built from the registry, linked from /security and the footer.",
+    "default": "Trees on, AI helper on; trees on the signing record per owner decision 8; every certification 'not held'.",
+    "first_sight": "A buyer reads 'We do not hold an ISO/IEC 27001 certificate.' on /security/certifications.",
+    "words": "Certifications; one sentence per entry from claimText. 'Signed record' means the signed PDF and its signing record pages. On screens 'certificate' is never the signing record.",
+    "never": "Badges, claims not in the registry, AI words in the signed record, tree words in the signed record when the switch is off.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "gov-G02": {
+    "lives": "Operator only: README 'Running it yourself', the container and chart, /api/health, /app/operator.",
+    "default": "Outside services off in sovereign mode; email recorded as 'Not emailed' without a relay.",
+    "first_sight": "An operator reads the README section.",
+    "words": "Run it yourself.",
+    "never": "An in-app setup wizard, any sender or signer screen.",
+    "merged_into": "ds-self-host",
+    "gate": "docs"
+  },
+  "gov-G03": {
+    "lives": "Public /procurement and /security/subprocessors, linked from /security and the footer's Trust group.",
+    "default": "Published; sub-processors list only what is switched on.",
+    "first_sight": "A buyer downloads the documents from /procurement.",
+    "words": "Procurement documents, Sub-processors.",
+    "never": "Anything in the app.",
+    "merged_into": null,
+    "gate": "docs"
+  },
+  "gov-G04": {
+    "lives": "No new controls; /accessibility statement and conformance report in the footer. Same work as ds-a11y.",
+    "default": "On everywhere.",
+    "first_sight": "A buyer reads 'Self-assessed on <date>... Not audited by a third party.'",
+    "words": "Accessibility statement.",
+    "never": "An accessible mode, claims beyond the self-assessment.",
+    "merged_into": "ds-a11y",
+    "gate": "always"
+  },
+  "gov-G05": {
+    "lives": "Same as ds-seal: no sender or signer control; Checks on the file; status line in Settings > Records and data; operator settings for the key or HSM.",
+    "default": "Off without settings.",
+    "first_sight": "The seal panel in a PDF reader.",
+    "words": "'Sealed by <operator name>' in History and Checks on the file; admin status line 'Digital seal (PAdES)' with its one line; trusted time stamp.",
+    "never": "A second seal setting next to ds-seal, 'qualified' unless held and in the certificate.",
+    "merged_into": "ds-seal",
+    "gate": "operator"
+  },
+  "gov-G06": {
+    "lives": "Same as ds-seal-ltv and ds-pdfa: Checks on the file; the PDF/A switch in Settings > Records and data; operator settings for re-time-stamping.",
+    "default": "Off without settings; re-time-stamping every 180 days when on.",
+    "first_sight": "'Can be checked for years. Archive format PDF/A-3.'",
+    "words": "Can be checked for years, Archive format (PDF/A).",
+    "never": "A sender choice, a wait for signers.",
+    "merged_into": "ds-seal-ltv",
+    "gate": "operator"
+  },
+  "gov-G07": {
+    "lives": "Public /verify 'Check a signed document' (one page for both questions). Editor step 1: the one note line under a file that already has signatures (shared with ds-convert and ds-tpl-combine). Envelope page Checks on the file.",
+    "default": "On.",
+    "first_sight": "Someone drops a PDF on /verify and reads 'Signature intact' or 'Changed after signing'.",
+    "words": "Check a signed document, Signature intact, Changed after signing, Could not check. Avoid DSS, ETSI, indication on screen (the report is a download).",
+    "never": "A second verify page, a technical report on screen.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "gov-G08": {
+    "lives": "The same Single sign-on card as ds-sso-oidc in Settings > Security, with role mapping in its More options; how you signed in under Settings > Security > 'Your sign-in'. Login as ds-sso-oidc: one screen.",
+    "default": "Off; IdP-started sign-in refused.",
+    "first_sight": "'Continue with <Org> sign-in' on the login page.",
+    "words": "Single sign-on, How you signed in.",
+    "never": "A second SSO screen, an email-first login, a login page with more buttons when nothing is set up.",
+    "merged_into": "ds-sso-oidc",
+    "gate": "admin"
+  },
+  "gov-G09": {
+    "lives": "As ds-id-login: Check who signs in the person's More (one choice per person); one 'Prove who you are with <scheme>' screen after consent; operator-configured providers.",
+    "default": "Off, hidden.",
+    "first_sight": "'Prove who you are with GOV.UK One Login'.",
+    "words": "Prove who you are with <scheme>; the level only on the signing record ('level substantial, as declared by the operator').",
+    "never": "Levels or NIST terms on signer screens, an ID number shown unless the sender chose it.",
+    "merged_into": "ds-id-login",
+    "gate": "admin"
+  },
+  "gov-G10": {
+    "lives": "Settings > Sending > More options > 'Signature level rules' (admins, default country); in the government profile this card comes first in Settings > Sending. Editor step 3: one prefilled line 'Signing rules: Kenya, employment contract. Change', only when rules are on.",
+    "default": "Off until an admin picks a default country, in every profile; nothing blocked except what cannot be done electronically.",
+    "first_sight": "A sender sees the prefilled line and sends without touching it.",
+    "words": "Signing rules: <country>, <document type>. Change; blocks say what to do ('This needs a qualified signature. Set up signing with a certificate under Settings, Connections.'). Keep 'not reviewed by a lawyer'. Avoid a bare 'For:'.",
+    "never": "On by default in the government profile (P8), a required question when off, legal advice, hiding the not-reviewed line.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "gov-G11": {
+    "lives": "As ds-retention in Settings > Records and data: schedules, Holds (by search, folder, person or dates), Deletion record; the records officer role in Team.",
+    "default": "Off; a hold blocks every deletion path.",
+    "first_sight": "An admin places a hold with a reason and a matter reference.",
+    "words": "Delete after, Hold (kept until the hold ends), Deletion record, Records officer.",
+    "never": "A second records screen, anything in the send flow.",
+    "merged_into": "ds-retention",
+    "gate": "admin"
+  },
+  "gov-G12": {
+    "lives": "As ds-sec-log: Settings > Security > Security record > Send to your security system; pulling it in Settings > Developers.",
+    "default": "Recording on; delivery off; email addresses left out unless the account turns them on.",
+    "first_sight": "An admin enters a syslog or HTTPS destination.",
+    "words": "Send to your security system (SIEM: Splunk, Elastic, Sentinel).",
+    "never": "A second security log, anything for members.",
+    "merged_into": "ds-sec-log",
+    "gate": "admin"
+  },
+  "gov-G13": {
+    "lives": "Settings > Organisation, only for organisation admins: agencies, policies passed down, delegated admin. Settings set above show 'Set by Ministry of X' where they appear.",
+    "default": "Absent for normal accounts.",
+    "first_sight": "An organisation admin sees the list of agencies.",
+    "words": "Organisation, Agencies, Set by <name>. Avoid tenant, org.",
+    "never": "Organisation words for normal accounts, settings that change without saying where from.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "gov-G14": {
+    "lives": "Settings > Plan becomes one line in deployment billing mode; public /pricing/government in the footer.",
+    "default": "Signatures mode (the consumer plan).",
+    "first_sight": "An agency admin reads 'This service is provided under <holder>'s agreement <ref>, valid until <date>.'",
+    "words": "Government prices.",
+    "never": "Signature counts, expiry or top-ups in deployment mode.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "gov-G15": {
+    "lives": "Same as ds-lang-core and ds-lang-signing: the per-person language in the person's More and the header menu on the signing page; LANGUAGES_ENABLED for the operator.",
+    "default": "English only.",
+    "first_sight": "A French signer sees the page in French.",
+    "words": "Language names in their own language.",
+    "never": "A second language system, a language step.",
+    "merged_into": "ds-lang-core",
+    "gate": "operator"
+  },
+  "gov-G16": {
+    "lives": "Same as ds-qtsp: How they sign in the person's More; 'Sign with your <provider> certificate' on the signing page; services set up by the operator.",
+    "default": "Off, hidden.",
+    "first_sight": "A signer goes to the provider and comes back signed.",
+    "words": "Sign with your <provider> certificate; the level only on the signing record.",
+    "never": "QES on signer screens unless validated, a second certificate-signing setting.",
+    "merged_into": "ds-qtsp",
+    "gate": "operator"
+  },
+  "gov-G17": {
+    "lives": "Settings > Account: the one account name field (merged: there is no separate 'Your name on emails and pages'), next to it the switch 'Hide the GrowSigning name on emails and pages', and 'Sending domain' with a DNS check. Signing page header, only for a verified sending domain: the words 'From acme.org (address checked)'. Portal signing is the ds-dev-api card 'Signing inside your site' in Settings > Developers.",
+    "default": "Off; the signing record always names the operator.",
+    "first_sight": "A citizen signs inside the agency's own portal under the agency's name.",
+    "words": "Hide the GrowSigning name on emails and pages, Sending domain, address checked. Avoid white label, Verified as a badge.",
+    "never": "A second name field, a badge, the words for an unverified domain, hiding the operator on the signing record.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "gov-G18": {
+    "lives": "Sidebar More > Counter, only for people with the counter permission. Counter is the queue view of the one in-person flow (How they sign: 'In person, with me'; ds-id-small's host question; ds-offline-inperson). The citizen's screen opens by a short code or QR code.",
+    "default": "Absent.",
+    "first_sight": "An official sees today's in-person queue.",
+    "words": "Counter, Start, Connect the citizen's screen; one ID question 'Which ID did you see?' and one line saying the software cannot check an ID document. Avoid 'Pair a screen'.",
+    "never": "A Counter entry for others, a second in-person flow, citizen field values on the official's screen unless allowed.",
+    "merged_into": null,
+    "gate": "admin"
+  },
+  "gov-G19": {
+    "lives": "Settings > Records and data: 'Export everything' (full, with the schema) and 'Bring in documents' (from an export or from DocuSign). For admins the empty Documents list carries one link, 'Bring in documents from DocuSign or an export', which goes away once documents exist.",
+    "default": "Available to owners and admins; large exports by email link.",
+    "first_sight": "An admin presses Export everything and gets an email when it is ready.",
+    "words": "Export everything, Bring in documents.",
+    "never": "Import on Home or in the editor, the link on a list that has documents.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "gov-G20": {
+    "lives": "Operator settings for the model; the Account AI helper switch. The model line 'Answers come from <model> on <host>' only in the app's Help (senders and admins) and on /security. Signer and public pages show only 'Answers are written by AI and can be wrong. Do not type passwords or card numbers.'",
+    "default": "Hosted models never used in sovereign or government mode; account switch on. Switch off means built-in answers only: the Help entry and 'Talk to a person' always stay.",
+    "first_sight": "The model line at the foot of the Help panel inside the app.",
+    "words": "Help; Answers come from <model> on <host> (app and /security only).",
+    "never": "A model answer when the switch is off, a hosted model in sovereign mode, a model or host name on a signer or public page, Help removed.",
+    "merged_into": "chat",
+    "gate": "operator"
+  },
+  "gov-G21": {
+    "lives": "Operator only; one line on /security.",
+    "default": "Off.",
+    "first_sight": "An operator sets FIPS_MODE.",
+    "words": "(operator docs only)",
+    "never": "Any app screen.",
+    "merged_into": null,
+    "gate": "docs"
+  },
+  "gov-G22": {
+    "lives": "The same card as ds-cmk: Settings > Security > Your own encryption key.",
+    "default": "Off: derived from the server key as today.",
+    "first_sight": "The owner connects their key service.",
+    "words": "Your own encryption key.",
+    "never": "A second key screen, anything for senders.",
+    "merged_into": "ds-cmk",
+    "gate": "admin"
+  },
+  "gov-G23": {
+    "lives": "Login page (one screen, as ds-sso-oidc): 'Sign in with a smart card' only when set up; Settings > Security > Sign-in rules: smart card required. Signing with a card is the ds-webeid option.",
+    "default": "Off, hidden.",
+    "first_sight": "A staff member taps 'Sign in with a smart card'.",
+    "words": "Sign in with a smart card, Sign with your ID card. Avoid PIV, CAC on the login page.",
+    "never": "A card button when not set up.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "gov-G24": {
+    "lives": "Same as ds-id-login: 'EU Digital Identity Wallet' appears in Check who signs only with the pilot switch on.",
+    "default": "Off.",
+    "first_sight": "A signer sees 'Prove who you are with your EU Digital Identity Wallet'.",
+    "words": "EU Digital Identity Wallet. Avoid OpenID4VP, PID.",
+    "never": "A wallet option without the pilot flag.",
+    "merged_into": "ds-id-login",
+    "gate": "operator"
+  },
+  "gov-G25": {
+    "lives": "As ds-id-login and ds-qtsp: a national connector appears as one more provider once the operator set it up, and the same scheme used to prove who you are and to sign is one trip. Operators see 'not tried against <scheme>' on /app/operator.",
+    "default": "Hidden.",
+    "first_sight": "A signer sees 'Sign with Smart-ID'.",
+    "words": "The scheme's own name.",
+    "never": "Unconfigured connectors, test status shown to signers.",
+    "merged_into": "ds-id-login",
+    "gate": "operator"
+  },
+  "gov-G26": {
+    "lives": "Operator only: settings and the README write-up.",
+    "default": "Files on disk.",
+    "first_sight": "An operator reads the measurements.",
+    "words": "(operator docs only)",
+    "never": "Any app screen.",
+    "merged_into": null,
+    "gate": "docs"
+  },
+  "abuse": {
+    "lives": "No controls. Refusals and limits appear as one plain line where the person is (editor step 3, Send to many, Forms).",
+    "default": "On for every account; unpaid accounts have a daily limit.",
+    "first_sight": "Most people never see it. A sender over a limit reads what happened and when they can send again.",
+    "words": "Say what was stopped and what to do. Avoid spam score, flagged, abuse.",
+    "never": "A captcha or an extra step for a normal send, blame.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "integrity": {
+    "lives": "Signing page only: after the sender changes a document the new pages are shown before Finish works.",
+    "default": "On.",
+    "first_sight": "A signer reads 'Rosa changed this document. Look at it again before you finish.'",
+    "words": "changed, look at it again. Avoid version, hash on signer screens.",
+    "never": "Finish on pages the signer was not shown, hashes on the page.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "nonus-words": {
+    "lives": "Wording on the consent screen, the signature dialog, landing and /pricing. No controls.",
+    "default": "On.",
+    "first_sight": "The consent sentence says what signing here does, without promising a legal effect.",
+    "words": "Say what the product does and does not do. Avoid 'legally binding', 'same legal effect', 'valid in every country'.",
+    "never": "A legal promise, a country question.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "nonus-text": {
+    "lives": "The signing record and typed signatures; one line in the editor or signature dialog when a character cannot be printed.",
+    "default": "On.",
+    "first_sight": "Someone typing a name in a script the PDF cannot print reads what will be printed instead and what to do.",
+    "words": "'cannot be printed in the PDF'. Avoid glyph, font, encoding.",
+    "never": "Empty boxes on the signed page, a silent replacement.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "mobile-send": {
+    "lives": "Editor on a phone: photos become pages in the same drop zone; no phone-only screens.",
+    "default": "On.",
+    "first_sight": "A sender takes a photo of a page and sees it upright as a page.",
+    "words": "Take a photo, Choose a file. Avoid EXIF, orientation.",
+    "never": "A separate phone editor, a fourth step.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "industry": {
+    "lives": "Wording on /security, /help, Forms and Send to many. No controls.",
+    "default": "On.",
+    "first_sight": "A buyer reads exactly who can open a document.",
+    "words": "Honest and exact, one line each. Avoid HIPAA, compliant unless the registry says held.",
+    "never": "A sector claim, a paragraph of disclaimers.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "disputes-evidence": {
+    "lives": "Envelope page's More: 'Full record for disputes'. Public /verify. A signer's 'I did not sign this' is behind Help and the completion email's footer.",
+    "default": "On.",
+    "first_sight": "A sender in a dispute opens the page's More and downloads the full record.",
+    "words": "Full record for disputes, Signing record, History. Avoid evidence pack, audit trail, certificate of completion.",
+    "never": "IP addresses or hashes on the envelope page, a main button for the full record.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "mobile-sign": {
+    "lives": "Signing page on a phone: zoom, view and download in the toolbar's More; the signature dialog fits landscape and large text.",
+    "default": "On.",
+    "first_sight": "A signer taps Next and lands on the field, already open.",
+    "words": "Next, Finish, Sign.",
+    "never": "Horizontal scroll, a target under 44 px, a second toolbar row.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "qr": {
+    "lives": "Envelope page, a person's More > 'Share the link yourself' (with Copy link, WhatsApp and Text); Forms: the form's public link.",
+    "default": "On, folded.",
+    "first_sight": "A sender who chose 'I will send the link myself' sees the share entry open.",
+    "words": "QR code, Share the link yourself.",
+    "never": "A QR code on a signer screen, a QR button on the main person row.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "groups": {
+    "lives": "Contacts: people and lists (a list is used as 'any one of them signs' in the editor and 'each gets their own copy' in Send to many). Editor step 1 More options: Add a group. Signing page Other actions: 'Hand back to <group>'.",
+    "default": "No lists.",
+    "first_sight": "An admin makes 'HR team' in Contacts.",
+    "words": "Group (any one of them can sign), Hand back to <group>. Avoid signing group.",
+    "never": "A group picker on the main person row, a second list kind next to saved lists.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "logic": {
+    "lives": "Editor field panel > More options: Only show when, Calculate from.",
+    "default": "Off for every field.",
+    "first_sight": "A sender opens More options on a field.",
+    "words": "Only show when, Calculate from. Avoid conditional, formula, logic.",
+    "never": "Controls in the main field panel, a hidden field shown or required.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "comments": {
+    "lives": "Signing page: Other actions > Questions and comments (not in the toolbar's More). Envelope page: one folded section with a count.",
+    "default": "Allowed; a signer's comment is private to the sender.",
+    "first_sight": "A signer with a question finds it in Other actions.",
+    "words": "Questions and comments. Avoid thread, annotation.",
+    "never": "Two entries on one screen, a comment panel open by default, another person's private comments.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "clickwrap": {
+    "lives": "Sidebar More > Website terms (admins).",
+    "default": "None.",
+    "first_sight": "An admin opens Website terms and makes the first one.",
+    "words": "Website terms. Avoid clickwrap, click-to-agree.",
+    "never": "Anything in the send flow, a top-level sidebar entry.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "encrypt": {
+    "lives": "No app screens. /security says what is encrypted; /app/operator warns when no key is set.",
+    "default": "Off until the operator sets a key.",
+    "first_sight": "An operator reads the warning on /app/operator.",
+    "words": "Encrypted stored files.",
+    "never": "Any sender or signer screen.",
+    "merged_into": null,
+    "gate": "docs"
+  },
+  "twostep": {
+    "lives": "Settings > Security > 'Your sign-in' (the first card, for everyone). 'Two-step for everyone' is in the admin card Sign-in rules.",
+    "default": "Off.",
+    "first_sight": "A person opens Settings > Security and sees 'Two-step login: off. Turn on'.",
+    "words": "Two-step login, code from your app, backup codes. Avoid 2FA, MFA, TOTP.",
+    "never": "A second screen at sign-in for people who have it off.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "witness": {
+    "lives": "Editor person More > Role: Is a witness. Signing page for a witness: its own Other actions list (I was not there, Questions and comments, Help).",
+    "default": "No witness.",
+    "first_sight": "A sender picks 'Is a witness' in a person's More.",
+    "words": "Witness, I was not there.",
+    "never": "Witness words for signers with no witness, more than two witnesses per signer.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "lifecycle": {
+    "lives": "Envelope page: one main button by state, the rest in the page's More. Documents tabs: All, Drafts, Waiting, Completed, Stopped.",
+    "default": "On.",
+    "first_sight": "The status sentence under the title.",
+    "words": "Cancel the request, Copy and fix, Reopen, Stopped. Avoid void, clone, correct, Closed.",
+    "never": "Two main buttons, a second Delete.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "signerux": {
+    "lives": "Signing page: Finish goes straight to Done unless something needs attention; a name is fixed by tapping the placed signature.",
+    "default": "On.",
+    "first_sight": "A signer with nothing left to fix goes from Finish to Done.",
+    "words": "Finish, Fix my name.",
+    "never": "'Check before you finish' with nothing to check, a 'Change my signature' entry in Other actions.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "support": {
+    "lives": "Inside Help: 'Talk to a person' under every answer, carrying the name and email the page knows; 'Your requests' on /help.",
+    "default": "On.",
+    "first_sight": "Someone presses 'Talk to a person' and gets a reference and when to expect an answer.",
+    "words": "Talk to a person, Your requests. Avoid ticket.",
+    "never": "A second Help entry, asking again for a name or email the page knows.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "money-today": {
+    "lives": "Settings > Plan only.",
+    "default": "The consumer plan.",
+    "first_sight": "The Plan card: what is left and when it resets.",
+    "words": "signatures left, reset on, Top up. Avoid credits, lots, ledger.",
+    "never": "Prices or plans on signer screens, a countdown banner.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "misc-today": {
+    "lives": "Settings > Team: Leave this team, in the member row's More.",
+    "default": "Nothing new on any screen.",
+    "first_sight": "A member who wants to leave finds it on their own row.",
+    "words": "Leave this team.",
+    "never": "A main button for leaving.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "signin": {
+    "lives": "Login and sign-up: 'Continue with Google' and 'Continue with Microsoft' above the form, each only when the operator set it up. Settings > Security > 'Your sign-in': ways to sign in.",
+    "default": "Absent until set up.",
+    "first_sight": "'Continue with Google' on the login page.",
+    "words": "Continue with Google. Avoid OAuth, OIDC, SSO on the login page.",
+    "never": "A button for a provider that is not set up, a second screen.",
+    "merged_into": null,
+    "gate": "operator"
+  },
+  "signercode": {
+    "lives": "Editor person More > Check who signs: Code by email, Code by text (text only when set up). Signing page: one code screen before consent.",
+    "default": "None.",
+    "first_sight": "A signer reads 'We sent a code to a...@example.org' with one box.",
+    "words": "Code by email, Code by text, Use another number. Avoid OTP, verification.",
+    "never": "A code screen the sender did not choose, more than one check per signer.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "bounces": {
+    "lives": "Envelope page: the person's status line ('The email to Ana did not arrive') with Change person in that person's More; delivery states inline in History (merged: there is no separate 'Emails sent' section).",
+    "default": "On.",
+    "first_sight": "A sender sees which email did not arrive and one fix.",
+    "words": "did not arrive, Change person. Avoid bounce, hard bounce, SMTP.",
+    "never": "A banner on every page, a second emails list.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "tplroles": {
+    "lives": "Templates: the row's More > 'Who can use this'.",
+    "default": "Everyone on the team can use every template.",
+    "first_sight": "A template owner opens the row's More.",
+    "words": "Who can use this, Locked. Avoid permissions, ACL.",
+    "never": "Permissions text in the Templates intro or the Use dialog.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "stamp": {
+    "lives": "Settings > Stamps and seals (account stamps: pictures). Editor step 2 > More fields > Stamp. Signing page: the stamp dialog for a stamp field.",
+    "default": "Available; members may place stamps.",
+    "first_sight": "An admin uploads a photo of a stamp and sees the before and after.",
+    "words": "Stamp, Add a stamp, Ink colour. A stamp is a picture; the Organisation seal is a certificate (ds-eseal); the operator's seal reads 'Sealed by <operator name>' (ds-seal). Avoid impression, blend.",
+    "never": "A stamp in the six common fields, a stamp step for a signer without a stamp field.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "expiry": {
+    "lives": "Settings > Plan top card: '6 of 9 left. They reset on 3 December at 14:00.', top-ups each with its date, the rule behind 'How signatures work'. The usage line under the account name. Editor step 3: one line only when this send would run out.",
+    "default": "The rule applies to the consumer plan; signatures that end soonest are used first.",
+    "first_sight": "The Plan card and the usage line.",
+    "words": "left, reset on, top-up signatures last 12 months. Avoid credits, lots, ledger.",
+    "never": "Countdown banners, a warning on every page, expiry words to signers.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "impact": {
+    "lives": "Signing page: one tree line per signer, next to Finish (paid signatures, signers only), plus the celebration on Done. Nothing on the consent screen. Envelope page after the first send: the celebration plays in place. /impact and sidebar More > Trees planted. 'Rosa pays, not you' lives in Help's built-in answer to 'Do I have to pay anything?'.",
+    "default": "On (the Account switch from gov-G01 turns it off).",
+    "first_sight": "A signer reads '10 mangroves will be planted when you finish.' next to Finish.",
+    "words": "10 mangroves, Trees planted, 10 more mangroves, Trees on the signing record. Avoid figures under 1 tree.",
+    "never": "A tree line on the consent screen, money words on a signer screen, a modal to close, a delay, tree words to approvers, viewers or copies, or when the switch is off.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "chat": {
+    "lives": "One Help entry per screen (sidebar bottom in the app, header on the signing page, top bar on public pages) opening a panel with the question box first; 'Talk to a person' under every answer. It stays when the AI helper is off (gov-G20).",
+    "default": "Model answers when a key is set, built-in answers otherwise; both answer 'I cannot sign today' with Finish later and Ask for more time buttons.",
+    "first_sight": "The question box with three suggested questions for that screen.",
+    "words": "Help, Talk to a person; one line 'Answers are written by AI and can be wrong. Do not type passwords or card numbers.' (only when a model answers).",
+    "never": "A floating bubble over buttons, disclaimers longer than one line above the box, asking again for a name or email the page knows, a model or host name on signer and public pages.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "brand-wire": {
+    "lives": "The logo and name everywhere. No controls.",
+    "default": "On.",
+    "first_sight": "The growsigning logo in the top bar.",
+    "words": "GrowSigning in sentences, growsigning in the logo, growsigning.com as the address. Never Sign&Grow.",
+    "never": "The old name anywhere a person can read it.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "simplify-start": {
+    "lives": "Sign-up and email confirmation, the sidebar (section 2.1), Home. Marks the sidebar's More group data-more=\"nav\".",
+    "default": "Nothing new on any screen.",
+    "first_sight": "A new sender confirms their address with a 6-digit code in the same tab.",
+    "words": "Send a document, Documents, To sign, More, Help.",
+    "never": "A second start button, a tour, more than 9 sidebar entries.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "simplify-editor": {
+    "lives": "The editor's three steps (section 2.3). Marks step More options data-more=\"screen\", each person, file and field data-item with its More data-more=\"item\".",
+    "default": "Nothing new on any screen.",
+    "first_sight": "Step 1 opens with a drop zone and one empty person row.",
+    "words": "Files and people, Fields, Review and send.",
+    "never": "A fourth step, options outside More, 'Sign a document yourself' gone without 'Sign now' on step 3.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "simplify-envelope": {
+    "lives": "The envelope page and Templates (sections 2.4 and 2.5). Marks the page's More data-more=\"screen\", people and rows data-item, folded sections data-fold.",
+    "default": "Nothing new on any screen.",
+    "first_sight": "One status sentence and one main button.",
+    "words": "Download, Full record for disputes, History, Open the PDF.",
+    "never": "IP addresses or hashes on the page, two Remind controls, Preview next to Download.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "simplify-signing": {
+    "lives": "The signing page, the consent screen and the invitation email (section 2.6). Marks the toolbar's More data-more=\"screen\" and Other actions data-fold.",
+    "default": "Nothing new on any screen.",
+    "first_sight": "A consent screen of 120 words or fewer with one tick.",
+    "words": "Your signature, Sign, Next, Finish, Other actions.",
+    "never": "Adopt, envelope or recipient on a signer screen, more than 6 Other actions, a tree line on the consent screen.",
+    "merged_into": null,
+    "gate": "always"
+  },
+  "simplify-public": {
+    "lives": "Landing, /pricing, /help and Settings (sections 2.2 and 2.7). Marks Settings cards data-item and each section's More options data-more=\"screen\".",
+    "default": "Nothing new on any screen.",
+    "first_sight": "A landing page of at most 3 phone screenfuls.",
+    "words": "Start free, Pricing, Help, Sign in.",
+    "never": "More than 4 top links, more than 10 Settings sections for an owner or 4 for a member with zero setup, an impact figure under 1 tree.",
+    "merged_into": null,
+    "gate": "always"
+  }
+}

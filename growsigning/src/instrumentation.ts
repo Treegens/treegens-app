@@ -1,0 +1,86 @@
+// Runs once when the server starts. Checks every 15 minutes for envelopes that expired or are due a reminder.
+// On hosts that sleep, call POST /api/cron with "Authorization: Bearer $CRON_SECRET" from a scheduler instead.
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  const g = globalThis as any;
+  if (g.__tscron) return;
+  // BILLING_MODE=deployment: the payment settings are taken away before anything reads them (src/server/billingmode.ts).
+  const { applyBillingMode, paymentSettingsIgnored } = await import('./server/billingmode');
+  applyBillingMode();
+  const { billingModeWarnings } = await import('./lib/billingmode');
+  for (const line of billingModeWarnings()) console.error(line);
+  if (paymentSettingsIgnored().length) console.error(`BILLING_MODE=deployment: ${paymentSettingsIgnored().join(', ')} ignored. Nothing is counted or charged on this server, and the payment provider is never called.`);
+  // The shorter names of the seal settings (LOCAL_P12_PATH, CSC_*) and PDF_SIGNING_MODE are copied to the seal's own
+  // names first, so everything after reads one set (src/lib/sealenv.ts).
+  const { applySealEnv } = await import('./lib/sealenv');
+  applySealEnv();
+  // Before anything else reads a setting or opens a connection: OUTSIDE_CALLS (src/lib/outside.ts). In mode none the
+  // settings of every service that needs an outside host are taken away here, so those features are simply absent;
+  // in listed and none the guard in src/server/outside.ts refuses other hosts. The list is logged either way.
+  const { applyOutsideCalls, outsideStartLines } = await import('./lib/outside');
+  applyOutsideCalls();
+  const { installOutsideGuard } = await import('./server/outside');
+  installOutsideGuard();
+  for (const line of outsideStartLines()) console.log(line);
+  // A cloud seal (SEAL_CSC_*, src/server/sealcsc.ts): a half set is said here, and the certificate chain is fetched.
+  const { cscStartLines, cscReady } = await import('./server/sealcsc');
+  for (const line of cscStartLines()) console.error(line);
+  // And what there is to say about those names, the mode, and a self-made test certificate on a production server.
+  const { sealStartLines } = await import('./server/sealkey');
+  for (const line of sealStartLines()) console.error(line);
+  void cscReady();
+  const { securityContactWarning } = await import('./lib/selfhost');
+  const contact = securityContactWarning();
+  if (contact) console.error(contact);
+  // A DEPLOYMENT_PROFILE nobody knows (a typo of "government") runs as the ordinary profile; the operator hears it.
+  const { deploymentProfileWarning } = await import('./lib/deployment');
+  const profile = deploymentProfileWarning();
+  if (profile) console.error(profile);
+  // And a government or closed-network server with a model in its settings that the help chat may not use there:
+  // a hosted service, or an address that is neither private nor in OUTBOUND_ALLOW (src/lib/chatboundary.ts).
+  const { chatProvider } = await import('./lib/chatprovider');
+  const { boundaryChatWarning } = await import('./lib/chatboundary');
+  const chatOff = boundaryChatWarning(chatProvider());
+  if (chatOff) console.error(chatOff);
+  // Said once, loudly, when a production server starts with nobody set up to receive help requests.
+  const { supportWarning } = await import('./lib/policy');
+  const warning = supportWarning();
+  if (warning) console.error(warning);
+  // And when signing in with Microsoft was set up with a MICROSOFT_TENANT we cannot check sign-ins against: it
+  // stays switched off, and the operator should hear why instead of looking for a missing button.
+  const { signInWarning } = await import('./lib/signin');
+  const signIn = signInWarning();
+  if (signIn) console.error(signIn);
+  // And when the security page has to tell visitors that the operator has not said where the server is or who
+  // else handles data: the operator hears it here first, with the settings that fill it in.
+  const { dataPlaceWarning } = await import('./lib/dataplace');
+  const where = dataPlaceWarning();
+  if (where) console.error(where);
+  // And when text messages were half set up: they stay switched off, and the operator hears which setting is missing.
+  const { smsWarning } = await import('./lib/checks');
+  const sms = smsWarning();
+  if (sms) console.error(sms);
+  // And when WhatsApp or calls with a code were half set up (src/lib/channels.ts).
+  const { channelsWarning } = await import('./lib/channels');
+  const channels = channelsWarning();
+  if (channels) console.error(channels);
+  // And when the stored files need a key the server was not given, or FILE_ENCRYPTION_KEY is not a key: it stores no
+  // new file until that is put right (src/server/filestore.ts), and the operator hears why before anyone uploads.
+  const { fileStoreWarning } = await import('./server/filestore');
+  const files = fileStoreWarning();
+  if (files) console.error(files);
+  // With a key, the text kept from uploaded PDFs for search is encrypted with it too, also what was kept before the
+  // key was set, and text under an old key moves to the current one (src/server/searchtext.ts).
+  const { sealKeptTexts } = await import('./server/searchtext');
+  sealKeptTexts();
+  // The same for the kept summaries for signers (src/server/aiassist.ts); one no key can open is deleted and rewritten.
+  const { sealKeptSummaries } = await import('./server/aiassist');
+  sealKeptSummaries();
+  // The same for signatures, answers, comments, stored emails, decline reasons and help messages in the database
+  // (src/server/colsweep.ts), and the warning when no key is set at all.
+  const { columnsAtStart } = await import('./server/colsweep');
+  columnsAtStart();
+  const { tick } = await import('./server/cron');
+  g.__tscron = setInterval(() => tick().catch((e) => console.error('[cron]', e)), 15 * 60_000);
+  g.__tscron.unref?.();
+}

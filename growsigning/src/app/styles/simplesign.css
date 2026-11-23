@@ -1,0 +1,79 @@
+/* The signing page made simpler (src/components/sign/actions.ts): the document tools inside Other actions, the
+   one-line sender on the consent screen, the note after Finish later, and Finish that asks to be pressed. */
+
+/* Other actions: the entries have no descriptions, so they are one line each, still 44 px or more to tap. */
+.sg-menu-item { min-height: 48px; }
+.sg-menu-when { margin: -4px 0 12px; font-size: 14px; color: var(--muted); }
+.sg-menu-doc { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.sg-menu-doc h3 { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.sg-menu-doc .sg-seg { width: 100%; }
+.sg-menu-doc .sg-seg button { flex: 1 1 0; min-height: 44px; }
+.sg-menu-doc .btn { min-height: 44px; justify-content: center; }
+.sg-menu-foot { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.sg-menu-foot .btn { min-height: 44px; }
+
+/* The consent screen: who sent it, once, on one line, and who it is for. */
+.sg-from { margin: 4px 0 2px; overflow-wrap: anywhere; }
+.sg-from a { color: var(--green); }
+.sg-for { margin: 0 0 12px; overflow-wrap: anywhere; }
+.sg-consent .sg-legal + .sg-legal { margin-top: 6px; }
+.sg-consent .sg-read { margin: 4px 0 14px; }
+
+/* The way to the text view for a keyboard or a screen reader, shown when it has the focus (like the skip link). */
+.sg-skip.sg-skip-text { position: absolute; left: 8px; top: auto; margin-top: -9999px; }
+.sg-skip.sg-skip-text:focus { position: relative; display: inline-block; margin: 0 0 12px; left: 0; }
+
+/* Finish, once nothing required is left: a short glow, once, never a dialog (P9). */
+@keyframes sg-ready { 0% { box-shadow: 0 0 0 0 rgba(255, 210, 74, 0.9); } 100% { box-shadow: 0 0 0 14px rgba(255, 210, 74, 0); } }
+.btn.go.finish.sg-ready { animation: sg-ready 1.2s ease-out 2; }
+@media (prefers-reduced-motion: reduce) { .btn.go.finish.sg-ready { animation: none; } }
+
+/* The "Your signature" dialog: fixing the spelling of one's name, one line under the tabs. */
+.sg-signame { margin: 10px 0 0; font-size: 14px; }
+@media (max-width: 600px), (pointer: coarse) { .sg-signame .sg-link { display: inline-flex; align-items: center; min-height: 44px; } }
+
+/* The toolbar's More (src/components/sign/More.tsx): the view, the size of the pages and the download. */
+.sg-moredlg { display: grid; gap: 16px; }
+.sg-moredlg h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.sg-moredlg .sg-seg { display: flex; width: 100%; }
+.sg-moredlg .sg-seg button { flex: 1 1 0; min-height: 44px; }
+.sg-moredlg p { margin: 6px 0 0; }
+.sg-moredlg > .btn { min-height: 48px; justify-content: center; }
+.sg-bottom .btn.sg-morebtn { flex: none; min-height: 54px; min-width: 64px; padding: 0 14px; font-size: 16px; }
+/* The consent screen on a phone: one screenful, so Continue is in sight when the page opens. */
+@media (max-width: 640px) {
+  .sg-consent { padding: 12px 16px 14px; margin: 0 auto; }
+  .sg-consent h1 { font-size: 21px; line-height: 1.2; margin: 0 0 4px; }
+  .sg-from { margin: 0; font-size: 15px; }
+  .sg-for { margin: 0 0 4px; }
+  .sg-consent .sg-read { margin: 0 0 4px; }
+  .sg-consent .sg-read .btn { min-height: 44px; padding-top: 6px; padding-bottom: 6px; }
+  .sg-consent .sg-legal { font-size: 13.5px; line-height: 1.4; margin-top: 4px; }
+  .sg-consent .sg-agree { margin: 8px 0 8px; padding: 8px 12px; min-height: 48px; font-size: 15px; }
+  .sg-consent .sg-continue { min-height: 48px; }
+  .sg-shell:has(.sg-consent) .signwrap { padding: 8px 10px 4px; }
+  .sg-shell:has(.sg-consent) .sg-foot { padding: 0 12px 4px; gap: 0 20px; }
+  /* The bar above already carries our logo on this screen, so the footer does not say it a second time. */
+  .sg-shell:has(.sg-consent) .sg-foot-by { display: none; }
+}
+.pub-replyto { margin: 0 0 12px; overflow-wrap: anywhere; }
+.pub-replyto .sg-link { display: inline-flex; align-items: center; min-height: 44px; }
+
+/* After the simplicity review (repair-simplify-signing). */
+/* 44 px to press at every width, also with a mouse: the header's More and Other actions, the footer's links, the
+   sender's address on the consent screen and "Fix my name" wherever it stands. */
+.sg-bar .btn.sm.sg-morebtn, .sg-bar .btn.sm.sg-other { min-height: 44px; }
+.sg-foot-links .sg-link, .sg-top .sg-link, .sg-dialog .sg-link { display: inline-flex; align-items: center; min-height: 44px; }
+.sg-from a { display: inline-block; padding: 12px 0; margin: -12px 0; }
+/* "Stop reminder emails" on a line of its own under the note, so the note's two lines stay together. */
+.sg-later-stop { margin-top: 2px; }
+.sg-later-stop:empty { display: none; }
+/* The sender's message behind one line, when the consent screen would otherwise pass 120 words before the tick. */
+.sg-fold { margin: 6px 0; }
+.sg-fold > summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--green); text-decoration: underline; font-size: 15px; }
+.sg-fold .sg-quote { margin-top: 4px; }
+/* The bar of the consent screen carries our logo, so its footer does not say "sent with" again, at any width. */
+.sg-shell:has(.sg-consent) .sg-foot-by { display: none; }
+.sg-shell .btn.sm, .sg-dialog .btn.sm { min-height: 44px; }
+.sg-impact .sg-more { display: inline-flex; align-items: center; min-height: 44px; }
+.sg-skip.sg-skip-text:focus { min-height: 46px; box-sizing: border-box; }

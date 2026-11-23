@@ -1,0 +1,78 @@
+'use client';
+// The totals and the working behind them, for /impact and the app's Trees planted page. Every figure about paper and
+// water is an estimate and is called one, with where it comes from. A total is shown only once it is large
+// enough to mean something (TOTALS_FROM in src/lib/impact.ts): until then its place is simply absent, never a tiny
+// number. Nothing here claims an offset or that signing undoes any harm.
+import { IMPACT, PRICING, TOTALS_FROM, TREES_BEFORE, TREES_RULE_DAY, fmtNum, publicTreesShown, totalWorthShowing } from '@/lib/impact';
+import { TREEGENS_URL, TREEGENS_ORG_URL, TREEGENS_READ_ON, MONEY_LINE } from '@/lib/impactwords';
+
+/** Is there any total worth showing for these numbers? */
+// `own`: the numbers of the account of the person looking. Everybody's total waits for more, and for money to have
+// been paid in at all (publicTreesShown): a few free trial signatures are not a public total.
+const treesShown = (i: any, own?: boolean): boolean => (own ? Number(i?.treesFunded) >= TOTALS_FROM.treesPlanted : publicTreesShown(i));
+export const anyTotal = (i: any, own?: boolean): boolean => !!i && (totalWorthShowing(i.sheets) || treesShown(i, own));
+
+export function ImpactStats({ i, dark, own }: { i: any; dark?: boolean; own?: boolean }) {
+  const paper = totalWorthShowing(i.sheets);
+  const planted = treesShown(i, own);
+  if (!paper && !planted) return null;
+  return (
+    <div className="grid g3">
+      {planted && <div className={`stat${dark ? '' : ' green'}`}><div className="k">{own ? 'Trees your signatures plant' : 'Trees our signatures plant'}</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">{PRICING.treesPerSignature} mangroves for every signature</div></div>}
+      {paper && <div className="stat"><div className="k">Sheets of paper not used, estimated</div><div className="v num">{fmtNum(i.sheets)}</div><div className="s">across {fmtNum(i.envelopes)} completed envelope{i.envelopes === 1 ? '' : 's'}</div></div>}
+      {paper && <div className="stat"><div className="k">Water not used, estimated</div><div className="v num">{fmtNum(i.litresWater)} L</div><div className="s">{IMPACT.litresWaterPerSheet} litres per sheet</div></div>}
+    </div>
+  );
+}
+
+const out = { target: '_blank', rel: 'noreferrer' } as const;
+
+// Where each outside sentence below comes from, read on TREEGENS_READ_ON (21 November 2026):
+// - treegens.app home page, "How it works" and "Who verifies your trees": "Record the land, then record the planting
+//   in the app. The phone stores a GPS fix with the clips." "Verifiers in the Treegens DAO watch both videos and
+//   vote." "... vote to approve or reject." (It also calls them independent; we do not repeat that.) Read again on
+//   21 November 2026: the same words.
+// - treegens.org: "Ten cents is the average planting cost across a run, not a named-tree invoice." On who the
+//   verifiers are: "stake to become a verifier", "DAO verifiers confirm the count"
+// - Van Oel and Hoekstra, Report 46 (2010): "between 300 and 2600 m3/ton (2-13 litres for an A4 sheet)".
+// - Conservatree, Trees Into Paper: "1 tree makes 16.67 reams of copy paper or 8,333.3 sheets". Its https address
+//   fails with a certificate error, so the link is the http one that opens.
+// - The Paper Calculator opens at c.environmentalpaper.org.
+// When any of these is read again, change the sentence, this note and TREEGENS_READ_ON together.
+
+// `perContract`: a server under a government agreement (BILLING_MODE=deployment). Nothing is paid per signature there,
+// so mangroves are not counted from signatures: they are set per contract (TREE_RULES in src/lib/govpricing.ts).
+export function Methodology({ perContract = false }: { perContract?: boolean } = {}) {
+  return (
+    <div className="card">
+      <h2 style={{ marginBottom: 10 }}>How we count</h2>
+      <p>Two different things are counted here, and they are kept apart.</p>
+      <h3 style={{ margin: '14px 0 6px' }}>1. Trees: {PRICING.treesPerSignature} for every signature</h3>
+      {perContract ? <p style={{ margin: 0 }}>On this server nothing is paid per signature, so no mangroves are counted from signatures. The trees of a government contract are set in the contract, whether or not the service is used, and each signed contract is listed on this page with its planting statements.</p> : (
+      <ul style={{ paddingLeft: 20, lineHeight: 1.7, margin: 0 }}>
+        <li><b>Every signature plants {PRICING.treesPerSignature} trees.</b> They are mangroves, planted by Treegens. It makes no difference where the signature came from: the {PRICING.welcomeSignatures} free ones a new account starts with, the monthly plan, a top-up, a free code or a reward for inviting a friend.</li>
+        <li>A signature is counted when a person you asked finishes signing. Signing your own document uses no signature, so it plants none. Approving, reading and getting a copy are not signatures.</li>
+        <li>{MONEY_LINE} That is the monthly plan and top-ups alike. Jimi plants the trees.</li>
+        <li>The total is every finished signature times {PRICING.treesPerSignature}. It says what our signatures plant, not what has been planted already: Treegens plants afterwards. A signature keeps its trees once it is finished. The public total is shown from {TOTALS_FROM.treesPublic} trees up, and only once customers have paid something. An account sees its own from {TOTALS_FROM.treesPlanted} trees up.</li>
+        <li>
+          <details data-fold>
+            <summary>Signatures and payments before {TREES_RULE_DAY}</summary>
+            <p style={{ margin: '4px 0 0' }}>Before that day the count followed the money: {TREES_BEFORE.perUsd} mangroves for each US dollar a customer paid, whether or not the signatures it bought were used, and none for a free signature. Money paid before that day stays in the total at that promise. A signature bought with that money is not counted a second time.</p>
+          </details>
+        </li>
+        <li>The planting itself is done by Treegens planters. Treegens describes its own checking on <a href={TREEGENS_URL} {...out}>treegens.app</a>: a planter films the land and then the planting in the Treegens app, the phone records where the clips were filmed, and verifiers watch both videos and vote to approve or reject. The verifiers are members of the Treegens community who stake its token to take part. That is what Treegens says about its own work, as we read it there on {TREEGENS_READ_ON}. It is not our finding: we have not checked plantings ourselves.</li>
+        <li>The rate: <a href={TREEGENS_ORG_URL} {...out}>treegens.org</a> says ten cents is the average cost of planting a tree across a run, not an invoice for a named tree. At that average, the {PRICING.treesPerSignature} trees of a signature cost about fifty cents. It is an average Treegens states, not a price we can show for each tree.</li>
+        <li>What you cannot check here yet: we do not publish receipts for the money sent to Treegens, or Treegens&apos; own statement of what it received. Until we do, the totals on this page are our own figures.</li>
+      </ul>
+      )}
+      <h3 style={{ margin: '14px 0 6px' }}>2. Paper: an estimate of what was not printed</h3>
+      <ul style={{ paddingLeft: 20, lineHeight: 1.7, margin: 0 }}>
+        <li><b>Sheets</b> = pages in the document × the people on it. On paper, each of them would get a printed copy. The sender&apos;s own copy, reprints and drafts are not counted, and only completed documents count. A total is shown from {fmtNum(TOTALS_FROM.sheets)} sheets up.</li>
+        <li><b>Water</b>: about {IMPACT.litresWaterPerSheet} litres to make one A4 sheet. That is toward the upper end of published figures, which run from 2 to 13 litres a sheet (Van Oel and Hoekstra, <a href="https://www.waterfootprint.org/resources/Report46-WaterFootprintPaper.pdf" {...out}>&ldquo;The green and blue water footprint of paper products&rdquo;</a>, UNESCO-IHE Value of Water Research Report 46, 2010).</li>
+        <li>We never show saved paper as a share of a tree. For scale only: one tree makes about {fmtNum(IMPACT.sheetsPerTree)} sheets, says <a href="http://conservatree.org/learn/EnviroIssues/TreeStats.shtml" {...out}>Conservatree</a>.</li>
+      </ul>
+      <h3 style={{ margin: '14px 0 6px' }}>What we do not claim</h3>
+      <p style={{ margin: 0 }}>We do not say that signing here offsets anything, and a signature does not undo any harm.</p>
+    </div>
+  );
+}

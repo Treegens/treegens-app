@@ -1,0 +1,81 @@
+/* The document page and Templates after the simplify-envelope batch (research/ux-charter.md, 2.4 and 2.5):
+   one More per screen and per item, folded sections, one status line per person. And the toasts. */
+
+/* More: the button, and the menu it opens. A list under the button on wide screens, in place on a phone. */
+.mo { position: relative; display: inline-block; }
+.mo-btn { min-height: 44px; }
+.mo-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; min-width: 240px; max-width: min(320px, 92vw); background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; display: grid; }
+.mo-line { display: flex; align-items: center; min-height: 44px; padding: 8px 12px; border: 0; background: none; border-radius: 8px; font: inherit; font-size: 15px; color: var(--ink); text-align: left; text-decoration: none; cursor: pointer; width: 100%; }
+.mo-line:hover { background: rgba(23, 36, 28, 0.06); }
+.mo-line:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.mo-line.danger { color: var(--red); }
+.mo-line:disabled { color: var(--muted); cursor: default; }
+
+/* The head of the document page: the title on one line where it fits, and More next to it. */
+.sn > .pagehead.sn-head { flex-wrap: nowrap; align-items: flex-start; }
+.sn > .pagehead.sn-head > .grow { flex: 1 1 auto; min-width: 0; }
+.sn-head .sn-headactions { flex: none; padding-top: 22px; }
+.sn-done { display: flex; gap: 12px 16px; align-items: flex-start; flex-wrap: wrap; background: var(--green-soft); border-color: #cfe3d2; }
+.sn-done > .grow { flex: 1 1 260px; min-width: 0; }
+.sn-now-actions .btn { min-height: 44px; }
+
+/* People: one line each, and what happened in their More. */
+.sn-person-head .mo-btn { flex: none; }
+.sn-person-line { margin: 8px 0 0; font-size: 14px; overflow-wrap: anywhere; }
+.sn-person-more { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fafbf9; }
+.sn-person-more .sn-facts { margin-top: 0; }
+.sn-person-more .btn { min-height: 44px; }
+.sn-share-h { margin: 14px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+.sn-share-h + .sn-person-actions { margin-top: 6px; }
+
+/* Folded sections: closed every time the page opens. */
+.sn-fold { padding-top: 0; padding-bottom: 0; }
+.sn-fold > summary { cursor: pointer; min-height: 52px; display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; font-weight: 600; list-style: none; border-radius: 6px; }
+.sn-fold > summary::-webkit-details-marker { display: none; }
+.sn-fold > summary::before { content: '▸'; flex: none; }
+.sn-fold[open] > summary::before { content: '▾'; }
+.sn-fold > summary > span:first-child { flex: 1 1 auto; }
+.sn-fold > summary:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.sn-fold-in { padding-bottom: 16px; }
+.sn-fold-in > :first-child { margin-top: 0; }
+.sn-history { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow: auto; }
+.sn-history li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.sn-history li:last-child { border-bottom: 0; }
+.ret-in-delete { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ret-in-delete .btn { min-height: 44px; margin-top: 6px; }
+/* The row of buttons at the foot of every dialog of the sender's screens: 44 px to press with a mouse too, so a third
+   way out ("Keep it instead" in the Delete dialog) is no smaller than it was inside the text. */
+.sn-dialog .actions .btn { min-height: 44px; }
+
+/* Templates: Use on each row, the rest in the row's More, which opens as a line under the row. */
+.sn-rowactions .mo-btn { margin-left: 6px; }
+.sn-rowactions .btn, .sn-newtpl { min-height: 44px; }
+.sn-linkbtn { border: 0; background: none; padding: 0; font: inherit; color: var(--green); text-decoration: underline; cursor: pointer; min-height: 44px; }
+.sn-linkbtn:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+tr.tpl-more-row > td { padding-top: 0; border-top: 0; background: #fafbf9; }
+.sn-rowmore { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 10px; }
+.sn-rowmore .btn { min-height: 44px; }
+
+/* Toasts: one bar at the bottom edge. While one shows, the page keeps that much room under its last line, so
+   nothing a person needs can stay under it; a tap goes through it to whatever is behind. */
+.toasts { bottom: 12px; width: min(560px, calc(100vw - 24px)); align-items: stretch; }
+.toast { max-width: none; text-align: center; }
+body:has(.toasts > .toast) .shell .main { padding-bottom: 120px; }
+
+@media (max-width: 900px) {
+  .mo { position: static; }
+  .sn-head .mo { position: relative; }
+  /* On a phone More sits on the line of the back link, so the title has the whole width to itself. */
+  .sn > .pagehead.sn-head { position: relative; }
+  .sn-head .sn-headactions { position: absolute; top: 0; right: 0; padding-top: 0; }
+  .sn-head .sn-back { min-height: 44px; }
+  .sn-person-head { flex-wrap: wrap; }
+  .sn-person-head > .grow { flex: 1 1 100%; }
+  .sn-person-badges { flex: 1 1 auto; width: auto; }
+  .sn-done .sn-now-actions { width: 100%; }
+  .sn-done .sn-now-actions .btn { flex: 1 1 auto; }
+  table.sn-list td.sn-rowactions { width: auto; white-space: normal; }
+  .sn-rowactions .btn { min-height: 44px; }
+  .sn-rowactions .mo-btn { margin: 6px 0 0 0; }
+  body:has(.toasts > .toast) .shell .main { padding-bottom: calc(176px + env(safe-area-inset-bottom)); }
+}

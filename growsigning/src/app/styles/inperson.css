@@ -1,0 +1,27 @@
+/* Signing in person without signal (src/app/in-person/page.tsx) and its PIN dialog (src/components/sender/OfflineReady.tsx). */
+.ip { max-width: 800px; margin: 0 auto; padding: 16px 16px 48px; }
+.ip-top { display: flex; justify-content: center; padding: 8px 0 16px; }
+.ip .card { margin-bottom: 16px; }
+.ip h1 { font-size: 22px; margin: 0 0 8px; }
+.ip-wide { width: 100%; min-height: 48px; margin: 8px 0; }
+.ip .btn { min-height: 44px; }
+.ip-agree { margin: 12px 0; min-height: 44px; }
+.ip-agree input, .ip-field input[type='checkbox'], .ip-field input[type='radio'] { width: 22px; height: 22px; }
+.ip-doc { margin: 0 -16px 16px; overflow-x: hidden; }
+.ip-field { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 14px; min-height: 44px; }
+.ip-field.f { display: block; }
+.ip-field input:not([type='checkbox']):not([type='radio']), .ip-field select { width: 100%; min-height: 44px; font-size: 16px; }
+.ip-label { font-weight: 600; flex: 1 1 100%; }
+.ip-mark { max-height: 56px; max-width: 220px; background: #fff; border: 1px solid var(--line, #ddd); border-radius: 6px; }
+.ofr input { width: 100%; min-height: 44px; font-size: 16px; }
+.ofr-actions { justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.ofr-actions .btn { min-height: 44px; }
+.ip-spot { position: absolute; border: 2px dashed var(--accent, #1f6f43); border-radius: 4px; background: rgba(31, 111, 67, 0.08); padding: 0; margin: 0; font: inherit; cursor: pointer; }
+/* A spot can be small on the page; what a finger can tap around it is at least 44 px. */
+.ip-spot::after { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+.ip-spot:focus-visible { outline: 3px solid var(--ink, #1d2a22); outline-offset: 2px; }
+.ip-problem { display: block; color: var(--danger, #b3392f); margin-top: 4px; }
+.ip-hint .btn { min-height: 44px; margin-left: 6px; }
+.ip-spot > span { position: absolute; left: 0; bottom: 100%; font-size: 11px; line-height: 1.2; padding: 1px 4px; background: var(--accent, #1f6f43); color: #fff; border-radius: 3px; white-space: nowrap; }
+.ip-ways { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.ip-ways .btn { min-height: 44px; }

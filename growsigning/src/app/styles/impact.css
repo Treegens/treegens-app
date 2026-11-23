@@ -1,0 +1,61 @@
+/* Trees: the first-time picture and the lines about mangroves (src/components/impact/). */
+
+/* The picture. Its drawn state is the end state, so a browser without animations, a print and "reduce motion" all
+   show the finished shoreline. Only while .imp-go is set does anything move, once, for about 2.5 seconds. */
+.imp-pic { display: block; width: 100%; max-width: 420px; height: auto; margin: 0 auto; border-radius: 14px; }
+.imp-pic .imp-tree, .imp-pic .imp-leaf { transform-box: view-box; }
+.imp-pic .imp-leaf { transform-box: fill-box; transform-origin: 50% 100%; }
+.imp-pic.imp-go .imp-tree { animation: imp-rise 0.62s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+.imp-pic.imp-go .imp-leaf { animation: imp-leaf 0.5s cubic-bezier(0.2, 0.8, 0.3, 1.2) both; }
+.imp-pic.imp-go .imp-sun { animation: imp-sun 2.4s ease-out both; }
+@keyframes imp-rise { from { transform: translateY(16px) scaleY(0.05); opacity: 0; } 30% { opacity: 1; } to { transform: none; opacity: 1; } }
+@keyframes imp-leaf { from { transform: scale(0); } to { transform: scale(1); } }
+@keyframes imp-sun { from { transform: translateY(14px); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .imp-pic.imp-go .imp-tree, .imp-pic.imp-go .imp-leaf, .imp-pic.imp-go .imp-sun { animation: none; }
+}
+@media print { .imp-pic .imp-tree, .imp-pic .imp-leaf, .imp-pic .imp-sun { animation: none !important; } }
+
+/* The first time: the picture, one big line, and Close. It sits in the page like any other card: nothing is covered
+   and nothing has to be closed before going on. */
+.imp-first { max-width: 560px; margin-left: auto; margin-right: auto; text-align: center; background: var(--green-soft); border-color: #cfe3d2; }
+.imp-first .imp-tap { cursor: pointer; }
+.imp-first h2 { margin: 14px 0 4px; font-size: 24px; line-height: 1.2; color: var(--green-deep); }
+.imp-first p { margin: 4px 0 0; }
+.imp-first .imp-acts { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.imp-first .imp-acts .btn { min-height: 44px; }
+
+/* Every later time: one small card. */
+.imp-small { display: flex; gap: 14px; align-items: flex-start; max-width: 560px; margin-left: auto; margin-right: auto; background: var(--green-soft); border-color: #cfe3d2; }
+.imp-small p { margin: 4px 0 0; }
+/* After Close the focus is put here, so a keyboard user sees where they are; a tap or a click shows no ring. */
+.imp-small:focus { outline: none; }
+.imp-small:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
+.imp-how { margin-top: 2px; }
+.imp-how summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--green); font-weight: 600; }
+.imp-how p { margin: 0 0 6px; }
+.imp-link { display: inline-flex; align-items: center; min-height: 44px; color: var(--green); font-weight: 600; }
+
+/* Next to Finish, for everyone whose signature plants trees. In the toolbar it is a short line before the button;
+   in the phone's bottom bar it takes a row of its own above the button. */
+.sg-tree { font-size: 13px; line-height: 1.3; color: var(--green-deep); font-weight: 600; }
+/* The toolbar is deep green: the line is light there. */
+.sg-wide .sg-tree { display: inline-block; white-space: nowrap; font-size: 14px; color: #fff; }
+.sg-bottom:has(.sg-tree) { flex-wrap: wrap; row-gap: 6px; }
+.sg-bottom .sg-tree { flex: 1 1 100%; order: -1; text-align: center; }
+
+/* The sender's envelope page: the first send ever plays the picture inside the "Sent." card, small, above its
+   heading. Nothing is added below it and nothing is pushed down the page by more than the picture. */
+.imp-sentpic { cursor: pointer; margin: 0 0 12px; }
+.imp-sentpic .imp-pic { max-width: 290px; margin: 0; }
+.sn-sent .imp-promise { margin: 0 0 4px; color: var(--green-deep); font-weight: 600; }
+.imp-vh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+/* The first screen of the signing page: "When you sign, 5 trees are planted." with who plants them under it. */
+.sg-open-trees { display: flex; gap: 12px; align-items: center; margin: 14px 0; padding: 12px 14px; border-radius: 12px; background: var(--green-soft); border: 1px solid #cfe3d2; }
+.sg-open-trees p { margin: 0; line-height: 1.35; }
+.sg-open-trees b { display: block; font-size: 17px; color: var(--green-deep); }
+.sg-open-trees span { display: block; font-size: 14px; color: var(--muted); }
+
+/* The finished screen, right under "All done": the trees of this signature, on the first screenful of a phone. */
+.sg-done-trees { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 0 0 10px; color: var(--green-deep); font-size: 17px; line-height: 1.3; }

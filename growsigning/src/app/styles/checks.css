@@ -1,0 +1,55 @@
+/* Checking who signs: the one-time code on the signing screen, and the check a sender chooses for a recipient. */
+
+/* The code screen. One box for the whole code, so a phone can fill it in from the text message in one go. */
+.sg-code .sg-code-to { white-space: nowrap; }
+.sg-code .sg-code-box { margin: 18px 0 4px; }
+.sg-code .sg-code-box > span { font-size: 15px; }
+.sg-code-input { width: 100%; min-height: 60px; font-size: 30px; font-weight: 600; letter-spacing: 0.32em; text-align: center; font-variant-numeric: tabular-nums; padding: 10px 6px 10px calc(6px + 0.32em); border-radius: 12px; }
+.sg-code-input[aria-invalid='true'] { border-color: var(--red); }
+.sg-code .btn.lg { min-height: 50px; }
+.sg-code .sg-code-again { margin-top: 10px; }
+.sg-code .sg-code-when { margin: 8px auto 0; }
+.sg-code .sg-problem { margin: 10px 0 14px; font-size: 15px; }
+.sg-code-trouble { margin-top: 18px; }
+.sg-code .sg-code-toggle { min-height: 44px; font-size: 15px; display: inline-flex; align-items: center; }
+.sg-code-help { text-align: left; margin-top: 4px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: #fbfaf6; font-size: 15px; }
+.sg-code-help p { margin: 0 0 10px; }
+.sg-code-help p:last-child { margin-bottom: 0; }
+.sg-code-outs { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.sg-code-outs .btn { min-height: 44px; white-space: normal; flex: 1 1 200px; }
+.sg-code .sg-confirmed { margin-top: 18px; }
+@media (max-width: 600px) {
+  .sg-code-input { font-size: 28px; letter-spacing: 0.26em; padding-left: calc(6px + 0.26em); }
+}
+
+/* The editor: the check for one recipient, under "More". */
+.ed-check { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); display: grid; gap: 10px; }
+.ed-check-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.ed-check label.f { margin: 0; }
+/* Written to win over the editor's own 40px rule for phones: everything here that is tapped is 44px tall. */
+.ed-check label.f select, .ed-check label.f input[type='tel'] { min-height: 44px; width: 100%; }
+.ed-check label.check { min-height: 44px; display: flex; align-items: center; gap: 8px; }
+.ed-check .ed-check-says { margin: 0; }
+@media (max-width: 700px) {
+  .ed-check-row { grid-template-columns: 1fr; }
+}
+
+/* The sender's page: what became of a text, and the check of each person. */
+.sn-check-fix { display: grid; gap: 12px; margin: 4px 0 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfaf6; }
+.sn-check-fix legend { font-weight: 600; font-size: 14px; padding: 0 4px; }
+.sn-check-fix label.f { margin: 0; }
+.sn-check-fix .ed-check { margin-top: 0; padding-top: 0; border-top: 0; }
+/* The dialog is narrow: one control to a line, so the name of the check is never cut short. */
+.sn-check-fix .ed-check-row { grid-template-columns: 1fr; }
+/* "I checked with them that this is their number": a whole line to tap, 44px at least. */
+.sn-check-fix label.sn-check-confirm { min-height: 44px; display: flex; align-items: center; gap: 10px; margin: 0; }
+/* The box itself keeps its size when the sentence wraps on a phone, instead of being squeezed to a sliver. */
+.sn-check-fix label.sn-check-confirm input, .ed-check label.check input { flex: none; width: 22px; height: 22px; margin: 0; }
+/* The check's name never runs past the edge of its box: it gets the room it needs, and a long one wraps. */
+.ed-check label.f select { text-overflow: ellipsis; white-space: normal; }
+
+/* The security and help pages: what each check proves, one to a line. */
+.pub-proof { display: block; margin: 6px 0 0; }
+
+/* The dev outbox: text messages next to emails. */
+.ob-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; margin: 4px 0 0; }

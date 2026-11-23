@@ -1,0 +1,39 @@
+/* Share links: the page at growsigning.com/<name> (components/share/WhoAreYou.tsx) and the sender's dialog
+   (components/sender/ShareLink.tsx). */
+.sl .sl-brand { margin-bottom: 12px; align-items: center; gap: 8px; }
+.sl .sl-title { font-size: 26px; line-height: 1.2; margin: 0; overflow-wrap: anywhere; }
+.sl .sl-from { margin: 4px 0 0; overflow-wrap: anywhere; }
+.sl .sl-ask { font-size: 20px; margin: 22px 0 4px; }
+.sl .sl-ask:focus { outline: none; }
+.sl .sl-state { font-size: 20px; margin: 22px 0 6px; }
+.sl .sl-hint { margin: 0 0 14px; }
+.sl .sl-people { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 10px; }
+.sl .sl-person { width: 100%; min-height: 56px; justify-content: flex-start; text-align: start; font-size: 17px; font-weight: 600; padding: 12px 16px; white-space: normal; overflow-wrap: anywhere; }
+.sl .sl-wide { width: 100%; min-height: 50px; }
+.sl .sl-second { margin-top: 10px; }
+.sl .sl-foot { margin: 14px 0 0; }
+.sl .sl-help { margin-top: 18px; }
+.sl .sl-help summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--green); text-decoration: underline; font-size: 15px; }
+.sl .sl-helpline { margin-top: 14px; }
+.sl .sl-helpline a { display: inline-flex; min-height: 44px; align-items: center; }
+.sl .sg-open-trees { margin-top: 16px; }
+
+/* The sender's side. */
+.sn-share { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 0 0; }
+.sn-share-url { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.shl-link { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfaf6; }
+.shl-link b { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; font-size: 17px; }
+.shl-link .btn { min-height: 44px; }
+.shl-qr { display: grid; justify-items: center; gap: 6px; margin: 4px 0 14px; }
+.shl-qr .qr-code { width: 196px; max-width: 100%; margin: 0; }
+.shl-qr .qr-code svg { display: block; width: 100%; height: auto; }
+.shl-link + .notice, .shl-qr + .notice { margin-bottom: 12px; }
+.shl-name { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.shl-name label { flex: 1 1 220px; margin: 0; }
+.shl-name label { min-width: 0; max-width: 100%; }
+.shl-name label .shl-box { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; min-width: 0; width: 100%; }
+.shl-name label .shl-box > span { display: inline; flex: none; margin: 0; font-weight: 400; }
+.shl-name label .shl-box input { flex: 1 1 0; width: 0; min-width: 0; margin: 0; }
+.shl-name .btn, .shl-off { min-height: 44px; }
+.shl-fold summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.shl-off { margin-top: 12px; }

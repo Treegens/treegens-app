@@ -1,0 +1,6 @@
+apiVersion: v2
+name: growsigning
+description: GrowSigning (e-signatures) as one pod with one volume. An example to read and adapt, not a supported product.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

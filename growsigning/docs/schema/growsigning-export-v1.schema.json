@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:growsigning:schema:export:v1",
+  "title": "GrowSigning full export, version 1",
+  "description": "The data.json at the top of a full export (GET /api/export/full). Every file it names is in the same ZIP under files/<sha256>, and manifest-sha256.txt lists the SHA-256 of every entry in the ZIP. No secrets are in it: no passwords, signing links, security codes, access codes, API keys or webhook secrets. Objects may carry more properties than are listed here: a newer server adds columns, and a reader should ignore what it does not know. A property listed here keeps its meaning within version 1.",
+  "type": "object",
+  "required": ["schema", "schema_version", "made_at", "deployment", "account", "members", "templates", "contacts", "signing_groups", "folders", "webhooks", "clickwraps", "retention", "envelopes", "imported", "files"],
+  "properties": {
+    "schema": { "const": "growsigning-export" },
+    "schema_version": { "const": 1 },
+    "made_at": { "$ref": "#/$defs/time" },
+    "made_by": { "type": "object", "properties": { "name": { "type": "string" }, "email": { "type": "string" } } },
+    "deployment": {
+      "type": "object", "required": ["url"],
+      "properties": { "url": { "type": "string", "description": "The address of the server the export was made on (APP_URL)." }, "software": { "type": "string" } }
+    },
+    "account": {
+      "type": "object", "required": ["id", "name", "created_at", "settings"],
+      "properties": {
+        "id": { "type": "string" }, "name": { "type": "string" }, "plan": { "type": ["string", "null"] }, "created_at": { "$ref": "#/$defs/time" },
+        "settings": { "type": "object", "description": "The account's settings as stored, without anything about payments. Each key is a setting under Settings." }
+      }
+    },
+    "members": {
+      "type": "array",
+      "items": { "type": "object", "required": ["name", "email", "role"], "properties": { "user_id": { "type": "string" }, "name": { "type": "string" }, "email": { "type": "string" }, "role": { "enum": ["owner", "admin", "member"] }, "joined_at": { "$ref": "#/$defs/timeOrNull" } } }
+    },
+    "templates": { "type": "array", "items": { "$ref": "#/$defs/template" } },
+    "contacts": {
+      "type": "array",
+      "items": { "type": "object", "required": ["name", "email"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "email": { "type": "string" }, "company": { "type": ["string", "null"] }, "created_at": { "$ref": "#/$defs/timeOrNull" } } }
+    },
+    "signing_groups": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["name", "members"],
+        "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "members": { "type": "array", "items": { "type": "object", "required": ["name", "email"], "properties": { "name": { "type": "string" }, "email": { "type": "string" } } } } }
+      }
+    },
+    "folders": { "type": "array", "items": { "type": "string" }, "description": "Every folder name an envelope or template of the account is in." },
+    "webhooks": {
+      "type": "array", "description": "Without their signing secrets. They are not brought in by an import: each needs a new secret.",
+      "items": { "type": "object", "required": ["url", "events", "active"], "properties": { "id": { "type": "string" }, "url": { "type": "string" }, "events": { "type": "array", "items": { "type": "string" } }, "active": { "type": "boolean" }, "created_at": { "$ref": "#/$defs/timeOrNull" } } }
+    },
+    "clickwraps": {
+      "type": "array", "description": "Click-to-agree terms with every published version and every acceptance.",
+      "items": {
+        "type": "object", "required": ["id", "name", "versions", "acceptances"],
+        "properties": {
+          "id": { "type": "string" }, "name": { "type": "string" }, "slug": { "type": "string" }, "active": { "type": "boolean" },
+          "versions": { "type": "array", "items": { "type": "object", "required": ["number"], "properties": { "number": { "type": "integer" }, "title": { "type": ["string", "null"] }, "terms_sha256": { "$ref": "#/$defs/shaOrNull" }, "file_sha256": { "$ref": "#/$defs/shaOrNull" }, "published_at": { "$ref": "#/$defs/timeOrNull" } } } },
+          "acceptances": { "type": "array", "items": { "type": "object", "required": ["version", "at"], "properties": { "version": { "type": "integer" }, "name": { "type": ["string", "null"] }, "email": { "type": ["string", "null"] }, "at": { "$ref": "#/$defs/time" }, "terms_sha256": { "$ref": "#/$defs/shaOrNull" } } } }
+        }
+      }
+    },
+    "retention": {
+      "type": "object", "required": ["schedule", "holds"],
+      "properties": {
+        "schedule": {
+          "type": ["object", "null"], "description": "null when the account keeps closed documents until someone deletes them.",
+          "properties": { "days": { "type": ["integer", "null"] }, "level": { "type": ["string", "null"] }, "name": { "type": ["string", "null"] }, "code": { "type": ["string", "null"] }, "stopped_days": { "type": ["integer", "null"] } }
+        },
+        "holds": { "type": "array", "items": { "type": "object", "required": ["id", "reason", "set_at"], "properties": { "id": { "type": "string" }, "envelope_id": { "type": ["string", "null"] }, "folder": { "type": ["string", "null"] }, "reason": { "type": "string" }, "matter": { "type": ["string", "null"] }, "set_by": { "type": ["string", "null"] }, "set_at": { "$ref": "#/$defs/time" }, "lifted_at": { "$ref": "#/$defs/timeOrNull" } } } }
+      }
+    },
+    "envelopes": { "type": "array", "items": { "$ref": "#/$defs/envelope" } },
+    "imported": { "type": "array", "description": "Records this account itself brought in from an export or from DocuSign, as they were brought in.", "items": { "$ref": "#/$defs/imported" } },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["sha256", "size", "path"],
+        "properties": { "sha256": { "$ref": "#/$defs/sha" }, "size": { "type": "integer", "minimum": 0 }, "path": { "type": "string", "pattern": "^files/[0-9a-f]{64}$" }, "kind": { "enum": ["document", "signed", "original", "terms", "imported"] }, "name": { "type": "string" } }
+      }
+    },
+    "not_included": { "type": "array", "items": { "type": "string" }, "description": "What could not be put in this export, each in words." }
+  },
+  "$defs": {
+    "time": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T" },
+    "timeOrNull": { "type": ["string", "null"] },
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "shaOrNull": { "type": ["string", "null"] },
+    "document": {
+      "type": "object", "required": ["id", "name", "position", "file_sha256"],
+      "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "position": { "type": "integer" }, "file_sha256": { "$ref": "#/$defs/shaOrNull" }, "pages": { "type": "integer" } }
+    },
+    "field": {
+      "type": "object", "required": ["id", "document_id", "type", "page", "x", "y", "w", "h"],
+      "properties": {
+        "id": { "type": "string" }, "document_id": { "type": "string" }, "recipient_id": { "type": ["string", "null"] }, "type": { "type": "string" },
+        "page": { "type": "integer", "minimum": 0, "description": "Counted from 0." },
+        "x": { "type": "number" }, "y": { "type": "number" }, "w": { "type": "number" }, "h": { "type": "number" },
+        "required": { "type": ["integer", "boolean"] }, "label": { "type": ["string", "null"] }, "value": { "type": ["string", "null"] }, "options": { "type": "array" }
+      },
+      "description": "x, y, w and h are shares of the page's width and height, measured from its top left corner."
+    },
+    "template": {
+      "type": "object", "required": ["id", "subject", "documents", "recipients", "fields"],
+      "properties": {
+        "id": { "type": "string" }, "subject": { "type": "string" }, "message": { "type": "string" }, "folder": { "type": ["string", "null"] },
+        "owner_email": { "type": ["string", "null"] }, "created_at": { "$ref": "#/$defs/timeOrNull" },
+        "rules": { "type": "object", "description": "Who may use and change it, and whether its wording is locked.", "properties": { "use": { "type": "string" }, "change": { "type": "string" }, "locked": { "type": "boolean" }, "chosen": { "type": "array", "items": { "type": "string" } } } },
+        "documents": { "type": "array", "items": { "$ref": "#/$defs/document" } },
+        "recipients": { "type": "array", "items": { "type": "object", "required": ["id", "role"], "properties": { "id": { "type": "string" }, "role": { "type": "string" }, "role_name": { "type": ["string", "null"] }, "name": { "type": "string" }, "email": { "type": "string" }, "routing_order": { "type": "integer" } } } },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      }
+    },
+    "auditLine": {
+      "type": "object", "required": ["seq", "at", "actor", "action", "detail", "prev_hash", "hash"],
+      "properties": {
+        "seq": { "type": "integer" }, "at": { "type": "string" }, "actor": { "type": "string" }, "action": { "type": "string" }, "detail": { "type": "string" },
+        "ip": { "type": ["string", "null"] }, "prev_hash": { "type": "string" }, "hash": { "type": "string" }, "redacted_at": { "type": ["string", "null"] }
+      }
+    },
+    "envelope": {
+      "type": "object", "required": ["id", "subject", "status", "created_at", "documents", "recipients", "fields", "audit", "signed_pdf"],
+      "properties": {
+        "id": { "type": "string" }, "subject": { "type": "string" }, "message": { "type": "string" },
+        "status": { "enum": ["draft", "sent", "completed", "voided", "declined", "expired"] },
+        "folder": { "type": ["string", "null"] }, "sender": { "type": "object", "properties": { "name": { "type": "string" }, "email": { "type": "string" } } },
+        "created_at": { "$ref": "#/$defs/time" }, "sent_at": { "$ref": "#/$defs/timeOrNull" }, "completed_at": { "$ref": "#/$defs/timeOrNull" },
+        "void_reason": { "type": ["string", "null"] }, "purged_at": { "$ref": "#/$defs/timeOrNull" },
+        "signed_pdf": { "type": ["object", "null"], "required": ["sha256"], "properties": { "sha256": { "$ref": "#/$defs/sha" }, "size": { "type": ["integer", "null"] }, "in_export": { "type": "boolean" }, "pdfa": { "type": ["string", "null"] }, "seal": { "type": ["string", "null"] } } },
+        "documents": { "type": "array", "items": { "$ref": "#/$defs/document" } },
+        "recipients": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["id", "role", "name", "email", "status"],
+            "properties": {
+              "id": { "type": "string" }, "role": { "type": "string" }, "name": { "type": "string" }, "email": { "type": "string" }, "status": { "type": "string" }, "routing_order": { "type": "integer" },
+              "sent_at": { "$ref": "#/$defs/timeOrNull" }, "viewed_at": { "$ref": "#/$defs/timeOrNull" }, "consent_at": { "$ref": "#/$defs/timeOrNull" }, "completed_at": { "$ref": "#/$defs/timeOrNull" },
+              "decline_reason": { "type": ["string", "null"] }, "ip": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+        "audit": {
+          "type": "object", "required": ["how", "chain", "events"],
+          "properties": {
+            "how": { "type": "string", "description": "How each line's hash is worked out." },
+            "chain": { "type": "object", "required": ["ok", "events", "head"], "properties": { "ok": { "type": "boolean" }, "events": { "type": "integer" }, "head": { "type": "string" } } },
+            "events": { "type": "array", "items": { "$ref": "#/$defs/auditLine" } }
+          }
+        },
+        "comments": { "type": "array", "description": "The questions and comments, private ones included. They are not part of what was signed." },
+        "custom_fields": { "type": "array" },
+        "evidence_pack": { "type": ["string", "null"], "description": "Path of this envelope's evidence pack in the ZIP, when there is one." }
+      }
+    },
+    "imported": {
+      "type": "object", "required": ["id", "source", "imported_at", "subject", "banner", "files"],
+      "properties": {
+        "id": { "type": "string" }, "source": { "enum": ["growsigning", "docusign"] }, "source_deployment": { "type": ["string", "null"] }, "source_id": { "type": ["string", "null"] },
+        "imported_at": { "$ref": "#/$defs/time" }, "subject": { "type": "string" }, "status": { "type": ["string", "null"] }, "chain_ok": { "type": ["boolean", "null"] },
+        "banner": { "type": "string" }, "data": { "type": "object" },
+        "files": { "type": "array", "items": { "type": "object", "required": ["sha256", "name"], "properties": { "sha256": { "$ref": "#/$defs/sha" }, "name": { "type": "string" }, "kind": { "type": "string" } } } }
+      }
+    }
+  }
+}

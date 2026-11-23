@@ -1,0 +1,16 @@
+{
+  "_about": "The ceilings of the core flows, per profile (research/ux-charter.md, section 3). tests/ux/flows.cjs reads them and breaks the run (exit 3) when a number is over. A batch that lowers a number writes the new one here in the same change (UX_RECORD=1 does it, and fills flows that have none). Nothing here is ever raised, with one exception the owner asked for on 23 November 2026: a phone number is required at sign-up, which adds one action to a-send-first (18 to 19). default: a to f are the baseline of tests/out/ux-baseline; g-sign-in and h-sign-myself were measured on 21 November 2026 (h on the Home link 'Sign a document yourself', ?self=1, then 'Sign now' on the envelope page). everything and government: recorded on their first run after the five simplify batches have merged. Lowered on 21 November 2026 by simplify-start (one start button, nine menu entries, Home with Recently completed, the code typed in the tab): a, c, d, e, g and h, from its run in tests/out/finish-simplify-start/ux/, and d from tests/out/finish-simplify-start/ux-after/ (Download on the row on Home). Lowered on 21 November 2026 by simplify-envelope (the document page with one main button and one More, Templates with Use and a More on each row, the Use dialog without the reminder paragraph): c-template-send from its run in tests/out/finish-simplify-envelope/ux/, and choices_seen and words of a-send-first from tests/out/finish-simplify-envelope/ux-after1/. Lowered again on 21 November 2026 by repair-simplify-envelope (a closed fold draws nothing inside, so the count no longer depends on whether the comments had loaded): c-template-send, the same on two runs, tests/out/repair-simplify-envelope/ux/ and ux2/.",
+  "default": {
+    "a-send-first": {"actions": 19, "screens": 8, "choices_seen": 137, "max_choices": 42, "words": 2979, "notices": 2},
+    "b-sign-phone": { "actions": 7, "screens": 5, "choices_seen": 36, "max_choices": 11, "words": 432, "notices": 0 },
+    "b-sign-desktop": { "actions": 7, "screens": 5, "choices_seen": 36, "max_choices": 11, "words": 442, "notices": 0 },
+    "c-template-send": { "actions": 5, "screens": 4, "choices_seen": 59, "max_choices": 20, "words": 268, "notices": 1 },
+    "d-find-download": { "actions": 1, "screens": 1, "choices_seen": 21, "max_choices": 21, "words": 89, "notices": 0 },
+    "e-settings-name": { "actions": 3, "screens": 2, "choices_seen": 54, "max_choices": 32, "words": 404, "notices": 0 },
+    "f-signer-help": { "actions": 7, "screens": 5, "choices_seen": 36, "max_choices": 9, "words": 598, "notices": 2 },
+    "g-sign-in": { "actions": 4, "screens": 3, "choices_seen": 71, "max_choices": 42, "words": 2585, "notices": 0 },
+    "h-sign-myself": {"actions": 14, "screens": 8, "choices_seen": 99, "max_choices": 24, "words": 645, "notices": 0}
+  },
+  "everything": {},
+  "government": {}
+}
