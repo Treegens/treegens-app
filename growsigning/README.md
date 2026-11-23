@@ -3494,7 +3494,7 @@ this on a schedule and tells the server what it saw (`src/server/acrobat.ts`, `r
 - The program's job, in plain words: once a week, fetch one sample from each service (`?tsa=ts.ssl.com` and
   `?tsa=timestamp.digicert.com`), open each in Acrobat Reader, read the bar and the signature panel, take a
   screenshot, and report.
-- Silence is a failure too: a sample with no result within 2 hours, or no check at all for more than 8 days after
+- Silence is a failure too: a sample with no result within 2 hours, or no check at all for more than 2 days after
   the first one, is told to the operators once by the timer.
 - `/app/operator` has an "Adobe Acrobat check" card: the last result with its screenshot, the last 10 checks and the
   day the next one is expected. The last 60 checks are kept. Both routes need `Authorization: Bearer <token>`

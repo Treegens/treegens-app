@@ -1,6 +1,6 @@
-# GrokBot: weekly Adobe Acrobat check for GrowSigning
+# GrokBot: daily Adobe Acrobat check for GrowSigning
 
-Run this every Monday morning, and also whenever I ask. Do it on this computer, with the desktop app
+Run this every day, in the morning, and also whenever I ask. Do it on this computer, with the desktop app
 "Adobe Acrobat Reader" (the free app, NOT the Adobe website in a browser).
 
 ## The secret

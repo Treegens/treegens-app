@@ -58,7 +58,7 @@ export function AcrobatCheckCard() {
       <p className="small" style={{ marginTop: 10 }}>
         {d.next_expected_at
           ? <>Next check expected by {fmtDate(d.next_expected_at, true)}. If none has come by {fmtDate(d.alarm_at, true)}, you are emailed.</>
-          : <>No check has been made yet. One is expected every {d.every_days} days once the program runs.</>}
+          : <>No check has been made yet. One is expected {d.every_days === 1 ? 'every day' : `every ${d.every_days} days`} once the program runs.</>}
       </p>
       {d.checks.length > 0 && (
         <details ref={list}>

@@ -25,9 +25,9 @@ import { readPng, cleanPng, crc32 } from './png.ts';
 import { addDocTimeStamp } from './ltv.ts';
 
 /** How often the program is expected to check, in days. The card shows the day the next one is due. */
-export const ACROBAT_EVERY_DAYS = 7;
+export const ACROBAT_EVERY_DAYS = 1;
 /** No check for longer than this, after the first one ever, and the operators are told once. */
-export const ACROBAT_SILENT_DAYS = 8;
+export const ACROBAT_SILENT_DAYS = 2;
 /** A sample that was fetched and not reported on within this long is a missed check. */
 export const ACROBAT_REPORT_HOURS = 2;
 /** How many checks (and their screenshots) are kept. Older ones are deleted by the timer. */
@@ -348,7 +348,7 @@ export async function acrobatTick(at = Date.now()): Promise<{ missed: number; si
     const since = last?.created_at || first.at;
     if (Date.parse(since) < at - ACROBAT_SILENT_DAYS * 86400_000) {
       silent = await tellOnce(`silent:${last?.id || 'none'}`, `No Acrobat check for more than ${ACROBAT_SILENT_DAYS} days`, [
-        `The last Acrobat check was at ${since}. One is expected every ${ACROBAT_EVERY_DAYS} days.`,
+        `The last Acrobat check was at ${since}. One is expected every day.`,
         'The program that opens the sample in Adobe Acrobat has stopped calling in. Look at the computer it runs on, and at ACROBAT_CHECK_TOKEN on both sides.',
       ]);
     }

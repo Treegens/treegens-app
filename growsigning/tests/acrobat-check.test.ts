@@ -314,7 +314,7 @@ test('each route is limited to 30 calls an hour from one address with the right 
   }
 });
 
-test('the timer: a sample not reported on within 2 hours, and no check for more than 8 days, are each told once', async () => {
+test('the timer: a sample not reported on within 2 hours, and no check for more than 2 days, are each told once', async () => {
   on();
   const { id } = await fetched();
   let before = alerts().length;
@@ -332,12 +332,12 @@ test('the timer: a sample not reported on within 2 hours, and no check for more 
   // A late report still counts, and the card says what it was.
   assert.equal((await report(pass(id))).data.verdict, 'pass');
 
-  // Silence: nothing for 9 days after the last check.
-  const nine = t0 + 9 * 86400_000;
+  // Silence: nothing for 3 days after the last check.
+  const nine = t0 + 3 * 86400_000;
   const quiet = await acro.acrobatTick(nine);
   assert.equal(quiet.silent, true);
   added = alerts().slice(before);
-  assert.ok(added.some((a) => /No Acrobat check for more than 8 days/.test(a)));
+  assert.ok(added.some((a) => /No Acrobat check for more than 2 days/.test(a)));
   before = alerts().length;
   assert.equal((await acro.acrobatTick(nine + 86400_000)).silent, false, 'once for the same silence');
   assert.equal(alerts().length, before);
@@ -363,7 +363,7 @@ test('the operator card: the latest result, the last 10 and the next expected da
   assert.equal(r.data.last.screenshot, true);
   assert.ok(r.data.checks.length <= 10 && r.data.checks.length > 0);
   assert.equal(r.data.checks[0].id, id);
-  assert.equal(Date.parse(r.data.next_expected_at) - Date.parse(r.data.checks[0].created_at), 7 * 86400_000);
+  assert.equal(Date.parse(r.data.next_expected_at) - Date.parse(r.data.checks[0].created_at), 1 * 86400_000);
   assert.ok(!JSON.stringify(r.data).includes(TOKEN), 'the token is never shown');
   const shot = await op.get(`/operator/acrobat-check/${id}/screenshot`);
   assert.equal(shot.status, 200);
