@@ -5,6 +5,8 @@ import { route, json, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, tx, saveBlob, readBlob } from './db.ts';
 // Send later ("send_at" on POST /envelopes/:id/send) and what a send by hand clears (timing.ts).
 import { scheduleSend, clearSchedule } from './timing.ts';
+// A person who sends something new from the app has given their phone number (signuprules.ts).
+import { phoneBeforeSend } from './signuprules.ts';
 import { bad, id, token, now, str, rateLimit, rateWait, isEmail, baseUrl, sha256, HttpError } from './util.ts';
 import { inspectPdf, imageToPdf, imagesToPdf } from './pdf.ts';
 import { extractPages, textOf } from './text.ts';
@@ -365,6 +367,7 @@ route('POST', '/envelopes', async (c) => {
   if (send && kind === 'envelope') {
     try {
       // "send_anyway": the caller has seen that an address on it bounced before, and wants it sent all the same.
+      phoneBeforeSend(c);
       noteSentBy(c, eid);
       await sendEnvelope(eid, c.actor, { anyway: b.send_anyway === true });
     } catch (e) {
@@ -527,6 +530,7 @@ route('POST', '/envelopes/:id/restore', (c) => {
 route('POST', '/envelopes/:id/send', async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const e = mine(c, c.params.id, 'envelope');
+  phoneBeforeSend(c);
   // Who pressed Send, now or for later, when it is not the person it belongs to (shares.ts).
   noteSentBy(c, e.id);
   // "send_at": a time to send it later instead of now (timing.ts). It stays a draft until then.
@@ -805,6 +809,7 @@ route('POST', '/bulk/check', async (c) => {
 
 route('POST', '/bulk', async (c) => {
   const b = await c.body();
+  phoneBeforeSend(c);
   // A bulk send takes as long as the mail server needs for every row, which is when a caller gives up and tries
   // again. With an Idempotency-Key the repeat gets the batch the first call made and nobody is sent a second copy.
   // While the first call is still sending, the repeat is answered at once with how far it has got (202). If the
@@ -1006,6 +1011,7 @@ route('GET', '/powerforms', (c) => ({
 }));
 route('POST', '/powerforms', async (c) => {
   const b = await c.body();
+  phoneBeforeSend(c);
   const tpl = mine(c, str(b.template_id), 'template');
   assertMayRunForm(c, tpl, 'publish it as a PowerForm');
   // Nobody can change the document or choose who comes next on a form: each visitor fills it in alone (agents.ts).

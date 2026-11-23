@@ -76,6 +76,8 @@ import { sharesPaths, ON_BEHALF_OF } from './openapi-shares.ts';
 import { sharelinksPaths, SHARE_LINK_PROP } from './openapi-sharelinks.ts';
 // Invite a friend (src/server/openapi-referrals.ts).
 import { referralsPaths } from './openapi-referrals.ts';
+// Making an account: no + in the address, one login per mailbox, a phone number (src/server/openapi-signuprules.ts).
+import { signupRulesPaths } from './openapi-signuprules.ts';
 import { keyDatesPaths, keyDatesListParams } from './openapi-airepo.ts';
 import { phoneAppPaths } from './openapi-phoneapp.ts';
 import { offlinePaths } from './openapi-offline.ts';
@@ -474,6 +476,7 @@ export function openapi() {
       ...sharesPaths(),
       ...sharelinksPaths(),
       ...referralsPaths(),
+      ...signupRulesPaths(),
       // Trees: what the signing page and the envelope page may say, and the account's switch (src/server/openapi-impact.ts).
       ...impactPaths(),
       // A payment taken by card while signing, into the account's own Stripe account (src/server/openapi-collect.ts).

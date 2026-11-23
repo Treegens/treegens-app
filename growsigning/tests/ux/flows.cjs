@@ -139,6 +139,8 @@ const DESKTOP = { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 }
 const PHONE = devices['iPhone 13'];
 const STAMP = Date.now().toString(36);
 const PASSWORD = 'plant-more-trees';
+// Sign-up asks for a phone number, one per login (src/server/signuprules.ts): a made-up one per person and run.
+const phoneFor = (i) => `+4474${String(10000000 + ((Date.now() + i * 7919) % 89999999)).slice(-8)}`;
 const SENDER = { name: 'Rosa Gardener', email: `rosa-${STAMP}@example.org` };
 const SIGNER_PHONE = { name: 'Ada Sponsor', email: `ada-${STAMP}@example.org` };
 const SIGNER_DESK = { name: 'Ben Partner', email: `ben-${STAMP}@example.org` };
@@ -683,7 +685,7 @@ async function warmUp(browser, pdf) {
   const who = { name: 'Warm Up', email: `warm-${STAMP}@example.org` };
   await p.goto(BASE);
   await p.goto(`${BASE}/signup`);
-  await apiIn(p, '/auth/signup', { body: { ...who, password: PASSWORD } });
+  await apiIn(p, '/auth/signup', { body: { ...who, password: PASSWORD, phone: phoneFor(1) } });
   const m = await waitMail(who.email, (x) => x.link?.includes('verify-email'), 'confirmation');
   await p.goto(m.link);
   await p.getByText(/confirmed/i).first().waitFor().catch(() => {});
@@ -722,6 +724,8 @@ async function flowA(f, pdf) {
   await f.type(p.getByLabel(/your name|full name|^name/i).first(), SENDER.name, 'name');
   await f.type(p.getByLabel(/^email/i).first(), SENDER.email, 'email');
   await f.type(p.getByLabel(/password/i).first(), PASSWORD, 'password');
+  // The phone number of the new login, typed with its country code so the picker needs no touch.
+  await f.type(p.getByLabel(/phone number/i).first(), phoneFor(3), 'phone number');
   await f.press(byRole(p, 'button', /create (an |my |your )?account|sign up|start/i), 'Create account', () => p.waitForURL(/\/app(\/|$|\?)/));
   await f.screen('App home before the address is confirmed');
 
@@ -1112,7 +1116,7 @@ async function setUp(browser, sender) {
     const ctx = await newContext(browser, DESKTOP);
     const p = await ctx.newPage();
     await p.goto(`${BASE}/signup`);
-    await apiIn(p, '/auth/signup', { body: { ...MEMBER, password: PASSWORD, invite: new URL(m.link).searchParams.get('invite') } });
+    await apiIn(p, '/auth/signup', { body: { ...MEMBER, password: PASSWORD, phone: phoneFor(2), invite: new URL(m.link).searchParams.get('invite') } });
     // 2.2: what a member sees in Settings.
     await p.goto(`${BASE}/app/settings`);
     const tabs = await p.getByRole('tab').first().waitFor({ timeout: 15000 }).then(() => visible(p.getByRole('tab')).allInnerTexts()).catch(() => []);

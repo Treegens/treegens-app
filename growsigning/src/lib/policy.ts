@@ -158,7 +158,7 @@ export const SUPPORT_REOPEN_DAYS = 30;
  * Plain constants, so a 'use client' file may import them.
  */
 export const DELETED_WITH_ACCOUNT: string[] = [
-  'Your login, your profile and your saved signature.',
+  'Your login, your profile, your phone number and your saved signature.',
   'Every account you own: its documents, drafts and templates, the documents you uploaded, the signed PDFs, the files signers attached and every audit trail, with the names, email addresses and internet addresses in them.',
   'Its contacts, API keys, webhooks and their delivery logs, Send to many records, public forms and reports from the people documents were sent to.',
   'Its click-to-agree terms with every version, every acceptance recorded for them (with the names, email addresses, customer numbers, internet addresses, browsers and pages in them), reports about their pages, and our stored copies of the emails that sent people a copy of what they accepted, with the certificate files attached to them.',

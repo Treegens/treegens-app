@@ -38,6 +38,8 @@ import { drawSenderDetails } from './customfields.ts';
 import { collectCertLines } from './collect.ts';
 import { sharedCertLines } from './collab.ts';
 import { sealLineFor } from './seal.ts';
+import { certificateShowsDevice } from '../lib/seal.ts';
+import { deviceName } from '../lib/phone.ts';
 import { pdfaLineFor } from './pdfa.ts';
 // Hidden values, currency signs and boxes of fixed size (fieldchecks.ts, src/lib/fieldrules.ts).
 import { printedFields, hiddenLine } from './fieldchecks.ts';
@@ -417,6 +419,14 @@ const ROLE_LABEL: Record<string, string> = { signer: 'Signer', approver: 'Approv
 // A moment on the signing record: the day with the month as a word, so nobody can misread it, and the time in UTC.
 const ts = (s: string | null | undefined) => (s ? `${dayText(s)} ${s.slice(11, 19)} UTC` : '-');
 
+// The browser and device in words, then the string the browser sent, as it was reported and unchecked.
+function deviceCertLine(ua: string | null | undefined): string {
+  const raw = clean(String(ua || '')).slice(0, 300);
+  if (!raw) return 'Not reported';
+  const d = deviceName(raw);
+  return `${d.browser} on ${d.device}, as their browser reported it: ${raw}`;
+}
+
 async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
   // The stamp at the foot of each sheet says "Signed with growsigning", so the footer line does not repeat the name.
   const s = new Sheet(ctx.doc, ctx.font, ctx.bold, `Certificate of Completion · Envelope ${e.id}`);
@@ -502,6 +512,9 @@ async function drawCertificate(ctx: Ctx, e: any, audit: any[], sender: any) {
       // Which ways of showing the document they used: the pages, Easy reading, or both (src/lib/readview.ts).
       { const v = viewsLine(r.views_used); if (v) s.kv('Read as', v); }
       s.kv('IP address', r.ip || '-');
+      // The browser and device their signing page reported, only on a server that asked for it
+      // (CERTIFICATE_SHOWS_DEVICE=1, src/lib/seal.ts): this certificate goes to everyone on the envelope.
+      if (certificateShowsDevice()) s.kv('Browser and device', deviceCertLine(r.user_agent));
       // The same moments by this person's own clock, in the time zone their device reported. The date of signing on
       // the pages is the calendar day there, so the certificate shows what that day rests on, next to UTC above.
       const zone = validZone(r.tz);

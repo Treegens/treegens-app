@@ -128,7 +128,13 @@
     ".next-trees5/types/**/*.ts",
     ".next-trees5/dev/types/**/*.ts",
     ".next-referrals/types/**/*.ts",
-    ".next-referrals/dev/types/**/*.ts"
+    ".next-referrals/dev/types/**/*.ts",
+    ".next-sk5/types/**/*.ts",
+    ".next-sk5/dev/types/**/*.ts",
+    ".next-slsimp/types/**/*.ts",
+    ".next-slsimp/dev/types/**/*.ts",
+    ".next-skeptic-sl/types/**/*.ts",
+    ".next-skeptic-sl/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

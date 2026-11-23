@@ -51,6 +51,10 @@ import { askedSenderLocale, noteSeenLocale } from './senderlocale.ts';
 import { directoryManaged, invitesAllowed } from './scim.ts';
 import { seal } from './colcrypt.ts';
 import { membersMayStamp } from './switches.ts';
+// No + in the address of a new login, one login per mailbox, and a phone number (signuprules.ts).
+import { refusePlus, newAddressOk, emailKeyOf, readPhone, phoneFree, savePhone, phoneState, phoneRequired, phoneBeforeSend } from './signuprules.ts';
+import { PLUS_INVITE_REFUSAL, plusInEmail } from '../lib/signup.ts';
+import './routes-signuprules.ts';
 
 // The role an invitation or a change gives (perm.ts): "admin", a role the team made (its id), and anything else
 // "member", as it always was. Refused when it can do more than the person giving it.
@@ -145,12 +149,19 @@ route('POST', '/auth/signup', async (c) => {
   const password = str(b.password, 200);
   if (!name) throw bad('Tell us your name.');
   if (!isEmail(email)) throw bad('Enter a valid email address.');
+  // No + in the address of a new login (signuprules.ts). Said before anything else about the address.
+  refusePlus(email);
   // An organisation that signs everyone at its domain in through its own service: the login is made there (orgsso.ts).
   signupAllowed(email);
+  // The phone number: asked for on the form, read for the country chosen there, and not another login's.
+  const phone = phoneRequired() || str(b.phone, 40).trim() ? readPhone(b) : null;
   // Long enough for the team being joined, and not a password from a leak (secpolicy.ts, pwned.ts).
   await newPasswordOk(password, { accounts: [inviteAccount(b.invite)] });
   if (get('SELECT id FROM users WHERE email=?', email)) throw bad(b.invite ? 'You already have a GrowSigning login with this address. Sign in with it and the invitation is accepted.' : 'An account with this email already exists. Sign in instead.', 409);
-  const made = await createLogin(c, { name, email, passwordHash: hashPassword(password), invite: b.invite, code: b.code, ref: b.ref });
+  // The same mailbox under another spelling (dots at Gmail, googlemail) is the same person: one login.
+  newAddressOk(email);
+  if (phone) phoneFree(phone);
+  const made = await createLogin(c, { name, email, passwordHash: hashPassword(password), invite: b.invite, code: b.code, ref: b.ref, phone });
   return { user: publicUser(made.user) };
 }, 'public');
 
@@ -160,7 +171,13 @@ route('POST', '/auth/signup', async (c) => {
 // provider); an invitation does the same, because it was sent there. Everyone else is emailed our confirmation link.
 // An invitation or a code that cannot be used is refused before anything is created. `also` runs inside the same
 // transaction as the new login, for what must exist with it or not at all.
-export async function createLogin(c: Ctx, p: { name: string; email: string; passwordHash: string; verified?: boolean; invite?: any; code?: any; ref?: any; via?: string; also?: (userId: string) => void }) {
+export async function createLogin(c: Ctx, p: { name: string; email: string; passwordHash: string; verified?: boolean; invite?: any; code?: any; ref?: any; via?: string; also?: (userId: string) => void; phone?: string | null; org?: boolean }) {
+  // Every way a login is made comes through here, so this is where the rules for a new address are kept
+  // (signuprules.ts): no + before the @, and no login on that mailbox yet. `org`: an organisation made the login
+  // through its own sign-in service for a domain it has shown to be its own; it answers for its people's addresses,
+  // and they are not asked for a phone number.
+  if (!p.org) newAddressOk(p.email);
+  if (p.phone) phoneFree(p.phone);
   const invite = p.invite ? openInvite(str(p.invite), p.email) : null;
   // A code that makes the plan free is checked before anything is created, so a typo is said out loud instead of
   // quietly giving an ordinary account. It only applies to a new workspace, not to joining someone else's team.
@@ -170,7 +187,9 @@ export async function createLogin(c: Ctx, p: { name: string; email: string; pass
   let accountId = invite?.account_id;
   const t = now();
   tx(() => {
-    run('INSERT INTO users (id, email, name, password_hash, email_verified, verify_token, created_at) VALUES (?,?,?,?,?,?,?)', uid, p.email, p.name, p.passwordHash, invite || p.verified ? 1 : 0, token(), t);
+    run('INSERT INTO users (id, email, name, password_hash, email_verified, verify_token, created_at, email_key, phone_rule) VALUES (?,?,?,?,?,?,?,?,?)', uid, p.email, p.name, p.passwordHash, invite || p.verified ? 1 : 0, token(), t, emailKeyOf(p.email), p.org ? 2 : 1);
+    // A login made with Google or Microsoft has no number yet: it gives one on the "One more thing" screen.
+    if (p.phone) savePhone(uid, p.phone);
     if (invite) join(invite, uid, t, c);
     else {
       // With a few free signatures to try the product with. Once per person.
@@ -410,6 +429,9 @@ route('GET', '/me', (c) => {
   noteSeenLocale(c.user, c.req);
   return {
     user: publicUser(c.user, c),
+    // The phone number of this login and whether it still has to be given (signuprules.ts). Only to the person in
+    // their own browser: no key reads it, and nobody else on the team is ever sent it.
+    ...(c.auth.via === 'session' ? { phone: phoneState(c.user) } : {}),
     role: c.role,
     // The role by name and what it can do (perm.ts): Owner, Admin, Member, or a role the team made.
     my_role: myRole(c),
@@ -593,6 +615,9 @@ route('POST', '/account/invites', async (c) => {
   const given = givenRole(c, b.role);
   const role = given.role;
   if (!isEmail(email)) throw bad('Enter a valid email address.');
+  // A new login cannot be made with a + in its address (signuprules.ts), so nobody is invited at one. Someone who
+  // already has a login with exactly this address keeps it and can be invited as before.
+  if (plusInEmail(email) && !get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(PLUS_INVITE_REFUSAL, 400, { code: 'plus_in_email' });
   // Nobody is invited into an account that is about to be deleted.
   if (c.account.closing_at) throw bad(closingText(c.account, 'Nobody can be invited to it now'), 403);
   // An account whose members come from its directory invites nobody by hand (scim.ts).
@@ -823,6 +848,8 @@ route('GET', '/api-keys', (c) => ({
 route('POST', '/api-keys', async (c) => {
   const b = await c.body();
   if (b.scope != null && b.scope !== 'send' && b.scope !== 'admin') throw bad('Choose what the key may do: "send" for everyday work, or "admin" to also change account settings.');
+  // A key sends without a person at the screen, so the login that makes one has given its phone number (signuprules.ts).
+  phoneBeforeSend(c);
   // A key reads every document of the account and outlives the browser. Until the address of the login is confirmed,
   // the login may be a stranger's made in somebody else's name (the same rule as for a webhook, below).
   if (!c.user.email_verified) throw bad('Confirm your email address before you create a key. Type the 6-digit code from our email at the top of the app, or press the button in that email. "Send a new code" there emails a new one.', 403);

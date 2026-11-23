@@ -13,17 +13,18 @@
 //   - the seal itself failed (a bug, a key that stopped working): made without a seal, as before any seal settings,
 //     and the people who run the server are told.
 // What happened is written into the envelope's audit trail once the file is stored (sealStored).
-import { sealPlan, sealPdf, rememberSealCert, TimeStampMissing, type SealDone } from './seal.ts';
+import { sealPlan, rememberSealCert, TimeStampMissing, type SealDone } from './seal.ts';
+import { sealWithPlan, sealFailure } from './pdfsealer.ts';
+import { applySealEnv } from '../lib/sealenv.ts';
 import { sealConfigured, tellOperators } from './sealkey.ts';
 import { run, get } from './db.ts';
 import { sha256 } from './util.ts';
 import { audit } from './envelopes.ts';
 import { t, SOURCE_LOCALE } from '../lib/i18n.ts';
 import { TSA_TOTAL_MS } from './tsa.ts';
-import { withLongTerm } from './ltv.ts';
 import { stampText } from '../lib/dates.ts';
 import { stampChainHead, saveChainStamp, type ChainStamp } from './auditstamp.ts';
-import { cscReady } from './sealcsc.ts';
+import { cscReady, withoutSecrets } from './sealcsc.ts';
 import { tsaUrls, TsaError } from './tsa.ts';
 import { addDocTimeStamp } from './ltv.ts';
 import { inArchiveFormat, archiveStored, discarded } from './pdfa.ts';
@@ -53,7 +54,9 @@ export async function finishPdf(e: any, render: Render): Promise<Uint8Array> {
 }
 
 async function finishSealed(e: any, render: Render, until: number, left: number): Promise<Uint8Array> {
-  // A cloud seal (sealcsc.ts): its certificate chain is fetched first when it is not there or more than a day old.
+  // The shorter names of the seal settings and PDF_SIGNING_MODE (src/lib/sealenv.ts), then
+  // a cloud seal (sealcsc.ts): its certificate chain is fetched first when it is not there or more than a day old.
+  applySealEnv();
   await cscReady();
   const plan = sealPlan();
   if (plan) Object.assign(plan, { until, tsaMs: left });
@@ -63,15 +66,17 @@ async function finishSealed(e: any, render: Render, until: number, left: number)
   try {
     const page = await render({ ...e, seal_plan: plan });
     if (discarded.has(page)) return page;
-    const r = await sealPdf(page, plan);
-    return longTerm(r, plan);
+    // pdfsealer.ts: the seal, its time stamp, and after a seal with a time stamp the data to check it for years
+    // (ltv.ts). The file is never held back for that last step.
+    const r = await sealWithPlan(page, plan);
+    return keep(r.bytes, { done: r.done });
   } catch (err) {
     if (err instanceof TimeStampMissing) {
       const bb = sealPlan(err.message);
       if (bb) {
         Object.assign(bb, { until, tsaMs: left });
         try {
-          const r = await sealPdf(await render({ ...e, seal_plan: bb }), bb);
+          const r = await sealWithPlan(await render({ ...e, seal_plan: bb }), bb);
           return keep(r.bytes, { done: r.done });
         } catch (again) {
           return unsealed(e, render, again);
@@ -83,10 +88,12 @@ async function finishSealed(e: any, render: Render, until: number, left: number)
 }
 
 async function unsealed(e: any, render: Render, err: any): Promise<Uint8Array> {
-  const why = String(err?.message || err).slice(0, 300);
+  // Never a secret of the signing service in the log or the alert, whatever the service wrote back (sealcsc.ts).
+  const why = withoutSecrets(String(err?.message || err)).slice(0, 300);
   // The operators are told once per reason, not once per document: during an outage of a signing service every
-  // completed PDF fails the same way. Which documents it was goes to the log only.
-  console.error(`[seal] envelope ${e.id} was completed without a seal: ${why}`);
+  // completed PDF fails the same way. Which documents it was goes to the log only, with the kind of failure
+  // (signing_service or failed, the codes of PdfSealError in pdfsealer.ts).
+  console.error(`[seal] envelope ${e.id} was completed without a seal (${sealFailure(err).code}): ${why}`);
   tellOperators(`A completed PDF could not be sealed, so it was made without a seal: ${why}`, `unsealed\n${alertReason(why)}`);
   return stampOnly(await render(e), { unsealed: 'failed' });
 }
@@ -110,13 +117,6 @@ async function stampOnly(pdf: Uint8Array, o: Outcome | null): Promise<Uint8Array
   } catch (err: any) {
     return keep(pdf, { ...o, stampFailed: err instanceof TsaError ? err.message : String(err?.message || err).slice(0, 300) });
   }
-}
-
-// After a seal with a time stamp: the data to check it for years (ltv.ts). The file is never held back for it.
-async function longTerm(r: { bytes: Buffer; done: SealDone }, plan: NonNullable<ReturnType<typeof sealPlan>>): Promise<Uint8Array> {
-  if (r.done.level !== 'B-T') return keep(r.bytes, { done: r.done });
-  const l = await withLongTerm(r.bytes, [plan.key.cert, ...plan.key.chain], r.done.tsaToken || null);
-  return keep(l.bytes, { done: { ...r.done, ltv: l.ltv } });
 }
 
 function keep(pdf: Uint8Array, o: Outcome) {

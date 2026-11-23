@@ -97,10 +97,18 @@ export async function boot(): Promise<Server> {
 
 export const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
+// Sign-up asks for a phone number, one per login (src/server/signuprules.ts). Almost every test makes logins and none
+// of the older ones cares which number, so a sign-up that names none is given the next one of a made-up range here.
+// A test about the rule itself sets `autoPhone = false` on its client, or sends its own "phone".
+let phones = 0;
+export const nextPhone = () => `+4474${String(10000000 + ++phones)}`;
+
 export class Client {
   cookies: Record<string, string> = {};
   ip = '203.0.113.9';
+  autoPhone = true;
   async call(method: string, url: string, body?: any, headers: Record<string, string> = {}) {
+    if (this.autoPhone && method === 'POST' && url === '/auth/signup' && body && typeof body === 'object' && !(body instanceof FormData) && !('phone' in body)) body = { ...body, phone: nextPhone() };
     const init: any = { method, headers: { cookie: Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; '), 'x-forwarded-for': this.ip, ...headers } };
     if (body instanceof FormData) init.body = body;
     else if (body !== undefined) (init.body = JSON.stringify(body)), (init.headers['content-type'] = 'application/json');

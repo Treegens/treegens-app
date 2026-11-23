@@ -33,6 +33,9 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   // A signing link whose document was paused while the page was open (src/server/timing.ts): the page reloads into
   // its paused card instead of showing the refusal as an error.
   if (res.status === 409 && data.code === 'paused' && path.startsWith('/sign/')) window.dispatchEvent(new Event('sg:paused'));
+  // A send refused because the login has no phone number yet (src/server/signuprules.ts): the app shell shows the
+  // screen that asks for it, over the page.
+  if (res.status === 403 && data.code === 'phone_needed') window.dispatchEvent(new Event('sg:phone'));
   if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong.'), { status: res.status, code: data.code as string | undefined, data });
   return data;
 }

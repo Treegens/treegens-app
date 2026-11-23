@@ -1,4 +1,5 @@
 // What the person's role allows (perm.ts), where this file once asked for an admin.
+import { ownLoginFile } from './signuprules.ts';
 import { can } from './perm.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -230,6 +231,8 @@ route('GET', '/export', (c) => {
     // words, so this copy is the one that keeps them. Only when there is a line.
     const deletions = can(c, 'settings') && !!get('SELECT 1 x FROM retention_log WHERE account_id=? LIMIT 1', c.account.id);
     if (deletions) yield { name: 'deletion-record.csv', data: Buffer.from(retentionCsv(c.account.id)) };
+    // The login of whoever made the export, with its phone number. Nobody else's number is in an export (signuprules.ts).
+    if (c.auth?.via === 'session') yield { name: 'your-login.json', data: ownLoginFile(c.user.id) };
     yield { name: 'README.txt', data: Buffer.from([
       `GrowSigning export for ${c.account.name}, made ${now()}.`, '',
       'signed/        completed documents, each with its certificate of completion',
@@ -240,6 +243,7 @@ route('GET', '/export', (c) => {
       ...(stamps.length ? ['stamps/        the stamps your team keeps under Settings, Stamps and seals, as pictures, with their names and settings in stamps/index.csv'] : []),
       ...(can(c, 'settings') ? [`security/      the security record of the account as it stands now (Settings, Security), oldest first. ${securityWords()}`] : []),
       ...(deletions ? ['deletion-record.csv  every change to the deletion schedule, every keep, hold and deletion of files, and every attempt the software refused, with the fingerprint of each deleted signed PDF (Settings, Records and data). Once the account is closed, the copy we keep loses its names and words.'] : []),
+      ...(c.auth?.via === 'session' ? ['your-login.json  your own login: name, email address and the phone number you gave. Nobody else\'s phone number is in this export.'] : []),
       `envelopes.csv  one row per envelope${custom.head.length ? ', with a column for each detail your account keeps on envelopes' : ''}`,
       '', `Check any signed PDF at ${baseUrl()}/verify. It must be the exact file from this export.`,
       ...(skipped ? ['', `${skipped} signed document(s) did not fit in one ZIP file. Export again with fewer envelopes selected to get them.`] : []),

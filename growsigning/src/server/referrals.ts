@@ -16,9 +16,10 @@ import type { Ctx } from './router.ts';
 //   2. A sign-up through the link writes one line in `referrals` (pending, or refused with the reason). Nothing is
 //      given yet.
 //   3. The reward lands once the friend's account is real: their email address is confirmed, they gave a phone
-//      number, and somebody has signed a document they sent (a signature that counted, not their own). Then the
-//      inviting account and the friend's account each get the free signatures, as a lot of their own that expires
-//      like the trial's (credits.ts, source "referral"). The owner of the inviting account gets one email.
+//      number (where the server asks for one), and somebody has signed a document they sent (a signature that
+//      counted, not their own). Then the inviting account and the friend's account each get the free signatures, as
+//      a lot of their own that expires like the trial's (credits.ts, source "referral"). The owner of the inviting
+//      account gets one email.
 //   4. Nobody is rewarded for inviting themselves: the same mailbox, the same phone number, the same account, a
 //      browser or an internet address the inviting account was used from. One reward per friend, and a limit per
 //      month and in total for each inviting account.
@@ -41,20 +42,27 @@ const SAME_IP_HOURS = 24;
 
 const mark = (kind: string, value: string) => hmac(`referral:${kind}:${value}`);
 const friendMark = (email: string) => mark('email', normalEmail(email));
-const phoneMark = (phone: string) => mark('phone', normalPhone(phone));
 // An address we cannot tell apart (no proxy in front) says nothing about who is who, so it never counts as "the same".
 const ipMark = (ip: string) => (ip && ip !== 'unknown' ? mark('ip', ip) : '');
 
 /**
- * The phone number a login gave ('' when none). It is users.phone; a column of the users row with another name for
- * the same thing (phone_e164, mobile and the like) is read too, so this does not depend on how sign-up names it.
- * The number is read as plain text: a build that encrypts that column has to open it before this sees it.
+ * The phone number of a login, as the keyed fingerprint sign-up keeps of it (users.phone_key, src/server/signuprules.ts),
+ * or '' when the login gave none. The number itself can be encrypted at rest, so two logins are compared by this
+ * fingerprint and never by the number. A row that has a plain number and no fingerprint (written by hand) is read too.
  */
-export function userPhone(u: any): string {
+export function phoneKey(u: any): string {
   if (!u) return '';
-  const names = ['phone', ...Object.keys(u).filter((k) => /phone|mobile/.test(k) && !/verif|hash|code|_at$|tries|calls/.test(k))];
-  for (const k of names) if (typeof u[k] === 'string' && normalPhone(u[k]).length >= 6) return u[k];
-  return '';
+  if (typeof u.phone_key === 'string' && u.phone_key) return u.phone_key;
+  return typeof u.phone === 'string' && /^\+?[\d\s().-]{6,24}$/.test(u.phone) && normalPhone(u.phone).length >= 6 ? mark('phone', normalPhone(u.phone)) : '';
+}
+// A server that does not ask its people for a phone number (SIGNUP_PHONE=off) cannot wait for one. The same rule as
+// phoneRequired in src/server/signuprules.ts, written out here because that file registers routes when it loads and
+// this one is loaded on the way to the router (tests/referrals.test.ts holds the two together).
+export function phoneAsked(env: Record<string, string | undefined> = process.env): boolean {
+  const v = String(env.SIGNUP_PHONE ?? '').trim().toLowerCase();
+  if (['off', '0', 'false', 'no'].includes(v)) return false;
+  if (['required', 'on', '1', 'true', 'yes'].includes(v)) return true;
+  return !isDeploymentBilling(env as any);
 }
 
 // ---- The link ----------------------------------------------------------------------------------------------------
@@ -128,8 +136,8 @@ function whyNot(inviter: any, friend: { userId: string; accountId: string; email
   const members = all('SELECT u.* FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=?', inviter.id);
   const me = normalEmail(friend.email);
   if (members.some((u) => normalEmail(u.email) === me)) return refuse('same_email');
-  const phone = normalPhone(userPhone(get('SELECT * FROM users WHERE id=?', friend.userId)));
-  if (phone && members.some((u) => normalPhone(userPhone(u)) === phone)) return refuse('same_phone');
+  const phone = phoneKey(get('SELECT * FROM users WHERE id=?', friend.userId));
+  if (phone && members.some((u) => phoneKey(u) === phone)) return refuse('same_phone');
   // The friend's browser or internet address at sign-up against every one the inviting account was used from: the
   // same browser at any time, the same internet address within a day before or after.
   const mine = all('SELECT device, ip, at FROM referral_devices WHERE account_id=?', friend.accountId);
@@ -178,7 +186,7 @@ const logLine = (accountId: string, what: string, ref: string, detail: string) =
 function friendReady(row: any): { user: any; ready: boolean } {
   const user = get('SELECT * FROM users WHERE id=?', row.friend_user_id);
   const signed = !!get("SELECT 1 x FROM credits WHERE account_id=? AND reason='signature' LIMIT 1", row.friend_account_id);
-  return { user, ready: !!user && !!user.email_verified && !!userPhone(user) && signed };
+  return { user, ready: !!user && !!user.email_verified && (!!phoneKey(user) || !phoneAsked()) && signed };
 }
 
 /**
@@ -218,8 +226,8 @@ function rewardOne(referralId: string): { to: string | null; mail: any } | null 
   // Decided again with what is known now: the phone number, and every browser and address noted since sign-up.
   const why = whyNot(inviter, { userId: user.id, accountId: friendAccount.id, email: user.email, at: row.at });
   if (why) return refused(why), null;
-  const pm = phoneMark(userPhone(user));
-  if (get("SELECT 1 x FROM referrals WHERE phone_mark=? AND id != ? AND status IN ('rewarded','taken_back')", pm, row.id)) return refused('phone_used'), null;
+  const pm = phoneKey(user) || null;
+  if (pm && get("SELECT 1 x FROM referrals WHERE phone_mark=? AND id != ? AND status IN ('rewarded','taken_back')", pm, row.id)) return refused('phone_used'), null;
   const r = referralSettings();
   const counts = rewardedCounts(inviter.id);
   if (counts.total >= r.total_max) return refused('total_limit'), null;

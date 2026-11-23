@@ -100,6 +100,8 @@ try {
     await page.getByLabel('Your name').fill('Jimi Sender');
     await page.getByLabel('Email').fill('jimi@example.org');
     await page.getByLabel(/Password/).fill('plant-more-trees');
+    // Sign-up asks for a phone number (src/server/signuprules.ts): a made-up one, typed with its country code so the picker follows it.
+    await page.getByLabel('Phone number').fill(`+44 7400 ${String(Date.now()).slice(-6)}`);
     await page.getByRole('button', { name: 'Create account' }).click();
     await page.waitForURL('**/app');
     await page.getByText(/Confirm your email/).waitFor();

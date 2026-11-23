@@ -52,7 +52,7 @@ export default function ProcessingSummary() {
 
         <h2>What is processed</h2>
         <ul className="pub-list">
-          <li><b>About account holders:</b> name, email address, a salted hash of the password (never the password), a job title and company if given, a saved signature and initials if saved, team memberships, notification settings, and the time zone their browser reports, which decides the day written for their signers when a signer&apos;s own device says none.</li>
+          <li><b>About account holders:</b> name, email address, the phone number given when the account was made (used to keep accounts real and to reach its owner about the account, never shared and never used for marketing), a salted hash of the password (never the password), a job title and company if given, a saved signature and initials if saved, team memberships, notification settings, and the time zone their browser reports, which decides the day written for their signers when a signer&apos;s own device says none.</li>
           <li><b>Documents:</b> the files you upload, the text read from PDFs so that you can search your own envelopes, the fields placed on them, the signed PDFs with their certificates, and files that signers attach.</li>
           <li><b>About the people you send to:</b> the name and email address you typed, an access code or a mobile number if you set one, what they filled in, their signature and initials as pictures, when they opened, agreed, signed or declined, and the time zone their device reports, which decides the date printed for them and is on the certificate.</li>
           <li><b>The audit trail of every envelope:</b> each step with its time, the internet address it came from and the kind of browser.</li>

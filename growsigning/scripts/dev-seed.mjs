@@ -48,7 +48,8 @@ async function upload(title) {
 const outbox = async () => (await api('/dev/outbox')).emails;
 const linkFor = async (to, part = '/sign/') => (await outbox()).find((m) => m.to_email === to && m.link?.includes(part))?.link;
 
-await api('/auth/signup', { body: { name: 'Demo Sender', email, password } });
+// Sign-up asks for a phone number, one per login: a made-up one for the demo sender.
+await api('/auth/signup', { body: { name: 'Demo Sender', email, password, phone: `+4474${String(Date.now()).slice(-8)}` } });
 const verify = (await outbox()).find((m) => m.to_email === email && m.link?.includes('verify-email'));
 await api('/auth/verify', { body: { token: new URL(verify.link).searchParams.get('token') } });
 

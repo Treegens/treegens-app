@@ -1,4 +1,6 @@
 'use client';
+import { PhoneForm, PhoneVerify } from './PhoneRequired';
+import { SOURCE_LOCALE, t } from '@/lib/i18n';
 import { emailLine } from '@/lib/simplicity';
 import { useId, useState } from 'react';
 import { api, toast } from './ui';
@@ -8,6 +10,7 @@ import { bounceDay } from '@/lib/mailnews';
 // email_problem), and the form that moves the login to another address (POST /me/email, src/server/routes-bounces.ts).
 // Both take `me` from their caller, so this file needs nothing from AppShell.
 
+const say = (key: string, vars: Record<string, string | number> = {}) => t(SOURCE_LOCALE, key, vars);
 const TAP = { minHeight: 44 };
 const friendly = (e: any) => (e?.status ? e.message : 'We could not reach GrowSigning, so nothing was changed. Check your connection and try again.');
 
@@ -103,8 +106,15 @@ export function EmailAddressCard({ me }: { me: any }) {
     <div className="card">
       <h2 style={{ marginBottom: 4 }}>Email address</h2>
       <p className="muted small">{emailLine(me.user.email, !!me.user.email_verified, !!me.email_problem)}</p>
+      {/* The phone number of the login (src/server/signuprules.ts): shown to its owner here, changed in the same fold. */}
+      {me.phone && <p className="muted small">{me.phone.number ? say('phone.settings_line', { number: me.phone.number }) : say('phone.settings_none')}{me.phone.verified ? ` ${say('phone.verify.done')}` : ''}</p>}
       <button type="button" className="btn sm" style={TAP} onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={`${id}-change`} data-more="item">Change email address</button>
       <div id={`${id}-change`} hidden={!open}>{open && <EmailChangeForm me={me} onCancel={() => setOpen(false)} />}</div>
+      {/* The same button opens the phone number: one fold for where we reach this person. */}
+      {open && me.phone && <div style={{ marginTop: 16 }}>
+        <PhoneForm me={me} button={say('phone.button.change')} onSaved={() => (toast(say('phone.saved')), me.reload?.())} />
+        {me.phone.can_verify && <PhoneVerify onDone={() => me.reload?.()} />}
+      </div>}
     </div>
   );
 }

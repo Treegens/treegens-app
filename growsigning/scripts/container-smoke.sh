@@ -60,7 +60,7 @@ if (!h.ok || h.mail !== 'not configured') throw new Error('health: ' + JSON.stri
 step('health answers 200 with no network and no mail server');
 
 const email = `smoke-${Date.now()}@example.org`;
-await call('POST', '/auth/signup', { name: 'Smoke Test', email, password: 'a long password for the smoke test 1' });
+await call('POST', '/auth/signup', { name: 'Smoke Test', email, password: 'a long password for the smoke test 1', phone: '+4474' + String(Date.now()).slice(-8) });
 step('signed up');
 
 // A login sends only once its address is confirmed, and the confirmation comes by email. This container has no mail

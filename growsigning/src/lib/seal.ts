@@ -96,3 +96,11 @@ export const signaturesLost = (n: number) =>
   `This PDF already carries ${n === 1 ? 'a digital signature' : `${n} digital signatures`}. ${n === 1 ? 'It does' : 'They do'} not survive here: the signed copy is made from the pages as they look, so in it ${n === 1 ? 'that signature is' : 'those signatures are'} only a picture and can no longer be checked. If ${n === 1 ? 'it' : 'they'} must stay checkable, keep the file as it is and do not send it for signing here.`;
 
 // The words on the screens (the envelope page, Settings) are in src/locales/en.json under "seal.".
+
+/**
+ * CERTIFICATE_SHOWS_DEVICE=1: the certificate of completion also prints, for each person, the browser and device
+ * their signing page reported (the "user agent"). Off unless set, on purpose: the certificate goes to everyone on the
+ * envelope, and the browser string says what phone or computer a person uses. Without the setting it stays where it
+ * was: in the sender's evidence pack (audit-trail.json) and with the people who run the server.
+ */
+export const certificateShowsDevice = (env: Env = process.env) => env.CERTIFICATE_SHOWS_DEVICE === '1';

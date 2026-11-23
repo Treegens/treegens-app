@@ -12,6 +12,7 @@
     "sbom": "node scripts/sbom.mjs",
     "backup": "node scripts/backup.mjs",
     "setup": "node scripts/setup.mjs",
+    "seal:dev-cert": "node scripts/dev-seal-cert.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "i18n:check": "node --experimental-strip-types --no-warnings scripts/i18n-check.mjs",

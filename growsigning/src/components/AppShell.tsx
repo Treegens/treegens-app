@@ -14,6 +14,8 @@ import { SideNav, TabBar } from './AppNav';
 import { navOn, pageTitle } from '@/lib/nav';
 // The account's sign-in rules (src/server/secpolicy.ts): a longer password first, and the warning before an idle sign-out.
 import { PasswordRequired } from './PasswordRequired';
+// "One more thing": the phone number of a login (src/server/signuprules.ts).
+import { PhoneRequired } from './PhoneRequired';
 import { IdleWarning } from './IdleWarning';
 import { signedOutPath, QUIET_HEADER } from '@/lib/signinrules';
 // The sender's screens in the sender's language (lang-sender): chosen under Settings, Profile, else the browser's.
@@ -78,6 +80,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (me) api('/impact').then(setImpact).catch(() => {});
   }, [me, path]);
   useEffect(() => setOpen(false), [path]);
+  // A send that the server refused because this login has no phone number yet (ui.tsx sends the event): the screen
+  // that asks for it comes up over the page, which stays as it is underneath.
+  const [phoneOver, setPhoneOver] = useState(false);
+  useEffect(() => {
+    const ask = () => setPhoneOver(true);
+    window.addEventListener('sg:phone', ask);
+    return () => window.removeEventListener('sg:phone', ask);
+  }, []);
   // Each page of the app has its own name in the browser tab (src/lib/nav.ts).
   useEffect(() => {
     if (!me) return;
@@ -129,8 +139,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   if (me.two_step?.setup_required) return inLang(<MeCtx.Provider value={{ ...me, reload }}><TwoStepRequired me={me} /></MeCtx.Provider>);
   // The same for a member whose password is shorter than the account asks (the server refuses the rest).
   if (me.rules?.password_needed) return inLang(<MeCtx.Provider value={{ ...me, reload }}><PasswordRequired me={me} /></MeCtx.Provider>);
+  // A login without a phone number: one made with Google or Microsoft gives it before the app opens, one from
+  // before the rule is asked once and may say not now (PhoneRequired.tsx).
+  if (me.phone?.ask === 'now' || me.phone?.ask === 'may_wait') return inLang(<MeCtx.Provider value={{ ...me, reload }}><PhoneRequired me={me} onDone={reload} /></MeCtx.Provider>);
   // Only in an account with "Sign out after N minutes of no use": the line that warns two minutes before.
-  const idle = me.rules?.idle_minutes ? <IdleWarning minutes={me.rules.idle_minutes} account={me.account.name} /> : null;
+  const idleLine = me.rules?.idle_minutes ? <IdleWarning minutes={me.rules.idle_minutes} account={me.account.name} /> : null;
+  const idle = <>{idleLine}{phoneOver && me.phone?.needed && <div className="phone-over" role="dialog" aria-modal="true" aria-label={T('phone.title')}><PhoneRequired me={me} onDone={() => (setPhoneOver(false), reload())} onClose={() => setPhoneOver(false)} /></div>}</>;
   const full = /^\/app\/(envelopes|templates)\/[^/]+\/edit/.test(path);
   if (full) return inLang(<MeCtx.Provider value={{ ...me, reload }}>{idle}{me.two_step?.reset_at && <div className="full-ts-reset"><TwoStepResetBanner me={{ ...me, reload }} /></div>}{children}</MeCtx.Provider>);
 

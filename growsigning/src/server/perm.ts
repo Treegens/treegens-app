@@ -50,6 +50,8 @@ const NEEDS: Record<Need, string[]> = {
     'GET /billing', 'POST /clickwraps/:id/acceptances', 'GET /clickwraps/:id/status', 'GET /custom-fields', 'GET /saved-fields',
     'POST /embed/sender/close', 'GET /groups', 'GET /impact', 'GET /inbox', 'POST /invites/accept', 'PATCH /me',
     'GET /me/delete', 'POST /me/delete', 'POST /me/email', 'POST /me/email-works', 'POST /me/email/confirm', 'GET /me/idle',
+    // The phone number of one's own login, and what the people who run the server see of it (signuprules.ts).
+    'POST /me/phone', 'POST /me/phone/later', 'POST /me/phone/code', 'POST /me/phone/verify', 'GET /operator/accounts/:id/people', 'POST /operator/phones',
     'POST /me/idle/stay', 'POST /me/password', 'GET /me/sessions', 'DELETE /me/sessions/:id', 'POST /me/sessions/sign-out-others',
     'GET /me/signin', 'DELETE /me/signin/:id', 'POST /me/signin/:provider/connect', 'POST /me/signin/password-link',
     'GET /me/two-step', 'POST /me/two-step/confirm', 'DELETE /me/two-step/devices', 'DELETE /me/two-step/devices/:id',

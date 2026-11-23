@@ -1,3 +1,4 @@
+import { PHONE_WHY } from '@/lib/signup';
 import { refundRuleText, priceRuleText, CLOSING_REMINDER_DAYS, DELETED_WITH_ACCOUNT, KEPT_AFTER_DELETION } from '@/lib/policy';
 import { expiryRuleText, HELD_EXPIRY_TEXT } from '@/lib/policy';
 import { referralOfferOn, referralRuleText, referralRulesFrom } from '@/lib/referral';
@@ -218,7 +219,7 @@ export default function Help() {
           </QA>
 
           <QA id="code" q="I was given a code">
-            <p>Some communities get {P.planName} free. Enter your code when you <Link href="/signup">sign up</Link>. If you already have an account, enter it under Settings, then Plan, where it says <b>Have a code?</b></p>
+            <p>Some communities get {P.planName} free. <Link href="/signup">Sign up</Link> first, then enter your code under Settings, then Plan, where it says <b>Have a code?</b> If we gave you a link with the code in it, the sign-up page shows the code and applies it for you.</p>
             <p>With a code, the {sigs(P.monthlySignatures)} of the monthly plan arrive every calendar month and nothing is charged for the plan, so there is nothing to cancel. Like a paid month&apos;s, they belong to that month: the ones not used by its end expire, and the next month brings a fresh {P.monthlySignatures}. If you were paying before, your paid subscription ends the moment the code is applied, with a cancellation reference by email; the card you paid with stays saved for top-ups until you remove it on the Plan page.</p>
           </QA>
 
@@ -228,6 +229,13 @@ export default function Help() {
             <p>You can take everything with you at any time, on any plan: Settings, then Records and data, then <b>Export everything</b> gives owners and admins one ZIP file with every signed PDF and its full record for disputes, every document and the full history of each, templates, contacts, groups and settings, in an open, published format. It is free and it keeps working after you cancel. Only the signed PDFs and a spreadsheet? Anyone can press <b>Download signed PDFs (ZIP)</b> on Documents.</p>
           </QA>
           </>}
+
+          <QA id="phone-number" q="Why do you ask for my phone number, and why can my email not have a + in it?">
+            <p><b>The phone number.</b> {PHONE_WHY} You give it once: on the sign-up form, or on a short screen called <b>One more thing</b> if you signed up with Google or Microsoft or made your account before we asked for it. Choose your country and type the number as you write it at home. We do not text or call you to check it.</p>
+            <p>An account made before we asked can say <b>Not now</b> once. Everything you have sent keeps working. We ask again before you send your next new document, and it takes about ten seconds.</p>
+            <p>One number belongs to one account. If it says <b>This number is already used by another account</b> and you share a phone with someone, <a href="#contact">write to us</a> and a person can allow it. You can see and change your number under Settings, Profile, with the button <b>Change email address</b>. Only you and the people who run GrowSigning can see it: nobody on your team can, and the people you send documents to cannot. It is in your own export and is deleted with your account.</p>
+            <p><b>The + in an email address.</b> A new account needs your email address without a + part, so <b>ann+work@example.com</b> signs up as <b>ann@example.com</b>. One mailbox gets one account. This is only about your own account: you can still send a document to someone whose address has a + in it.</p>
+          </QA>
 
           <QA id="close" q="How do I close my account?">
             <p>Closing is separate from cancelling. If you only want to stop paying, cancel the plan and keep your documents.</p>

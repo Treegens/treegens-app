@@ -13,6 +13,9 @@
 // clock (a service that lies about the time, or a server whose clock is wrong, is caught there), and, with TSA_TRUST,
 // issued under one of those certificates. Otherwise the next service is asked, and when none answers the seal goes
 // out at B-B (seal.ts); the PDF is never held back for it, and a file sealed at B-B is never changed afterwards.
+// When no service gave a time stamp, those that failed at once in a way that passes (no connection, or HTTP 429, 500,
+// 502, 503, 504) are asked once more a quarter of a second later, inside the same 4 seconds; a time-stamp request can
+// be repeated freely. A second service that answers well is used first, so nobody waits for a retry that is not needed.
 // Only with TSA_TRUST does anything call the time stamp "trusted": without it nobody checked whose service answered.
 // TSA_USER and TSA_PASSWORD are only ever sent to https addresses; with them set, a plain http address is not asked.
 import fs from 'node:fs';
@@ -42,6 +45,10 @@ const asking = new Map<string, Set<{ at: number }>>();
 export const tsaForgetRests = () => (resting.clear(), asking.clear());
 /** How far the time in a time-stamp may be from this server's clock. */
 export const TSA_CLOCK_MS = 5 * 60_000;
+/** One more try at the same service, after this pause, when the first failed at once in a way that passes. */
+export const TSA_RETRY_PAUSE_MS = 250;
+export const TSA_RETRY_STATUS = [429, 500, 502, 503, 504];
+const TSA_RETRY_CODES = ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_SOCKET'];
 const MAX_ANSWER = 256 * 1024;
 const TIME_STAMPING = '1.3.6.1.5.5.7.3.8';
 
@@ -163,76 +170,91 @@ export function checkAnswer(answer: Buffer, imprint: Buffer, nonce: Buffer, trus
 export async function timeStamp(signature: Buffer, urls = tsaUrls(), until = Date.now() + TSA_TOTAL_MS): Promise<TimeStamp> {
   if (!urls.length) throw new TsaError('no time-stamp service is set');
   const imprint = crypto.createHash('sha256').update(signature).digest();
-  const failures: string[] = [];
+  // By address, so a second try at a service replaces what its first try said.
+  const failures = new Map<string, string>();
   const trust = trustCerts();
   const user = process.env.TSA_USER;
-  for (const url of urls) {
-    // Only the host is ever repeated: an address can carry a key in its path, and this ends up in the audit trail.
-    const host = (() => {
-      try {
-        return new URL(url).host;
-      } catch {
-        return 'a service whose address cannot be read';
+  const again = new Set<string>();
+  for (let second = false; ; second = true) {
+    const round = second ? urls.filter((u) => again.has(u)) : urls;
+    again.clear();
+    for (const url of round) {
+      // Only the host is ever repeated: an address can carry a key in its path, and this ends up in the audit trail.
+      const host = (() => {
+        try {
+          return new URL(url).host;
+        } catch {
+          return 'a service whose address cannot be read';
+        }
+      })();
+      const rest = (resting.get(url) || 0) - Date.now();
+      if (rest > 0) {
+        failures.set(url, `${host}: not asked, because it did not answer a short while ago and is left alone for ${Math.ceil(rest / 60_000)} more minute${Math.ceil(rest / 60_000) === 1 ? '' : 's'}`);
+        continue;
       }
-    })();
-    const rest = (resting.get(url) || 0) - Date.now();
-    if (rest > 0) {
-      failures.push(`${host}: not asked, because it did not answer a short while ago and is left alone for ${Math.ceil(rest / 60_000)} more minute${Math.ceil(rest / 60_000) === 1 ? '' : 's'}`);
-      continue;
+      const left = until - Date.now();
+      if (left < 500) {
+        failures.set(url, `${host}: not asked, because the ${TSA_TOTAL_MS / 1000} seconds for time-stamps were used up`);
+        continue;
+      }
+      // Another signer's request to this service is still out: this one ends when that one's time is up, so signers
+      // who finish together wait together, and nobody waits longer than the first one does.
+      const out = asking.get(url) || new Set<{ at: number }>();
+      const first = out.size ? Math.min(...[...out].map((o) => o.at)) : 0;
+      const shared = first ? first + TSA_TIMEOUT_MS - Date.now() : Infinity;
+      if (shared < 250) {
+        failures.set(url, `${host}: not asked, because a request sent to it ${Math.round((Date.now() - first) / 1000)} seconds ago has had no answer`);
+        continue;
+      }
+      const wait = Math.min(TSA_TIMEOUT_MS, left, shared);
+      const nonce = crypto.randomBytes(8);
+      nonce[0] &= 0x7f;
+      // The user name and password go out with the request, so never over a connection anyone on the way can read.
+      if (user && !/^https:/i.test(url)) {
+        failures.set(url, `${host}: not asked, because its address is plain http and the user name and password are only sent over https`);
+        continue;
+      }
+      const sent = { at: Date.now() };
+      out.add(sent);
+      asking.set(url, out);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/timestamp-query',
+            accept: 'application/timestamp-reply',
+            ...(user ? { authorization: `Basic ${Buffer.from(`${user}:${process.env.TSA_PASSWORD || ''}`).toString('base64')}` } : {}),
+          },
+          body: new Uint8Array(timeStampRequest(imprint, nonce)),
+          signal: AbortSignal.timeout(wait),
+          redirect: 'error',
+        });
+        if (!res.ok) {
+          if (TSA_RETRY_STATUS.includes(res.status)) again.add(url);
+          throw new TsaError(`it answered HTTP ${res.status}${second ? ' (asked twice)' : ''}`);
+        }
+        const body = Buffer.from(await res.arrayBuffer());
+        if (body.length > MAX_ANSWER) throw new TsaError('its answer is far too large for a time-stamp');
+        const r = checkAnswer(body, imprint, nonce, trust);
+        return { ...r, url, host };
+      } catch (e: any) {
+        const together = wait === shared && shared < Math.min(TSA_TIMEOUT_MS, left);
+        const why = e instanceof TsaError ? e.message
+          : e?.name === 'TimeoutError' ? together ? `it did not answer, nor had it answered within ${TSA_TIMEOUT_MS / 1000} seconds a request sent to it moments earlier` : `it did not answer within ${Math.round(wait / 1000)} seconds`
+          : `it could not be reached (${String(e?.cause?.code || e?.message || e).slice(0, 120)})${second ? ' (asked twice)' : ''}`;
+        if (!(e instanceof TsaError) && e?.name !== 'TimeoutError' && TSA_RETRY_CODES.includes(String(e?.cause?.code || ''))) again.add(url);
+        failures.set(url, `${host}: ${why}`);
+        if (!(e instanceof TsaError) && e?.name === 'TimeoutError') resting.set(url, Date.now() + TSA_REST_MS);
+      } finally {
+        out.delete(sent);
+        if (!out.size) asking.delete(url);
+      }
     }
-    const left = until - Date.now();
-    if (left < 500) {
-      failures.push(`${host}: not asked, because the ${TSA_TOTAL_MS / 1000} seconds for time-stamps were used up`);
-      continue;
-    }
-    // Another signer's request to this service is still out: this one ends when that one's time is up, so signers
-    // who finish together wait together, and nobody waits longer than the first one does.
-    const out = asking.get(url) || new Set<{ at: number }>();
-    const first = out.size ? Math.min(...[...out].map((o) => o.at)) : 0;
-    const shared = first ? first + TSA_TIMEOUT_MS - Date.now() : Infinity;
-    if (shared < 250) {
-      failures.push(`${host}: not asked, because a request sent to it ${Math.round((Date.now() - first) / 1000)} seconds ago has had no answer`);
-      continue;
-    }
-    const wait = Math.min(TSA_TIMEOUT_MS, left, shared);
-    const nonce = crypto.randomBytes(8);
-    nonce[0] &= 0x7f;
-    // The user name and password go out with the request, so never over a connection anyone on the way can read.
-    if (user && !/^https:/i.test(url)) {
-      failures.push(`${host}: not asked, because its address is plain http and the user name and password are only sent over https`);
-      continue;
-    }
-    const sent = { at: Date.now() };
-    out.add(sent);
-    asking.set(url, out);
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/timestamp-query',
-          accept: 'application/timestamp-reply',
-          ...(user ? { authorization: `Basic ${Buffer.from(`${user}:${process.env.TSA_PASSWORD || ''}`).toString('base64')}` } : {}),
-        },
-        body: new Uint8Array(timeStampRequest(imprint, nonce)),
-        signal: AbortSignal.timeout(wait),
-        redirect: 'error',
-      });
-      if (!res.ok) throw new TsaError(`it answered HTTP ${res.status}`);
-      const body = Buffer.from(await res.arrayBuffer());
-      if (body.length > MAX_ANSWER) throw new TsaError('its answer is far too large for a time-stamp');
-      const r = checkAnswer(body, imprint, nonce, trust);
-      return { ...r, url, host };
-    } catch (e: any) {
-      const together = wait === shared && shared < Math.min(TSA_TIMEOUT_MS, left);
-      const why = e instanceof TsaError ? e.message
-        : e?.name === 'TimeoutError' ? together ? `it did not answer, nor had it answered within ${TSA_TIMEOUT_MS / 1000} seconds a request sent to it moments earlier` : `it did not answer within ${Math.round(wait / 1000)} seconds`
-        : `it could not be reached (${String(e?.cause?.code || e?.message || e).slice(0, 120)})`;
-      failures.push(`${host}: ${why}`);
-      if (!(e instanceof TsaError) && e?.name === 'TimeoutError') resting.set(url, Date.now() + TSA_REST_MS);
-    } finally {
-      out.delete(sent);
-      if (!out.size) asking.delete(url);
-    }
+    // No service gave a time stamp. Those that failed at once in a way that passes (no connection, or "busy") are
+    // asked once more after a short pause, inside the same seconds. A service that answered well is never asked twice,
+    // and neither is one that timed out (it rests) or whose answer did not check out.
+    if (second || !again.size || until - Date.now() < TSA_RETRY_PAUSE_MS + 500) break;
+    await new Promise((r) => setTimeout(r, TSA_RETRY_PAUSE_MS));
   }
-  throw new TsaError(failures.join('; '));
+  throw new TsaError([...failures.values()].join('; '));
 }

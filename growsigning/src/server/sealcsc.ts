@@ -24,8 +24,19 @@
 // until shortly before it expires. Every call gets 4 seconds and one seal 10 in all. When the service fails, the seal
 // throws, and finishPdf (finalpipe.ts) makes the file without a seal exactly as it does when a key file fails ("Not
 // sealed"), and the people who run the server are told why.
+//
+// The address may end in /csc/v0 or /csc/v1: SSL.com serves both (specification 0.1.7.9 and 1.0.3.0), and the calls
+// used here have the same names and the same fields in both. Both were tried against SSL.com's sandbox (/csc/v1 on
+// 23 November 2026, with scripts/seal-sandbox.ts); the default stays /csc/v0. The shorter names CSC_API_BASE_URL, CSC_CLIENT_ID and so on are read too
+// (src/lib/sealenv.ts).
+//
+// Trying again (cscRetryable below): a call that did not reach the service (the connection could not be opened), or
+// that it answered with HTTP 429, 502, 503 or 504, is sent once more after CSC_RETRY_PAUSE_MS, inside the same seconds.
+// A call that timed out is not sent again: the seconds are used up. signatures/signHash is never sent a second time
+// for the same fingerprint, whatever happened to the first: it is the paid step, and the service may have signed.
 import crypto from 'node:crypto';
 import { cscSettings } from '../lib/seal.ts';
+import { applySealEnv, asWritten } from '../lib/sealenv.ts';
 import { readCert, type CertInfo } from './x509.ts';
 import type { SealSigner } from './sealcms.ts';
 
@@ -35,6 +46,12 @@ export const CSC_SIGN_TOTAL_MS = 10_000;
 export const CSC_CHAIN_REFRESH_MS = 24 * 3600_000;
 /** After a failed fetch of the chain, the next try waits this long (a seal does not wait for a service that is down). */
 export const CSC_RETRY_MS = 60_000;
+/** The pause before a call that failed without an answer worth keeping is sent once more. */
+export const CSC_RETRY_PAUSE_MS = 300;
+/** The paid step: sent once for a fingerprint and never again. */
+export const CSC_NEVER_AGAIN = 'signatures/signHash';
+/** Whether a failed call may be sent once more: it never arrived, or the service said to come back. */
+export const cscRetryable = (e: any): boolean => !!e?.unreached || [429, 502, 503, 504].includes(e?.status);
 
 const SHA256 = '2.16.840.1.101.3.4.2.1';
 const SIGN_ALGO = { rsa: '1.2.840.113549.1.1.11', rsaEncryption: '1.2.840.113549.1.1.1', ecdsa: '1.2.840.10045.4.3.2' };
@@ -53,7 +70,7 @@ const v = (k: string) => (process.env[k] || '').trim();
 const settingsSig = () => ['SEAL_CSC_URL', 'SEAL_CSC_TOKEN_URL', 'SEAL_CSC_CLIENT_ID', 'SEAL_CSC_CLIENT_SECRET', 'SEAL_CSC_USERNAME', 'SEAL_CSC_PASSWORD', 'SEAL_CSC_CREDENTIAL_ID', 'SEAL_CSC_TOTP_SECRET'].map((k) => `${k}=${v(k)}`).join('\n');
 
 /** Whether any cloud seal setting is set (it may still be half set). */
-export const cscConfigured = () => cscSettings().any;
+export const cscConfigured = () => (applySealEnv(), cscSettings().any);
 
 /** Why the cloud seal settings cannot be used as they are, or null. Never repeats a secret. */
 export function cscSettingsProblem(): string | null {
@@ -87,7 +104,44 @@ const hostOf = (u: string) => {
   }
 };
 
-// One call: JSON in, JSON out, a short timeout, and the service's own error words (never our secrets) when it fails.
+const REMOVED = '[removed]';
+const forms = (x: string) => [x, JSON.stringify(x).slice(1, -1), encodeURIComponent(x), Buffer.from(x).toString('base64')];
+const cut = (text: string, values: unknown[], min: number) => {
+  // Longest first, so a secret that holds another one goes whole.
+  const all = [...new Set(values.filter((x): x is string => typeof x === 'string' && x.length >= min).flatMap(forms))].sort((a, b) => b.length - a.length);
+  for (const x of all) text = text.split(x).join(REMOVED);
+  return text.replace(/\b(Bearer|Basic)\s+[^\s"',;]+/gi, `$1 ${REMOVED}`);
+};
+
+/**
+ * `text` without the secrets of the cloud seal: the client secret, the account password, the secret behind the
+ * one-time codes and the access token kept now, each also as it looks inside JSON, a web address or base64, and
+ * whatever follows the word Bearer. Everything that goes to the log, to the operators' alert or into an error passes
+ * through here, so a signing service that repeats our request in its error answer cannot put a secret there.
+ * Values shorter than `min` characters are left alone in our own sentences (they would cut ordinary words apart);
+ * the service's words are held to 4, and an answer that repeats a request is dropped whole (saidBy).
+ */
+export function withoutSecrets(text: string, more: unknown[] = [], min = 6): string {
+  applySealEnv();
+  return cut(String(text), [v('SEAL_CSC_CLIENT_SECRET'), v('SEAL_CSC_PASSWORD'), v('SEAL_CSC_TOTP_SECRET'), st().token?.value, ...more], min);
+}
+
+/**
+ * The words of the service about a failed call, safe to log. An answer that looks like our own request sent back
+ * (JSON inside the words) is not repeated at all: only its short `error` code is. Otherwise the secrets and
+ * everything that was sent in this call (the user name, the token, the SAD, the one-time code) are cut out of it.
+ */
+function saidBy(json: any, sent: any, token: string | null): string {
+  if (!json || typeof json !== 'object') return '';
+  const code = typeof json.error === 'string' && /^[\w.-]{1,60}$/.test(json.error) ? json.error : '';
+  const words = [json.error_description, json.error, json.message].find((x) => typeof x === 'string' && x);
+  if (!words) return '';
+  if (/[{}]|"\s*:|\w=[^\s&]*&\w/.test(words)) return code && code !== words ? withoutSecrets(code) : 'an error it did not name';
+  const mine = [token, v('SEAL_CSC_USERNAME'), ...(sent && typeof sent === 'object' ? ['SAD', 'OTP', 'password', 'client_secret', 'username'].map((k) => sent[k]) : [])];
+  return withoutSecrets(words.replace(/\s+/g, ' '), mine, 4).slice(0, 200);
+}
+
+// One call: JSON in, JSON out, a short timeout, and the service's own error words (never our secrets: saidBy) when it fails.
 async function call(url: string, body: any, token: string | null, until: number): Promise<any> {
   const wait = Math.min(CSC_TIMEOUT_MS, until - Date.now());
   if (wait < 200) throw new CscError(`the ${CSC_SIGN_TOTAL_MS / 1000} seconds for the signing service were used up`);
@@ -101,7 +155,10 @@ async function call(url: string, body: any, token: string | null, until: number)
       redirect: 'error',
     });
   } catch (e: any) {
-    throw new CscError(e?.name === 'TimeoutError' ? `${hostOf(url)} did not answer within ${Math.round(wait / 100) / 10} seconds` : `${hostOf(url)} could not be reached (${String(e?.cause?.code || e?.message || e).slice(0, 120)})`);
+    if (e?.name === 'TimeoutError') throw new CscError(`${hostOf(url)} did not answer within ${Math.round(wait / 100) / 10} seconds`);
+    // `unreached`: no connection was opened, so the service never saw the call (a reset connection may have carried it).
+    const code = String(e?.cause?.code || '');
+    throw Object.assign(new CscError(`${hostOf(url)} could not be reached (${withoutSecrets(String(code || e?.message || e), [token]).slice(0, 120)})`), { unreached: ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(code) });
   }
   const text = (await res.text().catch(() => '')).slice(0, 2_000_000);
   let json: any = null;
@@ -111,11 +168,26 @@ async function call(url: string, body: any, token: string | null, until: number)
     json = null;
   }
   if (!res.ok) {
-    const said = json && (json.error_description || json.error || json.message);
-    throw Object.assign(new CscError(`${hostOf(url)} answered HTTP ${res.status}${said ? `: ${String(said).replace(/\s+/g, ' ').slice(0, 200)}` : ''}`), { status: res.status, code: json?.error || '' });
+    const said = saidBy(json, body, token);
+    throw Object.assign(new CscError(`${hostOf(url)} answered HTTP ${res.status}${said ? `: ${said}` : ''}`), { status: res.status, code: typeof json?.error === 'string' ? json.error.slice(0, 60) : '' });
   }
   if (!json || typeof json !== 'object') throw new CscError(`${hostOf(url)} did not answer with JSON`);
   return json;
+}
+
+/** `call`, sent once more after a short pause when the first try may be repeated (cscRetryable) and the seconds allow. */
+async function callAgain(url: string, body: any, token: string | null, until: number): Promise<any> {
+  try {
+    return await call(url, body, token, until);
+  } catch (e: any) {
+    if (!cscRetryable(e) || url.endsWith(`/${CSC_NEVER_AGAIN}`) || until - Date.now() < CSC_RETRY_PAUSE_MS + 500) throw e;
+    await new Promise((r) => setTimeout(r, CSC_RETRY_PAUSE_MS));
+    try {
+      return await call(url, body, token, until);
+    } catch (again: any) {
+      throw Object.assign(again, { message: `${again.message} (asked twice)` });
+    }
+  }
 }
 
 /**
@@ -138,7 +210,7 @@ async function accessToken(c: Config, until: number, stale?: string): Promise<st
 }
 
 async function fetchToken(c: Config, until: number, s: State): Promise<string> {
-  const j = await call(c.tokenUrl, { client_id: c.clientId, ...(c.clientSecret ? { client_secret: c.clientSecret } : {}), grant_type: 'password', username: c.username, password: c.password }, null, until)
+  const j = await callAgain(c.tokenUrl, { client_id: c.clientId, ...(c.clientSecret ? { client_secret: c.clientSecret } : {}), grant_type: 'password', username: c.username, password: c.password }, null, until)
     .catch((e) => {
       throw new CscError(`signing in to the signing service failed: ${e.message}. Check SEAL_CSC_CLIENT_ID, SEAL_CSC_CLIENT_SECRET, SEAL_CSC_USERNAME and SEAL_CSC_PASSWORD.`);
     });
@@ -154,10 +226,11 @@ async function withToken(c: Config, path: string, body: any, until: number): Pro
   const url = `${c.url}/${path}`;
   const token = await accessToken(c, until);
   try {
-    return await call(url, body, token, until);
+    return await callAgain(url, body, token, until);
   } catch (e: any) {
+    // A refused token is the one answer after which even signHash is sent again: a 401 means nothing was signed.
     if (e?.status !== 401) throw e;
-    return call(url, body, await accessToken(c, until, token), until);
+    return callAgain(url, body, await accessToken(c, until, token), until);
   }
 }
 
@@ -367,7 +440,7 @@ function p1363ToDer(raw: Buffer): Buffer {
 /** The lines the server logs once when it starts, when the cloud seal settings cannot be used as they are. */
 export function cscStartLines(): string[] {
   const p = cscSettingsProblem();
-  return p ? [`[config] ${p} Until then completed PDFs are made without the digital seal.`] : [];
+  return p ? [`[config] ${asWritten(p)} Until then completed PDFs are made without the digital seal.`] : [];
 }
 
 /** For tests: forget the token, the chain and why they failed. */

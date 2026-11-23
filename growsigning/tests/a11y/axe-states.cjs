@@ -65,7 +65,7 @@ async function axe(page, name) {
   const p = await ctx.newPage();
   await p.goto(BASE + '/signup');
   const email = `ax-${STAMP}@example.org`;
-  await api(p, '/auth/signup', { body: { name: 'Rosa Sender', email, password: 'correct horse battery 42' } });
+  await api(p, '/auth/signup', { body: { name: 'Rosa Sender', email, password: 'correct horse battery 42', phone: `+4474${String(Date.now()).slice(-8)}` } });
   // Confirmed the way the link in the email does it, in this browser.
   const confirm = (await mail(email, (x) => x.link?.includes('verify-email'))).link;
   await api(p, '/auth/verify', { body: { token: new URL(confirm).searchParams.get('token') } });

@@ -7,6 +7,7 @@ import { EncryptionLine } from './encryption';
 import { TreeCommitments } from './commitments';
 import { AcrobatCheckCard } from './acrobat';
 import { ReferralRecord } from './referrals';
+import { AccountPeople } from './people';
 import { useMe } from '@/components/AppShell';
 import { PRICE_NOTICE_DAYS, PAID_TRUST_DAYS, priceChangeDay } from '@/lib/policy';
 
@@ -120,7 +121,7 @@ export default function Operator() {
   );
   // The account a request or a report is about: what decides between answering, trusting and pausing.
   const about = (x: any) => (x.about_account
-    ? <div className="small" style={{ margin: '4px 0 8px' }}>Account <b>{x.account_name}</b> · {plan(x.account_plan)} · created {fmtDate(x.account_created_at)} · {x.account_trusted_at ? `trusted since ${fmtDate(x.account_trusted_at)}` : 'not trusted'}{x.suspended_at ? ' · paused' : ''}</div>
+    ? <div className="small" style={{ margin: '4px 0 8px' }}>Account <b>{x.account_name}</b> · {plan(x.account_plan)} · created {fmtDate(x.account_created_at)} · {x.account_trusted_at ? `trusted since ${fmtDate(x.account_trusted_at)}` : 'not trusted'}{x.suspended_at ? ' · paused' : ''}<AccountPeople id={x.about_account} /></div>
     : <div className="small muted" style={{ margin: '4px 0 8px' }}>No account goes with this address: they were not signed in, and no confirmed account owner uses it.</div>);
   return (
     <div className="stack">
@@ -164,7 +165,7 @@ export default function Operator() {
         {q.paused.length === 0 && <div className="empty" style={{ padding: 24 }}>No accounts are paused.</div>}
         {q.paused.map((a: any) => (
           <div key={a.id} className="queue-item row between wrap">
-            <div><b>{a.name}</b> <span className="muted small">{plan(a.plan)} · created {fmtDate(a.created_at)} · {a.trusted_at ? `trusted since ${fmtDate(a.trusted_at)}` : 'not trusted'} · paused {fmtDate(a.suspended_at, true)}</span><div className="small">{a.suspended_reason}</div></div>
+            <div><b>{a.name}</b> <span className="muted small">{plan(a.plan)} · created {fmtDate(a.created_at)} · {a.trusted_at ? `trusted since ${fmtDate(a.trusted_at)}` : 'not trusted'} · paused {fmtDate(a.suspended_at, true)}</span><div className="small">{a.suspended_reason}</div><AccountPeople id={a.id} /></div>
             <div className="row wrap">
               {trustButton(a.id, a.name, a.trusted_at)}
               <button className="btn sm primary" onClick={() => act(api(`/operator/accounts/${a.id}`, { body: { paused: false } }), 'Sending is back on. The account admins were emailed.')}>Lift the pause</button>

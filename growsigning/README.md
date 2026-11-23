@@ -98,6 +98,7 @@ What the test files cover:
 | `tests/seal.test.ts` | The digital seal of a completed PDF, checked by poppler's `pdfsig`, `openssl cms -verify` and `openssl ts -verify` where they are installed (each test that needs one is skipped otherwise) and by pdf.js: no settings leave the file byte for byte as it was and write nothing down; a sealed file is covered to its last byte and the stored SHA-256 is of it; one changed byte breaks the seal and a byte added after it is told apart; keys from a .p12 (as OpenSSL 3 writes it, and the old triple DES and RC2 kind) and from PEM, RSA-PSS and ECDSA P-256; an expired, not yet valid, wrong-purpose, mismatched, too small or unchained key refused with the file made as before and the operators told once; a time-stamp service made in the test (B-T, its token verified by OpenSSL), and every way a time-stamp can fail falling back to B-B at once, with the certificate saying so; several services in order and a 3-second timeout (4 in all); `/verify` on the sealed file, an added-to file, a changed file, a file sealed by someone else and one sealed with an earlier key; envelopes completed before the seal never sealed afterwards; a voided copy unsealed and saying so; an uploaded PDF that already carries signatures. The screens: one history line "Sealed by" and the certificate's name without technical names, `seal` on the page of the document, the admins' status line from `GET /seal` (admins only, never the reason a key is refused, never the time-stamp service's address), and none of it without settings. Repairs: a file put together around a real seal (the seal moved with other pages in its place, bytes hidden after it, a seal lifted into another file) is never said to hold; a time stamp a stranger adds afterwards is never shown or called trusted; a service that lies about the time is not used; without `TSA_TRUST` nothing says "trusted"; the user name and password never go over plain http; `certificate.pdf` in an evidence pack carries no seal field; the public pages say nothing about a seal without a seal key. |
 | `tests/seal-csc.test.ts` | The cloud seal (`src/server/sealcsc.ts`) against a fake CSC service with a throwaway authority, offline: a completed PDF sealed with the service's certificate, `pdfsig` and `openssl cms -verify` saying it holds, the whole chain in the CMS, `GET /seal` and the record naming that certificate; only the SHA-256 of the signed attributes in the two signing calls and nothing of the PDF; the token kept, fetched again after it expires and after a 401; the chain fetched again after a day; a one-time code (RFC 6238) that works and a wrong one that completes the file unsealed with the reason; a service that is down, slow or answers a bad signature, each completing unsealed at once with the reason logged; half-set and doubled settings refused with a `[config]` line; the outside list. Part B: a document time stamp over a completed PDF without a seal, checked by `openssl ts -verify`, and "Not time-stamped" when the service fails; `TSA_TRUST=bundled` matching `deploy/tsa-roots.pem` and the published fingerprints, and a root sent as a copy issued by an older root still leading to the listed one. After review: a slow but working service still gets B-T with one signing (the seconds for the seal's time stamp start when the signature is there); a time stamp that fails after a cloud signature keeps that signature at B-B, never a second paid signing, with a certificate line true either way; two builds of one file wait for each other; a render thrown away for PDF/A is not sealed; one operator alert per reason during an outage; a renewed key behind the credential fetched again before the next seal; one password grant for seals that start together; an ECDSA signature in raw form whose first byte is 0x30; a one-time code refused at the turn of its 30 seconds; the outside list naming every setting sent. |
 | `tests/seal-csc-sandbox.test.ts` | Runs `scripts/seal-sandbox.ts` against SSL.com's real eSigner sandbox, skipped with a message when it cannot be reached. |
+| `tests/seal-spec.test.ts` | The sealing spec line by line: the second names of the seal settings and `PDF_SIGNING_MODE` (`src/lib/sealenv.ts`), `npm run seal:dev-cert` and its refusal on a production server, `src/server/pdfsealer.ts` with its retry rules (a time-stamp service and a signing service asked once more, `signatures/signHash` never twice, typed errors), that only a 32-byte digest reaches the signing service, what the certificate of completion prints (`CERTIFICATE_SHOWS_DEVICE`), and that the stored bytes, every download, the evidence pack, the export and `/verify` are the sealed bytes, also after encryption at rest and a change of key. |
 | `tests/ds-seal-ltv.test.ts` | Long-term checking of the seal and the record's time stamp, with a stub OCSP responder, a stub revocation list and a stub time-stamp service made in the test: B-LTA (a `/DSS` with an OCSP answer for the seal certificate and its issuer and the revocation list of the time-stamp unit, then a document time stamp over the whole file that `openssl ts -verify` accepts), `pdfsig` still saying the seal is valid, `/verify` matching and calling it whole; B-LT when the document time stamp fails, said in the history; a responder that hangs past `LTV_WAIT_MS` leaving B-T with nothing half written and the page saying so; revoked, a stranger's signature, an old nonce, a refusal, an old answer, a listed serial and a list signed by someone else all refused; nothing tried for certificates that name no address, and nothing asked without a time-stamp service; a turned page, a changed byte and a document time stamp over other bytes after the seal never accepted as check data. Repairs: an empty `/DSS`, one holding other bytes or about other certificates, and a time stamp field carrying an action are "saved after the seal" on `checkSeal` and `/verify`; a document time stamp from a service nobody listed holds but its name and time are not given; addresses such as `localhost.`, `*.internal.` and names the DNS says lead inside are never asked; the document time stamp shares `LTV_WAIT_MS`; `LTV_WAIT_MS=0` turns the step off; a host refused by the outside-connections guard is named with `OUTBOUND_ALLOW`; a time-stamp unit with no address does not block the seal's own checks. The record: the chain head time-stamped with one certificate line, the token verified by `openssl ts -verify` over the head and refused for another, the evidence pack with the token, the head and the command; a rewrite of the record with every hash recomputed shown against the time stamp; a swapped-in token from a service of one's own named from the token, said unchecked, and not holding with `TSA_TRUST`; no line and the reason kept when the service fails; no technical text on the page and the record line in History. |
 | `tests/ds-pdfa.test.ts` | Archive format (PDF/A): `toPdfA` writing the PDF/A-2b XMP (part 2, conformance B, the title escaped and the same as the information dictionary, the dates agreeing), the sRGB output intent with the profile from `assets/icc` and its licence beside it, a document ID, no JavaScript open action, no page actions, hidden annotations taken away and the rest printable, a link that ran JavaScript running nothing and a web link kept; every font in the signed PDF this server renders embedded, other scripts included; an uploaded file with a font that is not inside it (also one named only in a filled-in form's appearance), printing-press colours, or a movie found; with no `VERAPDF_CMD` the switch not offered, refused with 409 and nothing changed; with the switch off nothing changed and veraPDF never run; only an admin signed in may switch it (not an API key), and the security record says who did; with veraPDF (a stand-in that answers in veraPDF's report format) passing, the stored file PDF/A and the certificate, the page of the document and the history saying "PDF/A-2b, checked with veraPDF"; failing, a font missing, a checker that cannot start and one that takes longer than `VERAPDF_TIMEOUT_MS`, each made as a normal PDF that says why, and the document always completing; the seal still valid for `pdfsig` and `checkSeal` after the PDF/A step, with the metadata and output intent kept; a font only listed and never drawn with not counted, one drawn with (also by a #-escaped name) counted; the last signer's Finish answering at once while a check runs, the timer's build of the same envelope waiting for that run (one check, one history line), and the "completed" email going out with the file once it is made; eight documents of one account completing at once running at most 2 checks at a time, at most 4 of that account in the line and the rest "the check was busy"; a next step under every "not PDF/A" and the history saying "signing record"; the Settings card saying when the last check could not be done, and when veraPDF was taken away with the switch on (switch off still works, switch on refused); the real veraPDF when installed (`VERAPDF_TEST_CMD`: a file with other scripts, a sealed one, and a bad one failed), skipped otherwise. |
 | `tests/seclog.test.ts` | The security record: each kind of event written once, to the right accounts, with the right person and address (the team, sign-ins and their failures to every account of the person, logins, two-step login, keys and their new addresses, settings, webhooks, deletions, template rules, the export, the owner handed over, the GrowSigning team), a wrong password and a wrong code written the same way for a login with two-step login, nothing secret in any line (the test's passwords, keys, tokens, codes and addresses looked for), members and send keys refused, an admin key paging in order, filters and the CSV, names only when shared, lines that cannot be changed or deleted, a forged line found by the chain, the purge after `SECURITY_LOG_DAYS` and with the account, the alerts once an hour and switched off by a person only, and the opt-in webhook. After the reviews: `INSERT OR REPLACE` over a line refused; a record re-chained without the server's secret, the newest lines removed and a changed note of the newest line all shown as changed; a key in the browser name left out; someone who left the team not named by the API, the download or the screen; fifteen switch-offs one email; a second key within the hour named when the hour is over; lines for a withdrawn invitation, new recovery codes, withdrawn devices, signing up and Google connected, used and removed; the search box; names in a signed-in admin's download and ids for a key; the export in files of a set size; and the words of the screen (no envelope, recipient, purge or events, details as sentences, never an id). |
@@ -1922,7 +1923,9 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   per friend (by mailbox, with Gmail dots and plus tags folded, and by phone number), at most 10 rewarded friends a
   calendar month and 30 in all per account (`REFERRAL_MONTHLY_MAX`, `REFERRAL_TOTAL_MAX`), and never for inviting
   yourself: the same mailbox, the same phone number, the same account, a browser the inviting account was used in
-  (a cookie), or the same internet address within a day. An address that had a login here before is not a new
+  (a cookie), or the same internet address within a day. Phone numbers are compared by the keyed fingerprint
+  sign-up keeps (users.phone_key, src/server/signuprules.ts), never by the number; on a server that asks nobody for
+  a number (SIGNUP_PHONE=off) the reward does not wait for one. An address that had a login here before is not a new
   friend. When the friend's account is paused for abuse, what is left of both rewards is taken back (used ones stay
   used). Every invite is one line in `referrals` with where it stands and why, and the operators read them at
   `GET /api/operator/referrals`. The owner of the inviting account gets one email per reward, with a link that
@@ -2790,6 +2793,11 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `SEAL_CSC_CLIENT_ID`, `SEAL_CSC_USERNAME`, `SEAL_CSC_PASSWORD` | Seals with a cloud signing service instead of a key file (SSL.com eSigner, see "The cloud seal"): the client id and the SSL.com account. All three, or the seal is refused and the startup log names what is missing. Not together with `SEAL_P12` or `SEAL_KEY_PEM`. | none |
 | `SEAL_CSC_CLIENT_SECRET`, `SEAL_CSC_CREDENTIAL_ID`, `SEAL_CSC_TOTP_SECRET` | The client secret when the client has one; the credential to seal with (else the first eSealing one listed); the one-time code secret (base64, as SSL.com shows it) only for a certificate that asks for a code. | none |
 | `SEAL_CSC_URL`, `SEAL_CSC_TOKEN_URL` | The CSC API and where its access token comes from. https only. Sandbox: `https://cs-try.ssl.com/csc/v0` and `https://oauth-sandbox.ssl.com/oauth2/token`. | `https://cs.ssl.com/csc/v0`, `https://login.ssl.com/oauth2/token` |
+| `PDF_SIGNING_MODE` | Which seal to use when you want to say it outright: `local_p12` (a key file) or `csc` (a cloud signing service). The settings of the other kind are then left unused, and the startup log names them. A mode whose settings are missing is refused in the log and documents complete without a seal (see "Sealing in two modes"). | unset: whichever seal settings are present decide |
+| `LOCAL_P12_PATH`, `LOCAL_P12_PASSWORD` | Second names of `SEAL_P12` and `SEAL_P12_PASSWORD`. `npm run seal:dev-cert` writes a test certificate to `./certs/dev-seal.p12` with the password `changeit`. | none |
+| `CSC_API_BASE_URL`, `CSC_TOKEN_URL`, `CSC_CLIENT_ID`, `CSC_CLIENT_SECRET`, `CSC_USERNAME`, `CSC_PASSWORD`, `CSC_CREDENTIAL_ID`, `CSC_TOTP_SECRET` | Second names of the `SEAL_CSC_` settings with the same endings (`CSC_API_BASE_URL` is `SEAL_CSC_URL`). When both names of one setting are set and differ, the `SEAL_` name wins and the startup log says so. | none |
+| `SEAL_ALLOW_SELF_SIGNED` | `1` lets a production server seal with a self-made certificate behind the well-known password `changeit` (the one `npm run seal:dev-cert` makes). Without it such a seal is refused there, because Acrobat shows "validity unknown" on every customer's PDF. | off |
+| `CERTIFICATE_SHOWS_DEVICE` | `1` prints each person's browser and device (the text their browser sent) on the certificate of completion, under their IP address. Off on purpose: the certificate goes to everyone on the document. The text is in the sender's evidence pack either way. | off |
 | `TSA_TRUST` | `bundled` for the roots of DigiCert and SSL.com built into the server (`deploy/tsa-roots.pem`), or a PEM file (or the PEM text) of the certificates the time-stamp service's own certificate must lead to. A time-stamp that does not is not used. Only with this set do the record, the certificate and the screens call a time stamp "trusted", and only then does `/verify` show a time stamp's time. | none: the time-stamp's signature, purpose and time are checked, not who issued its certificate, and nothing calls it trusted |
 | `VERAPDF_CMD` | The veraPDF command line program (it needs Java), with any arguments, split at spaces. At most 2 checks run at once. With it set, account admins see "Archive format (PDF/A)" in Settings, Records and data, More options, and with that on, documents completed from then on are made as PDF/A-2b and checked by veraPDF (see "Archive format (PDF/A)"). It runs with only `PATH`, `JAVA_HOME` and a language set. | none: no PDF/A, the switch is not shown |
 | `VERAPDF_TIMEOUT_MS` | How long one veraPDF check may take before it is stopped and the document is made as a normal PDF. The signed file and the "completed" emails are ready only after it; the signer is not kept waiting. Between 5000 and 600000. | 60000 |
@@ -2834,6 +2842,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `DORMANT_AUTO_STOP_DAYS` | A paid plan that has sent nothing for this long is not renewed. `0` only warns. | `90` |
 | `SECURITY_LOG_DAYS` | How many days a line of an account's security record (Settings, Security) is kept, a whole number from 1 to 3650. The same for every account on the server, so an admin cannot shorten it to wipe what they did. The timer deletes older lines; until then database triggers refuse an UPDATE, a DELETE and an INSERT over an existing line, unless its account is deleted. That stops the app and careless hands, not someone who can change the database's own rules: see the security record under "What is in it" for what the keyed fingerprints show and do not show. Settings, Security, the API and the export quote the number. | `400` |
 | `PWNED_CHECK` | The check of every new password (sign-up, the emailed link, Settings) against the Pwned Passwords list of passwords from data leaks. Only the first 5 characters of the password's SHA-1 leave the server; the comparison happens here. With no answer in 3 seconds, or an answer that is not the list, the password is allowed and nothing says it was checked. `0` (or `off`) switches it off; so does `OUTSIDE_CALLS=none`, unless the list's host is in `OUTBOUND_ALLOW`. | on |
+| `SIGNUP_PHONE` | Whether a login must give a phone number: on the sign-up form, once on the "One more thing" screen after signing up with Google or Microsoft, and for a login from before the rule once at its next visit and before its next new send. `required` asks, `off` does not. One number belongs to one login unless an operator allows it for more. No text is sent to check it. The rule that a new login has no + in its email address has no switch. See "Making an account". | `required`; nobody is asked with `BILLING_MODE=deployment` unless it is set to `required` |
 | `HIBP_RANGE_URL` | Another copy of that list, for example a mirror inside a closed network: an `http(s)` address answering `GET <address><5 characters>` as the Pwned Passwords range API does. Anything else switches the check off. | `https://api.pwnedpasswords.com/range/` |
 | `SECURITY_HEADS_DIR` | A folder outside the database. When set, the timer writes one file a day there (`security-heads-YYYY-MM-DD.jsonl`): one line per account with its id, the number, fingerprint and time of the newest line of its security record, and nothing else. Settings, Security then also holds the record against the newest 7 files and reads as changed when a noted line has another fingerprint or is gone before its days are over: that shows an older database put back, or a record rewritten by someone with the database and `APP_SECRET`. It shows nothing to someone who can rewrite the folder too, so copy it away or make it write-once, apart from the database and its backups. A file is never written over. | not set: nothing written or compared |
 | `APP_SECRET_RETIRED` | Only after `APP_SECRET` was changed: the secret before (several separated by commas), so that lines of the security record that were fingerprinted with it still check when an admin opens Settings, Security. Used for nothing else: new lines, links and seals use `APP_SECRET`. Without it, admins are told that a line of their record does not match until the old lines have gone. | empty |
@@ -3050,6 +3059,54 @@ call". It shows that someone answered that phone line, not who they are.
 **What it costs.** Per call fees are the operator's; customers are not charged for them, and until the owner sets
 a price (`src/lib/impact.ts`) the daily limit on texts caps them. Not tried against a live provider:
 only against stand-ins (`tests/ds-channels.test.ts`). Send one real message in the provider's test mode first.
+
+### Making an account: no + in the address, one login per mailbox, a phone number
+
+The owner's rules for who gets an account (23 November 2026). The words and the reading of numbers are in
+`src/lib/signup.ts`, the server side in `src/server/signuprules.ts`, the tests in `tests/signup-rules.test.ts`.
+
+**The email address.** A new login cannot have a `+` before the `@`. The page says so the moment it is typed and the
+server refuses it in the same sentence: "Please use your email address without the + part." One mailbox has one
+login: addresses that differ only by capital letters, by dots before the `@` at gmail.com and googlemail.com, or by
+googlemail for gmail are the same mailbox (`users.email_key`). Where it is checked:
+
+| Path | What happens |
+| --- | --- |
+| `POST /api/auth/signup` | 400 `plus_in_email`; 409 `same_mailbox` for another spelling of a mailbox that has a login |
+| Continue with Google or Microsoft, new login | back to the sign-up page with `plus_email` or `same_mailbox`, in words. Google signing in at a Gmail address opens the login of that mailbox, whatever its spelling |
+| An invitation to a team (`POST /api/account/invites`) | nobody is invited at a `+` address, unless a login with exactly that address exists already |
+| A change of address (`POST /api/me/email`) | the same two refusals |
+| An organisation's own sign-in service (SSO) and its directory | not checked: the organisation has shown that the domain is its own and answers for its people's addresses |
+
+A login that already has a `+` keeps working and signs in as before. Signers and recipients are not affected: a
+document can be sent to any address.
+
+**The phone number.** Asked for on the sign-up form, with a country picker that starts on the country of the
+browser's language. It is kept in international form (E.164) in `users.phone`, read without a library: lengths per
+country for about 215 countries, and the shape of a number for the countries most accounts come from. Premium-rate,
+satellite and made-up numbers (all the same digit) are refused. One number belongs to one login
+("This number is already used by another account"); an operator can allow a number for more than one login from the
+operator page (`POST /api/operator/phones`).
+
+| Who | When they are asked |
+| --- | --- |
+| Someone who signs up with email and password | on the form |
+| Someone who signs up with Google or Microsoft | once, on the "One more thing" screen, before the app opens |
+| Someone invited to a team | on the form they accept with (their own number), or on "One more thing" |
+| A login from before the rule | once at the next visit, with "Not now". After that the number is needed before the next new document is sent from the app, before a new API key and before a new public form (403 `phone_needed`, and the app shows the screen over the page). Documents that are out, keys that work and forms that are public go on working |
+| A login made by an organisation's own sign-in service | never |
+
+No verification text is sent. Where the server has a text message provider, checking the number by a 6-digit code is
+offered under Settings, Profile, never required, and `users.phone_verified_at` says when it was done.
+
+**Who sees it.** Its owner (Settings, Profile, in the Email address card) and the people who run the server
+(`OPERATOR_EMAILS`: "People and phone numbers" on the operator page, `GET /api/operator/accounts/:id/people`). Nobody
+else on a team, no API key, no list of members. It is exported with its owner's own login (`your-login.json` in both
+exports), deleted with the login, and encrypted in the database with the other encrypted columns when
+`FILE_ENCRYPTION_KEY` is set (`users.phone_key` is a keyed fingerprint for "is this number taken").
+
+The sign-up form no longer shows the plan code box unless the link carries a code (`/signup?code=...`): the phone
+number took its place, and a code can be added afterwards on the Plan page.
 
 ### Signing in with Google or Microsoft
 
@@ -3409,6 +3466,78 @@ the app itself (`src/server/filecrypt.ts` for the format, `src/server/filestore.
   after that, move the files the server cannot read out of `DATA_DIR/blobs` (keep them, in case the key turns up) and
   restart; asking for one of them then answers that it cannot be found. The text kept from those documents is gone
   too: a search no longer finds them by the words inside, and the check before sending reads only their names.
+
+### Sealing in two modes
+
+When the last person finishes, the server does three things, always in this order, and stores exactly the bytes the
+third one leaves (`finishPdf` in `src/server/finalpipe.ts`; `src/server/pdfsealer.ts` is the one way in to step 3):
+
+1. **Flatten.** Signature pictures, form fields and typed text become page content (`src/server/pdf.ts`).
+2. **Certificate of completion.** Added as the last pages: the envelope ID, the SHA-256 of each original document,
+   and for each person their name, email, IP address and the times in UTC, then the audit trail.
+3. **Seal.** A PAdES signature over the whole file, an RFC 3161 time stamp over it, then the OCSP answers and
+   revocation lists (the `/DSS`) and a document time stamp, each appended to the file. The SHA-256 of the result is
+   `envelopes.final_sha256`, and every download, the evidence pack, the email attachment and `/verify` use those bytes.
+
+Nothing writes into the file after step 3. `tests/seal-spec.test.ts` holds that: it compares every download with the
+stored bytes, also after the files were encrypted at rest and after the encryption key was changed.
+
+**`local_p12`, for your own computer.** Three steps:
+
+```
+npm run seal:dev-cert          # writes ./certs/dev-seal.p12, password "changeit"
+```
+
+Put these lines in `.env.local`, then start the app and complete a document:
+
+```
+PDF_SIGNING_MODE=local_p12
+LOCAL_P12_PATH=./certs/dev-seal.p12
+LOCAL_P12_PASSWORD=changeit
+TSA_URL=http://ts.ssl.com
+```
+
+Open the downloaded PDF in Adobe Acrobat Reader or Foxit. The signature panel shows the seal, its time stamp and that
+the file has not changed. The bar is yellow ("validity unknown") because you made the certificate yourself; it turns
+blue only after you trust it by hand on that computer. The script never writes over an existing file without
+`--force`, and `certs/` is in `.gitignore`. A production server refuses this certificate unless
+`SEAL_ALLOW_SELF_SIGNED=1` is set, because a self-made seal makes customers' PDFs look worse than no seal. Any
+other self-signed certificate on a production server seals, and the startup log says once, in a `[config]` line,
+that Acrobat will show "validity unknown" on every file.
+
+**`csc`, for production.** The blue bar "Signed and all signatures are valid" needs a certificate from an authority
+on the Adobe Approved Trust List, whose key must stay in the hardware of the signing service. Follow the steps in "The cloud seal
+(SSL.com eSigner) and what Acrobat shows" below, and set `PDF_SIGNING_MODE=csc` with `CSC_CLIENT_ID`,
+`CSC_CLIENT_SECRET`, `CSC_USERNAME`, `CSC_PASSWORD` and `CSC_CREDENTIAL_ID` (or the `SEAL_CSC_` names: they are the
+same settings). Only the 32-byte SHA-256 of what the seal signs goes to the service, in `credentials/authorize` and
+`signatures/signHash`; the PDF never leaves the server. With an eSealing credential no one-time code is asked for.
+`CSC_API_BASE_URL` may end in `/csc/v0` or `/csc/v1`: SSL.com serves both (specification 0.1.7.9 and 1.0.3.0) and
+the calls used have the same fields in both. Both were tried against SSL.com's sandbox; the default stays `/csc/v0`.
+
+**Trying again and failing.** The services in `TSA_URL` are asked in order. When none gave a time stamp, those that
+failed at once (no connection, or HTTP 429, 500, 502, 503, 504) are asked once more a quarter of a second later. A
+call to the signing
+service that never arrived, or was answered 429, 502, 503 or 504, is sent once more. `signatures/signHash` is never
+sent a second time for the same fingerprint, because it is the paid step and the service may have signed. All of this
+stays inside the seconds each step already had. With no time stamp the file is sealed anyway and its certificate says
+the time is the server's clock. With no seal the document still completes, its history says "Not sealed", and the
+people who run the server get an alert. What a signing service writes in an error answer is logged only after every
+secret of the cloud seal is cut out of it, and an answer that repeats our own request is not logged at all, only
+its short error code.
+
+**How many signings one document costs.** One, with two exceptions that are not retries. An account that asked for
+PDF/A whose file veraPDF does not pass is made and sealed a second time as a normal PDF. Each person's limited-view
+copy is a file of its own with a seal of its own. With a cloud seal each of those is one more paid signing.
+
+**`sealPdf` and completion.** `sealPdf(buffer, context)` in `src/server/pdfsealer.ts` seals one finished file and
+throws a typed `PdfSealError` (`not_configured`, `refused`, `signing_service`, `failed`); scripts and tests use it.
+A completed envelope goes through `sealWithPlan` in the same module, because its certificate page is drawn from the
+seal's plan first; a failure there is named with the same codes in the `[seal]` log line, and the document
+completes without a seal.
+
+**Why not `@signpdf/signpdf`.** The seal code here (`sealpdf.ts`, `sealcms.ts`) does the same job, and openssl,
+poppler's pdfsig and pyHanko, which share no code with it, accept its files. It also writes the long-term data
+(the `/DSS` and the document time stamp), which `@signpdf` does not.
 
 ### The digital seal of a completed PDF
 

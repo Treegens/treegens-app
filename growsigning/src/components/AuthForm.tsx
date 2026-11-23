@@ -10,6 +10,9 @@ import { signedOutNotice } from '@/lib/signinrules';
 import { useSso, SsoChoice } from './SsoSignIn';
 import { usePublicT } from './publicLang';
 import { PRICING } from '@/lib/impact';
+// The rules for a new login (src/lib/signup.ts): no + in the address, and a phone number.
+import { plusInEmail } from '@/lib/signup';
+import { PhoneField, usePhone, phoneBody, phoneProblem } from './PhoneField';
 
 type Mode = 'login' | 'signup' | 'forgot' | 'reset';
 type Provider = { id: string; name: string };
@@ -21,6 +24,10 @@ export function AuthForm({ mode }: { mode: Mode }) {
   const list = (names: string[]) => listIn(T, names);
   const [f, setF] = useState({ name: '', email: '', password: '', code: '' });
   const [q, setQ] = useState<URLSearchParams | null>(null);
+  // The phone number of a new login, with the country picker on the country of the browser's language.
+  const [phone, setPhone] = usePhone();
+  // Said under the email box the moment a + is typed: a new login cannot be made with one.
+  const plus = mode === 'signup' && plusInEmail(f.email);
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
   const [busy, setBusy] = useState(false);
@@ -77,13 +84,17 @@ export function AuthForm({ mode }: { mode: Mode }) {
     e.preventDefault();
     // The organisation signs this address in: Enter in the email box goes there too.
     if ((mode === 'login' || mode === 'signup') && sso.active) return window.location.assign(sso.startUrl(q));
+    // Said here in the same words the server uses, so nobody waits for a refusal they could have read at once.
+    if (plus) return setError(T('auth.plus_email'));
+    const wrongPhone = mode === 'signup' ? phoneProblem(phone, T.lang) : '';
+    if (wrongPhone) return setError(wrongPhone);
     setBusy(true);
     setError('');
     setCameBack('');
     sso.clearError();
     try {
       if (mode === 'login' || mode === 'signup') {
-        const r = await api(`/auth/${mode}`, { body: { ...f, invite: q?.get('invite') || undefined, ...(mode === 'login' && sso.wayBack ? { way_back: true } : {}) } });
+        const r = await api(`/auth/${mode}`, { body: { ...f, ...(mode === 'signup' ? phoneBody(phone) : {}), invite: q?.get('invite') || undefined, ...(mode === 'login' && sso.wayBack ? { way_back: true } : {}) } });
         // Two-step login: no session yet. The second screen asks for the code (src/server/twostep.ts), and whatever
         // the sign-in carries (an invitation, a closing login) is done after it.
         if (r.two_step) return window.location.assign(`/login/two-step${q?.get('next') ? `?next=${encodeURIComponent(q.get('next')!)}` : ''}`);
@@ -137,10 +148,14 @@ export function AuthForm({ mode }: { mode: Mode }) {
         {done ? <div className="notice" style={{ margin: '12px 0' }}>{done} <Link href="/login">{T('auth.sign_in')}</Link></div> : (
           <div style={{ marginTop: 14 }}>
             {mode === 'signup' && <label className="f"><span>{T('auth.your_name')}</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoComplete="name" autoFocus /></label>}
-            {mode !== 'reset' && <label className="f"><span>{T('auth.email')}</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} onBlur={(e) => (mode === 'login' || mode === 'signup') && sso.look(e.target.value)} required autoComplete="email" readOnly={mode === 'signup' && !!q?.get('invite')} /></label>}
+            {mode !== 'reset' && <label className="f"><span>{T('auth.email')}</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} onBlur={(e) => (mode === 'login' || mode === 'signup') && sso.look(e.target.value)} required autoComplete="email" readOnly={mode === 'signup' && !!q?.get('invite')} aria-invalid={plus || undefined} /></label>}
+            {mode === 'signup' && <p className="auth-plus" role="alert">{plus ? T('auth.plus_email') : ''}</p>}
             {(mode === 'login' || mode === 'signup') && sso.found && <SsoChoice sso={sso} mode={mode} q={q} />}
             {mode !== 'forgot' && !sso.active && <label className="f"><span>{mode === 'reset' ? T('auth.new_password') : T('auth.password')} {mode !== 'login' && <span className="hint">{T('auth.password_hint')}</span>}</span><input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={mode === 'login' ? 1 : 8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>}
-            {mode === 'signup' && !q?.get('invite') && !sso.active && <label className="f"><span>{T('auth.plan_code')} <span className="hint">{T('auth.plan_code_hint')}</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
+            {mode === 'signup' && !sso.active && <PhoneField T={T} value={phone} onChange={setPhone} lang={T.lang} />}
+            {/* The plan code box shows only when the link brought a code: without one it was a question most people
+                could not answer. A code can still be added afterwards on the Plan page. */}
+            {mode === 'signup' && !q?.get('invite') && !sso.active && !!q?.get('code') && <label className="f"><span>{T('auth.plan_code')} <span className="hint">{T('auth.plan_code_hint')}</span></span><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} autoComplete="off" /></label>}
             {error && <div className="notice err" style={{ marginBottom: 12 }} role="alert">{error}</div>}
             {!sso.active && <button className="btn primary" style={{ width: '100%' }} disabled={busy}>{T(`auth.button.${mode}`)}</button>}
             {(mode === 'login' || mode === 'signup') && providers.length > 0 && signedInAs && !q?.get('invite') && (

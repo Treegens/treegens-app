@@ -4,6 +4,7 @@
 // admin key), also while the account is closing, paused or unpaid, like the export under Settings (routes-trust.ts).
 // A large account is exported in the background: the admin is emailed when it is ready, the link works 7 days.
 // The import of such a file into another server is importer.ts; DocuSign's downloads are importer-docusign.ts.
+import { ownLoginFile } from './signuprules.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -134,6 +135,7 @@ const README = (data: any, left: string[], evidence: number) => [
   `schema/                the JSON Schema data.json is written to (version ${EXPORT_SCHEMA_VERSION}, JSON Schema 2020-12). Also at ${data.deployment.url}${EXPORT_SCHEMA_PATH}`,
   'files/<sha256>          every document, signed PDF, original upload and terms file, each named by the SHA-256 of its bytes. data.json says which is which.',
   ...(evidence ? ['evidence/<id>.zip       the evidence pack of each envelope that was sent, as "Download evidence pack" gives it.'] : []),
+  'your-login.json         your own login: name, email address and the phone number you gave. Nobody else\'s phone number is in this export.',
   'manifest-sha256.txt     the SHA-256 of every other file in this ZIP, one per line, in the form sha256sum -c reads.', '',
   'Signed PDFs are as they were stored: PDF/A where the account had that switched on and the check passed, and with a digital seal where the',
   'server had one (signed_pdf.pdfa and signed_pdf.seal in data.json say which). Signature pictures are printed in the signed PDFs and are not',
@@ -146,7 +148,7 @@ const README = (data: any, left: string[], evidence: number) => [
 ].join('\r\n');
 
 /** The entries of the ZIP, one at a time. `stats` is filled in as it goes. */
-export async function* exportEntries(account: any, by: { name: string; email: string }, stats: { envelopes: number; bytes: number; problems: string[] } = { envelopes: 0, bytes: 0, problems: [] }): AsyncGenerator<ZipEntry> {
+export async function* exportEntries(account: any, by: { id?: string; name: string; email: string }, stats: { envelopes: number; bytes: number; problems: string[] } = { envelopes: 0, bytes: 0, problems: [] }): AsyncGenerator<ZipEntry> {
   const { data, files } = exportData(account, by);
   const sums: string[] = [];
   let bytes = 0, count = 0;
@@ -201,6 +203,8 @@ export async function* exportEntries(account: any, by: { name: string; email: st
   if (problems.length) left.push(`data.json does not fully match its schema (this is a fault in this server, please tell its operators): ${problems.join('; ')}`);
   yield add('data.json', Buffer.from(JSON.stringify(data, null, 2)));
   yield add('schema/growsigning-export-v1.schema.json', Buffer.from(JSON.stringify(exportSchema(), null, 2)));
+  // The login of whoever made the export, with its phone number. Nobody else's number is in an export (signuprules.ts).
+  if (by.id) yield add('your-login.json', ownLoginFile(by.id));
   yield add('README.txt', Buffer.from(README(data, left, packs)));
   stats.bytes = bytes;
   yield { name: 'manifest-sha256.txt', data: Buffer.from(sums.join('\n') + '\n') };

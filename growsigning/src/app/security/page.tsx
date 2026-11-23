@@ -1,3 +1,4 @@
+import { PHONE_WHY } from '@/lib/signup';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/Public';
@@ -23,6 +24,7 @@ import { DatabaseLists } from './dblists';
 import { CHAIN_TRUTH, WHO_WHEN_WHERE } from '@/lib/evidence';
 import { sealSet, timeStampSet, cscSettings, SEAL_TRUTH, SEAL_TIME, SEAL_TRUST, SEAL_LIMITS, SEAL_CLOUD, TIME_STAMP_ONLY } from '@/lib/seal';
 import { DEVICE_COOKIE_WORDS } from '@/lib/witness';
+import { referralOfferOn, REFERRAL_COOKIE_WORDS } from '@/lib/referral';
 import { chatPrivacyPoint } from '@/lib/chatprovider';
 import { readPossible, READ_SENT, READ_KEPT } from '@/lib/aiassist';
 import { mailTlsPoint } from '@/lib/mailtls';
@@ -114,6 +116,7 @@ export default function Security() {
         </Block>
 
         <Block id="scams" title="Keeping scams out" lead="E-signature services get abused to send fake invoices. These checks are made where a sender starts something that emails a person (a first send, a correction to a document that is out, a reminder, reopening, a bulk send, a public form, a team invitation) and again where the email to the next person in a signing order is written.">
+          <Point title="Every account has a phone number, and one mailbox has one account.">{PHONE_WHY} It is asked for when an account is made, kept in international form, and one number belongs to one account. We send no text to check it. Only its owner and the people who run GrowSigning can see it: nobody else on a team, and nobody a document is sent to. It is in its owner&apos;s own export, it is deleted with the account, and where this server encrypts its database it is among the encrypted values. A new account cannot be made with a + in its email address, and addresses that reach the same mailbox count as one. Neither rule touches the people who sign: a document can be sent to any address.</Point>
           <Point title="Senders confirm their email address first.">An account cannot send anything, invite anyone, add a webhook or create an API key until its address is confirmed, with the 6-digit code from our email typed in the browser that signed up, or with the button in that email. A login gets 10 wrong codes in all, and so does an email address within 30 days, however many logins are made with it; after that only the button confirms it. The button works in the browser that signed up. Anywhere else it asks for the password of the login, so the owner of a mailbox cannot confirm a login that someone else made in their name by clicking a link out of habit.</Point>
           <Point title="New accounts have a daily limit.">An account that has not paid for anything can send to {abuse.firstWeekDaily} people a day in its first week and to {abuse.unpaidDaily} a day after that. Everyone a sender newly emails counts, however they are reached. A public form has the same limit of its own, counted for that form alone, so strangers filling in a form never use up what its owner may send. A team can invite {abuse.invitesPerDay} people a day. Paying does not lift the limit at once: it goes when a payment is {abuse.paidTrustDays} days old and was not refunded or disputed. A person on our team can lift it sooner.</Point>
           <Point title="Fake payment notices are stopped.">Until that same day an account cannot send something that reads like a payment notice from a well-known brand with a phone number to call, and cannot send or invite under a name that reads like such a brand. We read what the emails print: the subject, the message, notes to recipients, document names, what the sender wrote on the pages, the reason for voiding, the names the email goes out under and the name of a public form, which its page shows to anyone with the link, also when a brand is glued to another word or spelled with look-alike letters. It is a filter for the common trick, not a guarantee: a scam worded another way passes it, which is what reports are for. A refusal says which words set it off, and a person can clear a genuine sender.</Point>
@@ -161,6 +164,8 @@ export default function Security() {
           <Point title="A file you verify is not stored.">The verify page works out the fingerprint of the file and discards it. In the result, signers&apos; email addresses are partly hidden.</Point>
           {/* src/server/witness.ts beforeFinish and witnessDone make this true. */}
           <Point title="One cookie, only where a signature has a witness.">{DEVICE_COOKIE_WORDS}</Point>
+          {/* src/server/referrals.ts lookAtCode, noteDevice and referralsTick make this true. Only where the invite offer is on. */}
+          {referralOfferOn(process.env) && <Point title="Two cookies for Invite a friend.">{REFERRAL_COOKIE_WORDS}</Point>}
         </Block>
 
         {/* Where the server is and who else handles data, read from the settings this server runs on. */}

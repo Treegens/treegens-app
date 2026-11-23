@@ -322,12 +322,12 @@ export async function finishOrgSignIn(c: Ctx, row: any, accountId: string, p: Si
       // Someone the account's directory added (scim.ts) joins on their first sign-in, whatever join_new says.
       const invite = row.invite || (rule.joinNew || directoryWaiting(accountId, email) ? joinInvite(accountId, email) : null);
       try {
-        const made = await createLogin(c, { name: nameOf(claims, email), email, passwordHash: NO_PASSWORD, verified: true, invite, via: p.name, also: (uid) => void addIdentity(uid, p!, subject, email) });
+        const made = await createLogin(c, { name: nameOf(claims, email), email, passwordHash: NO_PASSWORD, verified: true, invite, via: p.name, org: true, also: (uid) => void addIdentity(uid, p!, subject, email) });
         return done(c, row, { joined: made.joined, sso_made: p.name });
       } catch (e) {
         if (!(e instanceof HttpError)) throw e;
         // An invitation for another address: made again without it.
-        const made = await createLogin(c, { name: nameOf(claims, email), email, passwordHash: NO_PASSWORD, verified: true, invite: rule.joinNew ? joinInvite(accountId, email) : null, via: p.name, also: (uid) => void addIdentity(uid, p!, subject, email) });
+        const made = await createLogin(c, { name: nameOf(claims, email), email, passwordHash: NO_PASSWORD, verified: true, invite: rule.joinNew ? joinInvite(accountId, email) : null, via: p.name, org: true, also: (uid) => void addIdentity(uid, p!, subject, email) });
         return done(c, row, { joined: made.joined, invite_error: e.message, sso_made: p.name });
       }
     }

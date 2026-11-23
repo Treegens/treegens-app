@@ -31,48 +31,57 @@ let db: Server['db'];
 let cron: Server['cron'];
 let credits: typeof import('../src/server/credits.ts');
 let referrals: typeof import('../src/server/referrals.ts');
+let rules: typeof import('../src/server/signuprules.ts');
 
 const PW = 'correct horse battery';
 const text = (html: string) => html.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ');
 const root = path.resolve(import.meta.dirname, '..');
 const src = (p: string) => readFileSync(path.join(root, p), 'utf8');
 
-type Person = { c: Client; id: string; uid: string; email: string; ip: string; phone: string | null };
+type Person = { c: Client; id: string; uid: string; email: string; ip: string };
 let k = 0;
 // A new login with a workspace of its own. `visit`: the browser opened an invite link first (the cookie carries the
-// code). `ref`: the code is sent with the form. `phone: null`: no phone number given yet. Whatever the sign-up form
-// asks for a phone, the number is set here, so each test says exactly what the account has.
-async function person(first: string, o: { visit?: string; ref?: string; ip?: string; email?: string; phone?: string | null; cookies?: Record<string, string>; unverified?: boolean } = {}): Promise<Person> {
+// code). `ref`: the code is sent with the form. Sign-up asks for a phone number (src/server/signuprules.ts) and the
+// test client gives every login one of its own; `phone` writes a chosen one afterwards, the way a person who runs
+// the server can allow one number for two logins.
+async function person(first: string, o: { visit?: string; ref?: string; ip?: string; email?: string; phone?: string; cookies?: Record<string, string>; unverified?: boolean } = {}): Promise<Person> {
   const n = ++k;
   const c = new Client();
   c.ip = o.ip || `198.51.${100 + Math.floor(n / 200)}.${(n % 200) + 1}`;
   Object.assign(c.cookies, o.cookies || {});
   if (o.visit) assert.equal((await c.get(`/public/referrals/${o.visit}`)).status, 200);
   const email = o.email || `${first.toLowerCase()}${n}@ref.example`;
-  const signupPhone = `+31 6 10 00 ${String(1000 + n)}`;
-  const r = await c.post('/auth/signup', { name: `${first} Tester`, email, password: PW, phone: signupPhone, ...(o.ref ? { ref: o.ref } : {}) });
+  const r = await c.post('/auth/signup', { name: `${first} Tester`, email, password: PW, ...(o.ref ? { ref: o.ref } : {}) });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   const u = db.get('SELECT * FROM users WHERE email=?', email);
   if (!o.unverified) assert.equal((await c.post('/auth/verify', { token: u.verify_token })).status, 200);
-  const phone = o.phone === null ? null : o.phone || `+31611${String(100000 + n)}`;
-  db.run('UPDATE users SET phone=? WHERE id=?', phone, u.id);
+  if (o.phone) rules.savePhone(u.id, o.phone);
   const me = (await c.get('/me')).data;
-  return { c, id: me.account.id, uid: u.id, email, ip: c.ip, phone };
+  return { c, id: me.account.id, uid: u.id, email, ip: c.ip };
 }
+// A login without a phone number: one from before the rule, or one whose number was taken away.
+const noPhone = (p: Person) => db.run('UPDATE users SET phone=NULL, phone_key=NULL WHERE id=?', p.uid);
 const invite = async (p: Person) => (await p.c.get('/referrals')).data;
 const row = (friend: Person) => db.get('SELECT * FROM referrals WHERE friend_user_id=?', friend.uid);
 const left = async (p: Person) => (await p.c.get('/billing')).data.signatures.available;
 const lots = (p: Person, source = 'referral') => credits.lotsOf(p.id).filter((l) => l.source === source);
 // The friend sends a document to someone else, and that person signs it: the first signed document.
 let signer = 0;
-async function firstSigned(p: Person) {
+async function sendDoc(p: Person) {
   const to = `signer${++signer}@sign.example`;
   const e = await simple(p.c, to);
   const sent = await p.c.post(`/envelopes/${e.id}/send`);
   assert.equal(sent.status, 200, JSON.stringify(sent.data));
-  const done = await signAll(e.id, to);
+  return { e, to };
+}
+async function signDoc(d: { e: any; to: string }) {
+  const done = await signAll(d.e.id, d.to);
   assert.equal(done.status, 200, JSON.stringify(done.data));
-  return e;
+}
+async function firstSigned(p: Person) {
+  const d = await sendDoc(p);
+  await signDoc(d);
+  return d.e;
 }
 const login = async (p: Person) => {
   p.c.cookies = Object.fromEntries(Object.entries(p.c.cookies).filter(([name]) => name === 'gs_dev'));
@@ -85,6 +94,7 @@ before(async () => {
   cron = s.cron;
   credits = await import('../src/server/credits.ts');
   referrals = await import('../src/server/referrals.ts');
+  rules = await import('../src/server/signuprules.ts');
 });
 
 // ---- The rules as numbers and words ---------------------------------------------------------------------------------
@@ -116,6 +126,15 @@ test('one mailbox is one friend: capitals, Gmail dots, plus tags and googlemail 
   assert.equal(isReferralCode('../../etc'), false);
 });
 
+test('whether a phone number is waited for is the sign-up rule, word for word', () => {
+  for (const env of [{}, { SIGNUP_PHONE: 'off' }, { SIGNUP_PHONE: '0' }, { SIGNUP_PHONE: 'required' }, { SIGNUP_PHONE: 'nonsense' }, { BILLING_MODE: 'deployment' }, { BILLING_MODE: 'deployment', SIGNUP_PHONE: 'on' }])
+    assert.equal(referrals.phoneAsked(env), rules.phoneRequired(env), JSON.stringify(env));
+  // Two logins are compared by the fingerprint sign-up keeps, never by the number, which can be encrypted at rest.
+  assert.equal(referrals.phoneKey({ phone: 'v1:sealed:abcdef0123456789', phone_key: 'k1' }), 'k1');
+  assert.equal(referrals.phoneKey({ phone: 'v1:sealed:abcdef0123456789', phone_key: null }), '', 'a sealed value without its fingerprint is not read as a number');
+  assert.equal(referrals.phoneKey({ phone: null, phone_key: null }), '');
+});
+
 // ---- The whole path ---------------------------------------------------------------------------------------------------
 
 let ann: Person, bob: Person;
@@ -134,22 +153,24 @@ test('the whole path: link, sign-up, a real account, 3 signatures each, one emai
   assert.deepEqual(look.data, { ok: true, signatures: 3, expiry_days: 30 });
   assert.equal((await new Client().get('/public/referrals/zzzzzzzz')).data.ok, false);
 
-  // Bob opens the link (the browser keeps the code), signs up and confirms his address. No phone number yet.
-  bob = await person('Bob', { visit: inv.code, phone: null });
+  // Bob opens the link (the browser keeps the code), signs up and confirms his address.
+  bob = await person('Bob', { visit: inv.code });
   assert.equal(row(bob).status, 'pending');
   assert.equal(row(bob).inviter_account_id, ann.id);
   assert.equal(bob.c.cookies.gs_ref, '', 'the code is used up by the sign-up');
   assert.equal(await left(bob), 3, 'nothing is given at sign-up beyond the trial');
   assert.deepEqual([(await invite(ann)).joined, (await invite(ann)).waiting, (await invite(ann)).rewarded], [1, 1, 0]);
 
-  // His first document is signed, but he gave no phone number: not a real account yet.
-  await firstSigned(bob);
+  // His first document is signed while his login has no phone number: not a real account yet.
+  const out = await sendDoc(bob);
+  noPhone(bob);
+  await signDoc(out);
   await cron.tick();
   assert.equal(row(bob).status, 'pending');
   assert.equal(await left(ann), 3);
 
   // With a phone number the reward lands, here on the timer.
-  db.run('UPDATE users SET phone=? WHERE id=?', '+31 6 5550 0001', bob.uid);
+  rules.savePhone(bob.uid, '+447555000001');
   await cron.tick();
   const r = row(bob);
   assert.deepEqual([r.status, r.inviter_got, r.friend_got], ['rewarded', 3, 3]);
@@ -207,6 +228,23 @@ test('with the code in the form and a phone number from the start, the reward la
   assert.equal(await left(cy), 5);
 });
 
+test('a server that asks nobody for a phone number (SIGNUP_PHONE=off) does not wait for one', async () => {
+  const inviter = await person('Olga');
+  const code = (await invite(inviter)).code;
+  const friend = await person('Odo', { ref: code });
+  const d = await sendDoc(friend);
+  noPhone(friend);
+  process.env.SIGNUP_PHONE = 'off';
+  try {
+    await signDoc(d);
+    assert.equal(row(friend).status, 'rewarded');
+    assert.equal(row(friend).phone_mark, null);
+    assert.equal(await left(inviter), 6);
+  } finally {
+    delete process.env.SIGNUP_PHONE;
+  }
+});
+
 test('signing your own document is not a first signed document, and an unconfirmed address is not a real account', async () => {
   const inv = await invite(ann);
   const own = await person('Own', { ref: inv.code });
@@ -235,12 +273,21 @@ test('a sign-up without a link, and one with a code nobody has, write nothing do
 // ---- Never for inviting yourself ----------------------------------------------------------------------------------------
 
 let cara: Person, caraCode = '';
-test('the same mailbox in another spelling is refused at sign-up', async () => {
-  cara = await person('Cara', { email: 'cara.lee@gmail.com' });
+const CARA_PHONE = '+447400123456';
+test('the same mailbox in another spelling is refused', async () => {
+  cara = await person('Cara', { email: 'cara.lee@gmail.com', phone: CARA_PHONE });
   caraCode = (await invite(cara)).code;
-  const twin = await person('Twin', { ref: caraCode, email: 'caralee@googlemail.com' });
-  assert.deepEqual([row(twin).status, row(twin).reason], ['refused', 'same_email']);
+  // Sign-up itself now refuses a second login for one mailbox (src/server/signuprules.ts), so nobody gets this far
+  // through the form. The invite rule stands behind it, for a login from before that rule: here the friend's address
+  // is the inviter's own mailbox in another spelling by the time the reward would land.
+  const refusedAtForm = await new Client().post('/auth/signup', { name: 'Twin Tester', email: 'caralee@googlemail.com', password: PW, ref: caraCode });
+  assert.ok(refusedAtForm.status >= 400, 'the sign-up form does not make a second login for the same mailbox');
+  const twin = await person('Twin', { ref: caraCode });
+  assert.equal(row(twin).status, 'pending');
+  db.run('UPDATE users SET email=? WHERE id=?', 'caralee@googlemail.com', twin.uid);
+  twin.email = 'caralee@googlemail.com';
   await firstSigned(twin);
+  assert.deepEqual([row(twin).status, row(twin).reason], ['refused', 'same_email']);
   assert.equal(await left(cara), 3);
   assert.equal(await left(twin), 2, 'the trial, one used, and nothing more');
 });
@@ -275,9 +322,11 @@ test('the same internet address within a day is refused, and two days later it i
 });
 
 test('the same phone number as the inviter is refused when the reward would land', async () => {
-  const same = await person('Same', { ref: caraCode, phone: null });
-  assert.equal(row(same).status, 'pending', 'nothing to compare at sign-up');
-  db.run('UPDATE users SET phone=? WHERE id=?', `0${normalPhone(cara.phone)}`, same.uid);
+  // One number is one login at sign-up, unless a person who runs the server allowed it for more. Then it still is
+  // not a friend: the same number as the inviter never counts.
+  const same = await person('Same', { ref: caraCode });
+  assert.equal(row(same).status, 'pending', 'another number at sign-up');
+  rules.savePhone(same.uid, CARA_PHONE);
   await firstSigned(same);
   assert.deepEqual([row(same).status, row(same).reason], ['refused', 'same_phone']);
   assert.equal(await left(cara), 3);
@@ -285,12 +334,12 @@ test('the same phone number as the inviter is refused when the reward would land
 });
 
 test('one reward per friend: a phone number that was a rewarded friend before is refused, whoever invites', async () => {
-  const one = await person('One', { ref: caraCode, phone: '+44 7700 900123' });
+  const one = await person('One', { ref: caraCode, phone: '+447700900123' });
   await firstSigned(one);
   assert.equal(row(one).status, 'rewarded');
   assert.equal(await left(cara), 6);
   const other = await person('Other');
-  const two = await person('Two', { ref: (await invite(other)).code, phone: '0044 7700 900 123' });
+  const two = await person('Two', { ref: (await invite(other)).code, phone: '+447700900123' });
   await firstSigned(two);
   assert.deepEqual([row(two).status, row(two).reason], ['refused', 'phone_used']);
   assert.equal(await left(other), 3);
@@ -324,7 +373,7 @@ test('a reward is taken back when the friend is paused for abuse: what is left l
   const eve = await person('Eve');
   const code = (await invite(eve)).code;
   const finn = await person('Finn', { ref: code });
-  const wait = await person('Wait', { ref: code, phone: null });
+  const wait = await person('Wait', { ref: code });
   await firstSigned(finn);
   assert.equal(row(finn).status, 'rewarded');
   // Eve uses four: the three of the trial go first (they end sooner), then one of the reward.
@@ -464,6 +513,8 @@ test('honest wording everywhere it is said, and no em dash in any of it', async 
   assert.match(src('src/app/pricing/page.tsx'), /Invite a friend:<\/b> you both get \{sigs\(referralRulesFrom\(process\.env\)\.signatures\)\} free after their first signed document/);
   assert.match(src('src/app/help/page.tsx'), /<QA id="invite" q="How do I get free signatures by inviting a friend\?">\s*<p>\{referralRuleText\(referralRulesFrom\(process\.env\)\)\}<\/p>/);
   assert.match(src('src/server/chatkb.ts'), /=== INVITE A FRIEND ===/);
+  // The two cookies of the offer are said on the security page, where the offer is on.
+  assert.match(src('src/app/security/page.tsx'), /referralOfferOn\(process\.env\) && <Point title="Two cookies for Invite a friend\.">\{REFERRAL_COOKIE_WORDS\}<\/Point>/);
   const readme = src('README.md');
   for (const part of ['Invite a friend (`src/server/referrals.ts`', '`REFERRAL_SIGNATURES`', '`REFERRAL_EXPIRY_DAYS`', '`REFERRAL_MONTHLY_MAX`', '`REFERRAL_TOTAL_MAX`', 'expire 30 days after they arrive', 'this server keeps no fingerprint of', 'the code has no list of them', '`tests/referrals.test.ts`']) assert.ok(readme.includes(part), part);
   const env = src('.env.example');

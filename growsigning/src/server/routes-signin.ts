@@ -11,6 +11,7 @@ import { forgetEarlierSetup } from './reclaim.ts';
 import { secondStepWaits } from './twostep.ts';
 import { record } from './seclog.ts';
 import { enforcedFor } from './orgsso.ts';
+import { mailboxOwner } from './signuprules.ts';
 
 // Signing in and signing up with Google or Microsoft, next to email and password. The talking to the provider and
 // the checking of what it answers are in oidc.ts. This file decides who the person is, and that rule is short:
@@ -226,7 +227,9 @@ route('GET', '/auth/:provider/callback', async (c) => {
     } catch {
       return back('busy');
     }
-    const existing = get('SELECT * FROM users WHERE email=?', who.email);
+    // At Gmail, dots before the @, a "+" part and googlemail for gmail all reach one mailbox, and Google itself stands
+    // behind it: a login under another spelling of the address is this person's login (signuprules.ts).
+    const existing = get('SELECT * FROM users WHERE email=?', who.email) || (who.vouched && /@(gmail|googlemail)\.com$/.test(who.email) ? mailboxOwner(who.email) : null);
     if (existing && !who.vouched) return back('exists', who.email);
     if (existing) {
       // Two-step login is on: Google or Microsoft alone connects, cuts and confirms nothing here. That waits for the
@@ -256,6 +259,9 @@ route('GET', '/auth/:provider/callback', async (c) => {
       } catch (e) {
         // An invitation for another address, or a code we do not know: nothing was created, and the page says which.
         if (!(e instanceof HttpError)) throw e;
+        // The rules for a new address (signuprules.ts): no + before the @, and one login per mailbox.
+        if (e.data?.code === 'plus_in_email') return back('plus_email');
+        if (e.data?.code === 'same_mailbox') return back('same_mailbox');
         return back(row.invite ? 'invite' : 'code');
       }
     }

@@ -10,6 +10,10 @@ export async function register() {
   const { billingModeWarnings } = await import('./lib/billingmode');
   for (const line of billingModeWarnings()) console.error(line);
   if (paymentSettingsIgnored().length) console.error(`BILLING_MODE=deployment: ${paymentSettingsIgnored().join(', ')} ignored. Nothing is counted or charged on this server, and the payment provider is never called.`);
+  // The shorter names of the seal settings (LOCAL_P12_PATH, CSC_*) and PDF_SIGNING_MODE are copied to the seal's own
+  // names first, so everything after reads one set (src/lib/sealenv.ts).
+  const { applySealEnv } = await import('./lib/sealenv');
+  applySealEnv();
   // Before anything else reads a setting or opens a connection: OUTSIDE_CALLS (src/lib/outside.ts). In mode none the
   // settings of every service that needs an outside host are taken away here, so those features are simply absent;
   // in listed and none the guard in src/server/outside.ts refuses other hosts. The list is logged either way.
@@ -21,6 +25,9 @@ export async function register() {
   // A cloud seal (SEAL_CSC_*, src/server/sealcsc.ts): a half set is said here, and the certificate chain is fetched.
   const { cscStartLines, cscReady } = await import('./server/sealcsc');
   for (const line of cscStartLines()) console.error(line);
+  // And what there is to say about those names, the mode, and a self-made test certificate on a production server.
+  const { sealStartLines } = await import('./server/sealkey');
+  for (const line of sealStartLines()) console.error(line);
   void cscReady();
   const { securityContactWarning } = await import('./lib/selfhost');
   const contact = securityContactWarning();

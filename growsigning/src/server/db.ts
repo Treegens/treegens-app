@@ -1347,8 +1347,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   // link or a reminder to this person, so reminders by text follow at most once a day.
   ['recipients', 'verify', 'TEXT'],
   ['recipients', 'phone', 'TEXT'],
-  // users.phone: the phone number a person gives at sign-up. Invite a friend reads it (userPhone in referrals.ts):
-  // a friend counts once they gave one, and never with the number of the person who invited them.
+  // users.phone: the phone number a person gives at sign-up (src/server/signuprules.ts writes it, with phone_key
+  // below). Invite a friend reads phone_key (phoneKey in referrals.ts): a friend counts once they gave a number,
+  // and never with the number of the person who invited them.
   ['users', 'phone', 'TEXT'],
   ['recipients', 'text_link', 'INTEGER NOT NULL DEFAULT 0'],
   ['recipients', 'check_gen', 'INTEGER NOT NULL DEFAULT 0'],

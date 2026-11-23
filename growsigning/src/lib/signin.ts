@@ -34,7 +34,7 @@ export function safeNext(next: any, fallback = '/app'): string {
 }
 
 /** Every way a sign-in at a provider can end without signing anyone in. The pages get the code, never free text. */
-export const SIGNIN_ERRORS = ['cancelled', 'expired', 'failed', 'exists', 'no_email', 'invite', 'code', 'taken', 'session', 'signed_in', 'busy', 'org_sso'] as const;
+export const SIGNIN_ERRORS = ['cancelled', 'expired', 'failed', 'exists', 'no_email', 'invite', 'code', 'taken', 'session', 'signed_in', 'busy', 'org_sso', 'plus_email', 'same_mailbox'] as const;
 export type SignInError = (typeof SIGNIN_ERRORS)[number];
 
 /** What happened and what to do next, in words. `provider` is only ever one of the names above. */
@@ -66,6 +66,11 @@ function errorWords(code: any, provider?: any): string {
       return `You are already signed in to GrowSigning in this browser, so no new login was made. To sign in with ${p} from now on, press Connect next to ${p} here. To make a separate login with it instead, sign out first and then use "Continue with ${p}" on the sign-in page.`;
     case 'busy':
       return 'Too many attempts. Please wait a bit and try again.';
+    case 'plus_email':
+      // The rules for a new login (src/lib/signup.ts): no + before the @.
+      return `The address you chose at ${p} has a + in it, and a new login cannot be made with one. No login was created. Please use your email address without the + part: choose another ${p} account, or create a login with your email and a password.`;
+    case 'same_mailbox':
+      return `You already have a GrowSigning login for this mailbox, under a slightly different spelling of the address. No second login was created. Sign in with that login, then connect ${p} under Settings.`;
     case 'org_sso':
       // The address is at a domain whose organisation signs everyone in through its own service (src/server/orgsso.ts).
       return `Your organisation signs you in to GrowSigning through its own sign-in service, so ${p} is not used for this address. Type your work email on this page and press the button with your organisation's name.`;

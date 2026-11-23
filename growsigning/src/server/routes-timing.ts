@@ -4,11 +4,13 @@ import { loadEnvelope, publicEnvelope } from './envelopes.ts';
 import { mine } from './routes-envelopes.ts';
 import { scheduleSend, cancelSchedule, pauseEnvelope, resumeEnvelope } from './timing.ts';
 import { noteSentBy } from './shares.ts';
+import { phoneBeforeSend } from './signuprules.ts';
 
 // Set or change the time a draft goes out by itself: { "send_at": "2027-03-20T09:00:00Z" }, 5 minutes to 30 days ahead.
 route('POST', '/envelopes/:id/send-later', async (c) => {
   const b = await c.body();
   const e = mine(c, c.params.id, 'envelope');
+  phoneBeforeSend(c);
   const at = scheduleSend(e, b?.send_at, c.actor);
   // Whoever set the time is who sent it, also when it leaves later by itself (shares.ts).
   noteSentBy(c, e.id);

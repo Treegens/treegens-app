@@ -5,6 +5,8 @@
 //   SEAL_CSC_* (sealcsc.ts): a cloud signing service (SSL.com eSigner) that keeps the key and signs a fingerprint.
 //     The certificate chain is the one the service gives; the key usage, the chain and the dates are checked here the
 //     same way, and every signature value it answers is checked with the certificate before it is used.
+// The shorter names LOCAL_P12_PATH, LOCAL_P12_PASSWORD and CSC_* are read too, and PDF_SIGNING_MODE picks between a
+// key file and the cloud service when both are set (src/lib/sealenv.ts).
 // RSA of 2048 bits or more (signed with RSASSA-PSS) or ECDSA on P-256. Sealing is refused, and completed PDFs are
 // made without a seal exactly as before, when the key cannot be read, does not belong to the certificate, the
 // certificate has expired or is not yet valid, its key usage allows neither digitalSignature nor nonRepudiation, or the
@@ -20,18 +22,29 @@ import { id, now, isEmail, baseUrl } from './util.ts';
 import { sendMail } from './mail.ts';
 import { seal } from './colcrypt.ts';
 import { dayText } from '../lib/dates.ts';
-import { cscConfigured, cscSettingsProblem, cscMaterial, cscSigner, type CscMaterial } from './sealcsc.ts';
+import { cscConfigured, cscSettingsProblem, cscMaterial, cscSigner, withoutSecrets, type CscMaterial } from './sealcsc.ts';
+import { applySealEnv, sealModeProblem, asWritten, sealEnvStartLines, DEV_P12_PASSWORD, DEV_SEAL_NAME } from '../lib/sealenv.ts';
 
 /** `metered`: each signature is a paid signing of a cloud service (sealcsc.ts), so a seal is never signed twice for a time stamp. */
 export type SealKey = { signer: SealSigner; cert: CertInfo; chain: CertInfo[]; hash: string; metered?: boolean };
 export type SealState = { on: true; key: SealKey } | { on: false; configured: boolean; why?: string };
 
-const SETTINGS = ['SEAL_P12', 'SEAL_P12_PASSWORD', 'SEAL_KEY_PEM', 'SEAL_CERT_PEM', 'SEAL_CHAIN_PEM'];
+const SETTINGS = ['SEAL_P12', 'SEAL_P12_PASSWORD', 'SEAL_KEY_PEM', 'SEAL_CERT_PEM', 'SEAL_CHAIN_PEM', 'NODE_ENV', 'SEAL_ALLOW_SELF_SIGNED'];
 
 /** Whether the person who runs the server has set a seal key at all (it may still be refused). */
-export const sealConfigured = () => sealSet() || !!process.env.SEAL_CERT_PEM;
+export const sealConfigured = () => (applySealEnv(), sealSet() || !!process.env.SEAL_CERT_PEM || !!sealModeProblem());
 
 class Refused extends Error {}
+
+/**
+ * The certificate made by `npm run seal:dev-cert` (or any self-made one behind the well-known password "changeit") on
+ * a production server. A self-made seal makes real customers' PDFs look worse than no seal: Acrobat shows a yellow
+ * "validity unknown" bar on every file. So it is refused there unless the operator says they mean it.
+ */
+const devSealProblem = (cert: CertInfo): string | null =>
+  process.env.NODE_ENV === 'production' && process.env.SEAL_ALLOW_SELF_SIGNED !== '1' && selfSigned(cert) && ((!!process.env.SEAL_P12 && process.env.SEAL_P12_PASSWORD === DEV_P12_PASSWORD) || cert.name === DEV_SEAL_NAME)
+    ? `The seal certificate (${cert.name}) is a self-made test certificate${process.env.SEAL_P12_PASSWORD === DEV_P12_PASSWORD ? ` behind the well-known password "${DEV_P12_PASSWORD}"` : ''}, and this is a production server. It is not used: Acrobat would show "validity unknown" on every customer's PDF, which looks worse than no seal. Set up a certificate from an authority (PDF_SIGNING_MODE=csc), or set SEAL_ALLOW_SELF_SIGNED=1 if you mean to seal with this one.`
+    : null;
 
 const pemOrFile = (v: string, what: string): string => {
   if (/-----BEGIN /.test(v)) return v.replace(/\\n/g, '\n');
@@ -98,6 +111,8 @@ function check(at = new Date()): SealKey {
   else if (key.asymmetricKeyType === 'ec' && d.namedCurve === 'prime256v1') scheme = 'ecdsa-p256';
   else throw new Refused('The seal key must be RSA of 2048 bits or more, or ECDSA on the P-256 curve.');
   const chain = chainOf(cert, infos, process.env.SEAL_P12 ? 'Put it in the .p12 file.' : 'Put it in SEAL_CHAIN_PEM.', at);
+  const dev = devSealProblem(cert);
+  if (dev) throw new Refused(dev);
   const signer: SealSigner = {
     scheme,
     chain: () => chain.map((c) => c.der),
@@ -162,6 +177,9 @@ const signature = () => SETTINGS.map((k) => `${k}=${process.env[k] || ''}`).join
 /** The seal key as it is now, or why there is none. */
 export function sealState(at = new Date()): SealState {
   if (!sealConfigured()) return { on: false, configured: false };
+  // PDF_SIGNING_MODE names a seal that has no settings behind it (src/lib/sealenv.ts).
+  const mode = sealModeProblem();
+  if (mode) return refused(mode);
   if (cscConfigured()) return cscState(at);
   const sig = signature();
   if (g.__sealKey?.sig !== sig) {
@@ -208,6 +226,8 @@ function cscState(at: Date): SealState {
 }
 
 function refused(why: string): SealState {
+  // Each setting by the name the operator wrote it under (LOCAL_P12_PATH for SEAL_P12, and so on).
+  why = asWritten(why);
   tellOperators(why);
   return { on: false, configured: true, why };
 }
@@ -215,6 +235,9 @@ function refused(why: string): SealState {
 // Logged and filed once for each reason (and again after a restart only if no open alert says the same).
 /** `key`: what makes two alerts the same one (the reason without what differs per document); the words by default. */
 export function tellOperators(why: string, key = why) {
+  // The alert is logged, stored and emailed: no secret of the signing service may ride along (sealcsc.ts).
+  why = withoutSecrets(why);
+  key = withoutSecrets(key);
   g.__sealTold ??= new Set<string>();
   if (g.__sealTold.has(key)) return;
   g.__sealTold.add(key);
@@ -230,6 +253,26 @@ export function tellOperators(why: string, key = why) {
   } catch (x: any) {
     console.error('[seal] could not file the alert', x?.message);
   }
+}
+
+/**
+ * The lines the server logs once when it starts (src/instrumentation.ts): what src/lib/sealenv.ts has to say about the
+ * names and the mode, and a self-made test certificate on a production server, which is refused.
+ */
+export function sealStartLines(): string[] {
+  const lines = sealEnvStartLines();
+  if (process.env.NODE_ENV === 'production' && (process.env.SEAL_P12 || process.env.SEAL_KEY_PEM) && !cscConfigured() && !sealModeProblem()) {
+    try {
+      const k = check();
+      // A self-made certificate that is allowed (SEAL_ALLOW_SELF_SIGNED=1) or that the guard does not know (another
+      // name, another password) still seals. One line says what customers will see, so nobody learns it from one.
+      if (selfSigned(k.cert))
+        lines.push(`[config] The seal certificate (${k.cert.name}) is self-signed, and this is a production server. Completed PDFs are sealed with it, and Acrobat shows "validity unknown" on each one until the reader trusts the certificate by hand. The blue bar needs a certificate from an authority on Adobe's list (PDF_SIGNING_MODE=csc).`);
+    } catch (e) {
+      if (e instanceof Refused && /self-made test certificate/.test(e.message)) lines.push(`[config] ${asWritten(e.message)} Until then completed PDFs are made without the digital seal.`);
+    }
+  }
+  return lines;
 }
 
 /** For tests: forget the key read from the settings, so changed settings are read again. */

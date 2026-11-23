@@ -1,6 +1,7 @@
 // What the person's role allows (perm.ts): 'see_all' here, where this file once asked for an admin.
 import { can } from './perm.ts';
 import { route, json, type Ctx } from './router.ts';
+import { refusePlus, newAddressOk, emailKeyOf } from './signuprules.ts';
 import { all, get, run, tx } from './db.ts';
 import { randomInt } from 'node:crypto';
 import { bad, baseUrl, hmac, HttpError, isEmail, now, rateLimit, safeEqual, sha256, str, token } from './util.ts';
@@ -533,6 +534,8 @@ route('POST', '/me/email', async (c) => {
   const email = str(b.email, 254).trim().toLowerCase();
   if (!isEmail(email)) throw bad('Enter the new email address in full, like name@example.com.');
   if (same(email, c.user.email)) throw bad(`${email} is the address of this login already. Type the address you want to move to.`);
+  // The rules for the address of a new login hold for a login that moves too: no + before the @ (signuprules.ts).
+  refusePlus(email);
   if (hasPassword(c.user)) {
     rateLimit(`email-change-pw:${c.user.id}`, 10, 900_000);
     if (!checkPassword(str(b.password, 200), c.user.password_hash)) throw bad('To move your login to another address, type your current password as well. That password is not right, so nothing was changed.', 403, { code: 'password_needed' });
@@ -541,6 +544,8 @@ route('POST', '/me/email', async (c) => {
   await needCode(c, b.code, 'move your login to another address');
   rateLimit(`email-change:${c.user.id}`, 5, 86400_000);
   if (get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(`There is already a GrowSigning login with ${email}, so this one cannot move there. Nothing was changed. If that login is yours too, sign in with it instead, or close it first under Settings, Records and data.`, 409);
+  // The same mailbox under another spelling is somebody's login already: one login per mailbox.
+  newAddressOk(email, c.user.id);
   const t = token();
   const until = new Date(Date.now() + 3600_000).toISOString();
   run('DELETE FROM email_changes WHERE user_id=? OR expires_at < ?', c.user.id, now());
@@ -559,9 +564,10 @@ route('POST', '/me/email/confirm', async (c) => {
   if (row.user_id !== c.user.id) throw bad('This link moves a different GrowSigning login to a new address. Sign in to that login in this browser and open the link again. Nothing was changed.', 403);
   const old = c.user.email;
   tx(() => {
+    newAddressOk(row.new_email, c.user.id);
     if (get('SELECT 1 x FROM users WHERE email=? AND id != ?', row.new_email, c.user.id)) throw bad(`In the meantime a GrowSigning login was made with ${row.new_email}, so this one cannot move there. Nothing was changed.`, 409);
     // The new address is proven, and whatever was known about the old one is not about this one.
-    run('UPDATE users SET email=?, email_verified=1, email_bounced_at=NULL, email_bounce_reason=NULL WHERE id=?', row.new_email, c.user.id);
+    run('UPDATE users SET email=?, email_key=?, email_verified=1, email_bounced_at=NULL, email_bounce_reason=NULL WHERE id=?', row.new_email, emailKeyOf(row.new_email), c.user.id);
     // Our copies of what was sent to the old address about this login are now about a login with another address:
     // marked as such, they go when the login does (purgeUser deletes by about_user), not 90 days later.
     run('UPDATE emails SET about_user=? WHERE envelope_id IS NULL AND about_user IS NULL AND to_email=? COLLATE NOCASE', c.user.id, old);
