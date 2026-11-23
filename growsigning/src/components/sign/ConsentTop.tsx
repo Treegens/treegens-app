@@ -56,7 +56,9 @@ export function ConsentTop({ data, ask, myEmail }: { data: any; ask: string; myE
     <div ref={top}>
       {ask && <p className="sg-kicker">{ask}</p>}
       <h1 className="serif" id="sg-h1" tabIndex={-1}>{prefix && level < 3 ? <span data-fit="prefix">{prefix}</span> : null}{rest}</h1>
-      <p className="sg-from">From <b>{sender.sent_by ? sentByName(sender.name, sender.sent_by) : sender.name}</b>{org ? <> at {org}</> : null}, <a href={`mailto:${sender.email}`}>{sender.email}</a></p>
+      {/* The sender's address is shown as words to read or copy, not as a link: "How electronic signing works" took
+          its place, so this screen keeps the same number of choices (tests/ux/ceilings.json is never raised). */}
+      <p className="sg-from">From <b>{sender.sent_by ? sentByName(sender.name, sender.sent_by) : sender.name}</b>{org ? <> at {org}</> : null}, <span className="sg-from-mail">{sender.email}</span></p>
       {/* "Report this request" is in the footer of every screen, so it is not said a second time here. */}
       {/* In person the notice below says whose turn it is, so "For ..." is not said as well. */}
       {me.role !== 'inperson' && !(plainFor && level >= 4) && (
