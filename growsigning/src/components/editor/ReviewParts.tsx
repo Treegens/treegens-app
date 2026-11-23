@@ -126,7 +126,7 @@ export function SavingBox({ pages, people, envelopeId }: { pages: number; people
     <div className="card row ed-saving" style={{ background: 'var(--green-soft)', borderColor: '#cfe3d2', alignItems: 'flex-start' }}>
       <Mark size={26} label="" />
       <div>
-        <b>{s.line}</b>{envelopeId && <ReviewPlus envelopeId={envelopeId} people={people} />}
+        {envelopeId && <ReviewPlus envelopeId={envelopeId} people={people} />}<b>{s.line}</b>
         <details data-fold className="ed-fold small">
           <summary>How we work this out</summary>
           <p style={{ margin: '4px 0 0' }}>{s.how} <Link href="/impact" target="_blank" rel="noopener" className="ed-tap-link">Where these numbers come from</Link></p>

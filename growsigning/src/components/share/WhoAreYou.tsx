@@ -96,7 +96,8 @@ export function WhoAreYou({ name, page }: { name: string; page: SharePage | null
 
   return (
     <Frame title={open.title} from={T('from', { sender })} sentWith={T('sent_with')} helpLabel={T('help')}>
-      {!who && <OpenTreesLine trees={open.plants} />}
+      {/* Said on every step, also while the person waits for the code: their signature plants trees. */}
+      <OpenTreesLine trees={open.plants} />
       {!who ? (
         open.people.length ? (
           <>
@@ -125,7 +126,7 @@ export function WhoAreYou({ name, page }: { name: string; page: SharePage | null
         </div>
       ) : (
         <form className="sg-code" noValidate onSubmit={check}>
-          <h2 className="sl-ask" ref={head} tabIndex={-1}>{T('is_you', { person: who.name })}</h2>
+          <h2 className="sl-ask" ref={head} tabIndex={-1}>{T('type_code')}</h2>
           <p className="muted sl-hint">{T('code_sent', { digits: sent.digits, minutes: sent.minutes, sender, person: who.name })}</p>
           <label className="f sg-code-box">
             <span>{T('code_label')}</span>

@@ -718,7 +718,7 @@ export function billingState(acct: any, user?: any) {
     expiry_rule: expiryRuleText(),
     held_rule: HELD_EXPIRY_TEXT,
     // The trees follow the signatures: 5 for every one finished on this account's documents, free ones included
-    // (treesOfAccount in impact.ts; signatures from before the change count what was promised then).
+    // (treesOfAccount in impact.ts; money paid before the change counts what was promised then, 10 a dollar).
     mangroves: treesOfAccount(acct.id),
     refund: enabled ? refundOffer(acct, lots) : null,
     // Refunds that have been asked for and not confirmed by the provider yet, so the page can say so at the top.

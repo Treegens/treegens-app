@@ -131,10 +131,10 @@
     ".next-referrals/dev/types/**/*.ts",
     ".next-sk5/types/**/*.ts",
     ".next-sk5/dev/types/**/*.ts",
-    ".next-slsimp/types/**/*.ts",
-    ".next-slsimp/dev/types/**/*.ts",
-    ".next-skeptic-sl/types/**/*.ts",
-    ".next-skeptic-sl/dev/types/**/*.ts"
+    ".next-refsimp/types/**/*.ts",
+    ".next-refsimp/dev/types/**/*.ts",
+    ".next-simp-signup/types/**/*.ts",
+    ".next-simp-signup/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

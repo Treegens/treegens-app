@@ -12,6 +12,7 @@ import { reporterKey } from './bysender.ts';
 import { callCode } from './voice.ts';
 import { lastWa, waEnds } from './whatsapp.ts';
 import { voiceProvider } from '../lib/channels.ts';
+import { listName } from '../lib/docname.ts';
 import { CHECKS, isCodeCheck, CHANNEL_WORDS, normalPhone, PHONE_HOW, maskPhone, maskEmail, checkLine, plainTime, SMS_OFF } from '../lib/checks.ts';
 import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SIGNER_CODE_WAIT_SECONDS, SIGNER_CODES_PER_HOUR, SIGNER_CODES_PER_CALLER_HOUR, SIGNER_CODES_PER_DESTINATION_DAY, LINK_TEXTS_PER_NUMBER_DAY, SIGNER_PASS_HOURS, smsDailyPerAccount } from '../lib/policy.ts';
 
@@ -55,7 +56,12 @@ export const passedCheck = (r: any): { how: string; at: string } | null =>
 // every one of those makes every device pass the check again. It also carries the moment the code was typed, signed
 // with the rest: the server refuses it SIGNER_PASS_HOURS later, whatever the browser does, so a copied cookie stops
 // working at the same moment, and two devices that passed never hold the same value.
-const deviceStamp = (r: any) => hmac(`vc:${r.id}:${r.token}:${r.check_gen || 0}:${r.verify}${gen(r)}`);
+// `code_via` is set on a copy of the row by a second way to ask for a code (a share link, sharelinks.ts sets
+// 'share'). Its codes then carry a stamp of their own: they never replace the code this person asked for on their
+// own signing page, never use up that code's tries, and wait on a clock of their own. Whoever only has the share
+// link can so never stand between the person and the document.
+const via = (r: any) => (r.code_via ? `:via-${r.code_via}` : '');
+const deviceStamp = (r: any) => hmac(`vc:${r.id}:${r.token}:${r.check_gen || 0}:${r.verify}${gen(r)}${via(r)}`);
 const jar = (r: any) => `ts_vc_${r.id}`;
 const passValue = (r: any, at: number) => `${at}.${hmac(`pass:${deviceStamp(r)}:${at}`)}`;
 export const passCookie = (r: any, secure: boolean) => cookie(jar(r), passValue(r, Date.now()), SIGNER_PASS_HOURS * 3600, secure);
@@ -488,7 +494,9 @@ export function stoppedFor(r: any): boolean {
 }
 // Which daily allowance of codes to one mailbox or number a code counts against: the sender's account, and for the
 // visitor of a public form, who typed their own address, that form alone.
-const codeBucket = (e: any, r: any) => (e.powerform_id && e.form_recipient_id === r.id ? `form:${e.powerform_id}` : e.account_id);
+// Codes asked for through a share link count in a bucket of their own too, so a stranger who keeps choosing a name
+// there never uses up what the person's own signing page may send to that mailbox.
+const codeBucket = (e: any, r: any) => (r.code_via ? `${r.code_via}:${e.account_id}` : e.powerform_id && e.form_recipient_id === r.id ? `form:${e.powerform_id}` : e.account_id);
 
 // `own` is for a text the timer tries again: it was counted when it was first written, and while that count is
 // still inside the last 24 hours it is not counted against itself a second time.
@@ -767,11 +775,15 @@ export async function requestCode(e: any, r: any, actor: Actor, by: 'text' | 'ca
       text: codeText(r, sender, code) })).status;
   } else {
     const L = mailLocale(r);
+    const shared = r.code_via === 'share' ? clip(listName(e.subject) || 'a document', 80) : '';
     delivery = await sendMail({
       // In the person's language (lang-mail), every line of it from en.json.
-      to: d.to!, subject: mt(L, 'mail.code.subject', { sender: sender.name }), heading: mt(L, 'mail.code.heading', { code }),
-      lines: [mt(L, 'mail.code.type', { minutes: SIGNER_CODE_MINUTES, sender: sender.name }),
-        sender.email ? mt(L, 'mail.code.never_ask', { sender: sender.name, email: sender.email }) : mt(L, 'mail.code.never_ask_plain', { sender: sender.name })],
+      // Asked for through a share link, the email says so and names the document: anyone who has that link can
+      // choose this name, so "someone has the link that was emailed to you" would be untrue and alarming.
+      to: d.to!, subject: shared ? mt(L, 'mail.code.share_subject', { title: shared }) : mt(L, 'mail.code.subject', { sender: sender.name }), heading: mt(L, 'mail.code.heading', { code }),
+      lines: shared ? [mt(L, 'mail.code.share_type', { minutes: SIGNER_CODE_MINUTES, sender: sender.name, title: shared }), mt(L, 'mail.code.share_not_you', { sender: sender.name })]
+        : [mt(L, 'mail.code.type', { minutes: SIGNER_CODE_MINUTES, sender: sender.name }),
+          sender.email ? mt(L, 'mail.code.never_ask', { sender: sender.name, email: sender.email }) : mt(L, 'mail.code.never_ask_plain', { sender: sender.name })],
       locale: L, envelopeId: e.id, brand: brandOf(e.account_id), replyTo: sender.email || undefined, fromName: sender.name, expiresAt: expires,
     });
     // Once the mail server has it, our own copy of the email no longer needs to hold the code.

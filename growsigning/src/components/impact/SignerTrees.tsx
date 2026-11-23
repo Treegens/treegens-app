@@ -1,41 +1,20 @@
 'use client';
 // Trees on the signing page: the first thing a person reads when they open their link, one line next to Finish, and
-// the finished screen. The server decides everything that is a claim (GET /api/sign/:token/impact,
-// src/server/impact.ts): whether this signature plants trees, whether it is the person's first, and the counts. This file only draws, with the words of src/lib/impactwords.ts.
+// the finished screen. The server decides everything that is a claim (envelope.plants in the page's first answer and
+// GET /api/sign/:token/impact, src/server/impact.ts): whether this signature plants trees, whether it is the person's first, and the counts. This file only draws, with the words of src/lib/impactwords.ts.
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/components/ui';
 import { Mark } from '@/components/Brand';
 import { IMPACT } from '@/lib/impact';
-import { finishLine, openLine, OPEN_UNDER, signerWords } from '@/lib/impactwords';
+import { doneLine, finishLine, openLine, OPEN_UNDER, signerWords } from '@/lib/impactwords';
 import { Mangroves } from './Mangroves';
-
-// The toolbar and the phone's bottom bar both show the line: one question to the server for the two of them.
-const asked = new Map<string, Promise<any>>();
-const ask = (base: string) => {
-  if (!asked.has(base)) asked.set(base, api(`${base}/impact`).catch(() => (asked.delete(base), null)));
-  return asked.get(base)!;
-};
 
 /**
  * The first screen, above everything legal: a leaf, "When you sign, 5 trees are planted." and who plants them.
- * Nothing at all for someone whose signature plants none, or where tree words are switched off. `onShown` tells the
- * screen around it that words were added, so it can count its words again (ConsentTop.tsx).
+ * `trees` comes with the page's first answer (envelope.plants from GET /api/sign/:token), so the line is there when
+ * the screen is first drawn: nothing arrives later and pushes the tick box down under a finger. Nothing at all for
+ * someone whose signature plants none, or where tree words are switched off. Also used by a public form.
  */
-export function OpenTrees({ base, show, onShown }: { base: string; show: boolean; onShown?: () => void }) {
-  const [trees, setTrees] = useState(0);
-  useEffect(() => {
-    let live = true;
-    if (show) ask(base).then((d) => live && setTrees(Number(d?.finish) || 0));
-    return () => void (live = false);
-  }, [base, show]);
-  const line = show ? openLine(trees) : '';
-  useEffect(() => {
-    if (line) onShown?.();
-  }, [line]);
-  return <OpenTreesLine trees={show ? trees : 0} />;
-}
-
-/** The same two lines for a page that already knows the number: a public form before the person has a link of their own. */
 export function OpenTreesLine({ trees }: { trees: number }) {
   const line = openLine(Number(trees) || 0);
   if (!line) return null;
@@ -48,15 +27,16 @@ export function OpenTreesLine({ trees }: { trees: number }) {
 }
 
 /** Next to Finish: "5 trees will be planted when you finish." For everyone whose signature plants trees. */
-export function TreeLine({ base, show }: { base: string; show: boolean }) {
-  const [trees, setTrees] = useState(0);
-  useEffect(() => {
-    let live = true;
-    if (show) ask(base).then((d) => live && setTrees(Number(d?.finish) || 0));
-    return () => void (live = false);
-  }, [base, show]);
-  const line = show ? finishLine(trees) : '';
+export function TreeLine({ trees, show }: { trees: number; show: boolean }) {
+  const line = show ? finishLine(Number(trees) || 0) : '';
   return line ? <span className="sg-tree">{line}</span> : null;
+}
+
+/** Right under "All done", on the first screenful of a phone: "5 trees will be planted for your signature." */
+export function DoneTrees({ trees }: { trees: number }) {
+  const line = doneLine(Number(trees) || 0);
+  if (!line) return null;
+  return <p className="sg-done-trees" data-feature="impact"><Mark size={22} label="" /><b>{line}</b></p>;
 }
 
 const num = (v: number, d = 0) => v.toLocaleString('en', { maximumFractionDigits: d });
@@ -87,7 +67,6 @@ export function SignerDone({ base, impact }: { base: string; impact: any }) {
   const small = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let live = true;
-    asked.delete(base); // asked again after Finish: the answer is a different one now
     api(`${base}/impact`).then((r) => live && setD(r?.done || null)).catch(() => live && setD(null));
     return () => void (live = false);
   }, [base]);
@@ -113,7 +92,7 @@ export function SignerDone({ base, impact }: { base: string; impact: any }) {
     return () => document.removeEventListener('keydown', key);
   });
   const sheets = Math.round(Number(d?.sheets ?? impact?.sheets) || 0);
-  const w = d ? signerWords({ trees: d.trees, first: d.first, total: d.total, sheets }) : null;
+  const w = d ? signerWords({ trees: d.trees, first: d.first, total: d.total, sheets, own: !!d.own }) : null;
   // One sentence for a screen reader, put in after the region exists so it is read out.
   useEffect(() => {
     if (first && w) setSaid(w.title);

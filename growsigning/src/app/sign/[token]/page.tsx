@@ -10,7 +10,7 @@ import { consentWording, consentPart } from '@/lib/policy';
 import { NUMBER_HINT } from '@/lib/numbers';
 import { twoWaysUnderField } from '@/lib/twoways';
 import { Shell, StateCard, Sender, Icon, useMedia, bringIntoView } from '@/components/sign/parts';
-import { TreeLine, OpenTrees, SignerDone } from '@/components/impact/SignerTrees';
+import { TreeLine, OpenTreesLine, DoneTrees, SignerDone } from '@/components/impact/SignerTrees';
 import { PurgedLink } from '@/components/sign/PurgedLink';
 import { ReplacedLink, UnknownLink, LoadProblem } from '@/components/sign/deadEnds';
 import { PausedLink } from '@/components/sign/Paused';
@@ -962,6 +962,8 @@ export default function SignPage() {
           {/* On the screen facing the person at a service counter there is no account to hand back: CounterDone below. */}
           {!env.counter?.screen && <>{inPerson && <HandBack signer={me.name} sender={sender.name} envelopeId={env.id} />}</>}
           <StateCard tone="ok" title={title}>
+            {/* The trees first, right under the heading, so a phone shows them without a scroll (impact/SignerTrees.tsx). */}
+            {!env.counter?.screen && me.paper_sign?.state !== 'accepted' && <DoneTrees trees={finished?.plants ?? env.plants} />}
             {/* No address for someone whose link the sender passed on: nothing is emailed, so nothing is promised. */}
             {/* At a service counter the copy goes by email only: the link used there is closed (CounterCopy). */}
             {env.counter && inPerson && <CounterCopy allDone={allDone} />}
@@ -1132,7 +1134,7 @@ export default function SignPage() {
         <div className="card sg-consent">
           {/* Who asks, the document, from and for whom, the sender's words; kept to 120 words before the tick. The
               sender is named once, with the account's name only when it says more ("at Acme Ltd"). */}
-          <ConsentTop data={data} ask={ask} myEmail={myEmail} trees={(shown) => <OpenTrees base={base} show={!ask} onShown={shown} />} />
+          <ConsentTop data={data} ask={ask} myEmail={myEmail} trees={!ask ? <OpenTreesLine trees={env.plants} /> : null} />
           {/* In person: whose turn it is. The line about the connection is said on the document, where it matters. */}
           {/* Not on the person's own counter screen: they already hold it (counter.ts). */}
           {me.role === 'inperson' && !env.counter?.screen && <div className="notice warn sg-gap">{richText(lang, 'sign.consent.hand_over', { name: <b>{me.name}</b> })}</div>}
@@ -1210,7 +1212,7 @@ export default function SignPage() {
       <span className="sg-wide"><MoreButton open={open === 'more'} onOpen={go('more')} /></span>
       {other}
       {/* One tree line next to Finish, for everyone whose signature plants trees (impact/SignerTrees.tsx). */}
-      <span className="sg-wide"><TreeLine base={base} show={acts && !hasNext} /></span>
+      <span className="sg-wide"><TreeLine trees={env.plants} show={acts && !hasNext} /></span>
       <span className="sg-wide">{mainButton(false)}</span>
     </>
   );
@@ -1218,7 +1220,7 @@ export default function SignPage() {
     <>
       {acts && <div className="sg-bottom-info"><b>{count}</b><span aria-hidden="true">{saveText}</span></div>}
       <MoreButton open={open === 'more'} onOpen={go('more')} className="btn sg-morebtn" />
-      <TreeLine base={base} show={acts && !hasNext} />
+      <TreeLine trees={env.plants} show={acts && !hasNext} />
       {mainButton(true)}
     </>
   );

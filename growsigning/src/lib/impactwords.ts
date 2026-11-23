@@ -71,26 +71,39 @@ export type SignerFacts = {
   total: number;
   /** Sheets of paper this document would have used: its pages times the people who would each have had a copy. */
   sheets: number;
+  /** A sender who signed their own document on a server with plans: it used no signature, so it plants none, and that is said. */
+  own?: boolean;
 };
+
+/** Said to a sender who signs their own document, where they would otherwise look for trees and find none. */
+export const OWN_LINE = 'Signing your own document is free and plants no trees.';
+
+/** The finished screen, right under "All done": what this person's signature does. Empty when it plants none. */
+export const doneLine = (k: number): string => (k >= 1 ? `${trees(k)} will be planted for your signature.` : '');
+
+/** One line in the email that says a document is complete. Empty when its signatures plant none. */
+export const completedMailLine = (k: number): string => (k >= 1 ? `The signatures on this document plant ${trees(k)}: mangroves, planted by Treegens.` : '');
 
 /**
  * The finished screen of a person who signs. `title` and `under` are the first-time card (the big line, and the line
  * under it); `line` is the small card of every other time.
  *
- * The tense is one and the same everywhere: a signature "plants" and trees "are being planted", because at this
- * moment Treegens still has the planting to do. Nothing says it has already happened.
+ * The tense: at this moment Treegens still has the planting to do, so the person reads what will happen because they
+ * signed ("5 trees will be planted for your signature"), which is a result of their own, and never that it has
+ * already happened.
  */
 export function signerWords(f: SignerFacts): { title: string; under: string; line: string; count: string; announce: string } {
   const plants = f.trees >= 1;
   const saved = f.sheets >= 1 ? `${pages(f.sheets)} of paper from a tree` : '';
-  const title = plants ? `Your signature plants ${trees(f.trees)}` : 'You signed your first document with GrowSigning';
-  const under = plants ? `${OPEN_UNDER}${saved ? ` You also saved ${saved}.` : ''}` : saved ? `You saved ${saved}.` : '';
+  const title = plants ? doneLine(f.trees).slice(0, -1) : 'You signed your first document with GrowSigning';
+  const own = !plants && f.own ? OWN_LINE : '';
+  const under = plants ? `${OPEN_UNDER}${saved ? ` You also saved ${saved}.` : ''}` : [own, saved ? `You saved ${saved}.` : ''].filter(Boolean).join(' ');
   // "More" is said only when there were some before: the total is above what this signature plants.
   const more = plants && f.total > f.trees;
-  // The two-part line: the pages first, then the trees, and the trees only when they are true.
-  const line = more ? `Your signature plants ${n(f.trees)} more ${f.trees === 1 ? 'tree' : 'trees'}.${saved ? ` You saved ${saved}.` : ''}`
-    : plants ? saved ? `Your signature plants ${trees(f.trees)}. You saved ${saved}.` : `Your signature plants ${trees(f.trees)}.`
-    : saved ? `You saved ${saved}.` : '';
+  // The two-part line: the trees first when they are true, then the pages.
+  const line = more ? `${n(f.trees)} more ${f.trees === 1 ? 'tree' : 'trees'} will be planted for your signature.${saved ? ` You saved ${saved}.` : ''}`
+    : plants ? `${doneLine(f.trees)}${saved ? ` You saved ${saved}.` : ''}`
+    : [saved ? `You saved ${saved}.` : '', own].filter(Boolean).join(' ');
   // The running count is said only when it says more than this signature already did.
   const count = f.total > f.trees && f.total >= 1 ? `Your signatures on GrowSigning plant ${trees(f.total)} so far.` : '';
   return { title, under, line, count, announce: `${title}.` };
@@ -127,8 +140,8 @@ export function senderWords(f: SenderFacts): { title: string; promise: string; s
 /** Once everyone finished, on the envelope page: what the signatures of this document plant together. */
 export const plantedLine = (k: number): string => (k >= 1 ? `Its signatures plant ${trees(k)} with Treegens.` : '');
 
-/** The second sentence of the box at the review step, when every signature of this document plants trees. */
-export const reviewPlus = (all: boolean): string => (all ? `Plus: ${trees(TREES_PER_SIGNATURE)} are planted for each person who signs.` : '');
+/** The first sentence of the box at the review step, before the paper, when every signature of this document plants trees. */
+export const reviewPlus = (all: boolean): string => (all ? `${trees(TREES_PER_SIGNATURE)} are planted for each person who signs.` : '');
 
 /**
  * The lines of the box "Signed without paper" on the signing record (the certificate of completion). Paper and water

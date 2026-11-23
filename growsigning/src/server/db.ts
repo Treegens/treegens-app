@@ -1098,7 +1098,8 @@ CREATE INDEX IF NOT EXISTS share_links_target ON share_links(kind, target_id);
 -- fingerprints (never the values) of the friend's email address as one person and of their phone number, so the same
 -- person is never a rewarded friend twice. referral_devices: keyed fingerprints of the browsers (a cookie) and
 -- internet addresses an account was used from when its invite link was looked at or when it signed up, for the rule
--- that nobody is rewarded for inviting themselves. Lines older than 90 days go (referralsTick).
+-- that nobody is rewarded for inviting themselves, noted whenever a person uses the account signed in (first_at: first
+-- seen, at: last seen). Lines not seen for 90 days go (referralsTick).
 CREATE TABLE IF NOT EXISTS referral_codes (
   account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
   mail_off INTEGER NOT NULL DEFAULT 0
@@ -1150,6 +1151,9 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['recipients', 'dead_link_alerted_at', 'TEXT'],
   ['webhooks', 'alerted_at', 'TEXT'],
   ['payments', 'kind', "TEXT NOT NULL DEFAULT 'plan'"],
+  // The payment behind a signature that was bought before the 5 trees rule: its trees are already in the totals as
+  // that payment's 10 for every dollar, so while the payment stands the row is not added to a total a second time.
+  ['impact_signed', 'old_payment', 'TEXT'],
   ['payments', 'credits', 'INTEGER NOT NULL DEFAULT 0'],
   ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
   ['powerforms', 'alerted_at', 'TEXT'],
@@ -1930,6 +1934,8 @@ const COLUMNS: [table: string, column: string, definition: string][] = [
   ['users', 'phone_asked_at', 'TEXT'],
   ['users', 'phone_verified_at', 'TEXT'],
   ['users', 'phone_code', 'TEXT'],
+  // Invite a friend: when a browser at an address was first seen with an account (`at` is the last time), referrals.ts.
+  ['referral_devices', 'first_at', 'TEXT'],
 ];
 
 // The monthly price each account is on, written down once when the server starts for every account that has none

@@ -10,9 +10,9 @@ import { snapSwitches } from './switches.ts';
 import { fireWebhooks } from './webhooks.ts';
 import { noteFramed } from './embed.ts';
 import { sheetsSaved, impactOf, fmtNum, PRICING } from '../lib/impact.ts';
-import { treesInInvite, noteFinished } from './impact.ts';
+import { treesInInvite, noteFinished, treesOnEnvelope } from './impact.ts';
 import { showsTrees } from './tenantpolicy.ts';
-import { mailLine } from '../lib/impactwords.ts';
+import { mailLine, completedMailLine } from '../lib/impactwords.ts';
 import { creditsEnabled, available, needed, isChargeable, isSelf, sigRef, grant, sameEmail, paidFor, creditSummary, nextPerson } from './credits.ts';
 import { afterSignature, referralAbuse, inviteSentence } from './referrals.ts';
 import { STANDING_PAYMENT, personGen, lastExpiry, swapRefusal, reholdEnvelope, pastDateText, renewalPending } from './credits.ts';
@@ -1776,8 +1776,13 @@ async function completeEnvelope(e: any) {
   fireWebhooks(e.account_id, 'envelope.completed', e.id);
 
   const i = impactOf(fresh.sheets);
+  // What the signatures of this document plant, said to everyone who gets the completed copy and to the sender
+  // (completedMailLine). Nothing with tree words off, and nothing when no signature on it counts.
+  const plantedTrees = showsTrees(e.account_id) ? treesOnEnvelope(e.id) : 0;
+  const planted = completedMailLine(plantedTrees);
   const lines = [
     pdf ? 'Everyone has finished. The signed document and its certificate of completion are ready.' : 'Everyone has finished. The signed document and its certificate of completion are being prepared and will be at the link below shortly.',
+    ...(planted ? [planted] : []),
     // The paper estimate belongs to 'Trees on screens and emails' (tenantpolicy.ts): an account that switched it off gets none.
     // Not when someone printed it and signed on paper: then it was not all signed on screen (paper.ts).
     ...(showsTrees(e.account_id) && !fresh.recipients.some((r: any) => r.paper_scan_id) ? [`Because this was signed on screen, about ${fmtNum(i.sheets)} ${i.sheets === 1 ? 'sheet' : 'sheets'} of paper and ${fmtNum(i.litresWater)} litres of water were not used. That is an estimate: ${baseUrl()}/impact shows how it is worked out.`] : []),
@@ -1816,7 +1821,7 @@ async function completeEnvelope(e: any) {
   }
   if (sender && !sent.has(sender.email.toLowerCase()) && notifyPrefs(sender).completed)
     // In the sender's language, every line from en.json (senderlocale.ts); in English the same words as the lines above.
-    noteCopyMailed(e, { name: sender.name, email: sender.email, sender: true }, copy, await (async (L) => sendMail({ ...senderCompletedMail(L, fresh, { ready: !!pdf, copy, impact: showsTrees(e.account_id) && !fresh.recipients.some((r: any) => r.paper_scan_id) ? i : null }), to: sender.email, envelopeId: e.id, brand, attachments, ...(L !== 'en' ? { locale: L } : {}) }))(senderLocaleOf(e)));
+    noteCopyMailed(e, { name: sender.name, email: sender.email, sender: true }, copy, await (async (L) => sendMail({ ...senderCompletedMail(L, fresh, { ready: !!pdf, copy, trees: plantedTrees, impact: showsTrees(e.account_id) && !fresh.recipients.some((r: any) => r.paper_scan_id) ? i : null }), to: sender.email, envelopeId: e.id, brand, attachments, ...(L !== 'en' ? { locale: L } : {}) }))(senderLocaleOf(e)));
 }
 
 export function finalPdf(e: any): Buffer | null {

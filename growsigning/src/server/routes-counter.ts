@@ -2,6 +2,7 @@
 // say who has the permission and which templates are used at the counter; the person's own screen connects with a
 // one-use code and needs no login.
 import { route, type Ctx } from './router.ts';
+import { phoneBeforeSend } from './signuprules.ts';
 import { all, get, run } from './db.ts';
 import { bad, isEmail, now, str } from './util.ts';
 import { copyEnvelope, sendEnvelope, yesNo } from './envelopes.ts';
@@ -23,6 +24,8 @@ route('GET', '/counter', (c) => {
 
 // "Start" for someone who is not on the list yet: a new document from a counter template, sent, with this official.
 route('POST', '/counter/start', async (c) => {
+  // A new document goes out: the login has a phone number first (signuprules.ts).
+  phoneBeforeSend(c);
   assertStaff(c);
   const b = await c.body();
   const name = str(b.name, 120).trim();

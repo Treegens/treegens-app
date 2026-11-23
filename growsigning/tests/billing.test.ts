@@ -267,8 +267,12 @@ test('unused signatures from the latest payment are refunded on request, to the 
   const pub = (await new Client().get('/public/impact')).data;
   const paid = db.get('SELECT SUM(amount_cents - refunded_cents) c FROM payments').c / 100;
   assert.equal(pub.donatedUsd, paid);
-  assert.equal(pub.treesFunded, db.get('SELECT COALESCE(SUM(trees),0) n FROM impact_signed').n);
-  assert.equal(pub.treesFunded % 5, 0);
+  // Repair of 23 November 2026: the payments above were dated before the change (45 and 100 days ago), so they keep
+  // what was promised then, 10 trees for every dollar that still stands; signatures since the change add 5 each.
+  const oldUsd = db.get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) c FROM payments WHERE at < '2026-11-23T00:00:00.000Z'").c / 100;
+  const since = db.get("SELECT COALESCE(SUM(trees),0) n FROM impact_signed WHERE at >= '2026-11-23T00:00:00.000Z' AND old_payment IS NULL").n;
+  assert.ok(oldUsd > 0);
+  assert.equal(pub.treesFunded, Math.floor(oldUsd * 10) + since);
 });
 
 test('locked out? stop billing by card, or find every subscription by email', async () => {

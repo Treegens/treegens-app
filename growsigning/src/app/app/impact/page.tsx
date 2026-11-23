@@ -11,8 +11,8 @@ export default function Impact() {
   if (!d) return <div className="muted">Loading…</div>;
   return (
     <div className="stack">
-      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Trees planted</h1><div className="muted">What the signatures of {me.account.name} have planted and kept out of the printer.</div></div></div>
-      <ImpactStats i={d.account} />
+      <div className="pagehead" style={{ marginBottom: 0 }}><div><h1 className="serif">Trees planted</h1><div className="muted">What the signatures of {me.account.name} plant and have kept out of the printer.</div></div></div>
+      <ImpactStats i={d.account} own />
       <div className="card row between wrap" style={{ background: 'var(--green-deep)', color: '#fff', borderColor: 'var(--green-deep)' }}>
         <div style={{ maxWidth: 620 }}>
           <h2 className="serif" style={{ fontSize: 22 }}>Every signature plants {PRICING.treesPerSignature} trees</h2>

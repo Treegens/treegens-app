@@ -11,12 +11,12 @@ import { api, useLoad } from '@/components/ui';
 import { plantedLine, reviewPlus, senderWords, TREES_PER_SIGNATURE } from '@/lib/impactwords';
 import { Mangroves } from './Mangroves';
 
-/** At the review step, after "This saves 15 pages of paper from a tree.": when every signature of the draft plants trees. */
+/** At the review step, before "This saves 15 pages of paper from a tree.": when every signature of the draft plants trees. */
 export function ReviewPlus({ envelopeId, people }: { envelopeId: string; people: number }) {
   // Asked again when the number of people changes: the answer is about the draft as it is saved.
   const [d] = useLoad(() => api(`/envelopes/${envelopeId}/impact`), [envelopeId, people]);
   const line = reviewPlus(!!d?.plus);
-  return line ? <> {line}</> : null;
+  return line ? <><b>{line}</b>{' '}</> : null;
 }
 
 // The envelope page asks once for the two places that draw from the answer.

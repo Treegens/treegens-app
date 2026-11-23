@@ -6,7 +6,8 @@ import { TOPUP_EXPIRY_MONTHS, WELCOME_EXPIRY_DAYS, expiryMoment } from '../lib/p
 import { referralRulesFrom } from '../lib/referral.ts';
 
 // Signatures are the unit people pay for. One credit is one person signing one envelope.
-//   - $9 a month adds 9 signatures. A top-up adds one per dollar. Every dollar plants 10 mangroves, used or not.
+//   - $9 a month adds 9 signatures. A top-up adds one per dollar. Every signature plants 5 trees when it is signed
+//     (src/server/impact.ts); money paid before that rule keeps its old promise there.
 //   - Signatures expire (expiryRuleText in src/lib/policy.ts, decided 2026-11-20): a plan month's 9 (and a month's
 //     from a free code) at the end of that month, top-ups 12 months after their payment, the trial's 3 thirty days
 //     after the account was made. The one that expires soonest is used first.
@@ -720,6 +721,24 @@ export function paidSignatureFor(recipientId: string): boolean {
     : get('SELECT lot_id FROM credit_holds WHERE account_id=? AND key=?', r.account_id, holdKey(ref))?.lot_id;
   const l = lotId ? get('SELECT * FROM credit_lots WHERE id=?', lotId) : null;
   return paymentStands(l);
+}
+/**
+ * The payment behind this person's signature and when it was made, or null when the signature is a free one (the
+ * trial, a code, a reward) or none was used. Trees ask this once, at Finish (noteSigned in impact.ts): a signature
+ * bought before the 5 trees rule is already in the totals as its payment's old promise.
+ */
+export function signaturePayment(recipientId: string): { id: string; at: string } | null {
+  const r = get('SELECT r.id, r.email, r.person_gen, e.account_id FROM recipients r JOIN envelopes e ON e.id=r.envelope_id WHERE r.id=?', recipientId);
+  if (!r) return null;
+  const ref = sigRef(r);
+  const line = get("SELECT id FROM credits WHERE account_id=? AND reason='signature' AND ref=?", r.account_id, ref);
+  const lotId = line
+    ? get('SELECT lot_id FROM credit_draws WHERE credit_id=? AND n > 0 AND lot_id IS NOT NULL ORDER BY id LIMIT 1', line.id)?.lot_id
+    : get('SELECT lot_id FROM credit_holds WHERE account_id=? AND key=?', r.account_id, holdKey(ref))?.lot_id;
+  const l = lotId ? get('SELECT paid, ref, at FROM credit_lots WHERE id=?', lotId) : null;
+  if (!l?.paid) return null;
+  const p = get('SELECT id, at FROM payments WHERE id=?', l.ref);
+  return p ? { id: p.id, at: p.at } : null;
 }
 // A lot that was paid for, whose payment still stands: not refunded in full and not disputed (or the dispute was won).
 function paymentStands(l: { paid?: number | boolean; ref?: string } | null | undefined): boolean {

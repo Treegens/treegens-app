@@ -15,7 +15,7 @@ const TAP = { minHeight: 44 };
 const friendly = (e: any) => (e?.status ? e.message : 'We could not reach GrowSigning, so nothing was changed. Check your connection and try again.');
 
 /** Asks for the new address (and the password, when the login has one) and emails a link there. Nothing changes before that link is opened. */
-export function EmailChangeForm({ me, onCancel }: { me: any; onCancel?: () => void }) {
+export function EmailChangeForm({ me, onCancel, quiet = false }: { me: any; onCancel?: () => void; /** Opened together with the phone form above it: the keyboard is not pulled into the email box. */ quiet?: boolean }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   // With two-step login on, the address is moved only with a current code too (src/server/twostep.ts).
@@ -49,7 +49,7 @@ export function EmailChangeForm({ me, onCancel }: { me: any; onCancel?: () => vo
   return (
     <form onSubmit={send} className="sn-email-form" aria-labelledby={`${id}-h`}>
       <p id={`${id}-h`} className="small" style={{ margin: '8px 0' }}>Type the address you want to use from now on. We email a link there, and the change is made once you open it in this browser. Your documents, team and plan stay as they are.</p>
-      <label className="f"><span>New email address</span><input type="email" autoComplete="email" inputMode="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} style={TAP} /></label>
+      <label className="f"><span>New email address</span><input type="email" autoComplete="email" inputMode="email" required autoFocus={!quiet} value={email} onChange={(e) => setEmail(e.target.value)} style={TAP} /></label>
       {pw && <label className="f"><span>Your current password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} style={TAP} /></label>}
       {twoStep && <label className="f"><span>Code from your authenticator app</span><input inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} style={TAP} /></label>}
       {error && <p className="notice err" role="alert">{error}</p>}
@@ -104,17 +104,18 @@ export function EmailAddressCard({ me }: { me: any }) {
   // The button stays on the page while the form is open, and says so (aria-expanded): pressing it again closes the form.
   return (
     <div className="card">
-      <h2 style={{ marginBottom: 4 }}>Email address</h2>
+      <h2 style={{ marginBottom: 4 }}>{me.phone ? 'Email and phone' : 'Email address'}</h2>
       <p className="muted small">{emailLine(me.user.email, !!me.user.email_verified, !!me.email_problem)}</p>
       {/* The phone number of the login (src/server/signuprules.ts): shown to its owner here, changed in the same fold. */}
       {me.phone && <p className="muted small">{me.phone.number ? say('phone.settings_line', { number: me.phone.number }) : say('phone.settings_none')}{me.phone.verified ? ` ${say('phone.verify.done')}` : ''}</p>}
-      <button type="button" className="btn sm" style={TAP} onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={`${id}-change`} data-more="item">Change email address</button>
-      <div id={`${id}-change`} hidden={!open}>{open && <EmailChangeForm me={me} onCancel={() => setOpen(false)} />}</div>
-      {/* The same button opens the phone number: one fold for where we reach this person. */}
+      <button type="button" className="btn sm" style={TAP} onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={`${id}-change`} data-more="item">{me.phone ? 'Change email or phone' : 'Change email address'}</button>
+      {/* One fold for where we reach this person, named for both. The phone number comes first: it is one box and
+          asks for no password. The email form follows under its own heading. */}
       {open && me.phone && <div style={{ marginTop: 16 }}>
-        <PhoneForm me={me} button={say('phone.button.change')} onSaved={() => (toast(say('phone.saved')), me.reload?.())} />
+        <PhoneForm me={me} button={say('phone.button.change')} why={false} onSaved={() => (toast(say('phone.saved')), me.reload?.())} />
         {me.phone.can_verify && <PhoneVerify onDone={() => me.reload?.()} />}
       </div>}
+      <div id={`${id}-change`} hidden={!open}>{open && <EmailChangeForm me={me} onCancel={() => setOpen(false)} quiet={!!me.phone} />}</div>
     </div>
   );
 }

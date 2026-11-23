@@ -27,15 +27,17 @@ export const phoneProblem = (v: PhoneValue, lang = 'en'): string => {
   return r.ok ? '' : phoneProblemText(r.why, r.iso || v.country, lang);
 };
 
-export function PhoneField({ T, value, onChange, lang = 'en', autoFocus = false, why = true }: { T: Say; value: PhoneValue; onChange: (v: PhoneValue) => void; lang?: string; autoFocus?: boolean; why?: boolean }) {
+export function PhoneField({ T, value, onChange, lang = 'en', autoFocus = false, why = true, show = false }: { T: Say; value: PhoneValue; onChange: (v: PhoneValue) => void; lang?: string; autoFocus?: boolean; why?: boolean; /** The form was sent: say what is wrong now, also for an empty box. */ show?: boolean }) {
   const id = useId();
   // Said once the person leaves the box, or at once for letters: nobody is told "too short" while still typing.
   const [left, setLeft] = useState(false);
   const [all, setAll] = useState(false);
   const fill = () => { if (!all) flushSync(() => setAll(true)); };
+  // Closed again, the picker shows the short form ("GB +44"), so the calling code is never cut off in a narrow box.
+  const fold = () => setAll(false);
   const countries = useMemo(() => PHONE_COUNTRIES.map((c) => ({ ...c, name: countryName(c.iso, lang) })).sort((a, b) => a.name.localeCompare(b.name, lang)), [lang]);
-  const r = value.number.trim() ? parsePhone(value.number, value.country) : null;
-  const wrong = r && !r.ok && (left || r.why === 'letters') ? phoneProblemText(r.why, r.iso || value.country, lang) : '';
+  const r = value.number.trim() || show ? parsePhone(value.number, value.country) : null;
+  const wrong = r && !r.ok && (left || show || r.why === 'letters') ? phoneProblemText(r.why, r.iso || value.country, lang) : '';
   // A number typed with + says its own country: the picker follows it, so the two never disagree on screen.
   useEffect(() => {
     if (r?.ok && r.iso !== value.country && value.number.trim().startsWith('+')) onChange({ ...value, country: r.iso });
@@ -46,9 +48,10 @@ export function PhoneField({ T, value, onChange, lang = 'en', autoFocus = false,
       <div className="phone-row">
         {/* Closed, the picker holds the chosen country only: a page with 200 country names in it reads as 600 words to a
             screen reader's "read all" and to anything that counts words. The list is filled the moment it is touched. */}
-        <select aria-label={T('phone.country')} value={value.country} onChange={(e) => onChange({ ...value, country: e.target.value })} autoComplete="tel-country-code"
-          onPointerDown={fill} onFocus={fill} onKeyDown={fill}>
-          {(all ? countries : countries.filter((c) => c.iso === value.country)).map((c) => <option key={c.iso} value={c.iso}>{c.name} (+{c.dial})</option>)}
+        <select aria-label={T('phone.country')} value={value.country} onChange={(e) => (onChange({ ...value, country: e.target.value }), fold())} autoComplete="tel-country-code"
+          onPointerDown={fill} onFocus={fill} onKeyDown={fill} onBlur={fold}>
+          {all ? countries.map((c) => <option key={c.iso} value={c.iso}>{c.name} (+{c.dial})</option>)
+            : countries.filter((c) => c.iso === value.country).map((c) => <option key={c.iso} value={c.iso} aria-label={`${c.name} (+${c.dial})`}>{c.iso} +{c.dial}</option>)}
         </select>
         <input id={`${id}-n`} type="tel" inputMode="tel" autoComplete="tel-national" required autoFocus={autoFocus} maxLength={32} value={value.number} placeholder={PHONE_EXAMPLES[value.country] || ''}
           onChange={(e) => onChange({ ...value, number: e.target.value })} onBlur={() => setLeft(true)} aria-invalid={!!wrong} aria-describedby={`${id}-w ${id}-e`} />

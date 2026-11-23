@@ -6,7 +6,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { boot, Client, signUp, mailTo, simple } from './helpers.ts';
+import { boot, Client, signUp, mailTo, simple, nextPhone } from './helpers.ts';
 import { safeNext, signInErrorText, signInNotice, signInProviders, removedText, SIGNIN_ERRORS } from '../src/lib/signin.ts';
 
 type P = 'google' | 'microsoft';
@@ -121,7 +121,13 @@ async function signIn(c: Client, provider: P, person: Record<string, any>, o: Fl
   const state = o.state === undefined ? auth.searchParams.get('state')! : o.state;
   delete c.cookies.sg_signin_note;
   const back = await go(c, `/auth/${o.at || provider}/callback?${new URLSearchParams({ code, ...(state === null ? {} : { state }) })}`);
-  return { ...back, start, auth, code, to: new URL(back.location || 'http://nowhere.invalid/'), note: c.cookies.sg_signin_note ? JSON.parse(decodeURIComponent(c.cookies.sg_signin_note)) : null };
+  const out = { ...back, start, auth, code, to: new URL(back.location || 'http://nowhere.invalid/'), note: c.cookies.sg_signin_note ? JSON.parse(decodeURIComponent(c.cookies.sg_signin_note)) : null };
+  // A login made with Google or Microsoft gives its phone number on the "One more thing" screen before anything else
+  // is done with it (src/server/signuprules.ts, since 23 November 2026: the server refuses everything else until
+  // then). These tests are about signing in, so the number is given here, as the person would on that screen.
+  const me = await c.get('/me');
+  if (me.status === 200 && me.data?.phone?.ask === 'now') assert.equal((await c.post('/me/phone', { phone: nextPhone() })).status, 200);
+  return out;
 }
 async function connect(c: Client, provider: P, person: Record<string, any>, between?: () => any) {
   const r = await c.post(`/me/signin/${provider}/connect`);

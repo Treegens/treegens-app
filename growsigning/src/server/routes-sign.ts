@@ -42,6 +42,7 @@ import { stampSeen } from './stamps.ts';
 // The account's own consent text under ours, and whether this person asked for paper instead (disclosure.ts).
 import { ownTermsFor, ownAtConsent, paperFacts } from './disclosure.ts';
 import { clientPolicy, showsTrees } from './tenantpolicy.ts';
+import { treesShownTo } from './impact.ts';
 import { awayMinutes } from './secpolicy.ts';
 // Paused by its sender: what the page says, and what a pause stops (timing.ts).
 import { pausedGate, pausedFacts } from './timing.ts';
@@ -160,6 +161,9 @@ export function signView(c: Ctx, found: any, quiet = false): any {
     // impact: the paper this document saves, for the finished screen. Null when the account switched 'Trees on screens
     // and emails' off, so that screen says nothing about paper or trees (tenantpolicy.ts).
     envelope: { id: e.id, subject: e.subject, status: e.status, void_reason: e.void_reason, expires_at: e.expires_at, date_format: e.date_format, sender, impact: showsTrees(e.account_id) ? impactOf(e.sheets) : null,
+      // plants: trees this person's signature plants (5), sent with the first answer so "When you sign, 5 trees are
+      // planted." is on the first screen at once. 0 says nothing: tree words off, someone who does not sign, no plans.
+      plants: showsTrees(e.account_id) ? treesShownTo(e, r) : 0,
       // For someone who came through a public form on a shared device: where the next person starts.
       next_person: (e.powerform_id && e.form_recipient_id === r.id && get('SELECT slug FROM powerforms WHERE id=? AND active=1 AND shared_device=1', e.powerform_id)?.slug) || null,
       // A public form's start that was cleared before the visitor finished: they start again (start_again is the
@@ -442,7 +446,9 @@ route('POST', '/sign/:token/complete', async (c) => {
   // The person a delegate signed for is told (delegation.ts).
   await delegateFinished(e, r.id, 'completed');
   const after = get('SELECT status, sheets FROM envelopes WHERE id=?', e.id);
-  return { ok: true, envelope_status: after.status, impact: showsTrees(e.account_id) ? impactOf(after.sheets) : null };
+  return { ok: true, envelope_status: after.status, impact: showsTrees(e.account_id) ? impactOf(after.sheets) : null,
+    // The trees of the signature just finished, for the line right under "All done".
+    plants: showsTrees(e.account_id) ? treesShownTo({ ...e, status: after.status, sheets: after.sheets }, get('SELECT * FROM recipients WHERE id=?', r.id)) : 0 };
 }, 'public');
 
 route('POST', '/sign/:token/decline', async (c) => {

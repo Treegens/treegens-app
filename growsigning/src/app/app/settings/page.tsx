@@ -700,6 +700,9 @@ function Billing() {
         </div>
       )}
 
+      {/* Invite friends, right under the balance: the link, two counts, the rules in three lines. With none left the link is in the box just above, so it is not drawn twice. */}
+      <InviteCard inv={inv} bare={!!s && s.available <= 0 && !!inv?.open} />
+
       <div className="card">
         <div className="row between wrap">
           <div>
@@ -828,9 +831,6 @@ function Billing() {
           <button className="btn" onClick={() => { setOffer(b.refund); setModal('refund'); }}>Refund {b.refund.amount}</button>
         </div>
       )}
-
-      {/* Invite friends: the link, how many joined, how many rewards, the rules in three lines. With none left, the link is already above. */}
-      <InviteCard inv={inv} bare={!!s && s.available <= 0 && !!inv?.open} />
 
       {/* Every rule, closed until someone wants it (research/ux-charter.md, Plan): the dates above are what people need daily. */}
       <details className="card" data-fold="">

@@ -104,12 +104,13 @@ test('a sender makes the link, and a second document with the same name gets the
 
   // Refused names say why, and nothing is saved.
   const e3 = await simple(c, 'sam@share.example', { subject: 'Billing', send: true });
-  assert.equal((await c.get(`/envelopes/${e3.id}/share-link`)).data.suggestion, 'billing-document');
+  assert.equal((await c.get(`/envelopes/${e3.id}/share-link`)).data.suggestion, 'billing-agreement');
   for (const name of ['login', 'growsigning-nda', 'PayPal Billing', 'ab', 'official lease']) {
     r = await c.put(`/envelopes/${e3.id}/share-link`, { name });
     assert.equal(r.status, 422, name);
     assert.equal(r.data.code, 'share_name');
-    assert.equal(r.data.suggestion, 'billing-document');
+    // The way forward the refusal itself advises ("login" gives "login-agreement"), else a name from the title.
+    assert.equal(r.data.suggestion, name === 'login' ? 'login-agreement' : 'billing-agreement', name);
   }
   assert.equal((await c.get(`/envelopes/${e3.id}/share-link`)).data.share_link, null);
   // A document whose name has no Latin letter still gets a plain suggestion.
@@ -482,4 +483,151 @@ test('the API description and the permission table know the routes', async () =>
   const { listRoutes } = await import('../src/server/router.ts');
   const ours = listRoutes().filter((r) => /share-link|\/public\/share/.test(r.path)).map((r) => `${r.method} ${r.path} ${r.level}`).sort();
   assert.deepEqual(ours, ['GET /envelopes/:id/share-link user', 'GET /powerforms/:id/share-link user', 'GET /public/share/:name public', 'POST /public/share/:name/code public', 'POST /public/share/:name/code/check public', 'PUT /envelopes/:id/share-link user', 'PUT /powerforms/:id/share-link user']);
+});
+
+// ---- Repairs after review ------------------------------------------------------------------------------------------
+
+test('a stranger with only the share link cannot end, use up or hold back the code a signer asked for on their own page', async () => {
+  const c = await signUp('Dora Sender', 'dora@share.example', '203.0.113.40');
+  const e = await simple(c, 'gus@lock.example', { subject: 'Locked lease', send: true, recipients: [{ id: 'r', role: 'signer', name: 'Gus Grower', email: 'gus@lock.example', verify: 'email_code' }] });
+  await c.put(`/envelopes/${e.id}/share-link`, {});
+  const tok = tokenFor(e.id, 'gus@lock.example');
+  const own = (subject: RegExp) => mailTo('gus@lock.example').filter((m: any) => subject.test(m.subject)).map((m: any) => /(\d{6}) is your code/.exec(m.html)?.[1]);
+  // The signer asks for their code on their own signing page.
+  const signer = visitor();
+  assert.equal((await signer.post(`/sign/${tok}/code`, {})).status, 200);
+  const real = own(/^Your code to open a document from/).pop()!;
+  // A stranger asks through the share link, at once: no waiting on the signer's clock, and a code of its own.
+  const stranger = visitor();
+  const key = (await stranger.get('/public/share/locked-lease')).data.people[0].key;
+  assert.equal((await stranger.post('/public/share/locked-lease/code', { person: key })).status, 200);
+  const rows = db.all('SELECT stamp, ended_how FROM signer_codes WHERE envelope_id=? ORDER BY id', e.id);
+  assert.equal(rows.length, 2);
+  assert.notEqual(rows[0].stamp, rows[1].stamp);
+  assert.equal(rows[0].ended_how, null, 'the signer\'s own code is still live');
+  // The stranger's wrong tries count against the share link's code only.
+  for (let i = 0; i < SIGNER_CODE_TRIES; i++) await stranger.post('/public/share/locked-lease/code/check', { person: key, code: real === '000000' ? '111111' : '000000' });
+  // The signer's own code never works on the share link, and the share link's never on the signer's page.
+  const shared = own(/^Your code to open Locked lease/).pop()!;
+  assert.ok(shared && shared !== undefined);
+  // As many more asks as the share link allows in an hour (each from a new address, a minute apart).
+  for (let i = 0; i < 8; i++) {
+    for (const row of db.all('SELECT id, at FROM signer_codes WHERE envelope_id=?', e.id)) db.run('UPDATE signer_codes SET at=? WHERE id=?', new Date(Date.parse(row.at) - 61_000).toISOString(), row.id);
+    await visitor().post('/public/share/locked-lease/code', { person: key });
+  }
+  assert.equal((await visitor().post('/public/share/locked-lease/code', { person: key })).status, 429, 'the share link itself is used up');
+  // None of it touched the signer: the code they were emailed opens the document, and a new one can be asked for.
+  const ok = await signer.post(`/sign/${tok}/code/check`, { code: real });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal((await signer.post(`/sign/${tok}/code`, {})).status, 200);
+});
+
+test('the code email asked for through a share link names the document and says what happened, without alarm', async () => {
+  const c = await signUp('Mila Mail', 'mila@share.example', '203.0.113.41');
+  const e = await simple(c, 'sam@mailwords.example', { subject: 'Please sign: Hedge agreement', send: true });
+  await c.put(`/envelopes/${e.id}/share-link`, {});
+  const v = visitor();
+  const key = (await v.get('/public/share/hedge-agreement')).data.people[0].key;
+  assert.equal((await v.post('/public/share/hedge-agreement/code', { person: key })).status, 200);
+  const m = mailTo('sam@mailwords.example').filter((x: any) => /^Your code to open/.test(x.subject)).pop();
+  assert.equal(m.subject, 'Your code to open Hedge agreement');
+  assert.match(m.html, /Someone chose your name on the share link for/);
+  assert.match(m.html, /If that was not you, do nothing: the document does not open without this code/);
+  assert.ok(!/someone else has the link that was emailed to you/.test(m.html));
+});
+
+test('a deleted document or form keeps its name away from every other account', async () => {
+  const a = await signUp('Alice First', 'alice@share.example', '203.0.113.42');
+  const e = await simple(a, 'sam@share.example', { subject: 'Rent contract', send: true });
+  assert.equal((await a.put(`/envelopes/${e.id}/share-link`, {})).data.share_link.name, 'rent-contract');
+  db.run('DELETE FROM envelopes WHERE id=?', e.id);
+  assert.equal((await visitor().get('/public/share/rent-contract')).status, 404);
+  const b = await signUp('Mallory Second', 'mallory@share.example', '203.0.113.43');
+  const theirs = await simple(b, 'sam@share.example', { subject: 'Rent contract', send: true });
+  assert.equal((await b.get(`/envelopes/${theirs.id}/share-link`)).data.suggestion, 'rent-contract-2');
+  const r = await b.put(`/envelopes/${theirs.id}/share-link`, { name: 'rent-contract' });
+  assert.equal(r.status, 409);
+  assert.equal((await visitor().get('/public/share/rent-contract')).status, 404);
+  // The account that had it may give it to another of its own documents.
+  const again = await simple(a, 'sam@share.example', { subject: 'Rent contract', send: true });
+  assert.equal((await a.put(`/envelopes/${again.id}/share-link`, {})).data.share_link.name, 'rent-contract');
+
+  // The same for a form that is deleted.
+  const file = await upload(a, 1);
+  const tpl = (await a.post('/envelopes', { kind: 'template', subject: 'Key handover', documents: [{ id: 'd', file_id: file.id }],
+    recipients: [{ id: 'r', role: 'signer', role_name: 'Tenant', name: '', email: '' }],
+    fields: [{ id: 'f', document_id: 'd', recipient_id: 'r', type: 'signature', page: 0, x: 0.1, y: 0.5, w: 0.3, h: 0.06 }] })).data.envelope;
+  const form = (await a.post('/powerforms', { template_id: tpl.id, name: 'Key handover form' })).data;
+  assert.equal(form.share_link.name, 'key-handover-form');
+  const id = (await a.get('/powerforms')).data.powerforms.find((p: any) => p.share_link?.name === 'key-handover-form').id;
+
+  // Switched off by its owner (the form, not the link): the readable address says "off" and gives no name or slug.
+  assert.equal((await a.call('PATCH', `/powerforms/${id}`, { active: false })).status, 200);
+  assert.deepEqual((await visitor().get('/public/share/key-handover-form')).data, { state: 'off' });
+  assert.deepEqual(links.sharePage('key-handover-form'), { state: 'off' });
+  assert.equal((await a.call('PATCH', `/powerforms/${id}`, { active: true })).status, 200);
+  assert.equal((await visitor().get('/public/share/key-handover-form')).data.state, 'form');
+
+  assert.equal((await a.call('DELETE', `/powerforms/${id}`)).status, 200);
+  assert.equal((await visitor().get('/public/share/key-handover-form')).status, 404);
+  assert.equal((await b.put(`/envelopes/${theirs.id}/share-link`, { name: 'key-handover-form' })).status, 409);
+});
+
+test('names that read as a notice, another service, a look-alike of ours or a page we may get are refused', () => {
+  const refused = 'account-suspended your-account-is-suspended password-expired urgent-action-required pay-now invoice-overdue docusign docusign-envelope adobe-sign dropbox-sign '
+    + 'irs-tax-refund hmrc-refund bank-of-america chase-bank-alert wells-fargo netflix-payment google-account-security office365-password it-helpdesk it-support '
+    + 'trust-and-safety abuse-team legal-team login-page sign-in-here secure-document growslgning grow-slgning-team qrowsigning grovvsigning treegems '
+    + 'unsubscribe welcome start get-started onboarding enterprise customers product solutions business sales contact-sales apps offline thanks thank-you done success '
+    + 'error complete open view review apple-app-site-association wp-admin wp-login cgi-bin postmaster webmaster hostmaster mailer-daemon noreply no-reply owner ceo founder moderator';
+  for (const name of refused.split(' ')) assert.ok(links.shareNameRefusal(name), `should be refused: ${name}`);
+  // Ordinary documents keep their names, also ones that hold a word from the lists.
+  for (const name of ['garden-agreement', 'apple-orchard-lease', 'visa-application-smith', 'first-lease', 'bank-mandate-acme', 'signing-bonus-letter', 'tree-planting-day', 'groups-charter', 'legal-services-agreement', 'document-to-sign'])
+    assert.equal(links.shareNameRefusal(name), null, name);
+});
+
+test('a refused name comes with a way forward, never with the name the link already has', async () => {
+  const c = await signUp('Nora Names', 'nora-names@share.example', '203.0.113.44');
+  const e = await simple(c, 'sam@share.example', { subject: 'Meadow lease', send: true });
+  await c.put(`/envelopes/${e.id}/share-link`, {});
+  let r = await c.put(`/envelopes/${e.id}/share-link`, { name: 'support' });
+  assert.equal(r.status, 422);
+  assert.equal(r.data.suggestion, 'support-agreement');
+  r = await c.put(`/envelopes/${e.id}/share-link`, { name: 'docusign' });
+  assert.equal(r.status, 422);
+  assert.notEqual(r.data.suggestion, 'meadow-lease');
+  assert.equal((await c.get(`/envelopes/${e.id}/share-link`)).data.share_link.name, 'meadow-lease');
+  // A name given out before the lists grew stops opening anything.
+  db.run("UPDATE share_links SET name='account-suspended' WHERE name='meadow-lease'");
+  assert.equal((await visitor().get('/public/share/account-suspended')).status, 404);
+  assert.equal((await visitor().post('/public/share/account-suspended/code', { person: 'k' })).status, 409);
+});
+
+test('a closed document: the sender can still switch the link off, and after some days the address no longer prints names', async () => {
+  const c = await signUp('Cleo Closed', 'cleo@share.example', '203.0.113.45');
+  const e = await simple(c, 'sam@share.example', { subject: 'Salary review', send: true });
+  await c.put(`/envelopes/${e.id}/share-link`, {});
+  assert.equal((await signAll(e.id, 'sam@share.example')).status, 200);
+  let page = (await visitor().get('/public/share/salary-review')).data;
+  assert.deepEqual([page.state, page.title, page.sender], ['completed', 'Salary review', 'Cleo Closed']);
+  // Later, whoever types the address reads the plain sentence and nothing about the document.
+  const { SHARE_CLOSED_NAMED_DAYS } = await import('../src/lib/policy.ts');
+  const old = new Date(Date.now() - (SHARE_CLOSED_NAMED_DAYS + 1) * 864e5).toISOString();
+  db.run('UPDATE envelopes SET completed_at=?, updated_at=? WHERE id=?', old, old, e.id);
+  page = (await visitor().get('/public/share/salary-review')).data;
+  assert.deepEqual([page.state, page.title, page.sender], ['completed', null, null]);
+  // Renaming is over, switching off is not.
+  assert.equal((await c.put(`/envelopes/${e.id}/share-link`, { name: 'other-name' })).status, 409);
+  assert.equal((await c.put(`/envelopes/${e.id}/share-link`, { active: true })).status, 409);
+  const off = await c.put(`/envelopes/${e.id}/share-link`, { active: false });
+  assert.equal(off.status, 200, JSON.stringify(off.data));
+  assert.deepEqual([off.data.share_link.active, off.data.can_share], [false, false]);
+  assert.deepEqual((await visitor().get('/public/share/salary-review')).data, { state: 'off' });
+});
+
+test('the page decides once for the body, the title and the link preview, and gives no name unless the link is open', () => {
+  const src = fs.readFileSync(path.join(import.meta.dirname, '..', 'src/app/[name]/page.tsx'), 'utf8');
+  // One counted lookup, shared: generateMetadata never asks sharePage by itself.
+  assert.equal(src.match(/sharePage\(/g)?.length, 1);
+  assert.match(src, /const look = cache\(/);
+  assert.match(src, /generateMetadata[\s\S]*await look\(name\)[\s\S]*page\.state === 'open' \|\| page\.state === 'form'/);
 });

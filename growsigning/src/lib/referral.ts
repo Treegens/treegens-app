@@ -2,8 +2,8 @@
 // the tests read the same ones. The server side is src/server/referrals.ts.
 //
 // Every account has one invite link: <site>/r/<code>, which opens the sign-up page (/signup?ref=<code>). When the
-// friend's account is real (their email is confirmed, they gave a phone number, and someone has signed a document
-// they sent), the inviter and the friend each get REFERRAL_SIGNATURES free signatures. They are a lot of their own in
+// friend's account is real (their email is confirmed, they gave a phone number, and somebody else has signed a
+// document they sent), the inviter and the friend each get REFERRAL_SIGNATURES free signatures. They are a lot of their own in
 // the ledger (source "referral", src/server/credits.ts), they expire REFERRAL_EXPIRY_DAYS days after they arrive, as
 // the trial's do after sign-up, and each one plants trees when it is signed, like every other signature.
 
@@ -64,6 +64,7 @@ export const REFERRAL_REFUSALS = {
   disposable: 'The friend signed up with a throwaway email address.',
   welcomed_before: 'That email address had a GrowSigning login before, so it is not a new friend.',
   total_limit: 'The inviting account had reached its limit of rewarded friends.',
+  monthly_limit: 'The inviting account had reached its limit of rewarded friends for the month, and this friend was not promised a reward.',
   inviter_closed: 'The inviting account was paused for abuse or is being closed.',
   friend_closed: 'The friend\'s account was paused for abuse.',
 } as const;
@@ -71,7 +72,7 @@ export type ReferralRefusal = keyof typeof REFERRAL_REFUSALS;
 
 /** The whole offer in plain sentences, for the pricing page, the help page, the chat helper and the API description. */
 export const referralRuleText = (r: ReferralRules = REFERRAL_DEFAULTS): string =>
-  `Every account has an invite link, on the Plan page. When a friend signs up through it, confirms their email, gives a phone number and has a first document signed by someone they sent it to, you and your friend each get ${r.signatures} free signatures. They last ${r.expiry_days} days from the day they arrive and plant trees like any other signature. You pass the link on yourself: we never write to your friends. One reward per friend, up to ${r.monthly_max} rewarded friends a month and ${r.total_max} in all. An invite does not count for a second account of your own: the same email address, the same phone number, the same device, or the same internet connection within a day. A reward is taken back if the friend's account is paused for abuse.`;
+  `Every account has an invite link, on the Plan page. When a friend signs up through it, confirms their email, gives a phone number (and confirms it by a code where we send text messages) and has a first document signed by somebody else, you and your friend each get ${r.signatures} free signatures. Somebody else means a person your friend sent the document to by email: not your friend, not you or your team, and not someone signing in person on your friend's device. They last ${r.expiry_days} days from the day they arrive and plant trees like any other signature. You pass the link on yourself: we never write to your friends. One reward per friend, up to ${r.monthly_max} rewarded friends a month and ${r.total_max} in all; a friend who opened your link before you reached a limit still gets theirs. An invite does not count for a second account of your own: the same email address, the same phone number, the same device, or the same internet connection within a day. A reward waits until you have signed in to your own account in the last 90 days, and it is taken back if the friend's account is paused for abuse.`;
 
 /** What the security page says about the two cookies of the offer (lookAtCode, noteDevice and referralsTick in src/server/referrals.ts). */
-export const REFERRAL_COOKIE_WORDS = 'When you open an invite link, your browser keeps the code of the invite for 30 days, so the invite still counts when you sign up later. When you sign up, or look at your own invite link, your browser gets a random number that it keeps for a year. We keep a keyed fingerprint of that number and of your internet address for 90 days, never the values themselves, to tell a friend from a second account of the same person. Neither cookie is used for anything else, and neither follows you to other sites.';
+export const REFERRAL_COOKIE_WORDS = 'When you open an invite link, your browser keeps the code of the invite for 30 days, so the invite still counts when you sign up later. When you sign up, and when you use your account signed in, your browser gets a random number that it keeps for a year. We keep a keyed fingerprint of that number and of your internet address, never the values themselves, until 90 days after you last used your account from them, to tell a friend from a second account of the same person. Neither cookie is used for anything else, and neither follows you to other sites.';

@@ -37,7 +37,12 @@ export const fmtNum = (n: number, digits = 0) => n.toLocaleString('en', { maximu
 // A total is shown only once it is large enough to mean something: the account's paper saved (the sidebar), and the
 // public counters. Until then the place it would stand in is simply absent, never a tiny number or "...". The saving
 // of one document is always shown where a person sends or finishes it.
-export const TOTALS_FROM = { sheets: 1000, treesPlanted: 10 };
+// treesPublic: the total everybody sees (the home page and /impact) waits for more, and for money to have been paid
+// in at all (publicTreesShown): a few free trial signatures on a server nobody has paid yet are not a public total.
+export const TOTALS_FROM = { sheets: 1000, treesPlanted: 10, treesPublic: 100 };
+/** May the public tree total be shown? Only from TOTALS_FROM.treesPublic up, and only once customers have paid something. */
+export const publicTreesShown = (i: { treesFunded?: unknown; donatedUsd?: unknown } | null | undefined): boolean =>
+  Number(i?.treesFunded) >= TOTALS_FROM.treesPublic && Number(i?.donatedUsd) > 0;
 export const totalWorthShowing = (sheets: unknown): boolean => Number(sheets) >= TOTALS_FROM.sheets;
 
 // Pricing. One number per rule, used by the server, the app and the public pages alike.
@@ -63,8 +68,12 @@ export const PRICING = {
 export const TREES_5_FROM = '2026-11-23T00:00:00.000Z';
 /** The same day in words, for the pages that explain the counting. */
 export const TREES_RULE_DAY = '23 November 2026';
-/** What a signature finished before TREES_5_FROM was promised: 10 when it was paid for, none when it was free. */
-export const TREES_BEFORE = { paid: 10, free: 0 };
+/**
+ * What was promised before TREES_5_FROM: 10 mangroves for a signature that was paid for, none for a free one, and in
+ * the totals 10 for every dollar paid, whether its signatures were used or not (perUsd). Money paid before the change
+ * keeps that promise in every total (treesOfOldMoney in src/server/impact.ts).
+ */
+export const TREES_BEFORE = { paid: 10, free: 0, perUsd: 10 };
 
 /**
  * The one counting function: the trees one finished signature plants. `at` is when it was finished (now when left

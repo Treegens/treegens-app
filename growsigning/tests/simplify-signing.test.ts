@@ -153,7 +153,7 @@ test('the consent screen: the sender once, 120 words or fewer before the tick, t
   assert.equal((consent.match(/<Sender /g) || []).length, 0, 'the "Sent by / Email / Account" box is gone');
   // The top of the screen lives in ConsentTop.tsx, which keeps it to 120 words (tests/open-signing.test.ts).
   // With the tree line of the 5 trees rule handed in (tests/trees-5.test.ts).
-  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} trees=\{\(shown\) => <OpenTrees base=\{base\} show=\{!ask\} onShown=\{shown\} \/>\} \/>/);
+  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} trees=\{!ask \? <OpenTreesLine trees=\{env\.plants\} \/> : null\} \/>/);
   const top = read('src/components/sign/ConsentTop.tsx');
   // A colleague sent it for the owner (ds-colleagues): only this line reads "Ben Okoro (sent by Ana Silva)".
   assert.match(top, /<p className="sg-from">From <b>\{sender\.sent_by \? sentByName\(sender\.name, sender\.sent_by\) : sender\.name\}<\/b>\{org \? <> at \{org\}<\/> : null\}/);

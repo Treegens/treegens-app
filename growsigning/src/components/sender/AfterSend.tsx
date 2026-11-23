@@ -15,8 +15,9 @@ import { ShareLinkLine, ShareLinkDialog } from './ShareLink';
 // Notifications ("Each time someone signs"), for all of this person's envelopes. Nothing here is a second setting.
 // `sentFor`: the colleague this person just sent it for (src/server/shares.ts). The emails about it go to them, so this
 // card says so, and offers no switch of this person's own.
-// The line under the first paragraph offers the document's readable address, growsigning.com/<name>, for a chat or
-// a QR code next to the emails that already went out (sender/ShareLink.tsx, the same dialog as "Share link" in More).
+// Once the document has a share link (growsigning.com/<name>, made from "Share link" in More, or by itself with
+// SHARE_LINKS_AUTO=1), the line under the first paragraph shows it with Copy link and its QR code
+// (sender/ShareLink.tsx). Without one the card gains nothing: its size is held by tests/ux/ceilings.json.
 export function AfterSend({ envelope, sentFor }: { envelope: any; sentFor?: string }) {
   const me = useMe();
   const [show, setShow] = useState(false);

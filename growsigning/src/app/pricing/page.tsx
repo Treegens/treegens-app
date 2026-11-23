@@ -63,7 +63,7 @@ export default function Pricing() {
               <ul>
                 <li><b>{sigs(P.welcomeSignatures)} free</b> to try the product, {treesFor(P.welcomeSignatures)} trees planted</li>
                 <li>No card needed</li>
-                {referralOfferOn(process.env) && <li><b>Invite a friend:</b> you both get {sigs(referralRulesFrom(process.env).signatures)} free after their first signed document. <Link href="/help#invite">The rules</Link></li>}
+                {referralOfferOn(process.env) && <li><b>Invite a friend:</b> you both get {sigs(referralRulesFrom(process.env).signatures)} extra free once someone signs the first document your friend sends. <Link href="/help#invite">The rules</Link></li>}
                 <li>Signing is free for everyone you send to</li>
               </ul>
               <Link href="/signup" className="btn">Start free</Link>

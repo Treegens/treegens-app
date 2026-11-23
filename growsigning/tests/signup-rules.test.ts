@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { boot, Client, signUp, simple, mailTo, nextPhone } from './helpers.ts';
-import { plusInEmail, mailboxKey, parsePhone, guessCountry, phoneProblemText, showPhone, PLUS_REFUSAL, PLUS_INVITE_REFUSAL, PHONE_TAKEN, PHONE_WHY, PHONE_COUNTRIES } from '../src/lib/signup.ts';
+import { withoutPlus, oddEmail, ODD_EMAIL_REFUSAL, PLUS_INVITED_REFUSAL, phoneTakenHelp, plusInEmail, mailboxKey, parsePhone, guessCountry, phoneProblemText, showPhone, PLUS_REFUSAL, PLUS_INVITE_REFUSAL, PHONE_TAKEN, PHONE_WHY, PHONE_COUNTRIES } from '../src/lib/signup.ts';
 import { signInErrorText, SIGNIN_ERRORS } from '../src/lib/signin.ts';
 
 const G = { id: 'rules.apps.google.test', secret: 'google-secret' };
@@ -141,7 +141,7 @@ test('an invitation to a team: nobody is invited at a + address, and the invited
   const adminPhone = user('ada.admin@rules.example').phone;
   const taken = await mel.post('/auth/signup', { name: 'Mel Member', email: 'mel.member@rules.example', password: PW, invite, phone: adminPhone });
   assert.equal(taken.status, 409, 'and it is their own, not the admin\'s');
-  assert.equal(taken.data.error, PHONE_TAKEN);
+  assert.equal(taken.data.error, `${PHONE_TAKEN} ${phoneTakenHelp(null)}`);
   const ok = await mel.post('/auth/signup', { name: 'Mel Member', email: 'mel.member@rules.example', password: PW, invite, phone: '0412 345 678', phone_country: 'AU' });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
   assert.equal(user('mel.member@rules.example').phone, '+61412345678');
@@ -227,6 +227,134 @@ const WRONG: [country: string, typed: string, why: string][] = [
   ['US', '900 555 0123', 'premium'],
 ];
 
+// ---- Repairs after the skeptic's and the simplicity reviewer's reports (23 November 2026) ---------------
+
+test('repair: a dot at the end, quotes, and signs that look like a + do not make a second login for one mailbox', async () => {
+  assert.equal(mailboxKey('annlee@gmail.com.'), 'annlee@gmail.com');
+  assert.equal(mailboxKey('ann.lee@GoogleMail.com..'), 'annlee@gmail.com');
+  assert.equal(mailboxKey('"annlee"@gmail.com'), 'annlee@gmail.com');
+  assert.equal(oddEmail('annlee@gmail.com.'), true);
+  assert.equal(oddEmail('"annlee"@gmail.com'), true);
+  assert.equal(oddEmail('ann.lee@gmail.com'), false);
+  for (const look of ['ann＋x@gmail.com', 'ann﹢x@x.example', 'ann%2Bx@x.example', 'ann%2bx@x.example']) {
+    assert.equal(plusInEmail(look), true, look);
+    assert.equal(mailboxKey(look).split('@')[0], 'ann', look);
+  }
+  assert.equal(withoutPlus('ann+work@example.com'), 'ann@example.com');
+  assert.equal(withoutPlus('Ann＋work@Example.com'), 'Ann@Example.com');
+  assert.equal(withoutPlus('+work@example.com'), '', 'nothing is offered when nothing would be left');
+  assert.equal(withoutPlus('ann+work'), '');
+
+  const first = await join(bare(), { email: 'rosa.reed@gmail.com', phone: nextPhone() });
+  assert.equal(first.status, 200, JSON.stringify(first.data));
+  for (const again of ['rosareed@gmail.com.', 'rosa.reed@gmail.com.', 'rosareed@googlemail.com.', '"rosareed"@gmail.com']) {
+    const r = await join(bare(), { email: again, phone: nextPhone() });
+    assert.equal(r.status, 400, again);
+    assert.equal(r.data.error, ODD_EMAIL_REFUSAL, again);
+    assert.equal(r.data.code, 'odd_email');
+  }
+  for (const look of ['rosa＋x@rules.example', 'rosa﹢x@rules.example', 'rosa%2Bx@rules.example']) {
+    const r = await join(bare(), { email: look, phone: nextPhone() });
+    assert.equal(r.status, 400, look);
+    assert.equal(r.data.error, PLUS_REFUSAL, look);
+  }
+  assert.equal(db.get("SELECT COUNT(*) n FROM users WHERE email_key='rosareed@gmail.com'").n, 1, 'one login for the mailbox');
+  assert.equal(db.get("SELECT COUNT(*) n FROM users WHERE email LIKE 'rosa%rules.example'").n, 0);
+  // Nobody is invited at such a spelling, and no login moves to one.
+  const rosa = bare();
+  await rosa.post('/auth/login', { email: 'rosa.reed@gmail.com', password: PW });
+  db.run("UPDATE users SET email_verified=1 WHERE email='rosa.reed@gmail.com'");
+  assert.equal((await rosa.post('/account/invites', { email: 'tom@rules.example.', role: 'member' })).data.code, 'odd_email');
+  assert.equal((await rosa.post('/me/email', { email: 'rosa@rules.example.', password: PW })).status, 400);
+  // A recipient of a document is still anyone the sender types.
+  const e = await simple(rosa, 'sig＋ner@rules.example');
+  assert.ok(e.id);
+});
+
+test('repair: a login that never confirmed its email address does not hold a phone number against its real owner', async () => {
+  const parked = bare();
+  assert.equal((await join(parked, { email: 'never.read@rules.example', phone: '+44 7911 123456' })).status, 200);
+  assert.equal(user('never.read@rules.example').email_verified, 0);
+  // The person the number belongs to signs up: it works, and the parked login no longer has the number.
+  const owner = bare();
+  const ok = await join(owner, { email: 'real.owner@rules.example', phone: '07911 123456', phone_country: 'GB' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal(user('real.owner@rules.example').phone, '+447911123456');
+  const lost = user('never.read@rules.example');
+  assert.deepEqual([lost.phone, lost.phone_key], [null, null]);
+  assert.equal((await parked.get('/me')).data.phone.ask, 'now', 'it is asked for a number of its own before it does anything');
+  assert.equal((await parked.post('/contacts', { name: 'A', email: 'a@rules.example' })).data.code, 'phone_needed');
+  assert.equal(db.get('SELECT COUNT(*) n FROM users WHERE phone_key=?', user('real.owner@rules.example').phone_key).n, 1, 'still one login per number');
+  // Once the owner has confirmed their address the number is theirs, and the refusal says what to do.
+  db.run("UPDATE users SET email_verified=1 WHERE email='real.owner@rules.example'");
+  const back = await parked.post('/me/phone', { phone: '+447911123456' });
+  assert.equal(back.status, 409);
+  assert.equal(back.data.error, 'This number is already used by another account. If this is your number, write to us through Help and we will sort it out.');
+  process.env.SUPPORT_EMAIL = 'help@growsigning.example';
+  try {
+    assert.match((await parked.post('/me/phone', { phone: '+447911123456' })).data.error, /If this is your number, write to us at help@growsigning\.example and we will sort it out\.$/);
+  } finally {
+    delete process.env.SUPPORT_EMAIL;
+  }
+  assert.equal(user('real.owner@rules.example').phone, '+447911123456');
+});
+
+test('repair: numbers as people really write them: Arabic and Persian digits, Argentina, Mexico, Jersey, Guernsey, Isle of Man', () => {
+  const read = (typed: string, country: string) => { const r = parsePhone(typed, country); return r.ok ? `${r.iso} ${r.e164}` : `no: ${r.why}`; };
+  assert.equal(read('٠٥٠١٢٣٤٥٦٧', 'AE'), 'AE +971501234567');
+  assert.equal(read('۰۹۱۲۳۴۵۶۷۸۹', 'IR'), 'IR +989123456789');
+  assert.equal(read('011 15 1234 5678', 'AR'), 'AR +541112345678');
+  assert.equal(read('+54 9 11 1234 5678', ''), 'AR +5491112345678');
+  assert.equal(read('+52 1 55 1234 5678', ''), 'MX +525512345678');
+  assert.equal(read('55 1234 5678', 'MX'), 'MX +525512345678');
+  assert.equal(read('07797 123456', 'JE'), 'JE +447797123456');
+  assert.equal(read('01481 712345', 'GG'), 'GG +441481712345');
+  assert.equal(read('01624 612345', 'IM'), 'IM +441624612345');
+  assert.equal(read('+44 7400 123456', ''), 'GB +447400123456', 'a +44 number is read for the United Kingdom unless an island was chosen');
+  assert.equal(read('+44 7797 123456', 'JE'), 'JE +447797123456');
+  for (const iso of ['JE', 'GG', 'IM']) assert.ok(PHONE_COUNTRIES.some((c) => c.iso === iso && c.dial === '44'), iso);
+});
+
+test('repair: an invitation sent to a + address before the rule says what to do', async () => {
+  const admin = await signUp('Ina Inviter', 'ina@rules.example', ip());
+  const acc = db.get("SELECT m.account_id a FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.email='ina@rules.example'").a;
+  db.run("INSERT INTO invites (id, account_id, email, role, token, created_at) VALUES ('inv_plus', ?, 'bea+team@old.example', 'member', 'tok-plus-old', ?)", acc, new Date().toISOString());
+  const bea = bare();
+  const r = await bea.post('/auth/signup', { name: 'Bea Before', email: 'bea+team@old.example', password: PW, invite: 'tok-plus-old', phone: nextPhone() });
+  assert.equal(r.status, 400);
+  assert.equal(r.data.error, PLUS_INVITED_REFUSAL);
+  assert.match(r.data.error, /ask the person who invited you to invite you again at your address without the \+ part/);
+  // Without that invitation the ordinary sentence is said: nothing about invitations leaks to a stranger's guess.
+  assert.equal((await bea.post('/auth/signup', { name: 'Bea Before', email: 'bea+team@old.example', password: PW, invite: 'wrong-token', phone: nextPhone() })).data.error, PLUS_REFUSAL);
+  assert.ok(admin);
+});
+
+test('repair: the screens say a thing once, name what the button changes, and show who is asking', () => {
+  const src = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  const auth = src('src/components/AuthForm.tsx');
+  // The + sentence and the phone problem are said under their own box only, never copied above the button.
+  assert.doesNotMatch(auth, /setError\(T\('auth\.plus_email'\)\)/);
+  assert.doesNotMatch(auth, /setError\(wrongPhone\)/);
+  assert.match(auth, /const edit = \(next: Partial<typeof f>\) => \(setError\(''\)/, 'editing a box takes the old message away');
+  assert.match(auth, /auth\.plus_use/, 'one tap takes the + part out');
+  const en = JSON.parse(src('src/locales/en.json'));
+  assert.equal(en['auth.plus_use'], 'Use {email} instead');
+  assert.equal(en['phone.later_note'], undefined);
+  assert.ok(en['phone.body_old'].split(/\s+/).length <= 16, en['phone.body_old']);
+  const card = src('src/components/EmailProblem.tsx');
+  assert.match(card, /'Change email or phone'/);
+  assert.match(card, /'Email and phone'/);
+  assert.ok(card.indexOf("<PhoneForm me={me} button={say('phone.button.change')}") < card.indexOf('{open && <EmailChangeForm'), 'the phone form comes first in the fold');
+  assert.doesNotMatch(en['phone.settings_line'], /button below/);
+  const need = src('src/components/PhoneRequired.tsx');
+  assert.match(need, /<Logo height=\{26\} \/>/, 'the screen shows who is asking');
+  const field = src('src/components/PhoneField.tsx');
+  assert.match(field, /\{c\.iso\} \+\{c\.dial\}/, 'closed, the picker shows the short form with the calling code');
+  const help = src('src/app/help/page.tsx');
+  assert.doesNotMatch(help, /signs up as/);
+  assert.match(help, /Change email or phone/);
+});
+
 test('phone numbers are read for the country chosen: twelve countries and more, as people write them at home', () => {
   for (const [country, typed, e164] of GOOD) {
     const r = parsePhone(typed, country);
@@ -245,7 +373,10 @@ test('wrong numbers are refused, each with a kind sentence', () => {
     const words = phoneProblemText(why as any, country);
     assert.ok(words.length > 20 && /[.]$/.test(words), words);
   }
-  assert.match(phoneProblemText('short', 'GB'), /too short for United Kingdom\. Please check it\. For example 07400 123456\./);
+  assert.equal(phoneProblemText('short', 'GB'), 'Too short for the country chosen (United Kingdom). Is the country right? Example: 07400 123456.');
+  // Plain words, and nobody is accused of anything (the simplicity review, 23 November 2026).
+  assert.equal(phoneProblemText('premium', 'US'), 'Please use your normal mobile or home number. This one is a paid service number.');
+  assert.equal(phoneProblemText('fake', 'US'), 'Please check the number. It does not look complete.');
 });
 
 test('the picker starts on the country of the browser, and a number is shown with its country code apart', () => {
@@ -255,7 +386,10 @@ test('the picker starts on the country of the browser, and a number is shown wit
   assert.equal(guessCountry('hi'), 'IN');
   assert.equal(guessCountry([]), 'US');
   assert.equal(guessCountry(['not a language']), 'US');
-  assert.equal(showPhone('+447400123456'), '+44 7400123456');
+  assert.equal(showPhone('+447400123456'), '+44 7400 123 456', 'in groups, so it can be checked at a glance');
+  assert.equal(showPhone('+14155552671'), '+1 415 555 2671');
+  assert.equal(showPhone('+33612345678'), '+33 612 345 678');
+  assert.equal(guessCountry(['en-JE']), 'JE', 'Jersey is a country in the picker');
 });
 
 test('sign-up needs a phone number, keeps it in international form, and one number belongs to one login', async () => {
@@ -267,18 +401,20 @@ test('sign-up needs a phone number, keeps it in international form, and one numb
   assert.match(none.data.error, /Please type your phone number/);
   const short = await join(c, { email: 'pia@rules.example', phone: '0612', phone_country: 'FR' });
   assert.equal(short.status, 400);
-  assert.match(short.data.error, /too short for France/);
+  assert.match(short.data.error, /Too short for the country chosen \(France\)/);
   assert.equal(user('pia@rules.example'), null, 'nothing was made');
   const ok = await join(c, { email: 'pia@rules.example', phone: '06 12 34 56 78', phone_country: 'FR' });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
   assert.equal(user('pia@rules.example').phone, '+33612345678');
   const me = (await c.get('/me')).data;
-  assert.deepEqual(me.phone, { number: '+33 612345678', verified: false, needed: false, ask: null, can_verify: false });
+  assert.deepEqual(me.phone, { number: '+33 612 345 678', verified: false, needed: false, ask: null, can_verify: false });
   // The same number written another way is the same number.
+  // Pia confirms her address: from then on her number is hers (a login that never confirmed does not hold one).
+  db.run("UPDATE users SET email_verified=1 WHERE email='pia@rules.example'");
   for (const again of [{ phone: '+33 6 12 34 56 78' }, { phone: '0033612345678' }, { phone: '0612345678', phone_country: 'FR' }]) {
     const r = await join(bare(), { email: `again${n}@rules.example`, ...again });
     assert.equal(r.status, 409, JSON.stringify(again));
-    assert.equal(r.data.error, 'This number is already used by another account.');
+    assert.ok(r.data.error.startsWith('This number is already used by another account.'), r.data.error);
     assert.equal(r.data.code, 'phone_taken');
   }
   assert.equal(db.get("SELECT COUNT(*) n FROM users WHERE email LIKE 'again%@rules.example'").n, 0);
@@ -307,7 +443,7 @@ test('a person changes their own number; an API key never reads or writes one', 
   assert.equal(same.status, 200, 'their own number again is not "taken"');
   const ok = await c.post('/me/phone', { phone: '0802 123 4567', phone_country: 'NG' });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
-  assert.equal(ok.data.phone.number, '+234 8021234567');
+  assert.equal(ok.data.phone.number, '+234 8021 234 567');
   assert.equal(user('cy@rules.example').phone, '+2348021234567');
   const key = (await c.post('/api-keys', { name: 'k', scope: 'admin' })).data.key;
   const api = async (method: string, url: string, body?: any) => {
@@ -406,14 +542,19 @@ test('a login made with Google or Microsoft is asked for its number once, before
     assert.ok(u && !u.phone && u.phone_rule === 1, provider);
     let me = (await c.get('/me')).data;
     assert.deepEqual([me.phone.needed, me.phone.ask, me.phone.number], [true, 'now', null], 'the app shows the One more thing screen and nothing else');
-    // It cannot be put off, and nothing new goes out before it is given.
+    // It cannot be put off, and nothing at all is done with the login before it is given: the server refuses, not
+    // only the screen (the skeptic's finding, 23 November 2026: invitations, counter sends and public pages went out).
     assert.equal((await c.post('/me/phone/later')).status, 409);
-    const e = await simple(c, `signer-${provider}@rules.example`);
-    const sent = await c.post(`/envelopes/${e.id}/send`);
-    assert.equal(sent.status, 403);
-    assert.equal(sent.data.code, 'phone_needed');
-    assert.match(sent.data.error, /^Add your phone number before you send\./);
-    assert.equal((await c.post('/api-keys', { name: 'k' })).data.code, 'phone_needed');
+    for (const [path, body] of [['/envelopes', { subject: 'x' }], ['/api-keys', { name: 'k' }], ['/account/invites', { email: `friend-${provider}@rules.example`, role: 'member' }],
+      ['/counter/start', { name: 'Walk In', email: 'walk@rules.example', template_id: 'tpl_x' }], ['/clickwraps', { name: 'Terms' }], ['/clickwraps/cw_x/publish', {}], ['/powerforms', { template_id: 'tpl_x' }], ['/contacts', { name: 'A', email: 'a@rules.example' }]] as [string, any][]) {
+      const r = await c.post(path, body);
+      assert.deepEqual([r.status, r.data.code], [403, 'phone_needed'], `${provider} POST ${path}`);
+      assert.match(r.data.error, /^Please add your phone number first\./);
+    }
+    assert.equal(db.get('SELECT COUNT(*) n FROM invites WHERE email=?', `friend-${provider}@rules.example`).n, 0, 'no invitation email went to anyone');
+    assert.equal(db.get('SELECT COUNT(*) n FROM envelopes WHERE account_id=?', me.account.id).n, 0);
+    // Reading, and the ways out, stay open.
+    assert.equal((await c.get('/envelopes')).status, 200);
     // Ten seconds: one number, and the app is open.
     const taken = await c.post('/me/phone', { phone: '+33612345678' });
     assert.equal(taken.status, 409);
@@ -421,8 +562,25 @@ test('a login made with Google or Microsoft is asked for its number once, before
     assert.equal(ok.status, 200, JSON.stringify(ok.data));
     me = (await c.get('/me')).data;
     assert.deepEqual([me.phone.needed, me.phone.ask], [false, null]);
+    const e = await simple(c, `signer-${provider}@rules.example`);
     assert.equal((await c.post(`/envelopes/${e.id}/send`)).status, 200);
+    assert.equal((await c.post('/account/invites', { email: `friend-${provider}@rules.example`, role: 'member' })).status, 200);
   }
+  // A team that asks everyone for two-step login and a login that still owes its number: each screen lets the
+  // other's step through, so nobody is stuck between the two.
+  const { twoStepGate } = await import('../src/server/twostep.ts');
+  const { phoneGate } = await import('../src/server/signuprules.ts');
+  const owes = { via: 'session', user: { phone: null, phone_key: null, phone_rule: 1 }, account: { id: 'a', name: 'Team', two_step_required_at: '2026-11-01' } } as any;
+  assert.doesNotThrow(() => twoStepGate(owes, 'POST /me/phone'));
+  assert.doesNotThrow(() => phoneGate(owes, 'POST /me/two-step/setup'));
+  assert.throws(() => phoneGate(owes, 'POST /account/invites'), /Please add your phone number first/);
+  assert.doesNotThrow(() => phoneGate({ ...owes, via: 'api_key' }, 'POST /account/invites'), 'a key is never asked');
+  assert.doesNotThrow(() => phoneGate({ ...owes, user: { ...owes.user, phone_rule: null } }, 'POST /account/invites'), 'a login from before the rule is not shut out');
+  // Signing out and closing the login are never behind the question.
+  const c = bare();
+  await signInWith(c, 'google', { sub: 'g-leaves', email: 'leaves@gmail.com', name: 'Lea Leaves' });
+  assert.equal((await c.get('/me')).data.phone.ask, 'now');
+  assert.equal((await c.post('/auth/logout')).status, 200);
 });
 
 // ---- Logins from before the rule ----------------------------------------------------------------------
@@ -463,6 +621,11 @@ test('a login from before the rule is asked once, may say not now, keeps what is
   assert.equal(no.data.code, 'phone_needed');
   assert.equal(db.get('SELECT status FROM envelopes WHERE id=?', next.id).status, 'draft', 'the draft is kept');
   assert.equal((await back.post(`/envelopes/${next.id}/send-later`, { send_at: new Date(Date.now() + 3600_000).toISOString() })).data.code, 'phone_needed');
+  // A document started at a counter and a new click-to-agree page are new things that reach other people too.
+  assert.equal((await back.post('/counter/start', { name: 'Walk In', email: 'walk@rules.example', template_id: 'tpl_x' })).data.code, 'phone_needed');
+  assert.equal((await back.post('/clickwraps/cw_x/publish', {})).data.code, 'phone_needed');
+  // Everything else of hers is as it was: she makes drafts, contacts, and invites a colleague.
+  assert.equal((await back.post('/contacts', { name: 'Con Tact', email: 'con@rules.example' })).status, 200);
   assert.equal((await back.post('/me/phone', { phone: '0712 123456', phone_country: 'KE' })).status, 200);
   assert.equal((await back.post(`/envelopes/${next.id}/send`)).status, 200);
   assert.equal((await back.get('/me')).data.phone.ask, null);
@@ -498,7 +661,7 @@ test('operators see the numbers of an account; nobody else does', async () => {
   const r = await olga.get(`/operator/accounts/${accountId}/people`);
   assert.equal(r.status, 200, JSON.stringify(r.data));
   const mel = r.data.people.find((p: any) => p.email === 'mel.member@rules.example');
-  assert.deepEqual([mel.phone, mel.phone_verified, mel.role], ['+61 412345678', false, 'member']);
+  assert.deepEqual([mel.phone, mel.phone_verified, mel.role], ['+61 412 345 678', false, 'member']);
   assert.ok(r.data.people.find((p: any) => p.email === 'ada.admin@rules.example').phone);
   // The admin of that very account is not an operator: the page does not exist for her.
   const ada = new Client();
@@ -551,6 +714,11 @@ test('with an encryption key the number is unreadable in the database, and still
     assert.equal((await join(bare(), { email: 'kim.key@rules.example', phone: '0412 999 888', phone_country: 'AU' })).status, 200);
     assert.ok(isSealed(rawPhone('kim.key@rules.example')), 'sealed where it is stored');
     assert.equal(user('kim.key@rules.example').phone, '+61412999888', 'and read back as it was written');
+    db.run("UPDATE users SET email_verified=1 WHERE email='kim.key@rules.example'");
+    // A number that cannot be read for a moment (the key is missing) is still a number that was given: nobody is
+    // asked again or shut out of the app because of it.
+    assert.equal(phoneState({ phone: null, phone_key: 'abc', phone_rule: 1 }).needed, false);
+    assert.equal(phoneState({ phone: null, phone_key: null, phone_rule: 1 }).ask, 'now');
     assert.equal((await join(bare(), { email: 'kim.two@rules.example', phone: '+61 412 999 888' })).status, 409);
     const disk = fs.readFileSync(path.join(process.env.DATA_DIR!, 'sign.db'));
     const wal = fs.existsSync(path.join(process.env.DATA_DIR!, 'sign.db-wal')) ? fs.readFileSync(path.join(process.env.DATA_DIR!, 'sign.db-wal')) : Buffer.alloc(0);

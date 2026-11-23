@@ -24,14 +24,18 @@ route('GET', '/envelopes/:id/share-link', (c) => envelopeAnswer(mine(c, c.params
 route('PUT', '/envelopes/:id/share-link', async (c) => {
   const b = await c.body();
   const e = mine(c, c.params.id, 'envelope');
-  if (!out(e)) throw bad(e.status === 'draft' ? 'A share link is made once the document is sent. Send it first.' : 'This document is closed, so its share link no longer takes anyone to it and cannot be changed.', 409);
+  if (e.status === 'draft') throw bad('A share link is made once the document is sent. Send it first.', 409);
+  // A closed document: its link can still be switched off, so that the address stops saying anything about the
+  // document. Nothing else is left to change.
+  const offOnly = b.active === false && (b.name === undefined || b.name === null || b.name === '') && !!shareLinkOf('envelope', e.id);
+  if (!out(e) && !offOnly) throw bad('This document is closed, so its share link no longer takes anyone to it. You can still switch the link off.', 409);
   rateLimit(`share-change:${c.account.id}`, SHARE_CHANGES_PER_HOUR, 3600_000);
   const before = shareLinkOf('envelope', e.id);
   const link = saveShareLink('envelope', e.id, e.account_id, e.subject, { name: b.name, active: b.active });
   if (!before) audit(e.id, c.actor, 'Share link made', `/${link.name}. Whoever opens it picks their name and proves it with a code sent to their address.`);
   else if (before.name !== link.name) audit(e.id, c.actor, 'Share link renamed', `From /${before.name} to /${link.name}. The old address stopped working.`);
   if (before && before.active !== link.active) audit(e.id, c.actor, link.active ? 'Share link switched on' : 'Share link switched off', `/${link.name}`);
-  return { share_link: link, suggestion: null, can_share: true };
+  return { share_link: link, suggestion: null, can_share: out(e) };
 });
 
 function formFor(c: Ctx, doing: string) {

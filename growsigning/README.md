@@ -103,7 +103,7 @@ What the test files cover:
 | `tests/ds-pdfa.test.ts` | Archive format (PDF/A): `toPdfA` writing the PDF/A-2b XMP (part 2, conformance B, the title escaped and the same as the information dictionary, the dates agreeing), the sRGB output intent with the profile from `assets/icc` and its licence beside it, a document ID, no JavaScript open action, no page actions, hidden annotations taken away and the rest printable, a link that ran JavaScript running nothing and a web link kept; every font in the signed PDF this server renders embedded, other scripts included; an uploaded file with a font that is not inside it (also one named only in a filled-in form's appearance), printing-press colours, or a movie found; with no `VERAPDF_CMD` the switch not offered, refused with 409 and nothing changed; with the switch off nothing changed and veraPDF never run; only an admin signed in may switch it (not an API key), and the security record says who did; with veraPDF (a stand-in that answers in veraPDF's report format) passing, the stored file PDF/A and the certificate, the page of the document and the history saying "PDF/A-2b, checked with veraPDF"; failing, a font missing, a checker that cannot start and one that takes longer than `VERAPDF_TIMEOUT_MS`, each made as a normal PDF that says why, and the document always completing; the seal still valid for `pdfsig` and `checkSeal` after the PDF/A step, with the metadata and output intent kept; a font only listed and never drawn with not counted, one drawn with (also by a #-escaped name) counted; the last signer's Finish answering at once while a check runs, the timer's build of the same envelope waiting for that run (one check, one history line), and the "completed" email going out with the file once it is made; eight documents of one account completing at once running at most 2 checks at a time, at most 4 of that account in the line and the rest "the check was busy"; a next step under every "not PDF/A" and the history saying "signing record"; the Settings card saying when the last check could not be done, and when veraPDF was taken away with the switch on (switch off still works, switch on refused); the real veraPDF when installed (`VERAPDF_TEST_CMD`: a file with other scripts, a sealed one, and a bad one failed), skipped otherwise. |
 | `tests/seclog.test.ts` | The security record: each kind of event written once, to the right accounts, with the right person and address (the team, sign-ins and their failures to every account of the person, logins, two-step login, keys and their new addresses, settings, webhooks, deletions, template rules, the export, the owner handed over, the GrowSigning team), a wrong password and a wrong code written the same way for a login with two-step login, nothing secret in any line (the test's passwords, keys, tokens, codes and addresses looked for), members and send keys refused, an admin key paging in order, filters and the CSV, names only when shared, lines that cannot be changed or deleted, a forged line found by the chain, the purge after `SECURITY_LOG_DAYS` and with the account, the alerts once an hour and switched off by a person only, and the opt-in webhook. After the reviews: `INSERT OR REPLACE` over a line refused; a record re-chained without the server's secret, the newest lines removed and a changed note of the newest line all shown as changed; a key in the browser name left out; someone who left the team not named by the API, the download or the screen; fifteen switch-offs one email; a second key within the hour named when the hour is over; lines for a withdrawn invitation, new recovery codes, withdrawn devices, signing up and Google connected, used and removed; the search box; names in a signed-in admin's download and ids for a key; the export in files of a set size; and the words of the screen (no envelope, recipient, purge or events, details as sentences, never an id). |
 | `tests/trees-5.test.ts` | The 5 trees rule: one constant and one counting function, free trial signatures count, totals add signatures from before the change (10 when paid, none when free) to new ones at 5, the first screen of a signer and of a public form, the line next to Finish, the finished screen, the email and the reminder, tree words off stays off, and no page still says the old rule. |
-| `tests/referrals.test.ts` | Invite a friend, with a fake clock: the whole path from the link to both rewards, the email to the inviter and its stop link, every rule against inviting yourself (mailbox, phone, device, internet address, account, an address that was here before), one reward per phone number, the monthly and total limits, expiry after 30 days, taking a reward back when the friend is paused for abuse, the operators' record, the switches, and that every out-of-signatures screen and message carries the offer. |
+| `tests/referrals.test.ts` | Invite a friend, with a fake clock: the whole path from the link to both rewards, the email to the inviter and its stop link, every rule against inviting yourself (mailbox, phone, device, internet address, account, an address that was here before), one reward per phone number, a first signature that has to be somebody else's (not the friend under another name, not the inviter, not from the inviter's address, not in person), a number confirmed by code where the server sends texts, an inviting account with no browser on record (the reward waits), the monthly and total limits for both sides and the sealed promise cookie, expiry after 30 days, taking a reward back when the friend is paused for abuse, the operators' record, the switches, and that every out-of-signatures screen and message carries the offer. |
 | `tests/impact.test.ts` | Trees: "5 trees" said for every signature from the balance, free trial ones included (on the first screen, next to Finish, in the email that asks someone to sign, on the finished screen, on the signing record) and never for a sender's own signature or on a server that takes no payments, nothing said to an approver, a viewer or a copy, the first time a person signs and an account sends (once, remembered by the server, by address also after an envelope is deleted), "10 more" and the count afterwards, a payment that went back no longer counting, what a link gives away before its access code, the forecast at the review step, the switch "Trees on the signing record" (admins only, in the security record, the box left off), totals hidden until 1,000 sheets or 10 trees, no share of a tree anywhere, and the green claims rules read from the source (no generic words, no carbon figure or claim anywhere, no CO2 field in any API answer, estimates called estimates with their sources). The payment provider is the stand-in of the billing tests. |
 | `tests/gov-g01.test.ts` | The honesty guard and the account's switches: the registry of certifications in `src/lib/claims.ts` (all not held; held only with a registry link, number, scope, dates not run out and who checked; in progress only with a signed engagement), `/security/certifications` built from it alone, and a scan (`tests/claims-scan.ts`) of every page, email, PDF text, README, `.env.example`, `docs/` and `public/` for certification names and words such as certified, compliant or qualified signature, each hit on the reviewed list `tests/claims-allow.json` with its reason or failing, printed with file and line; "Trees on screens and emails" and "AI answers in the help chat" (defaults under both profiles, owners and admins only, never an API key, each change in the security record, what disappears from screens, emails, the finished screen and the review step, the count going on); `DEPLOYMENT_PROFILE=government` (no trees on the signing record, read from the PDF with pdf.js, an earlier record never rebuilt, no hosted AI service ever asked). The AI model is a stub and the payment provider the stand-in of the billing tests. |
 | `tests/gov-g20.test.ts` | The help chat's model inside the server's own boundary: with `DEPLOYMENT_PROFILE=government` or `OUTSIDE_CALLS` listed, none or a typo, OpenRouter and Moonshot AI are never used (also when listed), only `SUPPORT_CHAT_BASE_URL` at a private network address (plain http allowed) or a host in `OUTBOUND_ALLOW`, never a link-local or public address; the start-up line that says why; `OUTSIDE_CALLS=none` keeping that one private address and no other; the account's switch for its people, its signers and its forms and agreement pages, and an organisation forcing it off; no table but `chat_counts` growing, the question in no table and no log line; the security pages, the DPA template and the model line (signed-in app only). The model is a stub. |
@@ -1638,29 +1638,38 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   that costs before the Send button, from the server's own count (`POST /api/bulk/check`).
 - Share links: a readable address at the top level of the site, such as `growsigning.com/garden-agreement`, for a
   chat, a poster or a QR code, next to the emailed invitations (which work as before).
-  - A document: its sender makes the link with one press ("Get a share link" on the Sent card, or "Share link" in
-    the document's More), copies it, shows its QR code, renames it or switches it off in the same dialog. Whoever
+  - A document: its sender makes the link with one press ("Share link" in the document's More: the dialog opens
+    with the link already made), copies it, shows its QR code, renames it or switches it off in the same dialog.
+    Once a document has a link, the Sent card shows it on one line with Copy link and QR code. Whoever
     opens it sees the document's name, the sender's name and "Who are you?": the names of the people whose turn it
     is, never an address. They pick their name, we email a 6-digit code to the address the sender gave for that
     name, and the right code opens their own signing page, the same one their invitation opens. The link alone
     opens nothing, so nobody signs as someone else with it. The code is the one-time code of "Checking who signs",
     with its limits (one a minute and five an hour for a person, a daily limit for a mailbox, five wrong tries end a
-    code) and its lines in the document's history, which also says who came in through the share link. Someone
+    code) and its lines in the document's history, which also says who came in through the share link. Codes asked
+    for through the share link are counted apart from the ones a person asks for on their own signing page, so
+    somebody who only has the link can never cancel or use up a signer's own code, and the email says "Someone
+    chose your name on the share link for ..." with the document's name. Someone
     signing in person, a signing group and a person whose link the sender passes on are not offered: they have no
     mailbox of their own on the document. An access code the sender set is still asked for on the signing page.
   - A public form gets its readable address when it is made; Copy link and the QR code then carry it. The address
     with the slug (`/f/...`) keeps working beside it.
   - Names: made from the document's name (small letters, digits and hyphens, accents taken off, 3 to 60 characters),
     editable, one per document or form across the whole site, with the next free one suggested
-    (`garden-agreement-2`). Never the address of a page of the site (the list in `src/lib/sharename.ts`, which a
-    test checks against the folders of `src/app` and `public`), never the name of this service, "official" or
-    "verified", never a name made only of words such as "billing" and "support", and never one the fake-notice
-    filter reads as a well-known brand. A renamed link's old address stops at once, says so, and stays kept for
-    the same document, so nobody else can take it over.
+    (`garden-agreement-2`). Never the address of a page the site has or may get (the list in
+    `src/lib/sharename.ts`, which a test checks against the folders of `src/app` and `public`), never the name of
+    this service or a look-alike of it (`growslgning`), "official" or "verified", never the name of another
+    signing service, a bank or a mail service, never a name made only of the words of a notice ("billing",
+    "support", "account-suspended", "pay-now"), and never one the fake-notice filter reads as a well-known brand.
+    A renamed link's old address stops at once, says so, and stays kept for the same document. The name of a
+    deleted document or form stays with the account that had it. Nobody else can ever take an address over.
   - A link stops when the document is completed, cancelled, declined, paused or has run out, with a sentence that
-    says which. A name nobody has answers like any page that does not exist. Lookups and code requests are limited
-    for each internet address. The pages are marked noindex, there is no sitemap, and a link preview shows the
-    document's name and "Sent with GrowSigning", nothing else.
+    says which. The sender can still switch the link off then, and 14 days after closing the address no longer
+    prints the document's or the sender's name. A form that is switched off says so and gives no name. A name
+    nobody has answers like any page that does not exist. Lookups and code requests are limited for each internet
+    address, and past the limit neither the page nor its title says whether a name exists. The pages are marked
+    noindex, there is no sitemap, and a link preview shows the name of a document that is open for signing and
+    "Sent with GrowSigning", nothing else.
   - A document has no share link until its sender asks for one, because the page shows the sender's name and the
     names of the people still to sign to anyone who types the address. `SHARE_LINKS_AUTO=1` gives every sent
     document one the first time its sender opens its page.
@@ -1912,18 +1921,25 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
 - Codes that make the monthly plan free for a community (`FREE_PLAN_CODES`), entered at sign-up or on the Plan page.
 - Invite a friend (`src/server/referrals.ts`, `src/lib/referral.ts`). Every account has one invite link,
   `<site>/r/<code>`, which opens the sign-up page. When the friend's account is real (email confirmed, a phone
-  number given, and a first document signed by someone they sent it to: a signature that counted, not their own),
+  number given, confirmed by a code where the server sends text messages, and a first document signed by somebody
+  else: a signature that counted, by email, not by an address of the friend's own account or of the inviting
+  account, not from an internet address the inviting account is used from, and not in person),
   the inviting account and the friend's account each get 3 free signatures (`REFERRAL_SIGNATURES`). They are a lot
   of their own in the ledger (source `referral`), expire 30 days after they arrive (`REFERRAL_EXPIRY_DAYS`), as the
-  trial's do after sign-up, and plant trees like any other signature. Where someone runs out (Home, step 3 of the
-  editor, the Plan page, the refusal of a send, the emails at two left and at none) the two ways to get more stand
-  side by side: "Get more signatures" and "Invite a friend, get 3 free signatures each", with the link, Copy, and
+  trial's do after sign-up, and plant trees like any other signature. Where someone has run out (Home at none
+  left, step 3 of the editor, the Plan page) the two ways to get more stand side by side, and the refusal of a send
+  and the emails at two left and at none say the offer in one sentence; with signatures left, Home has one quiet
+  link to the Invite friends card: "Get more signatures" and "Invite a friend, get 3 free signatures each", with the link, Copy, and
   buttons that open the person's own email program or the phone's share sheet. We upload no address book and send
   nothing in the inviter's name; the friend is told "A friend invited you" and never who. Hard to abuse: one reward
   per friend (by mailbox, with Gmail dots and plus tags folded, and by phone number), at most 10 rewarded friends a
   calendar month and 30 in all per account (`REFERRAL_MONTHLY_MAX`, `REFERRAL_TOTAL_MAX`), and never for inviting
   yourself: the same mailbox, the same phone number, the same account, a browser the inviting account was used in
-  (a cookie), or the same internet address within a day. Phone numbers are compared by the keyed fingerprint
+  (a cookie), or the same internet address within a day. The browser and address of an account are noted, as keyed
+  fingerprints, each day a person uses it signed in, and forgotten 90 days after they were last seen; a reward waits
+  while the inviting account has none on record. A link at a limit promises nothing: a sign-up through it is
+  refused, except from a browser that was shown the promise while the link was open (a sealed cookie); that friend
+  still gets theirs, the inviting account gets none, and such friend-only rewards have the same two limits again. Phone numbers are compared by the keyed fingerprint
   sign-up keeps (users.phone_key, src/server/signuprules.ts), never by the number; on a server that asks nobody for
   a number (SIGNUP_PHONE=off) the reward does not wait for one. An address that had a login here before is not a new
   friend. When the friend's account is paused for abuse, what is left of both rewards is taken back (used ones stay
@@ -1994,8 +2010,11 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   where the kind of tree is described.
 - Who is told. The person who signs reads it three times: on the first screen of their link, above everything
   legal ("When you sign, 5 trees are planted." with "Mangroves, planted by Treegens." under it), next to Finish
-  ("5 trees will be planted when you finish.") and on the finished screen ("Your signature plants 5 trees"). The
-  email that asks them and every reminder say it among their first lines. A public form says it on its own first
+  ("5 trees will be planted when you finish.") and on the finished screen, right under "All done" so a phone
+  shows it without a scroll ("5 trees will be planted for your signature."). The number comes with the signing
+  page's first answer (`envelope.plants` in `GET /api/sign/:token`), so the line is on the first screen as it is
+  drawn and nothing moves under a finger. The email that asks them and every reminder say it among their first
+  lines, and the email that says the document is complete says what its signatures plant. A public form says it on its own first
   screen. An approver, a viewer, a copy and a witness do not sign and are told nothing. The email for a signing
   in person goes to the host and names the person who signs.
 - Who plants none: a sender signing their own document (it uses no signature and has no limit, so it is not
@@ -2003,11 +2022,18 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   decides all of it (`counts` in `src/server/impact.ts`); the pages only draw, and the words are in
   `src/lib/impactwords.ts`. The words keep one tense: a signature "plants", trees "will be planted". Nothing
   says the planting has already happened, because Treegens does it afterwards. Nothing is said about carbon.
-- Signatures from before the change keep what was promised then: 10 mangroves for one that was paid for, none
-  for a free one (`TREES_BEFORE`, `TREES_5_FROM`). Their rows in `impact_signed` are never rewritten, the totals
-  add old rows and new rows as they stand, and a signing record that was already issued is never drawn again
-  (the completed PDF is stored once). An old paid signature whose payment went back still stops counting, as it
-  did then; a signature of the 5 trees rule keeps its trees once it is finished.
+  A sender who signs their own document reads "Signing your own document is free and plants no trees." on
+  their finished screen, so the one exception is said where it happens.
+- What was promised before the change stays. Then a total was 10 mangroves for every dollar paid, whether its
+  signatures were used or not, and a free signature planted none (`TREES_BEFORE`, `TREES_5_FROM`). So the
+  account's total and the public total are: 10 for every dollar paid before the change that still stands
+  (`treesOfOldMoney` in `src/server/impact.ts`), plus 5 for every signature finished since, except one bought
+  with that old money while that payment stands (its row names it in `old_payment`: its trees are in the first
+  part already). No total goes down
+  at the change and nothing is counted twice. Rows in `impact_signed` are never rewritten, and a signing record
+  that was already issued is never drawn again (the completed PDF is stored once). On the document and to the
+  signer, an old paid signature still says its 10 and stops counting if its payment went back, as it did then; a
+  signature of the 5 trees rule keeps its trees once it is finished.
 - The first time a person signs on this server (no earlier finished signature from their address) a picture plays
   once on the finished screen, under the buttons to view and download: a shoreline and mangrove seedlings
   rising, one for each tree, about 2.5 seconds, SVG and CSS. It covers nothing and delays nothing, has a Close
@@ -2015,16 +2041,19 @@ behaviour in the code, not a line in a policy page, and most rows are pinned dow
   The first envelope an account ever sends plays the same picture, small, inside the "Sent." card at the top of
   the envelope page: no card of its own and nothing to close. Either picture starts when it is on the screen, and
   that is when the server notes it was shown (under a keyed hash of the address, never the address). Later times
-  get one small card: "Your signature plants 5 more trees.", said only when there were some before, and the
+  get one small card: "5 more trees will be planted for your signature.", said only when there were some before, and the
   count of what that address's signatures plant.
 - Totals: the account's (Trees planted, the Plan page, `mangroves` in `GET /api/billing`) and everyone's
-  (`/impact`, the landing page, `treesFunded` in `GET /api/public/impact`) are the sum of finished signatures,
-  no longer dollars times ten. `donatedUsd` still says what was paid.
+  (`/impact`, the landing page, `treesFunded` in `GET /api/public/impact`) follow the rule above. They say what
+  our signatures plant, not what is in the ground already, and the label says so ("Trees our signatures plant").
+  The public total is shown only from 100 trees up and only once customers have paid something
+  (`publicTreesShown` in `src/lib/impact.ts`): free trial signatures on a server nobody has paid are never a
+  public total. An account sees its own from 10 trees up. `donatedUsd` still says what was paid.
 - A finished signature is counted by Finish itself, so the counts do not depend on anyone opening a screen or on
   "Trees on the signing record". People who sign in person are counted for the document and the account and
   never added together: the address on their row is the host's.
 - Totals (the sidebar, Reports, the landing page, `/impact`, Trees planted) are shown only from 1,000 sheets or
-  10 trees. Until then nothing stands in their place.
+  10 trees (the public tree total: 100 trees, and money paid in). Until then nothing stands in their place.
 - "Trees on the signing record" (Settings, Account; admins; on by default): off leaves the box "Signed without
   paper" off the signing record of documents completed from then on, for organisations that want nothing but
   the record there. Screens and emails are not changed by it (`GET` and `PUT /api/account/impact-record`).
@@ -2498,7 +2527,7 @@ e-signature product, not all of it. Not built:
 - **Reports you design yourself, or that arrive on a schedule you choose.** Reports has fixed tables (by template, by
   sender), the filters and a CSV; the only email is the monthly one. No new charts were added, and none are on Home.
 - **Trees planted, promised before sending.** The review step says how many pages of paper this document saves,
-  and adds "Plus: 5 trees are planted for each person who signs" when every signature of the draft counts:
+  and puts "5 trees are planted for each person who signs." first when every signature of the draft counts:
   everyone who signs has an address and none is the sender signing their own document. A mixed case (the sender
   signs too) says nothing there.
 - **Proof of each planting.** GrowSigning counts what was paid and says what that funds. It does not show which
@@ -2780,7 +2809,7 @@ and `TRUSTED_PROXY_HOPS` if the number of proxies in front of the app is not one
 | `APP_URL` | Public address of the app, for example `https://sign.example.com`. **Required on a real deployment:** every link in every email is built from it. The address of a request is never used for a real host, because a request header can be forged. Without `APP_URL` the app logs a warning and links only work on your own machine. It is also the address of link previews (`og:image`) and of the GrowSigning logo in emails that have no sender's logo (`/brand/email-logo.png`; until the app is public, mail programs show the words instead). | `http://localhost:3000`, or the localhost address you opened the app on |
 | `TRUSTED_PROXY_HOPS` | How many proxies of your own sit in front of the app (load balancer, CDN, the platform's router). The caller's address, used for rate limits and the audit trail, is read that many places from the right of `X-Forwarded-For`; anything further left is whatever the caller typed. `0` means nothing is in front: the header is ignored and every visitor shares one set of rate limits. The limit on one-time codes per caller address (see "Checking who signs") is not counted at all then, and with `1` on a server that has no proxy in front a caller can name any address; the limits per recipient and per mailbox or number hold either way. | `1` |
 | `DATA_DIR` | Where the database and files live. Must be a persistent disk. | `./data` |
-| `SHARE_LINKS_AUTO` | `1` gives every sent document a share link (`growsigning.com/<name>`) the first time its sender opens its page. Without it a document gets one when its sender presses "Get a share link", because the page behind the link shows the sender's name and the names of the people still to sign to anyone who types the address. Public forms always get one. | off |
+| `SHARE_LINKS_AUTO` | `1` gives every sent document a share link (`growsigning.com/<name>`) the first time its sender opens its page. Without it a document gets one when its sender opens "Share link" in the document's More, because the page behind the link shows the sender's name and the names of the people still to sign to anyone who types the address. Public forms always get one. | off |
 | `APP_SECRET` | Secret for access-code cookies and stop links. | generated and kept in `DATA_DIR` |
 | `FILE_ENCRYPTION_KEY` | Encrypts every file the app stores from now on (uploaded documents, signed PDFs, attachments) with AES-256-GCM. 32 random bytes as base64: make one with `openssl rand -base64 32` or `npm run setup` (writes it into `.env` when none is set), and keep a copy apart from the server and its backups. The text read from uploaded PDFs for search is encrypted with it too, and so is a picture of an ID document kept at the service counter (which is only offered with this set), and in the database signatures, typed answers, public form drafts, comments, stored emails, decline reasons and help messages with their chats; names, addresses, subjects and audit trails are not. See "Encrypting stored files" for what it protects and what it does not, how to encrypt the files stored before, and what happens when the key does not fit the files. Set to something that is not a key, the server stores no file at all until it is corrected. | off: files are stored as they are |
 | `FILE_ENCRYPTION_KEYS_OLD` | Earlier keys, separated by commas, so files written with them can still be read after the key was changed. `node scripts/encrypt-files.mjs` moves those files to the current key. | none |
@@ -3068,13 +3097,18 @@ The owner's rules for who gets an account (23 November 2026). The words and the 
 **The email address.** A new login cannot have a `+` before the `@`. The page says so the moment it is typed and the
 server refuses it in the same sentence: "Please use your email address without the + part." One mailbox has one
 login: addresses that differ only by capital letters, by dots before the `@` at gmail.com and googlemail.com, or by
-googlemail for gmail are the same mailbox (`users.email_key`). Where it is checked:
+googlemail for gmail are the same mailbox (`users.email_key`). Signs that look like a + or stand for one (the
+full-width and the small plus, `%2B`) count as a +. Two spellings only a machine would type are refused for a new
+login as well, because they would be a second login for the same mailbox: quotes before the `@` and a dot at the very
+end of the address (400 `odd_email`: "Please type your email address the usual way, without quotes and without a dot
+at the end."). On the sign-up page one tap under the box takes the + part out ("Use ann@example.com instead"). Where
+it is checked:
 
 | Path | What happens |
 | --- | --- |
 | `POST /api/auth/signup` | 400 `plus_in_email`; 409 `same_mailbox` for another spelling of a mailbox that has a login |
 | Continue with Google or Microsoft, new login | back to the sign-up page with `plus_email` or `same_mailbox`, in words. Google signing in at a Gmail address opens the login of that mailbox, whatever its spelling |
-| An invitation to a team (`POST /api/account/invites`) | nobody is invited at a `+` address, unless a login with exactly that address exists already |
+| An invitation to a team (`POST /api/account/invites`) | nobody is invited at a `+` address, unless a login with exactly that address exists already. Someone who holds an invitation that was sent to a `+` address before the rule is told to ask for a new one at the address without the + part |
 | A change of address (`POST /api/me/email`) | the same two refusals |
 | An organisation's own sign-in service (SSO) and its directory | not checked: the organisation has shown that the domain is its own and answers for its people's addresses |
 
@@ -3085,21 +3119,25 @@ document can be sent to any address.
 browser's language. It is kept in international form (E.164) in `users.phone`, read without a library: lengths per
 country for about 215 countries, and the shape of a number for the countries most accounts come from. Premium-rate,
 satellite and made-up numbers (all the same digit) are refused. One number belongs to one login
-("This number is already used by another account"); an operator can allow a number for more than one login from the
-operator page (`POST /api/operator/phones`).
+("This number is already used by another account", followed by where to write if the number is yours:
+`SUPPORT_EMAIL` when it is set, else Help); an operator can allow a number for more than one login from the
+operator page (`POST /api/operator/phones`). Only a login whose email address is confirmed holds a number against
+other people: a login that never confirmed its address (a typo, or someone parking a number that is not theirs)
+gives the number up when the next person gives it, and is asked for a number of its own again. Digits written in
+Arabic or Persian are read as 0 to 9, and Jersey, Guernsey and the Isle of Man are in the picker.
 
 | Who | When they are asked |
 | --- | --- |
 | Someone who signs up with email and password | on the form |
-| Someone who signs up with Google or Microsoft | once, on the "One more thing" screen, before the app opens |
+| Someone who signs up with Google or Microsoft | once, on the "One more thing" screen, before the app opens. Until then the server refuses everything from that login except reading, giving the number, signing out, switching workspace and closing the login (403 `phone_needed`, checked in `src/server/router.ts` for every route, so no invitation, counter document or public page goes out either) |
 | Someone invited to a team | on the form they accept with (their own number), or on "One more thing" |
-| A login from before the rule | once at the next visit, with "Not now". After that the number is needed before the next new document is sent from the app, before a new API key and before a new public form (403 `phone_needed`, and the app shows the screen over the page). Documents that are out, keys that work and forms that are public go on working |
+| A login from before the rule | once at the next visit, with "Not now". After that the number is needed before the next new document is sent from the app, before a new API key, before a new public form, before a click-to-agree page is published and before a document is started at a counter (403 `phone_needed`, and the app shows the screen over the page). Documents that are out, keys that work and forms that are public go on working |
 | A login made by an organisation's own sign-in service | never |
 
 No verification text is sent. Where the server has a text message provider, checking the number by a 6-digit code is
 offered under Settings, Profile, never required, and `users.phone_verified_at` says when it was done.
 
-**Who sees it.** Its owner (Settings, Profile, in the Email address card) and the people who run the server
+**Who sees it.** Its owner (Settings, Profile, in the card "Email and phone") and the people who run the server
 (`OPERATOR_EMAILS`: "People and phone numbers" on the operator page, `GET /api/operator/accounts/:id/people`). Nobody
 else on a team, no API key, no list of members. It is exported with its owner's own login (`your-login.json` in both
 exports), deleted with the login, and encrypted in the database with the other encrypted columns when

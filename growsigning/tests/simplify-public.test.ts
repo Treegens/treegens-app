@@ -128,7 +128,8 @@ test('the video block: plays by itself muted and looped, a pause button, still f
 // ---- 3. Totals and tiny figures -------------------------------------------------------------------------------------
 
 test('no total is shown until it means something, and no figure under one tree anywhere', () => {
-  assert.deepEqual(TOTALS_FROM, { sheets: 1000, treesPlanted: 10 });
+  // treesPublic (repair of 23 November 2026): the public tree total waits for 100 trees and for money to have been paid.
+  assert.deepEqual(TOTALS_FROM, { sheets: 1000, treesPlanted: 10, treesPublic: 100 });
   assert.equal(totalWorthShowing(999), false);
   assert.equal(totalWorthShowing(1000), true);
   assert.match(read('src/components/Public.tsx'), /if \(!i \|\| \(!paper && !planted\)\) return null;/, 'the band on the home page is absent, not zero');
@@ -141,7 +142,7 @@ test('no total is shown until it means something, and no figure under one tree a
   assert.equal(reviewPlus(false), '');
   const free = signerWords({ trees: 0, first: true, total: 0, sheets: 15 });
   assert.doesNotMatch(`${free.title} ${free.line} ${free.count}`, /mangrove/i);
-  assert.equal(signerWords({ trees: 5, first: true, total: 5, sheets: 15 }).line, 'Your signature plants 5 trees. You saved 15 pages of paper from a tree.');
+  assert.equal(signerWords({ trees: 5, first: true, total: 5, sheets: 15 }).line, '5 trees will be planted for your signature. You saved 15 pages of paper from a tree.');
 });
 
 // ---- 4. Settings ----------------------------------------------------------------------------------------------------
@@ -299,11 +300,11 @@ test('a day written for a person reads 20 Nov 2026 on screens, in emails and on 
 // ---- 6. Repairs after the skeptic's and the simplicity reviewer's reports (21 November 2026) -------------------------
 
 test('repair: a More that the measuring script opens stays on the page while it is open', () => {
-  // "Change email address" was taken out of the page when pressed, and tests/ux/flows.cjs then waited 20 seconds for it
+  // "Change email address" (called "Change email or phone" since 23 November 2026, when the same fold took the phone number) was taken out of the page when pressed, and tests/ux/flows.cjs then waited 20 seconds for it
   // and stopped its inventory at Settings, Profile.
   const card = read('src/components/EmailProblem.tsx');
   const body = card.slice(card.indexOf('export function EmailAddressCard'));
-  assert.match(body, /<button type="button" className="btn sm" style=\{TAP\} onClick=\{\(\) => setOpen\(\(o\) => !o\)\} aria-expanded=\{open\} aria-controls=\{`\$\{id\}-change`\} data-more="item">Change email address<\/button>/);
+  assert.match(body, /<button type="button" className="btn sm" style=\{TAP\} onClick=\{\(\) => setOpen\(\(o\) => !o\)\} aria-expanded=\{open\} aria-controls=\{`\$\{id\}-change`\} data-more="item">\{me\.phone \? 'Change email or phone' : 'Change email address'\}<\/button>/);
   assert.match(body, /<div id=\{`\$\{id\}-change`\} hidden=\{!open\}>\{open && <EmailChangeForm/);
   assert.doesNotMatch(body, /\{open \? <EmailChangeForm/, 'the button is not swapped for the form');
   // The same holds for every other mark of this kind on a Settings screen: a <details>, or a button that says where its panel is.

@@ -21,11 +21,12 @@
 // never required, and users.phone_verified_at says when it was done.
 import type { Ctx } from './router.ts';
 import { all, db, get, run } from './db.ts';
-import { bad, hmac, str } from './util.ts';
+import { bad, hmac, str, HttpError } from './util.ts';
 import { seal } from './colcrypt.ts';
 import { smsProvider } from '../lib/checks.ts';
 import { isDeploymentBilling } from '../lib/billingmode.ts';
-import { plusInEmail, mailboxKey, parsePhone, phoneProblemText, showPhone, PLUS_REFUSAL, SAME_MAILBOX_REFUSAL, PHONE_TAKEN, PHONE_BEFORE_SEND } from '../lib/signup.ts';
+import { plusInEmail, oddEmail, mailboxKey, parsePhone, phoneProblemText, showPhone, phoneTakenHelp, PLUS_REFUSAL, ODD_EMAIL_REFUSAL, SAME_MAILBOX_REFUSAL, PHONE_TAKEN, PHONE_BEFORE_SEND } from '../lib/signup.ts';
+import type { Auth } from './auth.ts';
 
 const g = globalThis as any;
 
@@ -61,6 +62,8 @@ function fillKeys() {
 /** Refuses an address with a + before the @. For every way a login is made or moved, never for a recipient. */
 export function refusePlus(email: string) {
   if (plusInEmail(email)) throw bad(PLUS_REFUSAL, 400, { code: 'plus_in_email' });
+  // Quotes before the @ or a dot at the very end: other spellings of a mailbox that may already have a login.
+  if (oddEmail(email)) throw bad(ODD_EMAIL_REFUSAL, 400, { code: 'odd_email' });
 }
 /** The login that already has this mailbox, under this spelling or another one, or null. */
 export function mailboxOwner(email: string, exceptUserId?: string | null): any {
@@ -95,12 +98,20 @@ export function phoneFree(e164: string, exceptUserId?: string | null) {
   ready();
   const key = phoneKeyOf(e164);
   if (get('SELECT 1 x FROM phone_shared WHERE phone_key=?', key)) return;
-  if (get('SELECT 1 x FROM users WHERE phone_key=? AND id != ?', key, exceptUserId || '')) throw bad(PHONE_TAKEN, 409, { code: 'phone_taken' });
+  // Only a login whose email address is confirmed holds a number against other people. One that never confirmed
+  // its address (a typo by an honest person, or someone parking a number that is not theirs) gives way: see
+  // savePhone, which takes the number off it when the next person gives it.
+  if (get('SELECT 1 x FROM users WHERE phone_key=? AND id != ? AND email_verified=1', key, exceptUserId || ''))
+    throw bad(`${PHONE_TAKEN} ${phoneTakenHelp((process.env.SUPPORT_EMAIL || '').trim() || null)}`, 409, { code: 'phone_taken' });
 }
 /** Writes the number of a login. A changed number is no longer a checked one. */
 export function savePhone(userId: string, e164: string) {
   ready();
-  run('UPDATE users SET phone=?, phone_key=?, phone_verified_at=NULL, phone_code=NULL WHERE id=?', seal('users.phone', e164), phoneKeyOf(e164), userId);
+  const key = phoneKeyOf(e164);
+  // A login that never confirmed its email address does not keep a number someone else now gives (phoneFree let
+  // them through). It is asked for its number again the next time it is used. Not for a number allowed for several.
+  if (!get('SELECT 1 x FROM phone_shared WHERE phone_key=?', key)) run('UPDATE users SET phone=NULL, phone_key=NULL, phone_verified_at=NULL, phone_code=NULL WHERE phone_key=? AND id != ? AND email_verified=0', key, userId);
+  run('UPDATE users SET phone=?, phone_key=?, phone_verified_at=NULL, phone_code=NULL WHERE id=?', seal('users.phone', e164), key, userId);
 }
 
 export type PhoneAsk = 'now' | 'may_wait' | 'before_send' | null;
@@ -111,7 +122,9 @@ export type PhoneAsk = 'now' | 'may_wait' | 'before_send' | null;
  */
 export function phoneState(u: any): { number: string | null; verified: boolean; needed: boolean; ask: PhoneAsk; can_verify: boolean } {
   const has = typeof u?.phone === 'string' && !!u.phone;
-  const needed = !has && phoneRequired() && Number(u?.phone_rule) !== 2;
+  // "Has the login given a number" is read from its fingerprint, which is never encrypted: a server whose encryption
+  // key is missing for a while cannot read the number, and must not ask everyone for it again or shut them out.
+  const needed = !has && !u?.phone_key && phoneRequired() && Number(u?.phone_rule) !== 2;
   const ask: PhoneAsk = !needed ? null : Number(u?.phone_rule) === 1 ? 'now' : u?.phone_asked_at ? 'before_send' : 'may_wait';
   return { number: has ? showPhone(u.phone) : null, verified: has && !!u.phone_verified_at, needed, ask, can_verify: has && !u.phone_verified_at && !!smsProvider() };
 }
@@ -124,6 +137,19 @@ export function phoneState(u: any): { number: string | null; verified: boolean; 
 export function phoneBeforeSend(c: Ctx) {
   if (c.auth?.via !== 'session' || !phoneState(c.user).needed) return;
   throw bad(`${PHONE_BEFORE_SEND} It takes ten seconds, and everything you have is kept. Nothing was sent.`, 403, { code: 'phone_needed' });
+}
+
+// What a login that has to give its number first ('now') may still do: read, give the number, sign out, switch
+// workspace, confirm its email address, ask for help, and what is about the login itself and may be asked of it by a
+// team before anything else (two-step login, a longer password, where it is signed in, leaving a team, closing the
+// login). Everything else waits, on the server and not only on the screen, so nothing reaches other people from a
+// login nobody can be reached at.
+const OPEN_WITHOUT_PHONE = [/^GET /, /^POST \/me\/phone/, /^POST \/auth\//, /^POST \/me\/delete$/, /^POST \/me\/email\/confirm/, /^POST \/(support|help)\b/,
+  /^[A-Z]+ \/me\/two-step/, /^POST \/me\/password$/, /^[A-Z]+ \/me\/sessions/, /^[A-Z]+ \/me\/idle/, /^POST \/account\/leave$/];
+export function phoneGate(auth: Auth | null, what: string) {
+  if (auth?.via !== 'session' || phoneState(auth.user).ask !== 'now') return;
+  if (OPEN_WITHOUT_PHONE.some((re) => re.test(what))) return;
+  throw new HttpError(403, 'Please add your phone number first. It takes ten seconds. Until then nothing else can be done with this login, and nothing was changed.', { code: 'phone_needed' });
 }
 
 // ---- Export ------------------------------------------------------------------------------------------

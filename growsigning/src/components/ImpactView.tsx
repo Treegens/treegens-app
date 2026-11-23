@@ -3,19 +3,22 @@
 // water is an estimate and is called one, with where it comes from. A total is shown only once it is large
 // enough to mean something (TOTALS_FROM in src/lib/impact.ts): until then its place is simply absent, never a tiny
 // number. Nothing here claims an offset or that signing undoes any harm.
-import { IMPACT, PRICING, TOTALS_FROM, TREES_BEFORE, TREES_RULE_DAY, fmtNum, totalWorthShowing } from '@/lib/impact';
+import { IMPACT, PRICING, TOTALS_FROM, TREES_BEFORE, TREES_RULE_DAY, fmtNum, publicTreesShown, totalWorthShowing } from '@/lib/impact';
 import { TREEGENS_URL, TREEGENS_ORG_URL, TREEGENS_READ_ON, MONEY_LINE } from '@/lib/impactwords';
 
 /** Is there any total worth showing for these numbers? */
-export const anyTotal = (i: any): boolean => !!i && (totalWorthShowing(i.sheets) || Number(i.treesFunded) >= TOTALS_FROM.treesPlanted);
+// `own`: the numbers of the account of the person looking. Everybody's total waits for more, and for money to have
+// been paid in at all (publicTreesShown): a few free trial signatures are not a public total.
+const treesShown = (i: any, own?: boolean): boolean => (own ? Number(i?.treesFunded) >= TOTALS_FROM.treesPlanted : publicTreesShown(i));
+export const anyTotal = (i: any, own?: boolean): boolean => !!i && (totalWorthShowing(i.sheets) || treesShown(i, own));
 
-export function ImpactStats({ i, dark }: { i: any; dark?: boolean }) {
+export function ImpactStats({ i, dark, own }: { i: any; dark?: boolean; own?: boolean }) {
   const paper = totalWorthShowing(i.sheets);
-  const planted = Number(i.treesFunded) >= TOTALS_FROM.treesPlanted;
+  const planted = treesShown(i, own);
   if (!paper && !planted) return null;
   return (
     <div className="grid g3">
-      {planted && <div className={`stat${dark ? '' : ' green'}`}><div className="k">Trees planted by signatures</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">{PRICING.treesPerSignature} mangroves for every signature</div></div>}
+      {planted && <div className={`stat${dark ? '' : ' green'}`}><div className="k">{own ? 'Trees your signatures plant' : 'Trees our signatures plant'}</div><div className="v num">{fmtNum(i.treesFunded)}</div><div className="s">{PRICING.treesPerSignature} mangroves for every signature</div></div>}
       {paper && <div className="stat"><div className="k">Sheets of paper not used, estimated</div><div className="v num">{fmtNum(i.sheets)}</div><div className="s">across {fmtNum(i.envelopes)} completed envelope{i.envelopes === 1 ? '' : 's'}</div></div>}
       {paper && <div className="stat"><div className="k">Water not used, estimated</div><div className="v num">{fmtNum(i.litresWater)} L</div><div className="s">{IMPACT.litresWaterPerSheet} litres per sheet</div></div>}
     </div>
@@ -49,8 +52,14 @@ export function Methodology({ perContract = false }: { perContract?: boolean } =
       <ul style={{ paddingLeft: 20, lineHeight: 1.7, margin: 0 }}>
         <li><b>Every signature plants {PRICING.treesPerSignature} trees.</b> They are mangroves, planted by Treegens. It makes no difference where the signature came from: the {PRICING.welcomeSignatures} free ones a new account starts with, the monthly plan, a top-up, a free code or a reward for inviting a friend.</li>
         <li>A signature is counted when a person you asked finishes signing. Signing your own document uses no signature, so it plants none. Approving, reading and getting a copy are not signatures.</li>
-        <li>{MONEY_LINE} That is the monthly plan and top-ups alike. A free signature has no payment of its own: its trees come out of that same money.</li>
-        <li>The total is every finished signature times {PRICING.treesPerSignature}, and a signature keeps its trees once it is finished. Before {TREES_RULE_DAY} the rule was another one: {TREES_BEFORE.paid} mangroves for a signature that was paid for and none for a free one. Signatures finished before that day stay in the total at what was promised then. A total is shown from {TOTALS_FROM.treesPlanted} trees up.</li>
+        <li>{MONEY_LINE} That is the monthly plan and top-ups alike. Free signatures are paid for from what plans earn.</li>
+        <li>The total is every finished signature times {PRICING.treesPerSignature}. It says what our signatures plant, not what has been planted already: Treegens plants afterwards. A signature keeps its trees once it is finished. The public total is shown from {TOTALS_FROM.treesPublic} trees up, and only once customers have paid something. An account sees its own from {TOTALS_FROM.treesPlanted} trees up.</li>
+        <li>
+          <details data-fold>
+            <summary>Signatures and payments before {TREES_RULE_DAY}</summary>
+            <p style={{ margin: '4px 0 0' }}>Before that day the count followed the money: {TREES_BEFORE.perUsd} mangroves for each US dollar a customer paid, whether or not the signatures it bought were used, and none for a free signature. Money paid before that day stays in the total at that promise. A signature bought with that money is not counted a second time.</p>
+          </details>
+        </li>
         <li>The planting itself is done by Treegens planters. Treegens describes its own checking on <a href={TREEGENS_URL} {...out}>treegens.app</a>: a planter films the land and then the planting in the Treegens app, the phone records where the clips were filmed, and verifiers watch both videos and vote to approve or reject. The verifiers are members of the Treegens community who stake its token to take part. That is what Treegens says about its own work, as we read it there on {TREEGENS_READ_ON}. It is not our finding: we have not checked plantings ourselves.</li>
         <li>The rate: <a href={TREEGENS_ORG_URL} {...out}>treegens.org</a> says ten cents is the average cost of planting a tree across a run, not an invoice for a named tree. At that average, the {PRICING.treesPerSignature} trees of a signature cost about fifty cents. It is an average Treegens states, not a price we can show for each tree.</li>
         <li>What you cannot check here yet: we do not publish receipts for the money sent to Treegens, or Treegens&apos; own statement of what it received. Until we do, the totals on this page are our own figures.</li>

@@ -193,7 +193,7 @@ test('the whole path: link, sign-up, a real account, 3 signatures each, one emai
   assert.equal(mails.length, 1);
   const body = text(mails[0].html);
   assert.ok(body.includes('Your friend signed their first document. You both got 3 free signatures.'), body);
-  assert.ok(body.includes(`Each one plants ${PRICING.treesPerSignature} trees when it is signed.`));
+  assert.match(body, new RegExp(`They are in your account now and last until .* UTC\\. Each one plants ${PRICING.treesPerSignature} trees\\.`), body);
   assert.ok(body.includes('Stop these emails') && /referral-emails\?token=/.test(mails[0].html));
   assert.ok(!body.includes('Bob') && !body.includes(bob.email), 'the friend is not named');
   assert.equal(mailTo(bob.email).filter((m: any) => /friend|invite/i.test(m.subject)).length, 0, 'we write nothing to the friend');
@@ -459,7 +459,7 @@ test('running out: the refusal of a send and the emails at two left and at none 
   const e = await simple(hal.c, 'more@sign.example');
   const r = await hal.c.post(`/envelopes/${e.id}/send`);
   assert.equal(r.status, 402);
-  assert.ok(r.data.error.endsWith('Signing your own documents stays free. Or invite a friend from the Plan page: you both get 3 free signatures after their first signed document.'), r.data.error);
+  assert.ok(r.data.error.endsWith('Signing your own documents stays free. Or invite a friend from the Plan page and you both get 3 free signatures.'), r.data.error);
   // "You have 1 left" (sent at two left) and "You have used all your signatures": both name the link.
   const low = mailTo(hal.email).filter((m: any) => /signatures? left|used all your signatures/.test(m.subject));
   assert.equal(low.length, 2);
@@ -470,7 +470,9 @@ test('the screens: every out-of-signatures place shows the two choices, and the 
   const en = JSON.parse(src('src/locales/en.json'));
   assert.equal(en['invite.more_title'], 'Get more signatures');
   assert.equal(en['invite.title'], 'Invite a friend, get {count} free signatures each');
-  assert.equal(en['auth.friend_invited'], 'A friend invited you: you both get {count} free signatures after your first signed document.');
+  // Said as it is: extra to the trial's, and it takes somebody else signing a document the friend sends.
+  assert.equal(en['auth.friend_invited'], 'A friend invited you: you both get {count} extra free signatures once someone signs the first document you send.');
+  assert.equal(en['invite.email_button'], 'Email a friend');
 
   const parts = src('src/components/sender/InviteFriend.tsx');
   // Two choices side by side, the link, Copy, and share buttons that open the person's own apps.
@@ -482,24 +484,42 @@ test('the screens: every out-of-signatures place shows the two choices, and the 
   assert.match(parts, /canShare && <button/, 'the share sheet only where the browser has one');
   // Nothing is uploaded and nothing is sent by us: no address book, no call that posts addresses.
   assert.ok(!/navigator\.contacts|ContactsManager|method: 'POST'|body:/.test(parts));
-  // The card: the link, how many joined, how many rewards, the rules in three lines.
-  assert.match(parts, /id="invite"[\s\S]*invite\.joined[\s\S]*invite\.rewarded[\s\S]*invite\.rule_how[\s\S]*invite\.rule_limits[\s\S]*invite\.rule_fair/);
+  // The card: the link, how many joined, how many signatures earned, the rules in three short lines and a link to
+  // all of them. Two counts, not three, and about 45 words of rules, not 130.
+  assert.match(parts, /id="invite"[\s\S]*invite\.joined[\s\S]*invite\.signatures[\s\S]*invite\.rule_how[\s\S]*invite\.rule_limits[\s\S]*invite\.rule_fair[\s\S]*href="\/help#invite"/);
   assert.equal((parts.match(/<li>\{T\('invite\.rule_/g) || []).length, 3);
+  assert.equal((parts.match(/<div><dt>/g) || []).length, 2);
+  const ruleWords = ['invite.rule_how', 'invite.rule_limits', 'invite.rule_fair'].map((key) => en[key].split(/\s+/).length);
+  assert.ok(ruleWords.every((n) => n <= 20) && ruleWords.reduce((a, b) => a + b) <= 55, ruleWords.join(' '));
+  // The link and Copy sit on one row, so Copy is on the first screen of a phone.
+  assert.match(parts, /className="inv-row"[^>]*>\s*<input readOnly [^\n]*\/>\s*<button type="button" className="btn sm primary" onClick=\{copy\}/);
   const css = src('src/app/styles/sender.css');
   assert.match(css, /\.inv-choices \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css, /@media \(max-width: 640px\) \{\s*\.inv-choices \{ grid-template-columns: minmax\(0, 1fr\); \}/);
 
-  // Home (the usage meter): at none left and at "Running low" (two or one left).
+  // Home (the usage meter): the two boxes only at none left. With some left (a new account is at two after its
+  // first send) the card keeps its one button and gets one quiet link to the Invite friends card.
   const meter = src('src/components/sender/UsageMeter.tsx');
-  assert.match(meter, /\{left <= 2 && <LowChoices plan=\{a\.plan\} canUpgrade=\{canUpgrade\} \/>\}/);
+  assert.match(meter, /\{left === 0 && <LowChoices plan=\{a\.plan\} canUpgrade=\{canUpgrade\} inv=\{inv\} \/>\}/);
+  assert.ok(!/left <= 2 && <LowChoices/.test(meter));
   assert.match(meter, /function LowChoices[\s\S]*<InviteChoices inv=\{inv\}/);
+  assert.match(meter, /\{left > 0 && <Link href=\{PLAN_PAGE\} className="btn sm">/);
+  assert.match(meter, /\{left > 0 && inv\?\.open && <> · <Link href=\{`\$\{PLAN_PAGE\}#invite`\}>\{T\('invite\.title'/);
   // The send stop screen: step 3 of the editor, inside the "this needs more than you have" notice.
   const review = src('src/components/editor/StepReview.tsx');
-  assert.match(review, /if \(need > have\) \{[\s\S]*<InviteChoices inv=\{inv\} more=\{<>[\s\S]*\/billing\/topup[\s\S]*\/billing\/checkout/);
+  assert.match(review, /if \(need > have\) \{[\s\S]*<InviteChoices inv=\{inv\} slow[\s\S]*more=\{<>[\s\S]*\/billing\/topup[\s\S]*\/billing\/checkout/);
+  // There the plan is said once (in the box, not also as a bullet), one button per choice, and the invite box says
+  // it will not unblock this send today.
+  assert.match(review, /\{!inv\?\.open && \(b\.plan === 'grove'/);
+  assert.match(review, /\{!\(inv\?\.open && admin && b\.enabled\) && <Link href="\/app\/settings\?tab=billing" className="btn sm">Open the Plan page<\/Link>\}/);
+  assert.match(parts, /slow \? ` \$\{T\('invite\.slow'\)\}` : ''/);
+  assert.equal(en['invite.slow'], 'This takes a little while. Your draft stays saved.');
   // The Plan page: the choices when none are left, and the Invite friends card always.
   const plan = src('src/app/app/settings/page.tsx');
   assert.match(plan, /\{s\.available <= 0 && inv\?\.open && \(\s*<InviteChoices inv=\{inv\}/);
   assert.match(plan, /<InviteCard inv=\{inv\} bare=/);
+  // The card stands right under the balance, before the plan, the code box and the top-up.
+  assert.ok(plan.indexOf('<InviteCard inv={inv}') < plan.indexOf('id="top-up"'), 'Invite friends is above Top up');
   // The sign-up page says a friend invited you, and never who.
   const auth = src('src/components/AuthForm.tsx');
   assert.match(auth, /mode === 'signup' && friend > 0 && <div className="notice"[^>]*>\{T\('auth\.friend_invited', \{ count: friend \}\)\}/);
@@ -510,7 +530,7 @@ test('the screens: every out-of-signatures place shows the two choices, and the 
 
 test('honest wording everywhere it is said, and no em dash in any of it', async () => {
   const rule = referralRuleText();
-  assert.match(src('src/app/pricing/page.tsx'), /Invite a friend:<\/b> you both get \{sigs\(referralRulesFrom\(process\.env\)\.signatures\)\} free after their first signed document/);
+  assert.match(src('src/app/pricing/page.tsx'), /Invite a friend:<\/b> you both get \{sigs\(referralRulesFrom\(process\.env\)\.signatures\)\} extra free once someone signs the first document your friend sends/);
   assert.match(src('src/app/help/page.tsx'), /<QA id="invite" q="How do I get free signatures by inviting a friend\?">\s*<p>\{referralRuleText\(referralRulesFrom\(process\.env\)\)\}<\/p>/);
   assert.match(src('src/server/chatkb.ts'), /=== INVITE A FRIEND ===/);
   // The two cookies of the offer are said on the security page, where the offer is on.
@@ -532,6 +552,104 @@ test('honest wording everywhere it is said, and no em dash in any of it', async 
   for (const f of ['src/lib/referral.ts', 'src/server/referrals.ts', 'src/server/routes-referrals.ts', 'src/server/openapi-referrals.ts', 'src/components/sender/InviteFriend.tsx', 'src/app/r/[code]/page.tsx', 'tests/referrals.test.ts'])
     assert.ok(!src(f).includes(String.fromCharCode(0x2014)), `an em dash in ${f}`);
   for (const [key, value] of Object.entries(JSON.parse(src('src/locales/en.json')))) if (/^invite\.|^auth\.friend/.test(key)) assert.ok(!String(value).includes(String.fromCharCode(0x2014)), key);
+});
+
+// ---- Somebody else has to sign, and the phone number has to be real ----------------------------------------------------------------
+
+const devices = (p: Person) => db.all('SELECT * FROM referral_devices WHERE account_id=?', p.id);
+// Signs as `email` from a chosen internet address (signAll in helpers.ts always signs from one fixed address).
+async function signFrom(envelopeId: string, email: string, ip: string) {
+  const c = new Client();
+  c.ip = ip;
+  const tok = db.get('SELECT token FROM recipients WHERE envelope_id=? AND email=?', envelopeId, email).token;
+  await c.post(`/sign/${tok}/consent`);
+  const v = (await c.get(`/sign/${tok}`)).data;
+  const values: Record<string, string> = {};
+  for (const f of v.fields || []) values[f.id] = '1';
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const done = await c.post(`/sign/${tok}/complete`, { values, signature_png: png, initials_png: png });
+  assert.equal(done.status, 200, JSON.stringify(done.data));
+}
+
+test('the first signature has to be somebody else: not the friend under another name, not the inviter, not from the inviter\'s address', async () => {
+  const gus = await person('Gus');
+  const code = (await invite(gus)).code;
+  const pal = await person('Pal', { ref: code });
+  // 1. A document to his own address under another name. It is paid for like any signature, and it is no friend's proof.
+  const own = await simple(pal.c, pal.email);
+  assert.equal((await pal.c.post(`/envelopes/${own.id}/send`)).status, 200);
+  assert.equal((await signAll(own.id, pal.email)).status, 200);
+  assert.equal(await left(pal), 2, 'that signature was a paid one');
+  assert.equal(row(pal).status, 'pending');
+  // 2. A document to the inviter, who signs it herself (in another spelling of her mailbox).
+  const hers = await simple(pal.c, gus.email.toUpperCase());
+  assert.equal((await pal.c.post(`/envelopes/${hers.id}/send`)).status, 200);
+  assert.equal((await signAll(hers.id, gus.email.toUpperCase())).status, 200);
+  assert.equal(row(pal).status, 'pending');
+  await cron.tick();
+  assert.deepEqual([row(pal).status, lots(pal).length, lots(gus).length], ['pending', 0, 0]);
+  // 3. A document to a third mailbox, signed from the internet address the inviting account is used from.
+  const third = await simple(pal.c, 'third-box@sign.example');
+  assert.equal((await pal.c.post(`/envelopes/${third.id}/send`)).status, 200);
+  await signFrom(third.id, 'third-box@sign.example', gus.ip);
+  await cron.tick();
+  assert.deepEqual([row(pal).status, lots(pal).length], ['pending', 0]);
+  assert.equal(await left(pal), 0);
+  // 4. Somebody else, somewhere else: that is a first signed document.
+  credits.grant(pal.id, 1, 'adjust', 'one more for the test', new Date().toISOString());
+  const real = await simple(pal.c, 'a-real-client@sign.example');
+  assert.equal((await pal.c.post(`/envelopes/${real.id}/send`)).status, 200);
+  await signFrom(real.id, 'a-real-client@sign.example', '192.0.2.200');
+  assert.deepEqual([row(pal).status, row(pal).inviter_got, row(pal).friend_got], ['rewarded', 3, 3]);
+});
+
+test('signing in person on the friend\'s own device is not somebody else', async () => {
+  const code = (await invite(ann)).code;
+  const desk = await person('Desk', { ref: code });
+  const e = await simple(desk.c, 'walk-in@sign.example', { recipients: [{ id: 'r', role: 'inperson', name: 'Walk-in Client', email: 'walk-in@sign.example' }] });
+  assert.equal((await desk.c.post(`/envelopes/${e.id}/send`)).status, 200);
+  const rcp = db.get('SELECT id FROM recipients WHERE envelope_id=?', e.id);
+  // The signature of a person signing in person is a paid one (credits.ts isChargeable); written as the ledger would.
+  db.run("INSERT INTO credits (account_id, delta, reason, ref, at) VALUES (?,?,?,?,?)", desk.id, -1, 'signature', `${rcp.id}|walk-in@sign.example`, new Date().toISOString());
+  await cron.tick();
+  assert.deepEqual([row(desk).status, lots(desk).length], ['pending', 0]);
+  await firstSigned(desk);
+  assert.equal(row(desk).status, 'rewarded');
+});
+
+test('where the server sends text messages, a number that was only typed is not enough: it has to be confirmed by code', async () => {
+  const code = (await invite(cara)).code;
+  const typed = await person('Typed', { ref: code });
+  const d = await sendDoc(typed);
+  process.env.SMS_DEV_OUTBOX = '1';
+  try {
+    await signDoc(d);
+    await cron.tick();
+    assert.equal(row(typed).status, 'pending', 'any made-up number would do otherwise');
+    db.run('UPDATE users SET phone_verified_at=? WHERE id=?', new Date().toISOString(), typed.uid);
+    await cron.tick();
+    assert.deepEqual([row(typed).status, row(typed).friend_got], ['rewarded', 3]);
+  } finally {
+    delete process.env.SMS_DEV_OUTBOX;
+  }
+});
+
+test('using an account signed in notes its browser and address, once a day', async () => {
+  const una = await person('Una');
+  db.run('DELETE FROM referral_devices WHERE account_id=?', una.id);
+  travel(1);
+  // Not the invite card: any page of the app.
+  assert.equal((await una.c.get('/me')).status, 200);
+  const first = devices(una);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].first_at, first[0].at);
+  db.run('DELETE FROM referral_devices WHERE account_id=?', una.id);
+  await una.c.get('/billing');
+  assert.equal(devices(una).length, 0, 'the same browser at the same address is written once a day, not on every request');
+  // From another address the same day: a new line. An API key leaves none.
+  una.c.ip = '192.0.2.77';
+  await una.c.get('/me');
+  assert.equal(devices(una).length, 1);
 });
 
 // ---- The switches -----------------------------------------------------------------------------------------------------------------------
@@ -557,7 +675,7 @@ test('REFERRALS=0, and a server where nothing is counted: no link, no offer, not
 
 // ---- The limits, and expiry (the clock moves from here on) ---------------------------------------------------------------------------
 
-test('the limits: 2 a month and 3 in all here; over the month the friend still gets theirs, at the total the link is closed', async () => {
+test('the limits: 2 a month and 3 in all here; a promised friend still gets theirs, an unpromised one gets nothing, and the link is closed', async () => {
   process.env.REFERRAL_MONTHLY_MAX = '2';
   process.env.REFERRAL_TOTAL_MAX = '3';
   try {
@@ -568,6 +686,13 @@ test('the limits: 2 a month and 3 in all here; over the month the friend still g
     const code = (await invite(ida)).code;
     // Three friends sign up while the link is open. Two are rewarded on both sides.
     const friends = [await person('F1', { ref: code }), await person('F2', { ref: code }), await person('F3', { ref: code })];
+    // Three browsers open the link while it stands, and sign up later.
+    const early = [new Client(), new Client(), new Client()];
+    for (const [i, c] of early.entries()) {
+      c.ip = `192.0.2.${10 + i}`;
+      assert.equal((await c.get(`/public/referrals/${code}`)).data.ok, true);
+      assert.match(c.cookies.gs_ref, new RegExp(`^${code}\\.[a-z0-9]+\\.[0-9a-f]{24}$`), 'the promise is kept sealed');
+    }
     await firstSigned(friends[0]);
     await firstSigned(friends[1]);
     assert.equal(await left(ida), 9);
@@ -584,6 +709,33 @@ test('the limits: 2 a month and 3 in all here; over the month the friend still g
     assert.equal(await left(friends[2]), 5);
     assert.equal(mailTo(ida.email).filter((m: any) => /Your friend signed/.test(m.subject)).length, 2);
 
+    // The link is at its limit and promises nothing. A sign-up that only carries the code (typed, or posted by a
+    // script) is no invite: nothing for either side, however many documents get signed.
+    const late = await person('Late', { ref: code });
+    assert.deepEqual([row(late).status, row(late).reason], ['refused', 'monthly_limit']);
+    await firstSigned(late);
+    assert.equal(lots(late).length, 0);
+    // A made-up promise is not a promise.
+    const forged = await person('Forged', { cookies: { gs_ref: `${code}.zzzzzzzz.${'0'.repeat(24)}` } });
+    assert.equal(row(forged), null);
+    // A browser that looks again now is shown nothing, and its old promise ends with that look.
+    assert.equal((await early[2].get(`/public/referrals/${code}`)).data.ok, false);
+    assert.equal(early[2].cookies.gs_ref, '');
+    const looked = await person('Looked', { cookies: early[2].cookies, ip: early[2].ip });
+    assert.equal(row(looked), null);
+    // A browser that was shown the promise while the link was open is still a friend: theirs arrives, the inviter gets none.
+    const kept = await person('Kept', { cookies: early[0].cookies, ip: early[0].ip });
+    assert.equal(row(kept).status, 'pending');
+    await firstSigned(kept);
+    assert.deepEqual([row(kept).status, row(kept).inviter_got, row(kept).friend_got], ['rewarded', 0, 3]);
+    // Friends rewarded that way have the month's limit too (2 here: F3 and Kept), so a link cannot give without end.
+    const over = await person('Over', { cookies: early[1].cookies, ip: early[1].ip });
+    assert.equal(row(over).status, 'pending');
+    await firstSigned(over);
+    assert.deepEqual([row(over).status, row(over).reason, row(over).friend_got], ['refused', 'monthly_limit', 0]);
+    assert.equal(lots(over).length, 0);
+    assert.equal(await left(ida), 9);
+
     // Next month the link is open again, for one more: then the total is reached.
     travel(32);
     await login(ida);
@@ -594,9 +746,12 @@ test('the limits: 2 a month and 3 in all here; over the month the friend still g
     assert.deepEqual([row(f4).status, row(f4).inviter_got], ['rewarded', 3]);
     assert.match(text(mailTo(ida.email).filter((m: any) => /Your friend signed/.test(m.subject)).at(-1)!.html), /That was the last friend your link is rewarded for this month\./);
     assert.deepEqual([(await invite(ida)).total_left, (await invite(ida)).open], [0, false]);
-    // F5 signed up before the total was reached; when their turn comes, the total has been reached: nothing for either.
+    // F5 signed up while the promise stood; when their turn comes the total has been reached. As at the month's
+    // limit, a promised friend gets theirs and the inviter gets none.
     await firstSigned(f5);
-    assert.deepEqual([row(f5).status, row(f5).reason, row(f5).friend_got], ['refused', 'total_limit', 0]);
+    assert.deepEqual([row(f5).status, row(f5).inviter_got, row(f5).friend_got], ['rewarded', 0, 3]);
+    assert.match(row(f5).reason, /limit of rewarded friends in all, so only the friend was rewarded/);
+    assert.equal(lots(f5).length, 1);
     const f6 = await person('F6', { ref: code });
     assert.deepEqual([row(f6).status, row(f6).reason], ['refused', 'total_limit']);
     assert.equal(db.get('SELECT COUNT(*) n FROM referrals WHERE inviter_account_id=? AND inviter_got > 0', ida.id).n, 3);
@@ -635,4 +790,42 @@ test('fingerprints of browsers and addresses are forgotten after 90 days', async
   assert.equal(out.forgotten, before);
   assert.equal(db.get('SELECT COUNT(*) n FROM referral_devices').n, 0);
   assert.ok(!db.all('SELECT device, ip FROM referral_devices').length);
+});
+
+test('an inviting account with nothing on record (not opened for 90 days, link taken from an email): the reward waits, and is decided when it is opened', async () => {
+  // The test before left no fingerprints at all, as on an account nobody has signed in to for 90 days.
+  assert.equal(devices(ann).length, 0);
+  const code = db.get('SELECT code FROM referral_codes WHERE account_id=?', ann.id).code;
+  // Ann makes herself a "friend" in the very same browser, from the very same address.
+  const fake = await person('Fake', { ref: code, cookies: { gs_dev: ann.c.cookies.gs_dev }, ip: ann.ip });
+  // And a real friend signs up through the same link.
+  const real = await person('Real', { ref: code });
+  assert.deepEqual([row(fake).status, row(real).status], ['pending', 'pending'], 'nothing to compare them with yet');
+  await firstSigned(fake);
+  await firstSigned(real);
+  await cron.tick();
+  assert.deepEqual([row(fake).status, row(real).status], ['pending', 'pending'], 'no reward while the inviting account has no browser on record');
+  assert.equal(lots(fake).length + lots(real).length, 0);
+  // Ann opens her account (she has to, to use any reward). That alone notes her browser and address.
+  await login(ann);
+  await ann.c.get('/me');
+  assert.ok(devices(ann).length > 0);
+  await cron.tick();
+  assert.deepEqual([row(fake).status, row(fake).reason, lots(fake).length], ['refused', 'same_device', 0]);
+  assert.deepEqual([row(real).status, row(real).inviter_got, row(real).friend_got], ['rewarded', 3, 3]);
+});
+
+test('an internet address the inviting account keeps using counts as the same, whenever in that stretch the friend signed up', async () => {
+  const ivy = await person('Ivy', { ip: '203.0.113.88' });
+  const code = (await invite(ivy)).code;
+  travel(3);
+  const mid = await person('Mid', { ref: code, ip: '203.0.113.88' });
+  assert.equal(row(mid).status, 'pending', 'three days after Ivy was last seen there');
+  travel(3);
+  // Ivy uses her account from that address again: she was there before and after the sign-up.
+  await ivy.c.get('/me');
+  const d = devices(ivy).find((x: any) => x.first_at !== x.at);
+  assert.ok(d, 'the line keeps when it was first seen and when last');
+  await firstSigned(mid);
+  assert.deepEqual([row(mid).status, row(mid).reason], ['refused', 'same_ip']);
 });

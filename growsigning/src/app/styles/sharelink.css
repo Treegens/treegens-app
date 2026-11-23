@@ -30,6 +30,10 @@
 .shl-link + .notice, .shl-qr + .notice { margin-bottom: 12px; }
 .shl-name { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
 .shl-name label { flex: 1 1 220px; margin: 0; }
+.shl-name label { min-width: 0; max-width: 100%; }
+.shl-name label .shl-box { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; min-width: 0; width: 100%; }
+.shl-name label .shl-box > span { display: inline; flex: none; margin: 0; font-weight: 400; }
+.shl-name label .shl-box input { flex: 1 1 0; width: 0; min-width: 0; margin: 0; }
 .shl-name .btn, .shl-off { min-height: 44px; }
 .shl-fold summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
 .shl-off { margin-top: 12px; }

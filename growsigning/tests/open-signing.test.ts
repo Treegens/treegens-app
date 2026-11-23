@@ -98,7 +98,7 @@ test('no page says that 100% or everything customers pay goes to Treegens: card 
   assert.match(read('src/server/chatkb.ts'), /and from people who send documents\. \$\{MONEY_LINE\}/);
   // Since the 5 trees rule (23 November 2026) the trees total counts finished signatures, not dollars, and the page
   // says where the trees of a free signature come from. (Before: "It counts each whole dollar, before card fees".)
-  assert.match(read('src/components/ImpactView.tsx'), /A free signature has no payment of its own: its trees come out of that same money\./);
+  assert.match(read('src/components/ImpactView.tsx'), /Free signatures are paid for from what plans earn\./);
 });
 
 // ---- 2. Originals in the account's export ------------------------------------------------------------------------
@@ -342,7 +342,7 @@ test('the consent screen stays at 120 words before the tick for a group, a witne
   // A group: the "For" line names the group, and what agreeing does for the group comes after the tick, right above
   // Continue. The long explanation of how a group works stays in the email (groupInvite), not before the tick.
   // Since the 5 trees rule the top also carries the tree line, which is counted with the rest (ConsentTop.tsx).
-  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} trees=\{\(shown\) => <OpenTrees base=\{base\} show=\{!ask\} onShown=\{shown\} \/>\} \/>/);
+  assert.match(consent, /<ConsentTop data=\{data\} ask=\{ask\} myEmail=\{myEmail\} trees=\{!ask \? <OpenTreesLine trees=\{env\.plants\} \/> : null\} \/>/);
   assert.match(read('src/components/sign/ConsentTop.tsx'), /\{group \|\| \(me\.link_by_sender/);
   const tick = consent.indexOf('<label className="check sg-agree">');
   const note = consent.indexOf('<GroupConsentNote data={data} />');

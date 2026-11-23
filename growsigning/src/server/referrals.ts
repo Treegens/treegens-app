@@ -7,6 +7,8 @@ import { isDeploymentBilling } from '../lib/billingmode.ts';
 import { PRICING } from '../lib/impact.ts';
 import { expiryMoment } from '../lib/policy.ts';
 import { referralRulesFrom, referralOfferOn, referralPath, isReferralCode, normalEmail, normalPhone, REFERRAL_CODE_LENGTH, REFERRAL_REFUSALS, type ReferralRefusal, type ReferralRules } from '../lib/referral.ts';
+import { smsProvider } from '../lib/checks.ts';
+import { onSessionUse } from './sessionuse.ts';
 import type { Ctx } from './router.ts';
 
 // Invite a friend (the rules and the words are in src/lib/referral.ts).
@@ -21,8 +23,13 @@ import type { Ctx } from './router.ts';
 //      a lot of their own that expires like the trial's (credits.ts, source "referral"). The owner of the inviting
 //      account gets one email.
 //   4. Nobody is rewarded for inviting themselves: the same mailbox, the same phone number, the same account, a
-//      browser or an internet address the inviting account was used from. One reward per friend, and a limit per
-//      month and in total for each inviting account.
+//      browser or an internet address the inviting account was used from. The browser and address of an account
+//      are noted whenever a person uses it signed in (once a day at most), and a reward waits while the inviting
+//      account has none on record. The signature that makes the friend real is one by somebody else: not the
+//      friend, not a member of the inviting account, not from an address the inviting account uses, not in person.
+//      One reward per friend, and a limit per month and in total for each inviting account. A friend who was
+//      promised the reward while the link was open still gets theirs when the inviter has reached a limit since,
+//      up to the same limits again.
 //   5. When the friend's account is paused for abuse, what is left of both rewards is taken back.
 // Nothing is emailed in anybody's name: the inviter passes the link on themselves.
 
@@ -104,8 +111,19 @@ const accountOfCode = (code: unknown) => (isReferralCode(code) ? get('SELECT a.*
 export function lookAtCode(c: Ctx, code: string): { ok: boolean; signatures: number; expiry_days: number } {
   const r = referralSettings();
   const ok = referralsOn() && linkOpen(accountOfCode(code));
-  if (ok) c.cookies.push(cookie(REF_COOKIE, code, REF_COOKIE_DAYS * 86400, c.secure));
+  if (ok) c.cookies.push(cookie(REF_COOKIE, promise(code, Date.now() + REF_COOKIE_DAYS * DAY), REF_COOKIE_DAYS * 86400, c.secure));
+  // Shown nothing, promised nothing: an older promise in this browser ends with this look.
+  else if (readCookie(c.req, REF_COOKIE)) c.cookies.push(cookie(REF_COOKIE, '', 0, c.secure));
   return { ok, signatures: r.signatures, expiry_days: r.expiry_days };
+}
+// What the browser keeps after the sign-up page showed the promise: the code, until when, and our seal on both. So
+// a sign-up can tell "this browser was promised the reward while the link was open" from a code somebody typed.
+const promise = (code: string, until: number) => `${code}.${until.toString(36)}.${hmac(`referral-promise:${code}:${until}`).slice(0, 24)}`;
+/** The code this browser was promised a reward for, or '' (no cookie, not ours, or older than 30 days). */
+function promisedCode(c: Ctx): string {
+  const [code, untilText, seal] = String(readCookie(c.req, REF_COOKIE) || '').split('.');
+  const until = parseInt(untilText || '', 36);
+  return isReferralCode(code) && seal && until > Date.now() && promise(code, until) === `${code}.${untilText}.${seal}` ? code : '';
 }
 
 // ---- Browsers and internet addresses, as fingerprints ----------------------------------------------------------------
@@ -123,8 +141,24 @@ function deviceOf(c: Ctx): string {
 export function noteDevice(c: Ctx, accountId: string) {
   // Only a person in a browser: an API key keeps no cookie, so every call of one would look like a new browser.
   if (!referralsOn() || !accountId || c.auth?.via === 'api_key') return;
-  run('INSERT INTO referral_devices (account_id, device, ip, at) VALUES (?,?,?,?) ON CONFLICT(account_id, device, ip) DO UPDATE SET at=excluded.at', accountId, deviceOf(c), ipMark(c.ip), now());
+  const t = now();
+  // first_at: when this browser at this address was first seen with the account; at: when last. Both matter for
+  // "the same internet address within a day".
+  run('INSERT INTO referral_devices (account_id, device, ip, at, first_at) VALUES (?,?,?,?,?) ON CONFLICT(account_id, device, ip) DO UPDATE SET at=excluded.at, first_at=COALESCE(first_at, at)', accountId, deviceOf(c), ipMark(c.ip), t, t);
 }
+// Every use of an account by a person signed in notes the browser and the address, once a day for each (the
+// router calls this). Before, only sign-up and the invite card did, so an account older than 90 days, or one that
+// took its link from an email, had nothing on record to compare a "friend" with.
+const seenToday = new Map<string, string>();
+onSessionUse('referrals', (c: Ctx) => {
+  if (!c.account?.id || !referralsOn()) return;
+  const day = now().slice(0, 10);
+  const key = `${c.account.id}|${readCookie(c.req, DEVICE_COOKIE) || ''}|${c.ip}`;
+  if (seenToday.get(key) === day && readCookie(c.req, DEVICE_COOKIE)) return;
+  if (seenToday.size > 20000) seenToday.clear();
+  seenToday.set(key, day);
+  noteDevice(c, c.account.id);
+});
 
 // ---- A sign-up through a link ------------------------------------------------------------------------------------------
 
@@ -140,11 +174,14 @@ function whyNot(inviter: any, friend: { userId: string; accountId: string; email
   if (phone && members.some((u) => phoneKey(u) === phone)) return refuse('same_phone');
   // The friend's browser or internet address at sign-up against every one the inviting account was used from: the
   // same browser at any time, the same internet address within a day before or after.
-  const mine = all('SELECT device, ip, at FROM referral_devices WHERE account_id=?', friend.accountId);
-  const theirs = all('SELECT device, ip, at FROM referral_devices WHERE account_id=?', inviter.id);
+  const mine = all('SELECT device, ip, at, COALESCE(first_at, at) first_at FROM referral_devices WHERE account_id=?', friend.accountId);
+  const theirs = all('SELECT device, ip, at, COALESCE(first_at, at) first_at FROM referral_devices WHERE account_id=?', inviter.id);
   if (mine.some((m) => theirs.some((t) => t.device === m.device))) return refuse('same_device');
-  const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) <= SAME_IP_HOURS * 3600_000;
-  if (mine.some((m) => m.ip && theirs.some((t) => t.ip === m.ip && near(t.at, friend.at)))) return refuse('same_ip');
+  // Each line says from when until when an account was seen at an address. Two accounts were at the same address
+  // "within a day" when those stretches come within 24 hours of each other.
+  const slack = SAME_IP_HOURS * 3600_000;
+  const near = (m: any, t: any) => Date.parse(m.first_at) <= Date.parse(t.at) + slack && Date.parse(t.first_at) <= Date.parse(m.at) + slack;
+  if (mine.some((m) => m.ip && theirs.some((t) => t.ip === m.ip && near(m, t)))) return refuse('same_ip');
   return null;
 }
 
@@ -158,7 +195,8 @@ function whyNot(inviter: any, friend: { userId: string; accountId: string; email
 export function noteSignup(c: Ctx, user: { id: string; email: string }, accountId: string, o: { ref?: unknown; welcomedBefore?: boolean } = {}): 'none' | 'pending' | 'refused' {
   if (!referralsOn()) return 'none';
   noteDevice(c, accountId);
-  const code = isReferralCode(o.ref) ? o.ref : readCookie(c.req, REF_COOKIE);
+  const promised = promisedCode(c);
+  const code = isReferralCode(o.ref) ? o.ref : promised;
   // The code is used up by this sign-up, whatever comes of it.
   if (readCookie(c.req, REF_COOKIE)) c.cookies.push(cookie(REF_COOKIE, '', 0, c.secure));
   const inviter = accountOfCode(code);
@@ -166,8 +204,10 @@ export function noteSignup(c: Ctx, user: { id: string; email: string }, accountI
   const at = now();
   const r = referralSettings();
   const counts = rewardedCounts(inviter.id);
+  // A link at its limit promises nothing, so a sign-up through it is no invite. The one exception is a browser that
+  // was shown the promise while the link was open (the sealed cookie): that friend is kept, and rewardOne decides.
   const why: ReferralRefusal | null = inviter.suspended_at || inviter.closing_at ? 'inviter_closed'
-    : counts.total >= r.total_max ? 'total_limit'
+    : !linkOpen(inviter) && promised !== code ? (counts.total >= r.total_max ? 'total_limit' : 'monthly_limit')
     : o.welcomedBefore || get("SELECT 1 x FROM referrals WHERE friend_mark=? AND status IN ('rewarded','taken_back')", friendMark(user.email)) ? 'welcomed_before'
     : whyNot(inviter, { userId: user.id, accountId, email: user.email, at });
   const made = run('INSERT OR IGNORE INTO referrals (id, inviter_account_id, friend_user_id, friend_account_id, friend_mark, status, reason, at, decided_at) VALUES (?,?,?,?,?,?,?,?,?)',
@@ -182,11 +222,34 @@ const sigs = (n: number) => `${n} signature${n === 1 ? '' : 's'}`;
 const logLine = (accountId: string, what: string, ref: string, detail: string) =>
   run('INSERT INTO billing_log (account_id, at, what, ref, detail) VALUES (?,?,?,?,?)', accountId, now(), what, ref, detail);
 
-/** Whether the friend's account is real yet: a confirmed address, a phone number, and a signature that counted. */
+/**
+ * Whether somebody else has signed a document the friend sent. "Somebody else" for the reward is stricter than for
+ * paying: not an address of the friend's own account (a document sent to yourself under another name), not an
+ * address of the inviting account (the inviter signing their "friend's" document), not from an internet address the
+ * inviting account is used from, and not in person on the friend's own device.
+ */
+function signedBySomeoneElse(row: any): boolean {
+  const members = (accountId: string) => all('SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.account_id=?', accountId).map((u) => normalEmail(u.email));
+  const own = new Set([...members(row.friend_account_id), ...members(row.inviter_account_id)]);
+  const theirIps = new Set(all("SELECT DISTINCT ip FROM referral_devices WHERE account_id=? AND ip != ''", row.inviter_account_id).map((d) => d.ip));
+  // The ledger line of a signature is named "<recipient id>|<address>|..." (sigRef in credits.ts).
+  for (const line of all("SELECT ref FROM credits WHERE account_id=? AND reason='signature' ORDER BY id LIMIT 200", row.friend_account_id)) {
+    const [recipientId, email] = String(line.ref).split('|');
+    if (own.has(normalEmail(email))) continue;
+    const rcp = get('SELECT role, email, ip FROM recipients WHERE id=?', recipientId);
+    if (rcp && (rcp.role === 'inperson' || own.has(normalEmail(rcp.email)) || (ipMark(String(rcp.ip || '')) && theirIps.has(ipMark(String(rcp.ip)))))) continue;
+    return true;
+  }
+  return false;
+}
+/**
+ * Whether the friend's account is real yet: a confirmed address, a phone number (confirmed by a code where this
+ * server sends text messages, so a made-up number is not enough), and a signature by somebody else.
+ */
 function friendReady(row: any): { user: any; ready: boolean } {
   const user = get('SELECT * FROM users WHERE id=?', row.friend_user_id);
-  const signed = !!get("SELECT 1 x FROM credits WHERE account_id=? AND reason='signature' LIMIT 1", row.friend_account_id);
-  return { user, ready: !!user && !!user.email_verified && (!!phoneKey(user) || !phoneAsked()) && signed };
+  const phoneOk = !phoneAsked() || (!!phoneKey(user) && (!smsProvider() || !!user?.phone_verified_at));
+  return { user, ready: !!user && !!user.email_verified && phoneOk && signedBySomeoneElse(row) };
 }
 
 /**
@@ -223,6 +286,9 @@ function rewardOne(referralId: string): { to: string | null; mail: any } | null 
   if (friendAccount.suspended_at) return refused('friend_closed'), null;
   if (!inviter || inviter.suspended_at || inviter.closing_at) return refused('inviter_closed'), null;
   if (!ready) return null;
+  // Nothing is known yet about where the inviting account is used from (it has not been opened for 90 days, or
+  // never since this was built): the reward waits until a person signs in to it, and is decided then.
+  if (!get('SELECT 1 x FROM referral_devices WHERE account_id=? LIMIT 1', inviter.id)) return null;
   // Decided again with what is known now: the phone number, and every browser and address noted since sign-up.
   const why = whyNot(inviter, { userId: user.id, accountId: friendAccount.id, email: user.email, at: row.at });
   if (why) return refused(why), null;
@@ -230,13 +296,19 @@ function rewardOne(referralId: string): { to: string | null; mail: any } | null 
   if (pm && get("SELECT 1 x FROM referrals WHERE phone_mark=? AND id != ? AND status IN ('rewarded','taken_back')", pm, row.id)) return refused('phone_used'), null;
   const r = referralSettings();
   const counts = rewardedCounts(inviter.id);
-  if (counts.total >= r.total_max) return refused('total_limit'), null;
-  // Over the limit of the month: the friend was promised theirs and gets it; the inviting account gets none for
-  // this friend, and the record says why.
-  const inviterGets = counts.month < r.monthly_max ? r.signatures : 0;
+  // At a limit, of the month or in all: the friend was promised theirs and gets it; the inviting account gets none
+  // for this friend, and the record says why. Friends rewarded this way have the same two limits of their own, so
+  // a link cannot hand out signatures without end.
+  const inviterGets = counts.total < r.total_max && counts.month < r.monthly_max ? r.signatures : 0;
+  if (!inviterGets) {
+    const only = get(`SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN decided_at >= ? THEN 1 ELSE 0 END), 0) month
+      FROM referrals WHERE inviter_account_id=? AND inviter_got = 0 AND friend_got > 0`, monthStart(), inviter.id);
+    if (Number(only?.total) >= r.total_max) return refused('total_limit'), null;
+    if (Number(only?.month) >= r.monthly_max) return refused('monthly_limit'), null;
+  }
   grant(friendAccount.id, r.signatures, 'referral', lotRef('friend', row.id), t);
   if (inviterGets) grant(inviter.id, inviterGets, 'referral', lotRef('invite', row.id), t);
-  run("UPDATE referrals SET status='rewarded', reason=?, decided_at=?, phone_mark=?, inviter_got=?, friend_got=? WHERE id=?", inviterGets ? '' : 'The inviting account had reached its limit of rewarded friends for the month.', t, pm, inviterGets, r.signatures, row.id);
+  run("UPDATE referrals SET status='rewarded', reason=?, decided_at=?, phone_mark=?, inviter_got=?, friend_got=? WHERE id=?", inviterGets ? '' : `The inviting account had reached its limit of rewarded friends ${counts.total >= r.total_max ? 'in all' : 'for the month'}, so only the friend was rewarded.`, t, pm, inviterGets, r.signatures, row.id);
   const until = expiryMoment(new Date(Date.parse(t) + r.expiry_days * DAY).toISOString());
   logLine(friendAccount.id, 'referral', row.id, `${sigs(r.signatures)} added for joining through a friend's invite link. They expire on ${until}.`);
   if (!inviterGets) return { to: null, mail: null };
@@ -249,7 +321,7 @@ function rewardOne(referralId: string): { to: string | null; mail: any } | null 
     to: owner.email, subject: `Your friend signed their first document: ${sigs(inviterGets)} for you`, heading: 'Your invite worked',
     lines: [
       `Your friend signed their first document. You both got ${r.signatures} free signatures.`,
-      `Yours are on the Plan page of ${inviter.name} now. Use them by ${until}: after that, unused ones expire. Each one plants ${PRICING.treesPerSignature} trees when it is signed.`,
+      `They are in your account now and last until ${until}. Each one plants ${PRICING.treesPerSignature} trees.`,
       left > 0 ? `You can invite ${left === 1 ? 'one more friend' : `${left} more friends`} this month with the same link.` : 'That was the last friend your link is rewarded for this month.',
     ],
     cta: { label: 'See your signatures', url: `${baseUrl()}/app/settings?tab=billing#invite` },
@@ -346,7 +418,7 @@ export function referralRecord(limit = 200, accountId?: string) {
 
 // ---- The timer --------------------------------------------------------------------------------------------------------------------
 
-/** On the timer: rewards that are due, and fingerprints of browsers and addresses older than DEVICE_KEEP_DAYS go. */
+/** On the timer: rewards that are due, and fingerprints of browsers and addresses not seen for DEVICE_KEEP_DAYS go. */
 export async function referralsTick(): Promise<{ rewarded: number; forgotten: number }> {
   const forgotten = Number(run('DELETE FROM referral_devices WHERE at < ?', new Date(Date.now() - DEVICE_KEEP_DAYS * DAY).toISOString()).changes) || 0;
   return { rewarded: await settleReferrals(), forgotten };
@@ -364,5 +436,5 @@ export function inviteSentence(accountId: string, withLink = false): string {
   const n = referralSettings().signatures;
   return withLink
     ? `Or invite a friend: when their first document is signed, you both get ${n} free signatures. Your invite link: ${inviteUrl(codeOf(accountId))}`
-    : `Or invite a friend from the Plan page: you both get ${n} free signatures after their first signed document.`;
+    : `Or invite a friend from the Plan page and you both get ${n} free signatures.`;
 }

@@ -7,6 +7,7 @@
 // One box, one button: it is meant to take ten seconds.
 import { useState } from 'react';
 import { api, toast } from './ui';
+import { Logo } from './Brand';
 import { PhoneField, usePhone, phoneBody, phoneProblem } from './PhoneField';
 import { SOURCE_LOCALE, t } from '@/lib/i18n';
 
@@ -17,10 +18,11 @@ export function PhoneForm({ me, button, onSaved, autoFocus = false, why = true }
   const [phone, setPhone] = usePhone();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const wrong = phoneProblem(phone);
-    if (wrong) return setError(wrong);
+    // What is wrong with the number is said once, under its box, and the keyboard goes back there.
+    if (phoneProblem(phone)) return (setError(''), setShow(true), (e.currentTarget as HTMLFormElement).querySelector<HTMLInputElement>('input[type=tel]')?.focus());
     setBusy(true);
     setError('');
     try {
@@ -33,7 +35,7 @@ export function PhoneForm({ me, button, onSaved, autoFocus = false, why = true }
   }
   return (
     <form onSubmit={submit} noValidate data-user={me?.user?.id || ''}>
-      <PhoneField T={say} value={phone} onChange={setPhone} autoFocus={autoFocus} why={why} />
+      <PhoneField T={say} value={phone} onChange={(v) => (setError(''), setPhone(v))} autoFocus={autoFocus} why={why} show={show} />
       {error && <div className="notice err" role="alert" style={{ marginBottom: 12 }}>{error}</div>}
       <button className="btn primary" disabled={busy} style={{ minHeight: 44 }}>{button}</button>
     </form>
@@ -73,6 +75,8 @@ export function PhoneRequired({ me, onDone, onClose }: { me: any; onDone: () => 
   };
   return (
     <main className="authbox phone-need" style={{ maxWidth: 480 }}>
+      {/* Who is asking: the same logo as on the sign-up page, so nobody meets a bare card that wants a phone number. */}
+      <div className="logo" style={{ marginBottom: 20 }}><Logo height={26} /></div>
       <div className="card">
         <h1 className="serif" style={{ fontSize: 24, marginBottom: 6 }}>{say('phone.title')}</h1>
         <p style={{ marginBottom: 14 }}>{say(onClose ? 'phone.body_send' : ask === 'now' ? 'phone.body_new' : 'phone.body_old')}</p>
@@ -82,7 +86,6 @@ export function PhoneRequired({ me, onDone, onClose }: { me: any; onDone: () => 
             : ask === 'may_wait' ? <button type="button" className="btn" style={{ minHeight: 44 }} disabled={busy} onClick={later}>{say('phone.later')}</button>
             : <button type="button" className="btn" style={{ minHeight: 44 }} onClick={() => api('/auth/logout', { method: 'POST' }).then(() => window.location.assign('/login'))}>{say('phone.sign_out')}</button>}
         </div>
-        {!onClose && ask === 'may_wait' && <p className="small muted" style={{ margin: '10px 0 0' }}>{say('phone.later_note')}</p>}
       </div>
     </main>
   );

@@ -8,12 +8,34 @@ import { normalPhone } from './checks.ts';
 
 // ---- Email -------------------------------------------------------------------------------------------
 
-/** Whether the part before the @ has a "+" in it ("ann+work@example.com"). */
-export const plusInEmail = (email: unknown): boolean => {
+// A plus sign, and the signs that look like one or stand for one: the full-width and the small plus, and "%2B",
+// which is how a + is written inside a web address.
+const PLUS = /[+\uFF0B\uFE62]|%2b/i;
+const localPart = (email: unknown): string => {
   const s = String(email ?? '').trim();
   const at = s.lastIndexOf('@');
-  return (at < 0 ? s : s.slice(0, at)).includes('+');
+  return at < 0 ? s : s.slice(0, at);
 };
+/** Whether the part before the @ has a "+" in it ("ann+work@example.com"), or a sign that looks like one. */
+export const plusInEmail = (email: unknown): boolean => PLUS.test(localPart(email));
+/** The address without its + part ("ann+work@example.com" gives "ann@example.com"), offered as one tap under the box. '' when that leaves nothing usable. */
+export const withoutPlus = (email: unknown): string => {
+  const s = String(email ?? '').trim();
+  const at = s.lastIndexOf('@');
+  const local = at < 0 ? '' : s.slice(0, at).split(PLUS)[0];
+  return local && at < s.length - 3 && s.slice(at + 1).includes('.') ? `${local}${s.slice(at)}` : '';
+};
+/**
+ * Other spellings that would let one mailbox have two accounts, or that only a machine would type: quotes around the
+ * part before the @, and a dot at the very end ("ann@example.com."). Refused for a new account, in one kind sentence.
+ */
+export const oddEmail = (email: unknown): boolean => {
+  const s = String(email ?? '').trim();
+  return /["']/.test(localPart(s)) || /\.$/.test(s);
+};
+export const ODD_EMAIL_REFUSAL = 'Please type your email address the usual way, without quotes and without a dot at the end.';
+/** Said when someone accepts an invitation that was sent, before this rule, to an address with a + in it. */
+export const PLUS_INVITED_REFUSAL = 'This invitation was sent to an address with a + in it, and a new account cannot be made with one. Please ask the person who invited you to invite you again at your address without the + part.';
 
 /** Said on the page the moment a + is typed, and by the server whichever way the account is made. */
 export const PLUS_REFUSAL = 'Please use your email address without the + part.';
@@ -32,8 +54,9 @@ export function mailboxKey(email: unknown): string {
   const s = String(email ?? '').trim().toLowerCase();
   const at = s.lastIndexOf('@');
   if (at < 1) return s;
-  let local = s.slice(0, at).split('+')[0];
-  let domain = s.slice(at + 1);
+  // Quotes around the part before the @ and a dot at the end of the address are other spellings of the same mailbox.
+  let local = s.slice(0, at).replace(/["']/g, '').split(PLUS)[0];
+  let domain = s.slice(at + 1).replace(/\.+$/, '');
   if (domain === 'googlemail.com') domain = 'gmail.com';
   if (domain === 'gmail.com') local = local.replace(/\./g, '');
   return `${local}@${domain}`;
@@ -45,6 +68,8 @@ export function mailboxKey(email: unknown): string {
 export const PHONE_WHY = 'We ask for your number to keep accounts real and to reach you about your account. It is never shared and never used for marketing calls or texts.';
 /** Said when another account already has the number. */
 export const PHONE_TAKEN = 'This number is already used by another account.';
+/** What to do about it, said right after: the person may be the number's real owner. */
+export const phoneTakenHelp = (supportEmail?: string | null) => `If this is your number, ${supportEmail ? `write to us at ${supportEmail}` : 'write to us through Help'} and we will sort it out.`;
 /** Said to someone who has to give a number before they send. */
 export const PHONE_BEFORE_SEND = 'Add your phone number before you send.';
 
@@ -55,8 +80,8 @@ const TABLE =
   'BS:1:10:10 BH:973:8:8 BD:880:8:10 BB:1:10:10 BY:375:9:9 BE:32:8:9 BZ:501:7:7 BJ:229:8:10 BM:1:10:10 BT:975:7:8 BO:591:8:8 BA:387:8:9 BW:267:7:8 BR:55:10:11 VG:1:10:10 BN:673:7:7 BG:359:8:9 BF:226:8:8 BI:257:8:8 ' +
   'KH:855:8:9 CM:237:9:9 CA:1:10:10 CV:238:7:7 KY:1:10:10 CF:236:8:8 TD:235:8:8 CL:56:9:9 CN:86:10:11 CO:57:8:10 KM:269:7:7 CG:242:9:9 CD:243:9:9 CK:682:5:5 CR:506:8:8 CI:225:8:10 HR:385:8:9 CU:53:8:8 CW:599:7:8 CY:357:8:8 CZ:420:9:9 ' +
   'DK:45:8:8 DJ:253:8:8 DM:1:10:10 DO:1:10:10 EC:593:8:9 EG:20:9:10 SV:503:8:8 GQ:240:9:9 ER:291:7:7 EE:372:7:8 SZ:268:8:8 ET:251:9:9 FK:500:5:5 FO:298:6:6 FJ:679:7:7 FI:358:5:12 FR:33:9:9 GF:594:9:9 PF:689:6:8 ' +
-  'GA:241:7:8 GM:220:7:7 GE:995:9:9 DE:49:6:12 GH:233:9:9 GI:350:8:8 GR:30:10:10 GL:299:6:6 GD:1:10:10 GP:590:9:9 GU:1:10:10 GT:502:8:8 GN:224:9:9 GW:245:7:9 GY:592:7:7 HT:509:8:8 HN:504:8:8 HK:852:8:8 HU:36:8:9 ' +
-  'IS:354:7:9 IN:91:10:10 ID:62:8:12 IR:98:10:10 IQ:964:9:10 IE:353:7:9 IL:972:8:9 IT:39:6:11 JM:1:10:10 JP:81:9:10 JO:962:8:9 KZ:7:10:10 KE:254:7:9 KI:686:5:8 XK:383:8:8 KW:965:8:8 KG:996:9:9 ' +
+  'GA:241:7:8 GM:220:7:7 GE:995:9:9 DE:49:6:12 GH:233:9:9 GI:350:8:8 GR:30:10:10 GL:299:6:6 GD:1:10:10 GP:590:9:9 GU:1:10:10 GT:502:8:8 GG:44:10:10 GN:224:9:9 GW:245:7:9 GY:592:7:7 HT:509:8:8 HN:504:8:8 HK:852:8:8 HU:36:8:9 ' +
+  'IS:354:7:9 IN:91:10:10 ID:62:8:12 IR:98:10:10 IQ:964:9:10 IE:353:7:9 IM:44:10:10 IL:972:8:9 IT:39:6:11 JM:1:10:10 JP:81:9:10 JE:44:10:10 JO:962:8:9 KZ:7:10:10 KE:254:7:9 KI:686:5:8 XK:383:8:8 KW:965:8:8 KG:996:9:9 ' +
   'LA:856:8:10 LV:371:8:8 LB:961:7:8 LS:266:8:8 LR:231:7:9 LY:218:9:9 LI:423:7:9 LT:370:8:8 LU:352:6:11 MO:853:8:8 MG:261:9:9 MW:265:7:9 MY:60:8:10 MV:960:7:7 ML:223:8:8 MT:356:8:8 MH:692:7:7 MQ:596:9:9 MR:222:8:8 MU:230:7:8 MX:52:10:10 ' +
   'FM:691:7:7 MD:373:8:8 MC:377:8:9 MN:976:8:8 ME:382:8:8 MS:1:10:10 MA:212:9:9 MZ:258:8:9 MM:95:7:10 NA:264:8:9 NR:674:7:7 NP:977:8:10 NL:31:9:9 NC:687:6:6 NZ:64:8:10 NI:505:8:8 NE:227:8:8 NG:234:7:10 MK:389:8:8 NO:47:8:8 ' +
   'OM:968:8:8 PK:92:9:10 PW:680:7:7 PS:970:8:9 PA:507:7:8 PG:675:7:8 PY:595:9:9 PE:51:8:9 PH:63:8:10 PL:48:9:9 PT:351:9:9 PR:1:10:10 QA:974:8:8 RE:262:9:9 RO:40:9:9 RU:7:10:10 RW:250:9:9 KN:1:10:10 LC:1:10:10 VC:1:10:10 ' +
@@ -77,6 +102,8 @@ export const phoneCountry = (iso: unknown): PhoneCountry | null => BY_ISO.get(St
 const NANP = /^[2-9]\d{2}[2-9]\d{6}$/;
 const SHAPE: Record<string, RegExp> = {
   GB: /^[1-37-9]\d{8,9}$/,
+  // Jersey, Guernsey and the Isle of Man: United Kingdom numbers with their own area codes and mobile ranges.
+  JE: /^(1534|7\d{3})\d{6}$/, GG: /^(1481|7\d{3})\d{6}$/, IM: /^(1624|7\d{3})\d{6}$/,
   DE: /^[1-9]\d{5,11}$/,
   FR: /^[1-9]\d{8}$/,
   ES: /^[6-9]\d{8}$/,
@@ -101,13 +128,23 @@ export const PHONE_EXAMPLES: Record<string, string> = {
 export type PhoneProblem = 'empty' | 'letters' | 'country' | 'short' | 'long' | 'shape' | 'fake' | 'premium';
 export type PhoneResult = { ok: true; e164: string; iso: string } | { ok: false; why: PhoneProblem; iso: string | null };
 
+// The country a shared calling code is read for when nobody chose one of the others.
+const MAIN = new Set(['US', 'RU', 'GB']);
 /** The countries that share a calling code, the one asked for first. */
 function withDial(digits: string, prefer?: string | null): PhoneCountry[] {
   for (const n of [3, 2, 1]) {
     const hit = PHONE_COUNTRIES.filter((c) => c.dial === digits.slice(0, n));
-    if (hit.length) return hit.sort((a, b) => Number(b.iso === prefer) - Number(a.iso === prefer) || Number(b.iso === 'US' || b.iso === 'RU') - Number(a.iso === 'US' || a.iso === 'RU'));
+    if (hit.length) return hit.sort((a, b) => Number(b.iso === prefer) - Number(a.iso === prefer) || Number(MAIN.has(b.iso)) - Number(MAIN.has(a.iso)));
   }
   return [];
+}
+
+// Two habits from home that do not belong in the international form: in Argentina a mobile is written with 15 after
+// the area code ("011 15 1234 5678"), and Mexican mobiles used to carry a 1 after +52.
+function homeHabit(c: PhoneCountry, national: string, international: boolean): string {
+  if (c.iso === 'MX' && international && national.length === 11 && national.startsWith('1')) return national.slice(1);
+  if (c.iso === 'AR' && !international && national.length === 12) for (const area of [2, 3, 4]) if (national.slice(area, area + 2) === '15') return national.slice(0, area) + national.slice(area + 2);
+  return national;
 }
 
 function fits(c: PhoneCountry, national: string): PhoneProblem | null {
@@ -126,7 +163,8 @@ function fits(c: PhoneCountry, national: string): PhoneProblem | null {
  */
 export function parsePhone(typed: unknown, iso?: unknown): PhoneResult {
   const chosen = phoneCountry(iso);
-  let s = String(typed ?? '').trim().replace(/\(0\)/g, '').replace(/[\s().\- ‐-―/]/g, '');
+  // Digits as they are written in Arabic and Persian read as 0 to 9.
+  let s = String(typed ?? '').trim().replace(/[\u0660-\u0669\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) & 15)).replace(/\(0\)/g, '').replace(/[\s().\- ‐-―/]/g, '');
   if (!s) return { ok: false, why: 'empty', iso: chosen?.iso || null };
   if (s.startsWith('00')) s = `+${s.slice(2)}`;
   const international = s.startsWith('+');
@@ -146,6 +184,7 @@ export function parsePhone(typed: unknown, iso?: unknown): PhoneResult {
       let national = digits.slice(c.dial.length);
       // "+44 (0)7400..." written without the brackets: the 0 does not belong there.
       if (!KEEPS_ZERO.has(c.iso) && national.startsWith('0')) national = national.slice(1);
+      national = homeHabit(c, national, true);
       const no = fits(c, national);
       if (!no) return done(c, national);
       first ??= no;
@@ -160,7 +199,7 @@ export function parsePhone(typed: unknown, iso?: unknown): PhoneResult {
   if (digits.startsWith(chosen.dial) && digits.length > chosen.dial.length) tries.push(digits.slice(chosen.dial.length).replace(KEEPS_ZERO.has(chosen.iso) ? /^$/ : /^0/, ''));
   if (chosen.dial === '7' && digits.length === 11 && digits.startsWith('8')) tries.push(digits.slice(1));
   let first: PhoneProblem | null = null;
-  for (const national of tries) {
+  for (const national of tries.map((n) => homeHabit(chosen, n, false))) {
     const no = fits(chosen, national);
     if (!no) return done(chosen, national);
     first ??= no;
@@ -181,7 +220,7 @@ export function countryName(iso: string, locale = 'en'): string {
 export function phoneProblemText(why: PhoneProblem, iso?: string | null, locale = 'en'): string {
   const c = phoneCountry(iso);
   const where = c ? countryName(c.iso, locale) : '';
-  const example = c && PHONE_EXAMPLES[c.iso] ? ` For example ${PHONE_EXAMPLES[c.iso]}.` : '';
+  const example = c && PHONE_EXAMPLES[c.iso] ? ` Example: ${PHONE_EXAMPLES[c.iso]}.` : '';
   switch (why) {
     case 'empty':
       return 'Please type your phone number.';
@@ -190,13 +229,13 @@ export function phoneProblemText(why: PhoneProblem, iso?: string | null, locale 
     case 'country':
       return 'Please choose your country, or start the number with + and your country code.';
     case 'short':
-      return `That number is too short for ${where || 'this country'}. Please check it.${example}`;
+      return `Too short for the country chosen${where ? ` (${where})` : ''}. Is the country right?${example}`;
     case 'long':
-      return `That number is too long for ${where || 'this country'}. Please check it.${example}`;
+      return `Too long for the country chosen${where ? ` (${where})` : ''}. Is the country right?${example}`;
     case 'fake':
-      return 'That does not look like a real phone number. Please type your own.';
+      return 'Please check the number. It does not look complete.';
     case 'premium':
-      return 'That is a premium-rate or special network number. Please type your own mobile or landline number.';
+      return 'Please use your normal mobile or home number. This one is a paid service number.';
     default:
       return `That does not look like a phone number in ${where || 'this country'}. Please check it.${example}`;
   }
@@ -224,9 +263,15 @@ export function guessCountry(languages: readonly string[] | string | null | unde
   return (list[0] && region(list[0], true)) || 'US';
 }
 
-/** "+44 7400 123456" for a screen: the calling code, a space, the rest. Only for the person the number belongs to and for operators. */
+/** "+44 7400 123 456" for a screen: the calling code, then the number in groups. Only for the person the number belongs to and for operators. */
 export function showPhone(e164: unknown): string {
   const s = String(e164 ?? '');
   const c = withDial(s.replace(/^\+/, ''))[0];
-  return c && s.startsWith('+') ? `+${c.dial} ${s.slice(1 + c.dial.length)}` : s;
+  if (!c || !s.startsWith('+')) return s;
+  // In groups, so it can be checked at a glance: 3 3 4 in North America, elsewhere threes with the odd digits first.
+  const n = s.slice(1 + c.dial.length);
+  const first = c.dial === '1' ? 3 : n.length % 3 === 1 ? 4 : n.length % 3 || 3;
+  const rest = n.slice(first);
+  const groups = c.dial === '1' ? [rest.slice(0, 3), rest.slice(3)] : rest.match(/\d{1,3}/g) || [];
+  return [`+${c.dial}`, n.slice(0, first), ...groups].filter(Boolean).join(' ');
 }

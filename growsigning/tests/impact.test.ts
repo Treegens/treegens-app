@@ -86,20 +86,20 @@ test('the words: 5 trees for every signature, the soft line only for one that pl
 
   const first = signerWords({ trees: 5, first: true, total: 5, sheets: 15 });
   // One tense: a signature "plants", trees "will be planted". Nothing says the planting has already happened.
-  assert.equal(first.title, 'Your signature plants 5 trees');
+  assert.equal(first.title, '5 trees will be planted for your signature');
   assert.equal(first.under, 'Mangroves, planted by Treegens. You also saved 15 pages of paper from a tree.', 'under the title: the kind of tree and who plants it, then the paper');
-  assert.equal(first.line, 'Your signature plants 5 trees. You saved 15 pages of paper from a tree.', 'the small card that stays after Close');
+  assert.equal(first.line, '5 trees will be planted for your signature. You saved 15 pages of paper from a tree.', 'the small card that stays after Close');
   assert.equal(first.count, '', 'the running count says nothing this signature did not already say');
-  assert.equal(first.announce, 'Your signature plants 5 trees.', 'one sentence for a screen reader');
+  assert.equal(first.announce, '5 trees will be planted for your signature.', 'one sentence for a screen reader');
   assert.doesNotMatch(Object.values(first).join(' '), /\bplanted 5|just planted|have planted/, 'nothing is said to be planted already');
 
   const later = signerWords({ trees: 5, first: false, total: 20, sheets: 1 });
-  assert.equal(later.line, 'Your signature plants 5 more trees. You saved 1 page of paper from a tree.');
+  assert.equal(later.line, '5 more trees will be planted for your signature. You saved 1 page of paper from a tree.');
   assert.equal(later.count, 'Your signatures on GrowSigning plant 20 trees so far.');
   // "More" needs something before it: a first signature that plants, after one that planted none, is not "5 more".
   const afterNone = signerWords({ trees: 5, first: false, total: 5, sheets: 2 });
-  assert.equal(afterNone.line, 'Your signature plants 5 trees. You saved 2 pages of paper from a tree.');
-  assert.equal(afterNone.title, 'Your signature plants 5 trees');
+  assert.equal(afterNone.line, '5 trees will be planted for your signature. You saved 2 pages of paper from a tree.');
+  assert.equal(afterNone.title, '5 trees will be planted for your signature');
   assert.doesNotMatch(Object.values(afterNone).join(' '), /more/);
 
   // A signature that plants none: a sender signing their own document, or a server without plans.
@@ -121,7 +121,7 @@ test('the words: 5 trees for every signature, the soft line only for one that pl
   assert.equal(own.saving, 'Paper saved: 15 pages.', 'short: the envelope page is read on every send');
   assert.equal(own.saved, 'This saved 15 pages of paper from a tree.');
   assert.equal(senderWords({ counted: 0, signers: 1, planted: 0, sheets: 1 }).saving, 'Paper saved: 1 page.');
-  assert.equal(reviewPlus(true), 'Plus: 5 trees are planted for each person who signs.');
+  assert.equal(reviewPlus(true), '5 trees are planted for each person who signs.');
   assert.equal(reviewPlus(false), '');
 
   const withTrees = recordLines({ sheets: 15, litresWater: 150, trees: 10, site: 'https://sign.example' });
@@ -234,7 +234,7 @@ test('a plan signature: the line by Finish and in the email for the signer only,
   // 3 pages for 4 people: 12 sheets. The first time: the picture, once.
   const first = (await sees(eid, 'ada@signers.example')).done;
   assert.deepEqual(first, { trees: 5, first: true, celebrate: true, total: 5, sheets: 12 });
-  assert.equal(signerWords(first).title, 'Your signature plants 5 trees');
+  assert.equal(signerWords(first).title, '5 trees will be planted for your signature');
   await new Client().post(`/sign/${tokenFor(eid, 'ada@signers.example')}/impact/seen`);
   assert.equal((await sees(eid, 'ada@signers.example')).done.celebrate, false);
 
@@ -246,7 +246,7 @@ test('a plan signature: the line by Finish and in the email for the signer only,
   assert.equal((await signAll(e2, 'ADA@signers.example')).status, 200);
   const later = (await sees(e2, 'ADA@signers.example')).done;
   assert.deepEqual(later, { trees: 5, first: false, celebrate: false, total: 10, sheets: 1 });
-  assert.equal(signerWords(later).line, 'Your signature plants 5 more trees. You saved 1 page of paper from a tree.');
+  assert.equal(signerWords(later).line, '5 more trees will be planted for your signature. You saved 1 page of paper from a tree.');
   assert.equal(signerWords(later).count, 'Your signatures on GrowSigning plant 10 trees so far.');
 
   // What is kept: no address, only a keyed hash.
@@ -295,6 +295,9 @@ test('the first time is by address: an earlier signature from before the count, 
 test('a signature keeps its 5 trees when a payment goes back; one from before the change still follows its payment, as promised then', async () => {
   const p = await person('Refund');
   await subscribe(p);
+  // Repair of 23 November 2026: money paid before the change keeps its old promise in the account's total (10 for
+  // every dollar, used or not), so this payment is dated before the change, as Rolf's signature is below.
+  db.run('UPDATE payments SET at=? WHERE account_id=?', new Date(Date.parse(TREES_5_FROM) - 2 * 864e5).toISOString(), p.id);
   const eid = await send(p, 'rita@signers.example');
   assert.equal((await signAll(eid, 'rita@signers.example')).status, 200);
   const old = await send(p, 'rolf@signers.example');
@@ -303,7 +306,9 @@ test('a signature keeps its 5 trees when a payment goes back; one from before th
   const before = new Date(Date.parse(TREES_5_FROM) - 864e5).toISOString();
   db.run('UPDATE impact_signed SET trees=10, at=? WHERE envelope_id=?', before, old);
   assert.equal((await sees(eid, 'rita@signers.example')).done.total, 5);
-  assert.equal(impact.treesOfAccount(p.id), 15);
+  // The 9 dollars paid before the change: 90, as the Plan page said then. Both signatures were bought with that
+  // money, so neither is added a second time.
+  assert.equal(impact.treesOfAccount(p.id), 90);
   const ch = stripe.refundByHand(`ch_ini_${p.k}_1`, 900);
   await event('charge.refunded', { ...ch, id: `ch_ini_${p.k}_1` });
   // The signature happened: its 5 trees stay. The old promise was about the payment, so it goes with the payment.
@@ -444,7 +449,8 @@ test('"Trees on the signing record": on by default, only admins switch it, and o
 // ---- Totals, and the claims on the pages ------------------------------------------------------------------------
 
 test('totals are hidden until they mean something, and no share of a tree is shown anywhere', () => {
-  assert.deepEqual(TOTALS_FROM, { sheets: 1000, treesPlanted: 10 });
+  // treesPublic (repair of 23 November 2026): the public total waits for 100 trees and for money to have been paid.
+  assert.deepEqual(TOTALS_FROM, { sheets: 1000, treesPlanted: 10, treesPublic: 100 });
   assert.equal(totalWorthShowing(999), false);
   assert.equal(totalWorthShowing(1000), true);
   const view = read('src/components/ImpactView.tsx');
@@ -483,11 +489,11 @@ test('green claims: nothing generic, no carbon figure or claim anywhere, estimat
   for (const f of ['src/components/impact/SignerTrees.tsx', 'src/components/impact/SenderTrees.tsx']) assert.doesNotMatch(read(f), /@\/server|paidSignatureFor/, f);
   // The signing page: the line on the first screen (since the 5 trees rule), one line by Finish in each bar, and the card on the finished screen.
   const page = read('src/app/sign/[token]/page.tsx');
-  assert.equal((page.match(/<TreeLine base=\{base\} show=\{acts && !hasNext\} \/>/g) || []).length, 2, 'the toolbar and the phone bar');
+  assert.equal((page.match(/<TreeLine trees=\{env\.plants\} show=\{acts && !hasNext\} \/>/g) || []).length, 2, 'the toolbar and the phone bar');
   assert.match(page, /<span className="sg-wide"><TreeLine /, 'the toolbar line is hidden where the phone bar shows its own');
   assert.equal((page.match(/<SignerDone /g) || []).length, 1);
   const consent = page.slice(page.indexOf("if (stage === 'consent')"), page.indexOf("if (stage === 'done')") > page.indexOf("if (stage === 'consent')") ? page.indexOf("if (stage === 'done')") : undefined);
-  assert.equal((consent.match(/<OpenTrees base=\{base\}/g) || []).length, 1, 'the first screen says it once, through ConsentTop');
+  assert.equal((consent.match(/<OpenTreesLine trees=\{env\.plants\}/g) || []).length, 1, 'the first screen says it once, through ConsentTop');
   assert.doesNotMatch(consent.split('// ---- The document')[0], /<TreeLine|<SignerDone/);
   // The picture: decoration to a screen reader, still under "reduce motion", and nothing faster than a slow rise.
   const css = read('src/app/styles/impact.css');
@@ -590,7 +596,7 @@ test('a first signature that plants, after one that planted none: never "5 more"
   const d = (await sees(e2, mona.email)).done;
   assert.deepEqual(d, { trees: 5, first: false, celebrate: true, total: 5, sheets: 1 });
   const w = signerWords(d);
-  assert.equal(w.title, 'Your signature plants 5 trees');
+  assert.equal(w.title, '5 trees will be planted for your signature');
   assert.doesNotMatch(`${w.line} ${w.count}`, /more/, 'none came before, so none are "more"');
   await new Client().post(`/sign/${tokenFor(e2, mona.email)}/impact/seen`);
   assert.equal((await sees(e2, mona.email)).done.celebrate, false, 'once');
@@ -601,7 +607,7 @@ test('a first signature that plants, after one that planted none: never "5 more"
   assert.equal((await signAll(e3, mona.email)).status, 200);
   const third = (await sees(e3, mona.email)).done;
   assert.deepEqual([third.celebrate, third.total], [false, 10]);
-  assert.equal(signerWords(third).line, 'Your signature plants 5 more trees. You saved 1 page of paper from a tree.');
+  assert.equal(signerWords(third).line, '5 more trees will be planted for your signature. You saved 1 page of paper from a tree.');
 });
 
 test('"Every signature" is said to a sender only when every person who signs counts: not when the sender signs too', async () => {

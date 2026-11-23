@@ -233,8 +233,8 @@ export default function Help() {
           <QA id="phone-number" q="Why do you ask for my phone number, and why can my email not have a + in it?">
             <p><b>The phone number.</b> {PHONE_WHY} You give it once: on the sign-up form, or on a short screen called <b>One more thing</b> if you signed up with Google or Microsoft or made your account before we asked for it. Choose your country and type the number as you write it at home. We do not text or call you to check it.</p>
             <p>An account made before we asked can say <b>Not now</b> once. Everything you have sent keeps working. We ask again before you send your next new document, and it takes about ten seconds.</p>
-            <p>One number belongs to one account. If it says <b>This number is already used by another account</b> and you share a phone with someone, <a href="#contact">write to us</a> and a person can allow it. You can see and change your number under Settings, Profile, with the button <b>Change email address</b>. Only you and the people who run GrowSigning can see it: nobody on your team can, and the people you send documents to cannot. It is in your own export and is deleted with your account.</p>
-            <p><b>The + in an email address.</b> A new account needs your email address without a + part, so <b>ann+work@example.com</b> signs up as <b>ann@example.com</b>. One mailbox gets one account. This is only about your own account: you can still send a document to someone whose address has a + in it.</p>
+            <p>One number belongs to one account. If it says <b>This number is already used by another account</b> and you share a phone with someone, <a href="#contact">write to us</a> and a person can allow it. You can see and change your number under Settings, Profile, with the button <b>Change email or phone</b>. Only you and the people who run GrowSigning can see it: nobody on your team can, and the people you send documents to cannot. It is in your own export and is deleted with your account.</p>
+            <p><b>The + in an email address.</b> A new account needs your email address without a + part: type <b>ann@example.com</b>, not <b>ann+work@example.com</b>. If you type the + part, the form offers the address without it in one tap. One mailbox gets one account. This is only about your own account: you can still send a document to someone whose address has a + in it.</p>
           </QA>
 
           <QA id="close" q="How do I close my account?">
@@ -255,7 +255,7 @@ export default function Help() {
           </QA>
 
           <QA id="share-link" q="Can I share a link instead of relying on the email?">
-            <p>Yes. A document that is out for signing can have a short address of its own, such as growsigning.com/garden-agreement, for a chat, a poster or a QR code: <b>Get a share link</b> right after sending, or <b>Share link</b> in More on the document&apos;s page. You can rename it or switch it off there.</p>
+            <p>Yes. A document that is out for signing can have a short address of its own, such as growsigning.com/garden-agreement, for a chat, a poster or a QR code: open <b>More</b> on the document&apos;s page and choose <b>Share link</b>. The link is there to copy, with its QR code, and you can rename it or switch it off.</p>
             <p>Whoever opens it sees the name of the document, your name and the names of the people whose turn it is, never an email address. They pick their name and type a 6-digit code that we email to the address you gave for them, so nobody can sign as someone else with the link. The emails we sent keep working. A public form has such an address from the start.</p>
           </QA>
           <QA id="not-received" q="The person says they never got the email">

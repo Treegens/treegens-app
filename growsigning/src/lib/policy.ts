@@ -470,6 +470,8 @@ export const SIGNER_CODES_PER_CALLER_HOUR = 100;
 /** How many one-time codes one sender's documents can send to one mailbox or one phone number in a day (a public form counts on its own). */
 export const SIGNER_CODES_PER_DESTINATION_DAY = 15;
 /** Share links (growsigning.com/<name>): how many names one internet address can open in a minute. */
+/** For how many days after a document closed its share link still prints the document's and the sender's name. */
+export const SHARE_CLOSED_NAMED_DAYS = 14;
 export const SHARE_LOOKUPS_PER_MINUTE = 30;
 /** Share links: how many codes one internet address can ask for in an hour, over every name and person. The limits of the code itself hold as well. */
 export const SHARE_CODE_ASKS_PER_HOUR = 10;

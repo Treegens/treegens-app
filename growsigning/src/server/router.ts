@@ -2,12 +2,14 @@ import { authenticate, renewedCookie, type Auth } from './auth.ts';
 import { HttpError, bad, setOrigin, id } from './util.ts';
 import { twoStepGate } from './twostep.ts';
 import { rulesGate } from './secpolicy.ts';
+import { phoneGate } from './signuprules.ts';
 import { keyUsedFrom } from './seclog.ts';
 import { heldAsMember } from './orgs.ts';
 import { assertEmbedRoute } from './embed.ts';
 import { routeAllowed } from './perm.ts';
 import { closedRoute, CLOSED_TEXT } from './billingmode.ts';
 import type { Actor } from './envelopes.ts';
+import { sessionUsed } from './sessionuse.ts';
 
 export type Ctx = {
   req: Request;
@@ -160,6 +162,8 @@ export async function handle(req: Request): Promise<Response> {
         twoStepGate(auth, `${r.method} ${r.path}`);
         // A member whose password is shorter than the account asks chooses a longer one first (secpolicy.ts).
         rulesGate(auth, `${r.method} ${r.path}`);
+        // A login made since the phone rule that has no number yet gives it first (signuprules.ts).
+        phoneGate(auth, `${r.method} ${r.path}`);
       }
       // Cookie sessions must come from our own pages. API keys are exempt.
       if (auth?.via === 'session' && req.method !== 'GET' && r.level !== 'public') {
@@ -183,6 +187,8 @@ export async function handle(req: Request): Promise<Response> {
           }
         },
       };
+      // A person signed in used the account: whoever asked to hear of it is told (Invite a friend notes the browser).
+      if (auth?.via === 'session') sessionUsed(c);
       const out = await r.fn(c);
       const res = out instanceof Response ? out : json(out ?? { ok: true });
       for (const ck of cookies) res.headers.append('set-cookie', ck);

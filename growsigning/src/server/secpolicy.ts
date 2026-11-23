@@ -90,7 +90,7 @@ function passwordShort(user: any, account: any): number | null {
 
 // While a member's password is shorter than the account asks, only what concerns their own login opens: choosing a
 // new password, the second step it may ask for, going to another workspace, leaving, where they are signed in.
-const OPEN_WHILE_SHORT = [/^POST \/me\/password$/, /^[A-Z]+ \/me\/two-step/, /^[A-Z]+ \/me\/idle/, /^POST \/auth\/switch$/, /^POST \/account\/leave$/, /^POST \/auth\/resend-verification$/, /^POST \/auth\/verify-code$/, /^[A-Z]+ \/me\/sessions/, /^POST \/me\/delete$/, /^GET \/me\/signin$/];
+const OPEN_WHILE_SHORT = [/^POST \/me\/password$/, /^POST \/me\/phone/, /^[A-Z]+ \/me\/two-step/, /^[A-Z]+ \/me\/idle/, /^POST \/auth\/switch$/, /^POST \/account\/leave$/, /^POST \/auth\/resend-verification$/, /^POST \/auth\/verify-code$/, /^[A-Z]+ \/me\/sessions/, /^POST \/me\/delete$/, /^GET \/me\/signin$/];
 /** Called by the router for every route that needs signing in, next to the two-step rule. */
 export function rulesGate(auth: Auth | null, what: string): void {
   if (auth?.via !== 'session' || auth.role === 'owner') return;

@@ -1,7 +1,7 @@
 // What the API description says about share links (src/server/routes-sharelinks.ts and sharelinks.ts). Kept apart so
 // the busy openapi.ts only needs one reference to it.
 import { SHARE_NAME_MIN, SHARE_NAME_MAX } from '../lib/sharename.ts';
-import { SHARE_LOOKUPS_PER_MINUTE, SHARE_CODE_ASKS_PER_HOUR, SHARE_CODE_TRIES_PER_TEN_MINUTES, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES } from '../lib/policy.ts';
+import { SHARE_LOOKUPS_PER_MINUTE, SHARE_CODE_ASKS_PER_HOUR, SHARE_CODE_TRIES_PER_TEN_MINUTES, SIGNER_CODE_MINUTES, SIGNER_CODE_TRIES, SHARE_CLOSED_NAMED_DAYS } from '../lib/policy.ts';
 
 const err = { description: 'Error', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } };
 const json = (schema: any) => ({ content: { 'application/json': { schema } } });
@@ -10,7 +10,7 @@ const s = { type: 'string' }, b = { type: 'boolean' }, n = { type: 'integer' };
 const idParam = { name: 'id', in: 'path', required: true, schema: s };
 const nameParam = { name: 'name', in: 'path', required: true, schema: s, description: 'The name in the address: small letters, digits and hyphens.' };
 
-const NAME_RULES = `A name is ${SHARE_NAME_MIN} to ${SHARE_NAME_MAX} small letters, digits and single hyphens, and holds at least one letter. What you send is tidied first: accents are taken off, capitals made small and spaces turned into hyphens. Refused with 422 "share_name": the address of a page of the site, the name of this service, "official" or "verified", a name made only of words such as "billing" and "support", and a name that reads as a well-known brand. A name another document or form has is refused with 409 "share_name_taken". Both carry "suggestion": a name that is free right now.`;
+const NAME_RULES = `A name is ${SHARE_NAME_MIN} to ${SHARE_NAME_MAX} small letters, digits and single hyphens, and holds at least one letter. What you send is tidied first: accents are taken off, capitals made small and spaces turned into hyphens. Refused with 422 "share_name": the address of a page the site has or may get, the name of this service or a look-alike of it, "official" or "verified", the name of another signing service, bank or mail service, a name made only of the words of a notice such as "billing", "support" and "account-suspended", and a name that reads as a well-known brand. A name another document or form has, or that another account ever had, is refused with 409 "share_name_taken". Both carry "suggestion": a name that is free right now, or null.`;
 
 /** The share link of an envelope or a form, as GET /envelopes/{id} and GET /powerforms carry it. */
 export const SHARE_LINK_PROP = {
@@ -30,7 +30,7 @@ export const sharelinksPaths = () => ({
     },
     put: {
       summary: 'Make, rename, switch off or switch on the share link of a document',
-      description: `An empty body makes the link under the suggested name. ${NAME_RULES} Renaming stops the old address: whoever opens it is told that the link was changed, and the old name stays kept for this same document, so nobody else can take it over. Only for a document that is out for signing (409 otherwise). When the document is completed, voided, declined or has run out, the address says so in a sentence and lets nobody in. Each change is a line in the document's history.`,
+      description: `An empty body makes the link under the suggested name. ${NAME_RULES} Renaming stops the old address: whoever opens it is told that the link was changed, and the old name stays kept for this same document, so nobody else can take it over. Only for a document that is out for signing (409 otherwise), except {"active": false}, which also switches off the link of a closed document. When the document is completed, voided, declined or has run out, the address says so in a sentence and lets nobody in. Each change is a line in the document's history.`,
       parameters: [idParam], requestBody: { required: true, ...json(change) }, responses: { 200: { description: 'The link as it now stands.', ...json(answer) }, default: err },
     },
   },
@@ -41,7 +41,7 @@ export const sharelinksPaths = () => ({
   '/public/share/{name}': {
     get: {
       summary: 'What the page at a share link shows',
-      description: `No sign-in. "state" is "open" (with "title", "sender", "people": a name and a key for each person whose turn it is, "later": how many sign after them, "plants": trees a signature here plants, 0 when nothing is said), "form" (with "slug" and "title": the public form at /f/{slug}), "off" or "renamed" (nothing else is said), "completed", "voided", "declined", "expired" or "paused" (with "title" and "sender", and nobody to pick), or "unavailable". A name nobody has, a name that is not written like one and the address of a page all answer 404 in the same words. Never an email address, an id or a signing link. At most ${SHARE_LOOKUPS_PER_MINUTE} lookups a minute from one internet address.`,
+      description: `No sign-in. "state" is "open" (with "title", "sender", "people": a name and a key for each person whose turn it is, "later": how many sign after them, "plants": trees a signature here plants, 0 when nothing is said), "form" (with "slug" and "title": the public form at /f/{slug}), "off" (also for a form that is switched off) or "renamed" (nothing else is said), "completed", "voided", "declined", "expired" or "paused" (nobody to pick; "title" and "sender" for ${SHARE_CLOSED_NAMED_DAYS} days after closing, null after that), or "unavailable". A name nobody has, a name that is not written like one and the address of a page all answer 404 in the same words. Never an email address, an id or a signing link. At most ${SHARE_LOOKUPS_PER_MINUTE} lookups a minute from one internet address.`,
       security: [], parameters: [nameParam],
       responses: { 200: { description: 'The page.', ...json(obj({ state: s, title: { ...s, nullable: true }, sender: { ...s, nullable: true }, people: { type: 'array', items: obj({ key: s, name: s }) }, later: n, plants: n, slug: s })) }, default: err },
     },

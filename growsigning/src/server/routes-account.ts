@@ -53,7 +53,7 @@ import { seal } from './colcrypt.ts';
 import { membersMayStamp } from './switches.ts';
 // No + in the address of a new login, one login per mailbox, and a phone number (signuprules.ts).
 import { refusePlus, newAddressOk, emailKeyOf, readPhone, phoneFree, savePhone, phoneState, phoneRequired, phoneBeforeSend } from './signuprules.ts';
-import { PLUS_INVITE_REFUSAL, plusInEmail } from '../lib/signup.ts';
+import { PLUS_INVITE_REFUSAL, PLUS_INVITED_REFUSAL, ODD_EMAIL_REFUSAL, plusInEmail, oddEmail } from '../lib/signup.ts';
 import './routes-signuprules.ts';
 
 // The role an invitation or a change gives (perm.ts): "admin", a role the team made (its id), and anything else
@@ -149,7 +149,9 @@ route('POST', '/auth/signup', async (c) => {
   const password = str(b.password, 200);
   if (!name) throw bad('Tell us your name.');
   if (!isEmail(email)) throw bad('Enter a valid email address.');
-  // No + in the address of a new login (signuprules.ts). Said before anything else about the address.
+  // No + in the address of a new login (signuprules.ts). Said before anything else about the address. Someone who
+  // holds an invitation that was sent to a + address before the rule is told what to do about it.
+  if (plusInEmail(email) && b.invite && get('SELECT 1 x FROM invites WHERE token=? AND accepted_at IS NULL AND lower(email)=?', str(b.invite, 200), email)) throw bad(PLUS_INVITED_REFUSAL, 400, { code: 'plus_in_email' });
   refusePlus(email);
   // An organisation that signs everyone at its domain in through its own service: the login is made there (orgsso.ts).
   signupAllowed(email);
@@ -618,6 +620,7 @@ route('POST', '/account/invites', async (c) => {
   // A new login cannot be made with a + in its address (signuprules.ts), so nobody is invited at one. Someone who
   // already has a login with exactly this address keeps it and can be invited as before.
   if (plusInEmail(email) && !get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(PLUS_INVITE_REFUSAL, 400, { code: 'plus_in_email' });
+  if (oddEmail(email) && !get('SELECT 1 x FROM users WHERE email=?', email)) throw bad(ODD_EMAIL_REFUSAL, 400, { code: 'odd_email' });
   // Nobody is invited into an account that is about to be deleted.
   if (c.account.closing_at) throw bad(closingText(c.account, 'Nobody can be invited to it now'), 403);
   // An account whose members come from its directory invites nobody by hand (scim.ts).
@@ -939,7 +942,10 @@ function globalImpact() {
   const t = get("SELECT COALESCE(SUM(sheets),0) sheets, COUNT(*) envelopes FROM envelopes WHERE kind='envelope' AND status='completed'");
   // Only money we know was paid to GrowSigning by one of its accounts counts: the monthly plan and top-ups.
   const pay = get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id IS NOT NULL AND kind IN ('plan','topup')");
-  // treesFunded: 5 for every finished signature, free ones included; older ones at what was promised then (impact.ts).
+  // treesFunded: the trees our signatures plant, not money already sent and not trees already in the ground: 5 for
+  // every finished signature, free ones included, and money paid before the change at what was promised then
+  // (treesOfEveryone in impact.ts). The name is the one callers already read. The pages show it only from
+  // TOTALS_FROM.treesPublic up and once donatedUsd is above 0 (publicTreesShown in src/lib/impact.ts).
   return { ...impactOf(t.sheets), envelopes: t.envelopes, donatedUsd: pay.cents / 100, treesFunded: treesOfEveryone() };
 }
 route('GET', '/public/impact', () => globalImpact(), 'public');

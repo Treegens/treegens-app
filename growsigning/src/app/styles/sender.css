@@ -242,7 +242,9 @@ table.sn-batch tr.cont td { border-bottom: 0; padding-bottom: 2px; }
 .inv-choice p { font-size: 14px; line-height: 1.45; margin: 0 0 10px; }
 .inv-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .inv-actions .btn { min-height: 44px; }
-.inv-link input { width: 100%; min-width: 0; font-size: 14px; margin: 0 0 8px; text-overflow: ellipsis; }
+.inv-row { display: flex; gap: 8px; align-items: stretch; margin: 0 0 8px; }
+.inv-row input { flex: 1 1 0; width: auto; min-width: 0; min-height: 44px; font-size: 14px; margin: 0; text-overflow: ellipsis; }
+.inv-row .btn { min-height: 44px; flex: none; white-space: nowrap; }
 .inv-link p { margin: 8px 0 0; }
 .inv-only { margin-top: 10px; }
 .inv-counts { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 14px 0 4px; }

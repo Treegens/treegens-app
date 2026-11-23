@@ -1065,7 +1065,9 @@ route('GET', '/public/powerforms/:slug', async (c) => {
     // Closed because it reached the number of signatures it was set up for, or its closing date: said, with whom to ask.
     closed_why: posing || noCustom ? null : formLimitClosed(p), shared_device: !!p.shared_device, trees: showsTrees(p.account_id),
     // Trees the visitor's signature plants (5), for the line at the top of the form page. 0 says nothing: tree words off, or no plans here.
-    plants: showsTrees(p.account_id) && creditsEnabled() ? treesForSignature() : 0,
+    // Also 0 when the form cannot take this visitor: closed, or its owner has no signature free (the start would be
+    // refused), so nobody is promised trees for a signature that cannot be made.
+    plants: showsTrees(p.account_id) && creditsEnabled() && !(posing || noCustom || formClosed(p, tpl) || formLimitClosed(p)) && available(p.account_id) >= 1 ? treesForSignature() : 0,
     // The questions the visitor answers before the document (webforms.ts), with what the form page needs to check them.
     ...(posing || noCustom ? { questions: [] } : formView(tpl, open)) };
 }, 'public');

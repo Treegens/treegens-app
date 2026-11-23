@@ -71,7 +71,8 @@ test('one constant: 5 trees a signature, and every number on a price line comes 
 test('one counting function: 5 from the change on, whatever the signature cost; before it, what was promised then', () => {
   assert.equal(TREES_5_FROM, '2026-11-23T00:00:00.000Z');
   assert.equal(TREES_RULE_DAY, '23 November 2026');
-  assert.deepEqual(TREES_BEFORE, { paid: 10, free: 0 });
+  // perUsd (repair): money paid before the change keeps 10 a dollar in the totals.
+  assert.deepEqual(TREES_BEFORE, { paid: 10, free: 0, perUsd: 10 });
   // Today's rule: no question about money is asked at all.
   assert.equal(treesForSignature(), 5);
   assert.equal(treesForSignature({ paid: false }), 5, 'a free signature');
@@ -96,11 +97,11 @@ test('the signer\'s three moments in words: the first screen, next to Finish, an
   assert.equal(finishLine(5), '5 trees will be planted when you finish.');
   assert.equal(mailLine(5), '5 trees will be planted with Treegens when you finish.');
   const done = signerWords({ trees: 5, first: true, total: 5, sheets: 2 });
-  assert.equal(done.title, 'Your signature plants 5 trees');
+  assert.equal(done.title, '5 trees will be planted for your signature');
   assert.equal(done.under, 'Mangroves, planted by Treegens. You also saved 2 pages of paper from a tree.');
   assert.equal(plantedLine(15), 'Its signatures plant 15 trees with Treegens.');
   assert.equal(plantedLine(0), '');
-  assert.equal(reviewPlus(true), 'Plus: 5 trees are planted for each person who signs.');
+  assert.equal(reviewPlus(true), '5 trees are planted for each person who signs.');
   assert.equal(recordLines({ sheets: 2, litresWater: 20, trees: 5, site: 'https://x.example' })[1], 'The signatures on this document plant 5 trees: mangroves, planted by Treegens. How we count: https://x.example/impact');
   // Honest words: nothing about carbon, nothing said to be planted already, no em dash, no money on a signer's screen.
   const all = [openLine(5), OPEN_UNDER, finishLine(5), mailLine(5), ...Object.values(done), RULE_LINE, RULE_FULL, plantedLine(5), senderWords({ counted: 1, signers: 1, planted: 5, sheets: 1 }).promise].join(' ');
@@ -124,7 +125,7 @@ test('a free trial signature plants 5 trees: said in the email, on the first scr
   assert.equal((await signAll(eid, 'tess@five.example')).status, 200);
   const done = (await sees(eid, 'tess@five.example')).done;
   assert.deepEqual([done.trees, done.total, done.first, done.celebrate], [5, 5, true, true]);
-  assert.equal(signerWords(done).title, 'Your signature plants 5 trees');
+  assert.equal(signerWords(done).title, '5 trees will be planted for your signature');
   // The row and the totals: the account's, the Plan page's, and everyone's.
   assert.deepEqual(db.all('SELECT trees FROM impact_signed WHERE envelope_id=?', eid).map((r: any) => r.trees), [5]);
   assert.equal(impact.treesOnEnvelope(eid), 5);
@@ -163,31 +164,135 @@ test('a signature counts whatever lot it came from: a reward or an adjustment th
 
 // ---- Old and new signatures in one total -------------------------------------------------------------------------
 
-test('totals with old and new signatures: old paid ones at 10, old free ones at 0, new ones at 5, and nothing is rewritten', async () => {
+// Repair of 23 November 2026 (review finding: totals for the past dropped at the change). Before the change a total
+// was 10 mangroves for every dollar paid, used or not. That promise stays for money paid before the change; rows
+// from the change on are added at 5, except a signature bought with that old money, which is in the total already.
+test('totals with old money and new signatures: old money at 10 a dollar used or not, new signatures at 5, nothing twice, nothing rewritten', async () => {
   const p = await person('History');
+  const credits = await import('../src/server/credits.ts');
+  const day = (d: number) => new Date(Date.parse(TREES_5_FROM) - d * 864e5).toISOString();
   const e1 = await send(p, 'new1@five.example');
   const e2 = await send(p, 'new2@five.example');
   assert.equal((await signAll(e1, 'new1@five.example')).status, 200);
   assert.equal((await signAll(e2, 'new2@five.example')).status, 200);
   assert.equal(impact.treesOfAccount(p.id), 10);
-  // Two signatures from before the change, as their rows were written then: one paid for (10), one free (0). Their
-  // envelopes are long gone, so the rows stand as written.
-  const day = (d: number) => new Date(Date.parse(TREES_5_FROM) - d * 864e5).toISOString();
-  db.run('INSERT INTO impact_signed (recipient_id, gen, envelope_id, account_id, who, trees, at) VALUES (?,?,?,?,?,?,?)', 'old-paid', 0, 'old-env-1', p.id, 'who-old-1', 10, day(30));
+  const everyone = impact.treesOfEveryone();
+  // 9 dollars paid a month before the change. The Plan page said 90 mangroves then, used or not: it still does.
+  db.run("INSERT INTO payments (id, account_id, amount_cents, currency, at, kind, credits) VALUES ('pay-old-h', ?, 900, 'usd', ?, 'plan', 9)", p.id, day(30));
+  assert.equal(impact.treesOfOldMoney(p.id), 90);
+  assert.equal(impact.treesOfAccount(p.id), 90 + 5 + 5, 'no total goes down at the change');
+  assert.equal(impact.treesOfEveryone(), everyone + 90);
+  assert.equal((await p.c.get('/impact')).data.account.treesFunded, 100);
+  assert.equal((await p.c.get('/billing')).data.mangroves, 100);
+  // Two signatures from before the change, as their rows were written then: one paid for (10), one free (0). They
+  // are part of that money already, so the account's total does not move; the document keeps what it said.
+  db.run('INSERT INTO impact_signed (recipient_id, gen, envelope_id, account_id, who, trees, at) VALUES (?,?,?,?,?,?,?)', 'old-paid', 0, 'old-env-1', p.id, 'who-old-1', 10, day(29));
   db.run('INSERT INTO impact_signed (recipient_id, gen, envelope_id, account_id, who, trees, at) VALUES (?,?,?,?,?,?,?)', 'old-free', 0, 'old-env-2', p.id, 'who-old-2', 0, day(20));
-  const before = impact.treesOfEveryone();
-  assert.equal(impact.treesOfAccount(p.id), 10 + 0 + 5 + 5);
-  assert.equal(impact.treesOnEnvelope('old-env-1'), 10, 'the old promise stands');
+  assert.equal(impact.treesOfAccount(p.id), 100);
+  assert.equal(impact.treesOnEnvelope('old-env-1'), 10, 'the old promise stands on the document');
   assert.equal(impact.treesOnEnvelope('old-env-2'), 0, 'an old free signature is not given trees after the fact');
-  assert.equal((await p.c.get('/impact')).data.account.treesFunded, 20);
-  assert.equal((await p.c.get('/billing')).data.mangroves, 20);
-  // Asking for totals changes no row, old or new.
-  assert.deepEqual(db.all('SELECT trees FROM impact_signed WHERE account_id=? ORDER BY at', p.id).map((r: any) => r.trees), [10, 0, 5, 5]);
-  // One more signature moves every total by exactly 5.
+  // Signatures bought with the old money and used now. The last free one goes first (it expires soonest) and adds
+  // 5; the next comes out of the old payment: the signer is told 5, and the total does not count it a second time.
+  assert.equal(credits.grant(p.id, 9, 'plan', 'pay-old-h'), true);
   const e3 = await send(p, 'new3@five.example');
   assert.equal((await signAll(e3, 'new3@five.example')).status, 200);
-  assert.equal(impact.treesOfAccount(p.id), 25);
-  assert.equal(impact.treesOfEveryone(), before + 5);
+  assert.equal(impact.treesOfAccount(p.id), 105);
+  const e4 = await send(p, 'new4@five.example');
+  assert.equal((await sees(e4, 'new4@five.example')).finish, 5);
+  assert.equal((await signAll(e4, 'new4@five.example')).status, 200);
+  assert.equal(impact.treesOnEnvelope(e4), 5);
+  assert.equal(db.get('SELECT old_payment FROM impact_signed WHERE envelope_id=?', e4).old_payment, 'pay-old-h');
+  assert.equal(impact.treesOfAccount(p.id), 105, 'in the total already, as its payment');
+  // Asking for totals changes no row, old or new.
+  assert.deepEqual(db.all('SELECT trees FROM impact_signed WHERE account_id=? ORDER BY at', p.id).map((r: any) => r.trees), [10, 0, 5, 5, 5, 5]);
+  // Part of the old payment goes back: the old promise follows the money, as it did then.
+  db.run("UPDATE payments SET refunded_cents=400 WHERE id='pay-old-h'");
+  assert.equal(impact.treesOfAccount(p.id), 50 + 15);
+  // All of it goes back: nothing is left of the old promise, and the signature made with it still happened.
+  db.run("UPDATE payments SET refunded_cents=900 WHERE id='pay-old-h'");
+  assert.equal(impact.treesOfAccount(p.id), 20);
+  // Money paid since the change plants nothing by itself: only its signatures do.
+  db.run("INSERT INTO payments (id, account_id, amount_cents, currency, at, kind, credits) VALUES ('pay-new-h', ?, 900, 'usd', ?, 'plan', 9)", p.id, new Date().toISOString());
+  assert.equal(impact.treesOfAccount(p.id), 20);
+});
+
+// Repair (review finding, high): the public total said "Trees planted by signatures: 10" after two free signatures
+// on a server nobody had paid. It is now worded as what signatures plant, and shown only from 100 trees and only once
+// customers have paid something.
+test('the public total: never for a few free signatures on a server nobody has paid, and never worded as already planted', async () => {
+  const { publicTreesShown, TOTALS_FROM } = await import('../src/lib/impact.ts');
+  assert.equal(TOTALS_FROM.treesPublic, 100);
+  assert.equal(publicTreesShown({ treesFunded: 10, donatedUsd: 0 }), false, 'two trial signatures, nothing paid');
+  assert.equal(publicTreesShown({ treesFunded: 5000, donatedUsd: 0 }), false, 'any number of free signatures, nothing paid');
+  assert.equal(publicTreesShown({ treesFunded: 99, donatedUsd: 9 }), false);
+  assert.equal(publicTreesShown({ treesFunded: 100, donatedUsd: 9 }), true);
+  assert.equal(publicTreesShown(null), false);
+  const band = read('src/components/Public.tsx');
+  assert.match(band, /const planted = publicTreesShown\(i\);/);
+  const view = read('src/components/ImpactView.tsx');
+  assert.match(view, /own \? Number\(i\?\.treesFunded\) >= TOTALS_FROM\.treesPlanted : publicTreesShown\(i\)/);
+  for (const f of ['src/components/Public.tsx', 'src/components/ImpactView.tsx', 'src/app/app/impact/page.tsx', 'src/app/impact/page.tsx'])
+    assert.doesNotMatch(read(f), /Trees planted by|have planted|has done so far|come out of that same money/, `${f}: nothing says the trees are planted already`);
+  assert.match(band, /Trees our signatures plant/);
+  assert.match(view, /It says what our signatures plant, not what has been planted already: Treegens plants afterwards\./);
+  assert.match(view, /Free signatures are paid for from what plans earn\./);
+});
+
+// Repair (review finding, medium): the completion emails said nothing about trees.
+test('the completion email says what the signatures plant, to the signer and to the sender, and nothing with tree words off', async () => {
+  const p = await person('Done');
+  const eid = await send(p, 'fin@five.example');
+  assert.equal((await signAll(eid, 'fin@five.example')).status, 200);
+  const LINE = 'The signatures on this document plant 5 trees: mangroves, planted by Treegens.';
+  const { completedMailLine } = await import('../src/lib/impactwords.ts');
+  assert.equal(completedMailLine(5), LINE);
+  assert.equal(completedMailLine(0), '');
+  assert.match(en['mail.sender.complete.trees'], /other \{The signatures on this document plant # trees: mangroves, planted by Treegens\.\}/);
+  const toSigner = mailTo('fin@five.example').filter((m) => /^Completed:/.test(m.subject)).at(-1)!;
+  assert.ok(textOf(toSigner.html).includes(LINE), 'the signer');
+  const toSender = mailTo(p.email).filter((m) => /Completed|complete/i.test(m.subject)).at(-1)!;
+  assert.ok(textOf(toSender.html).includes(LINE), 'the sender');
+  const q = await person('Hush');
+  assert.equal((await q.c.put('/account/policy', { impact_display: 'off' })).status, 200);
+  const e2 = await send(q, 'still@five.example');
+  assert.equal((await signAll(e2, 'still@five.example')).status, 200);
+  for (const m of [...mailTo('still@five.example'), ...mailTo(q.email)].filter((x) => /complete/i.test(x.subject))) assert.doesNotMatch(textOf(m.html), /trees|mangrove/i, m.subject);
+});
+
+// Repair (review finding, medium): the tree line came with a second request, after the screen was drawn.
+test('the number comes with the signing page\'s first answer, before and after Finish, so nothing arrives late', async () => {
+  const p = await person('First');
+  const eid = await send(p, 'paint@five.example');
+  const tok = tokenFor(eid, 'paint@five.example');
+  assert.equal((await new Client().get(`/sign/${tok}`)).data.envelope.plants, 5);
+  assert.equal((await signAll(eid, 'paint@five.example')).status, 200);
+  assert.equal((await new Client().get(`/sign/${tok}`)).data.envelope.plants, 5, 'the finished screen has it at once too');
+  // Nobody who plants none gets a number: tree words off, a sender's own document.
+  const own = await simple(p.c, p.email, { recipients: [{ id: 'r', role: 'signer', name: p.name, email: p.email }] });
+  assert.equal((await p.c.post(`/envelopes/${own.id}/send`)).status, 200);
+  assert.equal((await new Client().get(`/sign/${tokenFor(own.id, p.email)}`)).data.envelope.plants, 0);
+  // The page draws from that answer: no request of its own for the first screen or the Finish bar.
+  const trees = read('src/components/impact/SignerTrees.tsx');
+  const top = trees.slice(trees.indexOf('export function OpenTreesLine'), trees.indexOf('const num ='));
+  assert.doesNotMatch(top, /api\(|useEffect|useState/, 'the first screen and the Finish line ask the server nothing');
+  assert.doesNotMatch(read('src/components/sign/ConsentTop.tsx'), /treesIn/, 'nothing is counted again after the screen is up');
+});
+
+// Repair (UX review): a sender who signs their own document was shown a leaf and no trees, with no word why.
+test('a sender signing their own document is told plainly that it plants none', async () => {
+  const p = await person('Self');
+  const e = await simple(p.c, p.email, { recipients: [{ id: 'r', role: 'signer', name: p.name, email: p.email }] });
+  assert.equal((await p.c.post(`/envelopes/${e.id}/send`)).status, 200);
+  assert.equal((await signAll(e.id, p.email)).status, 200);
+  const d = (await sees(e.id, p.email)).done;
+  assert.deepEqual([d.trees, d.own], [0, true]);
+  const w = signerWords({ ...d });
+  assert.equal(w.under, 'Signing your own document is free and plants no trees. You saved 1 page of paper from a tree.');
+  assert.doesNotMatch(w.title, /tree/);
+  // Someone else's signature never carries the flag.
+  const eid = await send(p, 'other@five.example');
+  assert.equal((await signAll(eid, 'other@five.example')).status, 200);
+  assert.equal((await sees(eid, 'other@five.example')).done.own, undefined);
 });
 
 test('a signing record that was already issued is not written again', async () => {
@@ -243,33 +348,37 @@ test('tree words off stay off, a sender\'s own signature plants none, and a serv
 
 test('the signer screens: the line on the first screen above everything legal, again by Finish, and on the finished screen', () => {
   const trees = read('src/components/impact/SignerTrees.tsx');
-  assert.match(trees, /export function OpenTrees\(/);
+  assert.match(trees, /export function OpenTreesLine\(/);
   assert.match(trees, /const line = openLine\(Number\(trees\) \|\| 0\);\s+if \(!line\) return null;/, 'nothing is drawn when the signature plants none');
   assert.match(trees, /<Mark size=\{30\} label="" \/>\s+<p><b>\{line\}<\/b><span>\{OPEN_UNDER\}<\/span><\/p>/, 'a small leaf, the line, and who plants under it');
   assert.doesNotMatch(trees.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ''), /\b5 trees\b|10 mangroves/, 'the number is never typed into the screen');
   // The first screen: inside ConsentTop, after who it is from and for, before the sender's words and the legal text.
   const top = read('src/components/sign/ConsentTop.tsx');
-  assert.ok(top.indexOf('{trees?.(') > top.indexOf('className="sg-from"'), 'after the From line');
-  assert.ok(top.indexOf('{trees?.(') < top.indexOf('<SenderWords'), 'before the sender\'s message');
-  assert.match(top, /if \(need > level\) setLevel\(need\);/, 'the words are counted again once the line is in, so the screen keeps to its limit');
+  assert.ok(top.indexOf('      {trees}') > top.indexOf('className="sg-from"'), 'after the From line');
+  assert.ok(top.indexOf('      {trees}') < top.indexOf('<SenderWords'), 'before the sender\'s message');
+  assert.match(top, /if \(need > level\) setLevel\(need\);/, 'the line is drawn with the screen, so the one count of its words includes it');
   const page = read('src/app/sign/[token]/page.tsx');
   const consent = page.slice(page.indexOf("if (stage === 'consent')"));
-  const at = consent.indexOf('<OpenTrees base={base} show={!ask}');
+  const at = consent.indexOf('trees={!ask ? <OpenTreesLine trees={env.plants} /> : null}');
   assert.ok(at > 0, 'the consent screen draws it, for someone asked to sign');
   assert.ok(at < consent.indexOf("type=\"checkbox\"") || consent.indexOf("type=\"checkbox\"") < 0 || at < consent.indexOf('sg-read'), 'above the legal text and the tick');
-  assert.equal((page.match(/<OpenTrees /g) || []).length, 1);
+  assert.equal((page.match(/<OpenTreesLine /g) || []).length, 1);
+  // The finished screen: right under the heading, before the line about the copy and the buttons (a phone shows it without a scroll).
+  const done = page.slice(page.indexOf("if (stage === 'done')"));
+  assert.ok(done.indexOf('<DoneTrees trees={finished?.plants ?? env.plants} />') > done.indexOf('<StateCard tone="ok" title={title}>'));
+  assert.ok(done.indexOf('<DoneTrees ') < done.indexOf('doneActions(allDone)'), 'above the buttons');
   // By Finish, in both bars, and the finished screen.
-  assert.equal((page.match(/<TreeLine base=\{base\} show=\{acts && !hasNext\} \/>/g) || []).length, 2);
+  assert.equal((page.match(/<TreeLine trees=\{env\.plants\} show=\{acts && !hasNext\} \/>/g) || []).length, 2);
   assert.equal((page.match(/<SignerDone /g) || []).length, 1);
   // A public form (a shared link) says it on its own first screen, from the number the server gives.
   const form = read('src/app/f/[slug]/page.tsx');
   assert.match(form, /<OpenTreesLine trees=\{form\.plants\} \/>/);
   assert.ok(form.indexOf('<OpenTreesLine') < form.indexOf('Your full name'), 'before the first thing to fill in');
-  assert.match(raw('src/server/routes-envelopes.ts'), /plants: showsTrees\(p\.account_id\) && creditsEnabled\(\) \? treesForSignature\(\) : 0,/);
+  assert.match(raw('src/server/routes-envelopes.ts'), /plants: showsTrees\(p\.account_id\) && creditsEnabled\(\) && [^\n]*available\(p\.account_id\) >= 1 \? treesForSignature\(\) : 0,/);
   // The ceilings of the core flows are not touched by this change.
   const ceil = JSON.parse(raw('tests/ux/ceilings.json')).default;
   assert.deepEqual([ceil['b-sign-phone'].words, ceil['b-sign-phone'].max_choices, ceil['b-sign-desktop'].words], [432, 11, 442]);
-  assert.doesNotMatch(trees.slice(trees.indexOf('export function OpenTrees'), trees.indexOf('/** Next to Finish')), /<button|<a |<details|<input/, 'the line adds no choice to the first screen');
+  assert.doesNotMatch(trees.slice(trees.indexOf('export function OpenTreesLine'), trees.indexOf('/** Next to Finish')), /<button|<a |<details|<input/, 'the line adds no choice to the first screen');
 });
 
 test('a public form tells its visitor before they type: plants 5, and 0 when tree words are off', async () => {
@@ -284,6 +393,14 @@ test('a public form tells its visitor before they type: plants 5, and 0 when tre
   assert.equal((await p.c.put('/account/policy', { impact_display: 'off' })).status, 200);
   const quiet = (await new Client().get(`/public/powerforms/${slug}`)).data;
   assert.deepEqual([quiet.plants, quiet.trees], [0, false]);
+  // Repair (review finding, low): no trees are promised for a signature the form cannot take. With the owner's
+  // signatures used up the start would be refused, so the form says nothing about trees.
+  assert.equal((await p.c.put('/account/policy', { impact_display: 'on' })).status, 200);
+  for (const who of ['f1', 'f2', 'f3']) {
+    const e = await send(p, `${who}@five.example`);
+    assert.equal((await signAll(e, `${who}@five.example`)).status, 200);
+  }
+  assert.equal((await new Client().get(`/public/powerforms/${slug}`)).data.plants, 0);
 });
 
 // ---- The pages ---------------------------------------------------------------------------------------------------
@@ -292,8 +409,10 @@ test('the home page, pricing, the plan page and the emails all say the one rule,
   // The home page: the headline with its one button.
   assert.equal(en['public.home.h1'], 'Every signature plants {trees}');
   assert.equal(en['public.home.h1_trees'], '{count} trees.');
-  assert.match(en['public.home.lead'], /Each time someone signs, Treegens plants \{trees\} mangroves\. What you pay, less card fees, goes to Treegens\./);
-  assert.match(en['public.home.note'], /free to try it, no card needed\. They plant trees too\./);
+  // Shortened in the repair (UX review): the money line is said once in point 3 and in the footer, not in the lead as well.
+  assert.equal(en['public.home.lead'], 'Send documents and get them signed online. Each time someone signs, Treegens plants {trees} mangroves.');
+  assert.match(en['public.home.note'], /free, no card needed\. They plant trees too\.\}?$/);
+  assert.match(en['public.home.trees_body'], /^What you pay, less card fees, goes to Treegens\./);
   const home = raw('src/app/page.tsx');
   assert.match(home, /h1_trees', \{ count: String\(TREES_PER_SIGNATURE\) \}/);
   assert.equal((home.match(/className="btn primary lg"/g) || []).length, 1, 'one button');
@@ -302,8 +421,8 @@ test('the home page, pricing, the plan page and the emails all say the one rule,
   assert.match(en['public.impact.paid_body'], /Free signatures count too\./);
   const view = read('src/components/ImpactView.tsx');
   assert.match(view, /Every signature plants \{PRICING\.treesPerSignature\} trees\./);
-  assert.match(view, /Before \{TREES_RULE_DAY\} the rule was another one: \{TREES_BEFORE\.paid\} mangroves for a signature that was paid for and none for a free one\./);
-  assert.match(view, /stay in the total at what was promised then/);
+  assert.match(view, /<summary>Signatures and payments before \{TREES_RULE_DAY\}<\/summary>/, 'the old rule is one tap away, not in the way');
+  assert.match(view, /\{TREES_BEFORE\.perUsd\} mangroves for each US dollar a customer paid[^<]*Money paid before that day stays in the total at that promise\./);
   // Pricing: "9 signatures added every month, 45 trees".
   const pricing = read('src/app/pricing/page.tsx');
   assert.match(pricing, /added every month<\/b>, \{treesFor\(P\.monthlySignatures\)\} trees<\/li>/);
@@ -322,7 +441,7 @@ test('the home page, pricing, the plan page and the emails all say the one rule,
 });
 
 test('nothing still says the old rule: no "every dollar plants", no "10 mangroves", no "paid only", no "free signatures plant no trees"', () => {
-  const OLD = /every dollar (still )?(paid )?plants|for every dollar|per dollar|treesPerUsd|mangrovesFor\(|10 mangrove|ten mangroves|free signatures? (plant|fund)s? (no|none)|plant no trees|paid signature on it|signature you pay for plants|whether (its|the|their) signatures (are|were) used or not/i;
+  const OLD = /every dollar (still )?(paid )?plants|for every dollar|per dollar|treesPerUsd|mangrovesFor\(|10 mangrove|ten mangroves|free signatures? (plant|fund)s? (no|none)|plant no trees|plants? 10\b|paid signature on it|signature you pay for plants|whether (its|the|their) signatures (are|were) used or not/i;
   const files: string[] = [];
   const walk = (dir: string) => {
     for (const f of readdirSync(join(root, dir))) {
@@ -351,6 +470,7 @@ test('the API says the rule: finish is 5, the envelope answer names who counts, 
   const signer = spec.paths['/sign/{token}/impact'].get;
   assert.match(signer.description, /Every signature plants 5 trees: mangroves, planted by Treegens\./);
   assert.match(signer.description, /Signatures finished before 23 November 2026 count what was promised then/);
+  assert.match(spec.paths['/sign/{token}/impact'].get.responses[200].content['application/json'].schema.properties.done.properties.own.description, /own document/);
   const sent = spec.paths['/envelopes/{id}/impact'].get.responses[200].content['application/json'].schema.properties.sent.properties;
   assert.deepEqual(Object.keys(sent).sort(), ['celebrate', 'counted', 'here', 'planted', 'sheets', 'signers']);
   assert.doesNotMatch(JSON.stringify(spec.paths['/sign/{token}/impact']) + JSON.stringify(spec.paths['/envelopes/{id}/impact']), /paid signature|funds? none|per dollar/i);

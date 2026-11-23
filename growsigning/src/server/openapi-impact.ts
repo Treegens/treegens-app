@@ -24,6 +24,7 @@ export const impactPaths = () => ({
           celebrate: { ...bool, description: 'The picture has not been shown yet: for the first signature of this person, and once more for their first signature that plants anything.' },
           total: { ...int, description: 'Trees planted by all signatures from this address, this one included. For someone who signs in person: this signature only.' },
           sheets: { ...int, description: 'An estimate: the pages of the document times the people on it.' },
+          own: { ...bool, description: 'Only when true: a sender who signed their own document. It used no signature and plants none, and the finished screen says so.' },
         } },
       } }),
     },

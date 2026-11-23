@@ -18,7 +18,7 @@ import { showsTrees } from './tenantpolicy.ts';
 import { treesInInvite } from './impact.ts';
 import { listName } from '../lib/docname.ts';
 import { isShareName, shareNameFrom, shareNameProblem, nextFreeName, tidyShareName, type ShareState } from '../lib/sharename.ts';
-import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES } from '../lib/policy.ts';
+import { SIGNER_CODE_DIGITS, SIGNER_CODE_MINUTES, SHARE_CLOSED_NAMED_DAYS } from '../lib/policy.ts';
 
 export type ShareKind = 'envelope' | 'form';
 export type ShareLink = { name: string; url: string; active: boolean };
@@ -46,19 +46,23 @@ export function shareNameRefusal(name: string): string | null {
 }
 
 // Whether `name` can be taken for this envelope or form: nobody has it, or it is one of its own (an old name of the
-// same document may be taken back), or it points at something that no longer exists.
+// same document may be taken back), or it was the name of something the same account has since deleted. A name
+// another account ever had stays theirs, deleted or not: an address that is in chats, emails or on a poster can
+// never start opening a stranger's document.
 function freeFor(name: string, kind: ShareKind, targetId: string): boolean {
   const row = get('SELECT * FROM share_links WHERE name=?', name);
   if (!row) return true;
   if (row.kind === kind && row.target_id === targetId) return true;
-  return !targetLives(row);
+  if (targetLives(row)) return false;
+  const owner = get(kind === 'form' ? 'SELECT account_id FROM powerforms WHERE id=?' : 'SELECT account_id FROM envelopes WHERE id=?', targetId);
+  return !!owner && owner.account_id === row.account_id;
 }
 
 /** A name for this envelope or form that could be saved right now, made from its title. */
 export function suggestShareName(kind: ShareKind, targetId: string, title: string): string {
   let base = shareNameFrom(listName(title));
   if (base.length < 3 || shareNameRefusal(base)) {
-    const longer = base ? shareNameFrom(`${base} ${kind === 'form' ? 'form' : 'document'}`) : '';
+    const longer = base ? shareNameFrom(`${base} ${kind === 'form' ? 'form' : 'agreement'}`) : '';
     base = longer && !shareNameRefusal(longer) ? longer : kind === 'form' ? 'form-to-sign' : 'document-to-sign';
   }
   return nextFreeName(base, (c) => !shareNameRefusal(c) && freeFor(c, kind, targetId)) || base;
@@ -75,7 +79,14 @@ export function saveShareLink(kind: ShareKind, targetId: string, accountId: stri
   const active = change.active === undefined ? (has ? !!has.active : true) : !!change.active;
   if (!has || wanted !== has.name) {
     const no = shareNameRefusal(wanted);
-    if (no) throw bad(no, 422, { code: 'share_name', suggestion: suggestShareName(kind, targetId, title) });
+    if (no) {
+      // The suggestion is what the refusal itself advises ("support" gives "support-agreement") when that is free,
+      // else a name from the title. Never the name the link already has: that is no way forward.
+      const ok = (c: string) => !shareNameRefusal(c) && freeFor(c, kind, targetId);
+      const longer = wanted.length >= 3 ? shareNameFrom(`${wanted} ${kind === 'form' ? 'form' : 'agreement'}`) : '';
+      const next = (longer && nextFreeName(longer, ok)) || suggestShareName(kind, targetId, title);
+      throw bad(no, 422, { code: 'share_name', suggestion: next && next !== has?.name && ok(next) ? next : null });
+    }
   }
   return tx(() => {
     if (has && wanted === has.name) {
@@ -104,8 +115,13 @@ export function autoShareLink(kind: ShareKind, targetId: string, accountId: stri
   }
 }
 
-/** Every name of something that is being deleted is let go. */
-export const dropShareLinks = (kind: ShareKind, targetId: string) => run('DELETE FROM share_links WHERE kind=? AND target_id=?', kind, targetId);
+/**
+ * Something is being deleted: its names stop, and stay kept as ended rows. The address then answers like a name
+ * nobody has, and only the account that had it can give it to another of its documents (freeFor). An envelope needs
+ * no call: a row whose envelope is gone is read the same way.
+ */
+export const dropShareLinks = (kind: ShareKind, targetId: string) =>
+  run("UPDATE share_links SET active=0, ended_at=COALESCE(ended_at, ?), ended_why=COALESCE(ended_why, 'deleted') WHERE kind=? AND target_id=?", now(), kind, targetId);
 
 // ---- What the page at /<name> is told ------------------------------------------------------------------------------
 
@@ -151,9 +167,13 @@ export function sharePage(name: string): SharePage {
   if (!row) return { state: 'none' };
   if (row.ended_at) return targetLives(row) ? { state: 'renamed' } : { state: 'none' };
   if (!row.active) return targetLives(row) ? { state: 'off' } : { state: 'none' };
+  // A name given out before the lists in sharename.ts grew, which would be refused today: it stops.
+  if (shareNameRefusal(name)) return { state: 'none' };
   if (row.kind === 'form') {
-    const p = get('SELECT slug, name FROM powerforms WHERE id=?', row.target_id);
-    return p ? { state: 'form', slug: p.slug, title: p.name } : { state: 'none' };
+    const p = get('SELECT slug, name, active FROM powerforms WHERE id=?', row.target_id);
+    if (!p) return { state: 'none' };
+    // A form its owner switched off says so here, and gives neither its name nor its own address.
+    return p.active ? { state: 'form', slug: p.slug, title: p.name } : { state: 'off' };
   }
   const found = envelopeBehind(name);
   if (!found) return { state: 'none' };
@@ -164,9 +184,14 @@ export function sharePage(name: string): SharePage {
   const nobody = { people: [], later: 0, plants: 0 };
   // A paused account, a document we hold back, or a name that would print a fake notice under our address: closed,
   // and neither the document's name nor the sender's is printed (as on a public form, formPageRefusal).
-  if (!account || account.suspended_at || e.held_at || formPageRefusal(account, `${title} ${sender || ''}`)) return { state: 'unavailable', title: null, sender: null, ...nobody };
+  if (!account || account.suspended_at || e.held_at || formPageRefusal(account, `${title} ${sender || ''} ${name.replace(/-/g, ' ')}`)) return { state: 'unavailable', title: null, sender: null, ...nobody };
   const closed = closedState(e);
-  if (closed) return { state: closed, title, sender, ...nobody };
+  // Closed: the plain sentence. The document's and the sender's name stay on the page for a few days, for the people
+  // who were asked to sign and open the link once more, and are then no longer printed to whoever types the address.
+  if (closed) {
+    const named = closed === 'paused' || Date.now() - (Date.parse(e.completed_at || e.updated_at || '') || 0) < SHARE_CLOSED_NAMED_DAYS * 864e5;
+    return { state: closed, title: named ? title : null, sender: named ? sender : null, ...nobody };
+  }
   const rs = all('SELECT * FROM recipients WHERE envelope_id=? ORDER BY routing_order, position', e.id);
   return {
     state: 'open', title, sender,
@@ -188,8 +213,10 @@ function picked(name: string, key: unknown): { e: any; r: any } {
   return { e: found.e, r };
 }
 // The code of signercode.ts, asked for through the share link: for the address the sender gave, whatever check the
-// sender chose for the signing page itself. Kept apart from that check by its stamp, so neither ends the other's code.
-const viaLink = (r: any) => ({ ...r, verify: 'email_code' });
+// sender chose for the signing page itself. code_via gives these codes a stamp, a clock, tries and a daily count of
+// their own (signercode.ts), so a stranger with the link can never end, use up or hold back the code a person asked
+// for on their own signing page, and the email says it was asked for through the share link.
+const viaLink = (r: any) => ({ ...r, verify: 'email_code', code_via: 'share' });
 
 /** Sends the picked person a code, to the address the sender gave. The answer never holds the code or the address. */
 export async function shareCode(name: string, key: unknown, actor: Actor) {

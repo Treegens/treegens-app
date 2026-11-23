@@ -12,11 +12,19 @@
 // What is counted: one row in impact_signed for every finished signature of a person who signs (role signer, or a
 // signer in person), written at Finish with the trees of the rule of that day, and never changed afterwards. Rows
 // from before the change say what was promised then: 10 for a signature that was paid for, 0 for a free one. Only
-// those old rows are still asked whether their payment stands, as they always were. Every total is the sum of rows.
+// those old rows are still asked whether their payment stands, as they always were.
+//
+// The totals of an account and of everyone keep the old promise for old money: before the change a total was 10
+// mangroves for every dollar paid, whether its signatures were used or not. So a total is
+//   10 for every dollar paid before the change that still stands (treesOfOldMoney)
+//   + the rows from the change on, except those whose signature was bought with that old money (old_payment),
+//     while that payment stands: their trees are in the first part already.
+// (Rows from before the change are in the first part too, as the money that paid for them; a free one was 0.)
+// Nothing a person was shown before the change goes down because of it, and nothing is counted twice.
 import { get, all, run } from './db.ts';
 import { hmac, now } from './util.ts';
-import { paidSignatureFor, creditsEnabled, isChargeable } from './credits.ts';
-import { treesForSignature, TREES_5_FROM } from '../lib/impact.ts';
+import { paidSignatureFor, signaturePayment, creditsEnabled, isChargeable } from './credits.ts';
+import { treesForSignature, TREES_5_FROM, TREES_BEFORE } from '../lib/impact.ts';
 import { type SignerFacts, type SenderFacts } from '../lib/impactwords.ts';
 
 /** Who signs: the only people a tree is ever mentioned to. */
@@ -77,8 +85,11 @@ export function noteSigned(r: any): void {
   if (!r || !signs(r) || r.status !== 'completed') return;
   const e = get('SELECT account_id FROM envelopes WHERE id=?', r.envelope_id);
   const at = r.completed_at || now();
-  run('INSERT OR IGNORE INTO impact_signed (recipient_id, gen, envelope_id, account_id, who, trees, at) VALUES (?,?,?,?,?,?,?)',
-    r.id, genOf(r), r.envelope_id, e?.account_id || null, personOf(r), treesNow(r, at), at);
+  if (get('SELECT 1 x FROM impact_signed WHERE recipient_id=? AND gen=?', r.id, genOf(r))) return;
+  // Bought with money paid before the change: that money's old promise is in the totals already (treesOfOldMoney).
+  const paid = at >= TREES_5_FROM ? signaturePayment(r.id) : null;
+  run('INSERT OR IGNORE INTO impact_signed (recipient_id, gen, envelope_id, account_id, who, trees, at, old_payment) VALUES (?,?,?,?,?,?,?,?)',
+    r.id, genOf(r), r.envelope_id, e?.account_id || null, personOf(r), treesNow(r, at), at, paid && paid.at < TREES_5_FROM ? paid.id : null);
 }
 
 /**
@@ -117,16 +128,31 @@ export function treesOnEnvelope(envelopeId: string): number {
   return sumStanding(all('SELECT * FROM impact_signed WHERE envelope_id=? ORDER BY at DESC', envelopeId));
 }
 
-/** Trees planted by the signatures finished on an account's documents. */
-export function treesOfAccount(accountId: string): number {
-  return sumStanding(all('SELECT * FROM impact_signed WHERE account_id=? ORDER BY at DESC', accountId));
+/**
+ * Trees promised by money paid before the 5 trees rule: 10 for every dollar of it that still stands (less refunds),
+ * whether its signatures were used or not. That was the total people were shown then, and it stays.
+ */
+export function treesOfOldMoney(accountId?: string): number {
+  const p = accountId
+    ? get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id=? AND kind IN ('plan','topup') AND at < ?", accountId, TREES_5_FROM)
+    : get("SELECT COALESCE(SUM(amount_cents - refunded_cents),0) cents FROM payments WHERE account_id IS NOT NULL AND kind IN ('plan','topup') AND at < ?", TREES_5_FROM);
+  return Math.max(0, Math.floor(((Number(p?.cents) || 0) / 100) * TREES_BEFORE.perUsd));
 }
 
-/** Trees planted by every signature finished on this server: the public total. */
+// A row that is not already counted as old money: a free signature, one bought since the change, or one whose old
+// payment went back in full (then the money counts nothing any more, and the signature still happened).
+const NOT_IN_OLD_MONEY = '(s.old_payment IS NULL OR NOT EXISTS (SELECT 1 FROM payments p WHERE p.id=s.old_payment AND p.amount_cents - p.refunded_cents > 0))';
+
+/** Trees of an account's documents: old money at its old promise, and every signature since at 5 (see the top). */
+export function treesOfAccount(accountId: string): number {
+  const rows = get(`SELECT COALESCE(SUM(s.trees),0) n FROM impact_signed s WHERE s.account_id=? AND s.at >= ? AND ${NOT_IN_OLD_MONEY}`, accountId, TREES_5_FROM);
+  return treesOfOldMoney(accountId) + (Number(rows?.n) || 0);
+}
+
+/** The same for every account on this server: the public total. */
 export function treesOfEveryone(): number {
-  const newest = all('SELECT * FROM impact_signed ORDER BY at DESC LIMIT ?', RECHECK);
-  const rest = get('SELECT COALESCE(SUM(trees),0) n FROM (SELECT trees FROM impact_signed ORDER BY at DESC LIMIT -1 OFFSET ?)', RECHECK);
-  return sumStanding(newest) + (Number(rest?.n) || 0);
+  const rows = get(`SELECT COALESCE(SUM(s.trees),0) n FROM impact_signed s WHERE s.at >= ? AND ${NOT_IN_OLD_MONEY}`, TREES_5_FROM);
+  return treesOfOldMoney() + (Number(rows?.n) || 0);
 }
 
 const seen = (key: string) => !!get('SELECT 1 x FROM impact_seen WHERE key=?', key);
@@ -167,7 +193,19 @@ export function signerMoment(e: any, r: any): (SignerFacts & { celebrate: boolea
     celebrate: (!earlier && !seen(signerKey(r))) || (firstPaid && !seen(paidKey(r))),
     total,
     sheets: Number(e?.sheets) || 0,
+    // A sender who signed their own document where plans exist: it used no signature and plants none, and is told so.
+    ...(trees < 1 && creditsEnabled() && !counts(r) ? { own: true } : {}),
   };
+}
+
+/**
+ * The one number the signing page gets with its first answer, so the tree line is on the first screen without a
+ * second question: trees that will be planted when this person finishes, or, once they have, the trees of their
+ * signature. 0 for anyone who does not sign and on an envelope that was cancelled, declined or has expired.
+ */
+export function treesShownTo(e: any, r: any): number {
+  if (!e || !signs(r) || ['voided', 'expired', 'declined'].includes(e.status)) return 0;
+  return r.status === 'completed' ? signerMoment(e, r)?.trees ?? 0 : treesAtFinish(r);
 }
 
 /** The first-time picture was drawn for this person: it is not shown again. */

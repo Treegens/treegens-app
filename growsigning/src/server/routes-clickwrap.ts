@@ -3,6 +3,7 @@
 // clickwrap.ts and the words in src/lib/clickwrap.ts.
 // What the person's role allows (perm.ts): 'clickwrap' here, where this file once asked for an admin.
 import { can } from './perm.ts';
+import { phoneBeforeSend } from './signuprules.ts';
 import { route, pdfResponse, type Ctx } from './router.ts';
 import { all, get, run, readBlob } from './db.ts';
 import { bad, baseUrl, id, isEmail, now, rateLimit, rateWait, sha256, str, token } from './util.ts';
@@ -124,6 +125,8 @@ route('PATCH', '/clickwraps/:id', async (c) => {
 }, 'admin');
 
 route('POST', '/clickwraps/:id/publish', async (c) => {
+  // A new public page: the login has a phone number first (signuprules.ts), as for a new public form.
+  phoneBeforeSend(c);
   const cw = loadAgreement(c.params.id, c.account.id);
   const b = await c.body();
   if (b.ask_again !== undefined && typeof b.ask_again !== 'boolean') throw bad('"ask_again" is true or false, without quotes. Nothing was published.');

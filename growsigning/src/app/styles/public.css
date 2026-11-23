@@ -299,12 +299,13 @@
 .phone-f { margin-bottom: 12px; }
 .phone-f > label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
 .phone-row { display: flex; gap: 8px; }
-.phone-row select { flex: 0 1 42%; min-width: 0; max-width: 42%; min-height: 44px; text-overflow: ellipsis; }
+.phone-row select { flex: 0 0 auto; width: 104px; min-width: 0; max-width: 42%; min-height: 44px; }
 .phone-row input { flex: 1 1 0; min-width: 0; min-height: 44px; }
 .phone-err { margin: 6px 0 0; font-size: 13px; color: var(--red); }
 .phone-err:empty { display: none; }
 .phone-why { margin: 6px 0 0; font-size: 13px; color: var(--muted); font-weight: 400; }
 .auth-plus { margin: -6px 0 12px; font-size: 13px; color: var(--red); }
 .auth-plus:empty { display: none; }
+.auth-plus-use { display: inline-block; min-height: 44px; padding: 0 2px; border: 0; background: none; color: var(--green-deep); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
 /* The same screen over a page, when a send was refused for want of a phone number (AppShell.tsx). */
 .phone-over { position: fixed; inset: 0; z-index: 1000; background: var(--paper); overflow: auto; }

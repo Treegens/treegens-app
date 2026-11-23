@@ -39,18 +39,62 @@ export const RESERVED: ReadonlySet<string> = new Set((
   + 'api-docs openapi openapi.json swagger graphql webhook webhooks callback callbacks integrations integration developer partners partner affiliate '
   + 'affiliates referral referrals refer r s u e d t p q go to link links share shared sharing qr new edit delete remove create search explore '
   + 'trees tree mangrove mangroves planting impact-report demo example examples sample samples test tests testing null undefined true false nan '
-  + 'en es fr de pt it nl ja ko zh ar hi ru th km mobile ios android download-app').split(' '));
+  + 'en es fr de pt it nl ja ko zh ar hi ru th km mobile ios android download-app '
+  // Pages a site like this one gets sooner or later, and names that mail programs, phones and scanners ask for.
+  + 'unsubscribe welcome start get-started getting-started onboarding enterprise customers customer product products solutions solution business sales '
+  + 'contact-sales apps offline thanks thank-you done success error errors complete completed open view review reviews compare alternatives vs '
+  + 'case-studies webinar webinars newsletter notifications notification events event stories story resources resource tools tool use-cases usecases '
+  + 'why how-it-works tour overview book-a-demo book-demo get-demo quote quotes offer offers deals deal promo coupon gift gifts friend friends '
+  + 'apple-app-site-association assetlinks.json wp-admin wp-login wp-login.php wp-content xmlrpc.php cgi-bin phpmyadmin postmaster webmaster hostmaster '
+  + 'mailer-daemon noreply no-reply donotreply do-not-reply owner ceo founder founders moderator moderators mod sales-team hr it legal-team abuse-team '
+  + 'trust-and-safety sign-here signhere verify-email confirm confirm-email activate activation unlock recover recovery restore').split(' '));
 
-/** Words a company uses about itself. A name made only of these reads as a page of ours. */
+/**
+ * Words a company uses about itself, and the words of an alarming notice ("your account is suspended", "pay now",
+ * "urgent action required"). A name made only of these reads as a page or a notice of ours, not as a document.
+ */
 const OUR_WORDS = new Set(('official verified support help helpdesk desk service services customer care center centre billing bill payment payments pay '
   + 'account accounts security secure verification verify alert alerts notice notification notifications department team admin online login signin '
-  + 'password reset update updates confirmation confirm info mail email refund refunds invoice invoices order orders the of and for by from at my your').split(' '));
+  + 'password reset update updates confirmation confirm info mail email refund refunds invoice invoices order orders the of and for by from at my your '
+  + 'suspended suspension suspend expired expires expiring expiry urgent overdue due action required immediately immediate now here page pages site portal '
+  + 'document documents doc docs file files message messages is are was has been will be you we our us it hr legal abuse trust safety compliance fraud '
+  + 'sign signing in on out log access restore restored locked lock unlock unusual activity identity id warning important final last attention review '
+  + 'pending failed failure declined problem issue limited restricted blocked disabled closed closing deactivated validate validation authenticate '
+  // Names that are also plain words or surnames: only refused when the whole name is made of words from this list.
+  + 'bank banking tax taxes gov government america chase apple visa amazon meta delivery parcel package shipping statement wire transfer').split(' '));
 /** Words that claim a standing nobody can check. Refused anywhere in a name. */
 const CLAIMS = ['official', 'verified', 'certified'];
+/**
+ * Other signing services, and the banks, shops, mail services and tax offices whose name fake notices borrow most. A
+ * share link sits on this site's own address, so none of them is ever part of one, as a word or run together.
+ */
+const BRANDS = ('docusign adobesign adobe acrobat dropboxsign dropbox hellosign pandadoc signnow signwell docuseal echosign rightsignature '
+  + 'paypal netflix microsoft office365 outlook hotmail google gmail icloud facebook instagram whatsapp linkedin coinbase binance '
+  + 'bankofamerica wellsfargo citibank barclays santander natwest lloydsbank mastercard americanexpress westernunion moneygram fedex').split(' ');
+/** The short ones, which only count as a whole word ("irs-tax-refund"), never inside another ("first"). */
+const BRAND_WORDS = new Set('irs hmrc hsbc dhl ups usps amex fargo citi xero'.split(' '));
 
-/** Small letters with the look-alike digits read as letters, hyphens dropped: how the eye reads a name. */
-const squash = (name: string) => name.replace(/-/g, '').replace(/0/g, 'o').replace(/[1!|]/g, 'i').replace(/3/g, 'e').replace(/5/g, 's').replace(/9/g, 'g').replace(/4/g, 'a');
-const OURS = ['growsigning', 'growsignin', 'growsign', 'treegens', 'treegen'];
+/**
+ * How the eye reads a name: hyphens dropped, and every character that passes for another read as that other one. A
+ * digit for a letter (0 o, 1 i, 3 e, 5 s, 9 g, 4 a), a small L for an i, q for g, and two v for a w.
+ */
+const squash = (name: string) => name.replace(/-/g, '').replace(/0/g, 'o').replace(/[1!|l]/g, 'i').replace(/3/g, 'e').replace(/5/g, 's').replace(/9/g, 'g').replace(/4/g, 'a')
+  .replace(/q/g, 'g').replace(/vv/g, 'w');
+const OURS = ['growsigning', 'growsignin', 'growsign', 'treegens', 'treegen'].map(squash);
+// One letter swapped, dropped or added still reads as the name at a glance ("grovsigning", "treegems").
+const NEAR = ['growsigning', 'treegens'].map(squash);
+function within1(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+  return a.length > b.length ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+}
+function looksLikeOurs(eye: string): boolean {
+  if (OURS.some((o) => eye.includes(o))) return true;
+  for (const o of NEAR) for (const len of [o.length - 1, o.length, o.length + 1]) for (let i = 0; i + len <= eye.length; i++) if (within1(eye.slice(i, i + len), o)) return true;
+  return false;
+}
 
 /**
  * A name made from a document's name: accents taken off, small letters, everything else turned into single hyphens,
@@ -86,8 +130,11 @@ export function shareNameProblem(name: string): string | null {
   // A name that is all digits reads as a code or an id, not as a document.
   if (/^[0-9-]+$/.test(name)) return 'A link name needs at least one letter, so that it reads as the name of a document.';
   const eye = squash(name);
-  if (OURS.some((o) => eye.includes(o))) return 'A link name cannot hold the name of this service or of Treegens: the link would read as a page of ours.';
+  if (looksLikeOurs(eye)) return 'A link name cannot hold the name of this service or of Treegens, or a name that looks like one of them: the link would read as a page of ours.';
   const words = name.split('-');
+  const flat = name.replace(/-/g, '');
+  const brand = BRANDS.find((b) => flat.includes(b) || eye.includes(squash(b))) || words.find((w) => BRAND_WORDS.has(w));
+  if (brand) return `A link name cannot hold "${brand}": the link would read as a page of theirs. Name it after your own document.`;
   const claim = words.find((w) => CLAIMS.includes(w));
   if (claim) return `A link name cannot hold the word "${claim}": nobody opening it could check that.`;
   if (words.every((w) => OUR_WORDS.has(w) || /^\d+$/.test(w))) return `"${name}" reads as a page of this service, not as a document. Add a word that says what the document is, for example "${name}-agreement".`;

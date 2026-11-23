@@ -79,8 +79,10 @@ export async function tellSender(e: any, key: NotifyKey | 'always', build: (L: s
  * The sender's own "Your document is complete" email (finish in envelopes.ts), every line from en.json: in English it
  * reads word for word as it always has. `impact` is left out for an account that switched the paper estimate off.
  */
-export function senderCompletedMail(L: string, e: any, o: { ready: boolean; copy: 'attached' | 'too-large' | 'not-ready'; impact: { sheets: number; litresWater: number } | null }): SenderMail {
+export function senderCompletedMail(L: string, e: any, o: { ready: boolean; copy: 'attached' | 'too-large' | 'not-ready'; impact: { sheets: number; litresWater: number } | null; trees?: number }): SenderMail {
   const lines = [st(L, o.ready ? 'mail.sender.complete.ready' : 'mail.sender.complete.preparing')];
+  // What the signatures of this document plant: the same sentence as completedMailLine in src/lib/impactwords.ts. 0 says nothing.
+  if (Number(o.trees) >= 1) lines.push(st(L, 'mail.sender.complete.trees', { count: Number(o.trees) }));
   if (o.copy !== 'not-ready' && e.final_sha256)
     lines.push(st(L, o.copy === 'attached' ? 'mail.sender.complete.fingerprint_attached' : 'mail.sender.complete.fingerprint_link', { sha: e.final_sha256, url: `${baseUrl()}/verify`, id: e.id }));
   if (o.impact) lines.push(st(L, 'mail.sender.complete.paper', { count: o.impact.sheets, litres: Math.round(o.impact.litresWater), url: `${baseUrl()}/impact` }));
