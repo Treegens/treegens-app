@@ -280,3 +280,42 @@ export const SAVED_KEYS = ['type', 'label', 'required', 'validation', 'options',
 /** The kinds a saved field can be. A note and a strike-out are the sender's own words; a stamp is a picture. */
 export const SAVABLE = ['signature', 'initials', 'date_signed', 'full_name', 'first_name', 'last_name', 'email', 'company', 'title', 'text', 'number', 'date', 'checkbox', 'radio', 'dropdown', 'attachment', 'drawing'];
 export const savedKey = (name: any): string => String(name ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+
+// ---- 8. A box they fill in, and your own text ---------------------------------------------------------------------
+// Two kinds that were easy to mix up. The stored types keep their names ('text' and 'note'); only what people read
+// changed. "Fill in" is a blank the signer types into. "Your text" is the sender's own words, printed on the page.
+
+/** What the editor calls the two kinds, wherever a kind is named. */
+export const FILL_IN_NAME = 'Fill in';
+export const YOUR_TEXT_NAME = 'Your text';
+/** One line under the name at the moment of choosing: who types. Kinds without a line need none. */
+export const KIND_HINT: Record<string, string> = {
+  text: 'They type here',
+  note: 'You type, they read',
+  email: 'Their email, filled in for them',
+};
+/** The longer sentence, said once a kind is picked or selected. */
+export const KIND_SAYS: Record<string, string> = {
+  text: 'A blank for the signer. They type the answer when they sign.',
+  note: 'Your own words, printed on the page. Nobody can type here when signing.',
+  email: 'Prints the email address you sent the document to. They type nothing.',
+};
+/** What the signer reads in an empty box to type into when the sender gave it no label. */
+export const TYPE_HERE = 'Type here';
+/** What a "Your text" box says in the editor only, while it is still empty. Never sent, never printed. */
+export const YOUR_TEXT_EMPTY = 'Type your text';
+/** The word older drafts put into a new box before anything was typed. It was never the sender's wording. */
+export const OLD_NOTE_WORD = 'Note';
+
+/** The words of a "Your text" box, or '' when it holds none. Spaces and line breaks alone are not words. */
+export const noteWords = (f: any): string => (f?.type === 'note' ? String(f.value ?? '').trim() : '');
+/** A "Your text" box with nothing in it. It is not shown to anyone who signs and is not printed. */
+export const isEmptyNote = (f: any): boolean => f?.type === 'note' && !noteWords(f);
+/** A box that still holds only the word an older draft started it with. */
+export const isLeftoverNote = (f: any): boolean => f?.type === 'note' && noteWords(f) === OLD_NOTE_WORD;
+/** The boxes to bring up before sending: empty ones, and ones that still say only "Note". */
+export const unwrittenNotes = <F extends { type: string; value?: any }>(fields: F[]): F[] => fields.filter((f) => isEmptyNote(f) || isLeftoverNote(f));
+/** What a "Your text" box is saved with: its words as typed, or nothing at all when there are none. */
+export const noteValue = (value: any): string | null => (String(value ?? '').trim() ? String(value) : null);
+/** What is on a "Fill in" box in the editor: its label, or who types there. */
+export const fillInTag = (f: any, person?: string | null): string => String(f?.label || '').trim() || (person ? `${person} types here` : FILL_IN_NAME);

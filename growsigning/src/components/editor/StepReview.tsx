@@ -13,6 +13,7 @@ import { PaperCheck, EnoughLink } from './PaperCheck';
 import { SendWords, ReviewMore, SavingBox } from './ReviewParts';
 import { PrintCheck } from './PrintCheck';
 import { LabelCheck } from './LabelCheck';
+import { NoteCheck } from './NoteCheck';
 import { ChecksCheck } from './ChecksCheck';
 import { LogicCheck } from './FieldLogic';
 import { CustomFieldsStep } from './CustomFieldsStep';
@@ -155,6 +156,8 @@ export function StepReview({ ed, problems, busy, changed, error, conflict, close
       {!closed && docs.filter((d) => phoneWeight(d)).map((d) => (
         <div key={`phone-${d.id}`} className="notice warn"><b>{d.name || 'A file'}:</b> {phoneWeight(d)} <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => ed.go(1)}>Go to the files</button></div>
       ))}
+      {/* "Your text" boxes with no words in them, each with a way to write it or take it off (NoteCheck.tsx). */}
+      {!closed && <NoteCheck ed={ed} />}
       {/* Fields a screen reader can only name by their type, each with a way to the box where the label is typed. */}
       {!closed && <LabelCheck ed={ed} />}
       {!closed && <LogicCheck ed={ed} />}

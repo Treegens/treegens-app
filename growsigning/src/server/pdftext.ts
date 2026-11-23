@@ -133,7 +133,7 @@ export function printProblems(e: any, sender?: any): { where: string; chars: str
   const names = new Map<string, string>((e.recipients || []).map((r: any) => [r.id, r.name]));
   for (const f of e.fields || []) {
     if (['signature', 'initials', 'attachment', 'checkbox', 'radio', 'full_name', 'email', 'date_signed'].includes(f.type)) continue;
-    const what = f.label ? `"${f.label}"` : f.type === 'note' ? 'A note' : `A ${f.type} field`;
+    const what = f.label ? `"${f.label}"` : f.type === 'note' ? 'Your text' : f.type === 'text' ? 'A fill in field' : `A ${f.type} field`;
     check(`${what} on page ${f.page + 1}${f.recipient_id && names.get(f.recipient_id) ? `, in the part for ${names.get(f.recipient_id)}` : ''}`, f.value);
   }
   return out;

@@ -23,6 +23,8 @@ import { ConvertNotes } from './ConvertNotes';
 import { NameChoice, DateFrom, FieldLookMore, SavedPalette, kindTitle, onlyDateSource, ButtonWordsNote } from './FieldLook';
 import { AnyoneOption, SharedChoice, assignedValue, assignPatch, assignIds, canvasWho, offersAnyone, useDropShared, SHARED_COLOR } from './SharedChoice';
 import { paletteKinds, personLabel } from '@/lib/editorux';
+// "Fill in" (they type) and "Your text" (you type): the names, the one-line hints and the empty box (src/lib/fieldkinds.ts).
+import { KIND_HINT, KIND_SAYS, YOUR_TEXT_EMPTY, isEmptyNote, fillInTag } from '@/lib/fieldkinds';
 const senderStamp = (f: any) => f?.type === 'stamp' && !f.recipient_id;
 
 const SNAP_PX = 5; // how close, in screen pixels, before a field jumps into line
@@ -49,6 +51,7 @@ export function StepFields({ ed }: { ed: Ed }) {
   const stamps = useStamps();
   const canvas = useRef<HTMLDivElement>(null);
   const reveal = useRef<{ id: string; focus: boolean } | null>(null);
+  const typeIn = useRef<string | null>(null); // a "Your text" box was just dropped: the cursor goes into its words
   const pulled = useRef(false); // a field was just dragged in from the list, so the click that follows is not a pick
   const pressed = useRef(false); // a press that started on a field must not count as a click on the page
 
@@ -105,6 +108,17 @@ export function StepFields({ ed }: { ed: Ed }) {
     el.scrollIntoView({ block: 'center', inline: 'nearest' });
     if (r.focus) el.focus({ preventScroll: true });
   });
+  // A "Your text" box that was just dropped: its settings open and the cursor is in its words, so it is typed
+  // straight away and never left empty by accident.
+  useEffect(() => {
+    const id = typeIn.current;
+    if (!id || sel !== id) return;
+    const box = document.getElementById('ed-note-text') as HTMLTextAreaElement | null;
+    if (!box) return;
+    typeIn.current = null;
+    const t = setTimeout(() => box.focus({ preventScroll: !window.matchMedia('(max-width: 900px)').matches }), 30);
+    return () => clearTimeout(t);
+  });
 
   // Arriving from the review step's list of unfinished formats (ChecksCheck.tsx): More options opens, focus on Format and limits.
   const openChecks = (id: string) => {
@@ -114,6 +128,7 @@ export function StepFields({ ed }: { ed: Ed }) {
     setTimeout(() => document.querySelector<HTMLElement>('#ed-field-more .ed-checks-fold > summary')?.focus({ preventScroll: true }), 50);
     return true;
   };
+  // The same from the list of empty "Your text" boxes (NoteCheck.tsx): those have no label, so the cursor goes into their words.
   // Arriving from the review step's list of fields without a label: that field is selected, its settings are
   // open, and once its page is drawn it is brought into view with the cursor in the Label box.
   useEffect(() => {
@@ -135,7 +150,7 @@ export function StepFields({ ed }: { ed: Ed }) {
         if (r.bottom > top - 12) window.scrollBy({ top: r.bottom - top + 24 });
       }
       if (openChecks(id)) return; // an unfinished format: its More options opens on Format and limits
-      document.getElementById('ed-label')?.focus({ preventScroll: true });
+      (document.getElementById('ed-note-text') || document.getElementById('ed-label'))?.focus({ preventScroll: true });
     }, 100);
     return () => clearInterval(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -169,7 +184,9 @@ export function StepFields({ ed }: { ed: Ed }) {
     setFields((l) => [...l, f]);
     setSel(f.id);
     setTool(null);
-    if (fromKeyboard) reveal.current = { id: f.id, focus: true };
+    // Your own text is typed at once: the settings open (on a phone they slide up) with the cursor in the box.
+    if (type === 'note') (setSheet(true), (typeIn.current = f.id));
+    if (fromKeyboard) reveal.current = { id: f.id, focus: type !== 'note' };
   }
 
   function place(doc: any, page: number, x: number, y: number) {
@@ -492,9 +509,13 @@ export function StepFields({ ed }: { ed: Ed }) {
                 // which is asked before the change is saved.
                 const again = anyLocked ? `${ed.lockedNames} already finished. Adding this means they have to sign again. You are asked before anything is saved.` : undefined;
                 return (
-                  <button key={t} type="button" className={tool === t ? 'on' : ''} title={again} disabled={!!ed.wording}
+                  // Who types is said under the two kinds that were mixed up, and under Email (src/lib/fieldkinds.ts KIND_HINT).
+                  <button key={t} type="button" className={`${tool === t ? 'on' : ''}${KIND_HINT[t] ? ' ed-kind' : ''}`} title={again || KIND_SAYS[t]} disabled={!!ed.wording} data-kind={t}
+                    aria-label={KIND_HINT[t] ? label : undefined} aria-describedby={KIND_HINT[t] ? `ed-kind-${t}` : undefined}
                     onPointerDown={(e) => pull(e, t)}
-                    onClick={(e) => (pulled.current ? undefined : e.detail === 0 ? addInView(t) : setTool(tool === t ? null : t))} aria-pressed={tool === t}>{label}</button>
+                    onClick={(e) => (pulled.current ? undefined : e.detail === 0 ? addInView(t) : setTool(tool === t ? null : t))} aria-pressed={tool === t}>
+                    {KIND_HINT[t] ? <span className="ed-kind-in"><span>{label}</span><small id={`ed-kind-${t}`}>{KIND_HINT[t]}</small></span> : label}
+                  </button>
                 );
               })}
               {/* The six kinds most documents need are always there. Every other kind is behind this one button. */}
@@ -508,7 +529,7 @@ export function StepFields({ ed }: { ed: Ed }) {
         <p className="small ed-status" role="status">{finding ? `${finding}…` : note && note.count === list.length ? note.text : ''}</p>
         {suggest.panel}
         <p className="muted small ed-hint">
-          {ed.wording ? `The wording is locked, so the fields stay as the template has them. Select a field to see it, and to fill in one the template left empty for you. To change the fields, ask ${ed.wording.ask}.` : tool ? `Click on the page to place the ${TLABEL[tool].toLowerCase()} field.` : 'Drag a field onto the page, or pick one and click where it goes.'}
+          {ed.wording ? `The wording is locked, so the fields stay as the template has them. Select a field to see it, and to fill in one the template left empty for you. To change the fields, ask ${ed.wording.ask}.` : tool === 'text' ? 'Click on the page where they should type.' : tool === 'note' ? 'Click on the page where your words should go.' : tool ? `Click on the page to place the ${TLABEL[tool].toLowerCase()} field.` : 'Drag a field onto the page, or pick one and click where it goes.'}
           {!ed.wording && !tool && <span className="ed-hide-sm"> Drag to move, pull the corner to resize.</span>}
         </p>
       </div>
@@ -540,11 +561,11 @@ export function StepFields({ ed }: { ed: Ed }) {
                         const locked = isLockedField(f);
                         const owner = f.recipient_id ? rcps.find((r) => r.id === f.recipient_id) : null;
                         return (
-                          <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${f.type === 'stamp' ? ' stamp' : ''}${strikeClass(f)}${locked ? ' locked' : ''}`}
+                          <div key={f.id} data-fid={f.id} className={`field edit${sel === f.id ? ' sel' : ''}${f.type === 'checkbox' || f.type === 'radio' ? ' box' : ''}${f.type === 'stamp' ? ' stamp' : ''}${strikeClass(f)}${locked ? ' locked' : ''}${isEmptyNote(f) ? ' ed-empty' : ''}`}
                             style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, ['--fc' as any]: f.shared && offersAnyone(f, open) ? SHARED_COLOR : color(f.recipient_id), borderRadius: f.type === 'radio' ? '50%' : undefined }}
                             tabIndex={0} role="button" aria-label={`${kindTitle(f, list, true)} field${canvasWho(f, open, owner ? ` for ${label(owner)}` : senderStamp(f) ? ', your own stamp' : '')}, page ${page + 1}${locked ? ', locked' : ''}`}
                             onClick={(e) => e.stopPropagation()} onFocus={() => setSel(f.id)} onPointerDown={(e) => drag(e, f, 'move')}>
-                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? f.value : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || kindTitle(f, list)}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
+                            {f.type !== 'checkbox' && f.type !== 'radio' && f.type !== 'strike' && <span className="tag">{locked && <Lock size={11} />}{f.type === 'note' ? (isEmptyNote(f) ? <i>{YOUR_TEXT_EMPTY}</i> : f.value) : f.type === 'text' ? fillInTag(f, owner && !f.shared ? label(owner) : null) : senderStamp(f) ? `Your stamp${stamps.find((x) => x.id === f.stamp_id) ? `: ${stamps.find((x) => x.id === f.stamp_id).name}` : ''}` : f.label || kindTitle(f, list)}{!!f.required && f.type !== 'note' && <span className="req">*</span>}</span>}
                             {sel === f.id && !locked && <span className="grip" onPointerDown={(e) => drag(e, f, 'resize')} />}
                           </div>
                         );
@@ -602,6 +623,8 @@ export function StepFields({ ed }: { ed: Ed }) {
                 <h3 className="ed-hide-sm" style={{ marginBottom: 12 }}>{kindTitle(selected, list, true)}</h3>
                 {/* A strike-out has nothing to set: it is a line, it belongs to nobody, and its place is the whole of it. */}
                 {selected.type === 'strike' && <p className="muted small" id="ed-strike-help">{STRIKE_HELP}</p>}
+                {/* Who types: said first for the two kinds that are easy to mix up, and for Email (src/lib/fieldkinds.ts). */}
+                {KIND_SAYS[selected.type] && <p className="muted small ed-kind-says" id="ed-kind-says">{selected.type === 'text' && selected.readonly ? 'They see what you prefilled here and cannot change it.' : selected.type === 'text' && !selected.shared && rcps.some((r) => r.id === selected.recipient_id) ? `A blank for ${label(rcps.find((r) => r.id === selected.recipient_id))}. They type the answer when they sign.` : KIND_SAYS[selected.type]}</p>}
                 {selected.type === 'stamp' ? (
                   <StampChoice field={selected} open={open} envelopeId={env.id} page={docs.find((d) => d.id === selected.document_id)?.page_sizes?.[selected.page] || { w: 612, h: 792 }} patch={(p) => patchField(selected.id, p)} />
                 ) : !SENDER_MARK(selected.type) && (
@@ -619,13 +642,13 @@ export function StepFields({ ed }: { ed: Ed }) {
                 {!SENDER_MARK(selected.type) && !senderStamp(selected) && !['date_signed', 'full_name', 'email', 'approve', 'decline'].includes(selected.type) && selected.formula == null && !selected.date_from && !selected.shared && (
                   <label className="check ed-tap" style={{ marginBottom: 12 }}><input type="checkbox" checked={!!selected.required} onChange={(e) => patchField(selected.id, { required: e.target.checked })} /> Required</label>
                 )}
-                {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">(shown to the signer, and read out by a screen reader)</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
+                {!SENDER_MARK(selected.type) && !senderStamp(selected) && <label className="f"><span>Label <span className="hint">{selected.type === 'text' ? '(the hint they see in the blank, and hear from a screen reader)' : '(shown to the signer, and read out by a screen reader)'}</span></span><input id="ed-label" value={selected.label || ''} maxLength={120} placeholder={selected.type === 'text' ? 'For example: Email for notices' : undefined} onChange={(e) => patchField(selected.id, { label: e.target.value })} /></label>}
                 {/* Which name a name field holds, and what a date from another date counts from (FieldLook.tsx). */}
                 <NameChoice field={selected} patch={(p) => patchField(selected.id, p)} />
                 <DateFrom field={selected} fields={list} patch={(p) => patchField(selected.id, p)} />
                 <ButtonWordsNote field={selected} people={rcps} />
-                {/* What a note says is the note itself, so it stays in view. Everything else that is rarely needed is under More options. */}
-                {selected.type === 'note' && <label className="f"><span>Text</span><textarea style={{ minHeight: 60 }} value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>}
+                {/* What your own text says is the whole of it, so it stays in view. Everything else that is rarely needed is under More options. */}
+                {selected.type === 'note' && <label className="f"><span>Your words <span className="hint">(printed on the page as you type them)</span></span><textarea id="ed-note-text" style={{ minHeight: 60 }} placeholder={YOUR_TEXT_EMPTY} aria-describedby="ed-kind-says" value={selected.value || ''} onChange={(e) => patchField(selected.id, { value: e.target.value })} /></label>}
                 {selected.type === 'dropdown' && <label className="f"><span>Options <span className="hint">(one per line)</span></span><textarea value={(selected.options || []).join('\n')} onChange={(e) => patchField(selected.id, { options: e.target.value.split('\n') })} onBlur={(e) => patchField(selected.id, { options: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })} /></label>}
                 {selected.type === 'radio' && <label className="f"><span>Group <span className="hint">(one choice per group)</span></span><input value={selected.group_name || ''} onChange={(e) => patchField(selected.id, { group_name: e.target.value })} /></label>}
                 <button type="button" className="btn sm ed-fieldmore" data-more="item" aria-expanded={fieldMore} aria-controls="ed-field-more" onClick={() => setFieldMore(!fieldMore)}>More options</button>

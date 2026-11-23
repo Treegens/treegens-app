@@ -236,7 +236,7 @@ test('a field shows Assigned to, Required and Label; the rest is under its More 
   const [shown, folded] = [panel.slice(0, panel.indexOf('data-more="item"')), panel.slice(panel.indexOf('{fieldMore && <div id="ed-field-more"'))];
   for (const w of ['<span>Assigned to</span>', '/> Required</label>', '<span>Label ']) assert.ok(shown.includes(w), w);
   // What a note says, a list's options and a choice's group are the field itself, so they stay in view.
-  for (const w of ['<span>Text</span>', 'Options <span', 'Group <span']) assert.ok(shown.includes(w), w);
+  for (const w of ['<span>Your words ', 'Options <span', 'Group <span']) assert.ok(shown.includes(w), w);
   // Format and limits live in FieldChecks.tsx (ds-fields-checks), placed under More options like the rest.
   for (const w of ['Prefilled value', 'Read only', '<FieldChecks', '<FieldLogic', 'Width <span', 'Height <span', '>Duplicate<', '>Copy to every page<']) {
     assert.ok(folded.includes(w), `${w} is under More options`);

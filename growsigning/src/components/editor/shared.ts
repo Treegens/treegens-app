@@ -4,11 +4,12 @@ import type { History } from './history';
 import type { KeptForPerson } from '../../lib/tplroles';
 
 // [type, label, width, height] with sizes as a fraction of the page. Height 0 means "make it square".
+// 'text' is the blank a signer types into ("Fill in"); 'note' is the sender's own words ("Your text"): the same names as FILL_IN_NAME and YOUR_TEXT_NAME in src/lib/fieldkinds.ts (tests/note-text.test.ts).
 export const TYPES: [string, string, number, number][] = [
   ['signature', 'Signature', 0.22, 0.055], ['initials', 'Initials', 0.08, 0.045], ['date_signed', 'Date signed', 0.14, 0.026], ['full_name', 'Name', 0.2, 0.026],
-  ['email', 'Email', 0.24, 0.026], ['company', 'Company', 0.2, 0.026], ['title', 'Title', 0.2, 0.026], ['text', 'Text', 0.22, 0.026],
+  ['email', 'Email', 0.24, 0.026], ['company', 'Company', 0.2, 0.026], ['title', 'Title', 0.2, 0.026], ['text', 'Fill in', 0.22, 0.026],
   ['number', 'Number', 0.12, 0.026], ['date', 'Date', 0.14, 0.026], ['checkbox', 'Checkbox', 0.024, 0], ['radio', 'Radio', 0.024, 0],
-  ['dropdown', 'Dropdown', 0.2, 0.026], ['attachment', 'Attachment', 0.2, 0.03], ['note', 'Note', 0.25, 0.026],
+  ['dropdown', 'Dropdown', 0.2, 0.026], ['attachment', 'Attachment', 0.2, 0.03], ['note', 'Your text', 0.25, 0.026],
   // The sender's line through wording printed on the page (src/lib/strike.ts). Like a note, it belongs to nobody.
   ['strike', 'Strike out', 0.3, 0.02],
   // A company stamp or seal (src/server/stamps.ts). It starts at 40 mm across: see add() in StepFields.tsx.
@@ -44,7 +45,7 @@ export function makeField(kind: string, documentId: string, page: number, recipi
   if (type === 'approve' || type === 'decline') over = { required: false, ...over };
   return {
     id: newId('fld'), document_id: documentId, recipient_id: SENDER_MARK(type) ? null : recipientId, type, page, ...box,
-    required: !['checkbox', 'company', 'title', 'attachment', 'strike'].includes(type), label: '', value: type === 'note' ? 'Note' : '',
+    required: !['checkbox', 'company', 'title', 'attachment', 'strike'].includes(type), label: '', value: '', // a new "Your text" box starts empty: no word ever stands in for the sender's wording
     options: type === 'dropdown' ? ['Option 1', 'Option 2'] : [], group_name: type === 'radio' ? 'Group 1' : '', validation: '', readonly: SENDER_MARK(type),
     ...over,
   };

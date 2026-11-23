@@ -28,6 +28,8 @@ export type Found = Box & {
   /** Words printed next to the place that may name who it is for: the heading of its table column, the heading over
    *  its signature block, a name printed under the line. assignSigners() matches them to the people on the document. */
   who?: string[];
+  /** The table or group of signature blocks a place is part of. Signer numbers count from 1 inside each one. */
+  set?: string;
   group?: string;
   options?: string[];
   required?: boolean;
@@ -138,7 +140,7 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 
 // What the finder keeps about a place while it works. `rank` says which find wins when two want the same spot:
 // 1 a tag, 2 a blank drawn after a label, 3 a cell of a signature table, 4 a label that ends in a colon, 5 a bare label.
-type Raw = Omit<Found, 'page'> & { rank: number; row?: number; lx?: number };
+type Raw = Omit<Found, 'page'> & { rank: number; row?: number; lx?: number; said?: string };
 /** A piece of a line that stands apart: a table cell, or a label with space after it. */
 type Cell = { x0: number; x1: number; y: number; h: number; text: string };
 type Area = { x0: number; x1: number; top: number; bottom: number };
@@ -231,7 +233,7 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
       const x0 = line.cx[b.start] + 0.4 * line.h;
       const x1 = Math.min(x0 + (WIDTH[type] || 0.2) * PW, roomUntil(line, b.start));
       if (x1 - x0 < 0.05 * PW) continue;
-      out.push({ ...box(line, type, x0, x1), type, source: 'label', rank: 4, row, lx });
+      out.push({ ...box(line, type, x0, x1), type, source: 'label', rank: 4, row, lx, said: label });
     }
   });
 
@@ -274,8 +276,9 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
   const inCell = (type: string, c: Area, base: number, h: number): Box | null => {
     const padX = Math.min(3, 0.06 * (c.x1 - c.x0)), padY = Math.min(2, 0.1 * (c.bottom - c.top));
     const iw = c.x1 - c.x0 - 2 * padX, ih = c.bottom - c.top - 2 * padY;
-    if (iw < 0.05 * PW || ih < 0.85 * h) return null;
-    const w = Math.min(iw, (WIDTH[type] || 0.2) * PW);
+    if (iw < 0.05 * PW || ih < Math.max(TALL[type] ? 1.1 * h : 0.85 * h, TALL[type] ? 12 : 9)) return null; // nobody writes in a slit
+    // Every field in a table fills its cell, so the columns look even. A very wide cell is not filled to the end.
+    const w = Math.min(iw, 0.24 * PW);
     const fh = Math.min(ih, TALL[type] ? 0.06 * PH : 1.5 * h);
     // A signature takes the middle of its cell. One line of writing sits on the label's own line.
     const y = TALL[type] ? c.top + padY + (ih - fh) / 2 : clamp(base + 0.3 * h - fh, c.top + padY, c.bottom - padY - fh);
@@ -289,41 +292,89 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
   //  Date      |             |              |
   // Every empty cell on a label's row gets that label's field. A cell with text in it is left alone.
   const inTable = new Set<number>();
+  // Labels in one column start at the same x, or end at the same x when they are set against the right of their cell.
+  const inColumn = (c: Cell, lab: Cell) => Math.abs(c.x0 - lab.x0) <= 1.5 * lab.h || Math.abs(c.x1 - lab.x1) <= 1.5 * lab.h;
+  const mid = (c: Cell) => c.y - 0.35 * c.h;
   for (let r = 0; r < cells.length; r++) {
     const lab = cells[r][0];
     if (!lab || inTable.has(r) || !standaloneLabel(lab.text)) continue;
     const h = lab.h;
     const colMin = lab.x1 + 0.5 * h;
-    // Upwards to the header: the highest row close by that has cells to the right of the label column.
-    let hdr = -1;
+    // Upwards to the header: the first row that has cells to the right and no label of its own. Rows that start with
+    // a label are rows of the table. A line higher up (a centred heading, a place and date) is not looked at. When
+    // there is no header, a "Name" row with the names typed in does the same job.
+    let hdr = -1, named = -1;
     for (let u = r - 1, prev = r; u >= 0; prev = u, u--) {
       if (Y(prev) - Y(u) > 3.6 * h) break;
       const left = cells[u].filter((c) => c.x0 < colMin), right = cells[u].filter((c) => c.x0 >= colMin);
-      if (left.length > 1 || (left.length && Math.abs(left[0].x0 - lab.x0) > 1.5 * h)) break;
-      if (right.length) hdr = u;
-      else if (!left.length || !standaloneLabel(left[0].text)) break;
+      if (left.length > 1 || (left.length && !inColumn(left[0], lab))) break;
+      const type = left.length ? standaloneLabel(left[0].text) : null;
+      if (right.length && !type) { hdr = u; break; }
+      if (!type) break;
+      if (right.length && type === 'full_name') named = u;
     }
+    if (hdr < 0) hdr = named;
     if (hdr < 0) continue;
     const cols = cells[hdr].filter((c) => c.x0 >= colMin);
     if (cols.length > 8 || cols.every((c) => standaloneLabel(c.text))) continue;
+    // In a table with drawn borders the header must be part of the same table, to the right of the label column.
+    const own = ruledCell(lab.x0 + 1, mid(lab));
+    if (own && !cols.every((c) => { const hc = ruledCell(c.x0 + 1, mid(c)); return hc && hc.x0 >= own.x1 - 2; })) continue;
 
-    // Downwards: the rows of the table. A row with nothing in the label column carries on the row above it.
+    // Downwards: the rows of the table. A row with nothing in the label column carries on the row above it. The
+    // table ends where the type size changes, or where the drawn borders end.
     const edge = cols[0].x0 - 0.3 * h;
-    const bands: { row: number; last: number }[] = [];
+    const bands: { row: number; last: number; text: string }[] = [];
     let end = hdr;
     for (let s = hdr + 1; s < cells.length; end = s, s++) {
       if (Y(s) - Y(end) > Math.max(5 * h, 0.075 * PH)) break;
       const left = cells[s].filter((c) => c.x0 < edge);
-      if (left.length > 1 || (left.length && (Math.abs(left[0].x0 - lab.x0) > 1.5 * h || left[0].x1 > cols[0].x0))) break;
-      if (left.length) bands.push({ row: s, last: s });
+      if (left.length > 1 || (left.length && (!inColumn(left[0], lab) || left[0].x1 > cols[0].x0))) break;
+      if (left.length && (Math.abs(left[0].h - h) > 0.15 * h || (own && !ruledCell(left[0].x0 + 1, mid(left[0]))))) break;
+      if (left.length) bands.push({ row: s, last: s, text: left[0].text });
       else if (bands.length) bands[bands.length - 1].last = s;
     }
+    // A label that wraps in its cell ("Email for" over "notices") is one row.
+    for (let k = 0; k + 1 < bands.length; k++) {
+      const joined = bands[k].text + ' ' + bands[k + 1].text;
+      if (standaloneLabel(bands[k].text) || standaloneLabel(bands[k + 1].text) || !standaloneLabel(joined)) continue;
+      if (bands[k].last !== bands[k].row || Y(bands[k + 1].row) - Y(bands[k].row) > 1.6 * h) continue;
+      bands.splice(k, 2, { row: bands[k].row, last: bands[k + 1].last, text: joined });
+    }
+    const kinds = bands.map((b) => standaloneLabel(b.text));
+    // People sign in a signature table. A table with no row for a signature is a table of data with a gap in it.
+    if (!kinds.some((k) => k === 'signature' || k === 'initials')) continue;
+    // Labels again in the other columns ("Signature    Signature") are two blocks side by side, not a table.
+    if (bands.some((b, k) => kinds[k] && cells[b.row].some((c) => c.x0 >= edge && standaloneLabel(c.text)))) continue;
+
+    // Which column a piece of text belongs to, by its middle.
+    const colOf = (c: Cell) => {
+      const at = (c.x0 + c.x1) / 2;
+      let n = -1;
+      cols.forEach((col, i) => { if (at >= col.x0 - 0.8 * h) n = i; });
+      return n;
+    };
+    // Who each column is for: its header cell, more lines of the same header cell above it ("Treegens DAO" over
+    // "James Cohen"), and a name typed into a "Name" row.
+    const who: string[][] = cols.map((c) => [c.text]);
+    for (let u = hdr - 1, prev = hdr; u >= 0 && hdr - u <= 3; prev = u, u--) {
+      if (Y(prev) - Y(u) > 1.7 * lines[prev].h || cells[u].some((c) => c.x0 < colMin) || cells[u].length > cols.length) break;
+      const at = cells[u].map(colOf);
+      if (at.some((n) => n < 0) || new Set(at).size !== at.length) break;
+      if (cells[u].some((c, i) => c.x1 > (cols[at[i] + 1]?.x0 ?? Infinity) || (own && ruledCell(c.x0 + 1, mid(c))?.top !== ruledCell(cols[at[i]].x0 + 1, mid(cols[at[i]]))?.top))) break;
+      cells[u].forEach((c, i) => who[at[i]].push(c.text));
+    }
+    bands.forEach((band, k) => {
+      if (kinds[k] !== 'full_name' || band.row === hdr) return;
+      for (let s = band.row; s <= band.last; s++) for (const c of cells[s]) if (c.x0 >= edge && colOf(c) >= 0 && c.text.length <= 60) who[colOf(c)].push(c.text);
+    });
+
     const top = (k: number) => Y(bands[k].row) - 1.25 * lines[bands[k].row].h;
     bands.forEach((band, k) => {
       const c0 = cells[band.row][0];
-      const type = standaloneLabel(c0.text);
+      const type = kinds[k];
       if (!type) return;
-      inTable.add(band.row);
+      for (let s = band.row; s <= band.last; s++) inTable.add(s);
       // Without drawn borders the row runs from just above its label to just above the next row's label.
       let bottom: number;
       if (k + 1 < bands.length) bottom = top(k + 1) - 0.1 * h;
@@ -341,7 +392,7 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
         }
         if (!free({ x0: cell.x0 + 1, x1: cell.x1 - 1, top: cell.top + 1, bottom: cell.bottom - 1 })) return;
         const b = inCell(type, cell, Y(band.row), c0.h);
-        if (b) out.push({ ...b, type, source: 'label', rank: 3, ...(cols.length > 1 ? { signer: i + 1 } : {}), who: [col.text] });
+        if (b) out.push({ ...b, type, source: 'label', rank: 3, set: `t${hdr}`, ...(cols.length > 1 ? { signer: i + 1 } : {}), who: who[i] });
       });
     });
   }
@@ -349,6 +400,25 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
   // Bare labels: a line that is nothing but labels, with room to write next to it, on a line drawn above it, in the
   // empty cells of a ruled row beside it, or under it.
   const labelOnly = (r: number) => r >= 0 && r < cells.length && !inTable.has(r) && cells[r].length > 0 && cells[r].every((c) => standaloneLabel(c.text));
+  const signs = (c: Cell) => /^(signature|initials)$/.test(standaloneLabel(c.text) || '');
+  // Label lines under each other that share a left edge are one stack: "Signature" over "Name" over "Date".
+  const linked = (a: number, b: number) => labelOnly(a) && labelOnly(b) && Math.abs(Y(a) - Y(b)) <= 4.5 * lines[a].h && cells[a].some((c) => cells[b].some((o) => Math.abs(o.x0 - c.x0) <= 1.5 * c.h));
+  const stackSigns = (r: number) => {
+    let a = r, b = r;
+    while (linked(a - 1, a)) a--;
+    while (linked(b, b + 1)) b++;
+    // A signature needs room over its line. Words one under the other with no space between (an index) have none.
+    for (let k = a; k <= b; k++) if (cells[k].some(signs) && (k === 0 || Y(k) - Y(k - 1) >= 1.8 * lines[k].h)) return true;
+    return false;
+  };
+  // "Name   Signature   Date" over rows of people is the head of a list, not a place to sign: text sits under a
+  // label, or the drawn columns carry on under the row.
+  const headOfList = (r: number) => {
+    for (let s = r + 1; s < cells.length && Y(s) - Y(r) <= 8 * lines[r].h; s++)
+      if (!labelOnly(s) && cells[s].some((o) => cells[r].some((c) => o.x0 < c.x1 && o.x1 > c.x0))) return true;
+    const under = cells[r].filter((c) => { const own = ruledCell(c.x0 + 1, mid(c)); return own && ruledCell(c.x0 + 1, own.bottom + 4); });
+    return under.length >= 2;
+  };
   for (let r = 0; r < cells.length; r++) {
     if (!labelOnly(r)) continue;
     cells[r].forEach((c, j) => {
@@ -358,10 +428,14 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
       const add = (b: Box, more: Partial<Raw> = {}) => out.push({ ...b, type, source: 'label', rank: 5, row: r, lx: c.x0, ...more });
       const wide = (WIDTH[type] || 0.2) * PW;
       const py = c.y - 0.35 * h;
+      const hasColon = /[:：]\s*$/.test(c.text);
+      if (!hasColon && h > 1.2 * bodySize) return; // a heading
 
       // 1. A ruled row with no header: the empty cells to the right of the label, one per person when there are more.
+      // Without a colon the row has to be part of a signature block: a signature label in the same column close by.
       const own = ruledCell(c.x0 + 1, py);
-      if (own) {
+      const sigClose = signs(c) || cells.some((row) => row.some((o) => signs(o) && Math.abs(o.y - c.y) <= 0.2 * PH && inColumn(o, c)));
+      if (own && (hasColon || sigClose)) {
         const empty: Area[] = [];
         for (let at = own; empty.length < 6; ) {
           const next = ruledCell(at.x1 + 3, py);
@@ -369,12 +443,15 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
           empty.push((at = next));
         }
         const made = empty.map((cell) => inCell(type, cell, c.y, h));
-        if (made.some(Boolean)) return void made.forEach((b, i) => b && add(b, { rank: 3, lx: undefined, ...(empty.length > 1 ? { signer: i + 1 } : {}) }));
+        if (made.some(Boolean)) return void made.forEach((b, i) => b && add(b, { rank: 3, lx: undefined, set: `r${r}`, ...(empty.length > 1 ? { signer: i + 1 } : {}) }));
       }
 
-      // 2. A line drawn just above the label is the line to sign on.
+      // 2. A line drawn just above the label is the line to sign on. One line of words may sit between the two: the
+      // name of the person, printed under their line.
+      const between = (a: { y: number; x0: number; x1: number }) => items.filter((i) => i.x < a.x1 && i.x + i.w > a.x0 && i.y > a.y && i.y < c.y - 0.5 * h);
       const on = own ? undefined : across
-        .filter((a) => a.y > c.y - 2.4 * h && a.y < c.y - 0.75 * h && a.x0 <= c.x0 + 1.5 * h && a.x1 >= c.x0 + 0.08 * PW && !down.some((v) => v.x > a.x0 - 2 && v.x < a.x1 + 2 && v.y0 - 2 <= a.y && v.y1 + 2 >= a.y))
+        .filter((a) => a.y > c.y - 4.2 * h && a.y < c.y - 0.75 * h && a.x0 <= c.x0 + 1.5 * h && a.x1 >= c.x0 + 0.08 * PW && a.x1 - a.x0 <= 0.62 * PW && !down.some((v) => v.x > a.x0 - 2 && v.x < a.x1 + 2 && v.y0 - 2 <= a.y && v.y1 + 2 >= a.y))
+        .filter((a) => { const mids = between(a); return mids.length ? mids.every((i) => Math.abs(i.y - mids[0].y) <= 0.35 * i.h && i.h <= 1.6 * h) : a.y > c.y - 2.4 * h; })
         .sort((a, b) => b.y - a.y)[0];
       if (on) {
         const x1 = Math.min(on.x1, on.x0 + 1.3 * wide);
@@ -384,13 +461,18 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
         if (bottom - up >= h) return void add({ x: on.x0 / PW, y: Math.max(0, up) / PH, w: (x1 - on.x0) / PW, h: (bottom - Math.max(0, up)) / PH });
       }
 
-      // A label without a colon could be a heading. It counts when it is one of a set (two on a line with space under
-      // them, or stacked with another label), or a lone "Signature" with room under it, in the size of the body text.
-      const hasColon = /[:：]\s*$/.test(c.text);
+      // 2b. The same with a line typed as underscores or dots: "____________" with "Signature" under it.
+      const typed = r > 0 && Y(r) - Y(r - 1) <= 2.4 * h ? cells[r - 1].find((o) => /^(_{3,}|\.{5,}|…{2,})$/.test(o.text) && o.x0 <= c.x0 + 1.5 * h && o.x1 >= c.x0 + 0.05 * PW) : undefined;
+      if (typed) return void add(box(lines[r - 1], type, typed.x0, typed.x1), { rank: 2 });
+
+      // A label without a colon could be a heading, a word in a list or the last word of a paragraph. It counts when
+      // it is part of a signature block: stacked with other labels, one of them for a signature, or two labels on a
+      // line with space under them, one of them for a signature. "3. Signature" is the heading of a clause.
       if (!hasColon) {
+        if (/^\s*(?:\(?[0-9a-z]{1,2}[.)]|[•\-*·])\s/i.test(c.text)) return;
         const roomUnder = r + 1 >= cells.length || Y(r + 1) - c.y >= 2.5 * h || labelOnly(r + 1);
         const stacked = [r - 1, r + 1].some((n) => labelOnly(n) && Math.abs(Y(n) - c.y) <= 4.5 * h && cells[n].some((o) => Math.abs(o.x0 - c.x0) <= 1.5 * h));
-        if (h > 1.2 * bodySize || !(stacked || (roomUnder && (cells[r].length > 1 || type === 'signature')))) return;
+        if (!((stacked && stackSigns(r)) || (cells[r].length > 1 && cells[r].some(signs) && roomUnder && !headOfList(r)))) return;
       }
 
       // 3. To the right of the label, up to the next label or the margin.
@@ -411,7 +493,18 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
 
   // Two places never share a spot. The surer find stays.
   const kept: Raw[] = [];
-  for (const f of [...out].sort((a, b) => a.rank - b.rank)) if (!kept.some((k) => overlap(f, k) >= 0.3)) kept.push(f);
+  // A colon label with nothing drawn after it is dropped when its space is not empty after all, and when it is the
+  // line that leads into the signatures ("Signed by the parties:" over the table) and not a place to sign itself.
+  const LEAD_IN = /\b(parties|both|all|each|following|below|undersigned|organi[sz]ations|companies|signatories|witnesses)\b/i;
+  const dropped = (f: Raw) => {
+    if (f.rank !== 4) return false;
+    if (!free(toArea(f))) return true;
+    if (f.type !== 'signature') return false;
+    if (!standaloneLabel(f.said || '') && LEAD_IN.test(f.said || '')) return true;
+    const bottom = (f.y + f.h) * PH, reach = 6 * lines[f.row!].h;
+    return out.some((t) => t.set?.[0] === 't' && t.y * PH > bottom - 2 && t.y * PH - bottom <= reach);
+  };
+  for (const f of [...out].sort((a, b) => a.rank - b.rank)) if (!dropped(f) && !kept.some((k) => overlap(f, k) >= 0.3)) kept.push(f);
 
   // ---- Who each place is for ------------------------------------------------------------------------------------
   // Two signature blocks side by side are two people, left to right. Blocks under each other are two people when
@@ -420,7 +513,7 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
   const findRows = [...new Set(open.map((f) => f.row!))].sort((a, b) => a - b);
   const reach = (r: number) => Math.max(5.5 * lines[r].h, 0.07 * PH);
   const hintIn = (r: number, xa: number, xb: number) => (cells[r] || [])
-    .filter((c) => c.x0 >= xa - 0.5 * c.h && c.x0 < xb && !standaloneLabel(c.text) && c.text.length >= 2 && c.text.length <= 60 && c.text.split(' ').length <= 8 && /\p{L}/u.test(c.text) && c.text.search(BLANK) < 0 && c.text.search(TAG) < 0)
+    .filter((c) => c.x0 >= xa - 0.5 * c.h && c.x0 < xb && !standaloneLabel(c.text) && c.text.length >= 2 && c.text.length <= 60 && c.text.split(' ').length <= 8 && /\p{L}/u.test(c.text) && c.text.search(BLANK) < 0 && c.text.search(TAG) < 0 && !/^(witness|witnessed|in the presence)\b/i.test(c.text))
     .map((c) => c.text);
   /** Rows of a block of places that belong together, starting from row `r`. */
   const blockAround = (r: number, pool: number[]) => {
@@ -450,6 +543,7 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
       let n = 0;
       starts.forEach((xa, k) => { if (f.lx! >= xa) n = k; });
       f.signer = n + 1;
+      f.set = `s${rowsHere[0]}`;
       if (hints[n].length) f.who = hints[n];
       done.add(f);
     }
@@ -481,55 +575,119 @@ export function findInText(page: PageScan): Omit<Found, 'page'>[] {
     const who = [...b.above.slice(-2).reverse(), ...b.near].slice(0, 4);
     for (const f of open) {
       if (done.has(f) || !b.rows.includes(f.row!)) continue;
-      if (numbered && headed.includes(b)) f.signer = headed.indexOf(b) + 1;
+      if (numbered && headed.includes(b)) { f.signer = headed.indexOf(b) + 1; f.set = 'h'; }
       if (who.length && signing.includes(b)) f.who = who;
     }
   }
 
   const stays = new Set(kept);
-  return out.filter((f) => stays.has(f)).map(({ rank: _rank, row: _row, lx: _lx, ...f }) => f);
+  return out.filter((f) => stays.has(f)).map(({ rank: _rank, row: _row, lx: _lx, said: _said, ...f }) => f);
 }
 
 // ---- Giving each place to the right person ---------------------------------------------------------------------
 
 const TITLES = new Set(['mr', 'mrs', 'ms', 'miss', 'mx', 'dr', 'prof', 'professor', 'sir', 'madam', 'mme', 'jr', 'sr', 'ii', 'iii', 'phd', 'md', 'esq']);
-const nameWords = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w && !TITLES.has(w));
+const allWords = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+const nameWords = (s: string) => allWords(s).filter((w) => !TITLES.has(w));
+
+/** How surely words printed on the page name this person. 4 the very same words, 3 the same but for a title,
+ *  2 their first and last name in a longer line, 1 a one-word name found in a short line, 0 not them. */
+function nameScore(printed: string, name: string): number {
+  const p = nameWords(printed), n = nameWords(name);
+  if (!n.length || !p.length) return 0;
+  if (allWords(printed).join(' ') === allWords(name).join(' ')) return 4;
+  if (p.join(' ') === n.join(' ')) return 3;
+  if (n.length === 1) return p.length <= 3 && p.includes(n[0]) ? 1 : 0;
+  // First name, then the last name soon after it ("James R. Cohen"), or the last name, a comma and the first name.
+  // "Cohen & James LLP" and "James Smith and Ana Cohen" are not James Cohen.
+  const first = n[0], last = n[n.length - 1];
+  if (p.some((w, i) => w === first && p.slice(i + 1, i + 4).includes(last))) return 2;
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${last}\\s*,\\s*${first}($|[^\\p{L}\\p{N}])`, 'u').test(printed.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()) ? 2 : 0;
+}
 
 /** True when words printed on the page name this person: their full name, or their first and last name, whatever
  *  the capitals, titles and punctuation. "Mr. James R. Cohen, Director" is James Cohen. "jimi cohen" is not. */
 export function namesMatch(printed: string, name: string): boolean {
-  const p = nameWords(printed), n = nameWords(name);
-  if (!n.length || !p.length) return false;
-  if (n.length === 1) return p.length <= 3 && p.includes(n[0]);
-  return p.includes(n[0]) && p.includes(n[n.length - 1]);
+  return nameScore(printed, name) > 0;
 }
 
-/** Works out who each found place is for. `names` are the signers in their order. A place whose hints (Found.who)
- *  name one of them goes to that person, whatever the order. The other numbered places keep their order (first
- *  column is signer 1) among the people no name pointed at. Tags keep the number that was typed in them. A number
- *  past the end of `names` means nobody on the document fits yet. */
+/** Works out who each found place is for. `names` are the signers in their order. Inside one table or one group of
+ *  signature blocks (Found.set), a column or block whose words (Found.who) name a signer goes to that person,
+ *  whatever the order, and nobody gets two columns. The other columns keep their order (first column is signer 1)
+ *  where that person is still free. Tags keep the number that was typed in them. A number past the end of `names`
+ *  means nobody on the document fits yet. Places that carry no number and no name stay without one (they go to
+ *  whoever is picked in the editor), except on a page that has exactly one place to sign per signer and nothing
+ *  says whose is whose: then they go by order, top to bottom, each with the date and name next to it. */
 export function assignSigners<T extends Found>(found: T[], names: string[]): T[] {
-  const mine = (f: T) => f.source === 'label' && (f.who?.length || f.signer);
-  const key = (f: T) => (f.who?.length ? f.who.join('|').toLowerCase() : '') + '#' + (f.signer || 0);
-  const byName = new Map<string, number>(); // party -> index into names
+  const mine = (f: T) => f.source === 'label' && !!(f.who?.length || f.signer);
+  const where = (f: T) => `${(f as { doc?: string }).doc ?? ''}/${f.page}`;
+  const given = new Map<T, number>(); // place -> index into names, past the end when nobody fits
+  const sets = new Map<string, T[]>();
   for (const f of found) {
-    if (!mine(f) || byName.has(key(f))) continue;
-    const at = names.findIndex((n) => (f.who || []).some((w) => namesMatch(w, n)));
-    if (at >= 0) byName.set(key(f), at);
+    if (!mine(f)) continue;
+    const key = `${where(f)}/${f.set ?? `?${(f.who || []).join('|').toLowerCase()}#${f.signer || 0}`}`;
+    sets.set(key, [...(sets.get(key) || []), f]);
   }
-  // The people no name pointed at take the remaining places by number.
-  const named = new Set(byName.values());
-  const numbers = [...new Set(found.filter((f) => mine(f) && f.signer && !byName.has(key(f))).map((f) => f.signer!))].sort((a, b) => a - b);
-  const byNumber = new Map<number, number>(); // signer number on the page -> index into names
-  const spare = names.map((_, i) => i).filter((i) => !named.has(i));
-  for (const n of numbers) if (spare.includes(n - 1)) byNumber.set(n, spare.splice(spare.indexOf(n - 1), 1)[0]);
-  let past = names.length;
-  for (const n of numbers) if (!byNumber.has(n)) byNumber.set(n, spare.length ? spare.shift()! : past++);
+  for (const places of sets.values()) {
+    // The parties of this set: its columns or blocks.
+    const parties = new Map<string, { n: number; who: Set<string>; places: T[] }>();
+    for (const f of places) {
+      const key = f.signer ? `#${f.signer}` : (f.who || []).join('|').toLowerCase();
+      const party = parties.get(key) || { n: f.signer || 0, who: new Set<string>(), places: [] };
+      for (const w of f.who || []) party.who.add(w);
+      party.places.push(f);
+      parties.set(key, party);
+    }
+    const list = [...parties.values()];
+    // By name first, the surest match first.
+    const pairs: { pi: number; ni: number; score: number }[] = [];
+    list.forEach((party, pi) => names.forEach((name, ni) => {
+      const score = Math.max(0, ...[...party.who].map((w) => nameScore(w, name)));
+      if (score) pairs.push({ pi, ni, score });
+    }));
+    pairs.sort((a, b) => b.score - a.score || a.pi - b.pi || a.ni - b.ni);
+    const got = new Map<number, number>(), used = new Set<number>();
+    for (const { pi, ni } of pairs) if (!got.has(pi) && !used.has(ni)) { got.set(pi, ni); used.add(ni); }
+    // One signer, and nothing printed says the places are for different people: all stay with that signer.
+    if (names.length === 1 && !list.some((party) => party.who.size)) continue;
+    // Then by number: column 2 is signer 2 when signer 2 is still free, else whoever is left, else nobody yet.
+    const rest = list.map((_, pi) => pi).filter((pi) => !got.has(pi) && list[pi].n).sort((a, b) => list[a].n - list[b].n);
+    for (const pi of rest) {
+      const ni = list[pi].n - 1;
+      if (ni < names.length && !used.has(ni)) { got.set(pi, ni); used.add(ni); }
+    }
+    let past = names.length;
+    for (const pi of rest) {
+      if (got.has(pi)) continue;
+      const spare = names.findIndex((_, i) => !used.has(i));
+      const ni = spare >= 0 ? spare : past++;
+      got.set(pi, ni);
+      used.add(ni);
+    }
+    list.forEach((party, pi) => { if (got.has(pi)) for (const f of party.places) given.set(f, got.get(pi)!); });
+  }
+
+  // "Signature: ____  Date: ____" twice on a page, two signers, and no name or heading anywhere: one each.
+  if (names.length >= 2) {
+    const pages = new Map<string, T[]>();
+    for (const f of found) if (f.source === 'label' && !given.has(f)) pages.set(where(f), [...(pages.get(where(f)) || []), f]);
+    for (const loose of pages.values()) {
+      if (loose.filter((f) => f.type === 'signature').length !== names.length) continue;
+      if (found.some((f) => where(f) === where(loose[0]) && f.type === 'signature' && !loose.includes(f))) continue; // other signatures here already say who signs
+      const units: T[][] = [];
+      for (const f of [...loose].sort((a, b) => a.y + a.h - (b.y + b.h) || a.x - b.x)) {
+        if (!units.length || units[units.length - 1].some((o) => o.type === f.type)) units.push([]);
+        units[units.length - 1].push(f);
+      }
+      if (units.length !== names.length || !units.every((u) => u.some((f) => f.type === 'signature'))) continue;
+      units.forEach((u, i) => u.forEach((f) => given.set(f, i)));
+    }
+  }
+
   return found.map((f) => {
-    if (!mine(f)) return f;
-    const at = byName.get(key(f)) ?? (f.signer ? byNumber.get(f.signer) : undefined);
+    if (f.source !== 'label') return f;
     const { signer: _signer, ...bare } = f;
-    return (at === undefined ? bare : { ...bare, signer: at + 1 }) as T;
+    return (given.has(f) ? { ...bare, signer: given.get(f)! + 1 } : bare) as T;
   });
 }
 

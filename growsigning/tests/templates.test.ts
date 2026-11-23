@@ -532,7 +532,7 @@ test('the screens show the rule and the lock before anyone types, and the pages 
   assert.match(read('src/components/editor/PersonMore.tsx'), /aria-label="Role" disabled=\{!!wording\}/);
   assert.match(read('src/components/editor/ReviewParts.tsx'), /maxLength=\{5000\} readOnly=\{!!wording\}/);
   const fieldsStep = read('src/components/editor/StepFields.tsx');
-  assert.match(fieldsStep, /title=\{again\} disabled=\{!!ed\.wording\}/, 'no field is added');
+  assert.match(fieldsStep, /title=\{again \|\| KIND_SAYS\[t\]\} disabled=\{!!ed\.wording\}/, 'no field is added');
   assert.match(fieldsStep, /disabled=\{!ready \|\| !!finding \|\| !active \|\| !!ed\.wording\}/, 'none is found and added');
   assert.match(fieldsStep, /<WordingField field=\{selected\} lock=\{ed\.wording\}/, 'a field left empty can be filled in, and the rest says why it stays');
   assert.match(read('src/components/editor/ReviewParts.tsx'), /\{!ed\.wording && <PayLinkChoice/);

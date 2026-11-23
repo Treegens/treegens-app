@@ -754,7 +754,7 @@ test('fields a screen reader can only call by their type are listed before sendi
   assert.match(check, /onClick=\{\(\) => ed\.showField\(f\.id\)\} aria-label=\{`Add a label to the \$\{where\(f\)\}`\}/);
   assert.match(read('src/components/Editor.tsx'), /showField: \(fid\) => \(setJump\(fid\), void go\(2\)\), jump, clearJump: \(\) => setJump\(null\)/);
   const fieldsStep = read('src/components/editor/StepFields.tsx');
-  assert.match(fieldsStep, /const id = ed\.jump;[\s\S]{0,120}setSel\(id\);\s+setSheet\(true\);[\s\S]{0,900}document\.getElementById\('ed-label'\)\?\.focus/);
+  assert.match(fieldsStep, /const id = ed\.jump;[\s\S]{0,120}setSel\(id\);\s+setSheet\(true\);[\s\S]{0,900}document\.getElementById\('ed-label'\)\)?\?\.focus/);
   assert.match(fieldsStep, /<input id="ed-label" /);
   // On a phone the settings sheet covers the lower half, and the field is moved above it, not left under it.
   assert.match(fieldsStep, /el\?\.scrollIntoView\(\{ block: 'center', inline: 'nearest' \}\);\s+\/\/[^\n]*\n\s+const panel = document\.querySelector\('\.ed-settings\.has'\);[\s\S]{0,260}window\.scrollBy\(\{ top: r\.bottom - top \+ 24 \}\);/);

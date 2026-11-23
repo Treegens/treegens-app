@@ -118,7 +118,11 @@
     ".next-landfix/types/**/*.ts",
     ".next-landfix/dev/types/**/*.ts",
     ".next-place/types/**/*.ts",
-    ".next-place/dev/types/**/*.ts"
+    ".next-place/dev/types/**/*.ts",
+    ".next-sigclip/types/**/*.ts",
+    ".next-sigclip/dev/types/**/*.ts",
+    ".next-note-text/types/**/*.ts",
+    ".next-note-text/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

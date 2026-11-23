@@ -134,7 +134,7 @@ try {
       const b = await el.boundingBox();
       await page.mouse.click(b.x + b.width * x, b.y + b.height * y);
     };
-    await place('Text', 0, 0.56, 0.305);
+    await place('Fill in', 0, 0.56, 0.305); // the blank a signer types into, called Text before (tests/note-text.test.ts)
     await page.getByLabel(/^Label/).fill('Seedlings pledged');
     await place('Signature', 1, 0.3, 0.23);
     await place('Date signed', 1, 0.25, 0.305);

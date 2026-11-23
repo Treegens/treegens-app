@@ -242,7 +242,7 @@ html.sg-locked, html.sg-locked body { overflow: hidden; }
   .sg-dialog .sigpad { height: clamp(160px, 38vh, 320px); height: clamp(160px, 38dvh, 320px); }
   .sg-padrow { flex-wrap: nowrap; }
   .sg-sigstyles { grid-template-columns: 1fr 1fr; gap: 8px; }
-  .sg-sigstyles .sigstyle { font-size: 24px; padding: 8px 10px; }
+  .sg-sigstyles .sigstyle { font-size: 24px; padding: 8px 0.5em; }
 }
 @keyframes sg-up { from { transform: translateY(28px); opacity: 0.5; } }
 @media (prefers-reduced-motion: reduce) { .sg-dialog { animation: none !important; } }

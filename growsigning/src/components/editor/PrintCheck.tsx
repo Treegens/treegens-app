@@ -17,7 +17,7 @@ export function PrintCheck({ subject, docs, rcps, fields }: { subject: string; d
     ...docs.map((d) => ({ where: `The name of the document "${d.name}"`, text: d.name })),
     ...rcps.map((r) => ({ where: `The name ${r.name}`, text: r.name })),
     ...fields.filter((f) => f.value && ['text', 'number', 'date', 'company', 'title', 'note', 'dropdown'].includes(f.type))
-      .map((f) => ({ where: `${f.label ? `"${f.label}"` : f.type === 'note' ? 'A note' : `A ${f.type} field`} on page ${f.page + 1}${f.recipient_id && names.get(f.recipient_id) ? `, in the part for ${names.get(f.recipient_id)}` : ''}`, text: String(f.value) })),
+      .map((f) => ({ where: `${f.label ? `"${f.label}"` : f.type === 'note' ? 'Your text' : f.type === 'text' ? 'A fill in field' : `A ${f.type} field`} on page ${f.page + 1}${f.recipient_id && names.get(f.recipient_id) ? `, in the part for ${names.get(f.recipient_id)}` : ''}`, text: String(f.value) })),
     // Only what is not plain ASCII can be a problem, so most envelopes never ask the server at all.
   ].filter((t) => /[^ -~\n]/.test(t.text || ''));
   const key = JSON.stringify(texts);

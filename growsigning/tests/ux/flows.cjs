@@ -1279,7 +1279,7 @@ async function inventory(browser, page, ids) {
   await take('editor - step 2 (field types)', page, true);
   // Select one field of each kind that has its own settings and list them.
   const pg = page.locator('.pdfpage').first();
-  for (const [type, y] of [['Text', 0.3], ['Signature', 0.5], ['Dropdown', 0.7]]) {
+  for (const [type, y] of [['Fill in', 0.3], ['Signature', 0.5], ['Dropdown', 0.7]]) {
     const kinds = page.getByRole('group', { name: /add a field/i }).first();
     // A kind beyond the six common ones is behind "More fields" (simplify-editor).
     if (!(await byRole(kinds, 'button', new RegExp(`^${type}$`, 'i')).count())) await byRole(kinds, 'button', /^more fields$/i).click().catch(() => {});

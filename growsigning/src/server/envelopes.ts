@@ -29,6 +29,7 @@ import { saveChecks, copyCheck, assertChecks, checkBits, alsoText, textWaiting, 
 import { saveWhatsApp, assertWhatsApp, alsoWhatsApp, waCompleted } from './whatsapp.ts';
 import { sendWarnings, PAPER_AUDIT_ACTION } from './warnings.ts';
 import { paperAuditNote } from '../lib/paperwork.ts';
+import { noteValue } from '../lib/fieldkinds.ts';
 import { strikePlace } from '../lib/strike.ts';
 import { stackedFields } from '../lib/stacked.ts';
 import { bouncedBefore, bouncedRefusal, bouncedLine } from './bounces.ts';
@@ -411,7 +412,10 @@ function writeContent(e: any, body: any, accountId: string, correcting: boolean,
     // as it was (an editor opened before, the same request sent again) leaves it empty, or the line would come back
     // unseen. New wording is a change: it replaces the empty line, and the signer is told (content_version).
     const answered = correcting && !!old && !senderOwned && old.value !== old.prefill && (finished || old.value != null || String(f.value ?? '') === String(old.prefill));
-    const value = answered ? old.value : prefilled ? fit(f.value, 4000, `${which}: the value`) || null : correcting && old ? old.value : null;
+    // The sender's own text ("Your text", type 'note') with no words in it is kept as nothing at all: spaces alone are
+    // not wording, and an empty box is shown to nobody and never printed (src/lib/fieldkinds.ts noteValue).
+    const sent = prefilled ? fit(f.value, 4000, `${which}: the value`) || null : null;
+    const value = answered ? old.value : prefilled ? (f.type === 'note' ? noteValue(sent) : sent) : correcting && old ? old.value : null;
     // A date the sender fills in is held to the rule a signer's is (applyValues): a real day, written year-month-day.
     if (f.type === 'date' && value && !answered && !isDateValue(value)) throw bad(`${which}, a date field, was sent with "${String(value).slice(0, 40)}". A date is taken as a real day written year-month-day, like 2027-03-20, and printed in the envelope's date format. Nothing was saved.`);
     const readonly = ro || SENDER_MARK(f.type) ? 1 : 0;

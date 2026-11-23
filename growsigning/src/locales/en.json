@@ -1387,7 +1387,7 @@
   "settings.import.settings_taken": "Settings taken over: {list}.",
   "settings.import.still_out": "Not brought in, because they are still out for signature where they were sent. Bring them in once they are finished there: {list}.",
   "settings.import.not_in": "{count, plural, one {# thing was not brought in, and why} other {# things were not brought in, and why}}",
-  "settings.fieldkind.text": "Text",
+  "settings.fieldkind.text": "Fill in",
   "settings.fieldkind.number": "Number",
   "settings.fieldkind.date": "Date",
   "settings.fieldkind.company": "Company",

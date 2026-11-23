@@ -237,13 +237,19 @@ async function drawField(ctx: Ctx, page: PDFPage, f: any) {
     if (!img) return;
     const caption = f.type === 'signature' && vh >= 30;
     const availH = caption ? vh - 7 : vh;
+    // The whole picture, as large as fits, in the middle of the field: never cropped and never past an edge. The
+    // picture itself holds all of the ink with clear space around it (src/lib/sigmark.ts).
     const s = Math.min(vw / img.width, availH / img.height);
     const w = img.width * s, h = img.height * s;
     const p = m.pt(vx + (vw - w) / 2, vy + (availH + h) / 2);
     page.drawImage(img, { x: p.x, y: p.y, width: w, height: h, rotate: m.rotate });
     if (caption) {
+      // The small line under the signature stays inside the field as well: in a narrow field (a table cell) it is
+      // printed in smaller letters instead of running into the next cell.
+      const line = `Signed via GrowSigning · ${String(r.id).slice(-8)}`;
+      const size = Math.min(4.5, (4.5 * vw) / (ctx.font.widthOfTextAtSize(line, 4.5) + 0.5));
       const c = m.pt(vx, vy + vh - 1);
-      page.drawText(`Signed via GrowSigning · ${String(r.id).slice(-8)}`, { x: c.x, y: c.y, size: 4.5, font: ctx.font, color: GREEN, rotate: m.rotate });
+      page.drawText(line, { x: c.x, y: c.y, size, font: ctx.font, color: GREEN, rotate: m.rotate });
     }
     return;
   }

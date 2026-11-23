@@ -220,3 +220,13 @@ label.check.ed-tap > input[type='checkbox'] { width: 20px; height: 20px; }
 @media (max-width: 350px) { .ed-stepname { display: block; } }
 /* Every field button of the palette is 44 px to press, with a mouse too (it was 37 px on a desktop). */
 .ed .palette button { min-height: 44px; }
+
+/* "Fill in" (they type) and "Your text" (you type): who types is said under the name where the kind is chosen
+   (src/lib/fieldkinds.ts KIND_HINT), and an empty "Your text" box looks empty in the editor. */
+.ed .palette button.ed-kind { align-items: flex-start; }
+.ed-kind-in { display: grid; gap: 1px; min-width: 0; text-align: left; }
+.ed-kind-in small { font-size: 11px; font-weight: 500; line-height: 1.25; color: var(--muted, #5f6b65); }
+.ed .palette button.ed-kind.on small { color: #fff; }
+.ed-kind-says { margin: -4px 0 12px; }
+.field.edit.ed-empty { border-style: dashed; }
+.field.edit.ed-empty .tag i { font-weight: 500; opacity: 0.75; }

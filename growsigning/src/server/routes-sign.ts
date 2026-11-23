@@ -271,7 +271,8 @@ export function signView(c: Ctx, found: any, quiet = false): any {
         ...(f.type === 'stamp' && done && f.value ? stampSeen(c.params.token, f) : {}),
       };
       // A strike-out has no words and no picture: it is the sender's line through what is printed, and everyone is shown it.
-    }).filter((f: any) => f.value || f.image || f.type === 'strike'),
+      // The sender's own text with no words in it is not there for anyone: an empty box is never shown (src/lib/fieldkinds.ts).
+    }).filter((f: any) => (f.type === 'note' ? String(f.value ?? '').trim() : f.value) || f.image || f.type === 'strike'),
   };
 }
 

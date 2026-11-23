@@ -59,7 +59,7 @@ export function sendProblem(fields: any[], recipients: any[] = [], documents: an
   for (const f of fields) {
     const r = recipients.find((x) => x.id === f.recipient_id);
     const d = documents.length > 1 ? documents.find((x) => x.id === f.document_id) : null;
-    const which = `${f.label ? `"${str(f.label, 60)}"` : f.type === 'checkbox' ? 'Tick box' : f.type === 'number' ? 'Number' : 'Text'}${r ? ` for ${r.name || r.role_name || r.email}` : ''}, page ${(Number(f.page) || 0) + 1}${d ? ` of ${d.name || 'a document'}` : ''}`;
+    const which = `${f.label ? `"${str(f.label, 60)}"` : f.type === 'checkbox' ? 'Tick box' : f.type === 'number' ? 'Number' : 'Fill in'}${r ? ` for ${r.name || r.role_name || r.email}` : ''}, page ${(Number(f.page) || 0) + 1}${d ? ` of ${d.name || 'a document'}` : ''}`;
     const where = ' Put it right under Format and limits in the field\'s More options, then send again.';
     if (f.validation) {
       try {

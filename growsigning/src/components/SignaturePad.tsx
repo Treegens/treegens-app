@@ -6,12 +6,13 @@ import { handwritingWrites } from '@/lib/scripts';
 import { drawnProblem, inkShare, pictureProblem, onePen, twoFingers, PEN_WIDTH } from '@/lib/ink';
 import { DRAWING_IS } from '@/lib/fieldkinds';
 import { waysLimited, type SignWay } from '@/lib/switches';
+import { trimInk, typedMark, TYPED_INK, TYPED_SIZE } from '@/lib/sigmark';
 
 const STYLES = ['Sig Dancing', 'Sig Caveat', 'Sig Vibes', 'Sig Sacramento'];
 // The handwriting fonts have Latin letters only. A name with none of them is typed in the device's own plain font:
 // one style, said as such, instead of four buttons that would all show the same picture.
 const PLAIN = 'system-ui, sans-serif';
-const INK = '#10243a';
+const INK = TYPED_INK;
 // The server stores signatures up to 700,000 characters. Stay well inside that.
 const MAX_CHARS = 600_000;
 type Point = { x: number; y: number };
@@ -20,48 +21,8 @@ const MAKE: [Tab, string][] = [['type', 'Type'], ['draw', 'Draw'], ['upload', 'U
 /** A signature that was not made in this tab: saved with this document on another device, or kept on the person's account. */
 export type SavedMark = { image: string; from: 'document' | 'account' };
 
-// Trim transparent margins so the signature fills its field.
-function trim(src: HTMLCanvasElement): string | null {
-  const ctx = src.getContext('2d')!;
-  const { width: w, height: h } = src;
-  const d = ctx.getImageData(0, 0, w, h).data;
-  let x0 = w, y0 = h, x1 = -1, y1 = -1;
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++)
-      if (d[(y * w + x) * 4 + 3] > 8) {
-        if (x < x0) x0 = x;
-        if (x > x1) x1 = x;
-        if (y < y0) y0 = y;
-        if (y > y1) y1 = y;
-      }
-  if (x1 < 0) return null;
-  const pad = 6;
-  const out = document.createElement('canvas');
-  out.width = x1 - x0 + 1 + pad * 2;
-  out.height = y1 - y0 + 1 + pad * 2;
-  out.getContext('2d')!.drawImage(src, x0, y0, x1 - x0 + 1, y1 - y0 + 1, pad, pad, x1 - x0 + 1, y1 - y0 + 1);
-  return out.toDataURL('image/png');
-}
-
-function typed(text: string, family: string): string | null {
-  const c = document.createElement('canvas');
-  c.width = 900;
-  c.height = 220;
-  const ctx = c.getContext('2d')!;
-  ctx.fillStyle = INK;
-  ctx.textBaseline = 'middle';
-  let size = 110;
-  do {
-    ctx.font = `${size}px ${family}`;
-    size -= 6;
-  } while (ctx.measureText(text).width > 860 && size > 24);
-  // A name whose first letter is Arabic or Hebrew is laid out as right-to-left text, so a number or a Latin word in
-  // it stands on the correct side. It is still drawn from the left edge: the picture is trimmed afterwards.
-  ctx.direction = /^[^\p{L}]*[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/u.test(text) ? 'rtl' : 'ltr';
-  ctx.textAlign = 'left';
-  ctx.fillText(text, 20, 110);
-  return trim(c);
-}
+// Typed and drawn marks become pictures in src/lib/sigmark.ts: all of the ink, tails of letters included, with a
+// little clear space on every side, so the picture is never cut off at an edge and fills its field.
 
 // A photo of a signature can be large. Shrink it until it is small enough to store, so finishing never fails on size.
 function fitImage(img: HTMLImageElement): string {
@@ -252,15 +213,15 @@ export function AdoptSignature({ kind: asked, name, saved: savedIn, onDone, onCl
     if (tab === 'saved') image = saved?.image || null;
     else if (tab === 'type') {
       if (!text.trim()) return setError(kind === 'signature' ? 'Type your name first.' : 'Type your initials first.');
-      await document.fonts?.load(`110px '${font}'`, text).catch(() => {});
-      image = typed(text.trim(), handwritingWrites(text) ? `'${font}', cursive` : PLAIN);
+      await document.fonts?.load(`${TYPED_SIZE}px '${font}'`, text).catch(() => {});
+      image = typedMark(text.trim(), handwritingWrites(text) ? `'${font}', cursive` : PLAIN);
       if (!image) return setError('Type at least one letter or number, then try again.');
     } else if (tab === 'draw') {
       // A tap or a speck is not a signature: refused in words before it goes on the page (src/lib/ink.ts). A drawing
       // may be anything the person draws.
       const wrong = drawing ? '' : drawnProblem(strokes.current, size.current, kind);
       if (wrong) return setError(wrong);
-      image = strokes.current.length && pad.current ? trim(pad.current) : null;
+      image = strokes.current.length && pad.current ? trimInk(pad.current) : null;
       if (!image) return setError(`Draw your ${word} in the box first.`);
     } else {
       if (!photo) return setError('Choose a picture first.');

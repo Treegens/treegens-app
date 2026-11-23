@@ -1,6 +1,7 @@
 // What a signer's fields mean, shared by the document view, the text view and the phone sheet.
 import { NUMBER_RULE, NUMBER_PROBLEM } from '../../lib/numbers.ts';
 import { isDateValue, DATE_PROBLEM } from '../../lib/dates.ts';
+import { TYPE_HERE } from '../../lib/fieldkinds.ts';
 import { valueProblem, fieldChecks, currencySign, patternProblem, limitOf, groupProblem, groupRuleOf } from '../../lib/fieldrules.ts';
 
 export const AUTO = ['date_signed', 'full_name', 'email'];
@@ -8,8 +9,9 @@ export const AUTO = ['date_signed', 'full_name', 'email'];
 export const TYPED = ['text', 'number', 'date', 'company', 'title', 'first_name', 'last_name'];
 
 export const LABEL: Record<string, string> = {
-  signature: 'Signature', initials: 'Initials', text: 'Text', number: 'Number', date: 'Date', company: 'Company', title: 'Job title',
-  dropdown: 'Choice', attachment: 'Attachment', checkbox: 'Checkbox', radio: 'Option', date_signed: 'Date signed', full_name: 'Full name', email: 'Email', note: 'Note', stamp: 'Stamp',
+  // A blank with no label reads "Type here", and the sender's own words are named as what they are (src/lib/fieldkinds.ts).
+  signature: 'Signature', initials: 'Initials', text: TYPE_HERE, number: 'Number', date: 'Date', company: 'Company', title: 'Job title',
+  dropdown: 'Choice', attachment: 'Attachment', checkbox: 'Checkbox', radio: 'Option', date_signed: 'Date signed', full_name: 'Full name', email: 'Email', note: 'Written on the page', stamp: 'Stamp',
   first_name: 'First name', last_name: 'Last name', drawing: 'Drawing', approve: 'Approve', decline: 'Decline',
 };
 export const fieldName = (f: any): string => f.label || LABEL[f.type] || 'Field';
