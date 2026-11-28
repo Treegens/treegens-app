@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ALL_DAY_HOURS, DEFAULT_ASSISTANT, WEEKDAY_HOURS, defaultOwnerHost, defaultSchedule, defaultSite, newEventType, starterEventTypes } from '../../shared/defaults';
-import type { EventType, Host, SiteSettings } from '../../shared/types';
+import type { EventType, Host, SiteSettings, WeeklyHours } from '../../shared/types';
 import type { KV } from '../../server/lib/ctx';
 import * as repo from '../../server/lib/repo';
-import { MODEL_MOVE_MARKER, MOVE_MARKER, OLD_DEFAULT_MODEL, POD_DESCRIPTION, planShortLinks, runAssistantModelMove, runOpenHoursMove, runShortLinkMove } from '../../server/lib/seed';
+import { MODEL_MOVE_MARKER, MOVE_MARKER, OLD_DEFAULT_MODEL, POD_DESCRIPTION, planShortLinks, runAssistantModelMove, runOpenHoursMove, runOwnerAllDayMove, runShortLinkMove } from '../../server/lib/seed';
 import { runScheduled } from '../../server/cron';
 import { envFromProcess } from '../../server/lib/runtime';
 import { memoryKV } from '../../server/lib/store';
@@ -352,4 +352,32 @@ describe('runOpenHoursMove (the old 9 to 5 starter hours become every day, all d
     expect((await repo.listHosts(ctx))[0].schedules[0].weekly).toEqual(WEEKDAY_HOURS);
   });
 
+});
+
+describe('runOwnerAllDayMove (the owner asked for every free spot, once)', () => {
+  it("opens all of the owner's schedules and clears the hour window and daily cap on their events, not a co-host's hours", async () => {
+    const ctx = makeTestCtx({ kv: memoryKV() });
+    const [owner] = await repo.listHosts(ctx);
+    const mornings: WeeklyHours = { 0: [], 1: [{ start: '09:00', end: '11:30' }], 2: [], 3: [], 4: [], 5: [], 6: [] };
+    await repo.updateHost(ctx, owner.id, (h) => ({ ...h, schedules: [{ ...h.schedules[0], weekly: mornings, overrides: [{ date: '2026-12-24', ranges: [] }] }] }));
+    const coHost: Host = { ...structuredClone(owner), id: 'host_ian', role: 'member', email: 'ian@example.com', schedules: [{ id: 'sch_ian', name: 'Working hours', weekly: mornings, overrides: [] }], defaultScheduleId: 'sch_ian' };
+    await repo.saveHost(ctx, coHost);
+    const types = await repo.listEventTypes(ctx);
+    await repo.updateEventTypes(ctx, (list) => ({ next: list.map((e, i) => (i === 0 ? { ...e, scheduling: { ...e.scheduling, restrictHours: mornings, maxPerDay: 5 } } : e)), result: undefined }));
+
+    expect(await runOwnerAllDayMove(ctx)).toEqual({ schedules: 1, eventTypes: types[0].hostIds.includes(owner.id) ? 1 : 0 });
+    const hosts = await repo.listHosts(ctx);
+    const after = hosts.find((h) => h.id === owner.id)!;
+    expect(after.schedules[0].weekly).toEqual(ALL_DAY_HOURS);
+    expect(after.schedules[0].overrides).toEqual([{ date: '2026-12-24', ranges: [] }]);
+    expect(hosts.find((h) => h.id === 'host_ian')!.schedules[0].weekly).toEqual(mornings);
+    const first = (await repo.listEventTypes(ctx))[0];
+    expect(first.scheduling.restrictHours ?? null).toBeNull();
+    expect(first.scheduling.maxPerDay ?? null).toBeNull();
+
+    // Once.
+    await repo.updateHost(ctx, owner.id, (h) => ({ ...h, schedules: [{ ...h.schedules[0], weekly: mornings }] }));
+    expect(await runOwnerAllDayMove(ctx, { readMarker: true })).toBe('already_done');
+    expect((await repo.listHosts(ctx)).find((h) => h.id === owner.id)!.schedules[0].weekly).toEqual(mornings);
+  });
 });

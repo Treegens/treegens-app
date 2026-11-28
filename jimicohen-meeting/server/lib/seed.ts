@@ -307,3 +307,43 @@ export async function runOpenHoursMove(ctx: Ctx, opts?: { readMarker?: boolean }
   ctx.log('info', 'hours: one-time move done', { opened });
   return { opened };
 }
+
+const OWNER_HOURS_MARKER = 'migrations/owner-all-day-v1';
+const OWNER_HOURS_DONE = new WeakSet<KV>();
+
+/**
+ * The owner asked for every free spot in their calendar to be bookable (2026-11-28), whatever hours they
+ * had saved. Once: every schedule of the owner becomes every day, all day (date overrides kept), and every
+ * event type the owner hosts loses its extra hour window and its daily cap. Co-hosts keep their own hours.
+ */
+export async function runOwnerAllDayMove(ctx: Ctx, opts?: { readMarker?: boolean }): Promise<{ schedules: number; eventTypes: number } | 'already_done'> {
+  if (!opts?.readMarker && OWNER_HOURS_DONE.has(ctx.kv)) return 'already_done';
+  if (await ctx.kv.getJSON(OWNER_HOURS_MARKER)) {
+    OWNER_HOURS_DONE.add(ctx.kv);
+    return 'already_done';
+  }
+  const owner = (await listHosts(ctx)).find((h) => h.role === 'owner');
+  let schedules = 0;
+  let eventTypes = 0;
+  if (owner) {
+    await updateHost(ctx, owner.id, (fresh) => {
+      schedules = fresh.schedules.length;
+      return { ...fresh, schedules: fresh.schedules.map((s) => ({ ...s, weekly: structuredClone(ALL_DAY_HOURS) })) };
+    });
+    await updateEventTypes(ctx, (list) => {
+      eventTypes = 0;
+      const next = list.map((e) => {
+        if (!e.hostIds.includes(owner.id)) return e;
+        const sch = e.scheduling;
+        if (!sch.restrictHours && (sch.maxPerDay ?? null) === null) return e;
+        eventTypes++;
+        return { ...e, scheduling: { ...sch, restrictHours: null, maxPerDay: null } };
+      });
+      return eventTypes ? { next, result: undefined } : { keep: undefined };
+    });
+  }
+  await ctx.kv.setJSON(OWNER_HOURS_MARKER, { at: ctx.now().toISOString(), schedules, eventTypes }, { onlyIfNew: true });
+  OWNER_HOURS_DONE.add(ctx.kv);
+  ctx.log('info', 'owner hours: one-time move done', { schedules, eventTypes });
+  return { schedules, eventTypes };
+}
