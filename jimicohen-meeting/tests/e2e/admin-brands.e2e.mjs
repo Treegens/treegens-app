@@ -449,16 +449,16 @@ export default defineSuite('admin-brands', { mockCreds: true }, async (t) => {
       s.expect(await podHosts(), 'the pod meeting').toEqual(before);
     });
 
-    await s.step('Kim, ticked, while Jimi works Saturdays only: the dialog says what the shared-hours check found', async () => {
-      // A new co-host starts on 9 to 5, Monday to Friday, in Jimi's time zone: with Jimi on Saturdays only the hours never meet.
+    await s.step('Kim, ticked, while Jimi has no hours: the dialog says what the shared-hours check found', async () => {
+      // A new co-host starts at every day, all day: with Jimi on no hours at all, nobody can book the pod.
       await s.apiOk('PUT', '/admin/hosts/host_owner', {
-        body: { schedules: [{ id: 'sch_default', name: 'Working hours', weekly: { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [{ start: '10:00', end: '12:00' }] }, overrides: [] }], defaultScheduleId: 'sch_default' },
+        body: { schedules: [{ id: 'sch_default', name: 'Working hours', weekly: { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] }, overrides: [] }], defaultScheduleId: 'sch_default' },
       });
       await page.reload();
       await page.getByRole('heading', { name: 'Team', level: 1 }).waitFor();
       const { dialog } = await addCoHost(page, { name: 'Kim Diaz', email: 'kim@example.com', tick: true });
       await dialog.getByText('Kim is part of Eco Champions conversation now.', { exact: false }).waitFor();
-      await dialog.getByText('"Eco Champions conversation" cannot be booked: there is no time when', { exact: false }).waitFor();
+      await dialog.getByText('"Eco Champions conversation" cannot be booked:', { exact: false }).waitFor();
       await s.screenshot(page, 'team kim added with the shared-hours warning', { fullPage: false });
     });
   });

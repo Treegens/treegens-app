@@ -103,7 +103,10 @@ export async function prepare(s, { clock = MONDAY, zone = 'Europe/London', googl
 }
 
 /** Adds a co-host through the dashboard API and connects their Google account (as the owner may). Returns the host. */
-export async function addCoHost(s, ownerPage, { name, email, zone, google = email, weekly, connect = true }) {
+const WEEKDAYS_NINE_TO_FIVE = Object.fromEntries([1, 2, 3, 4, 5].map((d) => [d, [{ start: '09:00', end: '17:00' }]]));
+
+/** Weekly hours default to weekdays 9 to 5 here (a real new co-host starts at every day, all day): the scenarios count on them. */
+export async function addCoHost(s, ownerPage, { name, email, zone, google = email, weekly = WEEKDAYS_NINE_TO_FIVE, connect = true }) {
   const created = await s.apiOk('POST', '/admin/hosts', { body: { name, email } });
   const id = created.host.id;
   if (connect) {
