@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ALL_DAY_HOURS, WEEKDAY_HOURS } from '../../shared/defaults';
 
 // The booking engine belongs to another module. Here it is a stand-in that does the one thing
 // these tests need from it (cancelling), so the dashboard routes are tested on their own.
@@ -2535,10 +2536,18 @@ describe('GET /admin/overview', () => {
   async function apartJoint(s: Session): Promise<{ host: AdminHost; eventType: EventType }> {
     const { host } = await addCoHost(s);
     await ok(call(s, 'PUT', '/admin/hosts/host_owner', { timezoneMode: 'fixed', timezone: 'America/Los_Angeles' }));
-    await ok(call(s, 'PUT', `/admin/hosts/${host.id}`, { timezoneMode: 'fixed', timezone: 'Europe/Berlin' }));
+    // Both on weekdays 9 to 5, nine hours apart. (A new co-host starts at every day, all day.)
+    await ok(call(s, 'PUT', `/admin/hosts/${host.id}`, { timezoneMode: 'fixed', timezone: 'Europe/Berlin', schedules: [{ id: host.defaultScheduleId, name: 'Working hours', weekly: structuredClone(WEEKDAY_HOURS), overrides: [] }] }));
     const { eventType } = await ok<{ eventType: EventType }>(call(s, 'POST', '/admin/event-types', { title: 'Together', kind: 'collective', hostIds: ['host_owner', host.id], reminders: [] }), 201);
     return { host, eventType };
   }
+
+  it('starts a new co-host at every day, all day, so their calendar alone decides', async () => {
+    const s = await signIn();
+    const { host } = await addCoHost(s);
+    expect(host.schedules).toHaveLength(1);
+    expect(host.schedules[0].weekly).toEqual(ALL_DAY_HOURS);
+  });
 
   it('warns about a joint meeting whose hosts are never working at the same time', async () => {
     const s = await signIn();

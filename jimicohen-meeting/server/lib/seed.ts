@@ -21,11 +21,11 @@
  * hosts or hours; it renames only the untouched starter title.
  */
 import { ECO_CHAMPIONS_BRAND_ID, isBrandId } from '../../shared/brands';
-import { DEFAULT_ASSISTANT, newEventType } from '../../shared/defaults';
+import { ALL_DAY_HOURS, DEFAULT_ASSISTANT, WEEKDAY_HOURS, newEventType } from '../../shared/defaults';
 import type { EventType, Host, ShortName, SiteSettings } from '../../shared/types';
 import { freeSlug } from './admin/event-types';
 import type { Ctx, KV } from './ctx';
-import { KEYS, getSecrets, listHosts, getSite, updateEventTypes, updateSite } from './repo';
+import { KEYS, getSecrets, listHosts, getSite, updateEventTypes, updateHost, updateSite } from './repo';
 import { firstName } from './templates';
 
 export const MOVE_MARKER = `${KEYS.migrationPrefix}short-links-v1`;
@@ -266,4 +266,44 @@ export async function runAssistantModelMove(ctx: Ctx, opts?: { readMarker?: bool
   MODEL_DONE.add(ctx.kv);
   ctx.log('info', 'assistant model: one-time move done', { result, keySaved });
   return result;
+}
+
+const HOURS_MOVE_MARKER = 'migrations/open-hours-v1';
+const HOURS_DONE = new WeakSet<KV>();
+
+/** True for a schedule still exactly as the old starter left it: weekdays 9 to 5, no days off or extra hours. */
+function untouchedStarter(s: Host['schedules'][number]): boolean {
+  return (s.overrides ?? []).length === 0 && JSON.stringify(s.weekly) === JSON.stringify(WEEKDAY_HOURS);
+}
+
+/**
+ * Opens the old starter hours, once. Every host's schedule that still reads weekdays 9 to 5 exactly as the
+ * starter made it becomes every day, all day, so any free spot in the connected calendars can be booked.
+ * A schedule anyone has changed stays as it is. Run and guarded like the moves above.
+ */
+export async function runOpenHoursMove(ctx: Ctx, opts?: { readMarker?: boolean }): Promise<{ opened: number } | 'already_done'> {
+  if (!opts?.readMarker && HOURS_DONE.has(ctx.kv)) return 'already_done';
+  if (await ctx.kv.getJSON(HOURS_MOVE_MARKER)) {
+    HOURS_DONE.add(ctx.kv);
+    return 'already_done';
+  }
+  let opened = 0;
+  for (const host of await listHosts(ctx)) {
+    if (!host.schedules.some(untouchedStarter)) continue;
+    let changed = 0; // counted inside the write, which may run again on a conflict
+    await updateHost(ctx, host.id, (fresh) => {
+      changed = 0;
+      const schedules = fresh.schedules.map((s) => {
+        if (!untouchedStarter(s)) return s;
+        changed++;
+        return { ...s, weekly: structuredClone(ALL_DAY_HOURS) };
+      });
+      return { ...fresh, schedules };
+    });
+    opened += changed;
+  }
+  await ctx.kv.setJSON(HOURS_MOVE_MARKER, { at: ctx.now().toISOString(), opened }, { onlyIfNew: true });
+  HOURS_DONE.add(ctx.kv);
+  ctx.log('info', 'hours: one-time move done', { opened });
+  return { opened };
 }

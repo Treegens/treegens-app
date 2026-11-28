@@ -70,6 +70,17 @@ export const WEEKDAY_HOURS: WeeklyHours = {
   6: [],
 };
 
+/** Every day, all day: any free spot in the calendar can be booked. New co-hosts start here (admin/hosts.ts). */
+export const ALL_DAY_HOURS: WeeklyHours = {
+  0: [{ start: '00:00', end: '24:00' }],
+  1: [{ start: '00:00', end: '24:00' }],
+  2: [{ start: '00:00', end: '24:00' }],
+  3: [{ start: '00:00', end: '24:00' }],
+  4: [{ start: '00:00', end: '24:00' }],
+  5: [{ start: '00:00', end: '24:00' }],
+  6: [{ start: '00:00', end: '24:00' }],
+};
+
 export function defaultSchedule(id = 'sch_default'): Schedule {
   return { id, name: 'Working hours', weekly: structuredClone(WEEKDAY_HOURS), overrides: [] };
 }

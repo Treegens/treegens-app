@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_ASSISTANT, defaultOwnerHost, defaultSchedule, defaultSite, newEventType, starterEventTypes } from '../../shared/defaults';
+import { ALL_DAY_HOURS, DEFAULT_ASSISTANT, WEEKDAY_HOURS, defaultOwnerHost, defaultSchedule, defaultSite, newEventType, starterEventTypes } from '../../shared/defaults';
 import type { EventType, Host, SiteSettings } from '../../shared/types';
 import type { KV } from '../../server/lib/ctx';
 import * as repo from '../../server/lib/repo';
-import { MODEL_MOVE_MARKER, MOVE_MARKER, OLD_DEFAULT_MODEL, POD_DESCRIPTION, planShortLinks, runAssistantModelMove, runShortLinkMove } from '../../server/lib/seed';
+import { MODEL_MOVE_MARKER, MOVE_MARKER, OLD_DEFAULT_MODEL, POD_DESCRIPTION, planShortLinks, runAssistantModelMove, runOpenHoursMove, runShortLinkMove } from '../../server/lib/seed';
 import { runScheduled } from '../../server/cron';
 import { envFromProcess } from '../../server/lib/runtime';
 import { memoryKV } from '../../server/lib/store';
@@ -332,4 +332,24 @@ describe('runAssistantModelMove (off the old default model, once)', () => {
     expect(await modelOf(ctx)).toBe('claude-haiku-5-5');
     expect((await runScheduled(makeTestCtx({ kv: ctx.kv }), { oneTimeMoves: true, stepWaitMs: 50 })).assistantModel).toBe('already_done');
   });
+});
+
+describe('runOpenHoursMove (the old 9 to 5 starter hours become every day, all day, once)', () => {
+  it('opens an untouched starter schedule, leaves a changed one alone, and runs once', async () => {
+    const ctx = makeTestCtx({ kv: memoryKV() });
+    const [owner] = await repo.listHosts(ctx);
+    const custom = { id: 'sch_custom', name: 'Mornings', weekly: { ...structuredClone(WEEKDAY_HOURS), 1: [{ start: '08:00', end: '12:00' }] }, overrides: [] };
+    await repo.updateHost(ctx, owner.id, (h) => ({ ...h, schedules: [{ ...h.schedules[0], weekly: structuredClone(WEEKDAY_HOURS) }, custom] }));
+
+    expect(await runOpenHoursMove(ctx)).toEqual({ opened: 1 });
+    const after = (await repo.listHosts(ctx)).find((h) => h.id === owner.id)!;
+    expect(after.schedules[0].weekly).toEqual(ALL_DAY_HOURS);
+    expect(after.schedules[1]).toEqual(custom);
+
+    // Once: hours set back to 9 to 5 on purpose afterwards stay.
+    await repo.updateHost(ctx, owner.id, (h) => ({ ...h, schedules: [{ ...h.schedules[0], weekly: structuredClone(WEEKDAY_HOURS) }] }));
+    expect(await runOpenHoursMove(ctx, { readMarker: true })).toBe('already_done');
+    expect((await repo.listHosts(ctx))[0].schedules[0].weekly).toEqual(WEEKDAY_HOURS);
+  });
+
 });

@@ -178,7 +178,8 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
       await hours.getByText('Your hours are saved.').waitFor();
       const weekly = (await alexHost()).schedules[0].weekly;
       for (const day of [1, 2, 3, 4, 5]) s.expect(weekly[day], `stored hours, weekday ${day}`).toEqual([{ start: '14:00', end: '20:00' }]);
-      s.expect(weekly[0], 'stored Sunday').toEqual([]);
+      // Weekends keep the all-day start every new co-host gets.
+      s.expect(weekly[0], 'stored Sunday').toEqual([{ start: '00:00', end: '24:00' }]);
       await clearToasts(alex);
     });
 
@@ -521,10 +522,12 @@ export default defineSuite('admin-team', { mockCreds: true }, async (t) => {
 
   await t.scenario('a joint meeting whose hours never meet: said when it is made, in the editor and on Home, and the public page promises nothing', { reset: true }, async (s) => {
     await s.setClock(MONDAY);
-    // Jimi in Los Angeles, Alex in Berlin, both on the 9 to 5 every co-host starts with: nine hours apart, never both at work.
+    // Jimi in Los Angeles, Alex in Berlin, both on weekdays 9 to 5: nine hours apart, never both at work.
     await s.setupAdmin({ timezone: 'America/Los_Angeles' });
     await s.apiOk('PUT', '/admin/hosts/host_owner', { body: { email: OWNER_GOOGLE } });
     const { host, inviteUrl } = await s.apiOk('POST', '/admin/hosts', { body: CO_HOST });
+    // A new co-host starts at every day, all day; this scenario needs both on weekdays 9 to 5.
+    await s.apiOk('PUT', `/admin/hosts/${host.id}`, { body: { schedules: [{ id: host.defaultScheduleId, name: 'Working hours', weekly: { 1: [{ start: '09:00', end: '17:00' }], 2: [{ start: '09:00', end: '17:00' }], 3: [{ start: '09:00', end: '17:00' }], 4: [{ start: '09:00', end: '17:00' }], 5: [{ start: '09:00', end: '17:00' }] }, overrides: [] }] } });
     const owner = await s.newPage({ signedIn: true, timezoneId: 'America/Los_Angeles', viewport: { width: 1440, height: 900 } });
     const alex = await s.newPage({ timezoneId: 'Europe/Berlin', viewport: { width: 1280, height: 900 }, ip: '10.99.0.8' });
     let joint = null;

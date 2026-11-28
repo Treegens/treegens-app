@@ -12,7 +12,7 @@ import { remindEndingConnections } from './lib/googleExpiry';
 import type { Ctx } from './lib/ctx';
 import { runDueJobs } from './lib/jobs';
 import { KEYS, PRUNE_BUDGET_MS, PRUNE_LIMIT_PER_PREFIX, cacheGet, cacheSet, listHosts, pruneEphemeral } from './lib/repo';
-import { runAssistantModelMove, runShortLinkMove } from './lib/seed';
+import { runAssistantModelMove, runOpenHoursMove, runShortLinkMove } from './lib/seed';
 import { DAY_MS } from './lib/time';
 
 const HOUSEKEEPING_MARK = 'housekeeping-ran';
@@ -224,6 +224,7 @@ export async function runScheduled(ctx: Ctx, opts?: ScheduledRunOptions): Promis
   if (opts?.oneTimeMoves) {
     summary.shortLinks = await networkStep(ctx, 'the short link setup', ONE_TIME_MOVES_MS, () => runShortLinkMove(ctx));
     summary.assistantModel = await networkStep(ctx, 'the assistant model move', ONE_TIME_MOVES_MS, () => runAssistantModelMove(ctx));
+    summary.openHours = await networkStep(ctx, 'the open hours move', ONE_TIME_MOVES_MS, () => runOpenHoursMove(ctx));
   }
 
   const lastRun = await step(ctx, 'reading the housekeeping marker', () => cacheGet<{ at: string }>(ctx, HOUSEKEEPING_MARK));

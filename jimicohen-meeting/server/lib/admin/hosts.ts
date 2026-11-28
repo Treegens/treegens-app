@@ -6,7 +6,7 @@
  * The private link carries a random token. Only its SHA-256 is stored (see hostFromToken in
  * auth.ts), so the link can be shown exactly once: when it is made.
  */
-import { defaultSchedule } from '../../../shared/defaults';
+import { ALL_DAY_HOURS, defaultSchedule } from '../../../shared/defaults';
 import type { GoogleCalendarListItem, Host, IcsFeed, Schedule } from '../../../shared/types';
 import { syncHostTimezone } from '../busy';
 import { open, randomId, randomToken, seal, sha256Hex } from '../crypto';
@@ -59,7 +59,8 @@ export async function createCoHost(ctx: Ctx, body: unknown): Promise<{ host: Hos
   const owner = hosts.find((h) => h.role === 'owner');
   const now = ctx.now().toISOString();
   const invite = newInvite();
-  const schedule = defaultSchedule();
+  // Every day, all day: their connected calendars decide what is free. They narrow it on their own page.
+  const schedule = { ...defaultSchedule(), weekly: structuredClone(ALL_DAY_HOURS) };
   const host: Host = {
     id: randomId('host'),
     role: 'member',
